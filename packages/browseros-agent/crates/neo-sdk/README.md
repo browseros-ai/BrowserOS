@@ -44,6 +44,8 @@ host / MCP run
       |          +----> neo-sdk-api (spec + generated types)
       |          +----> neo-screencast <----- claw-server (desktop)
       +---------------> neo-captcha <----- claw-server (desktop)
+
+   SDK image supervisor ----> neo-slimviewer ----> Xvnc (display)
 ```
 
 | Package | Responsibility |
@@ -57,6 +59,7 @@ host / MCP run
 | `neo-sdk-api` | Host API specification, generated Rust models and compatibility rules. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
 | `neo-screencast` | Shared capture hub, also used by desktop. |
+| `neo-slimviewer` | Standalone X11-to-H.264 streamer and web viewer. Its Dockerfile supplies the SDK image. |
 
 A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
 route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`

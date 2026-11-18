@@ -12,7 +12,11 @@ case "$action" in
     case "$platform" in linux/amd64 | linux/arm64) ;; *) exit 2 ;; esac
     image="neo-sdk:remote-${REMOTE_BUILD_JOB:?}"
     build_started=$SECONDS
-    bash /usr/local/lib/browseros-remote-builds/build-image.sh --platform "$platform" --tag "$image" \
+    # A checkout that understands the guest's source metadata owns its build contexts.
+    # Older drivers require Git history, which the snapshot does not carry.
+    driver=crates/neo-sdk/neo-server/docker/build.sh
+    if ! grep -qs NEO_SDK_SOURCE_ROOT "$driver"; then driver=/usr/local/lib/browseros-remote-builds/build-image.sh; fi
+    bash "$driver" --platform "$platform" --tag "$image" \
       | tee "$REMOTE_BUILD_ARTIFACTS/image-build.txt"
     build_seconds=$((SECONDS-build_started))
     docker image inspect "$image" --format '{{json .Id}}' \

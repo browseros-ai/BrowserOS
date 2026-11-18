@@ -1,0 +1,10 @@
+*
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!csrc
+csrc/*.Dockerfile
+!src
+!tests/**/*.rs
+!web/slimviewer.html
+!web/ui.js

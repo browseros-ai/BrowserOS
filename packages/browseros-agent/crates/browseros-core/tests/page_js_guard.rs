@@ -1,7 +1,6 @@
 //! Keeps page JavaScript on known paths. Every `Runtime.evaluate` and `Runtime.callFunctionOn`
 //! that BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script
-//! runs in, or through the neo-playwright files in `ALLOWED`, which own its isolated
-//! `browseros-engine` world, main-world `page.evaluate`, and dedicated-worker evaluation. A raw
+//! runs in, or through the SDK files in `ALLOWED`, which select their own CDP contexts. A raw
 //! send anywhere else would run in the target's default world whatever the caller intended.
 //!
 //! A send is recognised by the method literal in argument position (followed by a comma), which
@@ -23,6 +22,11 @@ const ALLOWED: &[&str] = &[
     // Workers have no document or isolated world. This gateway selects the worker target's
     // startup context and races its lifetime, after checking the owning page's capability.
     "crates/neo-sdk/neo-playwright/src/page/worker_evaluate.rs",
+    // The standalone streamer uses its slimviewer-input world for focus, input and field
+    // geometry. Its session also evaluates a constant zero to drain pending CDP events.
+    "crates/neo-sdk/neo-slimviewer/src/rfb/cdp.rs",
+    "crates/neo-sdk/neo-slimviewer/src/rfb/cdp/desktop.rs",
+    "crates/neo-sdk/neo-slimviewer/src/rfb/cdp/session.rs",
 ];
 const SKIPPED_DIRS: &[&str] = &["target", "node_modules", "dist", "tests"];
 
@@ -60,7 +64,7 @@ fn tests_that_page_javascript_is_only_sent_through_page_js() -> std::io::Result<
     assert!(
         offenders.is_empty(),
         "page JavaScript must go through browseros_core::PageJs, which picks the isolated or the \
-         page world, or through the neo-playwright files in ALLOWED:\n{}",
+         page world, or through the reviewed SDK files in ALLOWED:\n{}",
         offenders.join("\n")
     );
     Ok(())

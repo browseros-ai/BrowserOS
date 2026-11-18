@@ -2,18 +2,20 @@
 #
 # The BrowserOS Neo SDK image: the released neo browser plus this commit's SDK server
 # (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it or run it alone.
-# README.md beside this file is the host contract. Build it with build.sh, from one
-# context, packages/browseros-agent, filtered by Dockerfile.dockerignore. The image owns its
+# README.md beside this file is the host contract. build.sh supplies packages/browseros-agent
+# (filtered by Dockerfile.dockerignore) and the slimviewer build output. The image owns its
 # browser supervisor (supervisor/ beside this file); the default Neo image, packages/browseros/
 # docker/neo with claw-server, is production's and shares nothing with it.
 #
-#   stage server          (build machine's arch)  workspace, minus supervisor/ ─▶ /out/browseros-claw-sdk
+#   stage server          (build machine's arch)  workspace minus supervisor/ and viewer ─▶ server
+#   context slimviewer    (target arch)          binary, web assets and notices from neo-slimviewer
 #   stage neo-sdk-runtime (target arch)           ubuntu + pinned browser .deb + server
-#                                                 + supervisor/ + provenance
+#                                                 + slimviewer + supervisor/ + provenance
 #   stage neo-sdk-keyed   neo-sdk-runtime + CAPTCHA keys from BuildKit secrets (build.sh --*-key-file)
 #   stage neo-sdk         neo-sdk-runtime as is: keyless, the default target
 
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+# Keep RUST_IMAGE in sync with ../../neo-slimviewer/Dockerfile.
 ARG RUST_IMAGE=rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
 
 # The server, cross-compiled on the build machine's own architecture exactly as
@@ -26,8 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv &&
  && ln -s "$(/opt/zig/bin/python -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)')/zig" /usr/local/bin/zig \
  && cargo install --locked cargo-zigbuild --version 0.23.0
 WORKDIR /src
-# The supervisor is not a server source: leaving it out keeps a supervisor edit from recompiling
-# the server, and keeps it out of the server's source digest.
+# The supervisor is installed at runtime and does not belong in the server's source digest.
 COPY --exclude=crates/neo-sdk/neo-server/docker/supervisor . .
 # The target cache is per architecture and shared by every checkout built on this Docker daemon,
 # so third-party crates compile once; the registry is shared by both architectures.
@@ -49,14 +50,17 @@ RUN --mount=type=cache,id=neo-sdk-cargo-registry,target=/usr/local/cargo/registr
     if [ -n "$NEO_SDK_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$NEO_SDK_BUILD_JOBS"; fi; \
     bash crates/neo-sdk/neo-server/docker/build-server.sh "$target"
 
+# build.sh supplies a named context that replaces this entire stage. A bare build
+# reaches the diagnostic without resolving a slimviewer image from a registry.
+FROM ${UBUNTU_IMAGE} AS slimviewer
+RUN echo 'Missing slimviewer build context. Run neo-server/docker/build.sh to build the SDK image.' >&2 && exit 1
+
 FROM ${UBUNTU_IMAGE} AS neo-sdk-runtime
 ARG TARGETARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 
-# No novnc/websockify: an SDK image serves no viewer. python3 is listed itself because neo-quit
-# (a clean CDP Browser.close at shutdown, so cookies are flushed) needs it, and only websockify
-# pulled it into the Neo image.
+# slimviewer connects directly to Xvnc. neo-quit uses python3 to flush browser state at shutdown.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl jq tini python3 \
@@ -99,6 +103,14 @@ COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/healthcheck.sh /us
 COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/neo-quit.py /usr/local/bin/neo-quit
 COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-playwright/third_party/playwright/LICENSE crates/neo-sdk/neo-playwright/third_party/playwright/NOTICE /usr/share/doc/neo-sdk/playwright/
 
+COPY --from=slimviewer /usr/local/bin/slimviewer /usr/local/bin/slimviewer
+COPY --from=slimviewer /usr/share/slimviewer/ /usr/share/slimviewer/
+COPY --from=slimviewer /usr/share/doc/slimviewer/ /usr/share/doc/slimviewer/
+RUN set -eu; while read -r package; do \
+      [ "$(dpkg-query -W -f='${db:Status-Status}' "$package")" = installed ] \
+        || { echo "missing slimviewer runtime package: $package" >&2; exit 1; }; \
+    done < /usr/share/slimviewer/RUNTIME-DEPS
+
 # What this image is made of, for hosts and for accept.sh: the source commit, the browser, and
 # the server binary as installed (its sha256, the version compiled into it, and the digest of the
 # sources it was compiled from, which must equal the digest of the sources this build copied;
@@ -110,14 +122,23 @@ COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-pla
 ARG NEO_SDK_REVISION=unknown
 ARG NEO_SDK_DIRTY=true
 ARG NEO_SDK_VERSION=unknown
+# Read the same OpenH264 pin that build.rs verified when it linked the binary.
 RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); \
+    read -r openh264_version openh264_revision < /usr/share/doc/slimviewer/OPENH264-SOURCE; \
     jq -n --arg version "$NEO_SDK_VERSION" --arg revision "$NEO_SDK_REVISION" --argjson dirty "$NEO_SDK_DIRTY" --arg arch "$TARGETARCH" \
       --arg browser "$NEO_BROWSER_VERSION" --arg deb "$(dpkg-query -W -f '${Version}' browserclaw)" \
+      --arg slimviewer_sha256 "$(sha256sum /usr/local/bin/slimviewer | cut -d' ' -f1)" \
+      --arg openh264_version "${openh264_version#v}" --arg openh264_revision "$openh264_revision" \
       --arg server_sha256 "$(sha256sum "$server" | cut -d' ' -f1)" \
       --arg marker "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-version=[^;]*' "$server" | head -1 | cut -d= -f2)" \
       --arg sources "$(cat /usr/share/neo-sdk/source-digest)" --arg path "$server" \
       --arg built_from "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-source=[0-9a-f]{64}' "$server" | head -1 | cut -d= -f2)" \
-      '{version: $version, revision: $revision, dirty: $dirty, arch: $arch, source_digest: $sources, browser: {version: $browser, deb: $deb}, server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}, captchaKeys: []}' \
+      '{version: $version, revision: $revision, dirty: $dirty, arch: $arch, source_digest: $sources, \
+        browser: {version: $browser, deb: $deb}, \
+        server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, \
+                 source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}, \
+        slimviewer: {sha256: $slimviewer_sha256, encoders: ["openh264"], \
+                     openh264: {version: $openh264_version, revision: $openh264_revision}}, captchaKeys: []}' \
       > /usr/share/neo-sdk/provenance.json; \
     [ "$(jq -r '.server.source_digest == .source_digest' /usr/share/neo-sdk/provenance.json)" = true ] \
       || { echo "the installed server was not compiled from this build's sources" >&2; exit 1; }
@@ -141,6 +162,7 @@ ENV NEO_SCREEN=1600x1000 \
     PGID=1000
 
 LABEL org.opencontainers.image.title="BrowserOS Neo SDK" \
+      io.browseros.slimviewer.encoders="openh264" \
       org.opencontainers.image.source="https://github.com/browseros-ai/BrowserOS" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.revision="$NEO_SDK_REVISION" \

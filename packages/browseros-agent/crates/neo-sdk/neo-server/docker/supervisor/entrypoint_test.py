@@ -1205,6 +1205,117 @@ class StartDisplayTest(unittest.TestCase):
         self.assertEqual(display.spawned[0], TODAY_XVNC + CLIPBOARD_OFF)
 
 
+class SlimviewerTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.viewer = self.directory / "slimviewer"
+        self.argv = self.directory / "setpriv-argv"
+        # setpriv records the privilege change, then execs the real env command.
+        stub = self.directory / "setpriv"
+        stub.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$@\" > '{self.argv}'\n"
+            'shift 4\nexec "$@"\n'
+        )
+        stub.chmod(0o755)
+
+    def launch(self, setting: str | None = None, installed: bool = True) -> subprocess.CompletedProcess:
+        if installed:
+            self.viewer.write_text(
+                "#!/bin/sh\n"
+                'printf "viewer %s %s\\n" "$$" "$PPID"\n'
+                'printf "host token %s\\n" "${CLAW_HOST_TOKEN_FILE-unset}"\n'
+            )
+            self.viewer.chmod(0o755)
+        parse = SCRIPT[SCRIPT.index("SLIMVIEWER_ENABLED=0\n"):SCRIPT.index("readonly SLIMVIEWER_ENABLED")]
+        given = "unset NEO_SLIMVIEWER" if setting is None else f"NEO_SLIMVIEWER={shlex.quote(setting)}"
+        return run_bash(
+            f"{given}\nPATH='{self.directory}':$PATH\n"
+            "export CLAW_HOST_TOKEN_FILE=/private/token\n"
+            "NEO_HOME=/home/neo stopping=0 slimviewer_pid=''\n"
+            'log() { echo "$*"; }\ndie() { echo "$*" >&2; exit 1; }\n'
+            + shell_function("is_true") + parse
+            + shell_function("start_slimviewer").replace("/usr/local/bin/slimviewer", str(self.viewer))
+            + 'start_slimviewer\nif [ -n "$slimviewer_pid" ]; then\n'
+            '  printf "tracked %s %s\\n" "$slimviewer_pid" "$$"\n  wait "$slimviewer_pid"\nfi\n',
+            check=False,
+        )
+
+    def test_default_launch_is_a_direct_child_with_fixed_privileges_env_and_ports(self):
+        result = self.launch()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.argv.read_text().splitlines(), [
+            "--reuid=neo", "--regid=neo", "--init-groups", "--no-new-privs",
+            "env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/home/neo",
+            str(self.viewer), "--display", ":1", "--rfb", "127.0.0.1:5900",
+            "--listen", "127.0.0.1:5910", "--listen-view", "127.0.0.1:5911",
+        ])
+        tracked = re.search(r"^tracked (\d+ \d+)$", result.stdout, re.MULTILINE)
+        self.assertIsNotNone(tracked)
+        self.assertIn(f"viewer {tracked[1]}", result.stdout.splitlines())
+        self.assertIn("host token unset", result.stdout.splitlines())
+
+    def test_false_spellings_skip_an_installed_viewer(self):
+        for setting in ["0", "false", "nO", "OFF"]:
+            with self.subTest(setting=setting):
+                result = self.launch(setting)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(result.stdout.splitlines()), 1)
+                self.assertIn("disabled", result.stdout)
+                self.assertFalse(self.argv.exists())
+
+    def test_invalid_setting_stops_startup(self):
+        result = self.launch("sometimes")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected true or false, got 'sometimes'", result.stderr)
+        self.assertFalse(self.argv.exists())
+
+    def test_missing_binary_is_logged_and_skipped(self):
+        result = self.launch(installed=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.stdout.splitlines()), 1)
+        self.assertIn("missing", result.stdout)
+        self.assertFalse(self.argv.exists())
+
+    def after_exit(self, stopping: bool) -> list[str]:
+        """A pipe releases the retry timer at five seconds on the test clock."""
+        clock = self.directory / "clock"
+        os.mkfifo(clock)
+        delay = next(line for line in SCRIPT.splitlines() if line.startswith("readonly SLIMVIEWER_RESTART_DELAY="))
+        result = run_bash(
+            f"exec 3<>'{clock}'\n{delay}\n"
+            'log() { echo "$*"; }\n'
+            'sleep() { echo "delay $1"; read -r -t 5 elapsed <&3; }\n'
+            'start_slimviewer() { echo "started at $tick"; }\n'
+            'term_neo() { :; }\n'
+            + shell_function("poll_slimviewer") + shell_function("on_term")
+            + "stopping=0 slimviewer_retry_pid='' tick=0\n"
+            + "(exit 23) &\nslimviewer_pid=$!\n"
+            + 'while kill -0 "$slimviewer_pid" 2>/dev/null; do command sleep 0.01; done\n'
+            + "poll_slimviewer\ntick=4\npoll_slimviewer\necho polled\n"
+            + ("on_term\n" if stopping else "")
+            + "tick=5\necho elapsed >&3\nwait\npoll_slimviewer\n"
+        )
+        return result.stdout.splitlines()
+
+    def test_exit_is_logged_and_polling_continues_until_the_five_second_retry(self):
+        events = self.after_exit(stopping=False)
+
+        self.assertTrue(any("slimviewer exited with status 23" in line for line in events))
+        self.assertIn("delay 5", events)
+        self.assertIn("polled", events)
+        self.assertEqual([line for line in events if line.startswith("started")], ["started at 5"])
+
+    def test_stop_during_the_retry_delay_prevents_relaunch(self):
+        events = self.after_exit(stopping=True)
+
+        self.assertIn("delay 5", events)
+        self.assertFalse(any(line.startswith("started") for line in events))
+
+
 class ConfigureNeoTest(unittest.TestCase):
     PUT_SETTINGS = [
         "-fsS", "-X", "PUT", "http://127.0.0.1:9010/api/v1/settings/agent",
@@ -1254,12 +1365,13 @@ class ConfigureNeoTest(unittest.TestCase):
 
 
 class ShutdownTest(unittest.TestCase):
-    def terminated(self, websockify_pid: str) -> list[str]:
+    def terminated(self, websockify_pid: str, slimviewer_pid: str = "", retry_pid: str = "") -> list[str]:
         """The arguments of shutdown's SIGTERM to the display, once Neo has stopped."""
         result = run_bash(
             "kill() { local IFS=$'\\t'; echo \"$*\"; }\n"
             "wait() { :; }\n"
             "neo_pid='' configure_pid=''\n"
+            f"slimviewer_pid='{slimviewer_pid}' slimviewer_retry_pid='{retry_pid}'\n"
             f"websockify_pid='{websockify_pid}' openbox_pid=3 vncconfig_pid=2 xvnc_pid=1\n"
             + shell_function("shutdown")
             + "shutdown 0\n"
@@ -1271,6 +1383,12 @@ class ShutdownTest(unittest.TestCase):
 
     def test_a_viewer_that_never_started_is_skipped(self):
         self.assertEqual(self.terminated(""), ["-TERM", "3", "2", "1"])
+
+    def test_slimviewer_receives_term_before_the_display(self):
+        self.assertEqual(self.terminated("", slimviewer_pid="5"), ["-TERM", "5", "3", "2", "1"])
+
+    def test_shutdown_cancels_a_pending_retry_before_waiting(self):
+        self.assertEqual(self.terminated("", retry_pid="6"), ["-TERM", "6", "3", "2", "1"])
 
 
 class HealthcheckTest(unittest.TestCase):

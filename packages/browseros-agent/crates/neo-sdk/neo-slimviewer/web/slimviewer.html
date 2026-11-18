@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neo</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  /* pinch-zoom: one finger drives Neo, two fingers zoom the owner's page (host's rule). */
+  #screen { position: absolute; display: block; touch-action: pinch-zoom; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  /* 16 px keeps iOS from zooming the page when the field takes focus. */
+  #noVNC_keyboardinput { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0;
+    font-size: 16px; resize: none; caret-color: transparent; }
+  #cover { position: fixed; inset: 0; z-index: 3; display: grid; place-items: center; padding: 24px; background: #111;
+    color: #bbb; font: 15px/1.4 -apple-system, system-ui, sans-serif; text-align: center; }
+  #cover[hidden], #controls[hidden] { display: none; }
+  #controls { position: fixed; right: 12px; bottom: 12px; z-index: 2; display: flex; gap: 4px; padding: 4px;
+    border-radius: 26px; background: #1d1d1ff0; }
+  #controls button { min-width: 48px; height: 44px; padding: 0 14px; border: 0; border-radius: 22px; background: none;
+    color: #f5f5f7; font: 500 15px -apple-system, system-ui, sans-serif; }
+  #controls button:active, #controls button[aria-pressed="true"] { background: #f5f5f7; color: #1d1d1f; }
+  .slimviewer-desktop #controls, .slimviewer-desktop #host_pill { display: none !important; }
+  #clipboard-status { position: fixed; top: 12px; right: 12px; z-index: 4; padding: 8px 12px;
+    background: #222; color: #fff; border-radius: 6px; font: 14px system-ui, sans-serif; }
+  #clipboard-status:empty { display: none; }
+</style>
+<canvas id="screen"></canvas>
+<!-- noVNC_keyboardinput: the id host's takeover pill (host-pill.js) tracks for keyboard focus. -->
+<textarea id="noVNC_keyboardinput" aria-hidden="true" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+<div id="controls" data-paste="idle" hidden><button id="kbd-btn" type="button" aria-pressed="false">Keyboard</button><button id="paste-btn" type="button" aria-live="polite">Paste</button></div>
+<div id="cover">Connecting…</div>
+<div id="clipboard-status" role="status" aria-live="polite"></div>
+<!-- SV_PROBE_BEGIN -->
+<script>
+(() => {
+  if (new URLSearchParams(location.search).get('probe') !== '1') return;
+  const now = () => performance.now(), limit = 20000;
+  const push = (list, value) => { if (list.length >= limit) list.splice(0, 1000); list.push(value); };
+  const quant = (xs, q) => { const a = xs.slice().sort((a, b) => a - b); return a.length ? a[Math.ceil(q * a.length) - 1] : null; };
+  const summary = xs => ({ n: xs.length, p50: quant(xs, .5), p95: quant(xs, .95), max: xs.length ? Math.max(...xs) : null });
+  let start, frames, inputs, gaps, motions, pending, effects, active, motionAt, lastDraw, fieldBox, lastTap, errors, explicitMotion, autoUntil;
+  const received = new Map();
+  function reset() {
+    start = now(); frames = []; inputs = []; gaps = []; motions = []; pending = []; effects = [];
+    active = false; explicitMotion = false; autoUntil = 0; motionAt = null; lastDraw = null; fieldBox = null; lastTap = null; errors = []; received.clear();
+  }
+  reset();
+  function finishGap(at) {
+    const from = Math.max(lastDraw ?? motionAt, motionAt);
+    if (at > from) push(gaps, { at: from, ms: at - from });
+  }
+  function setMotion(on, explicit = true) {
+    if (explicit) explicitMotion = true;
+    if (on === active) return;
+    if (on) { motionAt = now(); motions.push({start: motionAt, end: null}); }
+    else { finishGap(now()); motions[motions.length - 1].end = now(); }
+    active = on;
+  }
+  function endAutomaticMotion() {
+    if (active && !explicitMotion && now() > autoUntil) {
+      finishGap(autoUntil); motions[motions.length-1].end = autoUntil; active = false;
+    }
+  }
+  function expire() {
+    const at = now();
+    for (const e of pending) if (at - e.at >= 3000) { e.missed = true; push(effects, {kind:e.kind,at:e.at,missed:true}); }
+    pending = pending.filter(e => !e.missed);
+  }
+  function arm(kind, box) {
+    expire();
+    const c = document.getElementById('screen');
+    if (!c || !box) return;
+    const x = Math.max(0, Math.min(c.width - 1, Math.floor(box[0]))), y = Math.max(0, Math.min(c.height - 1, Math.floor(box[1])));
+    const w = Math.max(1, Math.min(c.width - x, Math.ceil(box[2]))), h = Math.max(1, Math.min(c.height - y, Math.ceil(box[3])));
+    const at = now(); push(inputs, {kind, at, box:[x,y,w,h]});
+    try {
+      if (pending.length >= 64) { const old = pending.shift(); push(effects, {kind:old.kind,at:old.at,missed:true,reason:'overlap-limit'}); }
+      pending.push({kind, at, box:[x,y,w,h], pixels:c.getContext('2d').getImageData(x,y,w,h).data});
+    } catch (e) { push(errors, String(e)); push(effects, {kind,at,missed:true,reason:'readback'}); }
+  }
+  const NativeSocket = window.WebSocket;
+  window.WebSocket = class extends NativeSocket {
+    constructor(...args) {
+      super(...args);
+      let remainder = new Uint8Array();
+      this.addEventListener('message', event => {
+        // The viewer requests ArrayBuffer; do not defer parsing behind its draw callback.
+        if (!(event.data instanceof ArrayBuffer)) return;
+        const chunk = new Uint8Array(event.data), buf = new Uint8Array(remainder.length + chunk.length);
+        buf.set(remainder); buf.set(chunk, remainder.length);
+        let offset = 0;
+        while (offset + 4 <= buf.length) {
+          const len = new DataView(buf.buffer, offset, 4).getUint32(0);
+          if (!len || len > 16 * 1024 * 1024) { remainder = new Uint8Array(); return; }
+          if (offset + len + 4 > buf.length) break;
+          const r = buf.subarray(offset + 4, offset + 4 + len);
+          if (r[0] === 2 && r.length > 10) {
+            const d = new DataView(r.buffer, r.byteOffset, r.byteLength), seq = d.getUint32(1);
+            if (received.size >= 256) received.delete(received.keys().next().value);
+            received.set(seq, {seq, arrive:now(), bytes:len+4, key:!!(r[5]&1), sharp:!!(r[5]&2), half:!!(r[5]&4), twoThirds:!!(r[5]&8), width:d.getUint16(6), height:d.getUint16(8)});
+          }
+          offset += len + 4;
+        }
+        remainder = buf.slice(offset);
+      });
+    }
+    send(data) {
+      const b = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+      if (b?.length >= 6 && ((b[4] === 0x21 && b.length === 10 && b[9] === 1) || b[4] === 0x23)) arm('key', fieldBox || lastTap);
+      return super.send(data);
+    }
+  };
+  const originalDraw = CanvasRenderingContext2D.prototype.drawImage;
+  CanvasRenderingContext2D.prototype.drawImage = function(source, ...args) {
+    const result = originalDraw.call(this, source, ...args);
+    if (this.canvas.id !== 'screen' || typeof source.timestamp !== 'number') return result;
+    endAutomaticMotion();
+    const at = now(), meta = received.get(source.timestamp);
+    received.delete(source.timestamp);
+    if (active) finishGap(at);
+    lastDraw = at;
+    push(frames, {...meta, seq:source.timestamp, draw:at, decodeMs:meta ? at-meta.arrive : null, motion:active});
+    expire();
+    for (const e of pending) {
+      try {
+        const pixels = this.getImageData(...e.box).data;
+        let diff = 0;
+        for (let i = 0; i < pixels.length; i += 4) diff += Math.abs(.299*(pixels[i]-e.pixels[i]) + .587*(pixels[i+1]-e.pixels[i+1]) + .114*(pixels[i+2]-e.pixels[i+2]));
+        if (diff / (pixels.length / 4) > 4) { e.done = true; push(effects, {kind:e.kind,at:e.at,visibleMs:at-e.at,seq:source.timestamp,box:e.box,missed:false}); }
+      } catch (err) { e.done = true; push(effects, {kind:e.kind,at:e.at,missed:true,reason:'readback'}); push(errors, String(err)); }
+    }
+    pending = pending.filter(e => !e.done);
+    return result;
+  };
+  let pointer = null, lastDrag = -Infinity;
+  addEventListener('pointerdown', e => {
+    if (e.target.id === 'screen') pointer = {id:e.pointerId,x:e.clientX,y:e.clientY,at:now(),drag:false};
+  }, true);
+  addEventListener('pointermove', e => {
+    if (pointer?.id === e.pointerId && Math.hypot(e.clientX-pointer.x,e.clientY-pointer.y) >= 10) {
+      pointer.drag = true;
+      if (!explicitMotion) { autoUntil = now() + 250; setMotion(true, false); }
+      if (now() - lastDrag >= 400) {
+        lastDrag = now(); const c = document.getElementById('screen'), r = c.getBoundingClientRect();
+        arm('drag', [(e.clientX-r.left)*c.width/r.width-48,(e.clientY-r.top)*c.height/r.height-48,96,96]);
+      }
+    }
+  }, true);
+  addEventListener('pointerup', e => {
+    if (!pointer || e.pointerId !== pointer.id) return;
+    if (!pointer.drag && now()-pointer.at < 500) {
+      const c = document.getElementById('screen'), r = c.getBoundingClientRect();
+      const x=(e.clientX-r.left)*c.width/r.width, y=(e.clientY-r.top)*c.height/r.height;
+      lastTap = [x-48,y-48,96,96]; arm('tap', lastTap);
+    }
+    pointer = null;
+  }, true);
+  addEventListener('pointercancel', () => { pointer = null; }, true);
+  addEventListener('message', e => {
+    if (e.data?.type !== 'host-keyboard' || !lastTap) return;
+    const gm = e.data.geometry, c = document.getElementById('screen');
+    if (gm?.width !== c.width || gm?.height !== c.height || !Array.isArray(gm.boxes)) return;
+    const x=lastTap[0]+48,y=lastTap[1]+48;
+    fieldBox=gm.boxes.find(b=>Array.isArray(b)&&b.length===4&&b.every(Number.isFinite)&&x>=b[0]&&y>=b[1]&&x<=b[0]+b[2]&&y<=b[1]+b[3]) || fieldBox;
+  });
+  function effectSummary(kind, from=start, to=Infinity) {
+    const selected = effects.filter(e => e.kind===kind && e.at>=from && e.at<to);
+    return {...summary(selected.filter(e=>!e.missed).map(e=>e.visibleMs)), missed:selected.filter(e=>e.missed).length, pending:pending.filter(e=>e.kind===kind && e.at>=from && e.at<to).length};
+  }
+  function snapshot() {
+    endAutomaticMotion(); expire(); const at=now(), live=frames.filter(f=>f.motion), allGaps=gaps.slice();
+    if (active) { const from=Math.max(lastDraw??motionAt,motionAt); if(at>from) allGaps.push({at:from,ms:at-from}); }
+    const flips=[]; let previous;
+    for (const f of live) { const scale=f.half?'half':f.twoThirds?'twoThirds':'full'; if(previous && previous.scale!==scale) flips.push({at:f.draw,from:previous.scale,to:scale}); previous={scale}; }
+    const motionMs=motions.reduce((n,m)=>n+(m.end??at)-m.start,0);
+    const trend=[];
+    for(let t=start;t<at;t+=10000) {
+      const end=Math.min(at,t+10000), selected=frames.filter(f=>f.draw>=t&&f.draw<end);
+      trend.push({t:t-start, intervalP95:quant(allGaps.filter(g=>g.at>=t&&g.at<end).map(g=>g.ms),.95), tapP50:effectSummary('tap',t,end).p50,keyP50:effectSummary('key',t,end).p50,dragP50:effectSummary('drag',t,end).p50,dragP95:effectSummary('drag',t,end).p95,decodeP95:quant(selected.map(f=>f.decodeMs).filter(Number.isFinite),.95),kbps:selected.reduce((n,f)=>n+(f.bytes||0),0)*8/Math.max(1,end-t)});
+    }
+    const selected=live.length?live:frames;
+    const half=selected.filter(f=>f.half).length, thirds=selected.filter(f=>f.twoThirds).length;
+    return JSON.parse(JSON.stringify({v:1,start,at,durationMs:at-start,motionMs,
+      frames:{n:frames.length,motionN:live.length,intervalMs:summary(allGaps.map(g=>g.ms)),freezes:allGaps.filter(g=>g.ms>500),halfFramesPct:selected.length?100*half/selected.length:null,scaleShare:{half:selected.length?half/selected.length:null,twoThirds:selected.length?thirds/selected.length:null,full:selected.length?(selected.length-half-thirds)/selected.length:null},flips,flipsPerMin:motionMs?flips.length*60000/motionMs:0},
+      tapMs:effectSummary('tap'),keyMs:effectSummary('key'),dragMs:effectSummary('drag'),decodeMs:summary(frames.map(f=>f.decodeMs).filter(Number.isFinite)),kbps:frames.reduce((n,f)=>n+(f.bytes||0),0)*8/Math.max(1,at-start),trend,errors,
+      raw:{frames,inputs,effects,motions,gaps:allGaps}}));
+  }
+  window.__svProbe = {reset,snapshot,setMotion,setFieldBox(box) { fieldBox=box; }};
+})();
+</script>
+<!-- SV_PROBE_END -->
+<script>
+'use strict';
+// slimviewer's page: H.264 records in over one WebSocket (wire table in design-rust.md §4),
+// decoded by the phone's own decoder (WebCodecs, Annex B), drawn on a canvas; touch, keys and
+// paste go back. It keeps host's viewer contract: host-viewer states, host-sizing/host-layout,
+// host-keyboard tap-to-type, and window.__stats / window.__probe for the measuring rig.
+const q = new URLSearchParams(location.search);
+// host injects its parent origins (as it does in host-keyboard.js); ?parents= is for local tests.
+const parents = (window.SLIM_PARENT_ORIGINS || (q.get('parents') || '').split(',')).filter(Boolean);
+const framed = parent !== window;
+const $ = id => document.getElementById(id);
+const canvas = $('screen'), g = canvas.getContext('2d', { alpha: false }), kbd = $('noVNC_keyboardinput'), cover = $('cover');
+const stats = window.__stats = { frames: 0, w: 0, h: 0, state: 'connecting', bytes: 0, errors: 0, codec: '', decodeMs: 0 };
+const T = { HELLO: 1, FRAME: 2, CLIP: 3, PASTE_RESULT: 4, FIELDS: 5, ACK: 0x10, KEYFRAME: 0x11,
+  POINTER: 0x20, KEY: 0x21, PASTE: 0x22, TYPE: 0x23, CLIPBOARD_WATCH: 0x24, WHEEL: 0x25, PASTE_TX: 0x26, FIELDS_WATCH: 0x27 };
+let viewOnly = q.get('view_only') === '1', connected = false, ownerConnection = false, supportsType = false, capabilities = 0;
+document.documentElement.classList.toggle('slimviewer-desktop', !navigator.maxTouchPoints && !matchMedia('(any-pointer: coarse)').matches);
+// What host's takeover pill asks noVNC's UI object (web/ui.js answers from here), and the root
+// classes its skin keys on.
+window.slimviewer = new class extends EventTarget {
+  get connected() { return connected; }
+  get viewOnly() { return viewOnly; }
+  get state() { return stats.state; }
+  paste() { return pasteFromPhone(); }
+  type(text) { return typeText(text); }
+  key(name) { return pressKey(name); }
+}();
+document.documentElement.classList.toggle('noVNC_touch', matchMedia('(pointer: coarse)').matches);
+
+// ---- the parent page (host owner page / dashboard)
+const report = state => {
+  if (state !== 'input') {
+    stats.state = state;
+    window.slimviewer.dispatchEvent(new CustomEvent('state', { detail: state }));
+  }
+  if (state === 'ready' || state === 'input') window.slimviewer.dispatchEvent(new Event(state));
+  if (framed) for (const o of parents) parent.postMessage({ type: 'host-viewer', state }, o);
+};
+
+// ---- transport: records may arrive split across, or packed into, WebSocket messages
+const MAX_RECORD = 16 * 1024 * 1024, MAX_FRAMES = 16, MAX_PASTE = 64 * 1024;
+const RETRY_MIN = 250, RETRY_MAX = 10000;
+let ws = null, pending = new Uint8Array(0), session = 0, stopped = false;
+let retryTimer = null, retryDelay = RETRY_MIN;
+function resetConnection() {
+  session++;
+  connected = false; ready = false; drawn = false; ownerConnection = false; supportsType = false;
+  clearTimeout(settling); settling = null; settlingAt = '';
+  clearTimeout(gesture?.timer); gesture = null; fingers.clear(); ignoreFingers = false;
+  mouseButtons = 0; wheelX = 0; wheelY = 0; geometry = null; fieldGeometry = null; capabilities = 0;
+  cancelAnimationFrame(wheelFrame); wheelFrame = null;
+  heldKeys.clear(); remoteModifiers.clear(); modifierCodes.clear(); commandMapped = null; cancelCopy();
+  pending = new Uint8Array(0); frames = []; arrived.clear();
+  try { decoder?.close(); } catch {}
+  decoder = null; dw = 0; dh = 0; dcodec = ''; needKey = true; askedKey = false;
+  document.documentElement.classList.remove('noVNC_connected');
+  $('controls').hidden = true;
+  pasteLabel('idle');
+  resetField();
+  resetPaste();
+}
+function retry() {
+  if (stopped || retryTimer !== null) return;
+  retryTimer = setTimeout(() => { retryTimer = null; connect(); }, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
+}
+function connect() {
+  if (stopped) return;
+  if (!segmenter) return unsupported();
+  resetConnection(); report('connecting'); showCover('Connecting…');
+  let socket;
+  try { socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/${q.get('path') || 'slim'}`); }
+  catch { report('disconnected'); showCover('Disconnected. Reconnecting…'); retry(); return; }
+  ws = socket; socket.binaryType = 'arraybuffer';
+  socket.onmessage = ({ data }) => {
+    if (socket !== ws || stopped || socket.readyState !== WebSocket.OPEN) return;
+    const chunk = new Uint8Array(data);
+    if (pending.length + chunk.length > MAX_RECORD + 4) return badRecord();
+    stats.bytes += chunk.length;
+    let buf = chunk;
+    if (pending.length) { buf = new Uint8Array(pending.length + chunk.length); buf.set(pending); buf.set(chunk, pending.length); }
+    let at = 0;
+    while (buf.length - at >= 4) {
+      const len = new DataView(buf.buffer, buf.byteOffset + at, 4).getUint32(0);
+      if (!len || len > MAX_RECORD) return badRecord();
+      if (buf.length - at - 4 < len) break;
+      record(buf.subarray(at + 4, at + 4 + len));
+      if (socket !== ws || stopped || socket.readyState !== WebSocket.OPEN) return;
+      at += 4 + len;
+    }
+    pending = buf.slice(at);
+  };
+  socket.onerror = () => socket.close();
+  socket.onclose = () => {
+    if (socket !== ws) return;
+    ws = null; resetConnection();
+    if (stopped) return;
+    report('disconnected'); showCover('Disconnected. Reconnecting…'); retry();
+  };
+}
+function badRecord() { ws?.close(4002, 'Invalid viewer record'); }
+function endSession(state, message) {
+  stopped = true; clearTimeout(retryTimer); retryTimer = null;
+  const socket = ws; ws = null; resetConnection(); socket?.close();
+  report(state); showCover(message);
+}
+function unsupported() {
+  endSession('unsupported', 'This browser cannot show the live screen. Use a newer browser.');
+}
+function send(type, payload = []) {
+  if (ws?.readyState !== WebSocket.OPEN || stopped) return;
+  if (type >= T.POINTER && (!connected || viewOnly)) return;
+  const m = new Uint8Array(5 + payload.length);
+  new DataView(m.buffer).setUint32(0, payload.length + 1);
+  m[4] = type; m.set(payload, 5);
+  ws.send(m);
+}
+const be = (n, bytes) => Array.from({ length: bytes }, (_, i) => (n >>> (8 * (bytes - 1 - i))) & 255);
+
+function record(r) {
+  if (r[0] === T.HELLO) {
+    if (r.length !== 3 || r[1] !== 1) return badRecord();
+    if (connected) {
+      // The server revokes ownership before closing a replaced owner's connection.
+      if (ownerConnection && (r[2] & 1) === 1) return endSession('disconnected', 'This screen was opened in another tab.');
+      return badRecord();
+    }
+    if (typeof VideoDecoder !== 'function' || typeof VideoDecoder.isConfigSupported !== 'function') return unsupported();
+    ownerConnection = (r[2] & 1) === 0;
+    viewOnly = q.get('view_only') === '1' || (r[2] & 1) === 1;
+    supportsType = (r[2] & 2) !== 0;
+    connected = true;
+    capabilities = r[2] & 62;
+    if (!viewOnly && (capabilities & 4)) send(T.CLIPBOARD_WATCH);
+    if (!viewOnly && (capabilities & 32)) send(T.FIELDS_WATCH);
+    document.documentElement.classList.add('noVNC_connected');
+    $('controls').hidden = viewOnly || Boolean($('host_pill')); // host brings its own pill
+    report('connected');
+    return;
+  }
+  if (r[0] === T.CLIP) {
+    if (!canInput() || !(capabilities & 4)) return;
+    if (r.length > MAX_PASTE + 1) return badRecord();
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(r.subarray(1)); }
+    catch { return badRecord(); }
+    if (text.includes('\0')) return badRecord();
+    receiveClipboard(text);
+    return;
+  }
+  if (r[0] === T.PASTE_RESULT) {
+    if (canInput() && (capabilities & 16)) receivePasteResult(r);
+    return;
+  }
+  if (r[0] === T.FIELDS) {
+    if (canInput() && (capabilities & 32)) receiveFields(r);
+    return;
+  }
+  if (r[0] !== T.FRAME) return;
+  if (!connected || r.length <= 10) return badRecord();
+  const d = new DataView(r.buffer, r.byteOffset, r.byteLength);
+  const w = d.getUint16(6), h = d.getUint16(8);
+  if (!w || !h || w * h > 16 * 1024 * 1024 || frames.length + arrived.size >= MAX_FRAMES) return badRecord();
+  frames.push([d.getUint32(1), (r[5] & 1) === 1, w, h, r.slice(10), (r[5] & 4) === 4]);
+  drainFrames();
+}
+
+// ---- decode: Annex B, so no `description`; the codec string comes from the SPS
+let decoder = null, dw = 0, dh = 0, dcodec = '', needKey = true, askedKey = false;
+let frames = [], processing = null;
+// seq → [when its record was complete (stats.decodeMs), picture scale: 2 for a half-size motion frame]
+const arrived = new Map();
+function codecOf(au) {
+  for (let i = 0; i + 6 < au.length; i++) {
+    if (au[i] === 0 && au[i + 1] === 0 && au[i + 2] === 1 && (au[i + 3] & 0x1f) === 7) {
+      return 'avc1.' + [au[i + 4], au[i + 5], au[i + 6]].map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  }
+  return dcodec;
+}
+async function drainFrames() {
+  const token = session;
+  if (processing === token) return;
+  processing = token;
+  try {
+    while (token === session && frames.length) {
+      try { await decode(token, ...frames.shift()); }
+      catch (error) { if (token === session) decodeError(error); }
+    }
+  } finally {
+    if (processing === token) processing = null;
+  }
+}
+function decodeError(error) {
+  stats.errors++; stats.error = String(error.message);
+  if (error.name === 'NotSupportedError') return unsupported();
+  for (const seq of arrived.keys()) send(T.ACK, be(seq, 4));
+  arrived.clear();
+  try { decoder?.close(); } catch {}
+  decoder = null; needKey = true;
+  if (!askedKey) { askedKey = true; send(T.KEYFRAME); }
+}
+async function decode(token, seq, key, w, h, au, half) {
+  if (key) {
+    const codec = codecOf(au);
+    if (!decoder || decoder.state === 'closed' || w !== dw || h !== dh || codec !== dcodec) {
+      if (!/^avc1\.[0-9a-f]{6}$/.test(codec)) return badRecord();
+      const config = { codec, codedWidth: w, codedHeight: h, optimizeForLatency: true };
+      const support = await VideoDecoder.isConfigSupported(config);
+      if (token !== session) return;
+      if (!support.supported) return unsupported();
+      try { decoder?.close(); } catch {}
+      arrived.clear();
+      const next = new VideoDecoder({
+        output: frame => {
+          if (token !== session || decoder !== next) return frame.close();
+          draw(frame);
+        },
+        error: error => { if (token === session && decoder === next) decodeError(error); },
+      });
+      decoder = next; decoder.configure(config);
+      [dw, dh, dcodec, stats.codec] = [w, h, codec, codec];
+    }
+    needKey = false; askedKey = false;
+  }
+  if (needKey || decoder?.state !== 'configured') {
+    send(T.ACK, be(seq, 4)); // never stall the server's window on a frame we cannot use
+    if (!askedKey) { askedKey = true; send(T.KEYFRAME); }
+    return;
+  }
+  arrived.set(seq, [performance.now(), half ? 2 : 1]);
+  decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: seq, data: au }));
+}
+function draw(frame) {
+  const seq = frame.timestamp, [t, k] = arrived.get(seq) || [undefined, 1];
+  arrived.delete(seq);
+  // The canvas is always the screen's size; a half-size frame is drawn scaled up.
+  const cw = frame.displayWidth * k, ch = frame.displayHeight * k;
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; fit(); }
+  g.drawImage(frame, 0, 0, cw, ch);
+  frame.close();
+  stats.frames++; stats.w = canvas.width; stats.h = canvas.height;
+  if (t !== undefined) stats.decodeMs += (performance.now() - t - stats.decodeMs) / 16;
+  window.__probe?.(canvas);
+  send(T.ACK, be(seq, 4)); // the ack is the congestion signal: drawn, not just received
+  retryDelay = RETRY_MIN;
+  drawn = true; settle();
+}
+function fit() {
+  const W = innerWidth, H = innerHeight, cw = canvas.width || W, ch = canvas.height || H, s = Math.min(W / cw, H / ch);
+  Object.assign(canvas.style, { width: cw * s + 'px', height: ch * s + 'px', left: (W - cw * s) / 2 + 'px', top: (H - ch * s) / 2 + 'px' });
+}
+
+// ---- cover until "ready" (host-keyboard.js's rule): a frame drawn, the framebuffer equal to
+// floor(css × scale) rounded down to even once sizing is on, holding for 2 s; once per connection.
+// Once the parent's field geometry confirms Neo laid the page out at exactly this framebuffer size,
+// 250 ms is enough: Neo reports that geometry only while its page shows that layout.
+let sizing = false, layout = null, geometry = null, fieldGeometry = null, ready = false, drawn = false, settling = null, settlingAt = '';
+function showCover(text) { cover.textContent = text; cover.hidden = false; }
+function currentLayout() {
+  const css = [Math.min(Math.floor(innerWidth), 1920), Math.min(Math.floor(innerHeight), 1080)];
+  // Neo draws a phone at 1x or 2x only: any density above 1 asks for 2, so the framebuffer can match.
+  return { css, scale: css[0] <= 600 && (devicePixelRatio || 1) > 1 ? 2 : 1 };
+}
+function fitted() {
+  if (!connected || !drawn) return '';
+  const w = canvas.width, h = canvas.height;
+  if (sizing) {
+    const l = currentLayout();
+    if (w !== (Math.floor(l.css[0] * l.scale) & ~1) || h !== (Math.floor(l.css[1] * l.scale) & ~1)) return '';
+  }
+  return w + 'x' + h + (geometry && geometry.width === w && geometry.height === h ? ' confirmed' : '');
+}
+function settle() {
+  const size = ready ? '' : fitted();
+  if (settling && size === settlingAt) return;
+  clearTimeout(settling); settling = null; settlingAt = size;
+  if (!size) return;
+  settling = setTimeout(() => {
+    settling = null;
+    if (fitted() !== size) return settle();
+    ready = true; cover.hidden = true; report('ready');
+  }, size.endsWith(' confirmed') ? 250 : 2000);
+}
+function reportLayout(force) {
+  const next = currentLayout(), changed = !layout || layout.scale !== next.scale || layout.css.some((n, i) => n !== next.css[i]);
+  layout = next;
+  if (force || changed) for (const o of parents) parent.postMessage({ type: 'host-layout', ...layout }, o);
+  settle();
+}
+let layoutFrame = null;
+addEventListener('resize', () => {
+  fit(); geometry = null; settle();
+  if (sizing && !layoutFrame) layoutFrame = requestAnimationFrame(() => { layoutFrame = null; reportLayout(false); });
+});
+addEventListener('message', e => {
+  if (e.source !== parent || !parents.includes(e.origin)) return;
+  if (e.data?.type === 'host-sizing') { sizing = true; reportLayout(true); return; }
+  if (e.data?.type !== 'host-keyboard') return;
+  const gm = e.data.geometry, ok = gm && [gm.width, gm.height].every(n => Number.isInteger(n) && n > 0 && n <= 16384) &&
+    Array.isArray(gm.boxes) && gm.boxes.length <= 128 && gm.boxes.every(b => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite));
+  geometry = ok ? gm : null; if (ok) fieldGeometry = gm; settle();
+});
+// The owner page gives control back to host after 5 minutes without one of these.
+for (const type of ['pointerdown', 'pointermove', 'touchmove', 'wheel', 'keydown', 'input', 'paste']) {
+  addEventListener(type, e => {
+    if (e.isTrusted && (type !== 'pointermove' || e.buttons) && connected && !viewOnly) report('input');
+  }, { capture: true, passive: true });
+}
+
+// ---- touch and mouse. Tap = left click; a drag of 10 px or more = left-button drag on a phone
+// layout (≤600 css px: Neo's phone mode scrolls on drag) or wheel steps on a desktop one;
+// 500 ms still = right button held until lift; a second finger releases everything and the
+// browser pinch-zooms the owner page until all fingers lift.
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+function toScreen(x, y) {
+  const r = canvas.getBoundingClientRect();
+  return [clamp(Math.round((x - r.left) * canvas.width / r.width), 0, canvas.width - 1), clamp(Math.round((y - r.top) * canvas.height / r.height), 0, canvas.height - 1)];
+}
+let lastPointer = [0, 0];
+function pointer(x, y, buttons) { lastPointer = [x, y]; const [px, py] = toScreen(x, y); send(T.POINTER, [...be(px, 2), ...be(py, 2), buttons]); }
+const buttonMask = buttons => (buttons & 1) | ((buttons & 4) >> 1) | ((buttons & 2) << 1);
+const desktopLayout = () => q.get('swipe') ? q.get('swipe') === 'wheel' : (sizing ? currentLayout().css[0] : canvas.width) > 600;
+let gesture = null, fingers = new Set(), ignoreFingers = false, mouseButtons = 0;
+function release(tap) {
+  const t = gesture; gesture = null;
+  if (!t) return;
+  clearTimeout(t.timer);
+  if (t.mode === 'drag' || t.mode === 'hold') pointer(t.x, t.y, 0);
+  if (tap && t.mode === 'pending') { pointer(t.x0, t.y0, 0); pointer(t.x0, t.y0, 1); pointer(t.x0, t.y0, 0); tapToType(t.x0, t.y0); }
+}
+function wheelSteps(t) {
+  const step = 40, mask = (d, neg, pos) => (d < 0 ? neg : pos);
+  for (const [axis, neg, pos] of [['y', 16, 8], ['x', 64, 32]]) {
+    let d = t[axis] - t['w' + axis];
+    while (Math.abs(d) >= step) {
+      const m = mask(d, neg, pos);
+      pointer(t.x0, t.y0, m); pointer(t.x0, t.y0, 0);
+      t['w' + axis] += Math.sign(d) * step; d = t[axis] - t['w' + axis];
+    }
+  }
+}
+canvas.addEventListener('pointerdown', e => {
+  if (viewOnly || !connected) return;
+  if (e.pointerType === 'mouse') {
+    if (document.activeElement !== kbd) openKeyboard();
+    mouseButtons = buttonMask(e.buttons);
+    pointer(e.clientX, e.clientY, mouseButtons); canvas.setPointerCapture(e.pointerId); e.preventDefault(); return;
+  }
+  fingers.add(e.pointerId);
+  if (fingers.size > 1) { release(false); ignoreFingers = true; return; }
+  if (ignoreFingers) return;
+  const t = gesture = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, wx: e.clientX, wy: e.clientY, mode: 'pending' };
+  t.timer = setTimeout(() => { if (gesture === t && t.mode === 'pending') { t.mode = 'hold'; pointer(t.x0, t.y0, 0); pointer(t.x0, t.y0, 4); } }, 500);
+});
+canvas.addEventListener('pointermove', e => {
+  if (viewOnly || !connected) return;
+  if (e.pointerType === 'mouse') {
+    mouseButtons = buttonMask(e.buttons);
+    return pointer(e.clientX, e.clientY, mouseButtons);
+  }
+  const t = gesture;
+  if (!t || t.id !== e.pointerId || ignoreFingers) return;
+  t.x = e.clientX; t.y = e.clientY;
+  if (t.mode === 'pending' && Math.hypot(t.x - t.x0, t.y - t.y0) >= 10) {
+    clearTimeout(t.timer);
+    t.mode = desktopLayout() ? 'wheel' : 'drag';
+    if (t.mode === 'drag') { pointer(t.x0, t.y0, 0); pointer(t.x0, t.y0, 1); }
+  }
+  if (t.mode === 'drag') pointer(t.x, t.y, 1);
+  else if (t.mode === 'hold') pointer(t.x, t.y, 4);
+  else if (t.mode === 'wheel') wheelSteps(t);
+});
+function lift(e) {
+  if (e.pointerType === 'mouse') {
+    mouseButtons = e.type === 'pointercancel' ? 0 : buttonMask(e.buttons);
+    if (!viewOnly && connected) pointer(e.clientX, e.clientY, mouseButtons);
+    return;
+  }
+  fingers.delete(e.pointerId);
+  if (gesture?.id === e.pointerId) release(e.type === 'pointerup');
+  if (fingers.size === 0) ignoreFingers = false;
+}
+canvas.addEventListener('pointerup', lift);
+canvas.addEventListener('pointercancel', lift);
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('auxclick', e => e.preventDefault());
+canvas.addEventListener('lostpointercapture', () => {
+  if (mouseButtons) { mouseButtons = 0; pointer(...lastPointer, 0); }
+});
+// A finished touch must not turn into compatibility mouse events: their mousedown would take focus
+// from the keyboard field a tap just focused (host's noVNC patch cancels touchend for the same
+// reason). Pinch is decided on touchstart/touchmove, which stay uncancelled.
+for (const type of ['touchend', 'touchcancel']) canvas.addEventListener(type, e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+let wheelX = 0, wheelY = 0, wheelFrame = null, wheelAt = [0, 0];
+function flushWheel() {
+  wheelFrame = null;
+  if (!canInput()) { wheelX = wheelY = 0; return; }
+  if (capabilities & 8) {
+    const [x, y] = toScreen(...wheelAt), bytes = new Uint8Array(12), d = new DataView(bytes.buffer);
+    d.setUint16(0, x); d.setUint16(2, y);
+    d.setFloat32(4, clamp(wheelX, -16384, 16384)); d.setFloat32(8, clamp(wheelY, -16384, 16384));
+    wheelX = wheelY = 0; send(T.WHEEL, bytes);
+  } else {
+    // Old servers understand wheel buttons only; retain fractional movement on both axes.
+    const steps = (delta, neg, pos) => {
+      let count = 0;
+      while (Math.abs(delta) >= 50 && count++ < 64) {
+        pointer(...wheelAt, mouseButtons | (delta > 0 ? pos : neg)); pointer(...wheelAt, mouseButtons);
+        delta -= Math.sign(delta) * 50;
+      }
+      return delta;
+    };
+    wheelX = steps(wheelX, 32, 64); wheelY = steps(wheelY, 8, 16);
+  }
+}
+canvas.addEventListener('wheel', e => {
+  if (viewOnly || !connected || e.ctrlKey) return;
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect(), unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? r.height : 1;
+  let dx = e.deltaX, dy = e.deltaY;
+  if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+  wheelX += dx * unit * canvas.width / r.width; wheelY += dy * unit * canvas.height / r.height;
+  wheelAt = [e.clientX, e.clientY];
+  if (wheelFrame === null) wheelFrame = requestAnimationFrame(flushWheel);
+}, { passive: false });
+
+// ---- typing. A hidden field focused inside the tap opens the phone keyboard (iOS allows
+// focus only there). Keep composition local until it commits; diff finished text by grapheme.
+const XK = { Enter: 0xff0d, Backspace: 0xff08, Tab: 0xff09, Escape: 0xff1b, Delete: 0xffff, Home: 0xff50, End: 0xff57,
+  PageUp: 0xff55, PageDown: 0xff56, ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54, Insert: 0xff63,
+  Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, Meta: 0xffeb, AltGraph: 0xfe03, CapsLock: 0xffe5,
+  NumLock: 0xff7f, ScrollLock: 0xff14, Pause: 0xff13, PrintScreen: 0xff61, ContextMenu: 0xff67, Clear: 0xff0b,
+  Cancel: 0xff69, Help: 0xff6a };
+for (let i = 1; i <= 35; i++) XK['F' + i] = 0xffbd + i;
+const charSym = c => { const n = c.codePointAt(0); return n === 10 || n === 13 ? 0xff0d : n === 9 ? 0xff09 : (n >= 0x20 && n <= 0x7e) || (n >= 0xa0 && n <= 0xff) ? n : 0x1000000 + n; };
+const key = (sym, down) => send(T.KEY, [...be(sym, 4), down ? 1 : 0]);
+const tapKey = sym => { key(sym, true); key(sym, false); };
+const canInput = () => connected && !viewOnly && !stopped && ws?.readyState === WebSocket.OPEN;
+function typeText(text) {
+  if (!canInput() || typeof text !== 'string' || !text || text.includes('\0') || text.length > MAX_PASTE || new TextEncoder().encode(text).length > MAX_PASTE) return false;
+  if (supportsType) send(T.TYPE, new TextEncoder().encode(text));
+  else for (const character of text) tapKey(charSym(character));
+  report('input');
+  return true;
+}
+function pressKey(name) {
+  if (!canInput() || !['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown', 'Delete', 'Home', 'End'].includes(name)) return false;
+  tapKey(XK[name]); report('input');
+  return true;
+}
+const FILL = '_'.repeat(64);
+const segmenter = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const graphemes = text => Array.from(segmenter.segment(text), part => part.segment);
+let typed = FILL, compositionSession = null;
+function resetField() { kbd.value = typed = FILL; kbd.setSelectionRange(FILL.length, FILL.length); }
+function openKeyboard() { if (viewOnly || !connected) return; resetField(); kbd.focus({ preventScroll: true }); }
+function tapToType(x, y) {
+  const at = performance.now(), gm = fieldBoxes(at);
+  if (!gm) return;
+  const [px, py] = toScreen(x, y);
+  const sets = [gm];
+  // The picture lags the page: the set that the current one replaced stays valid for 600 ms.
+  if (gm === serverFields && gm.prev && at - gm.at <= 600 &&
+      gm.prev.width === canvas.width && gm.prev.height === canvas.height) sets.push(gm.prev);
+  for (const fields of sets) {
+    const box = fields.boxes.find(b => px >= b[0] && px <= b[0] + b[2] && py >= b[1] && py <= b[1] + b[3]);
+    if (box) {
+      tappedBox = { width: fields.width, height: fields.height, box };
+      openKeyboard(); updatePan(); return;
+    }
+  }
+}
+function commitField() {
+  if (!canInput()) { resetField(); return; }
+  const now = kbd.value;
+  const before = graphemes(typed), after = graphemes(now);
+  let i = 0;
+  while (i < before.length && i < after.length && before[i] === after[i]) i++;
+  for (let k = i; k < before.length; k++) tapKey(XK.Backspace);
+  typeText(after.slice(i).join(''));
+  typed = now;
+  if (now.length < 16 || now.length > 256) resetField();
+}
+kbd.addEventListener('compositionstart', () => { releaseKeyboard(); compositionSession = session; });
+kbd.addEventListener('compositionend', () => {
+  const current = compositionSession === session;
+  compositionSession = null;
+  if (current) commitField(); else resetField();
+});
+kbd.addEventListener('input', e => {
+  if (e?.isComposing || compositionSession !== null) return;
+  commitField();
+});
+const sync = () => $('kbd-btn').setAttribute('aria-pressed', String(document.activeElement === kbd));
+kbd.addEventListener('focus', sync); kbd.addEventListener('blur', () => { sync(); releaseKeyboard(); });
+// Keyboard: this page's control or host's pill button (#noVNC_keyboard_button). Paste: this page's
+// control; host's pill pastes through window.slimviewer.paste. Both on click, inside the tap, which
+// is where iOS allows focusing the field and reading the clipboard.
+// Preserve textarea focus until the click toggles it. Cancelling pointerdown would suppress
+// WebKit's trusted click; cancelling only the compatibility mousedown keeps touch clicks intact.
+document.addEventListener('mousedown', e => {
+  if (e.target.closest?.('#kbd-btn, #paste-btn, #noVNC_keyboard_button, #host_paste')) e.preventDefault();
+});
+document.addEventListener('click', e => {
+  if (e.target.closest?.('#kbd-btn, #noVNC_keyboard_button')) document.activeElement === kbd ? kbd.blur() : openKeyboard();
+  else if (e.target.closest?.('#paste-btn')) pasteFromPhone();
+});
+// Hardware keys keep their down/up identity even if Shift or the keyboard layout changes.
+// macOS omits some keyups while Command is held, so releasing Command releases its keys too.
+const mac = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform);
+const COMMAND_SHORTCUTS = new Set(['c', 'v', 'x', 'a', 'z', 'y', 'f', 'l', 't', 'w', 'r']);
+const MODS = ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'];
+const heldKeys = new Map(), remoteModifiers = new Set(), modifierCodes = new Set();
+let commandMapped = null;
+const viewerTarget = target => [kbd, canvas, document.body, document.documentElement].includes(target);
+function releaseKeyboard() {
+  for (const sym of heldKeys.values()) key(sym, false);
+  for (const sym of remoteModifiers) key(sym, false);
+  heldKeys.clear(); remoteModifiers.clear(); modifierCodes.clear(); commandMapped = null;
+}
+function syncModifiers(e) {
+  const desired = new Set(), altGraph = e.getModifierState?.('AltGraph');
+  const side = (name, left) => modifierCodes.has(name + 'Right') ? left + 1 : left;
+  if (e.shiftKey) desired.add(side('Shift', XK.Shift));
+  if (!altGraph && (e.ctrlKey || (e.metaKey && commandMapped))) desired.add(side('Control', XK.Control));
+  if (altGraph) desired.add(XK.AltGraph);
+  else if (e.altKey) desired.add(side('Alt', XK.Alt));
+  if (e.metaKey && (!mac || commandMapped === false)) desired.add(side('Meta', XK.Meta));
+  for (const sym of remoteModifiers) if (!desired.has(sym)) { key(sym, false); remoteModifiers.delete(sym); }
+  for (const sym of desired) if (!remoteModifiers.has(sym)) { key(sym, true); remoteModifiers.add(sym); }
+}
+function keySym(e, shortcut) {
+  if (e.location === 3) {
+    if (/^[0-9]$/.test(e.key)) return 0xffb0 + Number(e.key);
+    const pad = { Enter: 0xff8d, Add: 0xffab, Subtract: 0xffad, Multiply: 0xffaa, Divide: 0xffaf, Decimal: 0xffae, Equal: 0xffbd };
+    if (pad[e.code.slice(6)]) return pad[e.code.slice(6)];
+  }
+  return XK[e.key] || (Array.from(e.key).length === 1 ? charSym(shortcut ? e.key.toLowerCase() : e.key) : 0);
+}
+for (const [type, down] of [['keydown', true], ['keyup', false]]) {
+  const handle = (e, fromField = false) => {
+    if (!canInput() || (!fromField && !viewerTarget(e.target))) return;
+    const id = e.code || e.key, lower = e.key.toLowerCase();
+    if (MODS.includes(e.key)) {
+      down ? modifierCodes.add(id) : modifierCodes.delete(id);
+      if (mac && e.key === 'Meta' && !down) releaseKeyboard();
+      syncModifiers(e); e.preventDefault(); return;
+    }
+    if (!down) {
+      if (heldKeys.has(id)) { e.preventDefault(); key(heldKeys.get(id), false); heldKeys.delete(id); }
+      syncModifiers(e); return;
+    }
+    if (e.isComposing || compositionSession !== null || e.keyCode === 229 || ['Dead', 'Process', 'Unidentified'].includes(e.key)) {
+      if (!fromField && document.activeElement !== kbd) openKeyboard();
+      releaseKeyboard(); return;
+    }
+    if (mac && e.metaKey) commandMapped = COMMAND_SHORTCUTS.has(lower);
+    const shortcut = !e.getModifierState?.('AltGraph') && !e.altKey && (e.ctrlKey || (mac && e.metaKey));
+    syncModifiers(e);
+    if (shortcut && lower === 'v') {
+      e.preventDefault();
+      if (!e.repeat) pasteFromPhone(); // readText starts synchronously inside this trusted key event
+      return;
+    }
+    if (shortcut && ['c', 'x'].includes(lower) && !e.repeat) beginCopy();
+    if (!shortcut && Array.from(e.key).length === 1 && !/^[\x20-\x7e]$/.test(e.key)) {
+      if (fromField) { releaseKeyboard(); return; } // the field's native input commits text once
+      e.preventDefault(); releaseKeyboard(); typeText(e.key); resetField(); return;
+    }
+    const sym = keySym(e, shortcut);
+    if (!sym) return;
+    e.preventDefault();
+    if (fromField && !e.code && !shortcut) tapKey(sym);
+    else {
+      const previous = heldKeys.get(id);
+      if (previous !== undefined && previous !== sym) key(previous, false);
+      heldKeys.set(id, sym); key(sym, true);
+    }
+    if (fromField) resetField();
+  };
+  kbd.addEventListener(type, e => handle(e, true));
+  addEventListener(type, e => { if (e.target !== kbd) handle(e); });
+}
+function releaseDesktop() {
+  releaseKeyboard(); cancelCopy(); release(false);
+  if (mouseButtons) { mouseButtons = 0; pointer(...lastPointer, 0); }
+  cancelAnimationFrame(wheelFrame); wheelFrame = null; wheelX = wheelY = 0;
+}
+addEventListener('blur', releaseDesktop);
+addEventListener('pagehide', releaseDesktop);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDesktop(); });
+
+// Reserve the write during Copy/Cut activation; the X11 clipboard supplies the actual result.
+// A context-menu Copy arrives without a reservation and uses the recent pointer activation.
+let copyPending = null, copyNoticeTimer = null;
+function copyNotice(text) {
+  clearTimeout(copyNoticeTimer); $('clipboard-status').textContent = text;
+  copyNoticeTimer = setTimeout(() => { $('clipboard-status').textContent = ''; }, 3000);
+}
+function cancelCopy() {
+  if (!copyPending) return;
+  const pending = copyPending; copyPending = null;
+  pending.cancelled = true;
+  clearTimeout(pending.timer); pending.reject(new DOMException('Copy cancelled', 'AbortError'));
+}
+function beginCopy() {
+  cancelCopy();
+  if (!(capabilities & 4)) { copyNotice('Copy is unavailable in this session.'); return; }
+  if (!window.isSecureContext || !navigator.clipboard?.writeText) { copyNotice('Copy blocked by browser.'); return; }
+  const token = session;
+  let resolve, reject;
+  const data = new Promise((yes, no) => { resolve = yes; reject = no; });
+  data.catch(() => {});
+  const pending = copyPending = { resolve, reject, token, reserved: false, timer: null };
+  pending.timer = setTimeout(() => { if (copyPending === pending) cancelCopy(); }, 3000);
+  if (navigator.clipboard.write && typeof ClipboardItem === 'function') {
+    try {
+      const writing = navigator.clipboard.write([new ClipboardItem({ 'text/plain': data })]);
+      pending.reserved = true;
+      writing.catch(error => {
+        if (!pending.cancelled && token === session && canInput() && error.name !== 'AbortError') copyNotice('Copy blocked by browser.');
+      });
+    } catch { /* writeText below still works in browsers without promise-backed ClipboardItem. */ }
+  }
+}
+function receiveClipboard(text) {
+  if (!document.hasFocus() || document.hidden || !canInput()) { cancelCopy(); return; }
+  const pending = copyPending;
+  copyPending = null;
+  if (pending) {
+    clearTimeout(pending.timer);
+    if (pending.token !== session) { pending.reject(new DOMException('Old session', 'AbortError')); return; }
+    pending.resolve(new Blob([text], { type: 'text/plain' }));
+    if (pending.reserved) return;
+  }
+  const token = session;
+  try {
+    navigator.clipboard.writeText(text).catch(() => { if (token === session && canInput()) copyNotice('Copy blocked by browser.'); });
+  } catch { copyNotice('Copy blocked by browser.'); }
+}
+
+// ---- paste: the phone hands over its clipboard only inside a tap
+let pasteAttempt = 0, pasteTimer = null, pasteId = 0, pasteSlots = [];
+const pasteCalls = new Map(), pasteResults = new Map();
+function pasteLabel(state, ms = 0) {
+  clearTimeout(pasteTimer); pasteTimer = null;
+  $('controls').dataset.paste = state;
+  $('paste-btn').textContent = ({ cancelled: 'Tap again', blocked: 'Paste blocked', pasted: 'Pasted', 'try-again': 'Try again' })[state] || 'Paste';
+  if (ms) pasteTimer = setTimeout(() => pasteLabel('idle'), ms);
+}
+function reservePaste() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  const slot = { attempt: ++pasteAttempt, token: session, ready: false, done: false, bytes: null, id: 0, timer: null, resolve, promise };
+  pasteCalls.set(slot.attempt, slot); pasteSlots.push(slot);
+  // A read that never settles must not hold every later paste behind it.
+  slot.timer = setTimeout(() => { if (!slot.ready) { slot.ready = true; finishPaste(slot, 'tap-again'); flushPastes(); } }, 15000);
+  if (canInput()) pasteLabel('active', 1500);
+  return slot;
+}
+function finishPaste(slot, outcome) {
+  if (slot.done) return;
+  slot.done = true; slot.bytes = null;
+  clearTimeout(slot.timer); pasteResults.delete(slot.id); pasteCalls.delete(slot.attempt);
+  if (slot.attempt === pasteAttempt && slot.token === session && canInput()) {
+    const label = outcome === 'tap-again' ? 'cancelled' : outcome === 'sent' || outcome === 'empty' ? 'idle' : outcome;
+    pasteLabel(label, label === 'pasted' ? 1500 : label === 'idle' ? 0 : 3000);
+  }
+  slot.resolve(outcome);
+}
+function flushPastes() {
+  while (pasteSlots[0]?.ready) {
+    const slot = pasteSlots.shift();
+    if (slot.done) continue;
+    if (slot.token !== session || !canInput()) { finishPaste(slot, 'sent'); continue; }
+    if (capabilities & 16) {
+      if (pasteId === 0xffffffff) { finishPaste(slot, 'blocked'); continue; }
+      slot.id = ++pasteId;
+      pasteResults.set(slot.id, slot);
+      slot.timer = setTimeout(() => finishPaste(slot, 'sent'), 5000);
+      send(T.PASTE_TX, [...be(slot.id, 4), ...slot.bytes]);
+      slot.bytes = null;
+    } else {
+      send(T.PASTE, slot.bytes); finishPaste(slot, 'sent');
+    }
+    report('input');
+  }
+}
+function queuePaste(attempt, token, text) {
+  const slot = pasteCalls.get(attempt);
+  if (!slot || token !== session) return Promise.resolve('sent');
+  slot.ready = true; clearTimeout(slot.timer); slot.timer = null;
+  if (typeof text !== 'string' || text.includes('\0')) finishPaste(slot, 'blocked');
+  else if (!text) finishPaste(slot, 'empty');
+  else {
+    const bytes = new TextEncoder().encode(text.slice(0, MAX_PASTE));
+    let end = Math.min(bytes.length, MAX_PASTE);
+    // Keep the cap in bytes without cutting a UTF-8 character in two.
+    while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+    slot.bytes = bytes.subarray(0, end);
+  }
+  flushPastes();
+  return slot.promise;
+}
+function receivePasteResult(r) {
+  if (r.length !== 6) return badRecord();
+  const id = new DataView(r.buffer, r.byteOffset, r.byteLength).getUint32(1);
+  if (!id) return badRecord();
+  const slot = pasteResults.get(id);
+  if (slot) finishPaste(slot, ['pasted', 'try-again', 'try-again', 'blocked'][r[5]] || 'sent');
+}
+function resetPaste() {
+  for (const slot of pasteCalls.values()) finishPaste(slot, 'sent');
+  pasteSlots = []; pasteId = 0;
+  serverFields = null; tappedBox = null;
+  clearTimeout(fieldsTimer); fieldsTimer = null;
+  pan = 0; canvas.style.translate = '0 0px';
+}
+function sendPaste(text) {
+  const slot = reservePaste();
+  return queuePaste(slot.attempt, slot.token, text);
+}
+function pasteFromPhone() {
+  if (!canInput()) return Promise.resolve('blocked');
+  const slot = reservePaste();
+  const refuse = outcome => { slot.ready = true; finishPaste(slot, outcome); flushPastes(); };
+  if (!window.isSecureContext || !navigator.clipboard?.readText) {
+    refuse('blocked'); return slot.promise;
+  }
+  const failed = async () => {
+    let outcome = 'tap-again';
+    try {
+      if ((await navigator.permissions.query({ name: 'clipboard-read' })).state === 'denied') outcome = 'blocked';
+    } catch { /* WebKit has no clipboard-read permission; a cancelled bubble can be retried. */ }
+    refuse(outcome);
+  };
+  // Nothing asynchronous may precede this read: iOS requires the original trusted tap.
+  try {
+    if (!document.hasFocus()) window.focus();
+    if (document.activeElement !== kbd) openKeyboard();
+    const reading = navigator.clipboard.readText();
+    Promise.resolve(reading).then(text => queuePaste(slot.attempt, slot.token, text), failed);
+  } catch { void failed(); }
+  return slot.promise;
+}
+addEventListener('paste', e => {
+  if (e.target === kbd || !viewerTarget(e.target) || !e.clipboardData) return;
+  e.preventDefault(); sendPaste(e.clipboardData.getData('text/plain'));
+});
+kbd.addEventListener('paste', e => { e.preventDefault(); sendPaste(e.clipboardData?.getData('text/plain')); });
+
+// ---- field geometry and phone keyboard pan (independent of framebuffer sizing)
+let serverFields = null, tappedBox = null, fieldsTimer = null, visibleArea = null, pan = 0;
+function receiveFields(r) {
+  if (r.length < 7 || r[6] > 128 || r.length !== 7 + 8 * r[6]) return badRecord();
+  const d = new DataView(r.buffer, r.byteOffset, r.byteLength);
+  const width = d.getUint16(1), height = d.getUint16(3), focused = r[5], boxes = [];
+  if (!width || !height || width * height > 16 * 1024 * 1024 || (focused !== 255 && focused >= r[6])) return badRecord();
+  for (let at = 7; at < r.length; at += 8) {
+    const box = [d.getUint16(at), d.getUint16(at + 2), d.getUint16(at + 4), d.getUint16(at + 6)];
+    if (!box[2] || !box[3] || box[0] + box[2] > width || box[1] + box[3] > height) return badRecord();
+    boxes.push(box);
+  }
+  if (width !== canvas.width || height !== canvas.height) return;
+  const prev = serverFields ? { ...serverFields, prev: null } : null;
+  serverFields = { width, height, boxes, focused, at: performance.now(), prev };
+  clearTimeout(fieldsTimer); fieldsTimer = setTimeout(updatePan, 3001);
+  updatePan();
+}
+function fieldBoxes(at) {
+  const gm = serverFields && at - serverFields.at <= 3000 && serverFields.width === canvas.width && serverFields.height === canvas.height
+    ? serverFields : fieldGeometry;
+  return gm && gm.width === canvas.width && gm.height === canvas.height ? gm : null;
+}
+function setVisibleArea(area) { visibleArea = area; updatePan(); }
+function updatePan() {
+  const vv = window.visualViewport;
+  const area = framed ? visibleArea : vv ? { top: vv.offsetTop, bottom: vv.offsetTop + vv.height } : null;
+  let next = 0;
+  if (canInput() && document.activeElement === kbd && area && area.bottom < innerHeight && area.bottom > area.top) {
+    const gm = fieldBoxes(performance.now());
+    // The server's focused box wins; until it reports one (or on older binaries) use this keyboard session's tap.
+    const box = gm === serverFields && gm?.boxes[gm.focused] ||
+      (tappedBox?.width === canvas.width && tappedBox?.height === canvas.height ? tappedBox.box : null);
+    if (box) {
+      const rect = canvas.getBoundingClientRect(), scale = rect.height / canvas.height;
+      // The DOM rect includes our previous translate; undo it before computing the next one.
+      const top = rect.top + pan, bottom = rect.bottom + pan;
+      const offset = box[3] * scale > area.bottom - area.top - 24
+        ? top + box[1] * scale - area.top - 12
+        : top + (box[1] + box[3]) * scale + 12 - area.bottom;
+      next = clamp(offset, 0, Math.max(0, bottom - area.bottom));
+    }
+  }
+  pan = next; canvas.style.translate = `0 ${-pan}px`;
+}
+addEventListener('message', e => {
+  if (e.source !== parent || !parents.includes(e.origin) || e.data?.type !== 'host-pill' || e.data.v !== 1 ||
+      !['init', 'bounds'].includes(e.data.kind)) return;
+  const area = e.data.visible;
+  if (!area || ![area.left, area.top, area.right, area.bottom].every(Number.isFinite) ||
+      area.right <= area.left || area.bottom <= area.top) return;
+  setVisibleArea({ top: area.top, bottom: area.bottom });
+});
+kbd.addEventListener('focus', updatePan);
+kbd.addEventListener('blur', () => { tappedBox = null; updatePan(); });
+addEventListener('resize', updatePan);
+window.visualViewport?.addEventListener('resize', updatePan);
+window.visualViewport?.addEventListener('scroll', updatePan);
+if (typeof ResizeObserver === 'function') new ResizeObserver(updatePan).observe(canvas);
+fit();
+connect();
+</script>
+</html>

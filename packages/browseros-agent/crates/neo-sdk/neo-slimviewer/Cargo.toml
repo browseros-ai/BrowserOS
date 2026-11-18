@@ -1,0 +1,36 @@
+# Standalone crate with its own lock file and source-built OpenH264 backend.
+[package]
+name = "neo-slimviewer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/browseros-ai/BrowserOS"
+description = "Streams an X11 screen to a phone browser as H.264 (WebCodecs) and takes touch and keys back"
+publish = false
+
+[[bin]]
+name = "slimviewer"
+path = "src/main.rs"
+
+[features]
+default = ["openh264"]
+x264 = []
+openh264 = []
+
+[dependencies]
+x11rb = { version = "0.14", default-features = false, features = ["shm", "damage"] }
+libc = "0.2"
+serde_json = "1"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[workspace]
