@@ -273,6 +273,14 @@ async fn run_tool(
         return Ok(Code::Timeout);
     }
 
+    // Last, after everything that reads the result: the page id and url are parsed out of the
+    // full text, and only the printed copy is shortened.
+    let navigates = plan.tool == "navigate"
+        || (plan.tool == "tabs" && plan.args.get("action").and_then(Value::as_str) == Some("new"));
+    if navigates {
+        output.text =
+            render::summarize_auto_snapshot(&output.text, render::AUTO_SNAPSHOT_MAX_CHARS);
+    }
     report(&output, label, plan.tool, page, elapsed, &files, globals);
 
     // A page-scoped failure is usually a closed or recycled tab, and the one
