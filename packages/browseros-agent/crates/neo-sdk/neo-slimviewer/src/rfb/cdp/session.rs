@@ -1357,7 +1357,7 @@ impl Session {
             .filter(|key| **key != root && documents.contains_key(*key))
             .cloned()
             .collect();
-        let mut offsets = HashMap::from([(root.clone(), [0., 0., f64::INFINITY, f64::INFINITY])]);
+        let mut offsets = HashMap::new();
         for _ in 0..keys.len() {
             let mut progress = false;
             for key in &keys {
@@ -1384,13 +1384,17 @@ impl Session {
                 else {
                     continue;
                 };
-                let Some(base) = offsets.get(&parent).copied() else {
-                    continue;
+                let offset = if parent == root {
+                    self.frame_rect(key, &parent)
+                } else {
+                    offsets.get(&parent).and_then(|&offset| {
+                        let rect = self.frame_rect(key, &parent)?;
+                        let boxes = self.page.as_ref()?.frames.get(&parent)?.boxes.as_ref()?;
+                        fields::Child { offset, boxes }.to_top_viewport(rect)
+                    })
                 };
-                if let Some(mut rect) = self.frame_rect(key, &parent) {
-                    rect[0] += base[0];
-                    rect[1] += base[1];
-                    offsets.insert(key.clone(), rect);
+                if let Some(offset) = offset {
+                    offsets.insert(key.clone(), offset);
                     progress = true;
                 }
             }
@@ -2894,6 +2898,45 @@ mod transaction_tests {
         assert_eq!(count(&log, "Page.getLayoutMetrics"), 1);
         assert_eq!(count(&log, "DOM.getFrameOwner"), 2);
         assert_eq!(count(&log, "Runtime.releaseObjectGroup"), 2);
+    }
+
+    #[test]
+    fn tests_that_nested_field_boxes_follow_both_iframes_scales() {
+        let (port, _, server) = peer(Browser {
+            depth: 2,
+            focused_depth: 2,
+            ..Browser::default()
+        });
+        let mut session = open(port);
+        // Both iframe elements render at (10, 20), size 300 x 400 in their parent.
+        // The root's 390 CSS pixels span 780 framebuffer pixels.
+        for (outer_viewport, inner_viewport, expected) in [
+            ([300, 400], [300, 400], [60, 120, 200, 60]),
+            ([150, 200], [300, 400], [100, 200, 400, 120]),
+            ([150, 200], [600, 200], [80, 280, 200, 240]),
+        ] {
+            for (frame, [w, h]) in [
+                ("child-session", outer_viewport),
+                ("grand-session", inner_viewport),
+            ] {
+                let mut report = box_report(frame, frame == "grand-session");
+                report["vp"]["inner"] = json!([w, h]);
+                report["vp"]["vv"] = json!([0, 0, w, h]);
+                session.event(&binding(frame, report));
+            }
+            let fields = session
+                .fields()
+                .expect("frame tree has reported its fields");
+            let field =
+                fields.boxes()[usize::from(fields.focused().expect("nested input is focused"))];
+            assert_eq!(
+                [field.x, field.y, field.w, field.h],
+                expected,
+                "outer viewport {outer_viewport:?}, inner viewport {inner_viewport:?}"
+            );
+        }
+        drop(session);
+        server.join().unwrap();
     }
     #[test]
     fn tests_that_new_document_fields_exclude_the_previous_documents_child_frames() {
