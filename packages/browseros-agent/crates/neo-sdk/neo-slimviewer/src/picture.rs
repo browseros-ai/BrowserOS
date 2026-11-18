@@ -722,13 +722,13 @@ impl Picture {
         }
     }
 
-    pub fn probe(&mut self, now: Instant, bytes: usize, delay: Duration, rtt: Duration) {
+    pub fn probe(&mut self, now: Instant, bytes: usize, delay: Duration, base_rtt: Duration) {
         if bytes >= 32 * 1024 && !delay.is_zero() {
             // Include RTT: this budgets the whole wait for the next key's ACK.
             self.last_delivery = Some((now, delay.as_secs_f64() / bytes as f64));
         }
         if bytes >= 32 * 1024
-            && let Some(transfer) = delay.checked_sub(rtt)
+            && let Some(transfer) = delay.checked_sub(base_rtt)
             && !transfer.is_zero()
         {
             self.capacity

@@ -75,7 +75,7 @@ pub struct Viewer {
     unacked_since: Option<Instant>,
     needs_key: bool,
     burst_grace: bool,
-    rtt: AckDelays,
+    rtt: Box<AckDelays>,
     sent_frames: u32,
     sent_bytes: u64,
     acked_bytes: u64,
@@ -165,7 +165,7 @@ impl Viewer {
             unacked_since: None,
             needs_key: true,
             burst_grace: true,
-            rtt: AckDelays::new(),
+            rtt: Box::new(AckDelays::new()),
             sent_frames: 0,
             sent_bytes: 0,
             acked_bytes: 0,
@@ -364,11 +364,11 @@ impl Viewer {
             }
             if f.seq == seq {
                 let delay = now.saturating_duration_since(f.at);
-                if f.burst {
-                    self.probes.push((f.bytes, delay, self.rtt.get()));
-                }
                 let ms = delay.as_millis() as u32;
-                self.rtt.push(ms, now);
+                let base_rtt = self.rtt.push(ms, now);
+                if f.burst {
+                    self.probes.push((f.bytes, delay, base_rtt));
+                }
                 self.delays_ms.push(ms);
             }
             self.inflight.pop_front();
@@ -518,21 +518,23 @@ fn acknowledge(viewers: &mut [Viewer], picture: &mut Picture, id: u64, seq: u32,
     if let Some(viewer) = viewers.iter_mut().find(|viewer| viewer.id == id) {
         viewer.on_ack(seq, now);
         // This ACK may open the window for a sharp frame in the same loop pass.
-        for (bytes, delay, rtt) in viewer.probes.drain(..) {
+        for (bytes, delay, base_rtt) in viewer.probes.drain(..) {
             if pacer == Some(id) {
-                picture.probe(now, bytes, delay, rtt);
+                picture.probe(now, bytes, delay, base_rtt);
             }
         }
     }
 }
 
-/// ACK floor and spread over the last 5–10 s (two rotating windows).
+/// The pacing window uses the last 5–10 s of ACKs. Burst probes use the last minute.
 struct AckDelays {
     cur: u32,
     prev: u32,
     cur_max: u32,
     prev_max: u32,
     since: Instant,
+    /// Increasing delays. A newer, shorter ACK outlives every larger one before it.
+    base_minima: VecDeque<(Instant, u32)>,
 }
 
 impl AckDelays {
@@ -543,9 +545,11 @@ impl AckDelays {
             cur_max: 0,
             prev_max: 0,
             since: Instant::now(),
+            base_minima: VecDeque::new(),
         }
     }
-    fn push(&mut self, ms: u32, now: Instant) {
+    /// Return the base RTT before this ACK, so a key never subtracts its own transfer.
+    fn push(&mut self, ms: u32, now: Instant) -> Duration {
         if now - self.since > Duration::from_secs(5) {
             (self.prev, self.cur, self.since) = (self.cur, ms, now);
             (self.prev_max, self.cur_max) = (self.cur_max, ms);
@@ -553,6 +557,23 @@ impl AckDelays {
             self.cur = self.cur.min(ms);
             self.cur_max = self.cur_max.max(ms);
         }
+        while self
+            .base_minima
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > Duration::from_secs(60))
+        {
+            self.base_minima.pop_front();
+        }
+        let base_ms = self.base_minima.front().map_or(50, |&(_, delay)| delay);
+        while self
+            .base_minima
+            .back()
+            .is_some_and(|&(_, delay)| delay >= ms)
+        {
+            self.base_minima.pop_back();
+        }
+        self.base_minima.push_back((now, ms));
+        Duration::from_millis(u64::from(base_ms))
     }
     fn get(&self) -> Duration {
         let ms = self.cur.min(self.prev);
@@ -1688,6 +1709,73 @@ mod tests {
             burst: false,
         });
         v.needs_key = false;
+    }
+
+    #[test]
+    fn tests_that_a_standing_queue_cannot_inflate_probe_capacity() {
+        let (mut owner, _peer) = viewer_pair(1, false);
+        let t = Instant::now();
+        let mut p = motion(t, true);
+        owner.rtt.push(70, t);
+        for second in 1..=12 {
+            owner.rtt.push(1210, t + Duration::from_secs(second));
+        }
+        assert_eq!(owner.rtt.get(), Duration::from_millis(1210));
+
+        let sent = t + Duration::from_secs(12);
+        let bytes = 82_000;
+        p.encoded(
+            sent,
+            picture::Encoded {
+                plan: Plan {
+                    scale: Scale::Full,
+                    sharp_qp: None,
+                },
+                key: true,
+                owner_key: true,
+                bytes,
+                pixels: 780 * ROWS,
+                big: true,
+                work: Work::default(),
+            },
+        );
+        owner.record_frame(
+            Sent {
+                seq: 1,
+                at: sent,
+                bytes,
+                burst: true,
+            },
+            false,
+        );
+        let ack = sent + Duration::from_millis(1300);
+        acknowledge(&mut [owner], &mut p, 1, 1, ack);
+        let kbps = p.capacity_kbps(ack).unwrap();
+        assert!(
+            (532.0..534.0).contains(&kbps),
+            "82 kB in 1230 ms: {kbps} kbps"
+        );
+        p.tick(ack, picture::Link::default(), picture::Cpu::default());
+        assert_eq!(p.plan(ack, BIG).scale, Scale::Half);
+    }
+
+    #[test]
+    fn tests_that_the_probe_base_relearns_rtt_after_a_minute() {
+        let mut rtt = AckDelays::new();
+        let t = Instant::now();
+        rtt.push(70, t);
+        assert_eq!(
+            rtt.push(180, t + Duration::from_secs(59)),
+            Duration::from_millis(70)
+        );
+        assert_eq!(
+            rtt.push(200, t + Duration::from_secs(61)),
+            Duration::from_millis(180)
+        );
+        assert_eq!(
+            rtt.push(220, t + Duration::from_secs(122)),
+            Duration::from_millis(50)
+        );
     }
 
     #[test]
