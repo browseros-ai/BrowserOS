@@ -1,0 +1,47 @@
+diff --git a/codec/encoder/core/src/encoder_ext.cpp b/codec/encoder/core/src/encoder_ext.cpp
+--- a/codec/encoder/core/src/encoder_ext.cpp
++++ b/codec/encoder/core/src/encoder_ext.cpp
+@@ -39,4 +39,7 @@
+  */
+
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ #include "encoder.h"
+ #include "cpu.h"
+@@ -2665,4 +2668,15 @@
+
+
++enum FeatureSearchMode { kSearchOnScroll, kSearchUpstream, kSearchDisabled };
++
++static FeatureSearchMode ReadFeatureSearchMode() {
++  const char* mode = getenv ("SV_OPENH264_FME");
++  if (!mode || strcmp (mode, "scroll") == 0) return kSearchOnScroll;
++  if (strcmp (mode, "always") == 0) return kSearchUpstream;
++  if (strcmp (mode, "never") == 0) return kSearchDisabled;
++  fprintf (stderr, "OpenH264: unknown SV_OPENH264_FME value, using scroll\n");
++  return kSearchOnScroll;
++}
++
+ void PreprocessSliceCoding (sWelsEncCtx* pCtx) {
+   SDqLayer* pCurLayer           = pCtx->pCurDqLayer;
+@@ -2737,7 +2751,16 @@
+         SVAAFrameInfoExt* pVaaExt = static_cast<SVAAFrameInfoExt*> (pCtx->pVaa);
+         const int32_t kiMbSize = pCurLayer->iMbHeight * pCurLayer->iMbWidth;
+-        pFeatureSearchPreparation->bFMESwitchFlag = CalcFMESwitchFlag (pFeatureSearchPreparation->uiFMEGoodFrameCount,
+-            pFeatureSearchPreparation->iHighFreMbCount * 100 / kiMbSize, pCtx->pVaa->sVaaCalcInfo.iFrameSad / kiMbSize,
+-            pVaaExt->sScrollDetectInfo.bScrollDetectFlag);
++        // A stationary screen can match at zero displacement. Skip the 8x8
++        // block hash then, but keep it for scrolling text to limit bandwidth.
++        static const FeatureSearchMode mode = ReadFeatureSearchMode();
++        const SScrollDetectionParam& scroll = pVaaExt->sScrollDetectInfo;
++        if (mode == kSearchUpstream) {
++          pFeatureSearchPreparation->bFMESwitchFlag = CalcFMESwitchFlag (pFeatureSearchPreparation->uiFMEGoodFrameCount,
++              pFeatureSearchPreparation->iHighFreMbCount * 100 / kiMbSize, pCtx->pVaa->sVaaCalcInfo.iFrameSad / kiMbSize,
++              scroll.bScrollDetectFlag);
++        } else {
++          pFeatureSearchPreparation->bFMESwitchFlag = mode == kSearchOnScroll && scroll.bScrollDetectFlag
++              && (scroll.iScrollMvX != 0 || scroll.iScrollMvY != 0);
++        }
+
+         //PerformFMEPreprocess

@@ -13,7 +13,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     CFLAGS="-ffile-prefix-map=/src=. -ffile-prefix-map=/usr/local/cargo=/cargo" \
     CXXFLAGS="-ffile-prefix-map=/src=. -ffile-prefix-map=/usr/local/cargo=/cargo" \
     OPENH264_ROOT=/opt/openh264
-COPY csrc/build-openh264.sh /tmp/build-openh264.sh
+COPY csrc/build-openh264.sh csrc/openh264-feature-search-mode.patch /tmp/
 RUN sh /tmp/build-openh264.sh /opt/openh264
 WORKDIR /src
 COPY --exclude=tests --exclude=web . .
@@ -117,8 +117,8 @@ with out.open('w') as report:
 
     root = pathlib.Path('/opt/openh264/share/doc/openh264')
     version, _ = (root / 'SOURCE').read_text().split()
-    section(f'OpenH264 {version.removeprefix("v")} — BSD-2-Clause (built from source)',
-            [root / 'SOURCE', root / 'LICENSE'], root)
+    section(f'OpenH264 {version.removeprefix("v")} — BSD-2-Clause (built from patched source)',
+            [root / 'SOURCE', root / 'PATCHES', root / 'LICENSE'], root)
 
     sysroot = pathlib.Path(subprocess.check_output(['rustc', '--print', 'sysroot'], text=True).strip())
     rust_docs = sysroot / 'share/doc/rust'
@@ -135,6 +135,7 @@ COPY --chmod=0644 web/slimviewer.html web/ui.js /out/usr/share/slimviewer/
 RUN chmod 0755 /out/usr/share/slimviewer \
  && printf '%s\n' libc6 libgcc-s1 libstdc++6 > /out/usr/share/slimviewer/RUNTIME-DEPS \
  && install -m 0644 "$OPENH264_ROOT/share/doc/openh264/SOURCE" /out/usr/share/doc/slimviewer/OPENH264-SOURCE \
+ && install -m 0644 "$OPENH264_ROOT/share/doc/openh264/PATCHES" /out/usr/share/doc/slimviewer/OPENH264-PATCHES \
  && find /out -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM scratch

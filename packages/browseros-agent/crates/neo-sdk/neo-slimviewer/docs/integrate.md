@@ -13,13 +13,14 @@ disable it. The supervisor also skips startup if the binary is missing.
 | `/usr/share/slimviewer/RUNTIME-DEPS` | Required runtime packages |
 | `/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES` | Bundled notices |
 | `/usr/share/doc/slimviewer/OPENH264-SOURCE` | OpenH264 version tag and Git revision |
+| `/usr/share/doc/slimviewer/OPENH264-PATCHES` | Applied patch name and SHA-256 |
 
 ## Build the image
 
 From the slimviewer crate, run `../neo-server/docker/build.sh --platform linux/arm64`
 or use `linux/amd64`. The script builds this crate's Dockerfile for that CPU and passes
 its release files to the SDK image. The SDK checks the packages in `RUNTIME-DEPS` and
-records the binary hash and OpenH264 revision in `/usr/share/neo-sdk/provenance.json`.
+records the binary hash, OpenH264 revision and patch hash in `/usr/share/neo-sdk/provenance.json`.
 
 ## Serve the viewer
 

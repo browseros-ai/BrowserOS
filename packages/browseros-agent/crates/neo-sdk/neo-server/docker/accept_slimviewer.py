@@ -29,7 +29,10 @@ def check_assets():
     version, revision = viewer['openh264']['version'], viewer['openh264']['revision']
     notices = Path('/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES').read_text()
     section = notices.partition(f'OpenH264 {version} — BSD-2-Clause')[2].partition('\n====')[0]
-    for required in (f'v{version} {revision}', 'Copyright (c) 2013, Cisco Systems',
+    digest, name = Path('/usr/share/doc/slimviewer/OPENH264-PATCHES').read_text().split()
+    if not re.fullmatch('[0-9a-f]{64}', digest) or viewer['openh264']['patches'] != [{'name': name, 'sha256': digest}]:
+        raise ValueError('OpenH264 patch manifest differs from provenance')
+    for required in (f'v{version} {revision}', digest, name, 'Copyright (c) 2013, Cisco Systems',
                      'Redistributions of source code must retain', 'Redistributions in binary form must reproduce',
                      'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"'):
         if required not in section:
