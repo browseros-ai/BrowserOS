@@ -202,9 +202,10 @@ impl AppState {
             harness.clone(),
             config.browserclaw_dir.join("skills"),
         ));
-        let skill_runs = Arc::new(SkillRunService::new(
+        let skill_runs = Arc::new(SkillRunService::new_with_analytics(
             SkillsRepository::new(database.clone()),
             audit_log.clone(),
+            analytics_sink.clone(),
         ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
         let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(

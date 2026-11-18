@@ -41,6 +41,10 @@ const DISTINCT_TOOLS: &str = "distinct_tools";
 const BY_TOOL: &str = "by_tool";
 const BY_CLIENT: &str = "by_client";
 const OTHER_TOOL: &str = "other";
+const ORIGIN: &str = "origin";
+const DAYS_SINCE_SAVED: &str = "days_since_saved";
+const RUNS_BEFORE_VERIFY: &str = "runs_before_verify";
+const P50_BUCKET: &str = "p50_bucket";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -62,6 +66,30 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
 ];
 
 pub(crate) const END_KIND_VALUES: [&str; 3] = ["closed", "errored", "cancelled"];
+
+/// How a skill came to exist, as stored on the skill.
+pub(crate) const SKILL_ORIGIN_VALUES: [&str; 4] = ["agent", "manual", "directory", "history"];
+
+/// A verified flow's median run time, in buckets, so no exact timing leaves the machine.
+pub(crate) const P50_BUCKET_VALUES: [&str; 5] = [
+    "under_2s",
+    "2s_to_5s",
+    "5s_to_10s",
+    "10s_to_30s",
+    "over_30s",
+];
+
+/// The bucket a verified flow's median run time falls in.
+#[must_use]
+pub fn p50_bucket(p50_ms: i64) -> &'static str {
+    match p50_ms {
+        ..2_000 => "under_2s",
+        2_000..5_000 => "2s_to_5s",
+        5_000..10_000 => "5s_to_10s",
+        10_000..30_000 => "10s_to_30s",
+        _ => "over_30s",
+    }
+}
 
 /// Fixed set of task kinds the agent may declare. Only these tokens leave the
 /// machine; the free-form session name never does. An unrecognized value is
@@ -88,6 +116,8 @@ enum PropertyKind {
     TaskSummary,
     Harness,
     EndKind,
+    SkillOrigin,
+    P50Bucket,
     ToolName,
     UnsignedInteger,
     SignedInteger,
@@ -145,6 +175,8 @@ impl PropertyDefinition {
             }
             PropertyKind::Harness => normalize_token(value, &HARNESS_VALUES),
             PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
+            PropertyKind::SkillOrigin => normalize_token(value, &SKILL_ORIGIN_VALUES),
+            PropertyKind::P50Bucket => normalize_token(value, &P50_BUCKET_VALUES),
             PropertyKind::ToolName => {
                 let raw = value.as_str()?;
                 known_tool_names()
@@ -400,7 +432,26 @@ pub const TOOL_CALLS_DAILY: EventDefinition = EventDefinition::new(
     ],
 );
 
-pub const ALL: [EventDefinition; 9] = [
+/// A saved skill's first recorded run.
+pub const SKILL_FIRST_RUN: EventDefinition = EventDefinition::new(
+    "skill_first_run",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(DAYS_SINCE_SAVED, PropertyKind::UnsignedInteger),
+    ],
+);
+
+/// A skill's ultrafast flow verified for the first time.
+pub const SKILL_FLOW_VERIFIED: EventDefinition = EventDefinition::new(
+    "skill_flow_verified",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(RUNS_BEFORE_VERIFY, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(P50_BUCKET, PropertyKind::P50Bucket),
+    ],
+);
+
+pub const ALL: [EventDefinition; 11] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -410,6 +461,8 @@ pub const ALL: [EventDefinition; 9] = [
     AGENT_SESSION_TOOL_USAGE,
     AGENT_SESSION_EFFICIENCY_COMPUTED,
     TOOL_CALLS_DAILY,
+    SKILL_FIRST_RUN,
+    SKILL_FLOW_VERIFIED,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -461,7 +514,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 9);
+        assert_eq!(ALL.len(), 11);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -474,7 +527,17 @@ mod tests {
                 AGENT_SESSION_TOOL_USAGE.name(),
                 AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
                 TOOL_CALLS_DAILY.name(),
+                SKILL_FIRST_RUN.name(),
+                SKILL_FLOW_VERIFIED.name(),
             ]
+        );
+        assert_eq!(
+            SKILL_FIRST_RUN.property_names(),
+            vec!["origin", "days_since_saved"]
+        );
+        assert_eq!(
+            SKILL_FLOW_VERIFIED.property_names(),
+            vec!["origin", "runs_before_verify", "p50_bucket"]
         );
         assert_eq!(
             TOOL_CALLS_DAILY.property_names(),
@@ -530,6 +593,30 @@ mod tests {
                 "screenshot_tokens_per_dispatch",
             ]
         );
+    }
+
+    #[test]
+    fn skill_events_keep_only_fixed_tokens_and_counts() {
+        assert_eq!(
+            SKILL_FLOW_VERIFIED.sanitize(&json!({
+                "origin": "history",
+                "runs_before_verify": 0,
+                "p50_bucket": p50_bucket(7_300),
+                "name": "neo-private-skill",
+            })),
+            Some(json!({
+                "origin": "history",
+                "runs_before_verify": 0,
+                "p50_bucket": "5s_to_10s",
+            }))
+        );
+        assert_eq!(
+            SKILL_FIRST_RUN.sanitize(&json!({ "origin": "made-up", "days_since_saved": 1 })),
+            None
+        );
+        assert_eq!(p50_bucket(900), "under_2s");
+        assert_eq!(p50_bucket(2_000), "2s_to_5s");
+        assert_eq!(p50_bucket(45_000), "over_30s");
     }
 
     #[test]

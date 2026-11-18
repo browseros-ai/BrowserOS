@@ -505,6 +505,11 @@ impl SkillService {
         Ok(self.repo.get(name).await?.map(|model| model.origin))
     }
 
+    /// How many runs of the skill have been recorded.
+    pub async fn run_count(&self, name: &str) -> AppResult<usize> {
+        Ok(self.repo.runs_for(name).await?.len())
+    }
+
     async fn view_of(&self, model: skills::Model) -> AppResult<SkillView> {
         let runs = self.repo.runs_for(&model.name).await?;
         let linked_agents = parse_linked_agents(&model.linked_agents_json);

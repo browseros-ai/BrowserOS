@@ -284,6 +284,8 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "harness_connected",
         "harness_disconnected",
         "tool_calls_daily",
+        "skill_first_run",
+        "skill_flow_verified",
     ];
     let mut wire_locations = wire_names
         .iter()
