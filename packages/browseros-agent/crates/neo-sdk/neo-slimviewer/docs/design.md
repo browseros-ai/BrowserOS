@@ -13,8 +13,9 @@ no owner. The link and CPU each choose a frame-rate limit, and the lower one
 paces capture. Under pressure they step down through 30, 20 and 15 fps. At
 the floor, a congested link raises the quantizer by up to two per step, to
 +6 by default. Sustained congestion can then trigger half size. A frame that
-would take over 300 ms at the quality limit, late acknowledgements or stalled
-delivery can accelerate those steps. Slow measured work can lower the CPU
+would take over 300 ms at the quality limit, late acknowledgements or two
+consecutive congested seconds without delivery can accelerate those steps.
+Slow measured work can lower the CPU
 limit. Throttle or steal counts only when frames miss 80% of the current
 cadence during at least half a second with damage pending and the pacer open.
 Recovery takes one step at a time after sustained headroom. A return to full-size

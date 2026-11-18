@@ -319,6 +319,7 @@ pub struct Picture {
     calm_sharp: bool,
     last_input: Option<Instant>,
     queue_high: bool,
+    previous_congested_no_ack: bool,
     last_reset: Option<Instant>,
     reset_since_tick: bool,
     /// An asynchronous reset reports the last complete interval's measurements.
@@ -367,6 +368,7 @@ impl Picture {
             calm_sharp: false,
             last_input: None,
             queue_high: false,
+            previous_congested_no_ack: false,
             last_reset: None,
             reset_since_tick: false,
             facts: Facts::default(),
@@ -438,6 +440,7 @@ impl Picture {
         self.last_reset = None;
         self.reset_since_tick = false;
         self.queue_high = false;
+        self.previous_congested_no_ack = false;
     }
 
     pub fn link_kbps(&self) -> u32 {
@@ -761,6 +764,7 @@ impl Picture {
         let reset = std::mem::take(&mut self.reset_since_tick);
         let congested = reset || link_full(link.blocked);
         let severe = congested && self.severe(&link, mean_bytes);
+        self.previous_congested_no_ack = congested && link.delivered_kbps == 0.0;
         self.facts = Facts {
             blocked: link.blocked,
             queue_ms: link.queue_ms,
@@ -845,7 +849,7 @@ impl Picture {
     /// nothing about the cost of continued motion.
     fn severe(&self, link: &Link, mean_bytes: f32) -> bool {
         if link.delivered_kbps == 0.0 {
-            return link.sent_kbps > 0.0;
+            return self.previous_congested_no_ack && link.sent_kbps > 0.0;
         }
         // A nonzero queue is measured from this pacer's acknowledgements in this interval.
         if link.queue_ms > 300 {
@@ -1426,10 +1430,18 @@ mod tests {
                 if n == 1 { Scale::Full } else { Scale::Half }
             );
         }
-        // A queued payload with no delivery also skips to the cap without motion samples.
-        let mut stalled = picture(t);
-        for n in 1..=2 {
-            let moves = stalled.tick(
+    }
+
+    #[test]
+    fn tests_that_stalled_delivery_needs_two_consecutive_congested_ticks() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for (n, why, fps, crf, scale) in [
+            (1, Why::Congested, 20.0, 24.0, Scale::Full),
+            (2, Why::Severe, 15.0, 30.0, Scale::Full),
+            (3, Why::Severe, 15.0, 30.0, Scale::Half),
+        ] {
+            let moves = p.tick(
                 at(t, n),
                 Link {
                     delivered_kbps: 0.0,
@@ -1437,9 +1449,36 @@ mod tests {
                 },
                 Cpu::default(),
             );
-            assert_eq!(moves[0].why, Why::Severe);
+            assert_eq!(moves.first().map(|m| m.why), Some(why));
+            assert_eq!((p.fps(), p.crf(), p.motion_scale()), (fps, crf, scale));
         }
-        assert_eq!(stalled.motion_scale(), Scale::Half);
+    }
+
+    #[test]
+    fn tests_that_an_isolated_no_ack_second_at_the_cap_keeps_full_size() {
+        let t = Instant::now();
+        for intervening in [active(15), Link::default()] {
+            let mut p = picture(t);
+            p.tick(
+                t,
+                Link {
+                    queue_ms: 400,
+                    ..jam()
+                },
+                Cpu::default(),
+            );
+            let stalled = || Link {
+                delivered_kbps: 0.0,
+                ..jam()
+            };
+            assert!(p.tick(at(t, 1), stalled(), Cpu::default()).is_empty());
+            p.tick(at(t, 2), intervening, Cpu::default());
+            assert!(p.tick(at(t, 3), stalled(), Cpu::default()).is_empty());
+            assert_eq!(p.motion_scale(), Scale::Full);
+            let moves = p.tick(at(t, 4), stalled(), Cpu::default());
+            assert_eq!(moves.first().map(|m| m.why), Some(Why::Severe));
+            assert_eq!(p.motion_scale(), Scale::Half);
+        }
     }
 
     #[test]
