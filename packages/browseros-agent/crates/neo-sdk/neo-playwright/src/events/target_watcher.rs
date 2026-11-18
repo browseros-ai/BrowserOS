@@ -558,6 +558,12 @@ struct RootObserver {
     target: TargetId,
     root: ProtocolSession,
     recovery: RecoveryObservation,
+    /// Set once `observe_recovery` handled this observer, whatever state it found: its tab
+    /// crashed while no session of core's was the tab's source, and recovers through it. Main's
+    /// recovery observer turned `Page` on there and reported the tab's events from then on, so
+    /// this observer's records are written as main's were (`Watcher::records_page_events`). It
+    /// stays set for the observer's life: `seed_observer` entering it later does not clear it.
+    after_crash: bool,
 }
 
 /// Page-only observation survives renderer failure without putting renderer setup on the
@@ -1927,15 +1933,16 @@ impl Watcher {
                 self.verify_recovery(ticket, session);
             }
         }
+        // Only the record is gated: the workers' closing and the recovery ticket above stand for
+        // every tab. The URL hint rides the record's seq, so it goes with it.
         if tab
             .as_ref()
-            .is_some_and(|tab| !self.records_page_events(tab))
+            .is_none_or(|tab| self.records_page_events(tab, session))
         {
-            return;
-        }
-        let seq = self.writer.record(navigation);
-        if let Some(tab) = main_of {
-            self.writer.main_frame_navigated(tab, seq);
+            let seq = self.writer.record(navigation);
+            if let Some(tab) = main_of {
+                self.writer.main_frame_navigated(tab, seq);
+            }
         }
     }
 
@@ -2139,6 +2146,7 @@ impl Watcher {
                 // browser restores a session's domains on the new renderer), so crash recovery
                 // has nothing left to enable on it (`observe_recovery`).
                 recovery: RecoveryObservation::Off,
+                after_crash: false,
             },
         );
         self.sessions.insert(session_id.clone(), target.clone());
@@ -2227,6 +2235,7 @@ impl Watcher {
                     target: target.clone(),
                     root,
                     recovery: RecoveryObservation::Off,
+                    after_crash: false,
                 },
             );
             self.sessions
@@ -2237,6 +2246,9 @@ impl Watcher {
         let Some(observer) = self.root_observers.get_mut(&session) else {
             return;
         };
+        // Usually seeded long before its tab crashed, with `Page` on already: what makes its
+        // records main's is the recovery, not which call turned `Page` on.
+        observer.after_crash = true;
         if let RecoveryObservation::Enabling(task) = &mut observer.recovery {
             if !task.is_finished() {
                 return;
@@ -2774,10 +2786,13 @@ impl Watcher {
         self.record_load(target, kind);
     }
 
-    /// Records `target`'s load event of `kind` with its main frame, if the tracker knows it and a
-    /// session of core's is on the tab ([`Self::records_page_events`]).
+    /// Records `target`'s load event of `kind` with its main frame, if the tracker knows it and the
+    /// tab's source writes records ([`Self::records_page_events`]). A load that waited in the
+    /// tab's line carries no session: it is the tab's source as the load is written that decides,
+    /// so a session of core's that attached meanwhile has it written.
     fn record_load(&mut self, target: TargetId, kind: PageEventKind) {
-        if !self.records_page_events(&target) {
+        let source = self.lifecycle_sources.primary.get(&target).cloned();
+        if !self.records_page_events(&target, source.as_ref()) {
             return;
         }
         if let Some(frame) = self.lifecycle.main(&target) {
@@ -2793,7 +2808,7 @@ impl Watcher {
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
         if let Some(target) = self.target_of(session).await {
-            let record = self.records_page_events(&target);
+            let record = self.records_page_events(&target, Some(session));
             let mut changed = false;
             for event in self.lifecycle.record(&target, method, params) {
                 if record {
@@ -3022,19 +3037,30 @@ impl Watcher {
         }
     }
 
-    /// Whether a page-domain event of `tab`'s, applied now, gets a record in the shared event log:
-    /// a frame's attach, removal or commit, a navigation, a load. Only while a session of core's
-    /// is on the tab ([`Self::core_attached`], the dialog rule's predicate). The log is one ring
-    /// for every run, 1,024 records long (`LOG_CAPACITY`), and an untouched tab that churns
-    /// frames would fill it for nobody: every reader of these records has a session of core's on
-    /// the tab first (a page listener is admitted on the tab, a context listener attaches core to
-    /// every tab, `observe_context`). Such a tab keeps its tracker and frame version current, which
-    /// write nothing to the ring (`EventWriter::frames_changed`). Asked when the event is applied,
-    /// in its line, so from core's attach on the tab's events are recorded, in order, whichever
-    /// session is its source; events read before the attach that its line still held are
-    /// recorded too, as they replay after it.
-    fn records_page_events(&self, tab: &TargetId) -> bool {
-        self.core_attached(tab)
+    /// Whether a page-domain event of `tab`'s that came on `session`, applied now, gets a record in
+    /// the shared event log (a frame's attach, removal or commit, a navigation, a load), so that
+    /// the log holds what it held on main. It does not for an event of the tab's root observer
+    /// while no session of core's is on the tab ([`Self::core_attached`], the dialog rule's
+    /// predicate): on main that observer had `Page` off and reported nothing. The log is one ring
+    /// for every run, 1,024 records long (`LOG_CAPACITY`), which an untouched tab churning frames
+    /// would fill for nobody: every reader of these records has a session of core's on the tab
+    /// first (a page listener is admitted on the tab, a context listener attaches core to every
+    /// tab). An out-of-process frame's session records as on main, and so does an observer whose
+    /// tab went through crash recovery (`RootObserver::after_crash`). The tracker and the tab's
+    /// frame version follow every event either way, and write nothing to the ring
+    /// (`EventWriter::frames_changed`). Asked as the event is applied, in its line: from core's
+    /// attach on, the tab's events are recorded, in order, whichever session is its source;
+    /// events its line still held from before the attach replay after it and are recorded too.
+    /// `session` is the one the event came on, or for a load the tab's source as it is written;
+    /// with none, the event is recorded.
+    fn records_page_events(&self, tab: &TargetId, session: Option<&SessionId>) -> bool {
+        if self.core_attached(tab) {
+            return true;
+        }
+        let Some(observer) = session.and_then(|session| self.root_observers.get(session)) else {
+            return true;
+        };
+        observer.after_crash
     }
 
     /// Whether a session of core's is on `target`'s tab: one of its own page sessions, from an
@@ -6308,6 +6334,94 @@ mod seed_tests {
             records(&hub),
             ["frameattached after", "load https://a.test/"]
         );
+        Ok(())
+    }
+
+    /// An untouched tab's out-of-process frame records its frames' events, as on main (its
+    /// session is the frame's own, whose `Page` main turned on too); the tab's observer's own
+    /// frame events write nothing.
+    #[tokio::test]
+    async fn an_untouched_tab_s_out_of_process_frame_records_as_on_main() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, observer) = observed_tab(&connection).await?;
+        let frame = json!({ "sessionId": "tf",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Target.attachedToTarget", frame),
+        )
+        .await;
+        let tf_tree = json!({ "frameTree": {
+            "frame": { "id": "tf", "parentId": "tab", "url": "https://tf.test/" } } });
+        answer(&mut watcher, "tf", tf_tree).await;
+        let attached = |id: &str, parent: &str| json!({ "frameId": id, "parentFrameId": parent });
+        read(
+            &mut watcher,
+            on(
+                observer.as_str(),
+                "Page.frameAttached",
+                attached("local", "tab"),
+            ),
+        )
+        .await;
+        read(
+            &mut watcher,
+            on("tf", "Page.frameAttached", attached("deep", "tf")),
+        )
+        .await;
+        assert_eq!(records(&hub), ["frameattached deep"]);
+        Ok(())
+    }
+
+    /// A crashed untouched tab recovers through its observer, seeded long before the crash: once
+    /// a pass handled it (`observe_recovery`, which finds `Page` on already), the reload's
+    /// main-frame commit is written with its navigation record and moves the host's URL hint, as
+    /// main's recovery observer wrote it. Before the crash, its commits wrote nothing.
+    #[tokio::test]
+    async fn a_crashed_untouched_tab_s_reload_is_recorded_through_its_observer() -> TestResult {
+        let connection = TestConnection::new([]);
+        let (hub, mut watcher, observer) = observed_tab(&connection).await?;
+        let tab = TargetId("tab".to_owned());
+        let commit = |loader: &str| {
+            json!({ "frame": { "id": "tab", "loaderId": loader,
+            "url": "https://a.test/" } })
+        };
+        let navigations = |hub: &EventHub| {
+            hub.read_after(0)
+                .records
+                .into_iter()
+                .filter(|record| matches!(&record.event, PageEvent::Navigation(_)))
+                .count()
+        };
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.frameNavigated", commit("before")),
+        )
+        .await;
+        assert_eq!(navigations(&hub), 0, "no record before the crash");
+        assert_eq!(hub.navigated_at(&tab), None);
+
+        let crashed = CdpEvent {
+            method: "Target.targetCrashed".to_owned(),
+            params: json!({ "targetId": "tab", "status": "crashed", "errorCode": 1 }),
+            session_id: None,
+        };
+        read(&mut watcher, crashed).await;
+        connection.always(
+            "Browser.getTabs",
+            json!({ "tabs": [{ "tabId": 7, "targetId": "tab", "windowId": 1,
+                "url": "https://a.test/", "title": "A", "isActive": false,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false,
+                "isHidden": false }] }),
+        )?;
+        watcher.observe_context().await;
+        read(
+            &mut watcher,
+            on(observer.as_str(), "Page.frameNavigated", commit("reload")),
+        )
+        .await;
+        assert_eq!(navigations(&hub), 1, "the reload's commit is recorded");
+        assert!(hub.navigated_at(&tab).is_some(), "the URL hint moved");
         Ok(())
     }
 
