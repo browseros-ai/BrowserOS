@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { Card } from '@/components/motion/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { newestDraftableId } from '@/screens/skill-draft/skill-draft.helpers'
 import { HISTORY_PAGE_SIZE, useAuditScreenData } from './audit.data'
 
 /** Everything your AI agents did with neo, newest first, one card per day. */
@@ -13,6 +14,9 @@ export function Audit() {
   const data = useAuditScreenData()
   const { filters } = data
   const now = Date.now()
+  const skillAlwaysId = newestDraftableId(
+    data.groups.flatMap((group) => group.tasks),
+  )
   const showFilters =
     !data.isError && (data.loadedCount > 0 || data.hasActiveFilters)
 
@@ -74,6 +78,7 @@ export function Audit() {
                       task={task}
                       now={now}
                       timeOnly
+                      skillAlways={task.sessionId === skillAlwaysId}
                     />
                   ))}
                 </div>

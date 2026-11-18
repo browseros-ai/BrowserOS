@@ -4,6 +4,7 @@ import { TaskRow } from '@/components/audit/TaskRow'
 import { Card } from '@/components/motion/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSessions } from '@/modules/api/audit.hooks'
+import { newestDraftableId } from '@/screens/skill-draft/skill-draft.helpers'
 
 const RECENT_TASK_COUNT = 4
 
@@ -18,6 +19,7 @@ export function RecentActivity() {
     .flatMap((page) => page.items)
     .slice(0, RECENT_TASK_COUNT)
   const now = Date.now()
+  const skillAlwaysId = newestDraftableId(tasks)
 
   return (
     <section
@@ -56,7 +58,12 @@ export function RecentActivity() {
         ) : (
           <div className="flex flex-col divide-y divide-border-2">
             {tasks.map((task) => (
-              <TaskRow key={task.sessionId} task={task} now={now} />
+              <TaskRow
+                key={task.sessionId}
+                task={task}
+                now={now}
+                skillAlways={task.sessionId === skillAlwaysId}
+              />
             ))}
           </div>
         )}
