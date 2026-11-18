@@ -24,6 +24,7 @@ mod live_run;
 mod page_server;
 
 use std::error::Error;
+use std::fs;
 use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -1569,6 +1570,25 @@ impl OutsideTab {
             .unwrap_or(Value::Null))
     }
 
+    /// The URL of the tab's child frame named `name`, read on this client's own session (its own
+    /// `Page` on, which no session of the run's sees).
+    async fn child_url(&self, name: &str) -> TestResult<String> {
+        self.session.send_value("Page.enable", json!({})).await?;
+        let tree = self
+            .session
+            .send_value("Page.getFrameTree", json!({}))
+            .await?;
+        let url = tree
+            .pointer("/frameTree/childFrames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|child| child.pointer("/frame/name").and_then(Value::as_str) == Some(name))
+            .and_then(|child| child.pointer("/frame/url").and_then(Value::as_str))
+            .ok_or_else(|| format!("no child frame named {name}"))?;
+        Ok(url.to_owned())
+    }
+
     /// Closes the tab, then the connection: dropping a `CdpClient` does not stop its tasks.
     async fn close(&self) {
         let _closed = self
@@ -1651,6 +1671,123 @@ async fn tests_that_a_child_commit_in_a_tab_neo_never_touched_moves_its_frame_ve
                 asked.elapsed()
             );
         }
+        assert!(
+            run.browser()
+                .pages
+                .get_attached_session(info.page_id)
+                .await
+                .is_none(),
+            "the run's core never attached to the tab"
+        );
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    tab.close().await;
+    result
+}
+
+/// A tab another client opened on a `file:` page, which the door refuses, reports nothing of its
+/// frames: the watcher sends such a tab nothing of a page domain, so a child's commit there
+/// leaves the tab's frame version where it was for the whole bound a child's commit gets in an
+/// untouched tab. Once the same client navigates the tab to a page the door allows, the watcher
+/// seeds its observer: the version moves, and a child's commit moves it again. Core never
+/// attaches to the tab. The `file:` fixture is three local files written to a fresh directory and
+/// opened by their path, as the browser reads the host's own files.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each step prints how long it waited or took, the measure its bound is checked \
+              against"
+)]
+async fn tests_that_an_untouched_tab_on_a_file_page_reports_no_frames_until_it_leaves_it()
+-> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = PageServer::start().await?;
+    let dir = tempfile::tempdir()?;
+    fs::write(
+        dir.path().join("parent.html"),
+        "<!doctype html><title>file parent</title><iframe name=\"same\" src=\"child.html\"></iframe>",
+    )?;
+    for child in ["child.html", "moved.html"] {
+        fs::write(
+            dir.path().join(child),
+            format!("<!doctype html><title>{child}</title>"),
+        )?;
+    }
+    let parent = format!("file://{}", dir.path().join("parent.html").display());
+    let tab = OutsideTab::open(&parent).await?;
+    let result = async {
+        let info = run
+            .browser()
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|info| info.target_id.as_str() == tab.target)
+            .ok_or("the tab is not listed")?;
+        let version = || {
+            run.frame_versions()
+                .into_iter()
+                .find(|(listed, _)| *listed == info.tab_id)
+                .map(|(_, version)| version)
+        };
+        // The watcher attaches its observer within the bound the untouched row gives it; on a
+        // file page that observer turns nothing of a page domain on.
+        time::sleep(UNTOUCHED_TAB_OBSERVED_BOUND).await;
+        let before = version();
+        tab.eval("document.querySelector('iframe[name=same]').src = 'moved.html'; ''")
+            .await?;
+        time::sleep(UNTOUCHED_CHILD_COMMIT_BOUND).await;
+        let committed = tab.child_url("same").await?;
+        assert!(
+            committed.ends_with("/moved.html"),
+            "the file page's child committed its navigation: {committed}"
+        );
+        assert_eq!(
+            version(),
+            before,
+            "a child's commit on a file page moved the tab's frame version within \
+             {UNTOUCHED_CHILD_COMMIT_BOUND:?}"
+        );
+        eprintln!(
+            "UNTOUCHED_FILE_TAB step=file waited={UNTOUCHED_CHILD_COMMIT_BOUND:?} version={before:?}"
+        );
+
+        let left = version();
+        tab.session
+            .send_value("Page.navigate", json!({ "url": server.url("/frames.html") }))
+            .await?;
+        let asked = Instant::now();
+        while version() <= left {
+            if asked.elapsed() > UNTOUCHED_TAB_OBSERVED_BOUND {
+                return Err(format!(
+                    "the tab's frame version did not move within {UNTOUCHED_TAB_OBSERVED_BOUND:?} \
+                     of its move to an allowed page"
+                )
+                .into());
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        eprintln!("UNTOUCHED_FILE_TAB step=allowed took={:?}", asked.elapsed());
+        let before = version();
+        tab.eval(&format!(
+            "document.querySelector('iframe[name=same]').src = {:?}; ''",
+            server.url("/child.html?moved")
+        ))
+        .await?;
+        let asked = Instant::now();
+        while version() <= before {
+            if asked.elapsed() > UNTOUCHED_CHILD_COMMIT_BOUND {
+                return Err(format!(
+                    "the child's commit on the allowed page did not move the tab's frame version \
+                     within {UNTOUCHED_CHILD_COMMIT_BOUND:?}"
+                )
+                .into());
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+        eprintln!("UNTOUCHED_FILE_TAB step=child took={:?}", asked.elapsed());
         assert!(
             run.browser()
                 .pages
