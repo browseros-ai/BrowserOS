@@ -35,6 +35,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0026_add_site_and_outcome_to_ultrafast_sessions::Migration),
             Box::new(m0027_backfill_task_active_duration::Migration),
             Box::new(m0028_align_efficiency_active_duration::Migration),
+            Box::new(m0029_add_task_groups::Migration),
         ]
     }
 }
@@ -3073,5 +3074,89 @@ mod m0020_add_feedback_invite_snooze {
     enum FeedbackInvite {
         Table,
         SnoozedAtMs,
+    }
+}
+
+mod m0029_add_task_groups {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0029_add_task_groups"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Which task owns a browser tab group. A CLI task is identified by its group
+            // and nothing else, so this binding is what lets one task span many CLI
+            // processes and survive a server restart while the browser holds the group.
+            // Durable rather than a sidecar in `target-bindings.json`, because it keys
+            // the same rows the rest of the task history is keyed on.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(TaskGroups::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(TaskGroups::GroupId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(ColumnDef::new(TaskGroups::SessionId).string().not_null())
+                        .col(ColumnDef::new(TaskGroups::AgentId).string().not_null())
+                        .col(ColumnDef::new(TaskGroups::Origin).string().not_null())
+                        .col(ColumnDef::new(TaskGroups::WindowId).string().null())
+                        .col(ColumnDef::new(TaskGroups::ProfileId).string().null())
+                        .col(
+                            ColumnDef::new(TaskGroups::CreatedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(ColumnDef::new(TaskGroups::EndedAt).big_integer().null())
+                        .to_owned(),
+                )
+                .await?;
+            manager
+                .create_index(
+                    Index::create()
+                        .name("task_groups_session_idx")
+                        .table(TaskGroups::Table)
+                        .col(TaskGroups::SessionId)
+                        .if_not_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(
+                    Table::drop()
+                        .table(TaskGroups::Table)
+                        .if_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum TaskGroups {
+        Table,
+        GroupId,
+        SessionId,
+        AgentId,
+        Origin,
+        WindowId,
+        ProfileId,
+        CreatedAt,
+        EndedAt,
     }
 }

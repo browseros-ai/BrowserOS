@@ -8,6 +8,7 @@ pub mod run_error_budget;
 pub mod session_efficiency_stats;
 pub mod session_tabs;
 pub mod skills;
+pub mod task_groups;
 pub mod tool_calls_daily;
 pub mod ultrafast_ledger;
 pub mod ultrafast_runs;
@@ -20,6 +21,7 @@ pub use recording_index::{
 pub use session_efficiency_stats::SessionEfficiencyStatsRepository;
 pub use session_tabs::SessionTabLedger;
 pub use skills::SkillsRepository;
+pub use task_groups::{BindOutcome, Binding, NewBinding, TaskGroupStore, TaskOrigin};
 
 use crate::error::{AppError, AppResult, IoPath};
 use migration::Migrator;
@@ -453,7 +455,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -684,7 +686,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 28);
+        assert_eq!(migration_count, 29);
         conn.close().await?;
         Ok(())
     }
@@ -793,7 +795,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(
             migrations
                 .iter()
@@ -816,7 +818,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 28);
+        assert_eq!(migration_count, 29);
         Ok(())
     }
 
@@ -952,7 +954,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 28);
+        assert_eq!(migrations.len(), 29);
         Ok(())
     }
 
@@ -1010,7 +1012,7 @@ mod tests {
                 .await?;
             assert_eq!(
                 migrations.len(),
-                28,
+                29,
                 "doctor pass {attempt} was not repaired"
             );
 

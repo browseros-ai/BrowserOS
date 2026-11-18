@@ -13,6 +13,7 @@ pub mod skill_runs;
 pub mod skills;
 pub mod tab_claims;
 pub mod tab_recordings;
+pub mod task_groups;
 pub mod tasks;
 pub mod tool_dispatches;
 
@@ -32,6 +33,7 @@ pub mod prelude {
     pub use super::skills::Entity as Skills;
     pub use super::tab_claims::Entity as TabClaims;
     pub use super::tab_recordings::Entity as TabRecordings;
+    pub use super::task_groups::Entity as TaskGroups;
     pub use super::tasks::Entity as Tasks;
     pub use super::tool_dispatches::Entity as ToolDispatches;
 }
