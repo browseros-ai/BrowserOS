@@ -1717,7 +1717,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_interrupting_an_in_flight_request_never_starts_another() {
+    async fn tests_that_interrupting_an_in_flight_request_never_starts_another()
+    -> anyhow::Result<()> {
         for (status, reason) in [
             (SolveStatus::Cancelled, SolveReason::CallerCancelled),
             (SolveStatus::Failed, SolveReason::DeadlineExceeded),
@@ -1742,16 +1743,19 @@ mod tests {
                     cancel.cancel();
                 }
             };
-            let (result, ()) = tokio::join!(
+            let attempt = tokio::time::timeout_at(
+                deadline + Duration::from_secs(1),
                 run(&page, &backend, &challenge, &cancel, deadline),
-                interrupt
             );
+            let (result, ()) = tokio::join!(attempt, interrupt);
+            let result = result?;
             assert_eq!((result.status, result.reason), (status, reason));
             assert!(matches!(
                 backend.tasks().as_slice(),
                 [SolveTask::RecaptchaTiles(_)]
             ));
         }
+        Ok(())
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_cancel_and_deadline_stop_before_any_action() {
