@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::{
     collections::BTreeMap,
     env, fs,
-    num::{NonZeroU16, NonZeroU64},
+    num::NonZeroU16,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -19,7 +19,6 @@ const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 const DEFAULT_SESSION_COMPLETE_IDLE_MS: u64 = 5 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
-const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 /// Developer assertion of the native BrowserOS version for builds whose launch config does
 /// not carry a usable one (dev/dogfood sidecars, stale local stamps). Logged at startup.
@@ -84,7 +83,6 @@ pub struct Config {
     /// and durable individual-tab cleanup so neither can close tabs before the chosen grace.
     pub session_retention: Duration,
     pub session_sweep_interval: Duration,
-    pub replay_retention_days: u64,
     /// A dev server is a guest beside the installed BrowserOS neo, which owns the shared
     /// agent configs (MCP entries and skills under `$HOME`, all named `browseros-neo`). It
     /// keeps its own default state dir and never changes those configs, even on explicit
@@ -181,8 +179,6 @@ struct SidecarConfig {
     directories: SidecarDirectories,
     #[serde(default)]
     flags: SidecarFlags,
-    #[serde(default)]
-    replay: Option<SidecarReplay>,
     /// Untyped on purpose: a missing, malformed or wrong-typed identity must leave the
     /// native unknown (gated features hidden), never fail startup and with it all browsing.
     #[serde(default)]
@@ -205,12 +201,6 @@ struct SidecarDirectories {
 #[serde(rename_all = "camelCase")]
 struct SidecarFlags {
     dev_mode: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SidecarReplay {
-    retention_days: NonZeroU64,
 }
 
 impl Config {
@@ -281,10 +271,6 @@ impl Config {
                 "CLAW_SESSION_SWEEP_INTERVAL_MS",
                 DEFAULT_SESSION_SWEEP_INTERVAL_MS,
             )),
-            replay_retention_days: sidecar
-                .replay
-                .map(|replay| replay.retention_days.get())
-                .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
             dev_mode,
             native,
             mode,
@@ -491,7 +477,6 @@ mod tests {
         assert_eq!(cfg.proxy_port, None);
         assert_eq!(cfg.session_idle, Duration::from_millis(1000));
         assert_eq!(cfg.session_retention, Duration::from_millis(2000));
-        assert_eq!(cfg.replay_retention_days, 7);
         assert!(cfg.browserclaw_dir.ends_with("browserclaw"));
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9200/mcp");
         // No proxy configured (dev): falls back to the direct server port.
@@ -500,15 +485,20 @@ mod tests {
     }
 
     #[test]
-    fn reads_replay_retention_days_from_sidecar_config() -> anyhow::Result<()> {
+    fn ignores_a_legacy_replay_section_in_sidecar_config() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let config_path = dir.path().join("sidecar.json");
-        fs::write(&config_path, r#"{"replay":{"retentionDays":14}}"#)?;
-        let cfg = Config::load_with_env(
-            &config_path,
-            &ConfigEnv::with_vars(BTreeMap::new(), dir.path().join("home")),
-        )?;
-        assert_eq!(cfg.replay_retention_days, 14);
+        // Replay retention follows the History setting now; older sidecars still load.
+        for raw in [
+            r#"{"replay":{"retentionDays":14}}"#,
+            r#"{"replay":{"retentionDays":0}}"#,
+        ] {
+            fs::write(&config_path, raw)?;
+            Config::load_with_env(
+                &config_path,
+                &ConfigEnv::with_vars(BTreeMap::new(), dir.path().join("home")),
+            )?;
+        }
         Ok(())
     }
 

@@ -8,7 +8,10 @@ import { registerDiagnostics } from '@browseros/diagnostics/extension'
 import { defineBackground } from 'wxt/utils/define-background'
 import { resolveBrowserOSServerBaseUrl } from '@/modules/api/browseros-ports'
 import { type Attention, registerAttention } from '@/modules/attention/register'
-import { createRecordingsRelay } from '@/modules/recorder'
+import {
+  createRecordingsRelay,
+  createSessionReplaysSetting,
+} from '@/modules/recorder'
 import type { TakeoverResolveMessage } from '@/modules/takeover/takeover.types'
 import { createTakeoverBridge } from '@/modules/takeover/takeover-bridge'
 import { registerExtensionUpdates } from '@/modules/updates/register'
@@ -18,6 +21,9 @@ export default defineBackground(() => {
   registerExtensionUpdates()
   registerDiagnostics('browseros-neo', resolveBrowserOSServerBaseUrl)
   const relay = createRecordingsRelay({
+    resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,
+  })
+  const sessionReplays = createSessionReplaysSetting({
     resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,
   })
   const requestResnapshot = (tabId: number) => {
@@ -79,6 +85,14 @@ export default defineBackground(() => {
       return true
     }
     return false
+  })
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if ((message as { type?: unknown }).type !== 'recorder-enabled') {
+      return false
+    }
+    void sessionReplays.enabled().then((enabled) => sendResponse({ enabled }))
+    return true
   })
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

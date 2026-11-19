@@ -159,6 +159,7 @@ describe('ClawApiClient', () => {
         return Response.json({
           humanHelpEnabled: false,
           taskCleanupTipEnabled: false,
+          sessionReplaysEnabled: true,
         })
       },
     })
@@ -166,6 +167,7 @@ describe('ClawApiClient', () => {
     const settings = {
       humanHelpEnabled: false,
       taskCleanupTipEnabled: false,
+      sessionReplaysEnabled: true,
     } as const
     await expect(client.getAgentSettings()).resolves.toEqual(settings)
     await expect(

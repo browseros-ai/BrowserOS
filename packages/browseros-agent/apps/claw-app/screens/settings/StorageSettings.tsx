@@ -15,7 +15,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/motion/select'
+import { Switch } from '@/components/motion/switch'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  useAgentSettings,
+  useUpdateAgentSettings,
+} from '@/modules/api/agent-settings.hooks'
 import {
   useAuditAgents,
   useAuditStorage,
@@ -33,6 +38,7 @@ import {
   retentionRequest,
 } from './storage.helpers'
 
+const REPLAYS_ID = 'session-replays'
 const RETENTION_ID = 'retention'
 const SPACE_ID = 'space-used'
 
@@ -103,6 +109,7 @@ export function StorageSettings() {
 
   return (
     <SettingsSection title="History and storage">
+      <SessionReplaysRow />
       <SettingRow
         id={RETENTION_ID}
         title="Keep task history for"
@@ -224,5 +231,46 @@ export function StorageSettings() {
         </CenterMorphModalContent>
       </CenterMorphModal>
     </SettingsSection>
+  )
+}
+
+/** Whether pages are recorded so History can replay each task. */
+function SessionReplaysRow() {
+  const settings = useAgentSettings()
+  const updateSettings = useUpdateAgentSettings()
+  const queryClient = useQueryClient()
+
+  const handleChange = (sessionReplaysEnabled: boolean) =>
+    updateSettings.mutate(
+      { sessionReplaysEnabled },
+      {
+        onSuccess: (saved) => {
+          queryClient.setQueryData(useAgentSettings.getKey(), saved)
+        },
+      },
+    )
+
+  return (
+    <SettingRow
+      id={REPLAYS_ID}
+      title="Record task replays"
+      description="Keeps a replay of each task so you can watch what happened. When this is off, new tasks aren’t recorded and History shows a picture of each step instead."
+      control={
+        <Switch
+          ariaLabel="Record task replays"
+          ariaDescribedBy={`${REPLAYS_ID}-description`}
+          // On until the server answers, matching its default.
+          checked={settings.data?.sessionReplaysEnabled ?? true}
+          onCheckedChange={handleChange}
+          disabled={!settings.data || updateSettings.isPending}
+        />
+      }
+    >
+      {updateSettings.isError ? (
+        <p role="alert" className="text-[13.5px] text-red-ink">
+          Couldn’t save that setting. Try again.
+        </p>
+      ) : null}
+    </SettingRow>
   )
 }

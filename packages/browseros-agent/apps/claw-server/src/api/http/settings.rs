@@ -1,6 +1,9 @@
 use super::{error, internal};
 use crate::{
-    AppState, error::CanonicalError, error::RequestId, services::agent_settings::HumanHelp,
+    AppState,
+    error::CanonicalError,
+    error::RequestId,
+    services::agent_settings::{AgentSettingsUpdate, HumanHelp},
 };
 use axum::{
     Extension, Json,
@@ -50,17 +53,23 @@ pub(super) async fn update_agent(
             &request_id,
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "humanHelpEnabled and taskCleanupTipEnabled must be booleans",
+            "humanHelpEnabled, taskCleanupTipEnabled and sessionReplaysEnabled must be booleans",
         )
     };
     let Json(payload) = payload.map_err(|_| invalid_settings())?;
-    if payload.human_help_enabled.is_none() && payload.task_cleanup_tip_enabled.is_none() {
+    if payload.human_help_enabled.is_none()
+        && payload.task_cleanup_tip_enabled.is_none()
+        && payload.session_replays_enabled.is_none()
+    {
         return Err(invalid_settings());
     }
-    let human_help = payload.human_help_enabled.map(HumanHelp::from_enabled);
     state
         .agent_settings
-        .update(human_help, payload.task_cleanup_tip_enabled)
+        .update(AgentSettingsUpdate {
+            human_help: payload.human_help_enabled.map(HumanHelp::from_enabled),
+            task_cleanup_tip_enabled: payload.task_cleanup_tip_enabled,
+            session_replays_enabled: payload.session_replays_enabled,
+        })
         .await
         .map_err(|source| internal(&request_id, source))?;
     Ok(Json(settings_of(&state)))
@@ -76,5 +85,6 @@ fn settings_of(state: &AppState) -> AgentSettings {
     AgentSettings::new(
         state.agent_settings.human_help().is_enabled(),
         state.agent_settings.task_cleanup_tip_enabled(),
+        state.agent_settings.session_replays_enabled(),
     )
 }

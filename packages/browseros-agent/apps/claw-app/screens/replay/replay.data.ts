@@ -89,15 +89,24 @@ export interface UseReplayDataResult {
   recordingState: RecordingLoadState
 }
 
+export interface UseReplayDataOptions {
+  /** False skips the recording entirely: no metadata, no events, no polling. */
+  enabled?: boolean
+}
+
 /** Loads task metadata and stable rrweb event buckets for one session's replay. */
-export function useReplayData(sessionId: string): UseReplayDataResult {
+export function useReplayData(
+  sessionId: string,
+  { enabled = true }: UseReplayDataOptions = {},
+): UseReplayDataResult {
+  const loadsRecording = enabled && sessionId.length > 0
   const taskQuery = useSessionDetail({
     variables: { sessionId },
     enabled: sessionId.length > 0,
   })
   const metadataQuery = useReplayMetadata({
     variables: { sessionId },
-    enabled: sessionId.length > 0,
+    enabled: loadsRecording,
     // Keep polling while live, and briefly after the session ends until the
     // recording first appears, so a batch that finalises just after teardown is
     // still picked up without polling forever.
@@ -108,7 +117,9 @@ export function useReplayData(sessionId: string): UseReplayDataResult {
         hasData: query.state.data?.hasData,
       }),
   })
-  const metadataRevision = replayEventsRevision(metadataQuery.data)
+  // Metadata cached from before replays were turned off must not start a download.
+  const metadata = loadsRecording ? metadataQuery.data : undefined
+  const metadataRevision = replayEventsRevision(metadata)
   const sessionRevision =
     metadataRevision === null ? null : `${sessionId}:${metadataRevision}`
   const eventsQuery = useReplayEvents({
@@ -182,8 +193,14 @@ export function useReplayData(sessionId: string): UseReplayDataResult {
       }
     })()
   }, [eventsQuery.refetch, refreshAttempt, sessionId, sessionRevision])
+  // Turning replays off drops events already downloaded instead of holding them.
+  useEffect(() => {
+    if (loadsRecording) return
+    requestedRevision.current = null
+    setResolvedEventSnapshot(null)
+  }, [loadsRecording])
   const hasCurrentSessionSnapshot =
-    resolvedEventSnapshot?.sessionId === sessionId
+    loadsRecording && resolvedEventSnapshot?.sessionId === sessionId
   const eventsLoaded =
     sessionRevision !== null &&
     hasCurrentSessionSnapshot &&
@@ -194,18 +211,13 @@ export function useReplayData(sessionId: string): UseReplayDataResult {
   const eventCatalog = useMemo(() => buildReplayEventCatalog(events), [events])
   const replay = useMemo<ReplayData | null>(() => {
     if (!taskQuery.data) return null
-    return buildReplayData(
-      taskQuery.data,
-      eventCatalog,
-      metadataQuery.data,
-      eventsLoaded,
-    )
-  }, [taskQuery.data, eventCatalog, eventsLoaded, metadataQuery.data])
+    return buildReplayData(taskQuery.data, eventCatalog, metadata, eventsLoaded)
+  }, [taskQuery.data, eventCatalog, eventsLoaded, metadata])
 
   const recordingState: RecordingLoadState =
-    sessionId.length > 0 && metadataQuery.isPending
+    loadsRecording && metadataQuery.isPending
       ? 'checking'
-      : metadataQuery.data?.hasData && !hasCurrentSessionSnapshot
+      : metadata?.hasData && !hasCurrentSessionSnapshot
         ? 'loading'
         : 'settled'
 

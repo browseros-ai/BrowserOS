@@ -33,6 +33,7 @@ pub const RECORDING_ORPHAN_TTL_MS: i64 = 60 * 60 * 1000;
 const ORPHAN_FILE_GRACE_MS: i64 = 5 * 60 * 1000;
 /// Per-run scan cap so a pathological `replays/` directory cannot hang the sweep.
 const MAX_ORPHAN_FILE_SCAN: usize = 100_000;
+const REPLAY_FILE_SUFFIX: &str = ".ndjson";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +64,9 @@ pub struct RetentionSweepResult {
     pub recordings_deleted: u64,
     pub orphan_files_deleted: u64,
     pub claims_deleted: u64,
+    /// Flat `replays/*.ndjson` files from the earlier session-keyed writer.
+    pub legacy_replays_deleted: u64,
+    pub legacy_replay_bytes_freed: i64,
 }
 
 /// Outcome of appending a batch.
@@ -279,7 +283,7 @@ impl RecordingStore {
         let key = replay_key(document_id);
         self.replays_root
             .join(replay_shard(&key))
-            .join(format!("{key}.ndjson"))
+            .join(format!("{key}{REPLAY_FILE_SUFFIX}"))
     }
 
     pub async fn read_range(
@@ -318,9 +322,16 @@ impl RecordingStore {
         read_file_range::<LegacyRecordedEvent>(self.path_for(target_id), from, to).await
     }
 
-    /// Total bytes of rrweb recording payloads stored in the database.
+    /// Total bytes of rrweb recording payloads: every tracked stream plus the
+    /// flat legacy replay files still on disk.
     pub async fn recording_bytes_total(&self) -> AppResult<i64> {
-        self.index.recording_bytes_total().await
+        let tracked = self.index.recording_bytes_total().await?;
+        let legacy = self
+            .legacy_flat_replays()
+            .await
+            .iter()
+            .fold(0i64, |total, file| total.saturating_add(file.bytes));
+        Ok(tracked.saturating_add(legacy))
     }
 
     pub async fn sweep_retention(
@@ -366,6 +377,8 @@ impl RecordingStore {
 
         let known: HashSet<String> = self.index.all_document_ids().await?.into_iter().collect();
         let orphan_files_deleted = self.sweep_orphan_replays(&known, now).await;
+        let (legacy_replays_deleted, legacy_replay_bytes_freed) =
+            self.sweep_legacy_flat_replays(retention_cutoff).await;
 
         Ok(RetentionSweepResult {
             recordings_deleted,
@@ -374,7 +387,61 @@ impl RecordingStore {
                 .index
                 .delete_released_claims_before(retention_cutoff)
                 .await?,
+            legacy_replays_deleted,
+            legacy_replay_bytes_freed,
         })
+    }
+
+    /// Deletes flat legacy replay files last written before `cutoff`, returning
+    /// `(files_deleted, bytes_freed)`. Best-effort: failed unlinks are skipped.
+    async fn sweep_legacy_flat_replays(&self, cutoff: i64) -> (u64, i64) {
+        let mut result = (0u64, 0i64);
+        for file in self.legacy_flat_replays().await {
+            if file.modified_ms.is_none_or(|modified| modified >= cutoff) {
+                continue;
+            }
+            if fs::remove_file(&file.path).await.is_ok() {
+                result.0 += 1;
+                result.1 = result.1.saturating_add(file.bytes);
+            }
+        }
+        result
+    }
+
+    /// `.ndjson` files directly in `replays/`. The earlier session-keyed writer
+    /// left them there and nothing reads them now; current replay files always
+    /// live in a shard directory, so a top-level file is never a live recording.
+    /// Capped like the orphan scan; an unreadable directory yields nothing.
+    async fn legacy_flat_replays(&self) -> Vec<LegacyFlatReplay> {
+        let mut found = Vec::new();
+        let Ok(mut entries) = fs::read_dir(&self.replays_root).await else {
+            return found;
+        };
+        let mut scanned = 0usize;
+        while scanned < MAX_ORPHAN_FILE_SCAN
+            && let Ok(Some(entry)) = entries.next_entry().await
+        {
+            scanned += 1;
+            if !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(REPLAY_FILE_SUFFIX))
+            {
+                continue;
+            }
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            found.push(LegacyFlatReplay {
+                path: entry.path(),
+                bytes: i64::try_from(meta.len()).unwrap_or(i64::MAX),
+                modified_ms: modified_ms(&meta),
+            });
+        }
+        found
     }
 
     /// Deletes replay files whose document has no live stream row (drift from a
@@ -410,7 +477,7 @@ impl RecordingStore {
                 let name = entry.file_name();
                 let Some(document_id) = name
                     .to_str()
-                    .and_then(|name| name.strip_suffix(".ndjson"))
+                    .and_then(|name| name.strip_suffix(REPLAY_FILE_SUFFIX))
                     .and_then(decode_replay_key)
                 else {
                     continue; // foreign / non-key file: leave alone
@@ -450,6 +517,7 @@ impl RecordingStore {
                                 recordings_deleted = result.recordings_deleted,
                                 orphan_files_deleted = result.orphan_files_deleted,
                                 claims_deleted = result.claims_deleted,
+                                legacy_replays_deleted = result.legacy_replays_deleted,
                                 "recording retention sweep finished"
                             ),
                             Err(error) => warn!(error = %error, "recording retention sweep failed"),
@@ -713,15 +781,25 @@ fn decode_replay_key(stem: &str) -> Option<String> {
 /// Whether a replay file is within the orphan grace window, i.e. recent enough
 /// to still be an in-flight append whose stream row has not committed yet.
 fn replay_file_too_young(meta: &std::fs::Metadata, now: i64) -> bool {
-    let Some(mtime_ms) = meta
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
-    else {
+    let Some(mtime_ms) = modified_ms(meta) else {
         return false;
     };
     now.saturating_sub(mtime_ms) < ORPHAN_FILE_GRACE_MS
+}
+
+/// A file's last-write time in Unix-epoch milliseconds, when the OS reports one.
+fn modified_ms(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| i64::try_from(since.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// A flat legacy replay file found in `replays/`.
+struct LegacyFlatReplay {
+    path: PathBuf,
+    bytes: i64,
+    modified_ms: Option<i64>,
 }
 
 /// Two-character shard directory for a replay key so `replays/` never becomes a
@@ -922,6 +1000,8 @@ mod tests {
                 recordings_deleted: 1,
                 orphan_files_deleted: 0,
                 claims_deleted: 0,
+                legacy_replays_deleted: 0,
+                legacy_replay_bytes_freed: 0,
             }
         );
         assert!(index.stream(claimed).await?.is_some());
@@ -1044,6 +1124,34 @@ mod tests {
         assert!(kept.exists());
         assert!(!orphan.exists());
         assert!(foreign.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_flat_replay_files_are_counted_and_swept_on_the_retention_window()
+    -> anyhow::Result<()> {
+        let (_dir, _index, store) = setup().await?;
+        fs::create_dir_all(&store.replays_root).await?;
+        // The earlier writer kept one flat `<sessionId>.ndjson` per session.
+        let legacy = store.replays_root.join("session-1.ndjson");
+        fs::write(&legacy, b"{\"ts\":1}\n{\"ts\":2}\n").await?;
+        let foreign = store.replays_root.join("notes.txt");
+        fs::write(&foreign, b"keep me\n").await?;
+        assert_eq!(store.recording_bytes_total().await?, 18);
+
+        let now = now_epoch_ms();
+        let inside_window = store.sweep_retention(7, now + 6 * DAY_MS).await?;
+        assert_eq!(inside_window.legacy_replays_deleted, 0);
+        let keep_forever = store.sweep_retention(u64::MAX, now + 365 * DAY_MS).await?;
+        assert_eq!(keep_forever.legacy_replays_deleted, 0);
+        assert!(legacy.exists());
+
+        let past_window = store.sweep_retention(7, now + 8 * DAY_MS).await?;
+        assert_eq!(past_window.legacy_replays_deleted, 1);
+        assert_eq!(past_window.legacy_replay_bytes_freed, 18);
+        assert!(!legacy.exists());
+        assert!(foreign.exists());
+        assert_eq!(store.recording_bytes_total().await?, 0);
         Ok(())
     }
 

@@ -20,7 +20,7 @@ AgentSettings:
   type: object
   description: User settings for the tools BrowserOS neo offers to agents.
   additionalProperties: false
-  required: [humanHelpEnabled, taskCleanupTipEnabled]
+  required: [humanHelpEnabled, taskCleanupTipEnabled, sessionReplaysEnabled]
   properties:
     humanHelpEnabled:
       type: boolean
@@ -30,6 +30,11 @@ AgentSettings:
     taskCleanupTipEnabled:
       type: boolean
       description: Whether successful MCP tool replies include a tip to close the task's tab group when finished.
+    sessionReplaysEnabled:
+      type: boolean
+      description: >-
+        Whether pages are recorded for task replays. When false, no new replay is stored and
+        History shows each step's picture instead of the replay.
 UpdateAgentSettingsRequest:
   type: object
   additionalProperties: false
@@ -41,3 +46,6 @@ UpdateAgentSettingsRequest:
     taskCleanupTipEnabled:
       type: boolean
       description: Omit to preserve the saved cleanup tip preference.
+    sessionReplaysEnabled:
+      type: boolean
+      description: Omit to preserve the saved session replay preference.

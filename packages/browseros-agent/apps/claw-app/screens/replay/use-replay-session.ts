@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type RecordingLoadState,
   type ReplayData,
+  type UseReplayDataOptions,
   useReplayData,
 } from './replay.data'
 import {
@@ -43,8 +44,14 @@ export interface ReplaySession {
  * state, so seeking either way and live refreshes land on the same answer.
  * Pinning a tab pins only the camera, never the clock.
  */
-export function useReplaySession(sessionId: string): ReplaySession {
-  const { replay, isLoading, recordingState } = useReplayData(sessionId)
+export function useReplaySession(
+  sessionId: string,
+  options: UseReplayDataOptions = {},
+): ReplaySession {
+  const { replay, isLoading, recordingState } = useReplayData(
+    sessionId,
+    options,
+  )
   const [pinnedTabId, setPinnedTabId] = useState<number | null>(null)
   const activeSessionRef = useRef<string | null>(null)
 

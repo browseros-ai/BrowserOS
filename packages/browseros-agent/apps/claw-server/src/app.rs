@@ -482,7 +482,6 @@ mod tests {
             session_complete_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
-            replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
             mode: Default::default(),

@@ -174,7 +174,12 @@ pub(crate) async fn sweep_audit_retention(state: &AppState, now: i64) -> AppResu
         .recordings
         .sweep_retention(recording_days, now)
         .await?;
-    report.recordings_deleted = i64::try_from(recordings.recordings_deleted).unwrap_or(i64::MAX);
+    report.recordings_deleted = i64::try_from(
+        recordings
+            .recordings_deleted
+            .saturating_add(recordings.legacy_replays_deleted),
+    )
+    .unwrap_or(i64::MAX);
 
     // Orphan screenshot files whose dispatch row is gone (partial-failure drift
     // from a best-effort unlink, or a crashed writer). Runs every sweep.
@@ -190,7 +195,9 @@ pub(crate) async fn sweep_audit_retention(state: &AppState, now: i64) -> AppResu
 
     state.audit_log.reclaim_disk().await?;
     let db_after = db_file_bytes(state).await;
-    report.bytes_reclaimed = db_before.saturating_sub(db_after).max(0) + screenshot_bytes_freed;
+    report.bytes_reclaimed = db_before.saturating_sub(db_after).max(0)
+        + screenshot_bytes_freed
+        + recordings.legacy_replay_bytes_freed;
     Ok(report)
 }
 
