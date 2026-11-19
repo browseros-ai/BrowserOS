@@ -1671,14 +1671,15 @@ async fn tests_that_a_child_commit_in_a_tab_neo_never_touched_moves_its_frame_ve
                 asked.elapsed()
             );
         }
-        assert!(
-            run.browser()
-                .pages
-                .get_attached_session(info.page_id)
-                .await
-                .is_none(),
-            "the run's core never attached to the tab"
-        );
+        if run
+            .browser()
+            .pages
+            .get_attached_session(info.page_id)
+            .await
+            .is_some()
+        {
+            return Err("the run's core attached to the tab".into());
+        }
         Ok::<(), Box<dyn Error>>(())
     }
     .await;
