@@ -236,7 +236,8 @@ async function withoutCursor(name) {
       let error
       try {
         await (name === 'covered' ? target : page.locator('#missing')).click({
-          timeout: 800,
+          // Give an incorrectly admitted covered click enough time to draw a cursor.
+          timeout: name === 'covered' ? 3000 : 800,
         })
       } catch (e) {
         error = e
@@ -351,7 +352,8 @@ async function phonePress(on) {
   )
   let error = null
   try {
-    await page.locator('#target').click({ timeout: 2200 })
+    // Leave enough time for the glide and capture before the four-second idle removal.
+    await page.locator('#target').click({ timeout: 3000 })
   } catch (e) {
     error = {
       name: e.name,
