@@ -5,10 +5,10 @@ The full text is in the repository's [LICENSE](../../../../../../LICENSE).
 
 | Encoder | Licence | Build |
 | --- | --- | --- |
-| OpenH264 2.7.0 | BSD-2-Clause | Default and sole encoder in the Neo SDK image. The build script verifies commit `1bca62311e447fd9c39fc93de2c4b96cd5ce971c` and applies `csrc/openh264-feature-search-mode.patch` before building the static library. |
+| OpenH264 2.7.0 | BSD-2-Clause | Default and sole encoder in the Neo SDK image. The build script verifies commit `1bca62311e447fd9c39fc93de2c4b96cd5ce971c` before building the static library. |
 | x264 | GPL-2.0-or-later | Opt-in Cargo feature `x264`. An x264-enabled binary links the system library. |
 
-The image bundles the OpenH264 source revision, patch SHA-256 and BSD notice, locked Rust
+The image bundles the OpenH264 source revision and BSD notice, locked Rust
 dependency notices, and runtime notices in
 `/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES`. Retain them when
 redistributing the binary. `/usr/share/slimviewer/RUNTIME-DEPS` lists its

@@ -1,9 +1,5 @@
 use super::*;
 
-#[cfg(feature = "openh264")]
-#[path = "encoder_feature_search_tests.rs"]
-mod feature_search;
-
 fn backends() -> impl Iterator<Item = Backend> {
     [Backend::X264, Backend::OpenH264]
         .into_iter()

@@ -44,23 +44,6 @@ fn build_openh264() {
         "v2.7.0 1bca62311e447fd9c39fc93de2c4b96cd5ce971c",
         "OpenH264 must be built from the pinned source",
     );
-    let patch = "openh264-feature-search-mode.patch";
-    let manifest = format!("{root}/share/doc/openh264/PATCHES");
-    println!("cargo:rerun-if-changed=csrc/{patch}");
-    println!("cargo:rerun-if-changed={manifest}");
-    let expected = std::process::Command::new("sha256sum")
-        .arg(patch)
-        .current_dir("csrc")
-        .output()
-        .expect("sha256sum is required to verify the OpenH264 patch");
-    assert!(expected.status.success(), "could not hash {patch}");
-    let installed = std::fs::read_to_string(manifest)
-        .expect("missing OpenH264 patch provenance: rebuild with csrc/build-openh264.sh");
-    assert_eq!(
-        installed,
-        String::from_utf8(expected.stdout).expect("invalid sha256sum output"),
-        "OpenH264 patch differs: rebuild with csrc/build-openh264.sh",
-    );
     println!("cargo:rerun-if-changed={root}/lib/libopenh264.a");
     cc::Build::new()
         .cpp(true)

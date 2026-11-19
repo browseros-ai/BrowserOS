@@ -8,10 +8,6 @@ trap 'rm -rf "$source_dir"' EXIT HUP INT TERM
 git clone --quiet --depth 1 --branch v2.7.0 https://github.com/cisco/openh264.git "$source_dir"
 commit=1bca62311e447fd9c39fc93de2c4b96cd5ce971c
 test "$(git -C "$source_dir" rev-parse HEAD)" = "$commit"
-patch_dir=$(cd "$(dirname "$0")" && pwd)
-patch=openh264-feature-search-mode.patch
-git -C "$source_dir" apply "$patch_dir/$patch"
 make -C "$source_dir" -j"${OPENH264_JOBS:-2}" BUILDTYPE=Release PREFIX="$prefix" install-static
 install -D -m 644 "$source_dir/LICENSE" "$prefix/share/doc/openh264/LICENSE"
 printf '%s\n' "v2.7.0 $commit" > "$prefix/share/doc/openh264/SOURCE"
-(cd "$patch_dir" && sha256sum "$patch") > "$prefix/share/doc/openh264/PATCHES"

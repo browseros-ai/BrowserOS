@@ -104,8 +104,6 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `CLAW_HOST_TCP` | unset | Development only: also serves the host API on this TCP address, token only. |
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
 | `NEO_SLIMVIEWER` | `true` | Starts the phone viewer when installed. Set to `0` to disable it. |
-| `NEO_SLIMVIEWER_FEATURE_SEARCH` | `scroll` | Search only when a nonzero scroll vector is detected. Use `always` for upstream OpenH264 behavior or `never` to save CPU on scrolling at the cost of bandwidth. Invalid values stop startup. |
-| `NEO_SLIMVIEWER_FPS` | unset (30 fps) | Frame rate ceiling from 0.1 to 240, including decimals. Invalid values stop startup. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The published image carries both; a local or pull request build none ([CAPTCHA keys](#captcha-keys)). |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |
 | `NEO_CLEAR_SESSIONS` | `false` | `true`: before every start of the browser, the entrypoint removes the profile's saved sessions, `/data/profile/Default/Sessions`, where values typed into pages rest ([Saved sessions](#saved-sessions)). |
@@ -169,8 +167,6 @@ It sends input to Xvnc on `127.0.0.1:5900`. Never publish its loopback ports 591
 Apply the same local-user firewall rules as for 9011.
 
 The viewer defaults on. Set `NEO_SLIMVIEWER=0` to turn it off. A missing binary is skipped.
-Set `NEO_SLIMVIEWER_FPS=60` for a 60 fps ceiling. An empty or unset value keeps the 30 fps default.
-At 60 fps the viewer can use roughly twice the CPU and bandwidth during motion.
 If it exits, the supervisor logs its status and retries after five seconds. On shutdown, it stops
 the viewer before Xvnc. The image uses OpenH264 only. The page (`slimviewer.html`), `ui.js`,
 and `RUNTIME-DEPS` are in `/usr/share/slimviewer`. Notices are in `/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES`.
