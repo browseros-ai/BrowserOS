@@ -10,7 +10,7 @@ and the encoder.
 The engine owns the encoder and each viewer's frame acknowledgements. It uses
 the owner's acknowledgements to pace capture, or a spectator's when there is
 no owner. The link and CPU each choose a frame-rate limit, and the lower one
-paces capture. Under pressure they step down through 30, 20 and 15 fps. At
+paces capture. By default they step down through 30, 20 and 15 fps under pressure. At
 the floor, a congested link raises the quantizer by up to two per step, to
 +6 by default. Sustained congestion can then trigger half size. During congestion,
 three or more large, full-size, non-key frames let the link estimate their mean
@@ -24,6 +24,16 @@ Two consecutive congested seconds without delivery can also accelerate the steps
 A late queue alone takes the usual quality steps. At the limit, two consecutive
 congested seconds with a median ACK delay over 300 ms above the pacing RTT floor
 can trigger half size.
+
+Dense scrolling exposes more new rows per frame when capture slows. On a
+pressure tick with enough full-size non-key motion frames (minimum below), the
+link keeps its maximum fps if the mean frame takes over 150 ms at the dip-guarded
+delivery rate. Bitrate overload then steps quality by up to two at a time.
+The usual jam tests select half size at the cap, still at maximum fps unless
+the CPU limits it. Recovery skips the fps steps and clears this mode at base
+quality and full size. Without a fresh probe, a motion return uses the last
+congested delivery for 20 seconds after congestion.
+
 Slow measured work can lower the CPU limit. Throttle or steal counts only when
 capture falls below 80% of the current cadence during at least half a second
 with damage pending and the pacer open. Grabs that find unchanged pixels count.

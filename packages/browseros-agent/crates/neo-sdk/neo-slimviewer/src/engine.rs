@@ -2740,6 +2740,13 @@ mod tests {
     }
 
     impl PacedTrace {
+        fn half_entries(&self) -> usize {
+            self.frames
+                .chunk_by(|a, b| a.scale == b.scale)
+                .filter(|run| run[0].scale == Scale::Half)
+                .count()
+        }
+
         fn max_draw_gap(&self, end: Duration) -> Duration {
             let mut previous = Duration::ZERO;
             let mut max_gap = Duration::ZERO;
@@ -3154,7 +3161,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_wikipedia_scroll_on_cellular_reaches_half_within_two_seconds() {
+    fn tests_that_dense_scroll_at_the_fps_floor_recovers_cadence_and_steps_quality() {
         let onset = Duration::from_secs(3);
         let end = Duration::from_secs(20);
         let height = 844 * 2;
@@ -3171,16 +3178,21 @@ mod tests {
                 let bytes = if Duration::from_millis(ms) < onset {
                     25_000.0
                 } else {
-                    110_000.0
+                    // The scroll exposes 110 kB of new rows per frame at 15 fps.
+                    110_000.0 * 15.0 / p.fps()
                 };
                 (height, bytes * 2.0_f32.powf((24.0 - p.crf()) / 6.0))
             },
         );
-        let half = trace.first_half.expect("the scroll must engage half size");
-        assert!(
-            (onset..=onset + Duration::from_secs(2)).contains(&half),
-            "half at {half:?}"
-        );
+        assert_eq!(trace.ticks[2].fps, 15.0);
+        for (tick, (crf, scale)) in trace.ticks[3..7].iter().zip([
+            (26.0, Scale::Full),
+            (28.0, Scale::Full),
+            (30.0, Scale::Full),
+            (30.0, Scale::Half),
+        ]) {
+            assert_eq!((tick.fps, tick.crf, tick.scale), (30.0, crf, scale));
+        }
         // At the viewer the scroll starts when the first heavy frame arrives.
         let first_scroll = trace
             .frames
@@ -3194,7 +3206,7 @@ mod tests {
             .find(|f| f.scale == Scale::Half)
             .expect("half-size scroll frame");
         assert!(
-            first_half.received <= first_scroll.received + Duration::from_secs(2),
+            first_half.received <= first_scroll.received + Duration::from_secs(4),
             "first scroll frame drawn at {:?}, first half-size frame at {:?}",
             first_scroll.received,
             first_half.received
@@ -3218,18 +3230,26 @@ mod tests {
         }
     }
 
-    fn wikipedia_scroll(seconds: u64, scrolling: impl Fn(u64) -> bool) -> PacedTrace {
+    fn contended_cellular(second: u64) -> (u64, u64) {
+        match second {
+            // The key probes the bare 60 ms tunnel before cellular shaping adds 100 ms.
+            0 => (24_000, 60),
+            // Periodic contention still fills the link during half-size swipes.
+            s if s >= 6 && matches!(s % 6, 3 | 4) => (1000, 160),
+            _ => (3000, 160),
+        }
+    }
+
+    fn wikipedia_scroll(
+        seconds: u64,
+        path: fn(u64) -> (u64, u64),
+        scrolling: impl Fn(u64) -> bool,
+    ) -> PacedTrace {
         let height = 844 * 2;
         paced_screen(
             seconds,
             &PacedCell {
-                // The key probes the bare 60 ms tunnel before cellular shaping adds 100 ms.
-                path: |second| match second {
-                    0 => (24_000, 60),
-                    // Periodic contention still fills the link during half-size swipes.
-                    s if s >= 6 && matches!(s % 6, 3 | 4) => (1000, 160),
-                    _ => (3000, 160),
-                },
+                path,
                 jitter_ms: 20,
                 // Fly's 390 px article produced roughly 60 kB half-size keys at the cap.
                 key_bytes: 480_000,
@@ -3238,7 +3258,7 @@ mod tests {
             },
             (390 * 2, height),
             |ms, p| {
-                if ms < 1_900 || !scrolling(ms - 1_900) {
+                if !scrolling(ms) {
                     return (height / 10, 2_000.0);
                 }
                 // A steady scroll exposes more new rows per frame as the cadence drops.
@@ -3251,7 +3271,8 @@ mod tests {
     #[test]
     fn tests_that_wikipedia_scroll_at_30_fps_reaches_half_on_the_second_congested_tick() {
         let end = Duration::from_secs(20);
-        let trace = wikipedia_scroll(end.as_secs(), |_| true);
+        // The swipe starts mid-tick. Only three full motion frames reach the next congested tick.
+        let trace = wikipedia_scroll(end.as_secs(), contended_cellular, |ms| ms >= 1_900);
         assert!(trace.resets.is_empty());
         assert!(
             trace.ticks[..2]
@@ -3266,7 +3287,7 @@ mod tests {
             (15.0, 30.0, Scale::Full),
             "{cap:?}"
         );
-        assert_eq!(half.scale, Scale::Half, "{half:?}");
+        assert_eq!((half.fps, half.scale), (30.0, Scale::Half), "{half:?}");
         let next_frame = trace.frames.iter().find(|f| f.at >= Duration::from_secs(4));
         assert_eq!(next_frame.map(|f| f.scale), Some(Scale::Half));
         let gap = trace.max_draw_gap(end);
@@ -3276,7 +3297,9 @@ mod tests {
     #[test]
     fn tests_that_repeated_text_swipes_stay_at_half_on_a_congested_link() {
         let end = Duration::from_secs(62); // 60 seconds of swipes after the warmup.
-        let trace = wikipedia_scroll(end.as_secs(), |ms| ms % 420 < 300);
+        let trace = wikipedia_scroll(end.as_secs(), contended_cellular, |ms| {
+            ms >= 1_900 && (ms - 1_900) % 420 < 300
+        });
         let first_half = trace
             .ticks
             .iter()
@@ -3313,6 +3336,23 @@ mod tests {
         );
         let gap = trace.max_draw_gap(end);
         assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
+    }
+
+    #[test]
+    fn tests_that_wikipedia_swipes_keep_full_fps_on_cellular() {
+        let end = Duration::from_secs(62); // Includes the page load before the 60 s of swipes.
+        let trace = wikipedia_scroll(
+            end.as_secs(),
+            |sec| if sec == 0 { (24_000, 60) } else { (3000, 100) },
+            |ms| ms >= 2_000 && (ms - 2_000) % 420 < 300,
+        );
+        let gap = trace.max_draw_gap(end);
+        let entries = trace.half_entries();
+        eprintln!("Wikipedia 3 Mb/s: max draw gap {gap:?}, half entries {entries}");
+        assert!(trace.resets.is_empty());
+        assert!(trace.ticks.iter().all(|tick| tick.fps == 30.0));
+        assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
+        assert_eq!(entries, 1);
     }
 
     #[test]
@@ -3466,6 +3506,10 @@ mod tests {
         assert_eq!(trace.first_half, None);
         assert!(trace.frames.iter().all(|f| f.scale == Scale::Full));
         let max_gap = trace.max_draw_gap(Duration::from_secs(seconds));
+        eprintln!(
+            "carousel max gap {max_gap:?}, {} half entries",
+            trace.half_entries()
+        );
         assert!(
             max_gap < Duration::from_millis(500),
             "largest draw gap {max_gap:?}"
