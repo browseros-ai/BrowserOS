@@ -257,7 +257,11 @@ mod tests {
         let bus = CaptchaEventBus::new();
         bus.emit(CaptchaEvent {
             event: CaptchaEventName::Solving, request_id: "cap_test".into(), page: 42, at_ms: 10,
-            data: json!({"type":"recaptcha_v2", "method":"tiles", "attempt":1, "round":2, "token":"secret-token", "url":"https://example.com/private?q=secret", "image":"secret-image"}),
+            data: json!({
+                "type":"recaptcha_v2", "method":"tiles", "attempt":1, "round":2,
+                "token":"secret-token", "url":"https://example.com/private?q=secret", "image":"secret-image",
+                "data":"private-challenge-data", "pagedata":"private-page-data"
+            }),
         });
         log_outcome(
             &SolveOutcome {
@@ -308,6 +312,8 @@ mod tests {
         for secret in [
             "secret-token",
             "secret-image",
+            "private-challenge-data",
+            "private-page-data",
             "https://",
             "/private",
             "q=secret",

@@ -213,9 +213,12 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
       '/cloudflare-wall.html',
       '3x00000000000000000000FF',
     ),
-    ...unsupported('cloudflare_challenge'),
+    // A static wall never clears: Neo watches it for its 10 s and hands it to a person.
+    expect: ['unsolved'] as Verdict[],
+    expectType: 'cloudflare_challenge',
+    expectReason: ['challenge_not_passed'],
     notes:
-      'Detected as cloudflare_challenge by its challenge script; its Turnstile is the wall checkbox.',
+      'Detected as cloudflare_challenge by its challenge script; its Turnstile is the wall checkbox. It never clears, so Neo reports challenge_not_passed.',
   },
   fixture(
     'no-captcha',
@@ -455,8 +458,13 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     kind: 'demo',
     family: 'turnstile',
     url: 'https://www.scrapingcourse.com/cloudflare-challenge',
-    ...unsupported('cloudflare_challenge'),
-    mayNeedPaid: false,
+    expect: ['solved', 'already_clear'],
+    expectType: 'cloudflare_challenge',
+    // The cleared page reports by itself; there is nothing to submit.
+    site: { acceptedPattern: 'You bypassed the Cloudflare challenge' },
+    // A home IP clears by itself in 2-3 s; a datacenter IP shows the checkbox, which this
+    // version of Neo does not click yet.
+    mayNeedPaid: true,
     ready:
       '!!window._cf_chl_opt || !/Just a moment|Verify you are human/i.test(document.title + " " + (document.body?.innerText ?? ""))',
     reading: {
@@ -466,7 +474,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       waitMs: 30_000,
     },
     notes:
-      'Not solved yet: the right type passes. The reading is the page title once the challenge is gone.',
+      'Passes when Cloudflare lets the browser through and the page says so. The reading is the page title once the challenge is gone.',
   },
 ]
 
