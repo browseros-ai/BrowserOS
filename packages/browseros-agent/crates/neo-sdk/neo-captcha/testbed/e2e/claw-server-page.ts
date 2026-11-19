@@ -106,7 +106,12 @@ export function clawServerPage(
       let value: string | null = null
       await poll(async () => {
         const found = await evaluate(readingProbe(reading.expression))
+        // evaluate_in_page answers in text, which payload() parses as JSON: a reading such as
+        // "0.9" arrives as the number 0.9. The probe only ever returns a string or null, so a
+        // number or boolean here is that string, parsed; take it back as text.
         if (typeof found === 'string') value = found
+        else if (typeof found === 'number' || typeof found === 'boolean')
+          value = String(found)
         return value !== null
       }, reading.waitMs)
       return value

@@ -684,3 +684,30 @@ test('tests that a trigger runs before the solve and a reading is recorded witho
       ])
   }
 })
+
+test('tests that a claw-server reading that looks like a number keeps its text', async () => {
+  const page: CaptchaPage = {
+    ...solvePage,
+    reading: { label: 'score', expression: "'0.9'", waitMs: 20 },
+  }
+  const { records } = await run('contract', {
+    server: 'claw-server',
+    pages: [page],
+  })
+  expect(records[0]).toMatchObject({
+    reading: { label: 'score', value: '0.9' },
+  })
+})
+
+test('tests that an absence run never clicks a page trigger', async () => {
+  const page: CaptchaPage = {
+    ...solvePage,
+    trigger: { click: '#missing', until: 'true' },
+  }
+  const { records, calls } = await run('no-tool', {
+    pages: [page],
+    expectToolMissing: true,
+  })
+  expect(records[0]).toMatchObject({ triggered: null, outcome: 'PASS' })
+  expect(calls.some((call) => call.step === 'trigger')).toBe(false)
+})

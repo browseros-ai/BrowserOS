@@ -150,6 +150,22 @@ function describe(error: unknown) {
   return message.length > 200 ? `${message.slice(0, 200)}…` : message
 }
 
+/**
+ * Clicks the page's pre-solve control and records whether its state came. Absence runs skip it:
+ * the control may be missing (a consent or error page), and the click would throw before the call
+ * that must show the solver is absent.
+ */
+async function runTrigger(
+  entry: CaptchaPage,
+  page: PageSession,
+  record: ResultRecord,
+  options: RunOptions,
+): Promise<void> {
+  if (!entry.trigger || options.expectToolMissing) return
+  record.triggered = await page.trigger(entry.trigger)
+  if (!record.triggered) record.note = 'trigger condition never held'
+}
+
 async function runPage(
   entry: CaptchaPage,
   page: PageSession,
@@ -180,10 +196,7 @@ async function runPage(
     if (!options.expectToolMissing && !(await page.ready(entry.ready)))
       record.note = 'widget never rendered'
     else {
-      if (entry.trigger) {
-        record.triggered = await page.trigger(entry.trigger)
-        if (!record.triggered) record.note = 'trigger condition never held'
-      }
+      await runTrigger(entry, page, record, options)
       const started = performance.now()
       Object.assign(record, await page.solve())
       record.latencyMs = Math.round(performance.now() - started)

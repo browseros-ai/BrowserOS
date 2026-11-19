@@ -173,7 +173,9 @@ export async function startStubMcp(options: {
       return true
     }
     if (code.startsWith(probes.trigger)) return true
-    if (code.startsWith(probes.reading)) return null
+    // claw-server answers in text, so a numeric reading such as "0.9" comes back parsed as 0.9.
+    if (code.startsWith(probes.reading))
+      return code.includes("'0.9'") ? 0.9 : null
     if (code.startsWith(probes.body))
       return siteVerdict(state, options.scenario, options.bodyText)
     return undefined
