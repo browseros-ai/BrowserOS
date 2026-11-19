@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 ASSETS = {
-    'slimviewer.html': '9580b195c453123c44d83754b8d3e1625e22ac201f6a231c59130e824de682c2',
+    'slimviewer.html': 'adfff83f96f0302ac7924f45b45cd6d1c832255dfa2eab25fb3803460038213f',
     'ui.js': 'e72e12a652957b7aa134f6ac7aaec666e64454b7cf4bc8e1c795405985b10eed',
 }
 LOOPBACK = [('0100007F', 5910), ('0100007F', 5911)]

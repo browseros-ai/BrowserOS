@@ -6,7 +6,7 @@ name: "Neo SDK image"
 # ghcr.io/browseros-ai/neo. This workflow is the only place CI builds the SDK image.
 #
 #   preflight  decides whether this run publishes (below), before anything is built
-#   scripts    the image's scripts without Docker: the supervisor's and smoke_sdk's tests, ruff
+#   scripts    supervisor and image script tests, ruff, and slimviewer's page tests
 #   slimviewer-check   PRs changing the viewer or its Docker inputs: lint and test both encoders
 #   image      amd64 and arm64, each on a native runner: build.sh, then accept.sh (every check
 #              boots natively); when publishing, pushes exactly the image it accepted
@@ -144,6 +144,12 @@ jobs:
       - name: Ruff
         # packages/browseros's pinned ruff, the one bos-build-tests runs on the default image's folder.
         run: uv run --directory "$GITHUB_WORKSPACE/packages/browseros" ruff check "$PWD"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26.13.0
+      - name: Test the slimviewer page
+        working-directory: packages/browseros-agent/crates/neo-sdk/neo-slimviewer
+        run: node --test tests/browser-recovery.mjs
 
   slimviewer-check:
     name: Neo SDK image / slimviewer checks (${{ matrix.runner }})

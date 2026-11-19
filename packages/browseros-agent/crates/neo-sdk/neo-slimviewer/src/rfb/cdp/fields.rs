@@ -10,6 +10,26 @@ pub(super) struct Child<'a> {
     pub boxes: &'a protocol::Boxes,
 }
 
+impl Child<'_> {
+    /// Both field boxes and iframe content rects use this scale once their origin
+    /// is relative to this frame's visual viewport.
+    pub(super) fn to_top_viewport(&self, [x, y, w, h]: [f64; 4]) -> Option<[f64; 4]> {
+        let vp = &self.boxes.vp;
+        if !vp
+            .inner
+            .into_iter()
+            .chain([vp.vv_scale])
+            .all(|v| v.is_finite() && v > 0.)
+        {
+            return None;
+        }
+        let [left, top, width, height] = self.offset;
+        let sx = width / vp.inner[0] * vp.vv_scale;
+        let sy = height / vp.inner[1] * vp.vv_scale;
+        Some([left + x * sx, top + y * sy, w * sx, h * sy])
+    }
+}
+
 pub(super) fn compose(
     top: &protocol::Boxes,
     children: &[Child<'_>],
@@ -53,25 +73,9 @@ pub(super) fn compose(
 
 fn child_box(top: &protocol::Viewport, child: &Child<'_>, rect: [f64; 4]) -> Option<[f64; 4]> {
     let vp = &child.boxes.vp;
-    if !vp
-        .inner
-        .into_iter()
-        .chain([vp.vv_scale])
-        .all(|v| v.is_finite() && v > 0.)
-    {
-        return None;
-    }
     let [x, y, w, h] = geometry::clip(rect, vp.vv)?;
-    let [left, top_edge, width, height] = child.offset;
-    let sx = width / vp.inner[0] * vp.vv_scale;
-    let sy = height / vp.inner[1] * vp.vv_scale;
-    let local = [
-        left + (x - vp.vv[0]) * sx,
-        top_edge + (y - vp.vv[1]) * sy,
-        w * sx,
-        h * sy,
-    ];
-    let [x, y, w, h] = geometry::clip(local, child.offset)?;
+    let mapped = child.to_top_viewport([x - vp.vv[0], y - vp.vv[1], w, h])?;
+    let [x, y, w, h] = geometry::clip(mapped, child.offset)?;
     // frameRect already removed the top visual-viewport offsets; the map removes them
     // for raw layout boxes, so put them back once for child boxes.
     Some([x + top.vv[0], y + top.vv[1], w, h])

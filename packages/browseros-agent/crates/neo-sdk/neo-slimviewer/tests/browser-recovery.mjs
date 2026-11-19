@@ -14,10 +14,10 @@ function record(type, payload = []) {
   return out;
 }
 
-function frame(seq, key = true, width = 640, height = 480) {
+function frame(seq, key = true, width = 640, height = 480, scaleFlags = 0) {
   const payload = new Uint8Array(16);
   const view = new DataView(payload.buffer);
-  view.setUint32(0, seq); payload[4] = Number(key);
+  view.setUint32(0, seq); payload[4] = Number(key) | scaleFlags;
   view.setUint16(5, width); view.setUint16(7, height);
   payload.set([0, 0, 1, 0x67, 0x42, 0xc0, 0x1f], 9);
   return record(2, payload);
@@ -96,6 +96,39 @@ test('tests that odd screen sizes settle at the encoder even dimensions', async 
     b.fireTimer();
     assert.equal(b.context.slimviewer.state, 'ready');
     assert.equal(b.elements.get('cover').hidden, true);
+  }
+});
+
+test('half frames keep the phone canvas and its server field boxes', async () => {
+  for (const [width, height, codedWidth, codedHeight, flags] of [
+    [393, 852, 392, 852, 4 | 16],
+    [430, 853, 430, 852, 4 | 32],
+    [393, 853, 392, 852, 4 | 16 | 32],
+  ]) {
+    const b = browser({ width, height, scale: 2 }), socket = b.sockets[0];
+    socket.receive(record(1, [1, 32])); // FIELDS capability
+    b.message({ type: 'host-sizing' });
+    socket.receive(frame(1, true, codedWidth, codedHeight, flags)); await flush();
+    const canvas = b.elements.get('screen');
+    assert.deepEqual([canvas.width, canvas.height], [width * 2, height * 2]);
+    assert.equal(b.context.fitted(), width * 2 + 'x' + height * 2);
+    b.fireTimer();
+    assert.equal(b.elements.get('cover').hidden, true);
+
+    const u16 = n => [n >> 8, n & 255];
+    socket.receive(record(5, [...u16(width * 2), ...u16(height * 2), 255, 1, 0, 10, 0, 20, 0, 60, 0, 30]));
+    assert.deepEqual([...b.context.fieldBoxes(0).boxes[0]], [10, 20, 60, 30]);
+  }
+});
+
+test('legacy half frames still double their coded dimensions', async () => {
+  for (const [width, codedWidth] of [[393, 392], [430, 430]]) {
+    const b = browser({ width, height: 852, scale: 2 }); b.hello();
+    b.message({ type: 'host-sizing' });
+    b.sockets[0].receive(frame(1, true, codedWidth, 852, 4)); await flush();
+    const canvas = b.elements.get('screen');
+    assert.deepEqual([canvas.width, canvas.height], [codedWidth * 2, 1704]);
+    assert.equal(b.context.fitted(), width === 393 ? '' : '860x1704');
   }
 });
 
