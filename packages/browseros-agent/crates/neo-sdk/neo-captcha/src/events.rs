@@ -115,10 +115,12 @@ fn log_data(event: &CaptchaEvent) -> Value {
         CaptchaEventName::Failed => {
             fields["status"] = typed::<SolveStatus>(data, "status");
             fields["reason"] = typed::<SolveReason>(data, "reason");
+            fields["provider"] = typed::<ProviderName>(data, "provider");
         }
         CaptchaEventName::Handoff => {
             fields["reason"] = typed::<SolveReason>(data, "reason");
             fields["humanHelp"] = typed::<bool>(data, "humanHelp");
+            fields["provider"] = typed::<ProviderName>(data, "provider");
         }
     }
     fields

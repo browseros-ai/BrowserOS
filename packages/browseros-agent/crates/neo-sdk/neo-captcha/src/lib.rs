@@ -63,14 +63,36 @@ pub const SOLVE_DEADLINE: Duration = Duration::from_secs(120);
 #[derive(Default)]
 struct Payments {
     provider: Option<ProviderName>,
+    /// A vendor charged before the current backend call returned its combined reply.
+    pending: Option<ProviderName>,
     count: u32,
     cost_usd: f64,
 }
 
 impl Payments {
+    fn finish_task(&mut self, reply: &Result<ProviderAnswer, ProviderError>) {
+        // The chain's final reply already accounts for its earlier vendor attempts.
+        self.pending = None;
+        match reply {
+            Ok(answer) => {
+                self.count += 1;
+                self.provider = Some(answer.provider);
+                self.cost_usd += answer
+                    .cost_usd
+                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                    .unwrap_or(0.0);
+            }
+            Err(error) if error.charged => {
+                self.count += 1;
+                self.provider = error.provider;
+            }
+            Err(_) => {}
+        }
+    }
+
     fn apply_to(&self, flow: &mut FlowResult) {
-        flow.provider = self.provider;
-        flow.paid_tasks = self.count;
+        flow.provider = self.pending.or(self.provider);
+        flow.paid_tasks = self.count + u32::from(self.pending.is_some());
         flow.cost_usd = self.cost_usd;
     }
 }
@@ -92,21 +114,7 @@ pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
 impl<P: CaptchaPage, B: CaptchaBackend> SolveCtx<'_, P, B> {
     fn record_payment(&self, flow: &mut FlowResult, reply: &Result<ProviderAnswer, ProviderError>) {
         let mut paid = self.payments.lock().unwrap_or_else(|e| e.into_inner());
-        match reply {
-            Ok(answer) => {
-                paid.count += 1;
-                paid.provider = Some(answer.provider);
-                paid.cost_usd += answer
-                    .cost_usd
-                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                    .unwrap_or(0.0);
-            }
-            Err(error) if error.charged => {
-                paid.count += 1;
-                paid.provider = error.provider;
-            }
-            Err(_) => {}
-        }
+        paid.finish_task(reply);
         paid.apply_to(flow);
     }
 }
@@ -213,7 +221,8 @@ impl CaptchaSolver {
             .try_reserve(page_id.0, &request_id)
             .map_err(SolveRefusal::Busy)?;
         let events = EventLog::new(self.events().clone(), request_id.clone(), page_id.0);
-        let payments = Mutex::new(Payments::default());
+        let payments = Arc::new(Mutex::new(Payments::default()));
+        let providers = self.providers.for_solve(Arc::clone(&payments));
         let mut host = None;
         let work = async {
             let mut user_agent = None;
@@ -310,7 +319,7 @@ impl CaptchaSolver {
                     if challenge.kind.is_supported() && challenge.state == ChallengeState::Active {
                         let ctx = SolveCtx {
                             page,
-                            backend: &self.providers,
+                            backend: &providers,
                             payments: &payments,
                             events: &events,
                             lease: &lease,
@@ -382,20 +391,19 @@ impl CaptchaSolver {
             }
             page_failure(PageError::Navigated)
         };
-        let interrupted = |mut flow: FlowResult| {
-            payments
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .apply_to(&mut flow);
-            flow
-        };
         let mut flow = tokio::select! {
             biased;
-            _ = cancel.cancelled() => interrupted(page_failure(PageError::Cancelled)),
-            _ = tokio::time::sleep_until(deadline) => interrupted(terminal(SolveStatus::Failed, SolveReason::DeadlineExceeded, "The CAPTCHA solve exceeded its 120-second deadline. Take a fresh snapshot before retrying.")),
-            _ = wait_for_page_close(page) => interrupted(page_failure(PageError::Closed)),
+            _ = cancel.cancelled() => page_failure(PageError::Cancelled),
+            _ = tokio::time::sleep_until(deadline) => terminal(SolveStatus::Failed, SolveReason::DeadlineExceeded, "The CAPTCHA solve exceeded its 120-second deadline. Take a fresh snapshot before retrying."),
+            _ = wait_for_page_close(page) => page_failure(PageError::Closed),
             result = work => result,
         };
+        {
+            let paid = payments.lock().unwrap_or_else(|e| e.into_inner());
+            if paid.count > 0 || paid.pending.is_some() {
+                paid.apply_to(&mut flow);
+            }
+        }
         let kind = self
             .reservations()
             .active(page_id.0)
@@ -462,12 +470,12 @@ impl CaptchaSolver {
             ),
             SolveStatus::NeedsHuman => events.emit(
                 CaptchaEventName::Handoff,
-                json!({"type":kind,"reason":flow.reason,"humanHelp":human_help_available}),
+                json!({"type":kind,"reason":flow.reason,"humanHelp":human_help_available,"provider":flow.provider}),
             ),
             SolveStatus::Failed | SolveStatus::Cancelled | SolveStatus::Unsupported => events.emit(
                 CaptchaEventName::Failed,
                 with_family(
-                    json!({"type":kind,"status":flow.status,"reason":flow.reason}),
+                    json!({"type":kind,"status":flow.status,"reason":flow.reason,"provider":flow.provider}),
                     kind,
                 ),
             ),
@@ -1096,7 +1104,7 @@ mod orchestration_tests {
         );
         assert_eq!(
             outcome.events[1].data,
-            json!({"type":"hcaptcha","status":"unsupported","reason":"unsupported_type"})
+            json!({"type":"hcaptcha","status":"unsupported","reason":"unsupported_type","provider":null})
         );
         assert!(
             outcome
@@ -1160,7 +1168,7 @@ mod orchestration_tests {
                     json!({"type":"unknown","state":"active","complete":false,"challenges":2,
                            "family":"perimeterx"}),
                     json!({"type":"unknown","status":"unsupported","reason":"unsupported_type",
-                           "family":"perimeterx"}),
+                           "family":"perimeterx","provider":null}),
                 ]
             );
         }
@@ -1323,6 +1331,13 @@ mod orchestration_tests {
             assert_eq!(outcome.paid_tasks, 1);
             assert_eq!(outcome.cost_usd, 0.002);
             assert_eq!(
+                outcome
+                    .events
+                    .last()
+                    .and_then(|event| event.data.get("provider")),
+                Some(&json!("2captcha"))
+            );
+            assert_eq!(
                 outcome.events.last().map(|event| event.event),
                 Some(CaptchaEventName::Failed)
             );
@@ -1380,7 +1395,7 @@ mod orchestration_tests {
             assert_eq!(
                 outcome.events.last().map(|event| &event.data),
                 Some(
-                    &json!({"type":"turnstile","reason":"provider_unavailable","humanHelp":human_help})
+                    &json!({"type":"turnstile","reason":"provider_unavailable","humanHelp":human_help,"provider":"capsolver"})
                 )
             );
         }
