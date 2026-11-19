@@ -126,13 +126,13 @@ async function landing(
           e.shift === shift,
       ),
     'input sequence or point',
-    log,
+    { wallMs, log },
   )
   check(
     overlays.length === (on ? 1 : 0) &&
       overlays.every((e) => e.scope === 'top'),
     'overlay count or document',
-    log,
+    { wallMs, log },
   )
   const gapMs = on
     ? input.find((e) => e.kind === 'mousedown').t - overlays[0].t
@@ -141,7 +141,7 @@ async function landing(
     check(
       overlays[0].t < input[0].t && gapMs >= 250,
       'too little glide before input',
-      log,
+      { wallMs, log },
     )
   return { wallMs, gapMs, log }
 }
