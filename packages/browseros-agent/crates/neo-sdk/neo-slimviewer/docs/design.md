@@ -29,6 +29,15 @@ Dense scrolling exposes more new rows per frame when capture slows. On a
 pressure tick with enough full-size non-key motion frames (minimum below), the
 link keeps its maximum fps if the mean frame takes over 150 ms at the dip-guarded
 delivery rate. Bitrate overload then steps quality by up to two at a time.
+If the link blocks pending damage longer than capture has credit and sends fewer
+than half the expected frames during that active time, it also keeps maximum
+fps. It estimates demand at the quality cap from the mean size of all full-size
+frames sent, including keys, at the interval's pace. Above 1.5 times the
+dip-guarded delivery rate, the link jumps to the cap, or to half size if
+already at the cap. If the next tick after a jump is still starved and sends
+zero frames, it selects half size. If delivery falls below half the preceding
+tick's rate and its sample is at most three seconds old, frames that took at
+most 150 ms each on average at that rate follow the usual link rules.
 The usual jam tests select half size at the cap, still at maximum fps unless
 the CPU limits it. Recovery skips the fps steps and clears this mode at base
 quality and full size. Without a fresh probe, a motion return uses the last

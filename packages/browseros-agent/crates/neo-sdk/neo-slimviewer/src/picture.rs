@@ -247,6 +247,8 @@ pub struct Encoded {
 
 #[derive(Default)]
 pub struct Link {
+    /// Seconds covered by the pacing viewer's counters.
+    pub elapsed: f32,
     pub blocked: f32,
     pub sent_kbps: f32,
     pub delivered_kbps: f32,
@@ -255,12 +257,41 @@ pub struct Link {
     pub base_queue_ms: Option<u32>,
     /// Frames sent during this observation interval.
     pub frames: u32,
+    /// Mean wire bytes of full-size frames sent to the pacer, including keys.
+    pub mean_full_bytes: Option<f32>,
     /// Completed screen grabs, including those that found unchanged pixels.
     pub grabs: u32,
     /// Capture wanted damage at some point during this interval, including while blocked.
     pub damage_pending: bool,
     /// Time with damage pending and credit to send a frame to the pacer.
     pub busy: Duration,
+}
+
+impl Link {
+    fn starved(&self, fps: f32, previous_kbps: f32) -> bool {
+        let blocked = self.blocked * self.elapsed;
+        let busy = self.busy.as_secs_f32();
+        // Only time with pending work counts. The link must have held the
+        // window closed longer than capture had it open.
+        let active = (blocked + busy).min(self.elapsed);
+        if !self.damage_pending
+            || !link_full(self.blocked)
+            || blocked <= busy
+            || self.frames as f32 >= 0.5 * fps * active
+        {
+            return false;
+        }
+        // A one-tick delivery dip can slow a light swipe. The preceding tick
+        // can identify those small frames even when its window stayed open.
+        let dip = self.elapsed <= 3.0 && self.delivered_kbps < 0.5 * previous_kbps;
+        !dip || self
+            .mean_full_bytes
+            .is_none_or(|bytes| big_at_delivery(bytes, previous_kbps))
+    }
+}
+
+fn big_at_delivery(mean_bytes: f32, kbps: f32) -> bool {
+    kbps > 0.0 && mean_bytes * 8.0 > 150.0 * kbps
 }
 
 #[derive(Default)]
@@ -348,6 +379,8 @@ pub struct Picture {
     queue_high: bool,
     previous_late_at_cap: bool,
     previous_congested_no_ack: bool,
+    /// The previous starved tick priced a full frame and jumped to the quality cap.
+    previous_starved_cap: bool,
     last_reset: Option<Instant>,
     reset_since_tick: bool,
     /// An asynchronous reset reports the last complete interval's measurements.
@@ -403,6 +436,7 @@ impl Picture {
             queue_high: false,
             previous_late_at_cap: false,
             previous_congested_no_ack: false,
+            previous_starved_cap: false,
             last_reset: None,
             reset_since_tick: false,
             facts: Facts::default(),
@@ -445,6 +479,7 @@ impl Picture {
         self.last_delivery = None;
         self.calm_sharp = false;
         self.demand_kbps = None;
+        self.previous_starved_cap = false;
         self.idr = None;
         self.predicted_full = None;
         self.cpu_full_floor = None;
@@ -483,6 +518,7 @@ impl Picture {
         self.queue_high = false;
         self.previous_late_at_cap = false;
         self.previous_congested_no_ack = false;
+        self.previous_starved_cap = false;
         self.last_congested = None;
         self.clear_ticks_needed = 0;
         self.capacity.clear();
@@ -850,8 +886,7 @@ impl Picture {
         if self.full_work.len() >= 5 {
             self.predicted_full = percentile75(&mut self.full_work);
         }
-        let mean_bytes = self.full_big_bytes as f32 / self.full_big.max(1) as f32;
-        if self.full_big >= 5 {
+        if let Some(mean_bytes) = self.mean_motion_bytes(5) {
             let demand = mean_bytes * 8.0 * fps / 1000.0;
             self.demand_kbps = Some(
                 self.demand_kbps
@@ -869,25 +904,21 @@ impl Picture {
                     && link.delivered_kbps < 0.5 * previous
             })
             .map_or(link.delivered_kbps, |(_, previous)| previous);
+        let starved = link.starved(fps, self.facts.delivered_kbps);
         let keep_fps = self.link.keep_fps
-            || (self.full_big >= min_motion_frames(fps)
-                && available_kbps > 0.0
-                && mean_bytes * 8.0 > 150.0 * available_kbps);
+            || starved
+            || self
+                .mean_motion_bytes(min_motion_frames(fps))
+                .is_some_and(|bytes| big_at_delivery(bytes, available_kbps));
         // A queue built below the cap hasn't tested what the quality steps can save.
         let late_at_cap = self.link.at == self.ladder.cap
             && !reset
             && congested
             && link.delivered_kbps > 0.0
             && link.queue_ms > 300;
-        let severe = congested
-            && self.severe(
-                &link,
-                mean_bytes,
-                fps,
-                available_kbps,
-                late_at_cap,
-                keep_fps,
-            );
+        let severe =
+            congested && self.severe(&link, fps, available_kbps, late_at_cap, keep_fps, starved);
+        self.previous_starved_cap = false;
         self.previous_late_at_cap = late_at_cap;
         self.previous_congested_no_ack = congested && link.delivered_kbps == 0.0;
         self.facts = Facts {
@@ -908,6 +939,12 @@ impl Picture {
             self.queue_high = link.queue_ms > 150;
         } else if let Some((to, why)) = self.link_step(now, &link, fps, congested, severe, keep_fps)
         {
+            self.previous_starved_cap = starved
+                && why == Why::Severe
+                && self.link.at < self.ladder.cap
+                && to == self.ladder.cap
+                && link.mean_full_bytes.is_some()
+                && link.delivered_kbps > 0.0;
             moves.push(self.apply(now, Source::Link, to, why));
         }
         if self.cfg.cpu_guard {
@@ -976,36 +1013,44 @@ impl Picture {
         }
     }
 
-    /// Price a full motion frame at the quality cap. A keyframe burst alone says
-    /// nothing about the cost of continued motion.
+    fn mean_motion_bytes(&self, minimum: usize) -> Option<f32> {
+        (self.full_big >= minimum).then(|| self.full_big_bytes as f32 / self.full_big as f32)
+    }
+
+    /// Estimate full-size demand at the quality cap using the interval's paced fps.
     fn severe(
         &self,
         link: &Link,
-        mean_bytes: f32,
         fps: f32,
         available_kbps: f32,
         late_at_cap: bool,
         keep_fps: bool,
+        starved: bool,
     ) -> bool {
+        // A fully blocked follow-up cannot supply another size sample. It
+        // confirms the overload that just sent the link to the cap.
+        if starved && link.frames == 0 && self.previous_starved_cap {
+            return true;
+        }
         if link.delivered_kbps == 0.0 {
             return self.previous_congested_no_ack && link.sent_kbps > 0.0;
         }
         if late_at_cap && self.previous_late_at_cap {
             return true;
         }
-        if self.full_big < 3 {
-            return false;
-        }
         let cap = self.ladder.rungs[self.ladder.cap];
         let remaining = cap.crf_add - self.ladder.rungs[self.link.at].crf_add;
-        let cap_bytes = mean_bytes * 2.0_f32.powf(-remaining / 6.0);
-        // Slower scroll frames carry more new rows, so bytes per second stay roughly
-        // constant. Pricing high-fps frames at the floor fps underestimates demand.
-        let cap_demand_kbps = cap_bytes * 8.0 * fps / 1000.0;
-        let rate_jam = cap_demand_kbps > 1.5 * available_kbps;
-        // Dense motion tries the quality steps before bitrate alone can send it to half.
-        cap_bytes * 8.0 > 300.0 * link.delivered_kbps
-            || (rate_jam && (!keep_fps || self.link.at == self.ladder.cap))
+        let factor = 2.0_f32.powf(-remaining / 6.0);
+        let motion = self.mean_motion_bytes(3);
+        let rate_sample = if starved {
+            link.mean_full_bytes
+        } else {
+            motion
+        };
+        let rate_jam = rate_sample
+            .is_some_and(|bytes| bytes * factor * 8.0 * fps / 1000.0 > 1.5 * available_kbps);
+        motion.is_some_and(|bytes| bytes * factor * 8.0 > 300.0 * link.delivered_kbps)
+            || (rate_jam && (starved || !keep_fps || self.link.at == self.ladder.cap))
     }
 
     fn observe_link(&mut self, now: Instant, link: &Link, congested: bool) {
@@ -1362,20 +1407,24 @@ mod tests {
         }
     }
     fn jam() -> Link {
+        // Ordinary congestion still leaves enough open time for the paced frames.
         Link {
-            blocked: 0.6,
+            elapsed: 1.0,
+            blocked: 0.35,
             sent_kbps: 9600.0,
             delivered_kbps: 3000.0,
             queue_ms: 250,
             base_queue_ms: Some(250),
-            frames: 8,
-            grabs: 8,
+            frames: 18,
+            mean_full_bytes: None,
+            grabs: 18,
             damage_pending: true,
-            busy: Duration::from_millis(400),
+            busy: Duration::from_millis(650),
         }
     }
     fn active(frames: u32) -> Link {
         Link {
+            elapsed: 1.0,
             frames,
             grabs: frames,
             damage_pending: true,
@@ -1638,6 +1687,216 @@ mod tests {
             let mut f = frame(Scale::Full, 10);
             f.bytes = bytes;
             p.encoded(now, f);
+        }
+    }
+
+    #[test]
+    fn tests_that_a_starved_cadence_sets_keep_fps_and_goes_half_in_two_ticks() {
+        let t = Instant::now();
+        for key in [false, true] {
+            let mut p = picture(t);
+            for n in 1..=2 {
+                p.tick(at(t, n), jam(), Cpu::default());
+            }
+            assert_eq!((p.fps(), p.crf()), (15.0, 24.0));
+            let now = at(t, 3);
+            p.encoded(
+                now,
+                Encoded {
+                    key,
+                    bytes: 200_000,
+                    ..frame(Scale::Full, 35)
+                },
+            );
+            for (n, frames, blocked, busy_ms, delivered_kbps, scale) in [
+                (3, 1, 0.92, 68, 2352.0, Scale::Full),
+                (4, 0, 1.00, 0, 3456.0, Scale::Half),
+            ] {
+                p.tick(
+                    at(t, n),
+                    Link {
+                        frames,
+                        mean_full_bytes: (frames > 0).then_some(200_000.0),
+                        grabs: frames,
+                        sent_kbps: 1600.0 * frames as f32,
+                        delivered_kbps,
+                        blocked,
+                        busy: Duration::from_millis(busy_ms),
+                        ..jam()
+                    },
+                    Cpu::default(),
+                );
+                assert_eq!((p.fps(), p.crf(), p.motion_scale()), (30.0, 30.0, scale));
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_cpu_throttled_cadence_is_not_link_starvation() {
+        let t = Instant::now();
+        for (blocked, busy_ms) in [(0.0, 1000), (0.3, 700)] {
+            let mut p = picture(t);
+            for n in 1..=2 {
+                let now = at(t, n);
+                for _ in 0..5 {
+                    p.encoded(
+                        now,
+                        Encoded {
+                            bytes: 12_000,
+                            ..frame(Scale::Full, 120)
+                        },
+                    );
+                }
+                let moves = p.tick(
+                    now,
+                    Link {
+                        blocked,
+                        busy: Duration::from_millis(busy_ms),
+                        mean_full_bytes: Some(12_000.0),
+                        ..active(5)
+                    },
+                    Cpu::default(),
+                );
+                if n == 2 {
+                    assert!(
+                        moves
+                            .iter()
+                            .any(|m| m.source == Source::Cpu && m.why == Why::Work)
+                    );
+                }
+            }
+            assert!(!p.link.keep_fps);
+            assert_eq!(
+                (p.fps(), p.crf(), p.motion_scale()),
+                (15.0, 24.0, Scale::Full)
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_starvation_needs_less_than_half_the_cadence_while_damage_is_pending() {
+        let t = Instant::now();
+        // This two-second interval has 0.8 s blocked, 0.2 s open and a full second idle.
+        for (frames, damage_pending, fps) in [(15, true, 20.0), (14, true, 30.0), (0, false, 20.0)]
+        {
+            let mut p = picture(t);
+            p.tick(
+                at(t, 2),
+                Link {
+                    elapsed: 2.0,
+                    blocked: 0.4,
+                    busy: Duration::from_millis(200),
+                    frames,
+                    grabs: frames,
+                    mean_full_bytes: (frames > 0).then_some(12_000.0),
+                    damage_pending,
+                    ..jam()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(p.fps(), fps);
+        }
+    }
+
+    #[test]
+    fn tests_that_one_starved_frame_is_priced_at_the_paced_fps_and_guarded_delivery() {
+        let t = Instant::now();
+        // After the six-point quality cut, 75 kB at 15 fps needs exactly 1.5 x 3 Mb/s.
+        for (bytes, crf) in [(75_000.0, 26.0), (75_001.0, 30.0)] {
+            let mut p = picture(t);
+            for n in 1..=2 {
+                p.tick(at(t, n), jam(), Cpu::default());
+            }
+            p.tick(
+                at(t, 3),
+                Link {
+                    blocked: 0.92,
+                    busy: Duration::from_millis(68),
+                    frames: 1,
+                    grabs: 1,
+                    sent_kbps: bytes * 8.0 / 1000.0,
+                    delivered_kbps: 1200.0,
+                    mean_full_bytes: Some(bytes),
+                    ..jam()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(
+                (p.fps(), p.crf(), p.motion_scale()),
+                (30.0, crf, Scale::Full)
+            );
+            p.tick(at(t, 4), Link::default(), Cpu::default());
+            p.tick(
+                at(t, 5),
+                Link {
+                    blocked: 1.0,
+                    busy: Duration::ZERO,
+                    frames: 0,
+                    grabs: 0,
+                    sent_kbps: 0.0,
+                    ..jam()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(
+                p.motion_scale(),
+                Scale::Full,
+                "an idle tick expired the cap jump"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_a_delivery_dip_spares_light_frames_for_only_one_tick() {
+        let t = Instant::now();
+        // At the preceding clean tick's 3 Mb/s, 56,250 bytes take exactly 150 ms.
+        for (bytes, first_fps) in [(56_250.0, 20.0), (56_251.0, 30.0)] {
+            let mut p = picture(t);
+            p.tick(at(t, 1), active(30), Cpu::default());
+            for (n, fps) in [(2, first_fps), (3, 30.0)] {
+                p.tick(
+                    at(t, n),
+                    Link {
+                        blocked: 0.92,
+                        busy: Duration::from_millis(68),
+                        frames: 1,
+                        grabs: 1,
+                        mean_full_bytes: Some(bytes),
+                        sent_kbps: bytes * 8.0 / 1000.0,
+                        delivered_kbps: 1000.0,
+                        ..jam()
+                    },
+                    Cpu::default(),
+                );
+                assert_eq!(p.fps(), fps);
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_cellular_carousel_ticks_are_not_starved() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for (n, fps) in [(1, 20.0), (2, 15.0)] {
+            let now = at(t, n);
+            sized_motion(&mut p, now, 12_000, 20);
+            p.tick(
+                now,
+                Link {
+                    blocked: 0.3,
+                    busy: Duration::from_millis(700),
+                    sent_kbps: 1920.0,
+                    mean_full_bytes: Some(12_000.0),
+                    frames: 20,
+                    grabs: 20,
+                    ..jam()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(
+                (p.fps(), p.crf(), p.motion_scale()),
+                (fps, 24.0, Scale::Full)
+            );
         }
     }
 
@@ -3070,7 +3329,7 @@ mod tests {
         assert_eq!((moves[1].source, moves[1].why), (Source::Cpu, Why::Work));
         assert_eq!(
             moves[0].to_string(),
-            "source=link from=0 to=5 fps=15 crf=30 scale=full why=severe blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=8 busy_ms=400 grabs=8"
+            "source=link from=0 to=5 fps=15 crf=30 scale=full why=severe blocked=35 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=18 busy_ms=650 grabs=18"
         );
     }
 
