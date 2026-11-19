@@ -225,16 +225,25 @@ async function withoutCursor(name) {
     case 'move':
       await page.mouse.move(101, 72)
       break
-    case 'refused': {
+    case 'missing':
+    case 'covered': {
+      if (name === 'covered')
+        await page.evaluate(() => {
+          const cover = document.createElement('div')
+          cover.style.cssText = 'position:fixed;inset:0;background:white'
+          document.body.append(cover)
+        })
       let error
       try {
-        await page.locator('#missing').click({ timeout: 350 })
+        await (name === 'covered' ? target : page.locator('#missing')).click({
+          timeout: 800,
+        })
       } catch (e) {
         error = e
       }
       check(
         error?.name === 'TimeoutError' || /timeout/i.test(error?.message),
-        'missing target refusal',
+        'actionability refusal',
         String(error),
       )
       break
@@ -247,12 +256,18 @@ async function withoutCursor(name) {
     field: document.querySelector('#field').value,
     checked: document.querySelector('#box').checked,
   }))
-  const downs = seen.log.filter((e) => e.kind === 'mousedown')
+  const input = seen.log.filter((e) =>
+    ['pointerdown', 'mousedown', 'click', 'dblclick', 'auxclick'].includes(
+      e.kind,
+    ),
+  )
   check(!seen.log.some((e) => e.kind === 'overlay'), 'unexpected overlay', seen)
   check(
     name === 'check'
-      ? downs.length === 1 && downs[0].id === 'box' && seen.checked
-      : downs.length === 0,
+      ? input.map((e) => e.kind).join() === 'pointerdown,mousedown,click' &&
+          input.every((e) => e.id === 'box' && e.trusted) &&
+          seen.checked
+      : input.length === 0,
     'unexpected button press',
     seen,
   )

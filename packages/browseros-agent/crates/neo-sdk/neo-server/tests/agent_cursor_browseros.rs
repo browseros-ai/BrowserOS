@@ -156,7 +156,9 @@ async fn no_visuals_for_other_actions() -> TestResult {
         return Ok(());
     };
     b.cursor("on").await?;
-    for name in ["trial", "hover", "fill", "check", "move", "refused"] {
+    for name in [
+        "trial", "hover", "fill", "check", "move", "missing", "covered",
+    ] {
         let seen = b
             .script(&format!("return await withoutCursor({name:?})"))
             .await?;
@@ -349,7 +351,7 @@ async fn screenshot_hides_visible_cursor() -> TestResult {
 
 // The observer changes the title at cursor insertion. Read it on this rig's debugging port
 // while the SDK click is pending; a delay from launching an MCP run could race its cold start.
-async fn take_during_glide(b: &Browser, tab: &Value) -> ResultOf<(Value, u64)> {
+async fn take_during_glide(b: &Browser, tab: &Value, title: &str) -> ResultOf<(Value, u64)> {
     time::timeout(Duration::from_secs(5), async {
         loop {
             let reply = get(b.rig.cdp_port(), "/json/list").await?;
@@ -359,7 +361,7 @@ async fn take_during_glide(b: &Browser, tab: &Value) -> ResultOf<(Value, u64)> {
             let tabs: Vec<Value> = serde_json::from_str(body)?;
             if tabs
                 .iter()
-                .any(|t| t.get("title") == Some(&json!("cursor-in-glide")))
+                .any(|t| t.get("title").and_then(Value::as_str) == Some(title))
             {
                 return Ok::<_, Box<dyn Error>>(());
             }
@@ -386,11 +388,14 @@ async fn owner_takes_over_during_glide() -> TestResult {
         ("mouse", "page.mouse.click(120,84)"),
         ("already-held", "page.locator('#target').click()"),
     ] {
-        let tab = b.script(r"
+        let title = format!("cursor-in-glide-{name}");
+        let tab = b.script(&format!(r"
           await fresh()
-          await page.evaluate(() => { window.onCursorAppearance = () => { window.appearedAt = Date.now(); document.title = 'cursor-in-glide' } })
+          await page.evaluate(title => {{
+            window.onCursorAppearance = () => {{window.appearedAt = Date.now(); document.title = title}}
+          }}, {title:?})
           return page.tabId
-        ").await?;
+        ")).await?;
         let program = format!(
             r"
           try {{ await {action}; return 'landed' }}
@@ -403,7 +408,8 @@ async fn owner_takes_over_during_glide() -> TestResult {
                 .await?;
             (b.script(&program).await, taken, None)
         } else {
-            let (click, taken) = tokio::join!(b.script(&program), take_during_glide(&b, &tab));
+            let (click, taken) =
+                tokio::join!(b.script(&program), take_during_glide(&b, &tab, &title));
             let (taken, requested) = taken?;
             (click, taken, Some(requested))
         };
