@@ -175,6 +175,18 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     '/recaptcha-v2.html',
     '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI',
   ),
+  {
+    ...fixture(
+      'recaptcha-v2-invisible-bind',
+      'Invisible reCAPTCHA v2 bound to a button',
+      'recaptcha_v2',
+      '/recaptcha-v2-invisible-bind.html',
+      '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI',
+      ['already_clear'],
+    ),
+    expectType: 'recaptcha_v2',
+    maxPaidTasks: 0,
+  },
   fixture(
     'turnstile-pass',
     'Turnstile always passes',

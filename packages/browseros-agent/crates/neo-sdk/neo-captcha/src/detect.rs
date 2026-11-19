@@ -2863,6 +2863,24 @@ window.onTs = function() {{
 
     #[tokio::test]
     #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_a_render_key_without_a_bound_client_stays_v3() -> anyhow::Result<()> {
+        let result = live_dom_detection(
+            r#"<script src="https://www.google.com/recaptcha/api.js?render=score-key"></script>"#,
+            "",
+        )
+        .await?;
+        assert!(result.complete);
+        let [challenge] = result.challenges.as_slice() else {
+            anyhow::bail!("expected one v3 widget, got {:?}", result.challenges);
+        };
+        assert_eq!(challenge.kind, CaptchaKind::RecaptchaV3);
+        assert_eq!(challenge.state, ChallengeState::WidgetOnly);
+        assert_eq!(challenge.sitekey.as_deref(), Some("score-key"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
     async fn tests_that_live_page_settings_arrive_whole() -> anyhow::Result<()> {
         let long = "k".repeat(3000);
         let recaptcha = live_dom_detection(

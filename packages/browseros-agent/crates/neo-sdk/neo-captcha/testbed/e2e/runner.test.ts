@@ -303,8 +303,8 @@ for (const server of ['sdk', 'claw-server'] as const) {
     expect(records.filter((r) => r.outcome !== 'PASS')).toEqual([])
     expect(exitCode(records)).toBe(0)
     expect(summarize(records)).toMatchObject({
-      pass: 21,
-      siteAccepted: 6,
+      pass: 22,
+      siteAccepted: 7,
       deliveredOnly: 0,
       detected: 15,
       paidTasks: 0,
@@ -423,14 +423,14 @@ test('tests that an absent SDK solver passes every page only when absence is exp
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
   expect(summarize(expected.records)).toMatchObject({
-    pass: 21,
+    pass: 22,
     siteAccepted: 0,
     deliveredOnly: 0,
     detected: 0,
-    absent: 21,
+    absent: 22,
   })
   expect(renderSummary(expected.records)).toContain(
-    'solver absent as expected: 21',
+    'solver absent as expected: 22',
   )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),

@@ -884,7 +884,7 @@ mod tests {
         sync::{Arc, Mutex},
         time::Duration,
     };
-    use tokio::time::Instant;
+    use tokio::{sync::Notify, time::Instant};
     use tokio_util::sync::CancellationToken;
 
     struct State {
@@ -1165,6 +1165,8 @@ mod tests {
         answers: Mutex<VecDeque<Result<ProviderAnswer, ProviderError>>>,
         tasks: Mutex<Vec<SolveTask>>,
         after: Option<Arc<Mutex<State>>>,
+        configured: bool,
+        pending_request: Option<Arc<Notify>>,
     }
     impl FakeBackend {
         fn new(answers: Vec<SolveAnswer>) -> Self {
@@ -1184,6 +1186,8 @@ mod tests {
                 ),
                 tasks: Mutex::new(vec![]),
                 after: None,
+                configured: true,
+                pending_request: None,
             }
         }
         fn tasks(&self) -> Vec<SolveTask> {
@@ -1198,7 +1202,7 @@ mod tests {
     }
     impl CaptchaBackend for FakeBackend {
         fn is_configured(&self) -> bool {
-            true
+            self.configured
         }
         async fn solve(
             &self,
@@ -1210,6 +1214,10 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(task.clone());
+            if let Some(started) = &self.pending_request {
+                started.notify_one();
+                return std::future::pending().await;
+            }
             if let Some(state) = &self.after {
                 let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                 s.navigated = true;
@@ -1687,6 +1695,63 @@ mod tests {
             (SolveStatus::Cancelled, SolveReason::Navigated)
         );
         assert_eq!(page.read(|s| s.clicks.len()), 1);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaTiles(_)]
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_unconfigured_provider_receives_no_request() {
+        let page = FakePage::new(true);
+        let backend = FakeBackend {
+            configured: false,
+            ..FakeBackend::new(vec![])
+        };
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.reason, result.paid_tasks),
+            (SolveStatus::NeedsHuman, SolveReason::NoProvider, 0)
+        );
+        assert!(backend.tasks().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_interrupting_an_in_flight_request_never_starts_another() {
+        for (status, reason) in [
+            (SolveStatus::Cancelled, SolveReason::CallerCancelled),
+            (SolveStatus::Failed, SolveReason::DeadlineExceeded),
+        ] {
+            let page = FakePage::new(true);
+            let started = Arc::new(Notify::new());
+            let backend = FakeBackend {
+                pending_request: Some(started.clone()),
+                ..FakeBackend::new(vec![])
+            };
+            let cancel = CancellationToken::new();
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let challenge = challenge();
+            let interrupt = async {
+                if reason == SolveReason::CallerCancelled {
+                    assert!(
+                        tokio::time::timeout_at(deadline, started.notified())
+                            .await
+                            .is_ok(),
+                        "the provider must receive a request before cancellation"
+                    );
+                    cancel.cancel();
+                }
+            };
+            let (result, ()) = tokio::join!(
+                run(&page, &backend, &challenge, &cancel, deadline),
+                interrupt
+            );
+            assert_eq!((result.status, result.reason), (status, reason));
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::RecaptchaTiles(_)]
+            ));
+        }
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_cancel_and_deadline_stop_before_any_action() {
