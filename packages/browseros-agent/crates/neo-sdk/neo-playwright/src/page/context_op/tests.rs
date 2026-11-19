@@ -28,7 +28,7 @@ impl TabScript for SlowNewTab {
         ProbeAnswer::unexpected()
     }
 
-    fn delay(&self, method: &str) -> Duration {
+    fn delay(&self, method: &str, _params: &Value) -> Duration {
         if method == "Page.setLifecycleEventsEnabled"
             && self.lifecycles.fetch_add(1, Ordering::SeqCst) == 0
         {

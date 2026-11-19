@@ -1,10 +1,15 @@
 //! Cursor paint, policy checks and real device events through the public operation routes.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
+
+use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat};
 
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
+use tokio::sync::Notify;
+use tokio::time;
 
 use crate::test_env::EnvCall;
 use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript, TestResult};
@@ -12,8 +17,12 @@ use crate::{ErrorCode, Op, PlaywrightError, Refusal};
 
 #[derive(Default)]
 struct ClickPage {
+    slow_expression: Option<&'static str>,
+    evaluating: Notify,
+    capturing: Notify,
     skipped: bool,
     covered: bool,
+    armed: AtomicBool,
     /// Pixels the target moves each time the cursor glides.
     step: u32,
     shift: AtomicU32,
@@ -47,6 +56,7 @@ impl TabScript for ClickPage {
                 if self.covered {
                     json!({ "kind": "covered", "by": "<div>" })
                 } else {
+                    self.armed.store(true, Ordering::Relaxed);
                     json!({ "kind": "armed", "point": point, "rect": rect, "token": request["arm"]["token"] })
                 }
             }
@@ -54,7 +64,10 @@ impl TabScript for ClickPage {
                 self.record("measure".to_owned());
                 json!({ "kind": "measured", "pin": 1, "point": point, "rect": rect, "inView": true, "transformed": false })
             }
-            Some("verdict") => json!({ "kind": "verdict", "hit": "done" }),
+            Some("verdict") => {
+                self.armed.store(false, Ordering::Relaxed);
+                json!({ "kind": "verdict", "hit": "done" })
+            }
             Some("resolve") => json!({ "kind": "element", "pin": 1, "preview": "<input>" }),
             Some("read") => json!({ "kind": "read", "value": {
                 "checked": self.events().iter().any(|e| e.starts_with("mousePressed")),
@@ -66,7 +79,27 @@ impl TabScript for ClickPage {
         ProbeAnswer::reply(reply)
     }
 
+    fn delay(&self, method: &str, params: &Value) -> Duration {
+        if method == "Page.captureScreenshot" {
+            self.capturing.notify_one();
+            return Duration::from_millis(100);
+        }
+        if method == "Runtime.evaluate"
+            && let (Some(fragment), Some(js)) =
+                (self.slow_expression, params["expression"].as_str())
+            && js.contains(fragment)
+        {
+            self.evaluating.notify_one();
+            return Duration::from_millis(100);
+        }
+        Duration::ZERO
+    }
+
     fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
+        if method == "Page.captureScreenshot" {
+            self.record("capture".to_owned());
+            return Some(json!({"data": "AQID"}));
+        }
         if method == "Input.dispatchMouseEvent" {
             self.record(format!(
                 "{} {} {}",
@@ -82,8 +115,16 @@ impl TabScript for ClickPage {
         if !expression.contains("Symbol.for('browseros.agentPointer')") {
             return None;
         }
+        if expression.contains("p.hide()") {
+            self.record("hide absent".to_owned());
+            return Some(json!({"result": {"value": false}}));
+        }
         if let Some((_, command)) = expression.trim().rsplit_once("\n})(") {
             let command: Value = serde_json::from_str(command.strip_suffix(')')?).ok()?;
+            assert!(
+                !self.armed.load(Ordering::Relaxed),
+                "input was intercepted during travel"
+            );
             self.record(format!("glide {}", command["x"].as_f64()?));
             self.shift.fetch_add(self.step, Ordering::Relaxed);
             let status = if self.skipped { "skipped" } else { "arrived" };
@@ -94,6 +135,15 @@ impl TabScript for ClickPage {
         self.record(format!("ripple {coords}"));
         Some(json!({ "result": { "value": true } }))
     }
+}
+
+async fn wait_for_request(request: &Notify) {
+    assert!(
+        time::timeout(Duration::from_secs(5), request.notified())
+            .await
+            .is_ok(),
+        "the expected protocol request never arrived"
+    );
 }
 
 async fn invoke(run: &ScriptedRun, name: &str, fields: Value) -> Result<Value, PlaywrightError> {
@@ -159,9 +209,9 @@ async fn clicks_add_only_a_glide_remeasurement_and_ripple_to_the_burst() -> Test
 }
 
 #[tokio::test]
-async fn a_takeover_before_or_during_travel_refuses_the_click() -> TestResult {
+async fn a_takeover_before_either_paint_or_input_refuses_the_click() -> TestResult {
     for op in ["locator.click", "mouse.click"] {
-        for passing in [0, 1] {
+        for passing in [0, 1, 2] {
             let tab = ScriptedTab::new(ClickPage::default());
             let mut run = ScriptedRun::over(&tab).await?;
             run.env.draws_cursor = true;
@@ -185,10 +235,90 @@ async fn a_takeover_before_or_during_travel_refuses_the_click() -> TestResult {
                 .into_iter()
                 .filter(|event| event != "arm" && event != "measure")
                 .collect();
-            assert_eq!(effects, vec!["glide 10"; passing]);
+            assert_eq!(effects, ["glide 10", "ripple 10,20"][..passing]);
             assert!(!run.env.calls().contains(&EnvCall::MarkSent));
         }
     }
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_owner_can_move_the_mouse_during_a_locator_glide() -> TestResult {
+    let tab = ScriptedTab::new(ClickPage {
+        slow_expression: Some("var BrowserOSAgentCursor"),
+        ..Default::default()
+    });
+    let mut run = ScriptedRun::over(&tab).await?;
+    run.env.draws_cursor = true;
+    let (click, moved) = tokio::join!(invoke(&run, "locator.click", json!({})), async {
+        wait_for_request(&tab.script().evaluating).await;
+        invoke(&run, "mouse.move", json!({"x": 99})).await
+    });
+    click?;
+    moved?;
+    assert!(tab.script().events().starts_with(&[
+        "measure".to_owned(),
+        "arm".to_owned(),
+        "mouseMoved 99 0".to_owned(),
+        "glide 10".to_owned()
+    ]));
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn abort_during_the_ripple_leaves_delivery_not_sent() -> TestResult {
+    for op in ["locator.click", "mouse.click"] {
+        let tab = ScriptedTab::new(ClickPage {
+            slow_expression: Some("p.click("),
+            ..Default::default()
+        });
+        let mut run = ScriptedRun::over(&tab).await?;
+        run.env.draws_cursor = true;
+        let (result, ()) = tokio::join!(invoke(&run, op, json!({})), async {
+            wait_for_request(&tab.script().evaluating).await;
+            run.env.abort("cancelled while painting");
+        });
+        assert_eq!(
+            result
+                .err()
+                .ok_or("click should have aborted")?
+                .error_code(),
+            Some(ErrorCode::Aborted)
+        );
+        assert!(
+            !run.env.calls().contains(&EnvCall::MarkSent),
+            "{op} delivery"
+        );
+        assert_eq!(tab.sent("Input.dispatchMouseEvent"), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_background_capture_reads_pixels_before_the_first_glide_creates_a_canvas() -> TestResult {
+    let tab = ScriptedTab::new(ClickPage::default());
+    let mut run = ScriptedRun::over(&tab).await?;
+    run.env.draws_cursor = true;
+    let browser = run.playwright.browser();
+    let page = browser.pages.list().await?.pop().ok_or("missing tab")?;
+    let capture = browser.screenshot_for_target(
+        page.page_id,
+        &page.target_id,
+        ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            ..Default::default()
+        },
+    );
+    let (shot, click) = tokio::join!(capture, async {
+        wait_for_request(&tab.script().capturing).await;
+        invoke(&run, "mouse.click", json!({})).await
+    });
+    assert_eq!(shot?.ok_or("target closed")?.data, "AQID");
+    click?;
+    assert_eq!(
+        &tab.script().events()[..3],
+        &["hide absent", "capture", "glide 10"]
+    );
     Ok(())
 }
 

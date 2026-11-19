@@ -5,8 +5,9 @@ use std::time::Duration;
 use browseros_core::ProtocolSession;
 use browseros_core::input::Point as CorePoint;
 use browseros_core::pointer::{Pointer, PointerAction};
+use browseros_core::screenshot::with_screenshot_lock;
 use browseros_core::timeouts::POINTER_MOVE_DEADLINE;
-use tokio::time::Instant;
+use tokio::time::{self, Instant};
 
 use crate::input::Point;
 use crate::op_scope::OpScope;
@@ -28,44 +29,49 @@ impl ClickCursor {
         }
     }
 
-    /// A successful glide gives the page time to move. Locator clicks must measure again.
+    /// Leave a second for input and bound the number of remeasurements on moving targets.
+    pub(crate) fn needs_glide(&self, scope: &OpScope<'_>, at: Point) -> bool {
+        self.enabled
+            && self.glides < 3
+            && self
+                .last
+                .is_none_or(|last| (last.x - at.x).hypot(last.y - at.y) > 2.0)
+            && scope.deadline().is_none_or(|end| {
+                end.saturating_duration_since(Instant::now())
+                    >= POINTER_MOVE_DEADLINE + Duration::from_secs(1)
+            })
+    }
+
+    /// A screenshot may already have hidden an absent cursor. Wait until it has read its
+    /// pixels before creating the canvas, charging the wait to the same glide deadline.
     pub(crate) async fn glide(
         &mut self,
         scope: &OpScope<'_>,
         root: &ProtocolSession,
         at: Point,
-    ) -> Result<bool, PlaywrightError> {
-        // Give a moving target at most three glides and leave a second for the actual input.
-        if !self.enabled
-            || self.glides >= 3
-            || self
-                .last
-                .is_some_and(|last| (last.x - at.x).hypot(last.y - at.y) <= 2.0)
-        {
-            return Ok(false);
-        }
-        scope.recheck()?;
-        if scope.deadline().is_some_and(|end| {
-            end.saturating_duration_since(Instant::now())
-                < POINTER_MOVE_DEADLINE + Duration::from_secs(1)
-        }) {
-            return Ok(false);
-        }
-        let pointer = Pointer::default();
-        let moved = scope
-            .within(pointer.move_to(root, PointerAction::Click, at.into()))
+    ) -> Result<(), PlaywrightError> {
+        let paint = with_screenshot_lock(root, || async {
+            scope.recheck()?;
+            let moved = Pointer::default()
+                .move_to(root, PointerAction::Click, at.into())
+                .await;
+            Ok(moved)
+        });
+        let moved: Result<bool, PlaywrightError> = scope
+            .within(time::timeout(POINTER_MOVE_DEADLINE, paint))
             .await
-            .map_err(|_expired| scope.timed_out(ErrorCode::NotActionable))?;
-        if moved {
+            .map_err(|_expired| scope.timed_out(ErrorCode::NotActionable))?
+            .unwrap_or(Ok(false));
+        if moved? {
             self.last = Some(at);
             self.glides += 1;
         } else {
             self.enabled = false;
         }
-        Ok(moved)
+        Ok(())
     }
 
-    /// The caller has passed the final owner check. Snap any remaining distance before input.
+    /// Recheck ownership before painting. The caller marks delivery only after this returns.
     pub(crate) async fn ripple(
         &self,
         scope: &OpScope<'_>,
@@ -73,6 +79,7 @@ impl ClickCursor {
         at: Point,
     ) -> Result<(), PlaywrightError> {
         if self.enabled && self.last.is_some() {
+            scope.recheck()?;
             let pointer = Pointer::default();
             // Paint failures are best effort. If the operation itself ended, send no input.
             scope

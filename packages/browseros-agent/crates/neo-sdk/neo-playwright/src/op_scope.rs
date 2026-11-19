@@ -913,7 +913,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
-    use tokio::sync::{Notify, broadcast, mpsc};
+    use tokio::sync::{broadcast, mpsc};
     use tokio::task;
     use tokio::time::{self, Instant};
 
@@ -922,7 +922,7 @@ mod tests {
     use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
-    use crate::{Answer, ErrorCode, OpEnv, Refusal, RunState, TimedOut};
+    use crate::{Answer, ErrorCode, Refusal, TimedOut};
 
     fn op(name: &str) -> Result<Op, Box<dyn Error>> {
         Ok(Op::from_name(name).ok_or(format!("{name} is an op"))?)
@@ -1374,76 +1374,12 @@ mod tests {
         Ok(())
     }
 
-    /// A host whose script can abort the op (Playwright's `signal`), as claw-sdk's door does
-    /// through `OpCtx::aborted`.
-    struct AbortingHost {
-        env: TestEnv,
-        reason: Mutex<Option<String>>,
-        wake: Notify,
-    }
-
-    impl AbortingHost {
-        fn new() -> Self {
-            Self {
-                env: TestEnv::new(),
-                reason: Mutex::new(None),
-                wake: Notify::new(),
-            }
-        }
-
-        fn abort(&self, reason: &str) {
-            *self.reason.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason.to_owned());
-            self.wake.notify_waiters();
-        }
-    }
-
-    impl OpEnv for AbortingHost {
-        fn view(&self) -> &BrowserView {
-            self.env.view()
-        }
-
-        fn run_state(&self) -> &Arc<RunState> {
-            self.env.run_state()
-        }
-
-        fn recheck(&self) -> Result<(), Refusal> {
-            self.env.recheck()
-        }
-
-        fn mark_sent(&self) {
-            self.env.mark_sent();
-        }
-
-        fn note(&self, line: String) {
-            self.env.note(line);
-        }
-
-        fn abort_reason(&self) -> Option<String> {
-            self.reason
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone()
-        }
-
-        fn aborted(&self) -> BoxFuture<'_, ()> {
-            Box::pin(async move {
-                loop {
-                    let woken = self.wake.notified();
-                    if self.abort_reason().is_some() {
-                        return;
-                    }
-                    woken.await;
-                }
-            })
-        }
-    }
-
     /// Upstream's `Progress.abort`: the wait in flight ends, and the op's timeout path reports
     /// the abort, with the reason and an `operation was aborted` line under the call log.
     #[tokio::test(start_paused = true)]
     async fn tests_that_an_abort_ends_the_wait_in_flight_as_the_ops_abort()
     -> Result<(), Box<dyn Error>> {
-        let host = AbortingHost::new();
+        let host = TestEnv::new();
         let scope = OpScope::new(&host, op("locator.click")?, header(None, None));
         scope.log("waiting for locator('button')".to_owned());
         let (waited, ()) = tokio::join!(scope.within(pending::<()>()), async {
@@ -1469,7 +1405,7 @@ mod tests {
     /// An op aborted between attempts never sleeps or waits again.
     #[tokio::test(start_paused = true)]
     async fn tests_that_an_aborted_op_waits_no_more() -> Result<(), Box<dyn Error>> {
-        let host = AbortingHost::new();
+        let host = TestEnv::new();
         let scope = OpScope::new(&host, op("locator.click")?, header(None, Some(5_000)));
         host.abort("already");
         let started = Instant::now();
@@ -1483,7 +1419,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_an_answer_after_the_abort_settles_as_the_abort()
     -> Result<(), Box<dyn Error>> {
-        let host = AbortingHost::new();
+        let host = TestEnv::new();
         let scope = OpScope::new(&host, op("locator.ariaSnapshot")?, header(None, None));
         assert_eq!(scope.settle(Ok(json!("before")))?, json!("before"));
         host.abort("stop");

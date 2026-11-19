@@ -577,9 +577,9 @@ impl<'a> PointerRunner<'a> {
             // A glide needs fresh geometry, not the next scroll alignment and retry delay.
             let retry = pass - glide_rechecks;
             let wait = inner.wait(retry);
-            if retry == 0 {
+            if pass == 0 {
                 attempt.log(format!("attempting {} action{trial}", req.name));
-            } else {
+            } else if retry > 0 {
                 attempt.log(format!("retrying {} action{trial}", req.name));
                 if !wait.is_zero() {
                     attempt.log(format!("  waiting {}ms", wait.as_millis()));
@@ -856,7 +856,25 @@ impl<'a> PointerRunner<'a> {
             }
             // Arming checks the target's own cover and can redirect a label press. A glide
             // uses that accepted point, then the next pass checks the page again before input.
-            if self.cursor.glide(self.scope, &root, page_point).await? {
+            if self.cursor.needs_glide(self.scope, page_point) {
+                // A verdict stops this specific interceptor. Wait for it before releasing the
+                // input lock so the owner's input can pass freely during travel.
+                if let Some(mut armed) = guard {
+                    let stopped = self
+                        .scope
+                        .within(armed.verdict(self.scope, self.page))
+                        .await;
+                    match stopped {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(ProbeFailure::Gone(_))) => {
+                            return self.subject.lost(located).map(|()| Inner::Reresolve);
+                        }
+                        Ok(Err(failure)) => return Err(resolve::failed(self.scope, failure)),
+                        Err(_expired) => return Err(self.timed_out()),
+                    }
+                }
+                drop(own);
+                self.cursor.glide(self.scope, &root, page_point).await?;
                 glide_rechecks += 1;
                 continue;
             }
@@ -919,6 +937,7 @@ impl<'a> PointerRunner<'a> {
                     Called::Expired => return Err(self.timed_out()),
                 },
             };
+            self.cursor.ripple(self.scope, &root, page_point).await?;
             let sent = self.scope.send_effect()?;
             let dialogs_from = self.pw.events().head();
             // Every action that reads its verdict watches the navigations its input requests:
@@ -932,7 +951,6 @@ impl<'a> PointerRunner<'a> {
                 RequestedNavigations::watch(self.pw.browser().cdp_events(), sessions)
             });
             self.scope.log(format!("  performing {} action", req.name));
-            self.cursor.ripple(self.scope, &root, page_point).await?;
             let sending = match route {
                 None => input.send_planned(&sent, self.scope, planned, burst).await,
                 Some((before, approach)) => {
