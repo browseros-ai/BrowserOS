@@ -73,6 +73,7 @@ test('tests that always-pass Turnstile pages also accept a widget that already p
 test('tests that the catalog contains every required page with unique ids and existing paths', async () => {
   expect(FIXTURE_PAGES.map((page) => page.id)).toEqual([
     'recaptcha-v2-test',
+    'recaptcha-v2-invisible-bind',
     'turnstile-pass',
     'turnstile-block',
     'turnstile-interactive',
@@ -333,15 +334,68 @@ test('tests that frame readiness accepts only its own child origin, source and f
   }
 })
 
+test('tests that the bound v2 fixture becomes ready with its badge and submits through its callback', async () => {
+  const page = FIXTURE_PAGES.find((p) => p.id === 'recaptcha-v2-invisible-bind')
+  if (!page) throw new Error('missing button-bound fixture')
+  const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
+  const widget = html.match(/<div\b[^>]*class="g-recaptcha"[^>]*>/)?.[0] ?? ''
+  expect(widget).toContain('data-bind="submit"')
+  expect(widget).toContain('data-callback="onSuccess"')
+  expect(widget).toContain(`data-sitekey="${page.sitekey}"`)
+  expect(widget).not.toContain('data-size')
+  expect(page).toMatchObject({ expectType: 'recaptcha_v2', maxPaidTasks: 0 })
+
+  class Frame {
+    constructor(readonly badge: boolean) {}
+    closest(selector: string) {
+      return this.badge && selector === '.grecaptcha-badge'
+    }
+  }
+  const dataset: Record<string, string> = {}
+  let loaded = (_event: { target: Frame }) => {}
+  let submissions = 0
+  const document = {
+    documentElement: { dataset },
+    querySelector: () => ({ dataset: { sitekey: page.sitekey } }),
+    addEventListener: (type: string, handler: typeof loaded) => {
+      if (type === 'load') loaded = handler
+    },
+    getElementById: (id: string) =>
+      id === 'captcha-form' ? { requestSubmit: () => submissions++ } : null,
+  }
+  const context = { window: {}, document, HTMLIFrameElement: Frame }
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? ''
+  runInNewContext(script, context)
+  loaded({ target: new Frame(false) })
+  expect(runInNewContext(page.ready, context)).toBe(false)
+  loaded({ target: new Frame(true) })
+  expect(runInNewContext(page.ready, context)).toBe(true)
+  expect(submissions).toBe(0)
+  runInNewContext('onSuccess("test")', context)
+  expect(submissions).toBe(1)
+  expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+    callbackFired: true,
+    tokenLength: 4,
+  })
+  runInNewContext('onExpired(); onError()', context)
+  expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+    tokenLength: 0,
+    errors: ['expired', 'widget-error'],
+  })
+})
+
 test('tests that standalone pages mirror their lifecycle state and wait for visible iframes', async () => {
   for (const page of FIXTURE_PAGES) {
     const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
     expect(html.match(/<form\b/g)).toHaveLength(1)
     expect(html).toContain('id="captcha-form"')
     expect(html).toContain('id="submit" type="submit"')
-    // The PerimeterX pages build their frame themselves and load no vendor script; the test
-    // below runs them in a real DOM's place.
-    if (page.id.startsWith('perimeterx-')) continue
+    // The bound and PerimeterX fixtures have their own lifecycle tests.
+    if (
+      page.id === 'recaptcha-v2-invisible-bind' ||
+      page.id.startsWith('perimeterx-')
+    )
+      continue
     let visible = false
     let observe = () => {}
     let resize = () => {}
