@@ -28,9 +28,11 @@ Slow measured work can lower the CPU limit. Throttle or steal counts only when
 capture falls below 80% of the current cadence during at least half a second
 with damage pending and the pacer open. Grabs that find unchanged pixels count.
 Recovery takes one step at a time. To raise quality or frame rate, the link needs
-clean seconds with at least five large, non-key motion frames each. Small updates
-between swipes preserve any clean seconds already earned. A return to full-size
-motion must also fit the link's 300 ms keyframe budget. Burst probes subtract
+at least five large, non-key motion frames per clean second at 15 fps and above.
+Below 15 fps, the minimum is one third of the paced frame rate, rounded down,
+with a floor of one frame. Small updates between swipes preserve any clean
+seconds already earned. A return to full-size motion must also fit the link's
+300 ms keyframe budget. Burst probes subtract
 the lowest RTT seen in the preceding five minutes. After congestion, the link
 caps the latest probe at the measured congested delivery rate to price the
 keyframe and the sustained bitrate of a full-size return. If half-size frames
@@ -41,8 +43,9 @@ After 20 seconds without congestion, one such second suffices. Fresh probes
 continue to price full-size returns.
 If the full key exceeds that budget, a full second without a change allows a
 plain full-size frame through. Its acknowledgement measures fresh capacity.
-A sharp settle frame must fit 300 ms at the capped rate. Once the cap lifts,
-sharpening uses the fastest sample from the last ten seconds.
+A sharp settle frame must fit 300 ms. It uses the capped rate until the cap
+lifts or ten seconds pass without congestion. It then uses the fastest sample
+from the last ten seconds, or 8 Mb/s if none remain.
 
 When an owner's acknowledgement window times out, the engine applies the
 quality cap before encoding the next keyframe. Forced keys use half size whenever

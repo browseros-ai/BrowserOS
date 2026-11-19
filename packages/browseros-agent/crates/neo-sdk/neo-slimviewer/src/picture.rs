@@ -265,6 +265,13 @@ const FULL_SIZE_AFTER: Duration = Duration::from_secs(1);
 const CPU_FULL_SIZE_AFTER: Duration = Duration::from_secs(2);
 const CAPACITY_WINDOW: Duration = Duration::from_secs(10);
 const STALE_CAPACITY_AFTER_JAM: Duration = Duration::from_secs(20);
+
+fn capacity_expiry(at: Instant, now: Instant) -> Option<Instant> {
+    // capacity_kbps still includes samples exactly ten seconds old.
+    let expiry = at + CAPACITY_WINDOW + Duration::from_nanos(1);
+    (now < expiry).then_some(expiry)
+}
+
 // Integer nanoseconds keep the 40 ms recovery boundary at 15 fps inclusive.
 fn starved_work(fps: f32) -> Duration {
     Duration::from_nanos((800_000_000.0 / f64::from(fps)) as u64)
@@ -573,7 +580,7 @@ impl Picture {
             })
     }
 
-    /// Next useful wakeup. A rejected sharp budget has no deadline until new link facts arrive.
+    /// Next useful wakeup, including when the rate that ruled out sharpening expires.
     pub fn deadline(&self, now: Instant) -> Option<Instant> {
         self.deadline_since(now, self.last_change)
     }
@@ -612,23 +619,27 @@ impl Picture {
     }
 
     fn sharp_deadline_since(&self, now: Instant, since: Instant) -> Option<Instant> {
+        if !self.needs_sharp() {
+            return None;
+        }
         let pause = if self.scale == Scale::Half {
             self.full_size_after()
         } else {
             self.cfg.sharpen_after
         };
         let due = since + pause;
-        if self.needs_sharp()
-            && let Some((_, transfer)) = self.sharp_budget(now)
-        {
-            let quiet = if transfer > Duration::from_millis(150) {
-                self.last_input.map(|at| at + Duration::from_secs(1))
-            } else {
-                None
-            };
-            return Some(quiet.map_or(due, |quiet| due.max(quiet)));
-        }
-        None
+        let Some((_, transfer)) = self.sharp_budget(now) else {
+            let retry = self
+                .sharp_congestion_expiry(now)
+                .or_else(|| capacity_expiry(self.capacity.back()?.0, now))?;
+            return Some(due.max(retry));
+        };
+        let quiet = if transfer > Duration::from_millis(150) {
+            self.last_input.map(|at| at + Duration::from_secs(1))
+        } else {
+            None
+        };
+        Some(quiet.map_or(due, |quiet| due.max(quiet)))
     }
 
     pub fn still(&self, now: Instant) -> Option<Plan> {
@@ -684,8 +695,15 @@ impl Picture {
             .is_none_or(|(bytes, kbps)| bytes * 8.0 <= 300.0 * kbps)
     }
 
+    fn sharp_congestion_expiry(&self, now: Instant) -> Option<Instant> {
+        if self.clear_ticks_needed == 0 {
+            return None;
+        }
+        capacity_expiry(self.last_congested?.0, now)
+    }
+
     fn sharp_budget(&self, now: Instant) -> Option<(u8, Duration)> {
-        let cap = if self.clear_ticks_needed > 0 {
+        let cap = if self.sharp_congestion_expiry(now).is_some() {
             self.return_capacity_kbps(now)
         } else {
             self.capacity_kbps(now)
@@ -831,7 +849,7 @@ impl Picture {
         if reset {
             // The reset already cast this interval's link vote.
             self.queue_high = link.queue_ms > 150;
-        } else if let Some((to, why)) = self.link_step(now, &link, congested, severe) {
+        } else if let Some((to, why)) = self.link_step(now, &link, fps, congested, severe) {
             moves.push(self.apply(now, Source::Link, to, why));
         }
         if self.cfg.cpu_guard {
@@ -981,6 +999,7 @@ impl Picture {
         &mut self,
         now: Instant,
         link: &Link,
+        fps: f32,
         congested: bool,
         severe: bool,
     ) -> Option<(usize, Why)> {
@@ -1030,11 +1049,12 @@ impl Picture {
         }
         self.link.pressure = 0;
         // Small updates can drain on a link that would still queue a swipe.
+        let min_motion_frames = ((fps / 3.0) as usize).clamp(1, 5);
         if at == 0
             || at > cap
             || link.queue_ms >= 40
             || link.delivered_kbps == 0.0
-            || self.work.len() < 5
+            || self.work.len() < min_motion_frames
         {
             return None;
         }
@@ -2012,8 +2032,11 @@ mod tests {
         full.big = false;
         full.bytes = 160_000;
         p.encoded(quiet, full);
-        let first_ack = at(quiet, 11);
-        assert_eq!(p.deadline(first_ack), None, "sharpening waits for recovery");
+        let first_ack = at(quiet, 1);
+        assert!(
+            p.still(first_ack).is_none(),
+            "the recent jam limits sharpening"
+        );
         // After the queue drains, sharpening can use the fast peak while the
         // latest probe still holds motion at half size.
         let next = at(first_ack, 1);
@@ -2139,6 +2162,80 @@ mod tests {
                 (14, Scale::Full, 24.0, 30.0)
             ]
         );
+    }
+
+    #[test]
+    fn tests_that_quality_recovers_at_two_fps() {
+        let t = Instant::now();
+        let mut p = Picture::new(
+            Config {
+                max_fps: 2.0,
+                ..cfg()
+            },
+            WIDTH,
+            ROWS,
+            t,
+        );
+        for n in 1..=3 {
+            p.tick(
+                at(t, n),
+                Link {
+                    blocked: 0.6,
+                    ..active(2)
+                },
+                Cpu::default(),
+            );
+        }
+        assert_eq!(p.crf(), 30.0);
+
+        for (i, crf) in [30.0, 28.0, 28.0, 26.0, 26.0, 24.0].into_iter().enumerate() {
+            let now = at(t, 4 + i as u64);
+            sized_motion(&mut p, now, 10_000, 2);
+            p.tick(now, active(2), Cpu::default());
+            assert_eq!((p.fps(), p.crf()), (2.0, crf));
+        }
+    }
+
+    #[test]
+    fn tests_that_the_motion_gate_is_unchanged_at_fifteen_and_thirty_fps() {
+        let t = Instant::now();
+        for (max_fps, paced_fps) in [(20.0, 15.0), (60.0, 30.0)] {
+            let mut p = Picture::new(Config { max_fps, ..cfg() }, WIDTH, ROWS, t);
+            p.tick(t, jam(), Cpu::default());
+            assert_eq!(p.fps(), paced_fps);
+            for (i, frames) in [4, 4, 4, 5, 5, 5].into_iter().enumerate() {
+                let now = at(t, i as u64 + 1);
+                sized_motion(&mut p, now, 10_000, frames);
+                p.tick(now, active(frames as u32), Cpu::default());
+                assert_eq!(p.fps(), if i == 5 { max_fps } else { paced_fps });
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_a_ten_fps_cpu_limit_needs_three_motion_frames_for_link_recovery() {
+        let t = Instant::now();
+        let mut p = Picture::new(
+            Config {
+                adaptive_size: false,
+                ..cfg()
+            },
+            WIDTH,
+            ROWS,
+            t,
+        );
+        for n in 1..=5 {
+            let now = at(t, n);
+            motion(&mut p, now, Scale::Full, 70);
+            p.tick(now, if n == 5 { jam() } else { active(6) }, Cpu::default());
+        }
+        assert_eq!((p.fps(), p.crf()), (10.0, 26.0));
+        for (i, frames) in [2, 3, 3].into_iter().enumerate() {
+            let now = at(t, 6 + i as u64);
+            sized_motion(&mut p, now, 10_000, frames);
+            p.tick(now, active(10), Cpu::default());
+            assert_eq!(p.crf(), if i == 2 { 24.0 } else { 26.0 });
+        }
     }
 
     #[test]
@@ -3118,6 +3215,76 @@ mod tests {
             Some(21),
             "at 1 Mb/s, QP 20 needs 317 ms and QP 21 needs 283 ms"
         );
+    }
+
+    #[test]
+    fn tests_that_a_still_screen_sharpens_after_congestion_expires() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        p.encoded(
+            t,
+            Encoded {
+                key: true,
+                ..frame(Scale::Full, 10)
+            },
+        );
+        let jammed = at(t, 1);
+        p.tick(
+            jammed,
+            Link {
+                delivered_kbps: 1000.0,
+                ..jam()
+            },
+            Cpu::default(),
+        );
+        let expiry = at(jammed, 10);
+        let retry = p
+            .deadline(jammed)
+            .expect("a still screen must wake when congestion expires");
+        assert!(retry >= expiry && retry <= expiry + Duration::from_millis(1));
+
+        for n in 1..=9 {
+            let now = at(jammed, n);
+            p.tick(now, Link::default(), Cpu::default());
+            assert!(p.still(now).is_none());
+            assert_eq!(p.deadline(now), Some(retry));
+        }
+        assert!(p.still(expiry - Duration::from_nanos(1)).is_none());
+        let sharp = p
+            .still(retry)
+            .expect("the settle frame fits the default 8 Mb/s budget");
+        assert_eq!(sharp.sharp_qp, Some(18));
+        send(&mut p, retry, sharp);
+        assert_eq!(p.deadline(retry), None);
+    }
+
+    #[test]
+    fn tests_that_a_newer_slow_probe_delays_the_sharp_retry() {
+        let t = Instant::now();
+        for (bytes, expected_qp) in [(100_000, Some(18)), (400_000, None)] {
+            let mut p = picture(t);
+            p.encoded(
+                t,
+                Encoded {
+                    key: true,
+                    bytes,
+                    ..frame(Scale::Full, 10)
+                },
+            );
+            p.tick(t, jam(), Cpu::default());
+            capacity(&mut p, at(t, 5), 500.0);
+
+            let after_jam = at(t, 11);
+            assert!(p.still(after_jam).is_none());
+            let retry = p.deadline(after_jam).expect("the newer probe also expires");
+            assert!(retry >= at(t, 15));
+            let plan = p.still(retry);
+            assert_eq!(plan.and_then(|plan| plan.sharp_qp), expected_qp);
+            if let Some(plan) = plan {
+                send(&mut p, retry, plan);
+            }
+            assert_eq!(p.deadline(retry), None);
+        }
     }
 
     #[test]
