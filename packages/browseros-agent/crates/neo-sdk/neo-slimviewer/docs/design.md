@@ -16,9 +16,10 @@ the floor, a congested link raises the quantizer by up to two per step, to
 three or more large, full-size, non-key frames let the link estimate their mean
 size at the quality limit. The link jumps to that limit if the mean frame takes
 over 300 ms to deliver or if those frames at the interval's pace need more than
-twice the link rate. The rate check uses the higher of measured delivery and the
-capacity estimate for a full-size return, when available. The same checks at the
-limit select half size.
+1.5 times that second's delivered bitrate. If delivery drops below half the
+previous congested second's rate and that sample is at most three seconds old,
+the bitrate comparison uses the previous rate. The same checks at the limit
+select half size.
 Two consecutive congested seconds without delivery can also accelerate the steps.
 A late queue alone takes the usual quality steps. At the limit, two consecutive
 congested seconds with a median ACK delay over 300 ms above the pacing RTT floor
@@ -30,11 +31,12 @@ Recovery takes one step at a time. To raise quality or frame rate, the link need
 clean seconds with at least five large, non-key motion frames each. Small updates
 between swipes preserve any clean seconds already earned. A return to full-size
 motion must also fit the link's 300 ms keyframe budget. Burst probes subtract
-the lowest RTT seen in the preceding five minutes. After congestion, both the
-keyframe budget and the motion-rate check cap the latest probe at the measured
-congested delivery rate. If half-size frames are too small to probe, the last
-measurement still applies. Two consecutive uncongested seconds with delivery and
-a median ACK delay less than 40 ms above the base RTT release these limits.
+the lowest RTT seen in the preceding five minutes. After congestion, the link
+caps the latest probe at the measured congested delivery rate to price the
+keyframe and the sustained bitrate of a full-size return. If half-size frames
+are too small to probe, the last measurement still applies. Two consecutive
+uncongested seconds with delivery and a median ACK delay less than 40 ms above
+the base RTT release these limits.
 After 20 seconds without congestion, one such second suffices. Fresh probes
 continue to price full-size returns.
 If the full key exceeds that budget, a full second without a change allows a

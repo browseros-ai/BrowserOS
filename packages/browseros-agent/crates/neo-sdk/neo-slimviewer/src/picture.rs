@@ -334,13 +334,14 @@ pub struct Picture {
     /// An asynchronous reset reports the last complete interval's measurements.
     facts: Facts,
     last_pressure: Option<Instant>,
-    last_congested: Option<Instant>,
+    last_congested: Option<(Instant, f32)>,
     /// Zero once near-base ACKs have released the jam's return-rate limits.
     clear_ticks_needed: u8,
     last_full: Option<Instant>,
     backoff: Duration,
     capacity: VecDeque<(Instant, f32)>,
     last_probe: Option<(Instant, f32)>,
+    /// Full-size returns keep the last nonzero delivery through a stall.
     last_congested_kbps: Option<f32>,
     last_delivery: Option<(Instant, f64)>,
     demand_kbps: Option<f32>,
@@ -773,15 +774,15 @@ impl Picture {
             .reduce(f32::max)
     }
 
-    fn mark_congested(&mut self, now: Instant) {
-        self.last_congested = Some(now);
+    fn mark_congested(&mut self, now: Instant, delivered_kbps: f32) {
+        self.last_congested = Some((now, delivered_kbps));
         self.clear_ticks_needed = 2;
     }
 
     /// Price the forced key immediately. The next complete interval measures this stall.
     pub fn window_reset(&mut self, now: Instant) -> Option<Move> {
         self.reset_since_tick = true;
-        self.mark_congested(now);
+        self.mark_congested(now, 0.0);
         self.link_pressure(now, Why::Reset)
             .map(|(to, why)| self.apply(now, Source::Link, to, why))
     }
@@ -920,11 +921,16 @@ impl Picture {
         // Slower scroll frames carry more new rows, so bytes per second stay roughly
         // constant. Pricing high-fps frames at the floor fps underestimates demand.
         let cap_demand_kbps = cap_bytes * 8.0 * fps / 1000.0;
-        // A swipe can start mid-tick, before a full second of ACKs has arrived.
-        let available_kbps = link
-            .delivered_kbps
-            .max(self.return_capacity_kbps(now).unwrap_or(0.0));
-        cap_bytes * 8.0 > 300.0 * link.delivered_kbps || cap_demand_kbps > 2.0 * available_kbps
+        // A swipe can start mid-tick. Cover one delivery dip with the preceding
+        // congested tick's actual rate, so a sustained slowdown still counts.
+        let available_kbps = self
+            .last_congested
+            .filter(|&(at, previous)| {
+                now.saturating_duration_since(at) <= Duration::from_secs(3)
+                    && link.delivered_kbps < 0.5 * previous
+            })
+            .map_or(link.delivered_kbps, |(_, previous)| previous);
+        cap_bytes * 8.0 > 300.0 * link.delivered_kbps || cap_demand_kbps > 1.5 * available_kbps
     }
 
     fn observe_link(&mut self, now: Instant, link: &Link, congested: bool) {
@@ -938,7 +944,7 @@ impl Picture {
             self.capacity.pop_front();
         }
         if congested {
-            self.mark_congested(now);
+            self.mark_congested(now, link.delivered_kbps);
             if link.delivered_kbps > 0.0 {
                 self.capacity.push_back((now, link.delivered_kbps));
                 self.last_congested_kbps = Some(link.delivered_kbps);
@@ -952,10 +958,9 @@ impl Picture {
                     link.delivered_kbps > 0.0 && link.base_queue_ms.is_some_and(|ms| ms < 40);
                 self.clear_ticks_needed = if !drained {
                     2
-                } else if self
-                    .last_congested
-                    .is_some_and(|at| now.saturating_duration_since(at) >= STALE_CAPACITY_AFTER_JAM)
-                {
+                } else if self.last_congested.is_some_and(|(at, _)| {
+                    now.saturating_duration_since(at) >= STALE_CAPACITY_AFTER_JAM
+                }) {
                     0
                 } else {
                     self.clear_ticks_needed - 1
@@ -964,7 +969,7 @@ impl Picture {
             self.link_kbps += self.link_kbps / 10;
             if self
                 .last_congested
-                .is_none_or(|at| now.saturating_duration_since(at) >= Duration::from_secs(30))
+                .is_none_or(|(at, _)| now.saturating_duration_since(at) >= Duration::from_secs(30))
             {
                 self.backoff = Duration::from_secs(2);
             }
@@ -993,7 +998,7 @@ impl Picture {
             && now.saturating_duration_since(self.link.since) >= self.backoff
             && self
                 .last_congested
-                .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(2))
+                .is_none_or(|(at, _)| now.saturating_duration_since(at) >= Duration::from_secs(2))
             && self
                 .return_capacity_kbps(now)
                 .zip(self.demand_kbps)
@@ -1587,13 +1592,14 @@ mod tests {
     #[test]
     fn tests_that_the_rate_test_uses_three_frames_and_the_mean_at_the_paced_fps() {
         let t = Instant::now();
-        // At 30 fps, a 50 kB mean at base quality needs exactly 6 Mb/s at the cap.
+        // At 30 fps, a 37.5 kB mean needs exactly 1.5 times the 3 Mb/s delivery at the cap.
         for (samples, why) in [
             (&[110_000, 110_000][..], Why::Congested),
-            (&[30_000, 50_000, 70_000], Why::Congested),
-            (&[30_000, 50_000, 70_003], Why::Severe),
+            (&[25_000, 37_500, 50_000], Why::Congested),
+            (&[25_000, 37_500, 50_003], Why::Severe),
         ] {
             let mut p = picture(t);
+            capacity(&mut p, t, 12_000.0);
             for &bytes in samples {
                 sized_motion(&mut p, t, bytes, 1);
             }
@@ -1603,19 +1609,28 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_rate_test_uses_the_higher_of_delivery_and_return_capacity() {
+    fn tests_that_only_a_recent_congested_tick_covers_a_delivery_dip() {
         let t = Instant::now();
-        // A 60 kB scroll frame at 30 fps needs 7.2 Mb/s after the +6 CRF step.
-        for (probe_kbps, delivered_kbps, why) in [
-            (4000.0, 3000.0, Why::Congested),
-            (3000.0, 4000.0, Why::Congested),
-            (3000.0, 3000.0, Why::Severe),
+        // At 20 fps, 35 kB frames need 2.8 Mb/s at the cap.
+        for (age_ms, delivered_kbps, bytes, why) in [
+            (3000, 1499.0, 35_000, Why::Congested),
+            (3001, 1499.0, 35_000, Why::Severe),
+            (1000, 1500.0, 35_000, Why::Severe),
+            // One 20 kB frame at the cap takes 320 ms at this tick's delivery.
+            (1000, 500.0, 40_000, Why::Severe),
         ] {
             let mut p = picture(t);
-            capacity(&mut p, t, 8000.0); // An older, faster burst is still in the probe window.
-            let now = at(t, 1);
-            capacity(&mut p, now, probe_kbps);
-            sized_motion(&mut p, now, 60_000, 3);
+            p.tick(t, jam(), Cpu::default());
+            p.tick(
+                t + Duration::from_millis(500),
+                Link {
+                    delivered_kbps: 750.0,
+                    ..active(20)
+                },
+                Cpu::default(),
+            );
+            let now = t + Duration::from_millis(age_ms);
+            sized_motion(&mut p, now, bytes, 3);
             let moves = p.tick(
                 now,
                 Link {
@@ -1627,8 +1642,32 @@ mod tests {
             assert_eq!(
                 moves.first().map(|m| m.why),
                 Some(why),
-                "{probe_kbps} kb/s probe, {delivered_kbps} kb/s delivered"
+                "{age_ms} ms since congestion, {delivered_kbps} kb/s delivered"
             );
+        }
+    }
+
+    #[test]
+    fn tests_that_a_second_slow_tick_uses_the_previous_actual_delivery() {
+        let t = Instant::now();
+        for first_dip in [0.0, 500.0] {
+            let mut p = picture(t);
+            p.tick(t, jam(), Cpu::default());
+            for (n, delivered_kbps, why) in
+                [(1, first_dip, Why::Congested), (2, 500.0, Why::Severe)]
+            {
+                let now = at(t, n);
+                sized_motion(&mut p, now, 20_000, 3);
+                let moves = p.tick(
+                    now,
+                    Link {
+                        delivered_kbps,
+                        ..jam()
+                    },
+                    Cpu::default(),
+                );
+                assert_eq!(moves.first().map(|m| m.why), Some(why), "tick {n}");
+            }
         }
     }
 
@@ -2666,14 +2705,11 @@ mod tests {
         motion(&mut p, at(t, 2), Scale::Full, 35);
         let moves = p.tick(at(t, 2), jam(), Cpu::default());
         assert_eq!(moves.len(), 2);
-        assert_eq!(
-            (moves[0].source, moves[0].why),
-            (Source::Link, Why::Congested)
-        );
+        assert_eq!((moves[0].source, moves[0].why), (Source::Link, Why::Severe));
         assert_eq!((moves[1].source, moves[1].why), (Source::Cpu, Why::Work));
         assert_eq!(
             moves[0].to_string(),
-            "source=link from=0 to=1 fps=20 crf=24 scale=full why=congested blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=8 busy_ms=400 grabs=8"
+            "source=link from=0 to=5 fps=15 crf=30 scale=full why=severe blocked=60 queue_ms=250 offered_kbps=9600 delivered_kbps=3000 work_ms=35 stolen=0 frames=8 busy_ms=400 grabs=8"
         );
     }
 

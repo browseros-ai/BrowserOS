@@ -2752,8 +2752,8 @@ mod tests {
     }
 
     struct PacedCell {
-        kbps: u64,
-        rtt_ms: u64,
+        /// Serial bitrate (kb/s) and round-trip delay (ms) by elapsed second.
+        path: fn(u64) -> (u64, u64),
         jitter_ms: u64,
         motion_kbps: u64,
         key_bytes: usize,
@@ -2766,8 +2766,7 @@ mod tests {
     impl Default for PacedCell {
         fn default() -> Self {
             Self {
-                kbps: 3000,
-                rtt_ms: 30,
+                path: |_| (3000, 30),
                 jitter_ms: 0,
                 motion_kbps: 9600,
                 key_bytes: 40_000,
@@ -2775,6 +2774,24 @@ mod tests {
                 initial_queue_ms: 0,
                 changed_rows: 1200,
                 input_every_ms: None,
+            }
+        }
+    }
+
+    impl PacedCell {
+        fn transmit(&self, start: Duration, bytes: usize) -> Duration {
+            let mut at = start;
+            // One kb/s carries one millibit per microsecond.
+            let mut millibits = bytes as u64 * 8000;
+            loop {
+                let (kbps, _) = (self.path)(at.as_secs());
+                let boundary = Duration::from_secs(at.as_secs() + 1);
+                let available = (boundary - at).as_micros() as u64 * kbps;
+                if millibits <= available {
+                    return at + Duration::from_micros(millibits / kbps);
+                }
+                millibits -= available;
+                at = boundary;
             }
         }
     }
@@ -2800,12 +2817,11 @@ mod tests {
         let mut t = Instant::now();
         if cell.initial_queue_ms > 0 {
             // Replay a queue already old enough to have raised the short ACK floor.
-            owner.rtt.push(cell.rtt_ms as u32, t);
+            let (_, rtt_ms) = (cell.path)(0);
+            owner.rtt.push(rtt_ms as u32, t);
             for _ in 0..12 {
                 t += Duration::from_secs(1);
-                owner
-                    .rtt
-                    .push((cell.rtt_ms + cell.initial_queue_ms) as u32, t);
+                owner.rtt.push((rtt_ms + cell.initial_queue_ms) as u32, t);
             }
         }
         let mut p = full_picture(t, width, height);
@@ -2922,11 +2938,11 @@ mod tests {
                     full_return && key,
                 );
                 v.needs_key = false;
-                link_free =
-                    link_free.max(now) + Duration::from_micros(size as u64 * 8000 / cell.kbps);
+                link_free = t + cell.transmit(link_free.max(now) - t, size);
+                let (_, rtt_ms) = (cell.path)((link_free - t).as_secs());
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 let jitter = (u64::from(seed) * 2 * cell.jitter_ms) >> 32;
-                let path_delay = Duration::from_millis(cell.rtt_ms - cell.jitter_ms + jitter);
+                let path_delay = Duration::from_millis(rtt_ms - cell.jitter_ms + jitter);
                 // The frame can be drawn after the forward leg. TCP preserves its order.
                 let received = link_free - t + path_delay / 2;
                 let received = trace
@@ -2956,7 +2972,7 @@ mod tests {
     fn tests_that_threefold_jam_uses_offered_demand_before_window_throttling() {
         let trace = paced_picture(10, PacedCell::default());
         assert!(trace.ticks[0].sent < 9600.0 && trace.ticks[0].delivered < 9600.0);
-        assert_eq!((trace.ticks[0].fps, trace.ticks[0].crf), (20.0, 24.0));
+        assert_eq!((trace.ticks[0].fps, trace.ticks[0].crf), (15.0, 30.0));
         assert!(
             trace.ticks[..8]
                 .iter()
@@ -2971,7 +2987,7 @@ mod tests {
         let trace = paced_picture(
             30,
             PacedCell {
-                kbps: 300,
+                path: |_| (300, 30),
                 key_bytes: 150_000,
                 motion_kbps: 960,
                 ..PacedCell::default()
@@ -3016,7 +3032,7 @@ mod tests {
         let trace = paced_picture(
             end.as_secs(),
             PacedCell {
-                rtt_ms: 70,
+                path: |_| (3000, 70),
                 initial_queue_ms: 100,
                 key_bytes: 880_000,
                 first_two_ack_floor_ms: 3100,
@@ -3145,8 +3161,7 @@ mod tests {
         let trace = paced_screen(
             end.as_secs(),
             &PacedCell {
-                kbps: 3000,
-                rtt_ms: 100,
+                path: |_| (3000, 100),
                 jitter_ms: 20,
                 ..PacedCell::default()
             },
@@ -3203,29 +3218,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tests_that_wikipedia_scroll_at_30_fps_reaches_half_on_the_second_congested_tick() {
-        let end = Duration::from_secs(20);
+    fn wikipedia_scroll(seconds: u64, scrolling: impl Fn(u64) -> bool) -> PacedTrace {
         let height = 844 * 2;
-        let trace = paced_screen(
-            end.as_secs(),
+        paced_screen(
+            seconds,
             &PacedCell {
-                kbps: 3000,
-                rtt_ms: 100,
+                // The key probes the bare 60 ms tunnel before cellular shaping adds 100 ms.
+                path: |second| match second {
+                    0 => (24_000, 60),
+                    // Periodic contention still fills the link during half-size swipes.
+                    s if s >= 6 && matches!(s % 6, 3 | 4) => (1000, 160),
+                    _ => (3000, 160),
+                },
                 jitter_ms: 20,
-                key_bytes: 20_000,
+                // Fly's 390 px article produced roughly 60 kB half-size keys at the cap.
+                key_bytes: 480_000,
+                input_every_ms: Some(420),
                 ..PacedCell::default()
             },
             (390 * 2, height),
             |ms, p| {
-                if ms < 1_900 {
+                if ms < 1_900 || !scrolling(ms - 1_900) {
                     return (height / 10, 2_000.0);
                 }
                 // A steady scroll exposes more new rows per frame as the cadence drops.
                 let bytes = 70_000.0 * 30.0 / p.fps() * 2.0_f32.powf((24.0 - p.crf()) / 6.0);
                 (height, bytes)
             },
-        );
+        )
+    }
+
+    #[test]
+    fn tests_that_wikipedia_scroll_at_30_fps_reaches_half_on_the_second_congested_tick() {
+        let end = Duration::from_secs(20);
+        let trace = wikipedia_scroll(end.as_secs(), |_| true);
         assert!(trace.resets.is_empty());
         assert!(
             trace.ticks[..2]
@@ -3248,6 +3274,48 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_repeated_text_swipes_stay_at_half_on_a_congested_link() {
+        let end = Duration::from_secs(62); // 60 seconds of swipes after the warmup.
+        let trace = wikipedia_scroll(end.as_secs(), |ms| ms % 420 < 300);
+        let first_half = trace
+            .ticks
+            .iter()
+            .position(|tick| tick.scale == Scale::Half)
+            .expect("text swipes must engage half size");
+        assert!(
+            first_half < 4,
+            "half size first selected on tick {}",
+            first_half + 1
+        );
+        let ticks = &trace.ticks[first_half..];
+        assert!(ticks.iter().all(|t| t.scale == Scale::Half));
+        assert!(
+            ticks
+                .windows(2)
+                .any(|pair| pair.iter().all(|t| !link_full(t.blocked))),
+            "lighter intervals must give the ladder a chance to climb"
+        );
+        assert!(
+            ticks
+                .windows(20)
+                .all(|span| span.iter().any(|t| link_full(t.blocked))),
+            "congestion must recur within the 20-second recovery window"
+        );
+        let first_half_frame = trace
+            .frames
+            .iter()
+            .position(|f| f.scale == Scale::Half)
+            .expect("the viewer must receive half-size frames");
+        assert!(
+            trace.frames[first_half_frame..]
+                .iter()
+                .all(|f| f.scale == Scale::Half)
+        );
+        let gap = trace.max_draw_gap(end);
+        assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
+    }
+
+    #[test]
     fn tests_that_a_standing_noise_jam_keeps_drawing_at_half_size() {
         let end = Duration::from_secs(60);
         // At the quality cap these keys are 330 and 440 kB. Half-size motion
@@ -3256,8 +3324,7 @@ mod tests {
             let trace = paced_picture(
                 end.as_secs(),
                 PacedCell {
-                    kbps: 3000,
-                    rtt_ms: 70,
+                    path: |_| (3000, 70),
                     initial_queue_ms: 1140,
                     key_bytes,
                     motion_kbps: 12_800,
@@ -3323,7 +3390,7 @@ mod tests {
             let trace = paced_picture(
                 60,
                 PacedCell {
-                    rtt_ms: 100,
+                    path: |_| (3000, 100),
                     jitter_ms: 20,
                     motion_kbps,
                     ..PacedCell::default()
@@ -3349,8 +3416,11 @@ mod tests {
         let trace = paced_screen(
             seconds,
             &PacedCell {
-                kbps: 3000,
-                rtt_ms: 100 + 60,
+                path: |second| match second % 24 {
+                    2 => (1600, 160),
+                    3 => (500, 160),
+                    _ => (3000, 160),
+                },
                 jitter_ms: 20,
                 key_bytes: 100_000,
                 input_every_ms: Some(420),
@@ -3358,18 +3428,33 @@ mod tests {
             },
             (430 * 2, height),
             |ms, p| {
-                // Swipes cross the one-second tick boundary. At 30 fps the heavy
-                // and light parts average 10 kB/frame (2.4 Mb/s) over six seconds.
-                let phase = (ms + 500) % 9_000;
-                if phase >= 6_000 {
+                // Two seconds at 15 kB, nine at 10 kB and one between swipes
+                // average 2.4 Mb/s at 30 fps, before the ACK window throttles sends.
+                let phase = (ms + 500) % 12_000;
+                if phase >= 11_000 {
                     return (height / 10, 250.0);
                 }
-                let base_bytes = if phase < 1_500 { 34_000.0 } else { 2_000.0 };
-                (
-                    height,
-                    base_bytes * 30.0 / p.fps() * 2.0_f32.powf((24.0 - p.crf()) / 6.0),
-                )
+                let base_bytes = if (3_000..5_000).contains(&phase) {
+                    15_000.0
+                } else {
+                    10_000.0
+                };
+                (height, base_bytes * 2.0_f32.powf((24.0 - p.crf()) / 6.0))
             },
+        );
+        let dip = trace
+            .ticks
+            .windows(2)
+            .find(|pair| {
+                pair.iter().all(|t| link_full(t.blocked))
+                    && (1500.0..=3000.0).contains(&pair[0].delivered)
+                    && (400.0..=650.0).contains(&pair[1].delivered)
+            })
+            .expect("expected a congested delivery dip near 0.5 Mb/s after a normal tick");
+        assert_eq!(
+            (dip[1].fps, dip[1].crf),
+            (15.0, 24.0),
+            "the dip should only lower fps"
         );
         assert!(
             trace
