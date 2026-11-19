@@ -6,7 +6,7 @@
 //!   always the latest screen, so a slow link drops states at the source instead of queueing them.
 //!   It allows for the ack jitter seen lately (up to 150 ms): on a phone that is mostly radio
 //!   jitter, not a queue.
-//! - Picture policy owns frame rate, quality, size and sharpening. This loop supplies measured work,
+//! - Picture policy owns quality, size and sharpening. This loop supplies measured work,
 //!   input, acknowledgments and CPU counters, then applies its decisions.
 
 use std::collections::VecDeque;
@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::capture::{Capture, GrabError};
-use crate::encoder::{ENCODER_FPS, Encoder, Settings};
+use crate::encoder::{Encoder, Settings};
 #[cfg(test)]
 use crate::picture::link_full;
 use crate::picture::{self, Picture, Plan, Scale, Work};
@@ -48,7 +48,7 @@ pub struct Config {
     pub max_fps: f32,
     pub sharpen_qp: u8,
     pub sharpen_after: Duration,
-    /// Maximum quantizer increase at the frame-rate floor before the link can use half size.
+    /// How far the quality may drop below `encoder.crf` on a slow link.
     pub crf_range: f32,
     pub cpu_guard: bool,
     pub adaptive_size: bool,
@@ -75,11 +75,7 @@ pub struct Viewer {
     unacked_since: Option<Instant>,
     needs_key: bool,
     burst_grace: bool,
-    rtt: Box<AckDelays>,
-    sent_frames: u32,
-    sent_bytes: u64,
-    sent_full_frames: u32,
-    sent_full_bytes: u64,
+    rtt: AckDelays,
     acked_bytes: u64,
     delays_ms: Vec<u32>,
     probes: Vec<(usize, Duration, Duration)>,
@@ -167,11 +163,7 @@ impl Viewer {
             unacked_since: None,
             needs_key: true,
             burst_grace: true,
-            rtt: Box::new(AckDelays::new()),
-            sent_frames: 0,
-            sent_bytes: 0,
-            sent_full_frames: 0,
-            sent_full_bytes: 0,
+            rtt: AckDelays::new(),
             acked_bytes: 0,
             delays_ms: Vec::new(),
             probes: Vec::new(),
@@ -275,45 +267,12 @@ impl Viewer {
         self.burst_grace = true;
     }
 
-    fn record_frame(&mut self, frame: Sent, scale: Scale, full_return: bool) {
+    fn record_frame(&mut self, frame: Sent, full_return: bool) {
         if full_return {
             self.burst_grace = true;
         }
-        self.sent_frames += 1;
-        self.sent_bytes += frame.bytes as u64;
-        if scale == Scale::Full {
-            self.sent_full_frames += 1;
-            self.sent_full_bytes += frame.bytes as u64;
-        }
         self.unacked_since.get_or_insert(frame.at);
         self.inflight.push_back(frame);
-    }
-
-    fn link_sample(&mut self, elapsed: f32) -> picture::Link {
-        self.delays_ms.sort_unstable();
-        let rtt_ms = self.rtt.get().as_millis() as u32;
-        let median_ms = self.delays_ms.get(self.delays_ms.len() / 2);
-        let kbps = |bytes: u64| bytes as f32 * 8.0 / 1000.0 / elapsed;
-        picture::Link {
-            elapsed,
-            frames: self.sent_frames,
-            mean_full_bytes: (self.sent_full_frames > 0)
-                .then(|| self.sent_full_bytes as f32 / self.sent_full_frames as f32),
-            sent_kbps: kbps(self.sent_bytes),
-            delivered_kbps: kbps(self.acked_bytes),
-            queue_ms: median_ms.map_or(0, |ms| ms.saturating_sub(rtt_ms)),
-            base_queue_ms: median_ms.map(|ms| ms.saturating_sub(self.rtt.base_ms())),
-            ..picture::Link::default()
-        }
-    }
-
-    fn clear_interval(&mut self) {
-        self.sent_frames = 0;
-        self.sent_bytes = 0;
-        self.sent_full_frames = 0;
-        self.sent_full_bytes = 0;
-        self.acked_bytes = 0;
-        self.delays_ms.clear();
     }
 
     fn queue(&self, record: Arc<[u8]>) -> bool {
@@ -375,11 +334,11 @@ impl Viewer {
             }
             if f.seq == seq {
                 let delay = now.saturating_duration_since(f.at);
-                let ms = delay.as_millis() as u32;
-                let base_rtt = self.rtt.push(ms, now);
                 if f.burst {
-                    self.probes.push((f.bytes, delay, base_rtt));
+                    self.probes.push((f.bytes, delay, self.rtt.get()));
                 }
+                let ms = delay.as_millis() as u32;
+                self.rtt.push(ms, now);
                 self.delays_ms.push(ms);
             }
             self.inflight.pop_front();
@@ -516,7 +475,7 @@ fn frame_plan(
     let plan = picture.plan(now, band);
     if needs_key {
         Plan {
-            scale: picture.motion_scale(),
+            scale: picture.scale(),
             sharp_qp: None,
         }
     } else {
@@ -529,23 +488,21 @@ fn acknowledge(viewers: &mut [Viewer], picture: &mut Picture, id: u64, seq: u32,
     if let Some(viewer) = viewers.iter_mut().find(|viewer| viewer.id == id) {
         viewer.on_ack(seq, now);
         // This ACK may open the window for a sharp frame in the same loop pass.
-        for (bytes, delay, base_rtt) in viewer.probes.drain(..) {
+        for (bytes, delay, rtt) in viewer.probes.drain(..) {
             if pacer == Some(id) {
-                picture.probe(now, bytes, delay, base_rtt);
+                picture.probe(now, bytes, delay, rtt);
             }
         }
     }
 }
 
-/// The pacing window uses the last 5–10 s of ACKs. Probes and jam recovery use five minutes.
+/// ACK floor and spread over the last 5–10 s (two rotating windows).
 struct AckDelays {
     cur: u32,
     prev: u32,
     cur_max: u32,
     prev_max: u32,
     since: Instant,
-    /// Increasing delays. A newer, shorter ACK outlives every larger one before it.
-    base_minima: VecDeque<(Instant, u32)>,
 }
 
 impl AckDelays {
@@ -556,11 +513,9 @@ impl AckDelays {
             cur_max: 0,
             prev_max: 0,
             since: Instant::now(),
-            base_minima: VecDeque::new(),
         }
     }
-    /// Return the base RTT before this ACK, so a key never subtracts its own transfer.
-    fn push(&mut self, ms: u32, now: Instant) -> Duration {
+    fn push(&mut self, ms: u32, now: Instant) {
         if now - self.since > Duration::from_secs(5) {
             (self.prev, self.cur, self.since) = (self.cur, ms, now);
             (self.prev_max, self.cur_max) = (self.cur_max, ms);
@@ -568,26 +523,6 @@ impl AckDelays {
             self.cur = self.cur.min(ms);
             self.cur_max = self.cur_max.max(ms);
         }
-        while self
-            .base_minima
-            .front()
-            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > Duration::from_mins(5))
-        {
-            self.base_minima.pop_front();
-        }
-        let base_ms = self.base_ms();
-        while self
-            .base_minima
-            .back()
-            .is_some_and(|&(_, delay)| delay >= ms)
-        {
-            self.base_minima.pop_back();
-        }
-        self.base_minima.push_back((now, ms));
-        Duration::from_millis(u64::from(base_ms))
-    }
-    fn base_ms(&self) -> u32 {
-        self.base_minima.front().map_or(50, |&(_, delay)| delay)
     }
     fn get(&self) -> Duration {
         let ms = self.cur.min(self.prev);
@@ -624,56 +559,6 @@ impl Trace {
             self.write(&mut io::stderr().lock(), now, fields);
         }
     }
-}
-
-/// Frame facts at the point the engine hands the encoded picture to the viewers.
-struct SendEvent<'a> {
-    seq: u32,
-    bytes: usize,
-    requested_key: bool,
-    key: bool,
-    plan: Plan,
-    encode: Duration,
-    picture: &'a Picture,
-}
-
-impl std::fmt::Display for SendEvent<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "event=send seq={} bytes={} requested_key={} key={} sharp={} scale={:?} encode_ms={:.3} crf={} fps={} qp=",
-            self.seq,
-            self.bytes,
-            self.requested_key,
-            self.key,
-            self.plan.sharp_qp.is_some(),
-            self.plan.scale,
-            self.encode.as_secs_f64() * 1000.0,
-            self.picture.crf(),
-            self.picture.fps()
-        )?;
-        match self.plan.sharp_qp {
-            Some(qp) => write!(f, "{qp}"),
-            None => f.write_str("-"),
-        }
-    }
-}
-
-fn log_rungs(out: &mut impl Write, moves: &[picture::Move]) {
-    for change in moves {
-        let _ = writeln!(out, "slimviewer: event=rung {change}");
-    }
-}
-
-fn vbv_kbps(picture: &Picture, scale: Scale) -> u32 {
-    if scale == Scale::Full {
-        return 0;
-    }
-    // The shims budget bytes per frame at fixed fps. Keep the measured link budget at the
-    // actual motion cadence, within the native signed bits-per-second limit.
-    (f64::from(picture.link_kbps()) * f64::from(ENCODER_FPS) / f64::from(picture.fps()))
-        .round()
-        .min(f64::from(i32::MAX / 1000)) as u32
 }
 
 enum FrameAction {
@@ -729,31 +614,6 @@ fn frame_deadline(
     )
 }
 
-/// Wall time spent in a condition between loop events. A running span survives a tick boundary.
-#[derive(Default)]
-struct ActiveTime {
-    since: Option<Instant>,
-    elapsed: Duration,
-}
-
-impl ActiveTime {
-    fn observe(&mut self, now: Instant, active: bool) {
-        if active {
-            self.since.get_or_insert(now);
-        } else if let Some(start) = self.since.take() {
-            self.elapsed += now - start;
-        }
-    }
-
-    fn take(&mut self, now: Instant) -> Duration {
-        if let Some(start) = self.since.as_mut() {
-            self.elapsed += now - *start;
-            *start = now;
-        }
-        std::mem::take(&mut self.elapsed)
-    }
-}
-
 struct Engine {
     cfg: Config,
     cap: Capture,
@@ -761,7 +621,6 @@ struct Engine {
     enc: Option<Encoder>,
     pic: I420,
     viewers: Vec<Viewer>,
-    pacer_id: Option<u64>,
     retiring: Vec<Retiring>,
     seq: u32,
     t0: Instant,
@@ -774,8 +633,8 @@ struct Engine {
     picture: Picture,
     /// When the oldest damage not yet in a sent frame arrived (for the damage→send log figure).
     damage_at: Option<Instant>,
-    blocked: ActiveTime,
-    busy: ActiveTime,
+    blocked: Duration,
+    blocked_since: Option<Instant>,
     window_reset: bool,
     tick_at: Instant,
     last_log: Option<Instant>,
@@ -786,7 +645,6 @@ struct Engine {
 
 #[derive(Default)]
 struct Stats {
-    damage_pending: bool,
     frames: u32,
     keys: u32,
     sharps: u32,
@@ -800,36 +658,48 @@ struct Stats {
     delayed: u32,
 }
 
-impl Stats {
-    fn link_sample(
-        &self,
-        pacer: Option<&mut Viewer>,
-        elapsed: f32,
-        blocked: f32,
-        busy: Duration,
-        damaged: bool,
-    ) -> picture::Link {
-        picture::Link {
-            grabs: self.grabs,
-            damage_pending: self.damage_pending || (damaged && pacer.is_some()),
-            blocked,
-            busy,
-            ..pacer.map_or_else(picture::Link::default, |v| v.link_sample(elapsed))
-        }
-    }
-}
-
-fn take_tick(now: Instant, due: &mut Instant) -> Option<f32> {
-    if now < *due {
-        return None;
-    }
-    let elapsed = Duration::from_secs(1) + (now - *due);
-    *due = now + Duration::from_secs(1);
-    Some(elapsed.as_secs_f32())
-}
-
 pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Result<(), String> {
-    let mut e = Engine::new(cfg, cap, input, Instant::now());
+    let now = Instant::now();
+    let mut e = Engine {
+        picture: Picture::new(
+            picture::Config {
+                base_crf: cfg.encoder.crf,
+                crf_range: cfg.crf_range,
+                sharpen_qp: cfg.sharpen_qp,
+                sharpen_after: cfg.sharpen_after,
+                max_fps: cfg.max_fps,
+                adaptive_size: cfg.adaptive_size,
+                cpu_guard: cfg.cpu_guard,
+            },
+            usize::from(cap.width & !1),
+            usize::from(cap.height & !1),
+            now,
+        ),
+        damage_at: None,
+        cfg,
+        pic: I420::new(usize::from(cap.width & !1), usize::from(cap.height & !1)),
+        cap,
+        input,
+        enc: None,
+        viewers: Vec::new(),
+        retiring: Vec::new(),
+        seq: 0,
+        t0: now,
+        trace: Trace::new(std::env::var("SLIMVIEWER_TRACE").ok().as_deref(), now),
+        damaged: true,
+        resized: false,
+        want_key: true,
+        last_send: now,
+        last_key: now,
+        blocked: Duration::ZERO,
+        blocked_since: None,
+        window_reset: false,
+        tick_at: now,
+        last_log: None,
+        throttled_usec: throttled_usec(),
+        cpu_times: cpu_times(),
+        stats: Stats::default(),
+    };
     loop {
         match events.recv_timeout(e.wait(Instant::now())) {
             Ok(ev) => e.on(ev)?,
@@ -845,50 +715,6 @@ pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Res
 }
 
 impl Engine {
-    fn new(cfg: Config, cap: Capture, input: Input, now: Instant) -> Self {
-        Self {
-            picture: Picture::new(
-                picture::Config {
-                    base_crf: cfg.encoder.crf,
-                    crf_range: cfg.crf_range,
-                    sharpen_qp: cfg.sharpen_qp,
-                    sharpen_after: cfg.sharpen_after,
-                    max_fps: cfg.max_fps,
-                    adaptive_size: cfg.adaptive_size,
-                    cpu_guard: cfg.cpu_guard,
-                },
-                usize::from(cap.width & !1),
-                usize::from(cap.height & !1),
-                now,
-            ),
-            damage_at: None,
-            cfg,
-            pic: I420::new(usize::from(cap.width & !1), usize::from(cap.height & !1)),
-            cap,
-            input,
-            enc: None,
-            viewers: Vec::new(),
-            pacer_id: None,
-            retiring: Vec::new(),
-            seq: 0,
-            t0: now,
-            trace: Trace::new(std::env::var("SLIMVIEWER_TRACE").ok().as_deref(), now),
-            damaged: true,
-            resized: false,
-            want_key: true,
-            last_send: now,
-            last_key: now,
-            blocked: ActiveTime::default(),
-            busy: ActiveTime::default(),
-            window_reset: false,
-            tick_at: now + Duration::from_secs(1),
-            last_log: None,
-            throttled_usec: throttled_usec(),
-            cpu_times: cpu_times(),
-            stats: Stats::default(),
-        }
-    }
-
     fn owner_id(&self) -> Option<u64> {
         self.viewers.iter().find(|v| !v.view_only).map(|v| v.id)
     }
@@ -922,30 +748,6 @@ impl Engine {
     fn pacer(&mut self) -> Option<&mut Viewer> {
         let i = pacer_index(&self.viewers)?;
         self.viewers.get_mut(i)
-    }
-
-    fn sync_pacer(&mut self) {
-        let index = pacer_index(&self.viewers);
-        let id = index.map(|i| self.viewers[i].id);
-        if id != self.pacer_id {
-            // A spectator becoming the pacer has counters from its old role. Start a fresh
-            // interval of link evidence without discarding the picture's current settings.
-            self.pacer_id = id;
-            self.picture.pacer_changed();
-            self.blocked = ActiveTime::default();
-            self.busy = ActiveTime::default();
-            self.window_reset = false;
-            self.stats.damage_pending = false;
-            if let Some(i) = index {
-                self.viewers[i].clear_interval();
-            }
-        }
-    }
-
-    fn observe_busy(&mut self, now: Instant) {
-        let interval = self.interval();
-        let ready = self.damaged && self.pacer().is_some_and(|p| p.open(now, interval));
-        self.busy.observe(now, ready);
     }
 
     fn on(&mut self, ev: Ev) -> Result<(), String> {
@@ -1025,8 +827,6 @@ impl Engine {
                 }
             }
         }
-        self.sync_pacer();
-        self.observe_busy(now);
         self.release_changed_owner(previous_owner)
     }
 
@@ -1066,8 +866,6 @@ impl Engine {
     fn step(&mut self) -> Result<(), String> {
         let previous_owner = self.owner_connection();
         self.stream_step()?;
-        // A completed grab consumes damage. Close its busy span before sleeping for more.
-        self.observe_busy(Instant::now());
         self.release_changed_owner(previous_owner)
     }
 
@@ -1075,23 +873,16 @@ impl Engine {
         let now = Instant::now();
         self.retiring.retain(|r| now < r.until);
         let reset = expire_viewers(&mut self.viewers, now);
-        self.sync_pacer();
         self.want_key |= reset;
         self.window_reset |= reset;
-        // Price the forced resync key before it is admitted, even between regular ticks.
-        if std::mem::take(&mut self.window_reset) {
-            let change = self.picture.window_reset(now);
-            self.apply_rate(change.as_slice());
-        }
-        if let Some(elapsed) = take_tick(now, &mut self.tick_at) {
-            self.tick(now, elapsed);
+        if now >= self.tick_at {
+            self.tick(now);
         }
         if self.viewers.is_empty() {
             self.trace
                 .log(now, format_args!("event=loop reason=no_viewer"));
             return Ok(());
         }
-        // Decide resync before planning the frame, when the requesting viewer can receive it.
         if now.saturating_duration_since(self.last_key) >= Duration::from_secs(1)
             && self
                 .viewers
@@ -1116,21 +907,26 @@ impl Engine {
             }
         }
         if self.enc.is_none() {
-            self.encoder(self.picture.motion_scale())?;
+            self.encoder(Scale::Full)?;
             self.cap.forget();
             self.damaged = true;
         }
         let interval = self.interval();
         let open = self.pacer().is_some_and(|p| p.open(now, interval));
-        self.stats.damage_pending |= self.damaged;
         let wants = self.damaged || self.want_key;
         let capacity = self.picture.capacity_kbps(now);
         let blocked = wants
             && self
                 .pacer()
                 .is_some_and(|p| p.link_blocked(now, interval, capacity));
-        self.blocked.observe(now, blocked);
-        self.busy.observe(now, self.damaged && open);
+        match (blocked, self.blocked_since) {
+            (true, None) => self.blocked_since = Some(now),
+            (false, Some(t)) => {
+                self.blocked += now - t;
+                self.blocked_since = None;
+            }
+            _ => {}
+        }
         let action = frame_action(&self.picture, now, self.last_send, wants, open);
         if self.trace.enabled {
             let reason = match action {
@@ -1179,7 +975,7 @@ impl Engine {
                     grab.as_secs_f64() * 1000.0,
                 ),
             );
-            let needs_key = self.want_key || self.pacer().is_some_and(|p| p.needs_key);
+            let needs_key = self.pacer().is_some_and(|p| p.needs_key);
             let plan = frame_plan(&mut self.picture, now, band, needs_key);
             let convert_at = Instant::now();
             if self.encoder(plan.scale)? {
@@ -1250,7 +1046,12 @@ impl Engine {
             return Ok(false);
         }
         self.enc = None;
-        let vbv = vbv_kbps(&self.picture, scale);
+        // Half size = a short link or CPU: cap its rate. Full size: none (sharp keyframes).
+        let vbv = if scale == Scale::Half {
+            self.picture.link_kbps()
+        } else {
+            0
+        };
         self.enc = Some(
             Encoder::open(w, h, &self.cfg.encoder, self.picture.crf(), vbv)
                 .ok_or("encoder refused the settings")?,
@@ -1274,7 +1075,10 @@ impl Engine {
         let qp = plan.sharp_qp;
         let full_return = self.picture.scale() == Scale::Half && plan.scale == Scale::Full;
         let owner_key = self.pacer().is_some_and(|viewer| viewer.needs_key);
-        let idr = self.want_key;
+        // A viewer that skipped a frame cannot decode the next ones; resync it, at most once a second.
+        let resync = self.viewers.iter().any(|v| v.needs_key)
+            && now - self.last_key > Duration::from_secs(1);
+        let idr = self.want_key || resync;
         let Some(enc) = self.enc.as_mut() else { return };
         let t = Instant::now();
         let pts = (now - self.t0).as_millis() as i64;
@@ -1293,9 +1097,9 @@ impl Engine {
             self.seq,
             out.key,
             qp.is_some(),
-            plan.scale,
-            self.cap.width,
-            self.cap.height,
+            plan.scale == Scale::Half,
+            enc.width,
+            enc.height,
             &out.data,
         )
         .into();
@@ -1352,7 +1156,6 @@ impl Engine {
                     bytes: record.len(),
                     burst: out.key || qp.is_some(),
                 },
-                plan.scale,
                 full_return && out.key,
             );
             true
@@ -1362,42 +1165,42 @@ impl Engine {
         self.stats.keys += u32::from(out.key);
         self.stats.sharps += u32::from(qp.is_some());
         self.stats.bytes += record.len() as u64;
-        let event = SendEvent {
-            seq,
-            bytes: record.len(),
-            requested_key: idr,
-            key: out.key,
-            plan,
-            encode: work.encode,
-            picture: &self.picture,
-        };
-        self.trace.log(Instant::now(), format_args!("{event}"));
-    }
-
-    fn apply_rate(&mut self, moves: &[picture::Move]) {
-        if !moves.is_empty() {
-            log_rungs(&mut io::stderr().lock(), moves);
-        }
-        if let Some(enc) = self.enc.as_mut() {
-            enc.set_rate(
-                self.picture.crf(),
-                vbv_kbps(&self.picture, self.picture.scale()),
-            );
-        }
+        self.trace.log(Instant::now(), format_args!(
+            "event=send seq={seq} bytes={} requested_key={idr} key={} sharp={} scale={:?} encode_ms={:.3}",
+            record.len(), out.key, qp.is_some(), plan.scale, work.encode.as_secs_f64() * 1000.0,
+        ));
     }
 
     /// Once a second: feed link and CPU facts to policy, apply rates, and log.
-    fn tick(&mut self, now: Instant, elapsed: f32) {
-        let blocked = self.blocked.take(now).as_secs_f32() / elapsed;
-        let busy = self.busy.take(now);
+    fn tick(&mut self, now: Instant) {
+        let elapsed = (now - self.tick_at + Duration::from_secs(1))
+            .as_secs_f32()
+            .max(0.5);
+        self.tick_at = now + Duration::from_secs(1);
+        if let Some(t) = self.blocked_since {
+            self.blocked += now - t;
+            self.blocked_since = Some(now);
+        }
+        let blocked = std::mem::take(&mut self.blocked).as_secs_f32() / elapsed;
         let frames = self.stats.frames;
-        let pacer = pacer_index(&self.viewers).map(|i| &mut self.viewers[i]);
-        let rtt_ms = pacer.as_ref().map_or(0, |v| v.rtt.get().as_millis() as u32);
-        let link = self
-            .stats
-            .link_sample(pacer, elapsed, blocked, busy, self.damaged);
+        let mut rtt_ms = 0;
+        let mut link = picture::Link {
+            reset: std::mem::take(&mut self.window_reset),
+            blocked,
+            sent_kbps: self.stats.bytes as f32 * 8.0 / 1000.0 / elapsed,
+            ..picture::Link::default()
+        };
+        if let Some(p) = self.pacer() {
+            link.delivered_kbps =
+                (std::mem::take(&mut p.acked_bytes) * 8) as f32 / 1000.0 / elapsed;
+            let mut d = std::mem::take(&mut p.delays_ms);
+            d.sort_unstable();
+            rtt_ms = p.rtt.get().as_millis() as u32;
+            link.queue_ms = d.get(d.len() / 2).map_or(0, |m| m.saturating_sub(rtt_ms));
+        }
         for viewer in &mut self.viewers {
-            viewer.clear_interval();
+            viewer.acked_bytes = 0;
+            viewer.delays_ms.clear();
         }
         let throttled = throttled_usec().is_some_and(|t| {
             t.saturating_sub(self.throttled_usec.replace(t).unwrap_or(t)) > 10_000
@@ -1411,10 +1214,16 @@ impl Engine {
             share
         });
         let queue_ms = link.queue_ms;
-        let moves = self
-            .picture
+        self.picture
             .tick(now, link, picture::Cpu { stolen, throttled });
-        self.apply_rate(&moves);
+        if let Some(enc) = self.enc.as_mut() {
+            let vbv = if self.picture.scale() == Scale::Half {
+                self.picture.link_kbps()
+            } else {
+                0
+            };
+            enc.set_rate(self.picture.crf(), vbv);
+        }
         let s = &mut self.stats;
         if frames > 0
             || self
@@ -1430,7 +1239,7 @@ impl Engine {
                 }
             };
             eprintln!(
-                "slimviewer: {frames} frames ({} key, {} sharp{}) {} kbps{} | grabs {} ({} unchanged) {:.1} ms, encode {:.1} ms, damage→sent {:.1} ms | crf {:.0}, link {} kbps, fps cap {:.0}, rtt {rtt_ms} ms, queue {queue_ms} ms, blocked {:.0}%{} | scale {}, work p75 {:.1} ms, stolen {:.0}%, sharp qp {}, cap {:.0} kbps, busy {:.2}s, rung {}",
+                "slimviewer: {frames} frames ({} key, {} sharp{}) {} kbps{} | grabs {} ({} unchanged) {:.1} ms, encode {:.1} ms, damage→sent {:.1} ms | crf {:.0}, link {} kbps, fps cap {:.0}, rtt {rtt_ms} ms, queue {queue_ms} ms, blocked {:.0}%{} | scale {}, work p75 {:.1} ms, stolen {:.0}%, sharp qp {}, cap {:.0} kbps",
                 s.keys,
                 s.sharps,
                 if s.delayed > 0 {
@@ -1461,8 +1270,6 @@ impl Engine {
                     .sharp_qp(now)
                     .map_or_else(|| "skip".to_owned(), |qp| qp.to_string()),
                 self.picture.capacity_kbps(now).unwrap_or(0.0),
-                busy.as_secs_f32(),
-                self.picture.rung_label(),
             );
         }
         *s = Stats::default();
@@ -1526,56 +1333,6 @@ mod tests {
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (peer, _) = listener.accept().unwrap();
         (Viewer::new(id, view_only, stream).unwrap(), peer)
-    }
-
-    #[test]
-    fn tests_that_half_size_resync_preserves_the_capture_size_on_the_wire() {
-        use crate::encoder::Backend;
-        use std::io::Read;
-
-        for (width, height, coded_width, flags) in
-            [(786, 1704, 392_u16, 0x15), (860, 1706, 430, 0x25)]
-        {
-            let cfg = Config {
-                encoder: Settings {
-                    backend: Backend::default_name().parse().unwrap(),
-                    preset: "ultrafast".into(),
-                    threads: 1,
-                    crf: 24.0,
-                },
-                max_fps: 30.0,
-                sharpen_qp: 18,
-                sharpen_after: SHARPEN,
-                crf_range: 6.0,
-                cpu_guard: true,
-                adaptive_size: true,
-                max_viewers: 1,
-            };
-            let start = Instant::now();
-            let (events, _rx) = mpsc::sync_channel(1);
-            let cap = Capture::black_screen_for_test(width, height);
-            let mut engine = Engine::new(cfg, cap, Input::failing_for_test(events), start);
-            let (owner, mut peer) = viewer_pair(1, false);
-            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            engine.viewers.push(owner);
-
-            // A second stalled window forces a keyframe on the half-size rung.
-            let now = start + Duration::from_secs(1);
-            engine.picture.window_reset(start);
-            engine.picture.window_reset(now);
-            let plan = frame_plan(&mut engine.picture, now, None, true);
-            assert_eq!(plan.scale, Scale::Half);
-            engine.encoder(plan.scale).unwrap();
-            engine.convert(plan.scale, 0, usize::from(height));
-            engine.send(now, plan, Work::default(), false);
-
-            let mut header = [0; 14];
-            peer.read_exact(&mut header).unwrap();
-            assert_eq!(header[4], 0x02);
-            assert_eq!(u16::from_be_bytes([header[10], header[11]]), coded_width);
-            assert_eq!(u16::from_be_bytes([header[12], header[13]]), 852);
-            assert_eq!(header[9], flags);
-        }
     }
 
     #[test]
@@ -1778,74 +1535,6 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_standing_queue_cannot_inflate_probe_capacity() {
-        let (mut owner, _peer) = viewer_pair(1, false);
-        let t = Instant::now();
-        let mut p = motion(t, true);
-        owner.rtt.push(70, t);
-        for second in 1..=12 {
-            owner.rtt.push(1210, t + Duration::from_secs(second));
-        }
-        assert_eq!(owner.rtt.get(), Duration::from_millis(1210));
-
-        let sent = t + Duration::from_secs(12);
-        let bytes = 82_000;
-        p.encoded(
-            sent,
-            picture::Encoded {
-                plan: Plan {
-                    scale: Scale::Full,
-                    sharp_qp: None,
-                },
-                key: true,
-                owner_key: true,
-                bytes,
-                pixels: 780 * ROWS,
-                big: true,
-                work: Work::default(),
-            },
-        );
-        owner.record_frame(
-            Sent {
-                seq: 1,
-                at: sent,
-                bytes,
-                burst: true,
-            },
-            Scale::Full,
-            false,
-        );
-        let ack = sent + Duration::from_millis(1300);
-        acknowledge(&mut [owner], &mut p, 1, 1, ack);
-        let kbps = p.capacity_kbps(ack).unwrap();
-        assert!(
-            (532.0..534.0).contains(&kbps),
-            "82 kB in 1230 ms: {kbps} kbps"
-        );
-        p.tick(ack, picture::Link::default(), picture::Cpu::default());
-        assert_eq!(p.plan(ack, BIG).scale, Scale::Half);
-    }
-
-    #[test]
-    fn tests_that_the_probe_base_relearns_rtt_after_five_minutes() {
-        let mut rtt = AckDelays::new();
-        let t = Instant::now();
-        rtt.push(70, t);
-        assert_eq!(
-            rtt.push(180, t + Duration::from_secs(299)),
-            Duration::from_millis(70)
-        );
-        assert_eq!(
-            rtt.push(200, t + Duration::from_secs(301)),
-            Duration::from_millis(180)
-        );
-        assert_eq!(
-            rtt.push(220, t + Duration::from_secs(602)),
-            Duration::from_millis(50)
-        );
-    }
-
-    #[test]
     fn tests_that_an_owner_ack_stall_resets_the_window_without_disconnecting() {
         let (mut owner, _peer) = viewer_pair(1, false);
         let t = Instant::now();
@@ -1922,14 +1611,13 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_resync_uses_the_half_rung_even_without_changed_rows() {
+    fn tests_that_resync_uses_current_size_without_a_sharp_frame() {
         let t = Instant::now();
         let mut p = motion(t, true);
-        assert_eq!(p.scale(), Scale::Full);
         assert_eq!(
-            frame_plan(&mut p, t, None, true),
+            frame_plan(&mut p, t, BIG, true),
             Plan {
-                scale: Scale::Half,
+                scale: Scale::Full,
                 sharp_qp: None
             }
         );
@@ -1998,42 +1686,31 @@ mod tests {
     const SHARPEN: Duration = Duration::from_millis(250);
     const FULL_SIZE_AFTER: Duration = Duration::from_secs(1);
 
-    fn full_picture(now: Instant, width: usize, height: usize) -> Picture {
-        Picture::new(
+    fn motion(now: Instant, constrained: bool) -> Picture {
+        let mut p = Picture::new(
             picture::Config {
                 base_crf: 24.0,
-                crf_range: 6.0,
+                crf_range: 12.0,
                 sharpen_qp: 18,
                 sharpen_after: SHARPEN,
                 max_fps: 30.0,
                 adaptive_size: true,
                 cpu_guard: true,
             },
-            width,
-            height,
+            780,
+            ROWS,
             now,
-        )
-    }
-
-    fn motion(now: Instant, constrained: bool) -> Picture {
-        let mut p = full_picture(now - Duration::from_secs(9), 780, ROWS);
+        );
         if constrained {
-            // Reach the ordinary half rung with the 15 fps link limit.
-            for n in (1..=8).rev() {
+            for n in (1..=2).rev() {
                 p.tick(
                     now - Duration::from_secs(n),
                     picture::Link {
-                        elapsed: 1.0,
                         blocked: 0.6,
                         sent_kbps: 9600.0,
                         delivered_kbps: 3000.0,
+                        reset: false,
                         queue_ms: 200,
-                        base_queue_ms: Some(200),
-                        frames: 15,
-                        mean_full_bytes: Some(80_000.0),
-                        grabs: 15,
-                        damage_pending: true,
-                        busy: Duration::from_millis(400),
                     },
                     picture::Cpu::default(),
                 );
@@ -2057,72 +1734,6 @@ mod tests {
             },
         );
         plan
-    }
-
-    #[test]
-    fn tests_that_small_changes_return_to_full_when_acks_drain_the_standing_queue() {
-        for (base_ms, queued_seconds, clear_delays) in [
-            (70, 3, [70, 70, 70]),
-            (80, 3, [120, 80, 100]), // Cellular jitter around a 100 ms median.
-            (70, 90, [70, 70, 70]),
-        ] {
-            let mut v = viewer();
-            let start = Instant::now();
-            v.rtt.push(base_ms, start);
-            let mut p = motion(start, true);
-            let plan = frame_plan(&mut p, start, BIG, true);
-            p.encoded(
-                start,
-                picture::Encoded {
-                    plan,
-                    key: true,
-                    owner_key: true,
-                    bytes: 110_000, // A 440 kB full key cannot fit the jam's 3 Mb/s.
-                    pixels: 780 * ROWS / 4,
-                    big: true,
-                    work: Work::default(),
-                },
-            );
-            for second in 1..=queued_seconds + 2 {
-                let tick = start + Duration::from_secs(second);
-                let delays = if second <= queued_seconds {
-                    [base_ms + 150; 3]
-                } else {
-                    clear_delays
-                };
-                for (i, ms) in delays.into_iter().enumerate() {
-                    let ack = tick - Duration::from_millis(300 * (2 - i as u64));
-                    let sent = ack - Duration::from_millis(u64::from(ms));
-                    changed(&mut p, sent, SMALL);
-                    let seq = 3 * second as u32 + i as u32;
-                    v.record_frame(
-                        Sent {
-                            seq,
-                            at: sent,
-                            bytes: 2000,
-                            burst: false,
-                        },
-                        p.scale(),
-                        false,
-                    );
-                    v.on_ack(seq, ack);
-                }
-                p.tick(tick, v.link_sample(1.0), picture::Cpu::default());
-                v.clear_interval();
-                // After 20 s without congestion one near-base tick can expire the old cap.
-                let clear_ticks = if queued_seconds >= 20 { 1 } else { 2 };
-                let expected = if second >= queued_seconds + clear_ticks {
-                    Scale::Full
-                } else {
-                    Scale::Half
-                };
-                assert_eq!(
-                    changed(&mut p, tick, SMALL).scale,
-                    expected,
-                    "base {base_ms} ms, standing queue for {queued_seconds} s, tick {second}"
-                );
-            }
-        }
     }
 
     #[test]
@@ -2230,9 +1841,8 @@ mod tests {
     fn tests_that_small_motion_never_starts_half_size() {
         let t0 = Instant::now();
         let mut m = motion(t0, true);
-        assert_eq!(m.scale(), Scale::Full);
         assert_eq!(
-            frame_plan(&mut m, t0, SMALL, false),
+            changed(&mut m, t0, Some((0, ROWS * 2 / 5, ROWS * 2 / 5))),
             Plan {
                 scale: Scale::Full,
                 sharp_qp: None
@@ -2306,7 +1916,6 @@ mod tests {
                 picture::Cpu::default(),
             );
             assert_eq!(p.plan(at, BIG).scale, Scale::Full);
-            assert_eq!(p.fps(), 30.0);
         }
     }
 
@@ -2323,127 +1932,23 @@ mod tests {
         // Every second of the jam is a full link, to the end: the allowance for jitter is
         // bounded, so a standing queue cannot pass for jitter.
         assert!(blocked[3..].iter().all(|&b| link_full(b)), "{blocked:?}");
+        // Quality is spent on tick one; a second congested tick sends big motion half size.
         let t0 = Instant::now();
         let mut p = motion(t0, false);
-        for n in 1..=8 {
-            let now = t0 + Duration::from_secs(n);
+        for n in 1..=2 {
             p.tick(
-                now,
+                t0 + Duration::from_secs(n),
                 picture::Link {
-                    elapsed: 1.0,
-                    blocked: blocked[2 + n as usize],
-                    sent_kbps: 2560.0,
+                    blocked: blocked[15 + n as usize],
+                    sent_kbps: 9600.0,
                     delivered_kbps: 3000.0,
+                    reset: false,
                     queue_ms: 200,
-                    base_queue_ms: Some(200),
-                    frames: 8,
-                    mean_full_bytes: Some(40_000.0),
-                    grabs: 8,
-                    damage_pending: true,
-                    busy: Duration::from_millis(400),
                 },
                 picture::Cpu::default(),
             );
-            assert_eq!(
-                p.plan(now, BIG).scale,
-                if n == 1 { Scale::Full } else { Scale::Half }
-            );
-            assert_eq!(p.fps(), 30.0);
         }
-    }
-
-    #[test]
-    fn tests_that_the_pacer_prices_full_keys_and_deltas_from_this_interval() {
-        let mut pacer = viewer();
-        let now = Instant::now();
-        for (seq, scale, burst, bytes) in [
-            (1, Scale::Full, true, 200_000),
-            (2, Scale::Half, true, 30_000),
-            (3, Scale::Full, false, 20_000),
-        ] {
-            pacer.record_frame(
-                Sent {
-                    seq,
-                    at: now,
-                    bytes,
-                    burst,
-                },
-                scale,
-                false,
-            );
-        }
-        let link = pacer.link_sample(1.0);
-        assert_eq!((link.frames, link.mean_full_bytes), (3, Some(110_000.0)));
-        pacer.clear_interval();
-        assert_eq!(pacer.link_sample(1.0).mean_full_bytes, None);
-    }
-
-    #[test]
-    fn tests_that_busy_time_excludes_pacer_waits_and_idle_spans_across_ticks() {
-        let t = Instant::now();
-        let mut busy = ActiveTime::default();
-        let (mut pacer, _peer) = viewer_pair(1, false);
-        let interval = Duration::from_secs_f32(1.0 / 30.0);
-        let at = |ms| t + Duration::from_millis(ms);
-        busy.observe(at(0), pacer.open(at(0), interval));
-        pacer.record_frame(
-            Sent {
-                seq: 1,
-                at: at(300),
-                bytes: 1000,
-                burst: true,
-            },
-            Scale::Full,
-            false,
-        );
-        busy.observe(at(300), pacer.open(at(300), interval));
-        pacer.on_ack(1, at(800));
-        busy.observe(at(800), pacer.open(at(800), interval));
-        assert_eq!(busy.take(at(1000)), Duration::from_millis(500));
-        busy.observe(at(1050), false); // The last damage was captured.
-        assert_eq!(busy.take(at(2000)), Duration::from_millis(50));
-        assert_eq!(busy.take(at(3000)), Duration::ZERO);
-    }
-
-    #[test]
-    fn tests_that_unchanged_grabs_count_toward_cpu_cadence() {
-        let t = Instant::now();
-        let mut p = motion(t, false);
-        let mut pacer = viewer();
-        for n in 1..=32 {
-            let unchanged = if n <= 30 { 12 } else { 0 };
-            let stats = Stats {
-                grabs: 18 + unchanged,
-                empty_grabs: unchanged,
-                damage_pending: true,
-                ..Stats::default()
-            };
-            pacer.sent_frames = 18;
-            let link = stats.link_sample(Some(&mut pacer), 1.0, 0.0, Duration::from_secs(1), false);
-            pacer.clear_interval();
-            let now = t + Duration::from_secs(n);
-            p.tick(
-                now,
-                link,
-                picture::Cpu {
-                    throttled: true,
-                    ..picture::Cpu::default()
-                },
-            );
-            assert_eq!(p.fps(), if n == 32 { 20.0 } else { 30.0 }, "tick {n}");
-            assert_eq!(p.plan(now, BIG).scale, Scale::Full);
-        }
-    }
-
-    #[test]
-    fn tests_that_slack_follows_the_rung_interval() {
-        let t = Instant::now();
-        let mut v = viewer();
-        v.rtt.push(20, t);
-        queued(&mut v, 1, t);
-        let after_transfer = t + Duration::from_millis(20 + 60);
-        assert!(!v.link_blocked(after_transfer, Duration::from_secs_f32(1.0 / 15.0), None));
-        assert!(v.link_blocked(after_transfer, Duration::from_secs_f32(1.0 / 30.0), None));
+        assert_eq!(p.plan(t0 + Duration::from_secs(2), BIG).scale, Scale::Half);
     }
 
     #[test]
@@ -2753,7 +2258,6 @@ mod tests {
         queued(&mut v, 3, t + Duration::from_secs(3));
         v.on_ack(1, t + Duration::from_secs(4));
         assert_eq!(v.acked_bytes, 100);
-        assert_eq!(v.link_sample(1.0).base_queue_ms, None);
         assert_eq!(v.inflight.front().unwrap().seq, 3);
         v.on_ack(1, t + Duration::from_secs(5));
         assert_eq!(v.acked_bytes, 100);
@@ -2764,17 +2268,13 @@ mod tests {
 
     #[derive(Debug)]
     struct PacedTick {
-        fps: f32,
         crf: f32,
         scale: Scale,
         sent: f32,
         delivered: f32,
-        blocked: f32,
-        queue_ms: u32,
     }
     struct PacedFrame {
         at: Duration,
-        received: Duration,
         scale: Scale,
         key: bool,
         bytes: usize,
@@ -2784,208 +2284,97 @@ mod tests {
         ticks: Vec<PacedTick>,
         frames: Vec<PacedFrame>,
         resets: Vec<Duration>,
-        first_half: Option<Duration>,
     }
 
-    impl PacedTrace {
-        fn half_entries(&self) -> usize {
-            self.frames
-                .chunk_by(|a, b| a.scale == b.scale)
-                .filter(|run| run[0].scale == Scale::Half)
-                .count()
-        }
-
-        fn max_draw_gap(&self, end: Duration) -> Duration {
-            self.max_draw_gap_for(end, |_| true)
-        }
-
-        fn max_draw_gap_for(
-            &self,
-            end: Duration,
-            include: impl Fn(&PacedFrame) -> bool,
-        ) -> Duration {
-            let mut previous = Duration::ZERO;
-            let mut max_gap = Duration::ZERO;
-            for frame in &self.frames {
-                if include(frame) {
-                    max_gap = max_gap.max(frame.received - previous);
-                }
-                // The first included frame still pays its entire gap back to the previous draw.
-                previous = frame.received;
-            }
-            max_gap.max(end.saturating_sub(previous))
-        }
-    }
-
-    struct PacedCell {
-        /// Serial bitrate (kb/s) and round-trip delay (ms) by elapsed second.
-        path: fn(u64) -> (u64, u64),
-        jitter_ms: u64,
-        motion_kbps: u64,
-        key_bytes: usize,
-        first_two_ack_floor_ms: u64,
-        initial_queue_ms: u64,
-        changed_rows: usize,
-        input_every_ms: Option<u64>,
-    }
-
-    impl Default for PacedCell {
-        fn default() -> Self {
-            Self {
-                path: |_| (3000, 30),
-                jitter_ms: 0,
-                motion_kbps: 9600,
-                key_bytes: 40_000,
-                first_two_ack_floor_ms: 0,
-                initial_queue_ms: 0,
-                changed_rows: 1200,
-                input_every_ms: None,
-            }
-        }
-    }
-
-    impl PacedCell {
-        fn transmit(&self, start: Duration, bytes: usize) -> Duration {
-            let mut at = start;
-            // One kb/s carries one millibit per microsecond.
-            let mut millibits = bytes as u64 * 8000;
-            loop {
-                let (kbps, _) = (self.path)(at.as_secs());
-                let boundary = Duration::from_secs(at.as_secs() + 1);
-                let available = (boundary - at).as_micros() as u64 * kbps;
-                if millibits <= available {
-                    return at + Duration::from_micros(millibits / kbps);
-                }
-                millibits -= available;
-                at = boundary;
-            }
-        }
-    }
-
-    // A steady scroll exposes the same bytes each second, so slower frames carry more damage.
-    fn paced_picture(seconds: u64, cell: PacedCell) -> PacedTrace {
-        paced_screen(seconds, &cell, (780, ROWS), |_, p| {
-            (
-                cell.changed_rows,
-                cell.motion_kbps as f32 * 1000.0 / (8.0 * p.fps()),
-            )
-        })
-    }
-
-    // Viewer admission, ACKs and policy run on the same clock as the serial link.
-    fn paced_screen(
+    // Real Viewer pacing/ACK/timeout code and Picture policy, with a serial link and a
+    // deterministic encoder-size model. An optional initial burst replays queued log facts.
+    fn paced_picture(
         seconds: u64,
-        cell: &PacedCell,
-        (width, height): (usize, usize),
-        motion_frame: impl Fn(u64, &Picture) -> (usize, f32),
+        kbps: u64,
+        key_bytes: usize,
+        motion_bytes: usize,
+        initial_keys: u32,
+        prior_capacity: Option<f32>,
     ) -> PacedTrace {
-        let (mut owner, _peer) = viewer_pair(1, false);
-        let mut t = Instant::now();
-        if cell.initial_queue_ms > 0 {
-            // Replay a queue already old enough to have raised the short ACK floor.
-            let (_, rtt_ms) = (cell.path)(0);
-            owner.rtt.push(rtt_ms as u32, t);
-            for _ in 0..12 {
-                t += Duration::from_secs(1);
-                owner.rtt.push((rtt_ms + cell.initial_queue_ms) as u32, t);
-            }
+        let t = Instant::now();
+        let mut p = motion(t, false);
+        if let Some(cap) = prior_capacity {
+            p.probe(
+                t,
+                100_000,
+                Duration::from_secs_f32(800.0 / cap),
+                Duration::ZERO,
+            );
         }
-        let mut p = full_picture(t, width, height);
+        let (owner, _peer) = viewer_pair(1, false);
         let mut viewers = vec![owner];
-        let (mut seq, mut last_send, mut blocked) = (0, None::<Instant>, 0.0);
-        let mut tick_at = t + Duration::from_secs(1);
-        let mut busy = ActiveTime::default();
-        let mut damage_pending = false;
-        let mut seed = 12345_u32;
-        let mut link_free = t + Duration::from_millis(cell.initial_queue_ms);
-        let mut acks = VecDeque::<(Instant, u32)>::new();
+        let (mut seq, mut last_send, mut sent, mut blocked, mut reset) =
+            (0, None::<Instant>, 0_usize, 0.0, false);
+        let (mut link_free, mut acks) = (t, VecDeque::<(Instant, u32)>::new());
         let mut trace = PacedTrace::default();
         for ms in 0..=seconds * 1000 {
             let now = t + Duration::from_millis(ms);
-            if cell
-                .input_every_ms
-                .is_some_and(|period| ms.is_multiple_of(period))
-            {
-                p.input(now);
-            }
             while let Some(&(at, ack)) = acks.front()
                 && at <= now
             {
                 acknowledge(&mut viewers, &mut p, 1, ack, at);
                 acks.pop_front();
             }
-            let reset = expire_viewers(&mut viewers, now);
-            if reset {
+            if expire_viewers(&mut viewers, now) {
+                reset = true;
                 trace.resets.push(now - t);
-                p.window_reset(now);
             }
             assert_eq!(viewers.len(), 1, "owner disconnected at {ms} ms");
             let interval = Duration::from_secs_f32(1.0 / p.fps());
-            // A zero-row interval leaves the page idle and lets queued frames drain.
-            let damaged = motion_frame(ms, &p).0 > 0;
-            damage_pending |= damaged;
-            busy.observe(now, damaged && viewers[0].open(now, interval));
-            if damaged && viewers[0].link_blocked(now, interval, p.capacity_kbps(now)) {
+            if viewers[0].link_blocked(now, interval, p.capacity_kbps(now)) {
                 blocked += 0.001;
             }
-            if let Some(elapsed) = take_tick(now, &mut tick_at) {
+            if ms > 0 && ms % 1000 == 0 {
                 let v = &mut viewers[0];
-                let stats = Stats {
-                    grabs: v.sent_frames,
-                    ..Stats::default()
-                };
-                let blocked_fraction = blocked / elapsed;
-                let link = stats.link_sample(
-                    Some(v),
-                    elapsed,
-                    blocked_fraction,
-                    busy.take(now),
-                    std::mem::take(&mut damage_pending),
+                let delivered = std::mem::take(&mut v.acked_bytes) as f32 * 8.0 / 1000.0;
+                let mut delays = std::mem::take(&mut v.delays_ms);
+                delays.sort_unstable();
+                let queue_ms = delays
+                    .get(delays.len() / 2)
+                    .map_or(0, |d| d.saturating_sub(v.rtt.get().as_millis() as u32));
+                let sent_kbps = sent as f32 * 8.0 / 1000.0;
+                p.tick(
+                    now,
+                    picture::Link {
+                        reset,
+                        blocked,
+                        sent_kbps,
+                        delivered_kbps: delivered,
+                        queue_ms,
+                    },
+                    picture::Cpu::default(),
                 );
-                v.clear_interval();
-                let sent = link.sent_kbps;
-                let delivered = link.delivered_kbps;
-                let queue_ms = link.queue_ms;
-                p.tick(now, link, picture::Cpu::default());
                 trace.ticks.push(PacedTick {
-                    fps: p.fps(),
                     crf: p.crf(),
-                    scale: p.motion_scale(),
-                    sent,
+                    scale: p.plan(now, BIG).scale,
+                    sent: sent_kbps,
                     delivered,
-                    blocked: blocked_fraction,
-                    queue_ms,
                 });
-                blocked = 0.0;
+                (sent, blocked, reset) = (0, 0.0, false);
             }
-            if p.motion_scale() == Scale::Half {
-                trace.first_half.get_or_insert(now - t);
-            }
-            let interval = Duration::from_secs_f32(1.0 / p.fps());
-            if damaged
+            let replay = seq < initial_keys && ms < 1000;
+            if (initial_keys == 0 || replay || ms >= 1000)
                 && viewers[0].open(now, interval)
                 && last_send.is_none_or(|last| now >= last + interval)
             {
-                let owner_key = viewers[0].needs_key;
-                let (changed_rows, motion_bytes) = motion_frame(ms, &p);
-                let band = Some((0, height, changed_rows));
-                let plan = frame_plan(&mut p, now, band, owner_key);
-                let key = owner_key || plan.scale != p.scale() || plan.sharp_qp.is_some();
-                let full_bytes = if key {
-                    let qp = plan.sharp_qp.map_or(p.crf(), f32::from);
-                    cell.key_bytes as f32 * 2.0_f32.powf((24.0 - qp) / 6.0)
+                let owner_key = replay || viewers[0].needs_key;
+                let plan = frame_plan(&mut p, now, BIG, owner_key);
+                let key = owner_key || plan.scale != p.scale();
+                let base = if key { key_bytes } else { motion_bytes };
+                // Keep offered motion demand fixed so the 3x jam remains 3x after
+                // a quality step. Keyframe estimates still shrink with quality.
+                let quality = if key {
+                    2.0_f32.powf((24.0 - p.crf()) / 6.0)
                 } else {
-                    motion_bytes
+                    1.0
                 };
-                let size = match plan.scale {
-                    Scale::Full => full_bytes,
-                    Scale::Half if key => full_bytes / 4.0,
-                    Scale::Half => {
-                        let bytes_per_frame =
-                            vbv_kbps(&p, Scale::Half) as f32 * 1000.0 / (8.0 * ENCODER_FPS);
-                        (full_bytes / 4.0).min(bytes_per_frame)
-                    }
-                }
+                let size = (base as f32 * quality
+                    / if plan.scale == Scale::Half { 4.0 } else { 1.0 })
                 .ceil() as usize;
                 let full_return = p.scale() == Scale::Half && plan.scale == Scale::Full;
                 p.encoded(
@@ -2995,8 +2384,8 @@ mod tests {
                         key,
                         owner_key,
                         bytes: size,
-                        pixels: width * height / if plan.scale == Scale::Half { 4 } else { 1 },
-                        big: changed_rows * 2 > height,
+                        pixels: 780 * ROWS / if plan.scale == Scale::Half { 4 } else { 1 },
+                        big: true,
                         work: Work {
                             encode: Duration::from_millis(10),
                             ..Work::default()
@@ -3012,34 +2401,18 @@ mod tests {
                         bytes: size,
                         burst: key,
                     },
-                    plan.scale,
                     full_return && key,
                 );
                 v.needs_key = false;
-                link_free = t + cell.transmit(link_free.max(now) - t, size);
-                let (_, rtt_ms) = (cell.path)((link_free - t).as_secs());
-                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let jitter = (u64::from(seed) * 2 * cell.jitter_ms) >> 32;
-                let path_delay = Duration::from_millis(rtt_ms - cell.jitter_ms + jitter);
-                // The frame can be drawn after the forward leg. TCP preserves its order.
-                let received = link_free - t + path_delay / 2;
-                let received = trace
-                    .frames
-                    .last()
-                    .map_or(received, |f| f.received.max(received));
-                let mut ack = link_free + path_delay;
-                if seq <= 2 {
-                    ack = ack.max(now + Duration::from_millis(cell.first_two_ack_floor_ms));
-                }
-                let ack = acks.back().map_or(ack, |&(last, _)| ack.max(last));
-                acks.push_back((ack, seq));
+                link_free = link_free.max(now) + Duration::from_micros(size as u64 * 8000 / kbps);
+                acks.push_back((link_free + Duration::from_millis(30), seq));
                 trace.frames.push(PacedFrame {
                     at: now - t,
-                    received,
                     scale: plan.scale,
                     key,
                     bytes: size,
                 });
+                sent += size;
                 last_send = Some(now);
             }
         }
@@ -3048,30 +2421,17 @@ mod tests {
 
     #[test]
     fn tests_that_threefold_jam_uses_offered_demand_before_window_throttling() {
-        let trace = paced_picture(10, PacedCell::default());
-        assert!(trace.ticks[0].sent < 9600.0 && trace.ticks[0].delivered < 9600.0);
-        assert_eq!((trace.ticks[0].fps, trace.ticks[0].crf), (30.0, 30.0));
-        assert!(
-            trace.ticks[..8]
-                .iter()
-                .any(|tick| tick.scale == Scale::Half),
-            "{:?}",
-            trace.ticks
-        );
+        let trace = paced_picture(3, 3000, 40_000, 40_000, 0, None);
+        assert!(trace.ticks[0].sent < 9600.0, "{:?}", trace.ticks);
+        assert!(trace.ticks[0].delivered < 9600.0);
+        assert!(trace.ticks[0].crf >= 30.0, "{:?}", trace.ticks);
+        assert_eq!(trace.ticks[1].scale, Scale::Half, "{:?}", trace.ticks);
     }
 
     #[test]
     fn tests_that_a_point_three_megabit_link_escapes_the_keyframe_reset_loop() {
-        let trace = paced_picture(
-            30,
-            PacedCell {
-                path: |_| (300, 30),
-                key_bytes: 150_000,
-                motion_kbps: 960,
-                ..PacedCell::default()
-            },
-        );
-        assert!(trace.ticks.iter().any(|tick| tick.crf == 30.0));
+        let trace = paced_picture(30, 300, 150_000, 4000, 0, None);
+        assert!(trace.ticks.iter().any(|tick| tick.crf >= 32.0));
         assert!(trace.frames.iter().any(|frame| frame.scale == Scale::Half));
         assert!(
             trace
@@ -3102,549 +2462,20 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_first_reset_key_on_the_half_rung_avoids_a_half_second_draw_gap()
-    -> Result<(), &'static str> {
-        // As on Fly, 46% changed rows never trigger a motion size switch. Two delayed
-        // ACKs expire the real owner window, first at full size and then at the half rung.
-        let end = Duration::from_secs(10);
-        let trace = paced_picture(
-            end.as_secs(),
-            PacedCell {
-                path: |_| (3000, 70),
-                initial_queue_ms: 100,
-                key_bytes: 880_000,
-                first_two_ack_floor_ms: 3100,
-                changed_rows: ROWS * 46 / 100,
-                ..PacedCell::default()
-            },
-        );
-        assert_eq!(trace.resets.len(), 2, "{:?}", trace.resets);
-        let engaged = trace.resets[1];
-        assert_eq!(trace.first_half, Some(engaged));
-        let forced = trace
+    fn tests_that_megabyte_keyframe_jam_reaches_half_on_the_second_tick() {
+        // Offer the recorded six ~1 MB keys through admission, with a stale ~859 Mb/s probe.
+        let trace = paced_picture(4, 3000, 1_000_000, 1_000_000, 6, Some(859_464.0));
+        assert!(trace.ticks[0].crf >= 32.0, "{:?}", trace.ticks);
+        assert_eq!(trace.ticks[1].scale, Scale::Half, "{:?}", trace.ticks);
+        // A 1 MB frame alone takes 2.67 s on the wire; apply the decision on its ACK.
+        let half = trace
             .frames
             .iter()
-            .find(|frame| frame.at >= engaged)
-            .ok_or("the reset must send a key")?;
-        assert!(forced.key);
-        assert_eq!((forced.scale, forced.bytes), (Scale::Half, 110_000));
-        let resync = trace
-            .frames
-            .iter()
-            .find(|f| f.at >= trace.resets[0])
-            .ok_or("the first reset must send a full resync key")?;
-        assert_eq!(
-            resync.bytes, 440_000,
-            "the first forced full key already uses the cap QP"
-        );
-        let mut last_draw = engaged;
-        for draw in trace
-            .frames
-            .iter()
-            .map(|f| f.received)
-            .filter(|&draw| draw >= engaged && draw <= end)
-            .chain([end])
-        {
-            assert!(
-                draw - last_draw < Duration::from_millis(500),
-                "draw gap from {last_draw:?} to {draw:?}"
-            );
-            last_draw = draw;
-        }
-        Ok(())
+            .find(|frame| frame.scale == Scale::Half)
+            .unwrap();
+        assert!(half.at < Duration::from_secs(3));
+        assert!(half.bytes <= 125_000);
     }
-
-    #[test]
-    fn tests_that_a_midsecond_reset_keeps_the_ack_in_the_regular_interval()
-    -> Result<(), &'static str> {
-        let t = Instant::now();
-        let mut p = motion(t, false);
-        p.tick(
-            t,
-            picture::Link {
-                blocked: 0.4,
-                sent_kbps: 9600.0,
-                delivered_kbps: 3000.0,
-                ..picture::Link::default()
-            },
-            picture::Cpu::default(),
-        );
-        let budget = p.link_kbps();
-        let (owner, _peer) = viewer_pair(1, false);
-        let mut viewers = vec![owner];
-        let now = t + Duration::from_millis(20);
-        for seq in [1, 2] {
-            viewers[0].record_frame(
-                Sent {
-                    seq,
-                    at: now - ACK_TIMEOUT,
-                    bytes: 60_000,
-                    burst: false,
-                },
-                Scale::Full,
-                false,
-            );
-        }
-        viewers[0].clear_interval();
-        acknowledge(&mut viewers, &mut p, 1, 1, now);
-        assert!(expire_viewers(&mut viewers, now));
-        assert!(p.window_reset(now).is_some());
-        assert_eq!((p.crf(), p.plan(now, BIG).scale), (30.0, Scale::Full));
-        assert_eq!(p.capacity_kbps(now), Some(3000.0));
-        assert_eq!(p.link_kbps(), budget);
-        let mut due = t + Duration::from_secs(1);
-        assert_eq!(take_tick(now, &mut due), None);
-        assert_eq!(due, t + Duration::from_secs(1));
-        let end = due;
-        let elapsed = take_tick(end, &mut due).ok_or("the regular tick is due")?;
-        let link = viewers[0].link_sample(elapsed);
-        assert_eq!((link.sent_kbps, link.delivered_kbps), (0.0, 480.0));
-        assert!(p.tick(end, link, picture::Cpu::default()).is_empty());
-        assert_eq!(p.plan(end, BIG).scale, Scale::Full);
-        assert_eq!(p.capacity_kbps(end), Some(3000.0));
-        assert_eq!(p.link_kbps(), 408); // 85% of the delivery measured over the whole second.
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_scroll_like_jam_reaches_half_without_a_half_second_gap() {
-        let trace = paced_picture(20, PacedCell::default());
-        assert!(
-            trace.ticks[..10]
-                .iter()
-                .any(|tick| tick.scale == Scale::Half)
-        );
-        assert!(trace.resets.len() <= 1);
-        let max_gap = trace.max_draw_gap(Duration::from_secs(20));
-        assert!(
-            max_gap < Duration::from_millis(500),
-            "largest gap between complete frames: {max_gap:?}"
-        );
-        let before_half = trace.frames.iter().take_while(|f| f.scale == Scale::Full);
-        assert_eq!(
-            before_half.clone().filter(|f| f.key).count(),
-            1,
-            "fps steps reuse the encoder"
-        );
-        assert!(
-            before_half.filter(|f| !f.key).any(|f| f.bytes == 40_000),
-            "30 fps still offers 9.6 Mb/s"
-        );
-    }
-
-    #[test]
-    fn tests_that_dense_scroll_at_the_fps_floor_recovers_cadence_and_reaches_the_cap() {
-        let onset = Duration::from_secs(3);
-        let end = Duration::from_secs(20);
-        let height = 844 * 2;
-        let trace = paced_screen(
-            end.as_secs(),
-            &PacedCell {
-                path: |_| (3000, 100),
-                jitter_ms: 20,
-                ..PacedCell::default()
-            },
-            (390 * 2, height),
-            |ms, p| {
-                // The smaller article updates bring the link to 15 fps before the heavy scroll.
-                let bytes = if Duration::from_millis(ms) < onset {
-                    25_000.0
-                } else {
-                    // The scroll exposes 110 kB of new rows per frame at 15 fps.
-                    110_000.0 * 15.0 / p.fps()
-                };
-                (height, bytes * 2.0_f32.powf((24.0 - p.crf()) / 6.0))
-            },
-        );
-        assert_eq!(trace.ticks[2].fps, 15.0);
-        for (tick, (crf, scale)) in trace.ticks[3..5]
-            .iter()
-            .zip([(30.0, Scale::Full), (30.0, Scale::Half)])
-        {
-            assert_eq!((tick.fps, tick.crf, tick.scale), (30.0, crf, scale));
-        }
-        // At the viewer the scroll starts when the first heavy frame arrives.
-        let first_scroll = trace
-            .frames
-            .iter()
-            .find(|f| f.at >= onset)
-            .expect("full-size scroll frame");
-        assert_eq!((first_scroll.key, first_scroll.bytes), (false, 110_000));
-        let first_half = trace
-            .frames
-            .iter()
-            .find(|f| f.scale == Scale::Half)
-            .expect("half-size scroll frame");
-        assert!(
-            first_half.received <= first_scroll.received + Duration::from_secs(4),
-            "first scroll frame drawn at {:?}, first half-size frame at {:?}",
-            first_scroll.received,
-            first_half.received
-        );
-
-        let mut last = Duration::ZERO;
-        for draw in trace
-            .frames
-            .iter()
-            .map(|f| f.received)
-            .take_while(|&d| d <= end)
-            .chain([end])
-        {
-            if draw > onset + Duration::from_secs(1) {
-                assert!(
-                    draw - last < Duration::from_millis(500),
-                    "draw gap from {last:?} to {draw:?}"
-                );
-            }
-            last = draw;
-        }
-    }
-
-    fn contended_cellular(second: u64) -> (u64, u64) {
-        match second {
-            // The key probes the bare 60 ms tunnel before cellular shaping adds 100 ms.
-            0 => (24_000, 60),
-            // Periodic contention still fills the link during half-size swipes.
-            s if s >= 6 && matches!(s % 6, 3 | 4) => (1000, 160),
-            _ => (3000, 160),
-        }
-    }
-
-    #[test]
-    fn tests_that_starved_wikipedia_scroll_from_15_fps_goes_half_in_two_ticks() {
-        const ONSET_MS: u64 = 7000;
-        let onset = Duration::from_millis(ONSET_MS);
-        let end = onset + Duration::from_secs(60);
-        let height = 932 * 2;
-        let trace = paced_screen(
-            end.as_secs(),
-            &PacedCell {
-                path: |_| (3000, 100),
-                jitter_ms: 20,
-                input_every_ms: Some(420),
-                ..PacedCell::default()
-            },
-            (430 * 2, height),
-            |ms, p| {
-                // Page load takes two fps steps. The 430 px Fly scroll then sent
-                // roughly 200 kB full-size frames at 15 fps between lighter updates.
-                let bytes = if ms < 3000 {
-                    25_000.0
-                } else if ms < ONSET_MS {
-                    // The last page-load picture on Fly was drawn four seconds before the swipe.
-                    return (0, 0.0);
-                } else if (ms - ONSET_MS) % 420 < 300 {
-                    200_000.0 * 15.0 / p.fps()
-                } else {
-                    return (height / 10, 2_000.0);
-                };
-                (height, bytes * 2.0_f32.powf((24.0 - p.crf()) / 6.0))
-            },
-        );
-        let start = onset.as_secs() as usize;
-        assert_eq!(
-            (trace.ticks[start - 1].fps, trace.ticks[start - 1].crf),
-            (15.0, 24.0)
-        );
-        let cap = &trace.ticks[start];
-        let half = &trace.ticks[start + 1];
-        assert!(link_full(cap.blocked) && link_full(half.blocked));
-        assert_eq!((cap.fps, cap.crf, cap.scale), (30.0, 30.0, Scale::Full));
-        assert_eq!((half.fps, half.crf, half.scale), (30.0, 30.0, Scale::Half));
-        let half_at = trace.first_half.expect("half size during the scroll");
-        let half_tick = (half_at - onset).as_secs();
-        assert_eq!(half_tick, 2);
-        assert_eq!(
-            trace
-                .frames
-                .iter()
-                .find(|f| f.at >= half_at)
-                .map(|f| f.scale),
-            Some(Scale::Half)
-        );
-        // Bytes already in the serial queue cannot change size when the link votes.
-        let post_vote = trace.max_draw_gap_for(end, |f| f.at >= onset + Duration::from_secs(1));
-        let after_two =
-            trace.max_draw_gap_for(end, |f| f.received >= onset + Duration::from_secs(2));
-        eprintln!(
-            "Wikipedia from 15 fps: half on congested tick {half_tick}, max draw gap {post_vote:?} for frames sent after tick 1, {after_two:?} for draws after 2 s"
-        );
-        assert!(post_vote < Duration::from_millis(500), "{post_vote:?}");
-    }
-
-    fn wikipedia_scroll(
-        seconds: u64,
-        path: fn(u64) -> (u64, u64),
-        scrolling: impl Fn(u64) -> bool,
-    ) -> PacedTrace {
-        let height = 844 * 2;
-        paced_screen(
-            seconds,
-            &PacedCell {
-                path,
-                jitter_ms: 20,
-                // Fly's 390 px article produced roughly 60 kB half-size keys at the cap.
-                key_bytes: 480_000,
-                input_every_ms: Some(420),
-                ..PacedCell::default()
-            },
-            (390 * 2, height),
-            |ms, p| {
-                if !scrolling(ms) {
-                    return (height / 10, 2_000.0);
-                }
-                // A steady scroll exposes more new rows per frame as the cadence drops.
-                let bytes = 70_000.0 * 30.0 / p.fps() * 2.0_f32.powf((24.0 - p.crf()) / 6.0);
-                (height, bytes)
-            },
-        )
-    }
-
-    #[test]
-    fn tests_that_wikipedia_scroll_at_30_fps_reaches_half_on_the_second_congested_tick() {
-        let end = Duration::from_secs(20);
-        // The swipe starts mid-tick. Only three full motion frames reach the next congested tick.
-        let trace = wikipedia_scroll(end.as_secs(), contended_cellular, |ms| ms >= 1_900);
-        assert!(trace.resets.is_empty());
-        assert!(
-            trace.ticks[..2]
-                .iter()
-                .all(|t| t.fps == 30.0 && !link_full(t.blocked))
-        );
-        let cap = &trace.ticks[2];
-        let half = &trace.ticks[3];
-        assert!(link_full(cap.blocked) && link_full(half.blocked));
-        assert_eq!(
-            (cap.fps, cap.crf, cap.scale),
-            (30.0, 30.0, Scale::Full),
-            "{cap:?}"
-        );
-        assert_eq!((half.fps, half.scale), (30.0, Scale::Half), "{half:?}");
-        let next_frame = trace.frames.iter().find(|f| f.at >= Duration::from_secs(4));
-        assert_eq!(next_frame.map(|f| f.scale), Some(Scale::Half));
-        let gap = trace.max_draw_gap(end);
-        assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
-    }
-
-    #[test]
-    fn tests_that_repeated_text_swipes_stay_at_half_on_a_congested_link() {
-        let end = Duration::from_secs(62); // 60 seconds of swipes after the warmup.
-        let trace = wikipedia_scroll(end.as_secs(), contended_cellular, |ms| {
-            ms >= 1_900 && (ms - 1_900) % 420 < 300
-        });
-        let first_half = trace
-            .ticks
-            .iter()
-            .position(|tick| tick.scale == Scale::Half)
-            .expect("text swipes must engage half size");
-        assert!(
-            first_half < 4,
-            "half size first selected on tick {}",
-            first_half + 1
-        );
-        let ticks = &trace.ticks[first_half..];
-        assert!(ticks.iter().all(|t| t.scale == Scale::Half));
-        assert!(
-            ticks
-                .windows(2)
-                .any(|pair| pair.iter().all(|t| !link_full(t.blocked))),
-            "lighter intervals must give the ladder a chance to climb"
-        );
-        assert!(
-            ticks
-                .windows(20)
-                .all(|span| span.iter().any(|t| link_full(t.blocked))),
-            "congestion must recur within the 20-second recovery window"
-        );
-        let first_half_frame = trace
-            .frames
-            .iter()
-            .position(|f| f.scale == Scale::Half)
-            .expect("the viewer must receive half-size frames");
-        assert!(
-            trace.frames[first_half_frame..]
-                .iter()
-                .all(|f| f.scale == Scale::Half)
-        );
-        let gap = trace.max_draw_gap(end);
-        assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
-    }
-
-    #[test]
-    fn tests_that_wikipedia_swipes_keep_full_fps_on_cellular() {
-        let end = Duration::from_secs(62); // Includes the page load before the 60 s of swipes.
-        let trace = wikipedia_scroll(
-            end.as_secs(),
-            |sec| if sec == 0 { (24_000, 60) } else { (3000, 100) },
-            |ms| ms >= 2_000 && (ms - 2_000) % 420 < 300,
-        );
-        let gap = trace.max_draw_gap(end);
-        let entries = trace.half_entries();
-        eprintln!("Wikipedia 3 Mb/s: max draw gap {gap:?}, half entries {entries}");
-        assert!(trace.resets.is_empty());
-        assert!(trace.ticks.iter().all(|tick| tick.fps == 30.0));
-        assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
-        assert_eq!(entries, 1);
-    }
-
-    #[test]
-    fn tests_that_a_standing_noise_jam_keeps_drawing_at_half_size() {
-        let end = Duration::from_secs(60);
-        // At the quality cap these keys are 330 and 440 kB. Half-size motion
-        // offers 3.2 Mb/s before the encoder budget on a 3 Mb/s serial link.
-        for key_bytes in [660_000, 880_000] {
-            let trace = paced_picture(
-                end.as_secs(),
-                PacedCell {
-                    path: |_| (3000, 70),
-                    initial_queue_ms: 1140,
-                    key_bytes,
-                    motion_kbps: 12_800,
-                    ..PacedCell::default()
-                },
-            );
-            let half = trace
-                .ticks
-                .iter()
-                .take(10)
-                .position(|tick| tick.scale == Scale::Half)
-                .expect("the jam must engage half size");
-            let ticks = &trace.ticks[half..];
-            assert!(
-                ticks.iter().all(|tick| tick.scale == Scale::Half),
-                "link returned to full with {key_bytes} B keys"
-            );
-            assert!(
-                ticks
-                    .windows(2)
-                    .any(|pair| pair.iter().all(|t| !link_full(t.blocked))),
-                "the link must get a chance to return"
-            );
-            assert!(
-                ticks
-                    .windows(20)
-                    .all(|span| span.iter().any(|t| link_full(t.blocked))),
-                "congestion must persist through the replay"
-            );
-
-            let half_frame = trace
-                .frames
-                .iter()
-                .position(|frame| frame.scale == Scale::Half)
-                .expect("a half-size frame must reach the wire");
-            assert!(
-                trace.frames[half_frame..]
-                    .iter()
-                    .all(|frame| frame.scale == Scale::Half)
-            );
-            let engaged = Duration::from_secs(half as u64 + 1);
-            let longest = trace.max_draw_gap_for(end, |f| f.at >= engaged);
-            assert!(
-                longest < Duration::from_millis(500),
-                "largest draw gap from a frame sent after half engaged: {longest:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn tests_that_a_cellular_link_under_its_demand_never_sets_half() {
-        for motion_kbps in [2300, 2400] {
-            let trace = paced_picture(
-                60,
-                PacedCell {
-                    path: |_| (3000, 100),
-                    jitter_ms: 20,
-                    motion_kbps,
-                    ..PacedCell::default()
-                },
-            );
-            assert!(trace.resets.is_empty());
-            // A severe tick would jump to CRF 30 or half size.
-            assert!(
-                trace
-                    .ticks
-                    .iter()
-                    .all(|t| t.crf < 30.0 && t.scale == Scale::Full)
-            );
-            assert!(trace.frames.iter().all(|f| f.scale == Scale::Full));
-        }
-    }
-
-    #[test]
-    fn tests_that_cellular_carousel_swipes_stay_full_without_half_second_draw_gaps() {
-        let seconds = 60;
-        // Fly captures two pixels per CSS pixel on the 430 × 932 screen.
-        let height = 932 * 2;
-        let trace = paced_screen(
-            seconds,
-            &PacedCell {
-                path: |second| match second % 24 {
-                    2 => (1600, 160),
-                    3 => (500, 160),
-                    _ => (3000, 160),
-                },
-                jitter_ms: 20,
-                key_bytes: 100_000,
-                input_every_ms: Some(420),
-                ..PacedCell::default()
-            },
-            (430 * 2, height),
-            |ms, p| {
-                // Two seconds at 15 kB, nine at 10 kB and one between swipes
-                // average 2.4 Mb/s at 30 fps, before the ACK window throttles sends.
-                let phase = (ms + 500) % 12_000;
-                if phase >= 11_000 {
-                    return (height / 10, 250.0);
-                }
-                let base_bytes = if (3_000..5_000).contains(&phase) {
-                    15_000.0
-                } else {
-                    10_000.0
-                };
-                (height, base_bytes * 2.0_f32.powf((24.0 - p.crf()) / 6.0))
-            },
-        );
-        let dip = trace
-            .ticks
-            .windows(2)
-            .find(|pair| {
-                pair.iter().all(|t| link_full(t.blocked))
-                    && (1500.0..=3000.0).contains(&pair[0].delivered)
-                    && (400.0..=650.0).contains(&pair[1].delivered)
-            })
-            .expect("expected a congested delivery dip near 0.5 Mb/s after a normal tick");
-        assert_eq!(
-            (dip[1].fps, dip[1].crf),
-            (15.0, 24.0),
-            "the dip should only lower fps"
-        );
-        // The last bandwidth dip sends just two 15 kB frames. Its preceding
-        // 1.52 Mb/s sample came from an open window.
-        let before = &trace.ticks[50];
-        let dip = &trace.ticks[51];
-        assert!(!link_full(before.blocked) && link_full(dip.blocked));
-        assert!(dip.delivered < 0.5 * before.delivered);
-        assert_eq!((dip.fps, dip.crf), (15.0, 24.0));
-        assert!(
-            trace
-                .ticks
-                .iter()
-                .any(|t| t.queue_ms > 300 && link_full(t.blocked)),
-            "the replay must exercise late, congested ACKs"
-        );
-        assert_eq!(trace.first_half, None);
-        assert!(trace.frames.iter().all(|f| f.scale == Scale::Full));
-        let max_gap = trace.max_draw_gap(Duration::from_secs(seconds));
-        eprintln!(
-            "carousel max gap {max_gap:?}, {} half entries",
-            trace.half_entries()
-        );
-        assert!(
-            max_gap < Duration::from_millis(500),
-            "largest draw gap {max_gap:?}"
-        );
-    }
-
     #[test]
     fn tests_that_newer_bursts_cannot_hide_an_older_stalled_frame() {
         let t = Instant::now();
@@ -3734,7 +2565,6 @@ mod tests {
                         bytes: 250_000,
                         burst: true,
                     },
-                    Scale::Half,
                     false,
                 );
                 v.needs_key = false;
@@ -3767,7 +2597,6 @@ mod tests {
                 bytes: 250_000,
                 burst: true,
             },
-            Scale::Full,
             false,
         );
         let mut viewers = vec![owner];
@@ -3806,22 +2635,13 @@ mod tests {
                 work: Work::default(),
             },
         );
-        p.tick(
-            t,
-            picture::Link {
-                blocked: 0.4,
-                delivered_kbps: 20_000.0,
-                ..picture::Link::default()
-            },
-            picture::Cpu::default(),
-        );
         p.probe(
             t,
             600_000,
-            Duration::from_millis(242),
+            Duration::from_millis(402),
             Duration::from_millis(2),
         );
-        let returned = t + Duration::from_secs(2);
+        let returned = t + Duration::from_secs(1);
         p.tick(returned, picture::Link::default(), picture::Cpu::default());
         let full = p.plan(returned, BIG);
         assert_eq!(full.scale, Scale::Full);
@@ -3833,7 +2653,6 @@ mod tests {
                 bytes: 100,
                 burst: true,
             },
-            Scale::Half,
             false,
         );
         v.on_ack(1, t + Duration::from_millis(2));
@@ -3844,7 +2663,6 @@ mod tests {
                 bytes: 600_000,
                 burst: true,
             },
-            full.scale,
             p.scale() == Scale::Half && full.scale == Scale::Full,
         );
         p.encoded(
@@ -3861,16 +2679,16 @@ mod tests {
         );
         let interval = Duration::from_millis(33);
         let mut blocked = 0.0;
-        for ms in 0..242 {
+        for ms in 0..402 {
             if v.link_blocked(
                 returned + Duration::from_millis(ms),
                 interval,
-                Some(20_000.0),
+                Some(12_000.0),
             ) {
                 blocked += 0.001;
             }
         }
-        v.on_ack(2, returned + Duration::from_millis(242));
+        v.on_ack(2, returned + Duration::from_millis(402));
         let now = returned + Duration::from_secs(1);
         p.tick(
             now,
@@ -3890,108 +2708,12 @@ mod tests {
                 bytes: 600_000,
                 burst: true,
             },
-            Scale::Full,
             false,
         );
         assert!(
-            v.link_blocked(now + Duration::from_millis(250), interval, Some(20_000.0)),
+            v.link_blocked(now + Duration::from_millis(250), interval, Some(12_000.0)),
             "an ordinary later key must not renew the full-return grace"
         );
-    }
-
-    #[test]
-    fn tests_that_trace_send_line_carries_crf_and_fps() -> Result<(), std::string::FromUtf8Error> {
-        let t = Instant::now();
-        let p = motion(t, true);
-        for (sharp_qp, expected) in [(None, "-"), (Some(18), "18")] {
-            let event = SendEvent {
-                seq: 4,
-                bytes: 128,
-                requested_key: false,
-                key: false,
-                plan: Plan {
-                    scale: Scale::Half,
-                    sharp_qp,
-                },
-                encode: Duration::from_millis(2),
-                picture: &p,
-            };
-            let mut bytes = Vec::new();
-            Trace::new(Some("1"), t).write(&mut bytes, t, format_args!("{event}"));
-            let log = String::from_utf8(bytes)?;
-            assert!(log.contains("event=send seq=4 bytes=128"));
-            assert!(
-                log.ends_with(&format!("crf=30 fps=15 qp={expected}\n")),
-                "{log}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_rung_events_are_logged_on_every_move() -> Result<(), std::string::FromUtf8Error> {
-        let t = Instant::now();
-        let mut p = motion(t, false);
-        let mut out = Vec::new();
-        for n in 1..=2 {
-            let moves = p.tick(
-                t + Duration::from_secs(n),
-                picture::Link {
-                    blocked: 0.3,
-                    frames: 6,
-                    grabs: 6,
-                    damage_pending: true,
-                    busy: Duration::from_millis(700),
-                    ..picture::Link::default()
-                },
-                picture::Cpu {
-                    stolen: 0.25,
-                    throttled: false,
-                },
-            );
-            log_rungs(&mut out, &moves);
-        }
-        let log = String::from_utf8(out)?;
-        let lines: Vec<_> = log.lines().collect();
-        assert_eq!(lines.len(), 3);
-        for (line, expected) in lines.iter().zip([
-            "source=link from=0 to=1",
-            "source=link from=1 to=2",
-            "source=cpu from=0 to=1",
-        ]) {
-            assert!(
-                line.starts_with(&format!("slimviewer: event=rung {expected}")),
-                "{line}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_half_size_vbv_uses_the_actual_frame_rate() {
-        let t = Instant::now();
-        let mut p = motion(t, true);
-        assert_eq!(p.fps(), 15.0);
-        assert_eq!(vbv_kbps(&p, Scale::Half), p.link_kbps() * 2);
-        assert_eq!(vbv_kbps(&p, Scale::Full), 0);
-        for n in 1..=9 {
-            p.tick(
-                t + Duration::from_secs(n),
-                picture::Link {
-                    frames: 6,
-                    grabs: 6,
-                    damage_pending: true,
-                    busy: Duration::from_secs(1),
-                    ..picture::Link::default()
-                },
-                picture::Cpu {
-                    stolen: 0.25,
-                    throttled: false,
-                },
-            );
-        }
-        assert_eq!(p.fps(), 10.0);
-        assert_eq!(vbv_kbps(&p, Scale::Half), p.link_kbps() * 3);
     }
 
     #[test]
@@ -4116,7 +2838,6 @@ mod tests {
                             bytes,
                             burst: key,
                         },
-                        plan.scale,
                         false,
                     );
                     v.needs_key = false;
@@ -4202,7 +2923,6 @@ mod tests {
                         bytes: 1000,
                         burst: key,
                     },
-                    Scale::Full,
                     false,
                 );
                 acks[index].push_back((
@@ -4258,15 +2978,13 @@ mod tests {
                 acks.pop_front();
             }
             if ms % 1000 == 0 {
-                let queue_ms = if jammed { 250 } else { 0 };
                 p.tick(
                     now,
                     picture::Link {
                         blocked: if jammed { 0.8 } else { 0.0 },
                         sent_kbps: 8000.0,
                         delivered_kbps: 3000.0,
-                        queue_ms,
-                        base_queue_ms: Some(queue_ms),
+                        queue_ms: if jammed { 250 } else { 0 },
                         ..picture::Link::default()
                     },
                     picture::Cpu::default(),
@@ -4339,7 +3057,6 @@ mod tests {
                     bytes,
                     burst: true,
                 },
-                plan.scale,
                 returning_full,
             );
             v.needs_key = false;
@@ -4454,7 +3171,6 @@ mod tests {
                 bytes: 250_000,
                 burst: true,
             },
-            half.scale,
             false,
         );
         owner.needs_key = false;
@@ -4507,7 +3223,6 @@ mod tests {
                         bytes: 1_000_000,
                         burst: true,
                     },
-                    plan.scale,
                     true,
                 );
                 full_sent = Some(sent - stop);

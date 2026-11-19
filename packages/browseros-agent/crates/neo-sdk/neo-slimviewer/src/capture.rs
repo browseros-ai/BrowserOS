@@ -99,32 +99,6 @@ fn err<E: std::fmt::Debug>(what: &str) -> impl FnOnce(E) -> String + '_ {
 }
 
 impl Capture {
-    /// An already-captured black screen for encoder and transport tests.
-    #[cfg(test)]
-    pub(crate) fn black_screen_for_test(width: u16, height: u16) -> Self {
-        use std::os::unix::net::UnixStream;
-        use x11rb::rust_connection::DefaultStream;
-
-        // Sending captured pixels needs no X requests. A closed peer makes unexpected I/O fail.
-        let (socket, _) = UnixStream::pair().unwrap();
-        let (stream, _) = DefaultStream::from_unix_stream(socket).unwrap();
-        let setup = xproto::Setup {
-            resource_id_mask: 1,
-            ..Default::default()
-        };
-        Self {
-            conn: Arc::new(RustConnection::for_connected_stream(stream, setup).unwrap()),
-            root: 0,
-            damage: 0,
-            depth: 24,
-            seg: None,
-            width,
-            height,
-            prev: vec![0; frame_len(width, height).unwrap()],
-            lost: LostGrabs::default(),
-        }
-    }
-
     /// Connects, checks MIT-SHM and DAMAGE, and starts the event thread that feeds `events`.
     pub fn open(display: &str, events: SyncSender<Ev>) -> Result<Capture, String> {
         let (conn, screen) = RustConnection::connect(Some(display)).map_err(err("connect to X"))?;

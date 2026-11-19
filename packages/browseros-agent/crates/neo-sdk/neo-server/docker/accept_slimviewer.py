@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 ASSETS = {
-    'slimviewer.html': 'adfff83f96f0302ac7924f45b45cd6d1c832255dfa2eab25fb3803460038213f',
+    'slimviewer.html': '9580b195c453123c44d83754b8d3e1625e22ac201f6a231c59130e824de682c2',
     'ui.js': 'e72e12a652957b7aa134f6ac7aaec666e64454b7cf4bc8e1c795405985b10eed',
 }
 LOOPBACK = [('0100007F', 5910), ('0100007F', 5911)]
@@ -29,10 +29,7 @@ def check_assets():
     version, revision = viewer['openh264']['version'], viewer['openh264']['revision']
     notices = Path('/usr/share/doc/slimviewer/THIRD-PARTY-LICENSES').read_text()
     section = notices.partition(f'OpenH264 {version} — BSD-2-Clause')[2].partition('\n====')[0]
-    digest, name = Path('/usr/share/doc/slimviewer/OPENH264-PATCHES').read_text().split()
-    if not re.fullmatch('[0-9a-f]{64}', digest) or viewer['openh264']['patches'] != [{'name': name, 'sha256': digest}]:
-        raise ValueError('OpenH264 patch manifest differs from provenance')
-    for required in (f'v{version} {revision}', digest, name, 'Copyright (c) 2013, Cisco Systems',
+    for required in (f'v{version} {revision}', 'Copyright (c) 2013, Cisco Systems',
                      'Redistributions of source code must retain', 'Redistributions in binary form must reproduce',
                      'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"'):
         if required not in section:
@@ -144,9 +141,6 @@ def spectator_frame():
 def check_running():
     pid = ready_pid()
     parent = check_process(pid)
-    argv = Path(f'/proc/{pid}/cmdline').read_bytes().rstrip(b'\0').split(b'\0')
-    if argv[-2:] != [b'--fps', b'60']:
-        raise ValueError(f'expected --fps 60 in viewer argv: {argv}')
     frame = spectator_frame()
     start = time.monotonic()
     os.kill(pid, signal.SIGKILL)

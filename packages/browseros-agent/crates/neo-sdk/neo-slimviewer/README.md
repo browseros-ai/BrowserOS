@@ -15,9 +15,8 @@ slimviewer --display :1 --rfb 127.0.0.1:5900 \
   --listen 127.0.0.1:5910 --listen-view 127.0.0.1:5911
 ```
 
-These are the SDK defaults. Set `NEO_SLIMVIEWER_FPS` in the SDK container to pass
-`--fps` (0.1–240, decimals allowed). Empty or unset keeps the default of 30.
-Run the binary as the Xvnc user in the same IPC namespace. The host serves the page and bridges each authenticated WebSocket
+These are the SDK defaults. Run the binary as the Xvnc user in the same IPC
+namespace. The host serves the page and bridges each authenticated WebSocket
 to the appropriate loopback TCP port. See [Host integration](docs/integrate.md).
 
 | Option | Default | Purpose |
@@ -28,8 +27,7 @@ to the appropriate loopback TCP port. See [Host integration](docs/integrate.md).
 | `--listen-view` | `127.0.0.1:5911` | View-only stream |
 | `--max-viewers` | `8` | Spectator limit, or zero to disable spectators |
 | `--encoder`, `--threads` | `openh264`, `0` | Compiled encoder and thread count (zero selects automatically) |
-| `--fps` | `30` | Frame rate ceiling. The lower rungs are whichever of 30, 20 and 15 fps fall below it |
-| `--crf`, `--crf-range` | `24`, `6` | Starting quantizer and maximum increase. At the frame-rate floor a congested link spends this budget in steps of up to 2 before using half size |
+| `--fps`, `--crf`, `--crf-range` | `30`, `24`, `12` | Frame rate ceiling, starting quantizer and allowed increase |
 | `--sharpen-qp`, `--sharpen-ms` | `18`, `250` | Still-frame quantizer and delay in milliseconds |
 | `--no-cpu-guard`, `--full-size-only` | off | Disable CPU throttling feedback or adaptive scaling |
 | `--preset` | `ultrafast` | Encoder preset for x264 builds |
@@ -45,15 +43,7 @@ docker buildx build --output type=local,dest=target/rootfs .
 docker buildx build --target slimviewer-check --output type=cacheonly .
 ```
 
-The release builds OpenH264 2.7.0 (BSD-2-Clause) from patched source. By default,
-it skips the 8×8 feature search unless it detects a nonzero scroll vector. This
-saves encode time on typing and small animations while keeping scroll traffic
-close to upstream. Set `SV_OPENH264_FME` when launching the binary directly,
-or `NEO_SLIMVIEWER_FEATURE_SEARCH` in the SDK container. Choose `scroll`
-(default), `always` for upstream behavior, or `never` to save encode time on
-CPU-limited hosts with bandwidth to spare.
-
-To build the full SDK image, run `../neo-server/docker/build.sh`.
+The release uses OpenH264. To build the full SDK image, run `../neo-server/docker/build.sh`.
 
 ## Build on Linux
 

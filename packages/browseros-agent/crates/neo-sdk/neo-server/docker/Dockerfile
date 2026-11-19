@@ -125,11 +125,9 @@ ARG NEO_SDK_VERSION=unknown
 # Read the same OpenH264 pin that build.rs verified when it linked the binary.
 RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); \
     read -r openh264_version openh264_revision < /usr/share/doc/slimviewer/OPENH264-SOURCE; \
-    read -r patch_sha256 patch_name < /usr/share/doc/slimviewer/OPENH264-PATCHES; \
     jq -n --arg version "$NEO_SDK_VERSION" --arg revision "$NEO_SDK_REVISION" --argjson dirty "$NEO_SDK_DIRTY" --arg arch "$TARGETARCH" \
       --arg browser "$NEO_BROWSER_VERSION" --arg deb "$(dpkg-query -W -f '${Version}' browserclaw)" \
       --arg slimviewer_sha256 "$(sha256sum /usr/local/bin/slimviewer | cut -d' ' -f1)" \
-      --arg patch_name "$patch_name" --arg patch_sha256 "$patch_sha256" \
       --arg openh264_version "${openh264_version#v}" --arg openh264_revision "$openh264_revision" \
       --arg server_sha256 "$(sha256sum "$server" | cut -d' ' -f1)" \
       --arg marker "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-version=[^;]*' "$server" | head -1 | cut -d= -f2)" \
@@ -140,8 +138,7 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); 
         server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, \
                  source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}, \
         slimviewer: {sha256: $slimviewer_sha256, encoders: ["openh264"], \
-                     openh264: {version: $openh264_version, revision: $openh264_revision, \
-                                patches: [{name: $patch_name, sha256: $patch_sha256}]}}, captchaKeys: []}' \
+                     openh264: {version: $openh264_version, revision: $openh264_revision}}, captchaKeys: []}' \
       > /usr/share/neo-sdk/provenance.json; \
     [ "$(jq -r '.server.source_digest == .source_digest' /usr/share/neo-sdk/provenance.json)" = true ] \
       || { echo "the installed server was not compiled from this build's sources" >&2; exit 1; }
