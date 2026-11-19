@@ -491,3 +491,91 @@ test.each([
     expect(runInNewContext(page.ready, { document })).toBe(true)
   },
 )
+
+test('tests that invisible reCAPTCHA runs untouched and after its own submit shows the challenge', () => {
+  const [untouched, triggered] = [
+    'google-recaptcha-invisible-untouched-demo',
+    'google-recaptcha-invisible-triggered-demo',
+  ].map((id) => DEMO_PAGES.find((p) => p.id === id))
+  if (!untouched || !triggered) throw new Error('invisible demo missing')
+  expect(untouched.trigger).toBeUndefined()
+  expect(triggered.trigger?.click).toBe('#recaptcha-demo-submit')
+  for (const page of [untouched, triggered])
+    expect(page).toMatchObject({
+      expect: ['solved'],
+      expectType: 'recaptcha_v2',
+      mayNeedPaid: true,
+      site: { acceptedPattern: 'Verification Success' },
+    })
+  const visible = new Function(
+    'document',
+    'getComputedStyle',
+    `return ${triggered.trigger?.until}`,
+  )
+  const frame = (visibility: string, height: number) => ({
+    style: { visibility },
+    getBoundingClientRect: () => ({ height }),
+  })
+  const run = (frames: unknown[]) =>
+    visible(
+      { querySelectorAll: () => frames },
+      (f: { style: unknown }) => f.style,
+    )
+  expect(run([frame('hidden', 580)])).toBe(false)
+  expect(run([frame('visible', 580)])).toBe(true)
+})
+
+test('tests that the v3 page needs no submit and records the score its server returns', () => {
+  const page = DEMO_PAGES.find((p) => p.id === 'recaptcha-v3-scores-demo')
+  if (!page?.reading || !page.site) throw new Error('v3 demo missing')
+  expect(page.site.submitSelector).toBeUndefined()
+  expect(page).toMatchObject({
+    family: 'recaptcha_v3',
+    expectType: 'recaptcha_v3',
+    expect: ['already_clear', 'solved'],
+  })
+  const read = (text: string | null) =>
+    new Function('document', `return ${page.reading?.expression}`)({
+      querySelector: () => (text === null ? null : { textContent: text }),
+    })
+  expect(read('{\n  "success": true,\n  "score": 0.9\n}')).toBe('0.9')
+  expect(read(null)).toBeNull()
+})
+
+test('tests that the Cloudflare full page passes only as a detected challenge and records leaving it', () => {
+  const page = DEMO_PAGES.find(
+    (p) => p.id === 'scrapingcourse-cloudflare-challenge',
+  )
+  if (!page?.reading) throw new Error('Cloudflare page missing')
+  expect(pageCheck(page)).toBe('detect')
+  expect(page).toMatchObject({
+    expect: ['unsolved'],
+    expectType: 'cloudflare_challenge',
+    expectReason: ['unsupported_type'],
+  })
+  const read = (title: string, innerText: string) =>
+    new Function('document', `return ${page.reading?.expression}`)({
+      title,
+      body: { innerText },
+    })
+  expect(read('Just a moment...', 'Verify you are human')).toBeNull()
+  expect(read('Cloudflare Challenge', 'You bypassed the challenge')).toBe(
+    'Cloudflare Challenge',
+  )
+})
+
+test('tests that the 2Captcha Enterprise demo waits for its hydrated widget and reads its own check', () => {
+  const page = DEMO_PAGES.find(
+    (p) => p.id === '2captcha-recaptcha-enterprise-demo',
+  )
+  expect(page).toMatchObject({
+    url: 'https://2captcha.com/demo/recaptcha-v2-enterprise',
+    expect: ['solved'],
+    expectType: 'recaptcha_v2',
+    site: {
+      submitSelector: 'main form button[type="submit"]',
+      acceptedPattern: '"success"\\s*:\\s*true',
+    },
+  })
+  expect(page?.ready).toContain('.g-recaptcha iframe')
+})

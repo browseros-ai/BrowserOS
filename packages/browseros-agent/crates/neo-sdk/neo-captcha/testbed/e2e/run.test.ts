@@ -30,14 +30,34 @@ test('tests that spotting remains selectable within fixtures and all', () => {
   expect(selectPages(all, parseOptions(['--pages', 'fixtures']))).toHaveLength(
     21,
   )
-  expect(selectPages(all, parseOptions(['--pages', 'demo']))).toHaveLength(8)
-  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(29)
+  expect(selectPages(all, parseOptions(['--pages', 'demo']))).toHaveLength(13)
+  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(34)
   expect(
     selectPages(
       all,
       parseOptions(['--pages', 'spotting', '--only', 'geetest-v4-frame']),
     ).map((p) => p.id),
   ).toEqual(['geetest-v4-frame'])
+})
+
+test("tests that the owner group runs the owner's six sites in the owner's order", () => {
+  const owner = selectPages(all, parseOptions(['--pages', 'owner']))
+  expect(owner.map((p) => new URL(p.url ?? '').href)).toEqual([
+    'https://www.google.com/recaptcha/api2/demo',
+    'https://www.google.com/recaptcha/api2/demo?invisible=true',
+    'https://www.google.com/recaptcha/api2/demo?invisible=true',
+    'https://2captcha.com/demo/recaptcha-v2-enterprise',
+    'https://demo.turnstile.workers.dev/',
+    'https://recaptcha-demo.appspot.com/recaptcha-v3-request-scores.php',
+    'https://www.scrapingcourse.com/cloudflare-challenge',
+  ])
+  expect(
+    selectPages(
+      all,
+      parseOptions(['--pages', 'owner', '--only', 'recaptcha-v3-scores-demo']),
+    ).map((p) => p.id),
+  ).toEqual(['recaptcha-v3-scores-demo'])
+  expect(() => parseOptions(['--pages', 'mine'])).toThrow('owner')
 })
 
 test('tests that the SDK is the default server and claw-server needs an endpoint', () => {

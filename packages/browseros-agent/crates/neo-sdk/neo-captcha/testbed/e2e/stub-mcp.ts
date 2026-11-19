@@ -146,6 +146,10 @@ export async function startStubMcp(options: {
       case 'submit':
         state.submitted = true
         return { value: true }
+      case 'trigger':
+        return { value: true }
+      case 'read':
+        return { error: ['script', 'wait_timeout', 'Timeout exceeded'] }
       case 'site': {
         const found = siteVerdict(state, options.scenario, options.bodyText)
         return found
@@ -168,6 +172,10 @@ export async function startStubMcp(options: {
       state.submitted = true
       return true
     }
+    if (code.startsWith(probes.trigger)) return true
+    // claw-server answers in text, so a numeric reading such as "0.9" comes back parsed as 0.9.
+    if (code.startsWith(probes.reading))
+      return code.includes("'0.9'") ? 0.9 : null
     if (code.startsWith(probes.body))
       return siteVerdict(state, options.scenario, options.bodyText)
     return undefined

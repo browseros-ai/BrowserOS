@@ -2,9 +2,17 @@ import {
   type McpSession,
   textOf,
 } from '../../../../../contracts/claw-mcp/tests/mcp-client'
-import type { SiteCheck } from '../fixtures/catalog'
+import type { PageReading, PageTrigger, SiteCheck } from '../fixtures/catalog'
 import type { PageSession, Timeouts } from './page-session'
-import { bodyProbe, observationProbe, readyProbe, submitProbe } from './probes'
+import {
+  bodyProbe,
+  clickProbe,
+  observationProbe,
+  probes,
+  readingProbe,
+  readyProbe,
+  submitProbe,
+} from './probes'
 import { notSolved, parseSdkSolve } from './solve-result'
 
 /** A failed `run`: the SDK's `{ owner, code, message }`. */
@@ -116,6 +124,15 @@ return true;`,
         throw error
       }
     },
+    async trigger(trigger: PageTrigger) {
+      await run(
+        script(
+          'trigger',
+          `return await page.evaluate(() => { ${probes.trigger} ${clickProbe(trigger.click)} });`,
+        ),
+      )
+      return await this.ready(trigger.until)
+    },
     async solve() {
       try {
         return parseSdkSolve(
@@ -150,7 +167,7 @@ return true;`,
       await run(
         script(
           'submit',
-          `return await page.evaluate(() => { ${submitProbe(site.submitSelector)} });`,
+          `return await page.evaluate(() => { ${submitProbe(site)} });`,
         ),
       )
       try {
@@ -164,6 +181,25 @@ return await page.evaluate(probe);`,
           timeouts.probeMs + 5_000,
         )
         return found === 'accepted' || found === 'rejected' ? found : null
+      } catch (error) {
+        if (error instanceof SdkRunError && TIMEOUTS.has(error.code))
+          return null
+        throw error
+      }
+    },
+    async read(reading: PageReading) {
+      const waitMs = reading.waitMs ?? timeouts.probeMs
+      try {
+        const value = await run(
+          script(
+            'read',
+            `const probe = () => { ${readingProbe(reading.expression)} };
+await page.waitForFunction(probe, null, { timeout: ${waitMs} });
+return await page.evaluate(probe);`,
+          ),
+          waitMs + 5_000,
+        )
+        return typeof value === 'string' ? value : null
       } catch (error) {
         if (error instanceof SdkRunError && TIMEOUTS.has(error.code))
           return null
