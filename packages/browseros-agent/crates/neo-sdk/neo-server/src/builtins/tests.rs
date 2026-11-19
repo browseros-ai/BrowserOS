@@ -1732,6 +1732,7 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
         "claw-sdk's own line, not the crate's MCP wording"
     );
     assert_eq!(answer["paidTasks"], 0, "no provider was ever asked");
+    assert_eq!(answer.get("provider"), Some(&Value::Null));
     let row = harness.row(op).await?;
     assert_eq!(
         (row.outcome, row.delivery),

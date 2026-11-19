@@ -107,6 +107,7 @@ fn log_data(event: &CaptchaEvent) -> Value {
         CaptchaEventName::Solved | CaptchaEventName::TokenApplied => {
             fields["method"] = typed::<SolveMethod>(data, "method");
             fields["durationMs"] = typed::<u64>(data, "durationMs");
+            fields["provider"] = typed::<ProviderName>(data, "provider");
             if event.event == CaptchaEventName::TokenApplied {
                 fields["callbackRan"] = typed::<bool>(data, "callbackRan");
             }
@@ -114,10 +115,12 @@ fn log_data(event: &CaptchaEvent) -> Value {
         CaptchaEventName::Failed => {
             fields["status"] = typed::<SolveStatus>(data, "status");
             fields["reason"] = typed::<SolveReason>(data, "reason");
+            fields["provider"] = typed::<ProviderName>(data, "provider");
         }
         CaptchaEventName::Handoff => {
             fields["reason"] = typed::<SolveReason>(data, "reason");
             fields["humanHelp"] = typed::<bool>(data, "humanHelp");
+            fields["provider"] = typed::<ProviderName>(data, "provider");
         }
     }
     fields
@@ -154,12 +157,12 @@ mod tests {
                 page: 42,
                 at_ms: 10,
                 data: json!({"type":"turnstile","method":"token","durationMs":10,
-                    "callbackRan":callback_ran,"token":"secret-token"}),
+                    "callbackRan":callback_ran,"provider":"2captcha","token":"secret-token"}),
             };
             assert_eq!(
                 log_data(&event),
                 json!({"type":"turnstile","method":"token",
-                "durationMs":10,"callbackRan":callback_ran})
+                "durationMs":10,"callbackRan":callback_ran,"provider":"2captcha"})
             );
         }
     }
@@ -271,6 +274,7 @@ mod tests {
                     token: 0,
                 },
                 paid_tasks: 2,
+                provider: Some(ProviderName::Capsolver),
                 cost_usd: 0.002,
                 message: "secret-token https://example.com/private?q=secret secret-image".into(),
                 events: Vec::new(),
@@ -295,7 +299,7 @@ mod tests {
             "recaptcha_v2",
             "example.com",
             "tiles_accepted",
-            "capsolver",
+            r#"provider="capsolver""#,
             "paid_tasks=2",
             "cost_usd=0.002",
         ] {
