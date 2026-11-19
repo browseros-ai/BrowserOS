@@ -549,7 +549,7 @@ return await page.evaluate(async shots => {
     const {data} = ctx.getImageData(0,0,160,90)
     let blue = 0, gray = 0
     for (let i=0; i<data.length; i+=4) {
-      const [r,g,b] = [data[i],data[i+1],data[i+2]]
+      const r = data[i], g = data[i+1], b = data[i+2]
       if (b-r > 65 && b-g > 45 && b > 120) ++blue
       if (Math.abs(r-119)<12 && Math.abs(g-119)<12 && Math.abs(b-119)<12) ++gray
     }
@@ -558,6 +558,59 @@ return await page.evaluate(async shots => {
   return counts
 }, shots)
 ";
+
+async fn trace_jpegs(b: &Browser, id: &str) -> ResultOf<(Vec<String>, Vec<String>)> {
+    let trace = b
+        .host(
+            "GET",
+            &format!("/v1/runs/{id}?wait=30&fields=summary"),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        trace.get("complete"),
+        Some(&json!(true)),
+        "pending trace {id}"
+    );
+    let ops = trace
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("trace operations")?;
+    let mut names = Vec::new();
+    let mut shots = Vec::new();
+    for op in ops {
+        if op.get("hasScreenshot") != Some(&json!(true)) {
+            continue;
+        }
+        let op_id = op.get("id").and_then(Value::as_str).ok_or("trace op id")?;
+        let jpeg = b
+            .rig
+            .host(
+                "GET",
+                &format!("/v1/operations/{op_id}/screenshot"),
+                Some(HOST_TOKEN),
+                None,
+            )
+            .await?;
+        assert_eq!(
+            (jpeg.status, jpeg.header("content-type")),
+            (200, Some("image/jpeg")),
+            "{op_id}"
+        );
+        assert!(
+            jpeg.body.starts_with(&[0xff, 0xd8]) && jpeg.body.ends_with(&[0xff, 0xd9]),
+            "{op_id}"
+        );
+        shots.push(STANDARD.encode(jpeg.body));
+        names.push(
+            op.get("name")
+                .and_then(Value::as_str)
+                .ok_or("trace op name")?
+                .to_owned(),
+        );
+    }
+    Ok((names, shots))
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn background_trace_jpegs_hide_new_and_recreated_cursors() -> TestResult {
@@ -602,57 +655,10 @@ async fn background_trace_jpegs_hide_new_and_recreated_cursors() -> TestResult {
             .get("id")
             .and_then(Value::as_str)
             .ok_or("trace run id")?;
-        let trace = b
-            .host(
-                "GET",
-                &format!("/v1/runs/{id}?wait=30&fields=summary"),
-                None,
-            )
-            .await?;
-        assert_eq!(
-            trace.get("complete"),
-            Some(&json!(true)),
-            "pending trace {id}"
-        );
-        let ops = trace
-            .get("operations")
-            .and_then(Value::as_array)
-            .ok_or("trace operations")?;
-        let mut names = Vec::new();
-        let mut shots = Vec::new();
-        for op in ops {
-            if op.get("hasScreenshot") != Some(&json!(true)) {
-                continue;
-            }
-            let op_id = op.get("id").and_then(Value::as_str).ok_or("trace op id")?;
-            let jpeg = b
-                .rig
-                .host(
-                    "GET",
-                    &format!("/v1/operations/{op_id}/screenshot"),
-                    Some(HOST_TOKEN),
-                    None,
-                )
-                .await?;
-            assert_eq!(
-                (jpeg.status, jpeg.header("content-type")),
-                (200, Some("image/jpeg")),
-                "{op_id}"
-            );
-            assert!(
-                jpeg.body.starts_with(&[0xff, 0xd8]) && jpeg.body.ends_with(&[0xff, 0xd9]),
-                "{op_id}"
-            );
-            shots.push(STANDARD.encode(jpeg.body));
-            names.push(
-                op.get("name")
-                    .and_then(Value::as_str)
-                    .ok_or("trace op name")?,
-            );
-        }
+        let (names, shots) = trace_jpegs(&b, id).await?;
         let writes: Vec<_> = names
             .iter()
-            .copied()
+            .map(String::as_str)
             .filter(|name| matches!(*name, "page.goto" | "locator.click" | "mouse.move"))
             .collect();
         assert_eq!(
@@ -693,4 +699,205 @@ async fn background_trace_jpegs_hide_new_and_recreated_cursors() -> TestResult {
         leaks.join("\n")
     );
     Ok(())
+}
+
+// BEGIN standalone phone diagnostic (the report runs this module against the plain base).
+mod phone_repro {
+    use std::{error::Error, sync::Arc, time::Duration};
+
+    use browseros_cdp::{CdpClient, ConnectOptions};
+    use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
+    use neo_takeover::testing::FakeXvnc;
+    use rmcp::model::{CallToolRequestParams, MetaObject, RequestMetaObject};
+    use serde_json::{Value, json};
+    use tokio::time::{self, Instant};
+
+    use super::browseros_rig::{
+        CaptchaKey, Client, HOST_TOKEN, RUN_META, Rig, TestResult, browser_or_skip, outcome, run,
+    };
+
+    // Retain every pointer, touch and compatibility mouse event, including a release after
+    // the SDK has already returned. All event times use the page's clock from the same mark.
+    const PAGE: &str = r#"
+      const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>#target{position:absolute;left:80px;top:64px;width:80px;height:40px}</style>
+        <button id="target">Target</button>
+        <script>
+        window.events=[]
+        for (const kind of ['pointerover','pointerenter','pointermove','pointerdown','pointerup','pointercancel','pointerout','pointerleave',
+          'touchstart','touchmove','touchend','touchcancel','mouseover','mouseenter','mousemove','mousedown','mouseup','click','dblclick','contextmenu','mouseout','mouseleave']) {
+          document.addEventListener(kind,e=>{
+            if(window.start===undefined)return
+            const point=e.changedTouches?.[0]||e
+            events.push({t:Math.round(performance.now()-start),kind,id:e.target.id||e.target.nodeName,
+              trusted:e.isTrusted, pointerType:e.pointerType??null, x:point.clientX,y:point.clientY,
+              button:e.button??null,buttons:e.buttons??null,touches:e.touches?.length??null})
+          },{capture:true,passive:true})
+        }
+        </script>`
+      await page.goto('data:text/html,'+encodeURIComponent(html)); return page.tabId
+    "#;
+    const META: &str = "phone-repro";
+
+    async fn value(client: &Client, code: &str) -> Result<Value, Box<dyn Error>> {
+        let result = run(client, code, &json!({"taskId":META})).await?;
+        if outcome(&result)?.get("status") != Some(&json!("ok")) {
+            return Err(format!("{:?}", result.content).into());
+        }
+        result
+            .structured_content
+            .and_then(|v| v.get("value").cloned())
+            .ok_or_else(|| "missing value".into())
+    }
+
+    // Raw mouse.click has no per-op timeout. Give the run a real deadline so the SDK itself
+    // reports the outcome and drains/releases its input before we read the page in a new run.
+    async fn sdk_click(client: &Client, action: &str) -> Result<Value, Box<dyn Error>> {
+        let code = format!(
+            "try {{ await {action}; return 'resolved' }} catch (e) {{return {{code:e.code, name:e.name, delivery:e.delivery, message:e.message}}}}"
+        );
+        let Value::Object(args) = json!({"code":code,"timeout":4000}) else {
+            return Err("run arguments".into());
+        };
+        let mut meta = MetaObject::new();
+        meta.insert(RUN_META.to_owned(), json!({"taskId":META}));
+        let mut params = CallToolRequestParams::new("run").with_arguments(args);
+        params.meta = Some(RequestMetaObject(meta));
+        let start = Instant::now();
+        let result = time::timeout(Duration::from_secs(10), client.call_tool(params)).await??;
+        Ok(
+            json!({"wallMs":start.elapsed().as_millis(), "status":outcome(&result)?.get("status"),
+            "response":result.structured_content,"text":result.content}),
+        )
+    }
+
+    // Independent CDP control. Submit release on a timer even if the press has no reply yet.
+    // The physical point (240,168) corresponds to CSS (120,84) at 2x preview zoom.
+    async fn ack(rig: &Rig, tab: i64) -> Result<Value, Box<dyn Error>> {
+        let cdp = Arc::new(CdpClient::connect(ConnectOptions::new(rig.cdp_port())).await?);
+        let browser = BrowserSession::new(
+            Arc::<CdpClient>::clone(&cdp),
+            BrowserSessionHooks::default(),
+        );
+        let pages = browser.pages.resolve_tab_ids(&[TabId(tab)]).await?;
+        let page = pages.get(&TabId(tab)).cloned().ok_or("phone tab")?;
+        let session = browser.pages.get_session(page).await?.session;
+        let start = Instant::now();
+        let dispatch = |kind: &'static str, buttons: u8, force: f64| {
+            let session = &session;
+            async move {
+                let sent = start.elapsed().as_millis();
+                let reply = time::timeout(Duration::from_secs(6), session.send_value("Input.dispatchMouseEvent",
+                    json!({"type":kind,"button":"left","buttons":buttons,"clickCount":1,"modifiers":0,"force":force,"x":240,"y":168}))).await;
+                json!({"sentMs":sent,"finishedMs":start.elapsed().as_millis(),"reply":format!("{reply:?}")})
+            }
+        };
+        let (press, release) = tokio::join!(dispatch("mousePressed", 1, 0.5), async {
+            time::sleep(Duration::from_secs(3)).await;
+            dispatch("mouseReleased", 0, 0.0).await
+        });
+        cdp.disconnect().await;
+        Ok(json!({"mousePressed":press,"mouseReleased":release}))
+    }
+
+    #[expect(
+        clippy::print_stderr,
+        reason = "the ignored reproduction exports full input and protocol evidence"
+    )]
+    pub(super) async fn measure(settings: Option<&Value>, methods: &[&str]) -> TestResult {
+        let Some(binary) = browser_or_skip() else {
+            return Ok(());
+        };
+        for method in methods {
+            let screen = FakeXvnc::start("1600x1000".parse()?).await?;
+            let rig = Rig::start_with(
+                &binary,
+                CaptchaKey::Absent,
+                &[("CLAW_XVNC_ADDR", &screen.addr().to_string())],
+            )?;
+            rig.until_ready().await?;
+            if let Some(settings) = settings {
+                let state = rig
+                    .host("PATCH", "/v1/settings", Some(HOST_TOKEN), Some(settings))
+                    .await?
+                    .json()?;
+                assert_eq!(state.get("unknown"), Some(&json!([])), "{state}");
+            }
+            let client = rig.client().await?;
+            let tab = value(&client, PAGE).await?.as_i64().ok_or("tab id")?;
+            let fit = rig
+                .host(
+                    "POST",
+                    &format!("/v1/tabs/{tab}/fit"),
+                    Some(HOST_TOKEN),
+                    Some(&json!({"width":366,"height":700,"scale":2})),
+                )
+                .await?
+                .json()?;
+            let id = fit.get("id").and_then(Value::as_str).ok_or("fit id")?;
+            let measured = async {
+                let metrics = value(
+                    &client,
+                    r"
+                    return await page.evaluate(() => {
+                      window.start = performance.now()
+                      return [innerWidth, innerHeight, devicePixelRatio, navigator.maxTouchPoints]
+                    })",
+                )
+                .await?;
+                assert_eq!(metrics, json!([366, 700, 2, 5]));
+                let outcome = match *method {
+                    "locator" => {
+                        sdk_click(&client, "page.locator('#target').click({timeout:3000})").await?
+                    }
+                    "mouse" => sdk_click(&client, "page.mouse.click(120,84)").await?,
+                    "cdp" => ack(&rig, tab).await?,
+                    _ => return Err("unknown probe".into()),
+                };
+                time::sleep(Duration::from_millis(600)).await;
+                let log = value(
+                    &client,
+                    r"
+                    return await page.evaluate(() => ({
+                      observedUntilMs: Math.round(performance.now()-start), events: window.events
+                    }))",
+                )
+                .await?;
+                eprintln!(
+                    "PHONE {method} {}",
+                    json!({"outcome":outcome,"metrics":metrics,"page":log})
+                );
+                Ok::<_, Box<dyn Error>>(())
+            }
+            .await;
+            let release = rig
+                .host(
+                    "POST",
+                    &format!("/v1/fits/{id}/restore"),
+                    Some(HOST_TOKEN),
+                    None,
+                )
+                .await?;
+            assert_eq!(release.status, 200, "{}", release.text());
+            measured?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "manual 2x phone input and CDP acknowledgement diagnostic"]
+    async fn plain_phone_inputs() -> TestResult {
+        measure(None, &["locator", "mouse", "cdp"]).await
+    }
+}
+// END standalone phone diagnostic.
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "paired measurement for the plain-base phone input diagnostic"]
+async fn enabled_phone_inputs() -> TestResult {
+    phone_repro::measure(
+        Some(&json!({"input":{"cursor":"on"}})),
+        &["locator", "mouse"],
+    )
+    .await
 }
