@@ -449,18 +449,22 @@ async fn owner_takes_over_during_glide() -> TestResult {
     Ok(())
 }
 
-// Navigation rendezvous: the host changes the setting between two clicks in one SDK run.
-// Answer only after PATCH returns, so the second click deterministically sees the new value.
+// The fixture's same-origin fetch completes only after the host PATCH. Both clicks use the
+// same tab, document, locator and SDK run, with no delay for the old cursor's idle timer.
 async fn turn_off_between_clicks(b: &Browser, listener: &TcpListener) -> TestResult {
-    let (mut stream, _) = time::timeout(Duration::from_secs(10), listener.accept()).await??;
-    let mut request = String::new();
-    BufReader::new(&mut stream).read_line(&mut request).await?;
-    if !request.starts_with("GET /switch ") {
-        return Err(format!("expected the agent's /switch navigation: {request}").into());
+    loop {
+        let (mut stream, _) = time::timeout(Duration::from_secs(10), listener.accept()).await??;
+        let mut request = String::new();
+        BufReader::new(&mut stream).read_line(&mut request).await?;
+        let switch = request.starts_with("GET /switch ");
+        if switch {
+            b.cursor("off").await?;
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
+        if switch {
+            return Ok(());
+        }
     }
-    b.cursor("off").await?;
-    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -470,12 +474,23 @@ async fn live_setting_changes_between_clicks() -> TestResult {
     };
     b.cursor("on").await?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let url = format!("http://{}/switch", listener.local_addr()?);
+    let url = format!("http://{}/fixture", listener.local_addr()?);
     let script = format!(
         r"
-      const before = await matrix('locator', true)
       await page.goto({url:?})
-      const after = await matrix('locator', false)
+      await page.setContent(html)
+      await observe(false)
+      const target = page.locator('#target')
+      const before = await landing(() => target.click(), {{on:true}})
+      await page.evaluate(async selector => {{
+        if (!(await fetch('/switch')).ok) throw new Error('host switch failed')
+        // A connected previous cursor can be reused without another insertion. Remove it and
+        // move the button so any stale on-setting would have to create a new visible cursor.
+        document.querySelector(selector)?.remove()
+        document.querySelector('#target').style.left = '230px'
+        window.cursorEvents.length = 0
+      }}, selector)
+      const after = await landing(() => target.click(), {{on:false,x:270}})
       return {{before,after}}
     "
     );
