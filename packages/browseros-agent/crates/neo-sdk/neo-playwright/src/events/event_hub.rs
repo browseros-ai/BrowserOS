@@ -3,18 +3,21 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use browseros_core::{TabId, TargetId};
+use browseros_core::{FrameId, TabId, TargetId};
 use neo_trace::EpochMillis;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
 use crate::RunState;
 use crate::events::dialog_table::{self, DialogAnswer, DialogTable, Unanswerable};
 use crate::events::download_table::DownloadTable;
+use crate::events::frame_lifecycle::EventFrame;
 use crate::events::log_lease::LogLeases;
 use crate::events::page_event::{BindingCalled, DialogId, DialogKind, PageEvent};
 use crate::events::run_events::QueuedCall;
+use crate::events::tab_frames::{TabFrameList, TabFrames};
 use crate::events::{PageEventKind, Subscription};
 
 /// How many records the log keeps. A reader that falls further behind is told how many it lost.
@@ -53,18 +56,36 @@ struct EventLog {
     /// ring cannot evict one the host has not refreshed its URL facts for. The watcher marks
     /// them (`EventWriter::main_frame_navigated`); a tab's entry goes with its recorded close.
     navigated: HashMap<TargetId, u64>,
-    /// Each open tab's frame-tree version: it moves when a child frame attaches, detaches or
-    /// navigates, when an out-of-process frame's session comes or goes, and when the main frame
-    /// commits a new document, so a run that holds the tab's tree knows it changed (every reply
-    /// carries them, `EventHub::frame_versions`). Only the browser's own events move it, never a
-    /// read of the tree. Kept apart from `records`, as `navigated` is; a tab's entry goes with
-    /// its close.
-    frames: HashMap<TargetId, u64>,
-    /// The last version handed out: versions grow across tabs, so a tab's never repeats.
-    last_frames: u64,
-    /// Each target's tab id, as the watcher learned it, for the per-tab versions every reply
-    /// carries (`EventHub::frame_versions`).
-    tab_ids: HashMap<TargetId, TabId>,
+    /// Every tab's frames and frame-tree version, and each target's tab id ([`TabFrames`]):
+    /// under the log's lock, so a list, its version and the records it includes change together.
+    /// The version moves when a child frame attaches, detaches or navigates, when an
+    /// out-of-process frame's session comes or goes, and when the main frame commits, so a run
+    /// that holds the tab's tree knows it changed (every reply carries them,
+    /// `EventHub::frame_versions`). Only the browser's own events move it, never a read of the
+    /// tree. Kept apart from `records`, as `navigated` is; a tab's version goes with its close.
+    frames: TabFrames,
+}
+
+impl EventLog {
+    /// Appends `event` as the next seq, dropping the oldest record past [`LOG_CAPACITY`]; a
+    /// close forgets its tab's navigation mark, version and tab id.
+    fn append(&mut self, event: PageEvent) -> u64 {
+        self.last_seq += 1;
+        let seq = self.last_seq;
+        if let PageEvent::Closed(target) = &event {
+            self.navigated.remove(target);
+            self.frames.closed(target);
+        }
+        self.records.push_back(EventRecord {
+            seq,
+            at_ms: now_ms(),
+            event,
+        });
+        while self.records.len() > LOG_CAPACITY {
+            self.records.pop_front();
+        }
+        seq
+    }
 }
 
 /// One event, numbered and stamped when the watcher recorded it.
@@ -264,11 +285,24 @@ impl EventHub {
     /// Every tab's frame-tree version whose tab id the watcher knows: every reply carries them,
     /// so a run learns that a tab's frames changed even from a reply about another tab.
     pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
-        let log = self.lock_log();
-        log.frames
-            .iter()
-            .filter_map(|(target, version)| log.tab_ids.get(target).map(|tab| (*tab, *version)))
-            .collect()
+        self.lock_log().frames.versions()
+    }
+
+    /// `tab`'s frames as the watcher's events and seeds left them, main frame first, with its
+    /// version, whether its seed landed and the newest record the list includes
+    /// ([`TabFrames::get`]). Nothing in the product reads it yet.
+    pub(crate) fn tab_frames(&self, tab: &TargetId) -> Option<TabFrameList> {
+        self.lock_log().frames.get(tab)
+    }
+
+    /// The tab a live frame belongs to, same-process children included ([`TabFrames::owner`]).
+    pub(crate) fn frame_owner(&self, frame: &FrameId) -> Option<TargetId> {
+        self.lock_log().frames.owner(frame).cloned()
+    }
+
+    /// `tab`'s main frame, once its commit or seed was applied ([`TabFrames::main`]).
+    pub(crate) fn main_frame(&self, tab: &TargetId) -> Option<EventFrame> {
+        self.lock_log().frames.main(tab)
     }
 
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
@@ -322,25 +356,7 @@ impl EventHub {
 impl EventWriter {
     /// Appends `event`, dropping the oldest record past [`LOG_CAPACITY`], and wakes the readers.
     pub(crate) fn record(&mut self, event: PageEvent) -> u64 {
-        let seq = {
-            let mut log = self.hub.lock_log();
-            log.last_seq += 1;
-            let seq = log.last_seq;
-            if let PageEvent::Closed(target) = &event {
-                log.navigated.remove(target);
-                log.frames.remove(target);
-                log.tab_ids.remove(target);
-            }
-            log.records.push_back(EventRecord {
-                seq,
-                at_ms: now_ms(),
-                event,
-            });
-            while log.records.len() > LOG_CAPACITY {
-                log.records.pop_front();
-            }
-            seq
-        };
+        let seq = self.hub.lock_log().append(event);
         // Outside the lock: woken readers take it at once.
         self.hub.changed.notify_waiters();
         seq
@@ -388,18 +404,73 @@ impl EventWriter {
         self.hub.lock_log().navigated.insert(tab, seq);
     }
 
-    /// Records that `tab`'s frame tree changed (see `EventLog::frames`). The watcher calls it, as
-    /// only the watcher knows which tab a frame's session belongs to.
     /// Records `target`'s tab id, which the per-tab versions are keyed by on the wire.
     pub(crate) fn tab_id(&mut self, target: TargetId, tab: TabId) {
-        self.hub.lock_log().tab_ids.insert(target, tab);
+        self.hub.lock_log().frames.tab_id(target, tab);
     }
 
+    /// Moves `tab`'s frame-tree version for an out-of-process frame's session attaching or
+    /// ending (see `EventLog::frames`). The watcher calls it, as only the watcher knows which tab
+    /// a frame's session belongs to; a frame event moves it in [`Self::frame_event`].
     pub(crate) fn frames_changed(&mut self, tab: TargetId) {
+        self.hub.lock_log().frames.changed(tab);
+    }
+
+    /// Seeds `tab`'s list from a `Page.getFrameTree` reply, whole as of the log's head
+    /// ([`TabFrames::seed`]). A seed moves no version.
+    pub(crate) fn seed_frames(&mut self, tab: &TargetId, tree: Value) {
         let mut log = self.hub.lock_log();
-        log.last_frames += 1;
-        let version = log.last_frames;
-        log.frames.insert(tab, version);
+        let head = log.last_seq;
+        log.frames.seed(tab, tree, head);
+    }
+
+    /// Applies one CDP frame event of `tab`'s lifecycle source to its list, writes its
+    /// transitions as records when `write` (only while a session of core's is on the tab, or
+    /// for a source whose records main wrote, `Watcher::records_page_events`), and moves the
+    /// tab's version on any transition or any commit, as the version always moved. All of it
+    /// under one lock, so a reader never sees the list, its version and the records it includes
+    /// disagree; the list names the newest record it includes.
+    pub(crate) fn frame_event(
+        &mut self,
+        tab: &TargetId,
+        method: &str,
+        params: &Value,
+        write: bool,
+    ) {
+        let written = {
+            let mut log = self.hub.lock_log();
+            let transitions = log.frames.record(tab, method, params);
+            let changed = !transitions.is_empty();
+            let written = write && changed;
+            if write {
+                for transition in transitions {
+                    log.append(PageEvent::FrameLifecycle(transition));
+                }
+            }
+            if changed {
+                let head = log.last_seq;
+                log.frames.included(tab, head);
+            }
+            if changed || method == "Page.frameNavigated" {
+                log.frames.changed(tab.clone());
+            }
+            written
+        };
+        if written {
+            self.hub.changed.notify_waiters();
+        }
+    }
+
+    /// Forgets `tab`'s list as the watcher drops the tab; its version goes with its recorded
+    /// close ([`TabFrames::forget`]).
+    pub(crate) fn forget_frames(&mut self, tab: &TargetId) {
+        self.hub.lock_log().frames.forget(tab);
+    }
+
+    /// Forgets every tab's list after a reconnect lost the events between
+    /// ([`TabFrames::reset_lists`]).
+    pub(crate) fn reset_frame_lists(&mut self) {
+        self.hub.lock_log().frames.reset_lists();
     }
 
     /// The hub this writer appends to.

@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::time;
 
 use crate::action::action_op;
+use crate::events::tab_frames::TabFrameList;
 use crate::events::{
     BINDING_CALLED, EventFence, EventHub, Fence, TargetWatcher, WatcherHandle, WatcherProgress,
     event_op,
@@ -205,6 +206,15 @@ impl Playwright {
     #[must_use]
     pub fn frame_versions(&self) -> Vec<(TabId, u64)> {
         self.events.frame_versions()
+    }
+
+    /// A tab's frames as the target watcher's events and seeds left them, main frame first,
+    /// with the tab's frame version, whether its seed landed and the newest event-log seq the
+    /// list includes; `None` for a target the watcher keeps nothing for. Nothing in the product
+    /// reads it yet: the comparison row checks it against the browser's own tree.
+    #[must_use]
+    pub fn tab_frames(&self, target: &TargetId) -> Option<TabFrameList> {
+        self.events.tab_frames(target)
     }
 
     /// The browser connection, for what an op does after it admitted its page: raw sessions,

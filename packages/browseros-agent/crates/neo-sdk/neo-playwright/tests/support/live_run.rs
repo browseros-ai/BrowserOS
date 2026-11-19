@@ -14,10 +14,12 @@ use std::{env, future};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
-    SessionId, TabId,
+    SessionId, TabId, TargetId,
 };
 use futures_util::future::BoxFuture;
-use neo_playwright::{ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState};
+use neo_playwright::{
+    ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState, TabFrameList,
+};
 use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
@@ -467,6 +469,12 @@ impl LiveRun {
     /// `frames`: a run re-reads a listed tab's tree once its version moved.
     pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
         self.playwright.frame_versions()
+    }
+
+    /// `target`'s frames as the run's target watcher built them from the tab's events and seeds
+    /// (`Playwright::tab_frames`).
+    pub(crate) fn tab_frames(&self, target: &TargetId) -> Option<TabFrameList> {
+        self.playwright.tab_frames(target)
     }
 
     /// Mirrors the door's cache observation for live tests, including watcher/core lag.
