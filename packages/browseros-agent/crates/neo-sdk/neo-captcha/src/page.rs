@@ -1226,6 +1226,7 @@ mod tests {
         let ctx = SolveCtx {
             page: &page,
             backend: &backend,
+            payments: &Default::default(),
             events: &events,
             lease: &lease,
             cancel: &cancel,

@@ -197,7 +197,7 @@ impl ProviderChain {
     {
         let mut previous = None;
         let mut errors = Vec::new();
-        let mut charged = false;
+        let mut last_charged = None;
         let mut prior_cost = 0.0;
         for (index, client) in self.clients.iter().enumerate() {
             if !client.supports(current.as_ref()) {
@@ -208,7 +208,8 @@ impl ProviderChain {
                     Ok(Some(fresh_task)) => current = std::borrow::Cow::Owned(fresh_task),
                     Ok(None) => return Err(previous_error),
                     Err(mut error) => {
-                        error.charged = charged;
+                        error.provider = last_charged;
+                        error.charged = last_charged.is_some();
                         return Err(error);
                     }
                 }
@@ -221,14 +222,14 @@ impl ProviderChain {
             {
                 errors.push("provider attempt cancelled or insufficient time remaining".into());
                 return Err(ProviderError {
-                    provider: Some(provider),
+                    provider: last_charged.or(Some(provider)),
                     kind: if cancel.is_cancelled() {
                         ProviderErrorKind::Cancelled
                     } else {
                         ProviderErrorKind::Timeout
                     },
                     message: errors.join("; "),
-                    charged,
+                    charged: last_charged.is_some(),
                 });
             }
             let result = async {
@@ -247,8 +248,8 @@ impl ProviderChain {
                     return Ok(answer);
                 }
                 Err(mut error) => {
-                    charged |= error.charged;
                     if error.charged {
+                        last_charged = Some(provider);
                         prior_cost += estimate(task);
                     }
                     errors.push(format!("{provider:?} {:?}: {}", error.kind, error.message));
@@ -261,16 +262,13 @@ impl ProviderChain {
                         error.kind = ProviderErrorKind::SpendLimit;
                         errors.push("paid-task limit reached".into());
                     }
+                    error.message = errors.join("; ");
+                    error.provider = last_charged.or(error.provider);
+                    error.charged = last_charged.is_some();
                     if !error.kind.may_fallback() || !next {
-                        error.message = errors.join("; ");
-                        error.charged = charged;
                         return Err(error);
                     }
-                    previous = Some(ProviderError {
-                        message: errors.join("; "),
-                        charged,
-                        ..error
-                    });
+                    previous = Some(error);
                 }
             }
         }
@@ -1592,6 +1590,36 @@ mod tests {
         assert!(error.message.contains("PRIMARY_AUTH"));
         assert!(error.message.contains("BACKUP_EMPTY"));
         assert_eq!(chain.paid_tasks(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failed_chain_names_the_last_vendor_that_charged() -> anyhow::Result<()> {
+        for (backup_charged, expected) in [
+            (false, ProviderName::Capsolver),
+            (true, ProviderName::TwoCaptcha),
+        ] {
+            let (primary, _) = fake(
+                "PRIMARY_FAILED",
+                Some(ProviderErrorKind::Unsolvable),
+                true,
+                true,
+            );
+            let backup = FakeVendor {
+                provider: ProviderName::TwoCaptcha,
+                code: "BACKUP_FAILED",
+                failure: Some(ProviderErrorKind::Unsolvable),
+                charged: backup_charged,
+                supported: true,
+                calls: Arc::default(),
+            };
+            let chain = ProviderChain::with_clients(vec![primary, Box::new(backup)], 2);
+            let Err(error) = solve(&chain, &recaptcha()).await else {
+                anyhow::bail!("both vendors failed");
+            };
+            assert!(error.charged);
+            assert_eq!(error.provider, Some(expected));
+        }
         Ok(())
     }
 

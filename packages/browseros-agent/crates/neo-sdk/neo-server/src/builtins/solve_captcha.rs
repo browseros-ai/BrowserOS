@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use browseros_core::CoreError;
-use neo_captcha::types::{CaptchaEvent, CaptchaKind, SolveOutcome, SolveReason, Verdict};
+use neo_captcha::types::{
+    CaptchaEvent, CaptchaKind, ProviderName, SolveOutcome, SolveReason, Verdict,
+};
 use neo_captcha::{CaptchaSolver, HumanHelp, SolveRefusal};
 use neo_trace::Effect;
 use serde::{Deserialize, Serialize};
@@ -18,7 +20,7 @@ use crate::dispatch::{
 /// The method's own line in the `run` description, shown only when this Neo has a provider key.
 /// Its time limit is neo-captcha's [`neo_captcha::SOLVE_DEADLINE`], which a test checks.
 const LISTED: &str = "neo.solveCaptcha(page) → { verdict, type, reason, message, durationMs, \
-    paidTasks }: solves the CAPTCHA on the page, in up to 120 s. Branch on `verdict`: solved | \
+    paidTasks, provider }: solves the CAPTCHA on the page, in up to 120 s. Branch on `verdict`: solved | \
     token_applied | already_clear | unsolved | cancelled | unknown. After cancelled or unknown, \
     look at the page again. Await it before any other action on that page: a write there \
     meanwhile fails `page_busy`.";
@@ -68,6 +70,7 @@ struct SolveOutput {
     message: String,
     duration_ms: u64,
     paid_tasks: u32,
+    provider: Option<ProviderName>,
 }
 
 impl Method for SolveCaptcha {
@@ -151,6 +154,7 @@ fn verdict_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
         message: message_for(verdict, outcome.reason, outcome.kind),
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
+        provider: outcome.provider,
     })
 }
 
@@ -272,7 +276,8 @@ fn cause(reason: SolveReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use neo_captcha::types::{
-        Attempts, CaptchaKind, SolveMethod, SolveOutcome, SolveReason, SolveStatus, Verdict,
+        Attempts, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, SolveStatus,
+        Verdict,
     };
 
     use super::{LISTED, cause, message, verdict_value};
@@ -322,6 +327,7 @@ mod tests {
             duration_ms: 1840,
             attempts: Attempts::default(),
             paid_tasks: 0,
+            provider: None,
             cost_usd: 0.0,
             message: "Call request_human_help with kind \"captcha\".".to_owned(),
             events: Vec::new(),
@@ -404,6 +410,7 @@ mod tests {
                             needs their help.",
                 "durationMs": 1840,
                 "paidTasks": 0,
+                "provider": null,
             }))
         );
         refused.kind = Some(CaptchaKind::Hcaptcha);
@@ -433,10 +440,10 @@ mod tests {
 
     #[test]
     fn a_verdict_is_a_value_with_the_crates_facts_and_claw_sdks_line() {
-        let value = verdict_value(&outcome(
-            SolveStatus::NeedsHuman,
-            SolveReason::TilesExhausted,
-        ));
+        let mut paid = outcome(SolveStatus::NeedsHuman, SolveReason::TilesExhausted);
+        paid.paid_tasks = 1;
+        paid.provider = Some(ProviderName::TwoCaptcha);
+        let value = verdict_value(&paid);
         let value = value.map(|value| serde_json::to_value(value).ok());
         assert_eq!(
             value,
@@ -447,7 +454,8 @@ mod tests {
                 "message": "The CAPTCHA still blocks the page (every image round failed); stop \
                             and tell the user it needs their help.",
                 "durationMs": 1840,
-                "paidTasks": 0,
+                "paidTasks": 1,
+                "provider": "2captcha",
             }))),
             "unsolved is a value a script branches on, not a thrown error"
         );

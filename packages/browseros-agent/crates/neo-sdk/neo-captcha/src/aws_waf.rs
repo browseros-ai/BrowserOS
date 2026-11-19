@@ -306,9 +306,7 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         result.paid_tasks = 1;
     }
     let answer = answer?;
-    if let Err(error) = &answer {
-        result.paid_tasks = u32::from(error.charged);
-    }
+    ctx.record_payment(result, &answer);
     if let Some(error) = read_error.into_inner().unwrap_or_else(|e| e.into_inner()) {
         return Err(error);
     }
@@ -319,10 +317,6 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         Ok(a) => a,
         Err(e) => return Ok(provider_failure(e)),
     };
-    result.cost_usd = answer
-        .cost_usd
-        .filter(|c| c.is_finite() && *c >= 0.0)
-        .unwrap_or(0.0);
     let fresh = read(ctx, challenge).await?;
     if fresh["stamp"] != state["stamp"] || state_params(&fresh) != state_params(&state) {
         return Ok(unconfirmed());
@@ -1070,6 +1064,10 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
 
     impl FakeBackend {
         fn new(page: &FakePage) -> Self {
+            Self::from_provider(page, ProviderName::Capsolver)
+        }
+
+        fn from_provider(page: &FakePage, provider: ProviderName) -> Self {
             Self {
                 page: page.clone(),
                 tasks: Mutex::default(),
@@ -1078,7 +1076,7 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
                 retry: None,
                 answer: Ok(ProviderAnswer {
                     answer: fields(&[("cookie", "issued:token==")]),
-                    provider: ProviderName::Capsolver,
+                    provider,
                     task_id: Some("task".into()),
                     cost_usd: Some(0.00145),
                 }),
@@ -1184,6 +1182,7 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
             &SolveCtx {
                 page,
                 backend,
+                payments: &Default::default(),
                 events: &events,
                 lease: &lease,
                 cancel,
@@ -1222,6 +1221,7 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
             assert_eq!(result.method, SolveMethod::Token);
             assert_eq!(result.paid_tasks, 1);
             assert_eq!(result.cost_usd, 0.00145);
+            assert_eq!(result.provider, Some(ProviderName::Capsolver));
             assert_eq!(backend.tasks().first(), Some(&SolveTask::AwsWaf(params())));
             assert!(
                 page.state()
@@ -1244,7 +1244,9 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
             let page = FakePage::default();
             page.state().reload_during_verify = true;
             page.state().verify_error = error;
-            let result = run(&page, &FakeBackend::new(&page), &CancellationToken::new()).await?;
+            let backend = FakeBackend::from_provider(&page, ProviderName::TwoCaptcha);
+            let result = run(&page, &backend, &CancellationToken::new()).await?;
+            assert_eq!(result.provider, Some(ProviderName::TwoCaptcha));
             assert_eq!(
                 (result.status, result.reason),
                 (SolveStatus::Solved, SolveReason::TokenAccepted)
@@ -1522,6 +1524,7 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
                 let result = run(&page, &backend, &CancellationToken::new()).await?;
                 assert_eq!(result.reason, reason);
                 assert_eq!(result.paid_tasks, u32::from(charged));
+                assert_eq!(result.provider, charged.then_some(ProviderName::Capsolver));
                 assert!(
                     !page
                         .state()

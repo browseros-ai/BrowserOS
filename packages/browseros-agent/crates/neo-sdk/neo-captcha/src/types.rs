@@ -319,6 +319,7 @@ impl ProviderErrorKind {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("{provider:?} {kind:?}: {message}")]
 pub struct ProviderError {
+    /// On a charged failure, the last vendor that charged, even if a later attempt failed for free.
     pub provider: Option<ProviderName>,
     pub kind: ProviderErrorKind,
     pub message: String, /* vendor errorCode + description; never the key */
@@ -475,6 +476,8 @@ pub struct SolveOutcome {
     pub duration_ms: u64,
     pub attempts: Attempts,
     pub paid_tasks: u32,
+    /// Vendor of the last paid task, including a charged failure. Free solves have no provider.
+    pub provider: Option<ProviderName>,
     pub cost_usd: f64,
     pub message: String,
     pub events: Vec<CaptchaEvent>,
@@ -493,6 +496,7 @@ pub struct FlowResult {
     pub reason: SolveReason,
     pub attempts: Attempts,
     pub paid_tasks: u32,
+    pub provider: Option<ProviderName>,
     pub cost_usd: f64,
     pub callback_ran: bool,
     pub message: String,
@@ -746,6 +750,7 @@ mod tests {
                     token: 3,
                 },
                 paid_tasks: 5,
+                provider: Some(ProviderName::TwoCaptcha),
                 cost_usd: 0.01,
                 message: "test result".into(),
                 events: vec![CaptchaEvent {
@@ -763,7 +768,7 @@ mod tests {
                     "status": status_wire, "type": kind, "method": method_wire, "reason": reason_wire,
                     "requestId": "cap_test", "page": 42, "durationMs": 3120,
                     "attempts": {"checkbox": 1, "tileRounds": 2, "token": 3},
-                    "paidTasks": 5, "costUsd": 0.01, "message": "test result",
+                    "paidTasks": 5, "provider": "2captcha", "costUsd": 0.01, "message": "test result",
                     "events": [{"event": "captcha.detected", "requestId": "cap_test", "page": 42,
                         "atMs": 140, "data": {"state": "active", "complete": true, "challenges": 1}}]
                 })

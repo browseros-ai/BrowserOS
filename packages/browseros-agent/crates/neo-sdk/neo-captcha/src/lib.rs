@@ -31,7 +31,11 @@ mod turnstile;
 mod twocaptcha;
 pub mod types;
 
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use browseros_core::{BrowserView, PageId};
 use futures_util::FutureExt;
@@ -46,7 +50,8 @@ use self::{
     reservation::{ActiveSolve, SolveLease, TabReservations},
     types::{
         Attempts, CaptchaEventName, CaptchaKind, Challenge, ChallengeState, Detection, DocumentId,
-        FlowResult, PageError, SolveMethod, SolveOutcome, SolveReason, SolveStatus, SolveStep,
+        FlowResult, PageError, ProviderAnswer, ProviderError, ProviderName, SolveMethod,
+        SolveOutcome, SolveReason, SolveStatus, SolveStep,
     },
 };
 
@@ -54,9 +59,26 @@ use self::{
 /// (neo-server's `run` description reads it from here), so it is one named number.
 pub const SOLVE_DEADLINE: Duration = Duration::from_secs(120);
 
+/// Confirmed charges belong to the request. The flow can be dropped while it verifies a paid answer.
+#[derive(Default)]
+struct Payments {
+    provider: Option<ProviderName>,
+    count: u32,
+    cost_usd: f64,
+}
+
+impl Payments {
+    fn apply_to(&self, flow: &mut FlowResult) {
+        flow.provider = self.provider;
+        flow.paid_tasks = self.count;
+        flow.cost_usd = self.cost_usd;
+    }
+}
+
 pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub page: &'a P,
     pub backend: &'a B,
+    payments: &'a Mutex<Payments>,
     pub events: &'a EventLog,
     pub lease: &'a SolveLease,
     pub cancel: &'a CancellationToken,
@@ -65,6 +87,28 @@ pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub document: DocumentId,
     pub user_agent: Option<String>,
     pub forced_method: Option<config::ForcedMethod>,
+}
+
+impl<P: CaptchaPage, B: CaptchaBackend> SolveCtx<'_, P, B> {
+    fn record_payment(&self, flow: &mut FlowResult, reply: &Result<ProviderAnswer, ProviderError>) {
+        let mut paid = self.payments.lock().unwrap_or_else(|e| e.into_inner());
+        match reply {
+            Ok(answer) => {
+                paid.count += 1;
+                paid.provider = Some(answer.provider);
+                paid.cost_usd += answer
+                    .cost_usd
+                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
+                    .unwrap_or(0.0);
+            }
+            Err(error) if error.charged => {
+                paid.count += 1;
+                paid.provider = error.provider;
+            }
+            Err(_) => {}
+        }
+        paid.apply_to(flow);
+    }
 }
 
 /// The solver a host holds for its whole process. The paid-task limit and the per-page
@@ -169,6 +213,7 @@ impl CaptchaSolver {
             .try_reserve(page_id.0, &request_id)
             .map_err(SolveRefusal::Busy)?;
         let events = EventLog::new(self.events().clone(), request_id.clone(), page_id.0);
+        let payments = Mutex::new(Payments::default());
         let mut host = None;
         let work = async {
             let mut user_agent = None;
@@ -266,6 +311,7 @@ impl CaptchaSolver {
                         let ctx = SolveCtx {
                             page,
                             backend: &self.providers,
+                            payments: &payments,
                             events: &events,
                             lease: &lease,
                             cancel: &cancel,
@@ -336,11 +382,18 @@ impl CaptchaSolver {
             }
             page_failure(PageError::Navigated)
         };
+        let interrupted = |mut flow: FlowResult| {
+            payments
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .apply_to(&mut flow);
+            flow
+        };
         let mut flow = tokio::select! {
             biased;
-            _ = cancel.cancelled() => page_failure(PageError::Cancelled),
-            _ = tokio::time::sleep_until(deadline) => terminal(SolveStatus::Failed, SolveReason::DeadlineExceeded, "The CAPTCHA solve exceeded its 120-second deadline. Take a fresh snapshot before retrying."),
-            _ = wait_for_page_close(page) => page_failure(PageError::Closed),
+            _ = cancel.cancelled() => interrupted(page_failure(PageError::Cancelled)),
+            _ = tokio::time::sleep_until(deadline) => interrupted(terminal(SolveStatus::Failed, SolveReason::DeadlineExceeded, "The CAPTCHA solve exceeded its 120-second deadline. Take a fresh snapshot before retrying.")),
+            _ = wait_for_page_close(page) => interrupted(page_failure(PageError::Closed)),
             result = work => result,
         };
         let kind = self
@@ -401,11 +454,11 @@ impl CaptchaSolver {
         match flow.status {
             SolveStatus::Solved => events.emit(
                 CaptchaEventName::Solved,
-                json!({"type":kind,"method":flow.method,"durationMs":duration_ms}),
+                json!({"type":kind,"method":flow.method,"durationMs":duration_ms,"provider":flow.provider}),
             ),
             SolveStatus::TokenApplied => events.emit(
                 CaptchaEventName::TokenApplied,
-                json!({"type":kind,"method":flow.method,"durationMs":duration_ms,"callbackRan":flow.callback_ran}),
+                json!({"type":kind,"method":flow.method,"durationMs":duration_ms,"callbackRan":flow.callback_ran,"provider":flow.provider}),
             ),
             SolveStatus::NeedsHuman => events.emit(
                 CaptchaEventName::Handoff,
@@ -430,11 +483,12 @@ impl CaptchaSolver {
             duration_ms,
             attempts: flow.attempts,
             paid_tasks: flow.paid_tasks,
+            provider: flow.provider,
             cost_usd: flow.cost_usd,
             message: flow.message,
             events: events.events(),
         };
-        events::log_outcome(&outcome, host.as_deref(), None);
+        events::log_outcome(&outcome, host.as_deref(), outcome.provider);
         Ok(outcome)
     }
 }
@@ -546,6 +600,7 @@ fn terminal(status: SolveStatus, reason: SolveReason, message: &str) -> FlowResu
         reason,
         attempts: Attempts::default(),
         paid_tasks: 0,
+        provider: None,
         cost_usd: 0.0,
         callback_ran: false,
         message: message.into(),
@@ -628,7 +683,7 @@ mod orchestration_tests {
     };
     use types::{
         CaptchaEventName, CaptchaKind, Challenge, ChallengeState, Detection, FlowResult, FrameRef,
-        PageError, Rect, ScanOutcome, SolveStep,
+        PageError, Rect, ScanOutcome, SolveAnswer, SolveStep,
     };
 
     fn document(loader: &str) -> DocumentId {
@@ -681,7 +736,7 @@ mod orchestration_tests {
 
     struct FakeDriver {
         scans: Mutex<VecDeque<Result<Detection, PageError>>>,
-        stall: bool,
+        stall_after: Option<ProviderAnswer>,
         result: Option<FlowResult>,
         expected_forced_method: Option<config::ForcedMethod>,
     }
@@ -689,7 +744,7 @@ mod orchestration_tests {
         fn new(detection: Detection) -> Self {
             Self {
                 scans: Mutex::new(VecDeque::from([Ok(detection)])),
-                stall: false,
+                stall_after: None,
                 result: None,
                 expected_forced_method: None,
             }
@@ -725,10 +780,7 @@ mod orchestration_tests {
                 CaptchaEventName::Solving,
                 json!({"type":challenge.kind,"method":method,"attempt":1}),
             );
-            if self.stall {
-                std::future::pending::<()>().await;
-            }
-            self.result.clone().unwrap_or_else(|| FlowResult {
+            let mut flow = self.result.clone().unwrap_or_else(|| FlowResult {
                 status: SolveStatus::Solved,
                 method,
                 reason,
@@ -737,10 +789,16 @@ mod orchestration_tests {
                     ..Default::default()
                 },
                 paid_tasks: 0,
+                provider: None,
                 cost_usd: 0.0,
                 callback_ran: false,
                 message: ctx.user_agent.clone().unwrap_or_default(),
-            })
+            });
+            if let Some(answer) = &self.stall_after {
+                ctx.record_payment(&mut flow, &Ok(answer.clone()));
+                std::future::pending::<()>().await;
+            }
+            flow
         }
     }
     fn service() -> CaptchaSolver {
@@ -794,6 +852,45 @@ mod orchestration_tests {
     }
 
     #[tokio::test]
+    async fn a_paid_solve_names_its_provider_in_the_outcome_event_and_log() -> anyhow::Result<()> {
+        let log = tempfile::NamedTempFile::new()?;
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(log.reopen()?)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let driver = FakeDriver {
+            result: Some(FlowResult {
+                method: SolveMethod::Tiles,
+                paid_tasks: 1,
+                provider: Some(ProviderName::Capsolver),
+                ..terminal(SolveStatus::Solved, SolveReason::TilesAccepted, "")
+            }),
+            ..FakeDriver::new(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                true,
+            ))
+        };
+        let outcome = run(&driver, false).await?;
+        assert_eq!(outcome.provider, Some(ProviderName::Capsolver));
+        let event = outcome
+            .events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing solved event"))?;
+        assert_eq!(event.event, CaptchaEventName::Solved);
+        assert_eq!(event.data["provider"], "capsolver");
+        let logs = std::fs::read_to_string(log.path())?;
+        assert!(
+            logs.lines()
+                .any(|line| line.contains("CAPTCHA solve finished")
+                    && line.contains(r#"provider="capsolver""#)),
+            "{logs}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_token_application_emits_its_event_without_human_handoff()
     -> anyhow::Result<()> {
         for kind in [CaptchaKind::RecaptchaV2, CaptchaKind::Turnstile] {
@@ -809,6 +906,7 @@ mod orchestration_tests {
                                 ..Default::default()
                             },
                             paid_tasks: 1,
+                            provider: Some(ProviderName::TwoCaptcha),
                             cost_usd: 0.001,
                             callback_ran,
                             message: token_applied_message(callback_ran),
@@ -816,6 +914,7 @@ mod orchestration_tests {
                         ..FakeDriver::new(scan(&[(kind, ChallengeState::Active)], true))
                     };
                     let outcome = run(&driver, human_help).await?;
+                    assert_eq!(outcome.provider, Some(ProviderName::TwoCaptcha));
                     let event = outcome
                         .events
                         .last()
@@ -824,7 +923,7 @@ mod orchestration_tests {
                     assert_eq!(
                         event.data,
                         json!({"type":kind,"method":"token",
-                        "durationMs":outcome.duration_ms,"callbackRan":callback_ran})
+                        "durationMs":outcome.duration_ms,"callbackRan":callback_ran,"provider":"2captcha"})
                     );
                     assert!(!outcome.events.iter().any(|event| matches!(
                         event.event,
@@ -852,7 +951,8 @@ mod orchestration_tests {
         assert!(outcome.request_id.starts_with("cap_"));
         ulid::Ulid::from_string(&outcome.request_id[4..])?;
         let value = serde_json::to_value(&outcome)?;
-        assert_eq!(value.as_object().map(|object| object.len()), Some(12));
+        assert_eq!(value.as_object().map(|object| object.len()), Some(13));
+        assert_eq!(value.get("provider"), Some(&Value::Null));
         assert_eq!(value["type"], Value::Null);
         assert_eq!(
             value["attempts"],
@@ -1113,6 +1213,7 @@ mod orchestration_tests {
                 (SolveStatus::Solved, Some(kind), method)
             );
             assert_eq!(outcome.message, "fake-agent");
+            assert_eq!(outcome.provider, None);
             assert_eq!(
                 outcome
                     .events
@@ -1135,14 +1236,14 @@ mod orchestration_tests {
         stale.document = document("old");
         let driver = FakeDriver {
             scans: Mutex::new(VecDeque::from([Ok(stale.clone()), Ok(scan(&[], true))])),
-            stall: false,
+            stall_after: None,
             result: None,
             expected_forced_method: None,
         };
         assert_eq!(run(&driver, false).await?.reason, SolveReason::NoCaptcha);
         let driver = FakeDriver {
             scans: Mutex::new(VecDeque::from([Ok(stale.clone()), Ok(stale)])),
-            stall: false,
+            stall_after: None,
             result: None,
             expected_forced_method: None,
         };
@@ -1179,7 +1280,12 @@ mod orchestration_tests {
             let service = service();
             let cancel = CancellationToken::new();
             let driver = FakeDriver {
-                stall: true,
+                stall_after: Some(ProviderAnswer {
+                    answer: SolveAnswer::Tiles(vec![]),
+                    provider: ProviderName::TwoCaptcha,
+                    task_id: None,
+                    cost_usd: Some(0.002),
+                }),
                 ..FakeDriver::new(scan(
                     &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
                     true,
@@ -1213,6 +1319,9 @@ mod orchestration_tests {
             );
             assert_eq!(outcome.attempts.checkbox, 1);
             assert_eq!(outcome.kind, Some(CaptchaKind::RecaptchaV2));
+            assert_eq!(outcome.provider, Some(ProviderName::TwoCaptcha));
+            assert_eq!(outcome.paid_tasks, 1);
+            assert_eq!(outcome.cost_usd, 0.002);
             assert_eq!(
                 outcome.events.last().map(|event| event.event),
                 Some(CaptchaEventName::Failed)
@@ -1251,6 +1360,7 @@ mod orchestration_tests {
                         ..Default::default()
                     },
                     paid_tasks: 2,
+                    provider: Some(ProviderName::Capsolver),
                     cost_usd: 0.002,
                     callback_ran: false,
                     message: "ERROR_ZERO_BALANCE".into(),
@@ -1262,6 +1372,7 @@ mod orchestration_tests {
             };
             let outcome = run(&driver, human_help).await?;
             assert_eq!(outcome.paid_tasks, 2);
+            assert_eq!(outcome.provider, Some(ProviderName::Capsolver));
             assert_eq!(outcome.cost_usd, 0.002);
             assert!(outcome.message.contains("ERROR_ZERO_BALANCE"));
             assert_eq!(outcome.message.contains("request_human_help"), human_help);
