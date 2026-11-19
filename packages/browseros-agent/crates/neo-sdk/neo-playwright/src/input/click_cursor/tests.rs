@@ -20,6 +20,7 @@ struct ClickPage {
     slow_expression: Option<&'static str>,
     evaluating: Notify,
     capturing: Notify,
+    capture_delay: Duration,
     skipped: bool,
     covered: bool,
     armed: AtomicBool,
@@ -82,7 +83,7 @@ impl TabScript for ClickPage {
     fn delay(&self, method: &str, params: &Value) -> Duration {
         if method == "Page.captureScreenshot" {
             self.capturing.notify_one();
-            return Duration::from_millis(100);
+            return self.capture_delay;
         }
         if method == "Runtime.evaluate"
             && let (Some(fragment), Some(js)) =
@@ -296,7 +297,10 @@ async fn abort_during_the_ripple_leaves_delivery_not_sent() -> TestResult {
 
 #[tokio::test(start_paused = true)]
 async fn a_background_capture_reads_pixels_before_the_first_glide_creates_a_canvas() -> TestResult {
-    let tab = ScriptedTab::new(ClickPage::default());
+    let tab = ScriptedTab::new(ClickPage {
+        capture_delay: Duration::from_millis(100),
+        ..Default::default()
+    });
     let mut run = ScriptedRun::over(&tab).await?;
     run.env.draws_cursor = true;
     let browser = run.playwright.browser();
@@ -319,6 +323,67 @@ async fn a_background_capture_reads_pixels_before_the_first_glide_creates_a_canv
         &tab.script().events()[..3],
         &["hide absent", "capture", "glide 10"]
     );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn double_clicks_wait_for_a_busy_screenshot_queue_within_their_budget() -> TestResult {
+    // A PNG holds the same session queue as the trace JPEG without its screencast fallback.
+    for (op, timeout_ms, capture_ms, skip_after_ms) in [
+        ("locator.dblclick", 6_000, 1_500, None),
+        ("mouse.click", 6_000, 1_500, None),
+        // The 100 ms move can finish after the three-second lock wait limit.
+        ("mouse.click", 6_000, 2_950, None),
+        ("mouse.click", 3_000, 1_500, Some(1_000)),
+        ("mouse.click", 10_000, 4_000, Some(3_000)),
+    ] {
+        let tab = ScriptedTab::new(ClickPage {
+            capture_delay: Duration::from_millis(capture_ms),
+            slow_expression: Some("var BrowserOSAgentCursor"),
+            ..Default::default()
+        });
+        let mut run = ScriptedRun::over(&tab).await?;
+        run.env.draws_cursor = true;
+        let browser = run.playwright.browser();
+        let page = browser.pages.list().await?.pop().ok_or("missing tab")?;
+        let capture = browser.screenshot_for_target(
+            page.page_id,
+            &page.target_id,
+            ScreenshotCaptureOptions::default(),
+        );
+        let (shot, click) = tokio::join!(capture, async {
+            wait_for_request(&tab.script().capturing).await;
+            let started = time::Instant::now();
+            let mut options = json!({"call": {"timeoutMs": timeout_ms}});
+            if op == "mouse.click" {
+                options["clickCount"] = json!(2);
+            }
+            invoke(&run, op, options).await.map(|_| started.elapsed())
+        });
+        assert_eq!(shot?.ok_or("target closed")?.data, "AQID");
+        let elapsed = click?;
+        let mut events = tab.script().events();
+        events.retain(|event| !matches!(event.as_str(), "measure" | "arm"));
+        let mut expected = vec!["hide absent"];
+        if skip_after_ms.is_none() {
+            expected.extend(["capture", "glide 10", "ripple 10,20"]);
+        }
+        expected.extend([
+            "mouseMoved 10 0",
+            "mousePressed 10 1",
+            "mouseReleased 10 1",
+            "mousePressed 10 2",
+            "mouseReleased 10 2",
+        ]);
+        if let Some(wait_ms) = skip_after_ms {
+            expected.push("capture");
+            assert!(
+                elapsed.abs_diff(Duration::from_millis(wait_ms)) < Duration::from_millis(10),
+                "{op} with {timeout_ms}ms budget waited {elapsed:?}"
+            );
+        }
+        assert_eq!(events, expected, "{op} with {timeout_ms}ms budget");
+    }
     Ok(())
 }
 

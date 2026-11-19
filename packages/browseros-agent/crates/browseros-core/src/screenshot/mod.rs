@@ -14,7 +14,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::timeout;
 
 const SCREENSHOT_CAPTURE_DEADLINE: Duration = Duration::from_millis(1_200);
@@ -777,9 +777,14 @@ pub async fn with_screenshot_lock<F: Future>(
     page_session: &ProtocolSession,
     task: impl FnOnce() -> F,
 ) -> F::Output {
-    let mutex = screenshot_mutex(page_session);
-    let _guard = mutex.lock().await;
+    let _guard = acquire_screenshot_lock(page_session).await;
     task().await
+}
+
+/// Acquire the session's capture queue so callers can bound the wait independently of the
+/// work under the lock. As with [`with_screenshot_lock`], do not acquire input while held.
+pub async fn acquire_screenshot_lock(page_session: &ProtocolSession) -> OwnedMutexGuard<()> {
+    screenshot_mutex(page_session).lock_owned().await
 }
 
 fn screenshot_mutex(page_session: &ProtocolSession) -> Arc<Mutex<()>> {
