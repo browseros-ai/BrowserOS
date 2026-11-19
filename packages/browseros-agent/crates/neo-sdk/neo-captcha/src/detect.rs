@@ -12,11 +12,9 @@ use super::{
     },
 };
 
-/// Detection's DOM pass over one document, in the adapter's DOM world. `scope`, `vendor`,
-/// `closedRoots` and `truncated` are bound by `dom_script`.
-const DOM_SCAN: &str = r#"
-const widgets = [], roots = [], frames = [], candidates = [];
-let complete = !truncated;
+/// The document and its nested shadow roots, shared by detection and the Cloudflare wall check.
+const DOM_QUERIES: &str = r#"
+const scope = document;
 const closed = new Map(closedRoots.map(r => [r.host, r]));
 const queryRoots = root => {
     const list = [root];
@@ -28,6 +26,12 @@ const queryRoots = root => {
 };
 const scopes = queryRoots(scope);
 const all = (s, root = scope) => (root === scope ? scopes : queryRoots(root)).flatMap(r => [...r.querySelectorAll(s)]);
+"#;
+
+/// Detection's DOM pass over one document, in the adapter's DOM world.
+const DOM_SCAN: &str = r#"
+const widgets = [], roots = [], frames = [], candidates = [];
+let complete = !truncated;
 const closest = (e, selector) => {
     for (let p = e; p; p = p.parentElement || p.getRootNode().host) if (p.matches(selector)) return p;
     return null;
@@ -204,6 +208,10 @@ if (vendor.turnstile && !widgets.some(w => w.kind === 'turnstile')) add(null, 't
 for (const [present, kind] of [[vendor.geetest, 'geetest'], [vendor.awsWaf, 'aws_waf'], [vendor.arkose, 'arkose']])
     if (present && !widgets.some(w => w.kind === kind)) add(null, kind, 'widget_only');
 for (const w of widgets.filter(w => w.kind === 'aws_waf')) w.sitekey ||= vendor.awsKey || null;
+if (wall || vendor.cfChlOpt) add(null, 'cloudflare_challenge', 'active').marker = !wall;
+"#;
+
+const CLOUDFLARE_WALL: &str = r#"
 // A Cloudflare wall loads the page's own challenge script. Bot management's background script
 // (/cdn-cgi/challenge-platform/scripts/precursor/) sets _cf_chl_opt on ordinary pages too.
 const challengeScript = all('script[src]').some(e => {
@@ -212,7 +220,6 @@ const challengeScript = all('script[src]').some(e => {
 });
 const wall = /^Just a moment/i.test(document.title) || all('#challenge-form').length > 0 || challengeScript
     || location.pathname.startsWith('/cdn-cgi/challenge-platform/');
-if (wall || vendor.cfChlOpt) add(null, 'cloudflare_challenge', 'active').marker = !wall;
 "#;
 
 /// The DOM function `CaptchaPage::scan_dom` runs. `vendor` is the top document's settings;
@@ -221,9 +228,13 @@ fn dom_script(vendor: Option<&Vendor>) -> String {
     let settings = vendor
         .and_then(|vendor| serde_json::to_string(vendor).ok())
         .unwrap_or_else(|| "null".to_owned());
-    let join = if vendor.is_some() { JOIN_SCAN } else { "" };
+    let (wall, join) = if vendor.is_some() {
+        (CLOUDFLARE_WALL, JOIN_SCAN)
+    } else {
+        ("", "")
+    };
     format!(
-        "function(closedRoots, truncated) {{ /* captcha:dom */ const scope = document; const vendor = {settings}; {DOM_SCAN} {join} return {{widgets, candidates, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }}"
+        "function(closedRoots, truncated) {{ /* captcha:dom */ const vendor = {settings}; {DOM_QUERIES} {DOM_SCAN} {wall} {join} return {{widgets, candidates, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }}"
     )
 }
 
@@ -295,6 +306,12 @@ struct Widget {
 }
 
 impl Widget {
+    fn is_cloudflare_wall(&self) -> bool {
+        self.challenge.kind == CaptchaKind::CloudflareChallenge
+            && self.challenge.host_frame.is_none()
+            && !self.marker
+    }
+
     fn new(kind: CaptchaKind) -> Self {
         Self {
             challenge: Challenge {
@@ -426,6 +443,7 @@ pub async fn detect(page: &impl CaptchaPage, budget: Duration) -> Result<Detecti
             challenges: vec![],
             complete,
             document: document.clone(),
+            cloudflare_wall: false,
         };
         match bounded(deadline, page.document()).await {
             Ok(after) if after != document => {
@@ -443,6 +461,7 @@ pub async fn detect(page: &impl CaptchaPage, budget: Duration) -> Result<Detecti
             }
         }
         result.complete &= Instant::now() < deadline;
+        result.cloudflare_wall = widgets.iter().any(Widget::is_cloudflare_wall);
         result.challenges = widgets.drain(..).map(|w| w.challenge).collect();
         result.outcome = if !result.challenges.is_empty() {
             ScanOutcome::Detected
@@ -453,6 +472,20 @@ pub async fn detect(page: &impl CaptchaPage, budget: Duration) -> Result<Detecti
         };
         return Ok(result);
     }
+}
+
+/// Checks the top document with the same DOM rules used for detection. An incomplete probe
+/// can establish that the wall is present, but cannot establish that it is gone.
+pub(super) async fn cloudflare_wall(page: &impl CaptchaPage) -> Result<Option<bool>, PageError> {
+    let probe = format!(
+        "function(closedRoots, truncated) {{ /* captcha:cloudflare-wall */
+        {DOM_QUERIES} {CLOUDFLARE_WALL}
+        if (wall) return true;
+        if (truncated || document.readyState === 'loading') return null;
+        return false;
+    }}"
+    );
+    decode(page.scan_dom(None, &probe).await?)
 }
 
 async fn scan(
@@ -2031,7 +2064,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_cloudflare_full_page_challenges_are_unsupported() -> Result<(), PageError> {
+    async fn tests_that_cloudflare_full_page_challenges_are_recognized() -> Result<(), PageError> {
         let result = scan(&FakePage::new(json!([widget(
             "cloudflare_challenge",
             "active"

@@ -19,6 +19,7 @@
 
 mod arkose;
 mod aws_waf;
+mod cloudflare;
 pub mod config;
 mod detect;
 pub mod events;
@@ -235,21 +236,25 @@ impl CaptchaSolver {
                         Err(error) => return page_failure(error),
                     },
                 };
-                let current = match page.document().await {
-                    Ok(document) => document,
-                    Err(PageError::Navigated) if rescan == 0 => continue,
-                    Err(error) => return page_failure(error),
-                };
-                if current != detection.document {
-                    if rescan == 0 {
-                        continue;
+                // The Cloudflare observer needs the original document even if it just cleared.
+                // Other flows act on the page, so their detection must still be current.
+                if !detection.cloudflare_wall {
+                    let current = match page.document().await {
+                        Ok(document) => document,
+                        Err(PageError::Navigated) if rescan == 0 => continue,
+                        Err(error) => return page_failure(error),
+                    };
+                    if current != detection.document {
+                        if rescan == 0 {
+                            continue;
+                        }
+                        return page_failure(PageError::Navigated);
                     }
-                    return page_failure(PageError::Navigated);
                 }
                 if let Some(challenge) = detection
                     .challenges
                     .iter()
-                    .find(|challenge| challenge.kind.is_supported())
+                    .find(|challenge| detection.supports(challenge))
                 {
                     lease.set_progress(Some(challenge.kind), SolveStep::Detecting);
                 }
@@ -271,13 +276,19 @@ impl CaptchaSolver {
                     })
                     .or_else(|| {
                         detection.challenges.iter().find(|challenge| {
-                            challenge.kind.is_supported()
+                            challenge.kind == CaptchaKind::CloudflareChallenge
+                                && detection.supports(challenge)
+                        })
+                    })
+                    .or_else(|| {
+                        detection.challenges.iter().find(|challenge| {
+                            detection.supports(challenge)
                                 && challenge.state == ChallengeState::Active
                         })
                     })
                     .or_else(|| {
                         detection.challenges.iter().find(|challenge| {
-                            !challenge.kind.is_supported()
+                            !detection.supports(challenge)
                                 && challenge.kind != CaptchaKind::Unknown
                                 && matches!(
                                     challenge.state,
@@ -287,7 +298,9 @@ impl CaptchaSolver {
                     })
                     .or_else(|| detection.challenges.first());
                 if selected.is_some_and(|challenge| {
-                    challenge.kind.is_supported() && challenge.state == ChallengeState::Active
+                    detection.supports(challenge)
+                        && challenge.state == ChallengeState::Active
+                        && challenge.kind != CaptchaKind::CloudflareChallenge
                 }) && !read_user_agent
                 {
                     user_agent = page
@@ -316,7 +329,7 @@ impl CaptchaSolver {
                             Some(challenge.kind),
                         ),
                     );
-                    if challenge.kind.is_supported() && challenge.state == ChallengeState::Active {
+                    if detection.supports(challenge) && challenge.state == ChallengeState::Active {
                         let ctx = SolveCtx {
                             page,
                             backend: &providers,
@@ -326,13 +339,13 @@ impl CaptchaSolver {
                             cancel: &cancel,
                             deadline,
                             page_url: detection.document.url.clone(),
-                            document: detection.document,
+                            document: detection.document.clone(),
                             user_agent,
                             forced_method: self.forced_method,
                         };
                         return driver.solve(&ctx, challenge).await;
                     }
-                    if !challenge.kind.is_supported()
+                    if !detection.supports(challenge)
                         && challenge.kind != CaptchaKind::Unknown
                         && matches!(
                             challenge.state,
@@ -525,6 +538,7 @@ impl SolveDriver for LiveDriver {
         match challenge.kind {
             CaptchaKind::RecaptchaV2 => recaptcha::solve(ctx, challenge).await,
             CaptchaKind::Turnstile => turnstile::solve(ctx, challenge).await,
+            CaptchaKind::CloudflareChallenge => cloudflare::observe(ctx).await,
             CaptchaKind::Geetest => geetest::solve(ctx, challenge).await,
             CaptchaKind::AwsWaf => aws_waf::solve(ctx, challenge).await,
             CaptchaKind::Arkose => arkose::solve(ctx, challenge).await,
@@ -544,7 +558,7 @@ async fn wait_for_ready_detection<P: CaptchaPage>(
     if !detection
         .challenges
         .iter()
-        .any(|challenge| challenge.kind.is_supported())
+        .any(|challenge| detection.supports(challenge))
     {
         return Ok(detection);
     }
@@ -553,10 +567,10 @@ async fn wait_for_ready_detection<P: CaptchaPage>(
     while !detection
         .challenges
         .iter()
-        .any(|challenge| challenge.kind.is_supported() && challenge.state == ChallengeState::Active)
+        .any(|challenge| detection.supports(challenge) && challenge.state == ChallengeState::Active)
         && (!detection.complete
             || detection.challenges.iter().any(|challenge| {
-                challenge.kind.is_supported() && challenge.state == ChallengeState::Unknown
+                detection.supports(challenge) && challenge.state == ChallengeState::Unknown
             }))
     {
         tokio::time::sleep_until((Instant::now() + Duration::from_millis(500)).min(until)).await;
@@ -809,7 +823,7 @@ mod orchestration_tests {
             flow
         }
     }
-    fn service() -> CaptchaSolver {
+    pub(super) fn service() -> CaptchaSolver {
         CaptchaSolver {
             providers: ProviderChain::new(&config::CaptchaConfig::default()),
             reservations: Arc::default(),
@@ -826,6 +840,7 @@ mod orchestration_tests {
             },
             complete,
             document: document("current"),
+            cloudflare_wall: false,
             challenges: challenges
                 .iter()
                 .map(|&(kind, state)| Challenge {

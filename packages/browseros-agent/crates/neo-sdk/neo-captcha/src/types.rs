@@ -27,7 +27,7 @@ pub enum CaptchaKind {
 impl CaptchaKind {
     pub fn is_supported(self) -> bool {
         match self {
-            Self::RecaptchaV2 | Self::Turnstile => true,
+            Self::RecaptchaV2 | Self::Turnstile | Self::CloudflareChallenge => true,
             Self::Geetest => super::geetest::SUPPORTED,
             Self::AwsWaf => super::aws_waf::SUPPORTED,
             Self::Arkose => super::arkose::SUPPORTED,
@@ -121,6 +121,20 @@ pub struct Detection {
     pub challenges: Vec<Challenge>,
     pub complete: bool,
     pub document: DocumentId,
+    /// The top document showed a Cloudflare interstitial. Ordinary pages can carry its marker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloudflare_wall: bool,
+}
+
+impl Detection {
+    pub(crate) fn supports(&self, challenge: &Challenge) -> bool {
+        match challenge.kind {
+            CaptchaKind::CloudflareChallenge => {
+                self.cloudflare_wall && challenge.host_frame.is_none()
+            }
+            kind => kind.is_supported(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,7 +826,9 @@ mod tests {
             assert_eq!(
                 kind.is_supported(),
                 match kind {
-                    CaptchaKind::RecaptchaV2 | CaptchaKind::Turnstile => true,
+                    CaptchaKind::RecaptchaV2
+                    | CaptchaKind::Turnstile
+                    | CaptchaKind::CloudflareChallenge => true,
                     CaptchaKind::Geetest => super::super::geetest::SUPPORTED,
                     CaptchaKind::AwsWaf => super::super::aws_waf::SUPPORTED,
                     CaptchaKind::Arkose => super::super::arkose::SUPPORTED,
