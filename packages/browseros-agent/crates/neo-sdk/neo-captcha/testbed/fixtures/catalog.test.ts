@@ -29,7 +29,6 @@ test('tests that unsupported families are detections refused as unsupported, nev
   for (const [id, type] of [
     ['hcaptcha-test', 'hcaptcha'],
     ['hcaptcha-demo', 'hcaptcha'],
-    ['cloudflare-wall', 'cloudflare_challenge'],
     ['perimeterx-modal', 'unknown'],
   ]) {
     const page = pages.find((p) => p.id === id)
@@ -542,16 +541,25 @@ test('tests that the v3 page needs no submit and records the score its server re
   expect(read(null)).toBeNull()
 })
 
-test('tests that the Cloudflare full page passes only as a detected challenge and records leaving it', () => {
+test('tests that a static Cloudflare wall is handed to a person, not refused as unsupported', () => {
+  expect(FIXTURE_PAGES.find((p) => p.id === 'cloudflare-wall')).toMatchObject({
+    expect: ['unsolved'],
+    expectType: 'cloudflare_challenge',
+    expectReason: ['challenge_not_passed'],
+  })
+})
+
+test('tests that the Cloudflare full page passes only when the site lets the browser through, and records leaving it', () => {
   const page = DEMO_PAGES.find(
     (p) => p.id === 'scrapingcourse-cloudflare-challenge',
   )
   if (!page?.reading) throw new Error('Cloudflare page missing')
-  expect(pageCheck(page)).toBe('detect')
+  expect(pageCheck(page)).toBe('solve')
   expect(page).toMatchObject({
-    expect: ['unsolved'],
+    expect: ['solved', 'already_clear'],
     expectType: 'cloudflare_challenge',
-    expectReason: ['unsupported_type'],
+    site: { acceptedPattern: 'You bypassed the Cloudflare challenge' },
+    mayNeedPaid: true,
   })
   const read = (title: string, innerText: string) =>
     new Function('document', `return ${page.reading?.expression}`)({

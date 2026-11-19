@@ -125,6 +125,8 @@ export function stubSdkSolve(verdict: Verdict, type: string | null) {
 export function stubClawServerSolve(
   status: string,
   type: string | null,
+  /** The page's expected reason, as the SDK stub answers; else the status's usual one. */
+  reason?: string,
 ): McpToolResult {
   const reasons: Record<string, string> = {
     solved: 'auto_passed',
@@ -144,7 +146,7 @@ export function stubClawServerSolve(
         : status === 'solved'
           ? 'auto_pass'
           : 'none',
-    reason: reasons[status],
+    reason: reason ?? reasons[status],
     durationMs: 1,
     paidTasks: 0,
     provider: null,

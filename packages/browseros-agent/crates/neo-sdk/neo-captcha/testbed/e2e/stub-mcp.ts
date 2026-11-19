@@ -240,7 +240,13 @@ export async function startStubMcp(options: {
         state.entry.expectReason?.includes('unsupported_type')
           ? 'unsupported'
           : STATUS[verdict]
-      return { result: stubClawServerSolve(status, stubType(state.entry)) }
+      return {
+        result: stubClawServerSolve(
+          status,
+          stubType(state.entry),
+          state.entry.expectReason?.[0],
+        ),
+      }
     }
     if (name !== 'evaluate_in_page') return { code: -32601 }
     const value = clawEvaluate(state, String(args.code))

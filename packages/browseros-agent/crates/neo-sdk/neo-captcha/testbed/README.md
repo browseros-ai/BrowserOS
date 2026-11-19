@@ -65,7 +65,8 @@ are kept, never tokens.
   does not list it); the spotting pages accept it beside any other `unsolved`.
 - Neo waits up to 10 seconds for Cloudflare's full-page check. It reports `solved` when the
   replacement page has cleared and carries the site's clearance cookie. A persistent wall returns
-  `unsolved` with `challenge_not_passed`. The static wall fixture still expects `unsupported_type`.
+  `unsolved` with `challenge_not_passed`, which the static wall fixture expects. The ScrapingCourse
+  demo passes as `solved` or `already_clear` once the page itself says the browser got through.
 - `solved`, and `already_clear` on a CAPTCHA page, pass only if the site accepted the submission.
   `token_applied` passes a `solved` page only if the site accepted. A site that accepts a page the
   solver called `unsolved` fails it.
