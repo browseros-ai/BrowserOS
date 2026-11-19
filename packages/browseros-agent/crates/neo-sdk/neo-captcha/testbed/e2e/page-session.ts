@@ -1,4 +1,4 @@
-import type { SiteCheck } from '../fixtures/catalog'
+import type { PageReading, PageTrigger, SiteCheck } from '../fixtures/catalog'
 import type { SolveResult } from './solve-result'
 
 export interface Timeouts {
@@ -15,11 +15,15 @@ export interface PageSession {
   open(url: string): Promise<void>
   /** False when the widget did not render in time. */
   ready(expression: string): Promise<boolean>
+  /** Clicks the trigger's control, then waits for its condition; false when it never held. */
+  trigger(trigger: PageTrigger): Promise<boolean>
   /** Never throws: a failed call is a result with `error` set. */
   solve(): Promise<SolveResult>
   /** The page's own token and callback state; lengths only. */
   observe(tokenExpression: string): Promise<unknown>
   /** Submits the form; the site's verdict, or null when none appeared in time. */
   submit(site: SiteCheck): Promise<'accepted' | 'rejected' | null>
+  /** The reading's string, or null when the page never showed one in time. */
+  read(reading: PageReading): Promise<string | null>
   close(): Promise<void>
 }

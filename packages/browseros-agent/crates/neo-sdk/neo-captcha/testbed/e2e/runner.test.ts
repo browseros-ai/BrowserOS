@@ -653,3 +653,34 @@ test('tests that the SDK submits by clicking the form button inside the page', a
   expect(submit).toContain('return await page.evaluate(() => {')
   expect(submit).toContain('button.click()')
 })
+
+test('tests that a trigger runs before the solve and a reading is recorded without deciding the outcome', async () => {
+  const page: CaptchaPage = {
+    ...solvePage,
+    trigger: { click: '#submit', until: 'true' },
+    reading: { label: 'score', expression: 'null', waitMs: 20 },
+  }
+  for (const server of ['sdk', 'claw-server'] as Server[]) {
+    const { records, calls } = await run('contract', { server, pages: [page] })
+    expect(records[0]).toMatchObject({
+      triggered: true,
+      reading: { label: 'score', value: null },
+      outcome: 'PASS',
+      note: 'score=none',
+    })
+    if (server === 'sdk')
+      expect(calls.map((call) => call.step)).toEqual([
+        'open',
+        'goto',
+        'ready',
+        'trigger',
+        'ready',
+        'solve',
+        'observe',
+        'submit',
+        'site',
+        'read',
+        'close',
+      ])
+  }
+})

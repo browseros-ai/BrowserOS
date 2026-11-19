@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bodyProbe } from './probes'
+import { bodyProbe, submitProbe } from './probes'
 
 test('tests that a page verdict remains small with rejection beyond the maximum inline size', () => {
   const code = bodyProbe({
@@ -34,4 +34,24 @@ test('tests that a page without a body yet is no verdict rather than an error', 
     rejectedPattern: 'REJECTED',
   })
   expect(new Function('document', code)({ body: null })).toBeNull()
+})
+
+test('tests that submit skips a page that already accepted, or has no control to click', () => {
+  const clicks: string[] = []
+  const submit = (site: Parameters<typeof submitProbe>[0], text: string) =>
+    new Function('document', submitProbe(site))({
+      body: { innerText: text },
+      querySelector: (selector: string) => ({
+        click: () => clicks.push(selector),
+      }),
+    })
+  const site = {
+    submitSelector: '#go',
+    acceptedPattern: 'Verification Success',
+  }
+  expect(submit(site, 'Verification Success... Hooray!')).toBe(false)
+  expect(submit({ acceptedPattern: 'ok' }, 'waiting')).toBe(false)
+  expect(clicks).toEqual([])
+  expect(submit(site, 'waiting')).toBe(true)
+  expect(clicks).toEqual(['#go'])
 })

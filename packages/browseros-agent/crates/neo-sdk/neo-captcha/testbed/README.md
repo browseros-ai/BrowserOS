@@ -30,7 +30,9 @@ minutes for a cold build, or set `--startup-timeout`.
 
 `--pages fixtures` (default) runs the ten local fixtures and the eleven fake-key GeeTest, AWS WAF
 and FunCaptcha pages, which include cross-site frames and closed shadow roots; `spotting` runs only
-those eleven; `demo` runs the eight public demos; `all` runs all 29. `--only id,id` narrows any
+those eleven; `demo` runs the thirteen public demos; `all` runs all 34; `owner` runs the owner's
+six-site check (`neo-server/docker/CLAUDE.md`) in its order, with invisible reCAPTCHA twice:
+untouched, and after its own submit has shown the image challenge. `--only id,id` narrows any
 group. Fixtures use two listeners on different sites, `127.0.0.1:A` for top pages and `localhost:B`
 for embedded widgets; `--fixture-frame-host` changes the frame host. See
 [`fixtures/README.md`](fixtures/README.md).
@@ -40,6 +42,14 @@ to the page, wait for the widget (`page.waitForFunction`), `neo.solveCaptcha(pag
 length, click the submit button inside the page (as claw-server's runner did, so a challenge frame
 left over the button cannot swallow the click), wait for the site's own verdict, and close the task. Each script starts with a
 `/* captcha-e2e:<step> {…} */` tag, which the stub reads instead of running JavaScript.
+
+A page may click something first (`trigger`), as a visitor would, and wait for the state it
+tests; if that state never comes (say, Google shows no challenge to a trusted IP), a failing page
+is UNVERIFIED. A page may also record one value after the site check (`reading`), such as the
+v3 demo's score, Turnstile's siteverify answer, or the title once the Cloudflare page lets the
+browser through; the reading is printed in the note and never decides the outcome. The site check
+clicks nothing when the page has no submit control or already shows its acceptance (an
+invisible reCAPTCHA callback submits the form itself).
 
 ## Outcomes
 

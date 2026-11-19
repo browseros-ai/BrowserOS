@@ -1,5 +1,6 @@
 export type CaptchaFamily =
   | 'recaptcha_v2'
+  | 'recaptcha_v3'
   | 'turnstile'
   | 'hcaptcha'
   | 'geetest'
@@ -33,9 +34,28 @@ export const SUCCESS_VERDICTS: readonly Verdict[] = [
 ]
 /** How the runner asks the page's own server whether it accepted the submission. */
 export interface SiteCheck {
-  submitSelector: string
+  /** The control the runner clicks after the solve. Absent: the page reports by itself. */
+  submitSelector?: string
   acceptedPattern: string
   rejectedPattern?: string
+}
+/** Something the runner does to the page before the solve, as a visitor would. */
+export interface PageTrigger {
+  /** Clicked with the page's own `click()`. */
+  click: string
+  /** A page expression the runner then waits for; the solve runs either way. */
+  until: string
+}
+/**
+ * A value the runner records from the page after the solve and the site check. It never decides
+ * the outcome: it keeps what a person would want to read off the page, such as a v3 score.
+ */
+export interface PageReading {
+  label: string
+  /** A page expression that is a string once the value is there, and null until then. */
+  expression: string
+  /** How long to wait for a string; the reading is null after that. Default: the probe timeout. */
+  waitMs?: number
 }
 export interface CaptchaPage {
   id: string
@@ -58,7 +78,9 @@ export interface CaptchaPage {
   maxPaidTasks?: number
   mayNeedPaid: boolean
   ready: string
+  trigger?: PageTrigger
   site?: SiteCheck
+  reading?: PageReading
   notes?: string
 }
 
@@ -288,6 +310,12 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       acceptedPattern: '"success"\\s*:\\s*true',
       rejectedPattern: '"success"\\s*:\\s*false',
     },
+    // The handler prints siteverify's JSON; keep its verdict and error codes beside the outcome.
+    reading: {
+      label: 'siteverify',
+      expression:
+        '(document.body?.innerText.match(/"success"\\s*:\\s*(true|false)[\\s\\S]{0,160}/) ?? [])[0]?.replace(/\\s+/g, " ") ?? null',
+    },
   },
   {
     id: 'hcaptcha-demo',
@@ -347,11 +375,119 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       '(() => { const name = Object.keys(window).find(k => /^arkoseLabsClientApi/.test(k)); const state = name && window[name]?.state; return !!state?.iframe?.isConnected && !!state.token && !state.error && state.iframe.getBoundingClientRect().height > 0; })()',
     notes: 'Arkose-owned test key. SDK delivery only; no server verification.',
   },
+  ...[false, true].map(
+    (triggered): CaptchaPage => ({
+      id: `google-recaptcha-invisible-${triggered ? 'triggered' : 'untouched'}-demo`,
+      title: `Google reCAPTCHA invisible demo, ${triggered ? 'solved after its submit shows the challenge' : 'solved before submit'}`,
+      kind: 'demo',
+      family: 'recaptcha_v2',
+      url: 'https://www.google.com/recaptcha/api2/demo?invisible=true',
+      sitekey: '6LfP0CITAAAAAHq9FOgCo7v_fb0-pmmH9VW3ziFs',
+      expect: ['solved'],
+      expectType: 'recaptcha_v2',
+      mayNeedPaid: true,
+      // reCAPTCHA enables the bound button once its widget is set up.
+      ready:
+        '!!document.querySelector("#recaptcha-demo iframe") && document.querySelector("#recaptcha-demo-submit")?.disabled === false',
+      // The bound button runs grecaptcha.execute(); the image challenge appears in the bframe.
+      trigger: triggered
+        ? {
+            click: '#recaptcha-demo-submit',
+            until:
+              '[...document.querySelectorAll("iframe[src*=\\"/recaptcha/api2/bframe\\"]")].some(f => getComputedStyle(f).visibility === "visible" && f.getBoundingClientRect().height > 100)',
+          }
+        : undefined,
+      // Its callback submits the form itself; the runner clicks only if the form is still there.
+      site: {
+        submitSelector: '#recaptcha-demo-submit',
+        acceptedPattern: 'Verification Success',
+      },
+      notes: triggered
+        ? 'The owner order: the visitor submits first, so the challenge is up when Neo solves.'
+        : 'The widget is untouched when Neo solves; the runner then submits.',
+    }),
+  ),
+  {
+    id: '2captcha-recaptcha-enterprise-demo',
+    title: '2Captcha reCAPTCHA v2 Enterprise demo',
+    kind: 'demo',
+    family: 'recaptcha_v2',
+    url: 'https://2captcha.com/demo/recaptcha-v2-enterprise',
+    sitekey: '6Lf26sUnAAAAAIKLuWNYgRsFUfmI-3Lex3xT5N-s',
+    expect: ['solved'],
+    expectType: 'recaptcha_v2',
+    mayNeedPaid: true,
+    // The page renders its widget after hydration; a solve before that finds no CAPTCHA.
+    ready:
+      '(document.querySelector(".g-recaptcha iframe")?.getBoundingClientRect().height ?? 0) > 0',
+    site: {
+      submitSelector: 'main form button[type="submit"]',
+      acceptedPattern: '"success"\\s*:\\s*true',
+      rejectedPattern: '"success"\\s*:\\s*false',
+    },
+  },
+  {
+    id: 'recaptcha-v3-scores-demo',
+    title: 'Google reCAPTCHA v3 request-scores demo',
+    kind: 'demo',
+    family: 'recaptcha_v3',
+    url: 'https://recaptcha-demo.appspot.com/recaptcha-v3-request-scores.php',
+    sitekey: '6LdKlZEpAAAAAAOQjzC2v_d36tWxCl6dWsozdSy9',
+    expect: ['already_clear', 'solved'],
+    expectType: 'recaptcha_v3',
+    mayNeedPaid: false,
+    ready: '!document.querySelector(".step1")?.classList.contains("hidden")',
+    // The page sends its own v3 token to its server on load and prints the JSON reply.
+    site: {
+      acceptedPattern: '"success"\\s*:\\s*true',
+      rejectedPattern: '"success"\\s*:\\s*false',
+    },
+    reading: {
+      label: 'score',
+      expression:
+        '(document.querySelector(".step3:not(.hidden) .response")?.textContent.match(/"score"\\s*:\\s*([0-9.]+)/) ?? [])[1] ?? null',
+    },
+    notes: 'v3 never blocks: the score is what the site would judge.',
+  },
+  {
+    id: 'scrapingcourse-cloudflare-challenge',
+    title: 'Cloudflare full-page challenge (ScrapingCourse)',
+    kind: 'demo',
+    family: 'turnstile',
+    url: 'https://www.scrapingcourse.com/cloudflare-challenge',
+    ...unsupported('cloudflare_challenge'),
+    mayNeedPaid: false,
+    ready:
+      '!!window._cf_chl_opt || !/Just a moment|Verify you are human/i.test(document.title + " " + (document.body?.innerText ?? ""))',
+    reading: {
+      label: 'left-challenge',
+      expression:
+        '/Just a moment|Verify you are human|security verification/i.test(document.title + " " + (document.body?.innerText ?? "")) ? null : document.title',
+      waitMs: 30_000,
+    },
+    notes:
+      'Not solved yet: the right type passes. The reading is the page title once the challenge is gone.',
+  },
+]
+
+/**
+ * The owner's six-site check, in the owner's order (`--pages owner`). Site 2, invisible v2, runs
+ * twice: untouched, and after its own submit has shown the image challenge.
+ */
+export const OWNER_PAGE_IDS: readonly string[] = [
+  'google-recaptcha-demo',
+  'google-recaptcha-invisible-untouched-demo',
+  'google-recaptcha-invisible-triggered-demo',
+  '2captcha-recaptcha-enterprise-demo',
+  'cloudflare-turnstile-demo',
+  'recaptcha-v3-scores-demo',
+  'scrapingcourse-cloudflare-challenge',
 ]
 
 export function tokenLengthExpression(family: CaptchaFamily): string {
   const fields = {
     recaptcha_v2: 'g-recaptcha-response',
+    recaptcha_v3: '',
     turnstile: 'cf-turnstile-response',
     hcaptcha: 'h-captcha-response',
     geetest: '',

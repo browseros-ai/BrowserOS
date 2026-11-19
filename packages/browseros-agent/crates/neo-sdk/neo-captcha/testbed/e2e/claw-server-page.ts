@@ -5,7 +5,15 @@ import {
   textOf,
 } from '../../../../../contracts/claw-mcp/tests/mcp-client'
 import type { PageSession, Timeouts } from './page-session'
-import { bodyProbe, observationProbe, readyProbe, submitProbe } from './probes'
+import {
+  bodyProbe,
+  clickProbe,
+  observationProbe,
+  probes,
+  readingProbe,
+  readyProbe,
+  submitProbe,
+} from './probes'
 import { notSolved, parseClawServerSolve } from './solve-result'
 
 function payload(text: string): unknown {
@@ -42,8 +50,11 @@ export function clawServerPage(
     if (result.isError) throw new Error('page probe failed')
     return payload(textOf(result))
   }
-  const poll = async (probe: () => Promise<boolean>) => {
-    const deadline = Date.now() + timeouts.probeMs
+  const poll = async (
+    probe: () => Promise<boolean>,
+    waitMs = timeouts.probeMs,
+  ) => {
+    const deadline = Date.now() + waitMs
     do {
       try {
         if (await probe()) return true
@@ -58,6 +69,12 @@ export function clawServerPage(
     },
     ready: (expression) =>
       poll(async () => (await evaluate(readyProbe(expression))) === true),
+    async trigger(trigger) {
+      await evaluate(`${probes.trigger} ${clickProbe(trigger.click)}`)
+      return await poll(
+        async () => (await evaluate(readyProbe(trigger.until))) === true,
+      )
+    },
     async solve() {
       try {
         return parseClawServerSolve(
@@ -76,7 +93,7 @@ export function clawServerPage(
     },
     observe: (tokenExpression) => evaluate(observationProbe(tokenExpression)),
     async submit(site) {
-      await evaluate(submitProbe(site.submitSelector))
+      await evaluate(submitProbe(site))
       let found: 'accepted' | 'rejected' | null = null
       await poll(async () => {
         const value = await evaluate(bodyProbe(site))
@@ -84,6 +101,15 @@ export function clawServerPage(
         return found !== null
       })
       return found
+    },
+    async read(reading) {
+      let value: string | null = null
+      await poll(async () => {
+        const found = await evaluate(readingProbe(reading.expression))
+        if (typeof found === 'string') value = found
+        return value !== null
+      }, reading.waitMs)
+      return value
     },
     async close() {
       if (page !== undefined)
