@@ -53,6 +53,9 @@ pub struct FakeCall {
     pub method: String,
     /// Its params as sent.
     pub params: Value,
+    /// The session it was sent on, `session-<target>` as `Target.attachToTarget` answers;
+    /// `None` for the browser's own.
+    pub session: Option<SessionId>,
     /// The connection epoch it was sent on.
     pub epoch: u64,
     /// The Tokio task that sent this call, stable across worker-thread handoffs. `None` for
@@ -547,6 +550,7 @@ impl FakeState {
         self.calls.push(FakeCall {
             method: method.to_owned(),
             params,
+            session: session.cloned(),
             epoch: self.epoch,
             task: task::try_id(),
         });
