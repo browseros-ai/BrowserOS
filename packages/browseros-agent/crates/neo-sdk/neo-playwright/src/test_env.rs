@@ -34,6 +34,7 @@ pub(crate) enum EnvCall {
 /// listener task.
 pub(crate) struct TestEnv {
     view: BrowserView,
+    pub(crate) draws_cursor: bool,
     run_state: Arc<RunState>,
     refusal: Option<Refusal>,
     file_access: Option<FileAccess>,
@@ -59,6 +60,7 @@ impl TestEnv {
     pub(crate) fn over(view: BrowserView) -> Self {
         Self {
             view,
+            draws_cursor: false,
             run_state: Arc::default(),
             refusal: None,
             file_access: None,
@@ -135,6 +137,10 @@ impl TestEnv {
 }
 
 impl OpEnv for TestEnv {
+    fn draws_cursor(&self) -> bool {
+        self.draws_cursor
+    }
+
     fn file_access(&self) -> Option<&FileAccess> {
         self.file_access.as_ref()
     }

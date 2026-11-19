@@ -11,6 +11,7 @@
 //!  crates/neo-sdk/neo-playwright-js/scripts/port-keyboard-layout.ts
 //! ```
 
+mod click_cursor;
 mod input_devices;
 pub(crate) mod input_op;
 mod keyboard;
@@ -20,6 +21,7 @@ mod page_input;
 mod typed;
 mod us_keyboard_layout;
 
+pub(crate) use click_cursor::ClickCursor;
 pub(crate) use input_devices::{InputDevices, InputStep, approach, waits};
 pub(crate) use input_op::{InputOp, burst_failed, hold, millis};
 pub(crate) use keyboard::{Keyboard, Modifiers, Platform, UnknownKey};

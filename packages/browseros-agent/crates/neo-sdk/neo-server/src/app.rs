@@ -292,6 +292,7 @@ impl App {
         let deps = BuiltinDeps {
             solver: CaptchaSolver::new(config.captcha.clone()).map(Arc::new),
             claims: Arc::clone(&claims),
+            settings: settings.clone(),
             playwright: Arc::clone(&playwright),
         };
         builtins::builtin_set(&mut methods, deps)

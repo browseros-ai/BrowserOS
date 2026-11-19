@@ -258,6 +258,11 @@ impl<'env> OpScope<'env> {
         self.conformance
     }
 
+    /// Conformance clicks must preserve upstream's exact protocol sequence and timing.
+    pub(crate) fn draws_cursor(&self) -> bool {
+        !self.conformance() && self.env.draws_cursor()
+    }
+
     /// Whether nobody chose this op's timeout: only Neo's own prelude found none on the call,
     /// the page or the context ([`CallHeader`]'s stamp). Covered-click B stops early only then.
     pub(crate) fn timeout_built_in(&self) -> bool {

@@ -2873,6 +2873,18 @@ components:
           $ref: '#/components/schemas/FilesSettings'
         fill:
           $ref: '#/components/schemas/FillSettings'
+        input:
+          $ref: '#/components/schemas/InputSettings'
+    InputSettings:
+      type: object
+      properties:
+        cursor:
+          type: string
+          x-extensible-enum: [off, on]
+          default: off
+          description: >-
+            Show the blue agent cursor before clicks and double-clicks in the live tab.
+            Each click reads the current setting. Neo hides the cursor for screenshots.
     FillSettings:
       type: object
       properties:
