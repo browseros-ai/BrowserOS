@@ -77,6 +77,11 @@ pub trait OpEnv: Send + Sync {
         false
     }
 
+    /// Whether this click should draw the agent cursor on the live page.
+    fn draws_cursor(&self) -> bool {
+        false
+    }
+
     /// Host filesystem policy, consulted at the actual IO gateways. SDK hosts always supply
     /// one. The default preserves standalone engine consumers that own their own IO policy.
     fn file_access(&self) -> Option<&FileAccess> {

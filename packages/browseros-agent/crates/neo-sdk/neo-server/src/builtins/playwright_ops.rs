@@ -22,6 +22,7 @@ use std::sync::{Arc, LazyLock};
 
 use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
+use neo_http::Settings;
 use neo_playwright::{
     Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
     RunState, TimedOut, url_scheme,
@@ -103,6 +104,7 @@ const NAVIGABLE_SCHEMES: [&str; 4] = ["http", "https", "data", "about"];
 pub(super) fn playwright_ops(
     builder: &mut RegistryBuilder,
     facade: &Arc<PlaywrightFacade>,
+    settings: &Settings,
 ) -> Result<(), RegistryError> {
     for op in Op::all() {
         let OpMarks { spec, hold } = OpMarks::of(&op.spec(), PLAYWRIGHT_LINE.as_str());
@@ -112,6 +114,7 @@ pub(super) fn playwright_ops(
                 op,
                 spec,
                 facade: Arc::clone(facade),
+                settings: settings.clone(),
                 pages: PageEffect::of(spec.name),
                 events: EventRelease::of(spec.name),
             })?,
@@ -158,6 +161,7 @@ struct PlaywrightOp {
     /// The crate's spec with the door's marks, derived once by [`OpMarks`].
     spec: MethodSpec,
     facade: Arc<PlaywrightFacade>,
+    settings: Settings,
     /// What the op does to pages that the door keeps books on.
     pages: PageEffect,
     /// Whether its result carries events, whose tabs the door's rules clear before release.
@@ -203,13 +207,16 @@ impl Method for PlaywrightOp {
             && matches!(self.op.spec().target, OpTarget::Field(_))
             && self.pages != PageEffect::Closes;
         let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(
-            op,
-            self.facade.hosted_mode(),
-            Arc::clone(self.facade.front()),
-            Arc::clone(self.facade.file_access()),
-        )
-        .keeping(self.facade.blank_tab().cloned());
+        let env = OpCtxEnv {
+            settings: Some(&self.settings),
+            blank_tab: self.facade.blank_tab().cloned(),
+            ..OpCtxEnv::new(
+                op,
+                self.facade.hosted_mode(),
+                Arc::clone(self.facade.front()),
+                Arc::clone(self.facade.file_access()),
+            )
+        };
         // The door already ran host policy. A remembered renderer crash must answer before
         // our URL/file guard refreshes native tab facts, which may fail with the crashed tab.
         // Return the refusal now: skipping a guard and continuing could admit work after a
@@ -647,6 +654,7 @@ impl OpenedPage {
 /// of their own.
 pub(super) struct OpCtxEnv<'a, M> {
     op: &'a OpCtx<M>,
+    settings: Option<&'a Settings>,
     hosted: bool,
     front: Arc<AgentFront>,
     file_access: Arc<FileAccess>,
@@ -671,17 +679,16 @@ impl<'a, M> OpCtxEnv<'a, M> {
             file_access,
             run_state: op.run().slot::<RunState>(),
             blank_tab: None,
+            settings: None,
         }
-    }
-
-    /// The env, with the blank tab the sidecar keeps (`PlaywrightFacade::blank_tab`).
-    pub(super) fn keeping(mut self, blank_tab: Option<Arc<NeoTab>>) -> Self {
-        self.blank_tab = blank_tab;
-        self
     }
 }
 
 impl<M> OpEnv for OpCtxEnv<'_, M> {
+    fn draws_cursor(&self) -> bool {
+        self.settings.is_some_and(Settings::draws_cursor)
+    }
+
     fn hosted_mode(&self) -> bool {
         self.hosted
     }
