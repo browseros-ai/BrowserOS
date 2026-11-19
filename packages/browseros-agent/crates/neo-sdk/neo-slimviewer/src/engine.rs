@@ -816,48 +816,7 @@ fn take_tick(now: Instant, due: &mut Instant) -> Option<f32> {
 }
 
 pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Result<(), String> {
-    let now = Instant::now();
-    let mut e = Engine {
-        picture: Picture::new(
-            picture::Config {
-                base_crf: cfg.encoder.crf,
-                crf_range: cfg.crf_range,
-                sharpen_qp: cfg.sharpen_qp,
-                sharpen_after: cfg.sharpen_after,
-                max_fps: cfg.max_fps,
-                adaptive_size: cfg.adaptive_size,
-                cpu_guard: cfg.cpu_guard,
-            },
-            usize::from(cap.width & !1),
-            usize::from(cap.height & !1),
-            now,
-        ),
-        damage_at: None,
-        cfg,
-        pic: I420::new(usize::from(cap.width & !1), usize::from(cap.height & !1)),
-        cap,
-        input,
-        enc: None,
-        viewers: Vec::new(),
-        pacer_id: None,
-        retiring: Vec::new(),
-        seq: 0,
-        t0: now,
-        trace: Trace::new(std::env::var("SLIMVIEWER_TRACE").ok().as_deref(), now),
-        damaged: true,
-        resized: false,
-        want_key: true,
-        last_send: now,
-        last_key: now,
-        blocked: ActiveTime::default(),
-        busy: ActiveTime::default(),
-        window_reset: false,
-        tick_at: now + Duration::from_secs(1),
-        last_log: None,
-        throttled_usec: throttled_usec(),
-        cpu_times: cpu_times(),
-        stats: Stats::default(),
-    };
+    let mut e = Engine::new(cfg, cap, input, Instant::now());
     loop {
         match events.recv_timeout(e.wait(Instant::now())) {
             Ok(ev) => e.on(ev)?,
@@ -873,6 +832,50 @@ pub fn run(cfg: Config, cap: Capture, input: Input, events: Receiver<Ev>) -> Res
 }
 
 impl Engine {
+    fn new(cfg: Config, cap: Capture, input: Input, now: Instant) -> Self {
+        Self {
+            picture: Picture::new(
+                picture::Config {
+                    base_crf: cfg.encoder.crf,
+                    crf_range: cfg.crf_range,
+                    sharpen_qp: cfg.sharpen_qp,
+                    sharpen_after: cfg.sharpen_after,
+                    max_fps: cfg.max_fps,
+                    adaptive_size: cfg.adaptive_size,
+                    cpu_guard: cfg.cpu_guard,
+                },
+                usize::from(cap.width & !1),
+                usize::from(cap.height & !1),
+                now,
+            ),
+            damage_at: None,
+            cfg,
+            pic: I420::new(usize::from(cap.width & !1), usize::from(cap.height & !1)),
+            cap,
+            input,
+            enc: None,
+            viewers: Vec::new(),
+            pacer_id: None,
+            retiring: Vec::new(),
+            seq: 0,
+            t0: now,
+            trace: Trace::new(std::env::var("SLIMVIEWER_TRACE").ok().as_deref(), now),
+            damaged: true,
+            resized: false,
+            want_key: true,
+            last_send: now,
+            last_key: now,
+            blocked: ActiveTime::default(),
+            busy: ActiveTime::default(),
+            window_reset: false,
+            tick_at: now + Duration::from_secs(1),
+            last_log: None,
+            throttled_usec: throttled_usec(),
+            cpu_times: cpu_times(),
+            stats: Stats::default(),
+        }
+    }
+
     fn owner_id(&self) -> Option<u64> {
         self.viewers.iter().find(|v| !v.view_only).map(|v| v.id)
     }
@@ -1509,6 +1512,56 @@ mod tests {
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (peer, _) = listener.accept().unwrap();
         (Viewer::new(id, view_only, stream).unwrap(), peer)
+    }
+
+    #[test]
+    fn tests_that_half_size_resync_preserves_the_capture_size_on_the_wire() {
+        use crate::encoder::Backend;
+        use std::io::Read;
+
+        for (width, height, coded_width, flags) in
+            [(786, 1704, 392_u16, 0x15), (860, 1706, 430, 0x25)]
+        {
+            let cfg = Config {
+                encoder: Settings {
+                    backend: Backend::default_name().parse().unwrap(),
+                    preset: "ultrafast".into(),
+                    threads: 1,
+                    crf: 24.0,
+                },
+                max_fps: 30.0,
+                sharpen_qp: 18,
+                sharpen_after: SHARPEN,
+                crf_range: 6.0,
+                cpu_guard: true,
+                adaptive_size: true,
+                max_viewers: 1,
+            };
+            let start = Instant::now();
+            let (events, _rx) = mpsc::sync_channel(1);
+            let cap = Capture::black_screen_for_test(width, height);
+            let mut engine = Engine::new(cfg, cap, Input::failing_for_test(events), start);
+            let (owner, mut peer) = viewer_pair(1, false);
+            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            engine.viewers.push(owner);
+
+            // A second stalled window forces a keyframe on the half-size rung.
+            let now = start + Duration::from_secs(1);
+            engine.picture.window_reset(start);
+            engine.picture.window_reset(now);
+            let plan = frame_plan(&mut engine.picture, now, None, true);
+            assert_eq!(plan.scale, Scale::Half);
+            engine.encoder(plan.scale).unwrap();
+            engine.convert(plan.scale, 0, usize::from(height));
+            engine.send(now, plan, Work::default(), false);
+
+            let mut header = [0; 14];
+            peer.read_exact(&mut header).unwrap();
+            assert_eq!(header[4], 0x02);
+            assert_eq!(u16::from_be_bytes([header[10], header[11]]), coded_width);
+            assert_eq!(u16::from_be_bytes([header[12], header[13]]), 852);
+            assert_eq!(header[9], flags);
+        }
     }
 
     #[test]
