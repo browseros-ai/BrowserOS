@@ -26,9 +26,8 @@ use wire::FromPage;
 const USAGE: &str =
     "usage: slimviewer [--display :1] [--rfb 127.0.0.1:5900] [--listen 127.0.0.1:5910]
        [--listen-view 127.0.0.1:5911] [--preset ultrafast] [--threads 0=auto] [--crf 24] [--fps 30]
-       [--sharpen-qp 18] [--sharpen-ms 250] [--crf-range 6] [--no-cpu-guard]
+       [--sharpen-qp 18] [--sharpen-ms 250] [--crf-range 12] [--no-cpu-guard]
        [--full-size-only] [--encoder x264|openh264] [--max-viewers 8] [--version]
-Motion drops frame rate first. At the fps floor, --crf-range limits the quantizer increase before half size.
 Owner: the newest connection replaces the previous owner.
 View-only clients: capped by --max-viewers; 0 disables them.
 Owner ACK timeout: reset the stream at 3 seconds; disconnect after 15 seconds without ACK progress.
@@ -77,7 +76,7 @@ fn run() -> Result<(), String> {
         max_fps: a.num("--fps", 30.0)?,
         sharpen_qp: a.num("--sharpen-qp", 18)?,
         sharpen_after: Duration::from_millis(a.num("--sharpen-ms", 250)?),
-        crf_range: a.num("--crf-range", 6.0)?,
+        crf_range: a.num("--crf-range", 12.0)?,
         cpu_guard: !a.flag("--no-cpu-guard"),
         adaptive_size: !a.flag("--full-size-only"),
         max_viewers: a.num("--max-viewers", 8)?,

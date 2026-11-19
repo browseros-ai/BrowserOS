@@ -9,31 +9,8 @@ and the encoder.
 
 The engine owns the encoder and each viewer's frame acknowledgements. It uses
 the owner's acknowledgements to pace capture, or a spectator's when there is
-no owner. The link and CPU each choose a frame-rate limit, and the lower one
-paces capture. Under pressure they step down through 30, 20 and 15 fps. At
-the floor, a congested link raises the quantizer by up to two per step, to
-+6 by default. Sustained congestion can then trigger half size. A frame that
-would take over 300 ms at the quality limit, late acknowledgements or two
-consecutive congested seconds without delivery can accelerate those steps.
-Slow measured work can lower the CPU limit. Throttle or steal counts only when
-capture falls below 80% of the current cadence during at least half a second
-with damage pending and the pacer open. Grabs that find unchanged pixels count.
-Recovery takes one step at a time after sustained headroom. A return to full-size
-motion must also fit the link's 300 ms keyframe budget. Burst probes subtract
-the lowest RTT seen in the preceding five minutes. After congestion, both the
-keyframe budget and the motion-rate check cap the latest probe at the measured
-congested delivery rate. If half-size frames are too small to probe, the last
-measurement still applies. Two consecutive uncongested seconds with delivery and
-a median ACK delay less than 40 ms above the base RTT release these limits.
-After 20 seconds without congestion, one such second suffices. Fresh probes
-continue to price full-size returns.
-If the full key exceeds that budget, a full second without a change allows the
-settle frame through. Its acknowledgement measures fresh capacity.
-
-When an owner's acknowledgement window times out, the engine applies the
-quality cap before encoding the next keyframe. Forced keys use half size whenever
-the link or CPU has selected it, even for small changes. It measures delivered bytes,
-CPU load and capture counts on the regular one-second tick.
+no owner. During motion it can reduce resolution or quality to fit the CPU and
+link budget. After motion stops, OpenH264 sends a sharp full-size keyframe.
 
 The host relays a TCP byte stream over WebSocket. Each record starts with a
 four-byte big-endian length covering a type byte and its payload. A record may
