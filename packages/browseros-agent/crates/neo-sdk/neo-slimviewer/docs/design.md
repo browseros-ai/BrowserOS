@@ -12,11 +12,15 @@ the owner's acknowledgements to pace capture, or a spectator's when there is
 no owner. The link and CPU each choose a frame-rate limit, and the lower one
 paces capture. Under pressure they step down through 30, 20 and 15 fps. At
 the floor, a congested link raises the quantizer by up to two per step, to
-+6 by default. Sustained congestion can then trigger half size. A frame that
-would take over 300 ms at the quality limit or two consecutive congested seconds
-without delivery can accelerate those steps. A late queue takes the usual quality
-steps. At the limit, two consecutive congested seconds with a median ACK delay
-over 300 ms above the pacing RTT floor can trigger half size.
++6 by default. Sustained congestion can then trigger half size. During congestion,
+three or more large, full-size, non-key frames let the link estimate their mean
+size at the quality limit. If that mean frame takes over 300 ms to deliver, or
+the stream at the frame-rate floor needs over 1.5 times the delivered bitrate,
+the link jumps to the quality limit. The same test at the limit selects half size.
+Two consecutive congested seconds without delivery can also accelerate the steps.
+A late queue alone takes the usual quality steps. At the limit, two consecutive
+congested seconds with a median ACK delay over 300 ms above the pacing RTT floor
+can trigger half size.
 Slow measured work can lower the CPU limit. Throttle or steal counts only when
 capture falls below 80% of the current cadence during at least half a second
 with damage pending and the pacer open. Grabs that find unchanged pixels count.

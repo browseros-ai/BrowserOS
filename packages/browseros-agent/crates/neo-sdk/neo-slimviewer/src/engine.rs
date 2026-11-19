@@ -3138,6 +3138,72 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_wikipedia_scroll_on_cellular_reaches_half_within_two_seconds() {
+        let onset = Duration::from_secs(3);
+        let end = Duration::from_secs(20);
+        let height = 844 * 2;
+        let trace = paced_screen(
+            end.as_secs(),
+            &PacedCell {
+                kbps: 3000,
+                rtt_ms: 100,
+                jitter_ms: 20,
+                ..PacedCell::default()
+            },
+            (390 * 2, height),
+            |ms, p| {
+                // The smaller article updates bring the link to 15 fps before the heavy scroll.
+                let bytes = if Duration::from_millis(ms) < onset {
+                    25_000.0
+                } else {
+                    110_000.0
+                };
+                (height, bytes * 2.0_f32.powf((24.0 - p.crf()) / 6.0))
+            },
+        );
+        let half = trace.first_half.expect("the scroll must engage half size");
+        assert!(
+            (onset..=onset + Duration::from_secs(2)).contains(&half),
+            "half at {half:?}"
+        );
+        // At the viewer the scroll starts when the first heavy frame arrives.
+        let first_scroll = trace
+            .frames
+            .iter()
+            .find(|f| f.at >= onset)
+            .expect("full-size scroll frame");
+        assert_eq!((first_scroll.key, first_scroll.bytes), (false, 110_000));
+        let first_half = trace
+            .frames
+            .iter()
+            .find(|f| f.scale == Scale::Half)
+            .expect("half-size scroll frame");
+        assert!(
+            first_half.received <= first_scroll.received + Duration::from_secs(2),
+            "first scroll frame drawn at {:?}, first half-size frame at {:?}",
+            first_scroll.received,
+            first_half.received
+        );
+
+        let mut last = Duration::ZERO;
+        for draw in trace
+            .frames
+            .iter()
+            .map(|f| f.received)
+            .take_while(|&d| d <= end)
+            .chain([end])
+        {
+            if draw > onset + Duration::from_secs(1) {
+                assert!(
+                    draw - last < Duration::from_millis(500),
+                    "draw gap from {last:?} to {draw:?}"
+                );
+            }
+            last = draw;
+        }
+    }
+
+    #[test]
     fn tests_that_a_standing_noise_jam_keeps_drawing_at_half_size() {
         let end = Duration::from_secs(60);
         // At the quality cap these keys are 330 and 440 kB. Half-size motion

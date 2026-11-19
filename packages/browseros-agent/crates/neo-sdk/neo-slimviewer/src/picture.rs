@@ -904,10 +904,16 @@ impl Picture {
         if late_at_cap && self.previous_late_at_cap {
             return true;
         }
-        let remaining =
-            self.ladder.rungs[self.ladder.cap].crf_add - self.ladder.rungs[self.link.at].crf_add;
+        if self.full_big < 3 {
+            return false;
+        }
+        let cap = self.ladder.rungs[self.ladder.cap];
+        let remaining = cap.crf_add - self.ladder.rungs[self.link.at].crf_add;
         let cap_bytes = mean_bytes * 2.0_f32.powf(-remaining / 6.0);
-        self.full_big >= 3 && cap_bytes * 8.0 > 300.0 * link.delivered_kbps
+        // If even the floor fps at the quality cap overwhelms the link, no full-size
+        // rung can fit. Walking those rungs only queues large frames.
+        let cap_demand_kbps = cap_bytes * 8.0 * cap.fps / 1000.0;
+        cap_bytes * 8.0 > 300.0 * link.delivered_kbps || cap_demand_kbps > 1.5 * link.delivered_kbps
     }
 
     fn observe_link(&mut self, now: Instant, link: &Link, congested: bool) {
@@ -1543,6 +1549,49 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_stream_too_big_for_any_full_rung_goes_half_in_two_ticks() {
+        let t = Instant::now();
+        let mut p = Picture::new(
+            Config {
+                max_fps: 15.0,
+                ..cfg()
+            },
+            WIDTH,
+            ROWS,
+            t,
+        );
+        // At the cap each frame takes only 147 ms, but 15 per second need 6.6 Mb/s.
+        for (n, bytes, scale) in [(1, 110_000, Scale::Full), (2, 55_000, Scale::Half)] {
+            let now = at(t, n);
+            sized_motion(&mut p, now, bytes, 3);
+            let moves = p.tick(now, jam(), Cpu::default());
+            assert_eq!(moves.first().map(|m| m.why), Some(Why::Severe));
+            assert_eq!(
+                (p.fps(), p.crf(), p.plan(now, BIG).scale),
+                (15.0, 30.0, scale)
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_the_rate_test_uses_three_frames_and_the_mean_at_the_floor() {
+        let t = Instant::now();
+        // At 30 fps and base CRF, 75 kB scales to exactly 4.5 Mb/s at the best full rung.
+        for (samples, why) in [
+            (&[110_000, 110_000][..], Why::Congested),
+            (&[50_000, 75_000, 100_000], Why::Congested),
+            (&[50_000, 75_000, 100_003], Why::Severe),
+        ] {
+            let mut p = picture(t);
+            for &bytes in samples {
+                sized_motion(&mut p, t, bytes, 1);
+            }
+            let moves = p.tick(at(t, 1), jam(), Cpu::default());
+            assert_eq!(moves.first().map(|m| m.why), Some(why), "{samples:?}");
+        }
+    }
+
+    #[test]
     fn tests_that_stalled_delivery_needs_two_consecutive_congested_ticks() {
         let t = Instant::now();
         let mut p = picture(t);
@@ -1930,7 +1979,16 @@ mod tests {
             (225_000, 3, Why::Congested),
             (225_001, 3, Why::Severe),
         ] {
-            let mut p = picture(t);
+            // At 4 fps these frames fit the rate budget, isolating the 300 ms limit.
+            let mut p = Picture::new(
+                Config {
+                    max_fps: 4.0,
+                    ..cfg()
+                },
+                WIDTH,
+                ROWS,
+                t,
+            );
             sized_motion(&mut p, t, bytes, count);
             let moves = p.tick(at(t, 1), jam(), Cpu::default());
             assert_eq!(moves[0].why, why);
@@ -1952,6 +2010,25 @@ mod tests {
             assert_eq!(p.motion_scale(), Scale::Full);
             if n == 1 {
                 assert_eq!((p.fps(), p.crf()), (20.0, 24.0));
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_cellular_carousel_frames_never_trip_the_rate_test() {
+        let t = Instant::now();
+        let mut p = picture(t);
+        for n in 1..=60 {
+            let now = at(t, n);
+            // Each swipe backs up the link for three seconds, then the queue drains.
+            let swipe = (n - 1) % 15 < 3;
+            sized_motion(&mut p, now, if swipe { 15_000 } else { 10_000 }, 6);
+            let link = if swipe { jam() } else { active(p.fps() as u32) };
+            let moves = p.tick(now, link, Cpu::default());
+            assert!(moves.iter().all(|m| m.why != Why::Severe), "tick {n}");
+            assert_eq!(p.plan(now, BIG).scale, Scale::Full, "tick {n}");
+            if n == 3 {
+                assert_eq!((p.fps(), p.crf()), (15.0, 26.0));
             }
         }
     }
