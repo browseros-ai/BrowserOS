@@ -181,6 +181,16 @@ pub(crate) const FILE_READ_DIRS: Setting = Setting {
     rule: Rule::AbsoluteDirs { max: 16 },
 };
 
+/// Draw the agent cursor before SDK clicks in the live tab.
+pub(crate) const INPUT_CURSOR: Setting = Setting {
+    name: "input.cursor",
+    invalid_saved: None,
+    rule: Rule::Choice {
+        default: "off",
+        values: &["off", "on"],
+    },
+};
+
 /// Every setting this server knows, in the order the README lists them.
 pub(crate) const SETTINGS: &[Setting] = &[
     TAB_IDLE_CLOSE,
@@ -191,6 +201,7 @@ pub(crate) const SETTINGS: &[Setting] = &[
     TRACE_VALUES,
     FILE_READ_DIRS,
     FILL_PICTURES,
+    INPUT_CURSOR,
 ];
 
 impl Setting {

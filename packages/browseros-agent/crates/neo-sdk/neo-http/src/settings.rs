@@ -19,9 +19,9 @@
 //! aside, and the settings must not vanish with it.
 
 use crate::setting::{
-    Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, SCREENSHOTS_OFF, SETTINGS,
-    Setting, SettingValue, TAB_IDLE_CLOSE, TABS_SCOPE, TABS_SCOPE_BROWSER, TRACE_RETENTION,
-    TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
+    Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, INPUT_CURSOR, SCREENSHOTS_OFF,
+    SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE, TABS_SCOPE, TABS_SCOPE_BROWSER,
+    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots, Values};
@@ -168,6 +168,12 @@ impl Settings {
     /// The load this instance started with, shared unchanged across settings clones and saves.
     pub(crate) fn file_report(&self) -> Option<&FileLoadReport> {
         self.inner.file_report.as_ref()
+    }
+
+    /// Whether the next SDK click should animate the agent cursor in the live tab.
+    #[must_use]
+    pub fn draws_cursor(&self) -> bool {
+        matches!(self.value(&INPUT_CURSOR), SettingValue::Choice("on"))
     }
 
     /// `tabs.idleCloseSeconds`: the idle-tab janitor closes an agent's tab nobody used for this
