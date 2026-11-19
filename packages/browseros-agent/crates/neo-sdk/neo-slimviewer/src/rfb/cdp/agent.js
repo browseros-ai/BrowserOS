@@ -303,7 +303,8 @@
         collectBoxes();
       } else {
         clearTimeout(boxTimer);
-        boxTimer = setTimeout(collectBoxes, remaining);
+        // Timers truncate fractional milliseconds. Round up to keep the minimum scan interval.
+        boxTimer = setTimeout(collectBoxes, Math.ceil(remaining));
       }
       return;
     }
