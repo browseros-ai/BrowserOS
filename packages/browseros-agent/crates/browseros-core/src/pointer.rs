@@ -19,9 +19,10 @@ pub struct Pointer {
     _private: (),
 }
 
+/// The input the cursor is approaching.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum PointerAction {
+pub enum PointerAction {
     Click,
     Hover,
     Focus,
@@ -29,9 +30,10 @@ pub(crate) enum PointerAction {
 }
 
 impl Pointer {
-    /// Only an explicit page-side skip preserves the original input sequence.
-    /// A drawing error may follow partial travel, so the caller must recheck.
-    pub(crate) async fn move_to(
+    /// Animate to a point in top-document viewport CSS pixels on the page's root session.
+    /// A page-side skip returns false. Otherwise travel may have occurred, even if drawing
+    /// failed, so the caller must recheck its target before sending input.
+    pub async fn move_to(
         &self,
         session: &ProtocolSession,
         action: PointerAction,
@@ -82,7 +84,8 @@ impl Pointer {
         }
     }
 
-    pub(crate) async fn click_effect(&self, session: &ProtocolSession, point: Point) {
+    /// Place the cursor at the final click point and play its ripple, best effort.
+    pub async fn click_effect(&self, session: &ProtocolSession, point: Point) {
         let expression = format!(
             "(()=>{{try{{const p=window[Symbol.for('browseros.agentPointer')];return !!(p&&p.click({},{}));}}catch(_){{return false;}}}})()",
             point.x, point.y

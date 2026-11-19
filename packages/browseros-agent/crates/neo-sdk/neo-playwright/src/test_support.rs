@@ -251,7 +251,7 @@ pub(crate) trait TabScript: Send + Sync + 'static {
 
     /// How long the tab takes to answer `method`, any command but a probe request: a renderer
     /// slow to set up a new page's lifecycle events, say.
-    fn delay(&self, _method: &str) -> Duration {
+    fn delay(&self, _method: &str, _params: &Value) -> Duration {
         Duration::ZERO
     }
 
@@ -478,7 +478,7 @@ impl<S: TabScript> ScriptedTab<S> {
                 method: method.to_owned(),
             });
         }
-        let delay = self.script.delay(method);
+        let delay = self.script.delay(method, params);
         if !delay.is_zero() {
             let _slowed = Slowed::new(&self.slowed);
             time::sleep(delay).await;

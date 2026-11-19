@@ -987,7 +987,7 @@ mod tests {
             fn child(&self) -> bool {
                 true
             }
-            fn delay(&self, method: &str) -> Duration {
+            fn delay(&self, method: &str, _params: &Value) -> Duration {
                 if method == "Page.getFrameTree" {
                     Duration::from_secs(30)
                 } else {

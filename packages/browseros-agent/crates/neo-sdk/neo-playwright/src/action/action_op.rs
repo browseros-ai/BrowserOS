@@ -803,6 +803,7 @@ async fn dblclick(
 ) -> Result<Nothing, PlaywrightError> {
     let action = PointerAction {
         kind: PointerKind::Dblclick,
+        cursor: true,
         perform: Perform::Click(MouseClickOptions {
             button: input.button.map_or(MouseButton::Left, WireButton::button),
             click_count: 2,
@@ -830,6 +831,7 @@ async fn hover(
 ) -> Result<Nothing, PlaywrightError> {
     let action = PointerAction {
         kind: PointerKind::Hover,
+        cursor: false,
         perform: Perform::Move,
         wait_after: WaitAfter::Verdict,
         force: input.force.unwrap_or(false),
@@ -938,6 +940,7 @@ async fn drop(
     let _lease = lease(scope, &page).await?;
     let action = PointerAction {
         kind: PointerKind::Drop,
+        cursor: false,
         perform: Perform::Drop(Arc::new(DropData { payloads, data })),
         wait_after: WaitAfter::Verdict,
         force: false,
@@ -956,6 +959,7 @@ async fn drop(
 fn pointer_action(input: &ClickInput) -> PointerAction {
     PointerAction {
         kind: PointerKind::Click,
+        cursor: true,
         perform: Perform::Click(MouseClickOptions {
             button: input.button.map_or(MouseButton::Left, WireButton::button),
             click_count: input.click_count.unwrap_or(1),
@@ -987,6 +991,7 @@ fn checked_action(
 ) -> PointerAction {
     PointerAction {
         kind: PointerKind::Click,
+        cursor: false,
         perform: Perform::Click(MouseClickOptions::default()),
         wait_after: WaitAfter::Verdict,
         force: force.unwrap_or(false),
@@ -1001,6 +1006,7 @@ fn checked_action(
 fn drag_phases(input: &DragInput) -> DragPhases {
     let half = |kind, perform, position| PointerAction {
         kind,
+        cursor: false,
         perform,
         wait_after: WaitAfter::Verdict,
         force: input.force.unwrap_or(false),
