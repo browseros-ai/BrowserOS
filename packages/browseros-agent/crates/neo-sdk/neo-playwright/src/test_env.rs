@@ -12,7 +12,7 @@ use browseros_core::{
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::{FileAccess, OpEnv, Refusal, RunState};
 
@@ -36,6 +36,7 @@ pub(crate) struct TestEnv {
     view: BrowserView,
     pub(crate) draws_cursor: bool,
     run_state: Arc<RunState>,
+    abort: watch::Sender<Option<String>>,
     refusal: Option<Refusal>,
     file_access: Option<FileAccess>,
     /// How many `recheck`s pass before `refusal` applies; 0 refuses from the first.
@@ -62,6 +63,7 @@ impl TestEnv {
             view,
             draws_cursor: false,
             run_state: Arc::default(),
+            abort: watch::channel(None).0,
             refusal: None,
             file_access: None,
             passing_rechecks: 0,
@@ -128,6 +130,10 @@ impl TestEnv {
             .clone()
     }
 
+    pub(crate) fn abort(&self, reason: &str) {
+        self.abort.send_replace(Some(reason.to_owned()));
+    }
+
     fn record(&self, call: EnvCall) {
         self.calls
             .lock()
@@ -137,6 +143,17 @@ impl TestEnv {
 }
 
 impl OpEnv for TestEnv {
+    fn abort_reason(&self) -> Option<String> {
+        self.abort.borrow().clone()
+    }
+
+    fn aborted(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {
+            let mut signal = self.abort.subscribe();
+            let _aborted = signal.wait_for(Option::is_some).await;
+        })
+    }
+
     fn draws_cursor(&self) -> bool {
         self.draws_cursor
     }

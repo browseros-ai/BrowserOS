@@ -401,16 +401,15 @@ async fn burst(
     let mut planned = input.plan();
     let steps = build(&mut planned)
         .map_err(|unknown| scope.fail(ErrorCode::InvalidInput, &unknown.to_string()))?;
-    let sent = if let Some(at) = click.filter(|_| scope.draws_cursor()) {
+    if let Some(at) = click.filter(|_| scope.draws_cursor()) {
         let root = page.root_session();
         let mut cursor = ClickCursor::new(true);
-        cursor.glide(scope, &root, at).await?;
-        let sent = scope.send_effect()?;
+        if cursor.needs_glide(scope, at) {
+            cursor.glide(scope, &root, at).await?;
+        }
         cursor.ripple(scope, &root, at).await?;
-        sent
-    } else {
-        scope.send_effect()?
-    };
+    }
+    let sent = scope.send_effect()?;
     input
         .send_planned(&sent, scope, planned, steps)
         .await

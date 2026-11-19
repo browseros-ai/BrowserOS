@@ -43,7 +43,7 @@ impl TabScript for LostCapture {
         first && !self.stalled_tree
     }
 
-    fn delay(&self, method: &str) -> Duration {
+    fn delay(&self, method: &str, _params: &Value) -> Duration {
         if self.stalled_tree && method == "Page.getFrameTree" {
             Duration::from_secs(60)
         } else {
