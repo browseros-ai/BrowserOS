@@ -4,7 +4,7 @@ const html = `<!doctype html><meta name="viewport" content="width=device-width,i
   <style>
     * { box-sizing:border-box } body { margin:0; background:white }
     #target { position:absolute; left:80px; top:64px; width:80px; height:40px;
-      padding:0; border:0; background:#aaa; color:black; outline:0; user-select:none }
+      padding:0; border:0; background:#d7ae64; color:black; outline:0; user-select:none }
   </style>
   <button id="target">Target</button><input id="field"><input id="box" type="checkbox">`
 const selector = 'browseros-agent-pointer[data-browseros-agent-pointer]'
@@ -87,7 +87,13 @@ async function landing(
   },
 ) {
   const start = Date.now()
-  await action()
+  try {
+    await action()
+  } catch (error) {
+    throw new Error(
+      `${error.message}; page events: ${JSON.stringify(await events())}`,
+    )
+  }
   const wallMs = Date.now() - start
   const log = await events()
   const overlays = log.filter((e) => e.kind === 'overlay')
@@ -309,4 +315,119 @@ async function framed(transform) {
     on: true,
     scope: 'frame',
   })
+}
+
+// BrowserOS can leave the emulated finger down until the locator times out. Even then the
+// page must receive exactly one press at the CSS point and the cursor must have glided there.
+async function phonePress(on) {
+  const metrics = await page.evaluate(() => [
+    innerWidth,
+    innerHeight,
+    devicePixelRatio,
+    navigator.maxTouchPoints,
+  ])
+  check(
+    metrics[0] === 366 &&
+      metrics[1] === 700 &&
+      metrics[2] === 2 &&
+      metrics[3] > 0,
+    'phone metrics',
+    metrics,
+  )
+  let error = null
+  try {
+    await page.locator('#target').click({ timeout: 2200 })
+  } catch (e) {
+    error = {
+      name: e.name,
+      code: e.code,
+      delivery: e.delivery,
+      message: e.message,
+    }
+  }
+  const log = await events()
+  const presses = log.filter((e) => e.kind === 'pointerdown')
+  const overlays = log.filter((e) => e.kind === 'overlay')
+  const seen = { metrics, error, log }
+  check(
+    presses.length === 1 &&
+      presses.every(
+        (e) =>
+          e.id === 'target' &&
+          e.scope === 'top' &&
+          e.trusted &&
+          Math.abs(e.x - 120) <= 1 &&
+          Math.abs(e.y - 84) <= 1,
+      ),
+    'phone press',
+    seen,
+  )
+  check(
+    overlays.length === (on ? 1 : 0) &&
+      overlays.every((e) => e.scope === 'top' && presses[0].t - e.t >= 250),
+    'phone cursor before press',
+    seen,
+  )
+  if (error)
+    check(
+      error.name === 'TimeoutError' &&
+        error.delivery === 'unknown' &&
+        error.message.includes('performing click action'),
+      'unexpected phone failure',
+      seen,
+    )
+  else
+    check(
+      log.filter((e) => e.kind === 'click' && e.id === 'target' && e.trusted)
+        .length === 1,
+      'completed phone click',
+      seen,
+    )
+  return seen
+}
+
+// Measure the solid button face in the actual PNG. Its center is the CSS landing point
+// regardless of the framebuffer size, device pixel ratio, and preview zoom.
+async function targetPixels(png) {
+  return page.evaluate(async (data) => {
+    const image = new Image()
+    image.src = `data:image/png;base64,${data}`
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(image, 0, 0)
+    const { width, height } = canvas
+    const pixels = ctx.getImageData(0, 0, width, height).data
+    let left = width,
+      right = -1,
+      top = height,
+      bottom = -1
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4
+        if (
+          pixels[i] === 215 &&
+          pixels[i + 1] === 174 &&
+          pixels[i + 2] === 100
+        ) {
+          left = Math.min(left, x)
+          right = Math.max(right, x)
+          top = Math.min(top, y)
+          bottom = Math.max(bottom, y)
+        }
+      }
+    if (right < left) throw new Error('button face absent from native capture')
+    const scale = (right - left + 1) / 80
+    const cx = (left + right) / 2,
+      cy = (top + bottom) / 2
+    let blue = 0
+    for (let y = Math.ceil(cy - 8 * scale); y <= cy + 8 * scale; y++)
+      for (let x = Math.ceil(cx - 8 * scale); x <= cx + 8 * scale; x++) {
+        const i = (y * width + x) * 4
+        if (pixels[i] < 50 && pixels[i + 1] < 130 && pixels[i + 2] > 140) blue++
+      }
+    return { width, height, button: [left, top, right, bottom], blue }
+  }, png)
 }
