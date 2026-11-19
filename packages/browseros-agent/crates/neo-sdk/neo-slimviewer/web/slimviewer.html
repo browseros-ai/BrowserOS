@@ -352,14 +352,14 @@ function record(r) {
   const d = new DataView(r.buffer, r.byteOffset, r.byteLength);
   const w = d.getUint16(6), h = d.getUint16(8);
   if (!w || !h || w * h > 16 * 1024 * 1024 || frames.length + arrived.size >= MAX_FRAMES) return badRecord();
-  frames.push([d.getUint32(1), r[5], w, h, r.slice(10)]);
+  frames.push([d.getUint32(1), (r[5] & 1) === 1, w, h, r.slice(10), (r[5] & 4) === 4]);
   drainFrames();
 }
 
 // ---- decode: Annex B, so no `description`; the codec string comes from the SPS
 let decoder = null, dw = 0, dh = 0, dcodec = '', needKey = true, askedKey = false;
 let frames = [], processing = null;
-// seq → [arrival time for stats.decodeMs, FRAME flags for this decoded picture]
+// seq → [when its record was complete (stats.decodeMs), picture scale: 2 for a half-size motion frame]
 const arrived = new Map();
 function codecOf(au) {
   for (let i = 0; i + 6 < au.length; i++) {
@@ -391,8 +391,7 @@ function decodeError(error) {
   decoder = null; needKey = true;
   if (!askedKey) { askedKey = true; send(T.KEYFRAME); }
 }
-async function decode(token, seq, flags, w, h, au) {
-  const key = flags & 1;
+async function decode(token, seq, key, w, h, au, half) {
   if (key) {
     const codec = codecOf(au);
     if (!decoder || decoder.state === 'closed' || w !== dw || h !== dh || codec !== dcodec) {
@@ -420,18 +419,14 @@ async function decode(token, seq, flags, w, h, au) {
     if (!askedKey) { askedKey = true; send(T.KEYFRAME); }
     return;
   }
-  arrived.set(seq, [performance.now(), flags]);
+  arrived.set(seq, [performance.now(), half ? 2 : 1]);
   decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: seq, data: au }));
 }
 function draw(frame) {
-  const seq = frame.timestamp, [t, flags] = arrived.get(seq) || [];
+  const seq = frame.timestamp, [t, k] = arrived.get(seq) || [undefined, 1];
   arrived.delete(seq);
-  let cw = frame.displayWidth, ch = frame.displayHeight;
-  if (flags & 4) {
-    // An odd half dimension lost two screen pixels when the encoder rounded down.
-    cw = cw * 2 + (flags & 16 ? 2 : 0);
-    ch = ch * 2 + (flags & 32 ? 2 : 0);
-  }
+  // The canvas is always the screen's size; a half-size frame is drawn scaled up.
+  const cw = frame.displayWidth * k, ch = frame.displayHeight * k;
   if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; fit(); }
   g.drawImage(frame, 0, 0, cw, ch);
   frame.close();

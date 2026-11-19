@@ -177,11 +177,7 @@ def check(name, peer, text, kind='direct', size=None, accepted=True):
 try:
     owner, spectator = Peer(5910), Peer(5911)
     assert pump(2, lambda: bool(owner.hellos and spectator.hellos))
-    owner_flags, = owner.hellos
-    required = ((0x02, 'TYPE'), (0x04, 'COPY'), (0x08, 'WHEEL'))
-    missing = [name for bit, name in required if not owner_flags & bit]
-    assert not missing, f'owner HELLO {owner_flags:#04x} missing {", ".join(missing)}'
-    assert spectator.hellos == [1], 'spectator HELLO must be view-only'
+    assert owner.hellos == [14] and spectator.hellos == [1]
     owner.send(0x24)
     spectator.send(0x24)
     pump(0.1)

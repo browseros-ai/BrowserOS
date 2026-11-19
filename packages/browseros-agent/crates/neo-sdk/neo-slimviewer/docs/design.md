@@ -40,14 +40,6 @@ four-byte big-endian length covering a type byte and its payload. A record may
 span multiple WebSocket messages. The page reassembles records, decodes Annex B
 H.264 with WebCodecs, draws to a canvas and acknowledges the frame.
 
-The FRAME header carries the sequence number (u32), flags (u8), and coded width
-and height (u16 each). Bit 0 marks a keyframe and bit 1 a sharp frame. For a
-half-size frame (bit 2), the page doubles the coded dimensions, then adds two
-pixels to the width if bit 4 is set and to the height if bit 5 is set. This
-recovers the full-size canvas used for field coordinates. Older pages ignore
-bits 4 and 5. Older servers leave them clear. The page's probe reserves bit 3
-for two-thirds size.
-
 ## From the page to Neo
 
 The port selects the role. Spectators can acknowledge frames and request a

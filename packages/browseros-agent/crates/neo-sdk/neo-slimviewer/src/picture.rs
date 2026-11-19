@@ -279,8 +279,6 @@ fn recent(at: Option<Instant>, now: Instant) -> bool {
 }
 
 impl Scale {
-    /// H.264 4:2:0 needs even dimensions at either scale. Rounding at half size can discard
-    /// two more screen pixels than encoding the same screen at full size.
     pub fn dims(self, width: u16, height: u16) -> (u16, u16) {
         let divisor = match self {
             Self::Full => 1,
@@ -1260,11 +1258,8 @@ mod tests {
         }
     }
     fn to_link_half(p: &mut Picture, t: Instant) -> Instant {
-        to_link_half_with_queue(p, t, jam().queue_ms)
-    }
-    fn to_link_half_with_queue(p: &mut Picture, t: Instant, queue_ms: u32) -> Instant {
         for n in 1..=8 {
-            p.tick(at(t, n), Link { queue_ms, ..jam() }, Cpu::default());
+            p.tick(at(t, n), jam(), Cpu::default());
         }
         assert_eq!(p.motion_scale(), Scale::Half);
         at(t, 8)
@@ -1299,49 +1294,6 @@ mod tests {
             Duration::from_secs_f32(800.0 / kbps) + Duration::from_millis(30),
             Duration::from_millis(30),
         );
-    }
-
-    #[test]
-    fn ladder_half_frames_preserve_phone_screen_dimensions() {
-        use crate::encoder::{Backend, Encoder, Settings};
-        use crate::{wire, yuv::I420};
-
-        let start = Instant::now();
-        let settings = Settings {
-            backend: Backend::default_name().parse().unwrap(),
-            preset: "ultrafast".into(),
-            threads: 1,
-            crf: cfg().base_crf,
-        };
-        let late_queue = |p: &mut Picture, t| to_link_half_with_queue(p, t, 400);
-        // At 2×, the 393×852 phone loses two screen pixels in width, the 430×853 in height.
-        for (width, height, coded_width, flags) in
-            [(786, 1704, 392_u16, 0x15), (860, 1706, 430, 0x25)]
-        {
-            let rows = usize::from(height);
-            for enter_half in [to_link_half, late_queue, to_cpu_half] {
-                let mut p = Picture::new(cfg(), usize::from(width), rows, start);
-                let now = enter_half(&mut p, start);
-                let plan = p.plan(now, Some((0, rows, rows)));
-                let (w, h) = plan.scale.dims(width, height);
-                let mut enc = Encoder::open(w, h, &settings, p.crf(), p.link_kbps()).unwrap();
-                let pixels = I420::new(usize::from(w), usize::from(h));
-                let out = enc.encode(&pixels, true, plan.sharp_qp, 0).unwrap();
-                let frame = wire::frame(
-                    1,
-                    out.key,
-                    plan.sharp_qp.is_some(),
-                    plan.scale,
-                    width,
-                    height,
-                    &out.data,
-                );
-
-                assert_eq!(frame[9], flags);
-                assert_eq!(&frame[10..12], &coded_width.to_be_bytes());
-                assert_eq!(&frame[12..14], &852_u16.to_be_bytes());
-            }
-        }
     }
 
     #[test]
