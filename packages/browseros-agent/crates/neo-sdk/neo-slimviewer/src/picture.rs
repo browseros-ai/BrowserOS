@@ -811,7 +811,7 @@ impl Picture {
             && congested
             && link.delivered_kbps > 0.0
             && link.queue_ms > 300;
-        let severe = congested && self.severe(&link, mean_bytes, late_at_cap);
+        let severe = congested && self.severe(now, &link, mean_bytes, fps, late_at_cap);
         self.previous_late_at_cap = late_at_cap;
         self.previous_congested_no_ack = congested && link.delivered_kbps == 0.0;
         self.facts = Facts {
@@ -897,7 +897,14 @@ impl Picture {
 
     /// Price a full motion frame at the quality cap. A keyframe burst alone says
     /// nothing about the cost of continued motion.
-    fn severe(&self, link: &Link, mean_bytes: f32, late_at_cap: bool) -> bool {
+    fn severe(
+        &self,
+        now: Instant,
+        link: &Link,
+        mean_bytes: f32,
+        fps: f32,
+        late_at_cap: bool,
+    ) -> bool {
         if link.delivered_kbps == 0.0 {
             return self.previous_congested_no_ack && link.sent_kbps > 0.0;
         }
@@ -910,10 +917,14 @@ impl Picture {
         let cap = self.ladder.rungs[self.ladder.cap];
         let remaining = cap.crf_add - self.ladder.rungs[self.link.at].crf_add;
         let cap_bytes = mean_bytes * 2.0_f32.powf(-remaining / 6.0);
-        // If even the floor fps at the quality cap overwhelms the link, no full-size
-        // rung can fit. Walking those rungs only queues large frames.
-        let cap_demand_kbps = cap_bytes * 8.0 * cap.fps / 1000.0;
-        cap_bytes * 8.0 > 300.0 * link.delivered_kbps || cap_demand_kbps > 1.5 * link.delivered_kbps
+        // Slower scroll frames carry more new rows, so bytes per second stay roughly
+        // constant. Pricing high-fps frames at the floor fps underestimates demand.
+        let cap_demand_kbps = cap_bytes * 8.0 * fps / 1000.0;
+        // A swipe can start mid-tick, before a full second of ACKs has arrived.
+        let available_kbps = link
+            .delivered_kbps
+            .max(self.return_capacity_kbps(now).unwrap_or(0.0));
+        cap_bytes * 8.0 > 300.0 * link.delivered_kbps || cap_demand_kbps > 2.0 * available_kbps
     }
 
     fn observe_link(&mut self, now: Instant, link: &Link, congested: bool) {
@@ -1574,13 +1585,13 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_rate_test_uses_three_frames_and_the_mean_at_the_floor() {
+    fn tests_that_the_rate_test_uses_three_frames_and_the_mean_at_the_paced_fps() {
         let t = Instant::now();
-        // At 30 fps and base CRF, 75 kB scales to exactly 4.5 Mb/s at the best full rung.
+        // At 30 fps, a 50 kB mean at base quality needs exactly 6 Mb/s at the cap.
         for (samples, why) in [
             (&[110_000, 110_000][..], Why::Congested),
-            (&[50_000, 75_000, 100_000], Why::Congested),
-            (&[50_000, 75_000, 100_003], Why::Severe),
+            (&[30_000, 50_000, 70_000], Why::Congested),
+            (&[30_000, 50_000, 70_003], Why::Severe),
         ] {
             let mut p = picture(t);
             for &bytes in samples {
@@ -1588,6 +1599,36 @@ mod tests {
             }
             let moves = p.tick(at(t, 1), jam(), Cpu::default());
             assert_eq!(moves.first().map(|m| m.why), Some(why), "{samples:?}");
+        }
+    }
+
+    #[test]
+    fn tests_that_the_rate_test_uses_the_higher_of_delivery_and_return_capacity() {
+        let t = Instant::now();
+        // A 60 kB scroll frame at 30 fps needs 7.2 Mb/s after the +6 CRF step.
+        for (probe_kbps, delivered_kbps, why) in [
+            (4000.0, 3000.0, Why::Congested),
+            (3000.0, 4000.0, Why::Congested),
+            (3000.0, 3000.0, Why::Severe),
+        ] {
+            let mut p = picture(t);
+            capacity(&mut p, t, 8000.0); // An older, faster burst is still in the probe window.
+            let now = at(t, 1);
+            capacity(&mut p, now, probe_kbps);
+            sized_motion(&mut p, now, 60_000, 3);
+            let moves = p.tick(
+                now,
+                Link {
+                    delivered_kbps,
+                    ..jam()
+                },
+                Cpu::default(),
+            );
+            assert_eq!(
+                moves.first().map(|m| m.why),
+                Some(why),
+                "{probe_kbps} kb/s probe, {delivered_kbps} kb/s delivered"
+            );
         }
     }
 

@@ -14,9 +14,11 @@ paces capture. Under pressure they step down through 30, 20 and 15 fps. At
 the floor, a congested link raises the quantizer by up to two per step, to
 +6 by default. Sustained congestion can then trigger half size. During congestion,
 three or more large, full-size, non-key frames let the link estimate their mean
-size at the quality limit. If that mean frame takes over 300 ms to deliver, or
-the stream at the frame-rate floor needs over 1.5 times the delivered bitrate,
-the link jumps to the quality limit. The same test at the limit selects half size.
+size at the quality limit. The link jumps to that limit if the mean frame takes
+over 300 ms to deliver or if those frames at the interval's pace need more than
+twice the link rate. The rate check uses the higher of measured delivery and the
+capacity estimate for a full-size return, when available. The same checks at the
+limit select half size.
 Two consecutive congested seconds without delivery can also accelerate the steps.
 A late queue alone takes the usual quality steps. At the limit, two consecutive
 congested seconds with a median ACK delay over 300 ms above the pacing RTT floor

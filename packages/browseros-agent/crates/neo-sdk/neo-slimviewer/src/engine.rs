@@ -3204,6 +3204,50 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_wikipedia_scroll_at_30_fps_reaches_half_on_the_second_congested_tick() {
+        let end = Duration::from_secs(20);
+        let height = 844 * 2;
+        let trace = paced_screen(
+            end.as_secs(),
+            &PacedCell {
+                kbps: 3000,
+                rtt_ms: 100,
+                jitter_ms: 20,
+                key_bytes: 20_000,
+                ..PacedCell::default()
+            },
+            (390 * 2, height),
+            |ms, p| {
+                if ms < 1_900 {
+                    return (height / 10, 2_000.0);
+                }
+                // A steady scroll exposes more new rows per frame as the cadence drops.
+                let bytes = 70_000.0 * 30.0 / p.fps() * 2.0_f32.powf((24.0 - p.crf()) / 6.0);
+                (height, bytes)
+            },
+        );
+        assert!(trace.resets.is_empty());
+        assert!(
+            trace.ticks[..2]
+                .iter()
+                .all(|t| t.fps == 30.0 && !link_full(t.blocked))
+        );
+        let cap = &trace.ticks[2];
+        let half = &trace.ticks[3];
+        assert!(link_full(cap.blocked) && link_full(half.blocked));
+        assert_eq!(
+            (cap.fps, cap.crf, cap.scale),
+            (15.0, 30.0, Scale::Full),
+            "{cap:?}"
+        );
+        assert_eq!(half.scale, Scale::Half, "{half:?}");
+        let next_frame = trace.frames.iter().find(|f| f.at >= Duration::from_secs(4));
+        assert_eq!(next_frame.map(|f| f.scale), Some(Scale::Half));
+        let gap = trace.max_draw_gap(end);
+        assert!(gap < Duration::from_millis(500), "largest draw gap {gap:?}");
+    }
+
+    #[test]
     fn tests_that_a_standing_noise_jam_keeps_drawing_at_half_size() {
         let end = Duration::from_secs(60);
         // At the quality cap these keys are 330 and 440 kB. Half-size motion
@@ -3275,18 +3319,26 @@ mod tests {
 
     #[test]
     fn tests_that_a_cellular_link_under_its_demand_never_sets_half() {
-        let trace = paced_picture(
-            60,
-            PacedCell {
-                rtt_ms: 100,
-                jitter_ms: 20,
-                motion_kbps: 2400,
-                ..PacedCell::default()
-            },
-        );
-        assert!(trace.resets.is_empty());
-        assert!(trace.ticks.iter().all(|tick| tick.scale == Scale::Full));
-        assert!(trace.frames.iter().all(|frame| frame.scale == Scale::Full));
+        for motion_kbps in [2300, 2400] {
+            let trace = paced_picture(
+                60,
+                PacedCell {
+                    rtt_ms: 100,
+                    jitter_ms: 20,
+                    motion_kbps,
+                    ..PacedCell::default()
+                },
+            );
+            assert!(trace.resets.is_empty());
+            // A severe tick would jump to CRF 30 or half size.
+            assert!(
+                trace
+                    .ticks
+                    .iter()
+                    .all(|t| t.crf < 30.0 && t.scale == Scale::Full)
+            );
+            assert!(trace.frames.iter().all(|f| f.scale == Scale::Full));
+        }
     }
 
     #[test]
