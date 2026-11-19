@@ -1781,9 +1781,10 @@ async fn tests_that_an_untouched_tab_on_a_file_page_reports_no_frames_until_it_l
             "UNTOUCHED_FILE_TAB step=allowed settled={:?} version={rest:?}",
             asked.elapsed()
         );
-        let moved = server.url("/child.html?moved");
-        let (committed, took) = child_commit_moves(&tab, &moved, &version, rest).await?;
-        eprintln!("UNTOUCHED_FILE_TAB step=child committed={committed:?} moved={took:?}");
+        let child_src = server.url("/child.html?moved");
+        let ChildCommit { committed, moved } =
+            child_commit_moves(&tab, &child_src, &version, rest).await?;
+        eprintln!("UNTOUCHED_FILE_TAB step=child committed={committed:?} moved={moved:?}");
         if run
             .browser()
             .pages
@@ -1844,15 +1845,24 @@ async fn loaded_over_http(tab: &OutsideTab) -> TestResult {
     }
 }
 
+/// How long [`child_commit_moves`] took for each of its two waits, both from when it set the
+/// child's `src`.
+struct ChildCommit {
+    /// Until the outside client's own tree read showed the child at its new URL.
+    committed: Duration,
+    /// Until the tab's frame version moved past its resting value.
+    moved: Duration,
+}
+
 /// Points the tab's `same` child at `src` and waits, within [`UNTOUCHED_CHILD_COMMIT_BOUND`], for
 /// the outside client's own tree read to show it committed, then for the tab's frame version to
-/// move past `rest`. Returns how long the commit and the move took.
+/// move past `rest`.
 async fn child_commit_moves(
     tab: &OutsideTab,
     src: &str,
     version: &impl Fn() -> Option<u64>,
     rest: Option<u64>,
-) -> TestResult<(Duration, Duration)> {
+) -> TestResult<ChildCommit> {
     set_child_src(tab, "same", src).await?;
     let asked = Instant::now();
     while tab.child_url("same").await? != src {
@@ -1875,7 +1885,10 @@ async fn child_commit_moves(
         }
         time::sleep(Duration::from_millis(20)).await;
     }
-    Ok((committed, asked.elapsed()))
+    Ok(ChildCommit {
+        committed,
+        moved: asked.elapsed(),
+    })
 }
 
 /// Points the tab's child frame named `name` at `src`, from the tab's main world, and checks the
