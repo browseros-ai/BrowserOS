@@ -110,6 +110,9 @@ context_args=()
 viewer=$agent/crates/neo-sdk/neo-slimviewer
 if [ -f "$viewer/Dockerfile" ]; then
   docker buildx build "${build_args[@]}" --output "type=local,dest=$workdir/slimviewer" "$viewer"
+  # The reproducible export gives every file the same timestamp. BuildKit's local
+  # context sync can then reuse another build's file if its size also matches.
+  find "$workdir/slimviewer" -type f -exec touch {} +
   context_args+=(--build-context "slimviewer=$workdir/slimviewer")
 fi
 # Older frozen worktrees use a named context for five shared supervisor files.
@@ -144,6 +147,9 @@ image=$(cat "$iidfile")
 container=$(docker create "$image")
 provenance=$(docker cp "$container:/usr/share/neo-sdk/provenance.json" - | tar -xO)
 docker cp "$container:$(jq -r .server.path <<<"$provenance")" - | tar -xO >"$binary"
+if [ -d "$workdir/slimviewer" ]; then
+  docker cp "$container:/usr/local/bin/slimviewer" "$workdir/installed-viewer"
+fi
 docker rm "$container" >/dev/null
 
 # The server must be this build's: compiled from the sources this build copied (the digest the
@@ -158,6 +164,12 @@ built_from=$(LC_ALL=C grep -aoE 'browseros-claw-sdk-source=[0-9a-f]{64}' "$binar
   || fail "the image's server was compiled from sources $built_from, not this build's $(jq -r .source_digest <<<"$provenance")"
 [ "$(sha256 "$binary")" = "$(jq -r .server.sha256 <<<"$provenance")" ] \
   || fail "the image's server is not the binary provenance.json describes"
+if [ -d "$workdir/slimviewer" ]; then
+  expected_viewer=$(sha256 "$workdir/slimviewer/usr/local/bin/slimviewer")
+  [ "$(sha256 "$workdir/installed-viewer")" = "$expected_viewer" ] \
+    && [ "$(jq -r .slimviewer.sha256 <<<"$provenance")" = "$expected_viewer" ] \
+    || fail "the image's slimviewer does not match the build export"
+fi
 
 docker tag "$image" "$tag"
 echo "TAG=$tag"
