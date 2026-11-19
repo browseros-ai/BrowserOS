@@ -6,6 +6,8 @@ pub mod browseros_rig;
 use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpClient, ConnectOptions, SessionId};
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
@@ -502,5 +504,193 @@ async fn live_setting_changes_between_clicks() -> TestResult {
     );
     let (value, ()) = tokio::try_join!(b.script(&script), turn_off_between_clicks(&b, &listener))?;
     record("toggle", &value);
+    Ok(())
+}
+
+// Install the observer in the fixture markup. An extra SDK call between goto and click would
+// give goto's background capture time to finish. mouse.move starts a fresh capture after idle.
+const TRACE_CLICKS: &str = r#"
+const html = `<!doctype html><style>
+  body {background:white} button {position:absolute;top:24px;width:40px;height:32px;
+    padding:0;border:0;background:#777;outline:0} #first {left:24px} #second {left:96px}
+  </style><button id="first"></button><button id="second"></button>
+  <script>
+    window.log = []
+    new MutationObserver(records => { for (const r of records) {
+      for (const n of r.addedNodes) if (n.matches?.('browseros-agent-pointer[data-browseros-agent-pointer]'))
+        log.push(['added',performance.now()])
+      for (const n of r.removedNodes) if (n.matches?.('browseros-agent-pointer[data-browseros-agent-pointer]'))
+        log.push(['removed',performance.now()])
+    }}).observe(document,{childList:true,subtree:true})
+    addEventListener('click', e => log.push([e.isTrusted ? e.target.id : 'untrusted',performance.now()]))
+  </script>`
+await page.goto('data:text/html,' + encodeURIComponent(html))
+await page.locator('#first').click()
+await new Promise(resolve => setTimeout(resolve, 4600))
+await page.mouse.move(2,2)
+await page.locator('#second').click()
+return await page.evaluate(() => window.log)
+"#;
+
+// Both gray buttons and the cursor's two glide paths fit inside these first 160 x 90 CSS px.
+// JPEG quantization can soften cursor blue, so compare channels rather than exact RGB values.
+const TRACE_PIXELS: &str = r"
+return await page.evaluate(async shots => {
+  const counts = []
+  for (const shot of shots) {
+    const image = new Image()
+    image.src = 'data:image/jpeg;base64,' + shot
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = 160
+    canvas.height = 90
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(image,0,0,innerWidth,innerHeight)
+    const {data} = ctx.getImageData(0,0,160,90)
+    let blue = 0, gray = 0
+    for (let i=0; i<data.length; i+=4) {
+      const [r,g,b] = [data[i],data[i+1],data[i+2]]
+      if (b-r > 65 && b-g > 45 && b > 120) ++blue
+      if (Math.abs(r-119)<12 && Math.abs(g-119)<12 && Math.abs(b-119)<12) ++gray
+    }
+    counts.push({blue,gray})
+  }
+  return counts
+}, shots)
+";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn background_trace_jpegs_hide_new_and_recreated_cursors() -> TestResult {
+    let Some(b) = Browser::start(&[]).await? else {
+        return Ok(());
+    };
+    let settings = b.host("GET", "/v1/settings", None).await?;
+    assert_eq!(
+        settings.pointer("/settings/trace/screenshots"),
+        Some(&json!("perOperation"))
+    );
+    b.cursor("on").await?;
+    // Bind the task's tab before measuring. No first-run blank-tab screenshot is in our sample.
+    b.script("await page.goto('about:blank'); return page.tabId")
+        .await?;
+    let mut leaks = Vec::new();
+    for iteration in 1..=10 {
+        let reply = run(&b.client, TRACE_CLICKS, &json!({"taskId":"cursor"})).await?;
+        let meta = outcome(&reply)?;
+        assert_eq!(
+            meta.get("status"),
+            Some(&json!("ok")),
+            "{:?}",
+            reply.content
+        );
+        let events = reply
+            .structured_content
+            .as_ref()
+            .and_then(|v| v.get("value"))
+            .and_then(Value::as_array)
+            .ok_or("fixture event log")?;
+        let kinds: Vec<_> = events
+            .iter()
+            .filter_map(|e| e.pointer("/0").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            kinds,
+            ["added", "first", "removed", "added", "second"],
+            "{events:?}"
+        );
+        let id = meta
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("trace run id")?;
+        let trace = b
+            .host(
+                "GET",
+                &format!("/v1/runs/{id}?wait=30&fields=summary"),
+                None,
+            )
+            .await?;
+        assert_eq!(
+            trace.get("complete"),
+            Some(&json!(true)),
+            "pending trace {id}"
+        );
+        let ops = trace
+            .get("operations")
+            .and_then(Value::as_array)
+            .ok_or("trace operations")?;
+        let mut names = Vec::new();
+        let mut shots = Vec::new();
+        for op in ops {
+            if op.get("hasScreenshot") != Some(&json!(true)) {
+                continue;
+            }
+            let op_id = op.get("id").and_then(Value::as_str).ok_or("trace op id")?;
+            let jpeg = b
+                .rig
+                .host(
+                    "GET",
+                    &format!("/v1/operations/{op_id}/screenshot"),
+                    Some(HOST_TOKEN),
+                    None,
+                )
+                .await?;
+            assert_eq!(
+                (jpeg.status, jpeg.header("content-type")),
+                (200, Some("image/jpeg")),
+                "{op_id}"
+            );
+            assert!(
+                jpeg.body.starts_with(&[0xff, 0xd8]) && jpeg.body.ends_with(&[0xff, 0xd9]),
+                "{op_id}"
+            );
+            shots.push(STANDARD.encode(jpeg.body));
+            names.push(
+                op.get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("trace op name")?,
+            );
+        }
+        let writes: Vec<_> = names
+            .iter()
+            .copied()
+            .filter(|name| matches!(*name, "page.goto" | "locator.click" | "mouse.move"))
+            .collect();
+        assert_eq!(
+            writes,
+            ["page.goto", "locator.click", "mouse.move", "locator.click"],
+            "missing trace JPEG in run {id}: {names:?}"
+        );
+        let pixels = b
+            .script(&format!("const shots = {};\n{TRACE_PIXELS}", json!(shots)))
+            .await?;
+        let counts = pixels.as_array().ok_or("decoded JPEGs")?;
+        assert_eq!(counts.len(), names.len());
+        record(
+            "trace-jpegs",
+            &json!({"iteration":iteration,"run":id,"ops":names,"pixels":counts,"events":events}),
+        );
+        for (name, count) in names.iter().zip(counts) {
+            assert!(
+                count
+                    .get("gray")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|n| n > 1500),
+                "fixture buttons missing in {id} {name}: {count}"
+            );
+            if count
+                .get("blue")
+                .and_then(Value::as_u64)
+                .ok_or("blue pixels")?
+                > 0
+            {
+                leaks.push(format!("iteration {iteration}, run {id}, {name}: {count}"));
+            }
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "trace JPEGs contained cursor blue:\n{}",
+        leaks.join("\n")
+    );
     Ok(())
 }
