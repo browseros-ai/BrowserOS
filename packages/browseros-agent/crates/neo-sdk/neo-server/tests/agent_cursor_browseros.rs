@@ -703,7 +703,9 @@ async fn background_trace_jpegs_hide_new_and_recreated_cursors() -> TestResult {
 
 // BEGIN standalone phone diagnostic (the report runs this module against the plain base).
 mod phone_repro {
-    use std::{error::Error, sync::Arc, time::Duration};
+    use std::error::Error;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     use browseros_cdp::{CdpClient, ConnectOptions};
     use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
