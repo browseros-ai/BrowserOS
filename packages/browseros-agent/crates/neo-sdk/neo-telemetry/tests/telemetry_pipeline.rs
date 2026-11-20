@@ -1225,6 +1225,60 @@ fn each_failure_counts_once_where_it_is_attributed() -> Result<(), Box<dyn Error
     Ok(())
 }
 
+#[test]
+fn an_op_that_settles_after_its_run_ended_still_counts_and_nests() -> Result<(), Box<dyn Error>> {
+    let (telemetry, probe) = live(SiteDetail::None);
+    let crash = failure(ErrorOwner::Neo, "internal_error");
+    let run = telemetry.start_run(facts(&"run-1"));
+    let ops = run.ops();
+    run.finish(RunVerdict {
+        status: RunStatus::Error,
+        error: Some(crash),
+    });
+    // A crash cut the op short: the door settles it after the run's guard already ended the run.
+    ops.op_settled(OpSettled {
+        outcome: OpOutcome::Cancelled,
+        delivery: Delivery::Unknown,
+        error: Some(crash),
+        ..settled("page.goto", &"run-1.1")
+    });
+    let metrics = scrape(&telemetry)?;
+    assert_eq!(
+        metrics.value(
+            "neo_operations_total",
+            &[
+                ("op", "page.goto"),
+                ("status", "cancelled"),
+                ("error_owner", "neo")
+            ]
+        ),
+        Some("1"),
+        "the late op still counts"
+    );
+    assert_eq!(
+        metrics.value(
+            "neo_errors_total",
+            &[("error_owner", "neo"), ("error_code", "internal_error")]
+        ),
+        Some("1"),
+        "the crash is one failure: the run's end counted it and the op it cut short adds none"
+    );
+    assert_eq!(
+        metrics.value("neo_runs_in_flight", &[]),
+        Some("0"),
+        "a late op never touches in-flight"
+    );
+    let spans = probe.spans();
+    let run = the_span(&spans, "neo.run")?;
+    let op = the_span(&spans, "neo.op")?;
+    assert_eq!(
+        (op.trace_id.as_str(), op.parent_span_id.as_deref()),
+        (run.trace_id.as_str(), Some(run.span_id.as_str())),
+        "the late op's span still nests under its run's"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn shutdown_returns_promptly_once_and_later_spans_stay_home() -> Result<(), Box<dyn Error>> {
     let (telemetry, probe) = live(SiteDetail::None);
