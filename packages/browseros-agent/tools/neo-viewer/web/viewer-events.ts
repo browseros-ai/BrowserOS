@@ -6,7 +6,7 @@
  * and every other request those tabs make (the live screen's status poll, a run's detail) waits
  * for a connection that never frees. So the tabs share one stream:
  *
- *   leader tab     holds the `neo-viewer:events` Web Lock and the one EventSource; relays what
+ *   leader tab     holds the `neo-viewer:events:2` Web Lock and the one EventSource; relays what
  *       │          it hears on the BroadcastChannel of the same name
  *       ▼  open {epoch}, then event {epoch, event}, …
  *   other tabs     queued for the lock, in the order they opened; hear the relay
@@ -28,18 +28,18 @@
  * needs a secure context, which `http://127.0.0.1` is), each tab opens its own stream.
  */
 
-import { apiRoutes, type ViewerEvent } from '../shared/api'
+import { apiRoutes, type StreamEvent } from '../shared/api'
 
 /**
  * The lock's and the channel's name. A tab still running an older page shares the channel, so a
  * change to `Relayed` changes the name.
  */
-const NAME = 'neo-viewer:events'
+const NAME = 'neo-viewer:events:2'
 
 export interface ViewerEventListener {
   /** The stream this tab hears (re)opened: take a fresh snapshot; every later event follows it. */
   opened(): void
-  event(event: ViewerEvent): void
+  event(event: StreamEvent): void
 }
 
 /** What a tab tells the others on the channel. */
@@ -48,7 +48,7 @@ type Relayed =
   | { kind: 'hello'; tab: string }
   /** The leader's stream opened; with `tab`, it answers that tab's hello and no other tab adopts it. */
   | { kind: 'open'; epoch: string; tab?: string }
-  | { kind: 'event'; epoch: string; event: ViewerEvent }
+  | { kind: 'event'; epoch: string; event: StreamEvent }
 
 /** One subscription's part in the origin's stream. */
 type Role =
@@ -152,7 +152,7 @@ export function listenToViewerEvents(
     }
     source.onmessage = (message) => {
       if (role.kind !== 'leading' || role.epoch === null) return
-      const event = JSON.parse(message.data) as ViewerEvent
+      const event = JSON.parse(message.data) as StreamEvent
       channel.postMessage({ kind: 'event', epoch: role.epoch, event })
       listener.event(event)
     }
@@ -188,6 +188,6 @@ function listenAlone(
   const source = openSource(apiRoutes.events)
   source.onopen = () => listener.opened()
   source.onmessage = (message) =>
-    listener.event(JSON.parse(message.data) as ViewerEvent)
+    listener.event(JSON.parse(message.data) as StreamEvent)
   return () => source.close()
 }
