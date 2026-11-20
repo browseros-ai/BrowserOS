@@ -10,6 +10,7 @@
 //! name. Every family gets its `# HELP` / `# TYPE` lines even before it has a sample, so a
 //! consumer sees the whole catalog from the first scrape.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Display, Write as _};
 
@@ -80,7 +81,7 @@ impl Prometheus {
                     let mut lines = String::new();
                     for (bound, below) in buckets {
                         let mut with_le = labels.clone();
-                        with_le.push(("le", bound));
+                        with_le.push((Cow::Borrowed("le"), bound));
                         let _ = writeln!(lines, "{name}_bucket{} {below}", label_text(&with_le));
                     }
                     let text = label_text(&labels);
@@ -114,21 +115,42 @@ fn sample<'a, T: Display>(
 }
 
 /// A data point's labels, sorted by name, values as text.
-fn label_pairs<'a>(attributes: impl Iterator<Item = &'a KeyValue>) -> Vec<(&'a str, String)> {
-    let mut pairs: Vec<(&str, String)> = attributes
+fn label_pairs<'a>(attributes: impl Iterator<Item = &'a KeyValue>) -> Vec<(Cow<'a, str>, String)> {
+    let mut pairs: Vec<(Cow<'a, str>, String)> = attributes
         .map(|attribute| {
             (
-                attribute.key.as_str(),
+                label_name(attribute.key.as_str()),
                 attribute.value.as_str().into_owned(),
             )
         })
         .collect();
-    pairs.sort_by(|left, right| left.0.cmp(right.0));
+    pairs.sort_by(|left, right| left.0.cmp(&right.0));
     pairs
 }
 
+/// A label name as the text format allows it, `[a-zA-Z_][a-zA-Z0-9_]*`. The catalog's names
+/// already are; this keeps the text well-formed should the SDK add one of its own, such as the
+/// `otel.metric.overflow` series it opens past its cardinality limit (2000 per metric, far above
+/// the closed label sets).
+fn label_name(key: &str) -> Cow<'_, str> {
+    let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_';
+    let leading_digit = key.starts_with(|character: char| character.is_ascii_digit());
+    if !key.is_empty() && !leading_digit && key.chars().all(allowed) {
+        return Cow::Borrowed(key);
+    }
+    let mut name = String::with_capacity(key.len() + 1);
+    if key.is_empty() || leading_digit {
+        name.push('_');
+    }
+    name.extend(
+        key.chars()
+            .map(|character| if allowed(character) { character } else { '_' }),
+    );
+    Cow::Owned(name)
+}
+
 /// `{name="value",…}`, or nothing for a series without labels.
-fn label_text(pairs: &[(&str, String)]) -> String {
+fn label_text(pairs: &[(Cow<'_, str>, String)]) -> String {
     if pairs.is_empty() {
         return String::new();
     }
@@ -409,6 +431,24 @@ neo_renderer_crashes_total 1
             "a run longer than the last bound counts only in `+Inf`"
         );
         Ok(())
+    }
+
+    #[test]
+    fn every_label_name_is_one_the_text_format_accepts() {
+        for name in ["status", "error_owner", "op"] {
+            assert_eq!(label_name(name), name, "the catalog's names pass unchanged");
+        }
+        assert_eq!(
+            label_name("otel.metric.overflow"),
+            "otel_metric_overflow",
+            "the SDK's own overflow label would otherwise break the exposition"
+        );
+        assert_eq!(
+            label_name("9lives"),
+            "_9lives",
+            "a name never starts with a digit"
+        );
+        assert_eq!(label_name(""), "_", "a name is never empty");
     }
 
     #[test]

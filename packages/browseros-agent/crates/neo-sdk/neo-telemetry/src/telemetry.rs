@@ -195,7 +195,9 @@ impl Telemetry {
 
     /// Flushes pending spans and metrics and stops the exporters, returning within `budget`
     /// whether or not the collector answers. Call once, after in-flight runs drained; hooks
-    /// after it record nothing that leaves the process. Never blocks a runtime worker.
+    /// after it record nothing that leaves the process. Never blocks a runtime worker: the stop
+    /// runs on a thread of its own and a tokio timer bounds the wait, so await it on a tokio
+    /// runtime.
     pub async fn shutdown(&self, budget: Duration) -> Result<(), TelemetryError> {
         match &self.backend {
             Backend::Noop => Ok(()),
