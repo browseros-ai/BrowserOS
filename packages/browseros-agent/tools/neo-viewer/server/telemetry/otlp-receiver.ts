@@ -88,7 +88,7 @@ async function receive(
   if (type === 'application/x-protobuf' || type === 'application/protobuf')
     return refuse(
       415,
-      'neo-viewer reads OTLP/HTTP JSON only, not protobuf: set OTEL_EXPORTER_OTLP_PROTOCOL=http/json',
+      'this receiver reads OTLP/HTTP JSON only, not protobuf: set OTEL_EXPORTER_OTLP_PROTOCOL=http/json',
     )
   if (type !== 'application/json')
     return refuse(
