@@ -915,22 +915,62 @@ mod shutdown_tests {
     use std::time::{Duration, Instant};
 
     use neo_telemetry::label::RunStatus;
-    use neo_telemetry::{RunFacts, RunVerdict, Telemetry, TelemetryCall, TelemetryConfig};
+    use neo_telemetry::{RunFacts, RunVerdict, Telemetry, TelemetryConfig};
 
     use super::{App, flush_telemetry};
     use crate::config::Defaults;
+    use crate::telemetry_rig::{MockCollector, Wire};
+    use crate::test_rig::TestError;
 
-    #[tokio::test]
-    async fn the_exit_flush_gives_telemetry_the_shutdown_budget() {
-        let (telemetry, recording) = Telemetry::recording();
-        flush_telemetry(&telemetry).await;
-        assert_eq!(
-            recording.calls(),
-            vec![TelemetryCall::ShutDown {
-                budget: Defaults::SHUTDOWN_FLUSH
-            }],
-            "one flush, with the budget the trace writer's commit shares"
-        );
+    /// One finished run: a `neo.run` span and the run metrics, pending until something pushes.
+    fn finish_a_run(telemetry: &Telemetry, run_id: &str) {
+        telemetry
+            .start_run(RunFacts {
+                run_id: &run_id,
+                task_id: None,
+                parent: None,
+            })
+            .finish(RunVerdict {
+                status: RunStatus::Ok,
+                error: None,
+            });
+    }
+
+    /// With the collector up, the exit flush delivers what was still pending, spans and metrics
+    /// both, well inside the budget it shares with the trace writer's commit.
+    #[test]
+    fn the_exit_flush_delivers_what_is_pending_to_a_healthy_collector() -> Result<(), TestError> {
+        let collector = MockCollector::start(Wire::ProtobufTcp)?;
+        // Nothing leaves on a timer before the flush, so the flush carries all of it.
+        let env = collector.env(600_000);
+        let config = TelemetryConfig::from_env(&|name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.clone())
+        })?;
+        App::runtime()?.block_on(async {
+            let telemetry = Telemetry::new(&config)?;
+            finish_a_run(&telemetry, "run-before-sigterm");
+            assert_eq!(collector.spans()?, [], "nothing left before the flush");
+            let flushing = Instant::now();
+            flush_telemetry(&telemetry).await;
+            let elapsed = flushing.elapsed();
+            assert!(
+                elapsed < Defaults::SHUTDOWN_FLUSH,
+                "a healthy collector's flush took {elapsed:?}"
+            );
+            let runs: Vec<_> = collector
+                .spans()?
+                .into_iter()
+                .filter(|span| span.text("neo.run.id") == Some("run-before-sigterm"))
+                .collect();
+            assert_eq!(runs.len(), 1, "the pending run span arrived once: {runs:#?}");
+            assert!(
+                collector.metric_names()?.iter().any(|name| name == "neo_runs_total"),
+                "the pending metrics arrived"
+            );
+            Ok::<(), TestError>(())
+        })
     }
 
     /// A collector that is down refuses the connection; a hung one accepts it (its backlog
@@ -954,16 +994,7 @@ mod shutdown_tests {
             })?;
             let elapsed = runtime.block_on(async {
                 let telemetry = Telemetry::new(&config)?;
-                telemetry
-                    .start_run(RunFacts {
-                        run_id: &"run-before-sigterm",
-                        task_id: None,
-                        parent: None,
-                    })
-                    .finish(RunVerdict {
-                        status: RunStatus::Ok,
-                        error: None,
-                    });
+                finish_a_run(&telemetry, "run-before-sigterm");
                 let flushing = Instant::now();
                 flush_telemetry(&telemetry).await;
                 Ok::<_, Box<dyn Error>>(flushing.elapsed())
