@@ -13,7 +13,7 @@ use tokio::sync::{Mutex as AsyncMutex, SetOnce};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use super::{BrowserLink, TabEvent, TabRegistry};
+use super::{BrowserLink, OpenFor, TabEvent, TabRegistry};
 
 /// What a blank tab shows: the browser's launch tab and a fresh tab both qualify.
 const BLANK_URLS: &[&str] = &["about:blank", "chrome://newtab/", "chrome://new-tab-page/"];
@@ -235,6 +235,7 @@ impl NeoTab {
             Adopt::Never => None,
         };
         let tab = match adopted {
+            // An adopted tab keeps the origin tab telemetry gave it at birth (`found`).
             Some(tab) => {
                 tracing::info!(tab = tab.0, "Neo's blank tab: adopted a blank tab");
                 Some(tab)
@@ -330,6 +331,9 @@ impl NeoTab {
     /// budget of Neo's own: the browser may open the tab before a late reply, and only the reply
     /// says which tab is Neo's. CDP's request timeout bounds it.
     async fn open(&self, root: &ProtocolSession) -> Option<TabId> {
+        // Before the browser is asked: the tab watch may list the new tab before the reply names
+        // it, and holds it until then, so tab telemetry counts it born `neo`, not `found`.
+        let intent = self.tabs.life().expect_open(OpenFor::Neo);
         let opened: Result<browser::CreateTabResult, _> = root
             .send(
                 "Browser.createTab",
@@ -339,7 +343,9 @@ impl NeoTab {
         match opened {
             Ok(created) => {
                 tracing::info!(tab = created.tab.tab_id, "Neo's blank tab: opened");
-                Some(TabId(created.tab.tab_id))
+                let tab = TabId(created.tab.tab_id);
+                intent.claim(tab);
+                Some(tab)
             }
             Err(error) => {
                 tracing::warn!(%error, "Neo's blank tab: the browser did not open one");
