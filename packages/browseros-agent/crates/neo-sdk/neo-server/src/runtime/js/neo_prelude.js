@@ -152,8 +152,9 @@
 
   /** The Jev helpers over one run's state: its earlier picks and its tab follows. */
   function jevVerbs({ context, console, setTimeout, refuse, stopError }) {
-    // This run's earlier `find` picks, so Jev can flag a ref picked again under another ask.
-    const picked = []
+    // This run's earlier `find` picks per tab, so Jev can flag a ref picked again under another
+    // ask. Per tab because a ref is unique only within its tab: two tabs can both print `e1`.
+    const picks = new Map()
     // Per page the script passed: the tabs followed from it, oldest first (a popup's popup still
     // counts as opened from the script's page), and the follows not yet written to the console.
     const lineage = new Map()
@@ -216,25 +217,32 @@
       line.tabs.filter((tab, at) => at === 0 || !tab.isClosed())
 
     /**
-     * The fallback: a tab the context knows (an event, a result, `context.pages()`), first seen
-     * after the line's newest tab, whose opener is in the line. One `page.opener` op per new
-     * tab, cached.
+     * The fallback: tabs the context knows (an event, a result, `context.pages()`), first seen
+     * after the line's newest tab, whose opener is in the line. It follows the whole chain: a
+     * popup B opened from popup A joins once A has, so it scans again after each follow until
+     * nothing joins. One `page.opener` op per new tab, cached.
      */
-    async function scanKnown(line, current) {
-      const known = context._knownPages()
-      const newer = known
-        .slice(known.indexOf(current) + 1)
-        .filter(
-          (tab) => tab._newInRun && !tab.isClosed() && !line.tabs.includes(tab),
-        )
-        .reverse()
-      for (const tab of newer) {
-        const opener = await openerOf(tab)
-        if (opener === null || !line.tabs.includes(opener)) continue
-        line.tabs.push(tab)
-        line.pending.push({ tab, opener })
-        watch(tab)
-        return
+    async function scanKnown(line) {
+      for (;;) {
+        const known = context._knownPages()
+        const newer = known
+          .slice(known.indexOf(openTabs(line).at(-1)) + 1)
+          .filter(
+            (tab) =>
+              tab._newInRun && !tab.isClosed() && !line.tabs.includes(tab),
+          )
+          .reverse()
+        let followed = false
+        for (const tab of newer) {
+          const opener = await openerOf(tab)
+          if (opener === null || !line.tabs.includes(opener)) continue
+          line.tabs.push(tab)
+          line.pending.push({ tab, opener })
+          watch(tab)
+          followed = true
+          break
+        }
+        if (!followed) return
       }
     }
 
@@ -258,7 +266,7 @@
      */
     async function lookAt(page, api) {
       const line = lineOf(page)
-      await scanKnown(line, openTabs(line).at(-1))
+      await scanKnown(line)
       return newestTab(line, api)
     }
 
@@ -372,7 +380,8 @@
 
     /**
      * Looks at the page until `done(verdict)` or `timeout` (ms; 0 looks once), every
-     * `RELOOK_MS`. An unchanged page is not asked again: Jev would answer the same.
+     * `RELOOK_MS`. An unchanged page is not asked again: Jev would answer the same. `input(tab)`
+     * is the ask's own fields for the tab this look read, which a popup can change mid-loop.
      */
     async function lookUntil({
       api,
@@ -396,7 +405,7 @@
           last = fingerprint
           verdict = await decide(
             api,
-            { ...seen, ...input },
+            { ...seen, ...input(tab) },
             { site, said, tab },
           )
         }
@@ -407,8 +416,19 @@
       return { verdict, tab }
     }
 
-    function findInput(askText, role) {
-      const input = { ask: askText, picked }
+    /** The earlier picks on `tab`, the list `find` adds its pick to. */
+    function pickedOn(tab) {
+      const key = tab.tabId ?? tab
+      let picked = picks.get(key)
+      if (picked === undefined) {
+        picked = []
+        picks.set(key, picked)
+      }
+      return picked
+    }
+
+    const findInput = (askText, role) => (tab) => {
+      const input = { ask: askText, picked: pickedOn(tab) }
       if (role !== undefined) input.role = role
       return input
     }
@@ -435,7 +455,7 @@
         note(
           `${head} -> ${pick.ref} ${pick.label} p${p2(pick.p)}${obstacleLine(verdict.obstacle)}`,
         )
-        picked.push({ ref: pick.ref, ask: askText })
+        pickedOn(tab).push({ ref: pick.ref, ask: askText })
         return tab.getByRef(pick.ref)
       }
       if (options?.optional === true) {
@@ -505,7 +525,7 @@
         page,
         text: true,
         timeout: timeoutOf(api, options?.timeout, 0),
-        input: { claim },
+        input: () => ({ claim }),
         site,
         said: claim,
         // A timed check waits for a clear yes: an unsure one may still settle.
@@ -547,7 +567,7 @@
         page,
         text: true,
         timeout: 0,
-        input: { question, options },
+        input: () => ({ question, options }),
         site,
         said: question,
         done: () => true,

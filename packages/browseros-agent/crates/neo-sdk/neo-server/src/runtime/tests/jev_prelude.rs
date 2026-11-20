@@ -765,6 +765,91 @@ fn every_verb_follows_a_popup_the_page_opened_after_the_first_look() -> Result<(
 }
 
 #[test]
+fn earlier_picks_are_kept_per_tab() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        let sent = jev_prelude(
+            &mut rig,
+            vec![("neo.find", vec![find_verdict("found", Some("e1"))])],
+        )?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "{FAKE_PAGE}
+            const shop = stub('- button \"Buy\" [ref=e1]', '', 1000)
+            const other = stub('- button \"Go\" [ref=e1]', '', 1000, 'https://other.example/', 8)
+            await neo.find(shop, 'the Buy button')
+            await neo.find(other, 'the Go button')
+            await neo.find(shop, 'the cart button')"
+        );
+        returned(run_code(&rig, &run, &code).await)?;
+        let find = sent.of("neo.find");
+        assert_eq!(
+            find[1]["picked"],
+            json!([]),
+            "tab 8 has no earlier picks: its e1 is not tab 7's e1"
+        );
+        assert_eq!(
+            find[2]["picked"],
+            json!([{ "ref": "e1", "ask": "the Buy button" }]),
+            "tab 7 keeps its own picks"
+        );
+        Ok(())
+    })
+}
+
+/// Popup A opened from the script's page, then popup B from A, both before the first helper:
+/// the fallback scan follows the whole chain and the helper reads B.
+#[test]
+fn a_popup_opened_from_a_popup_before_the_first_helper_is_followed() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        let sent = jev_prelude(
+            &mut rig,
+            vec![
+                ("neo.find", vec![find_verdict("found", Some("e1"))]),
+                (
+                    "page.opener",
+                    vec![
+                        json!({ "opener": { "$neo": "page", "tab": 101 } }),
+                        json!({ "opener": { "$neo": "page", "tab": 100 } }),
+                    ],
+                ),
+            ],
+        )?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = r#"
+            const shop = context._pageFor({ tab: 100, url: 'https://shop.example/' })
+            const a = context._pageFor({ tab: 101, url: 'https://shop.example/a' })
+            const b = context._pageFor({ tab: 102, url: 'https://shop.example/b' })
+            for (const tab of [shop, a, b]) {
+              tab.ariaSnapshot = async () => '- button "Buy" [ref=e1]'
+              tab.title = async () => 'Shop'
+            }
+            await neo.find(shop, 'the Buy button')"#;
+        let (end, lines) = split(run_code(&rig, &run, code).await);
+        returned(end)?;
+        assert_eq!(
+            sent.of("neo.find")[0]["url"],
+            "https://shop.example/b",
+            "the helper read the newest popup in the chain"
+        );
+        assert_eq!(
+            lines[..2],
+            [
+                "neo.find follows the new tab https://shop.example/a (opened from https://shop.example/)",
+                "neo.find follows the new tab https://shop.example/b (opened from https://shop.example/a)",
+            ]
+        );
+        assert_eq!(
+            sent.of("page.opener").len(),
+            2,
+            "one opener op per new tab: B's answer is reused on the second pass"
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn neo_stop_needs_no_await_and_hands_back_the_newest_tab() -> Result<(), TestError> {
     on_neo_runtime(async {
         let mut rig = TestRig::new().await?;
