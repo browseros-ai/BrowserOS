@@ -285,6 +285,10 @@ fn the_guides_never_teach_what_the_sdk_or_cli_rejects() {
             !text.contains("browseros skills"),
             "{name} teaches `skills`, which is now `guide`"
         );
+        assert!(
+            !text.contains("read_output"),
+            "{name} names the MCP tool read_output; the command is `browseros output`"
+        );
         for old in ["help request", "help wait"] {
             assert!(
                 !text.contains(old),

@@ -390,6 +390,7 @@ async fn run_local(client: &mut Client, globals: &Globals, local: Local) -> Resu
 }
 
 async fn status(client: &mut Client, globals: &Globals) -> Result<Code> {
+    io::note("New here? Run `browseros guide core` first.");
     let ready = client.transport().ready().await;
     // The scope file only remembers. One cheap call lets the server say whether the task is
     // still open, so a task whose tabs were closed is not reported as current.

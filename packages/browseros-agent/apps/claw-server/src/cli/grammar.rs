@@ -19,7 +19,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "browseros",
     about = "Drive BrowserOS neo from a shell.",
-    long_about = "Drive BrowserOS neo from a shell.\n\nA task is the tab group it works in. The first page you open starts one, every \
+    long_about = "Drive BrowserOS neo from a shell.\n\nNew here? Run `browseros guide core` first: it is short, and it covers what \
+--help cannot.\n\nA task is the tab group it works in. The first page you open starts one, every \
 command in this directory joins it, and `browseros task done` closes it. The current page and the group are remembered per \
 directory, so commands carry no plumbing and there is no session to manage. Start with `browseros status`, then \
 `browseros open <url>`.\n\n\

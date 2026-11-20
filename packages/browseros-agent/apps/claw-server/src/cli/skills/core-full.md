@@ -28,9 +28,12 @@ one command. `browseros use <id>` changes it.
 --endpoint <url>     the server, otherwise resolved and health checked
 --agent <name>       the product driving this CLI, for tab labelling
 --json               wrap the result in a JSON envelope on stdout
+--urls               print link addresses whole, query string included
 --quiet, -q          suppress the CLI's own notices on stderr
 --client-timeout <ms>  client read timeout, default 180000
 ```
+
+`--quiet` is also read from `BROWSEROS_QUIET=1`.
 
 `--agent` is also read from `BROWSEROS_AGENT`, which is how a harness sets it
 once. It accepts `claude`, `codex`, `cursor`, `opencode`, `antigravity`,
@@ -134,12 +137,21 @@ browseros snapshot [-i] [--depth N]
 browseros diff
 browseros read [--selector CSS] [--text|--links|--console]
              [--viewport] [--include-links] [--include-images]
-browseros grep <pattern> [--over ax|content] [--limit N]
+browseros grep <pattern> [--over ax|content] [-m|--limit N] [-i]
 browseros screenshot [path] [--full] [--annotate] [--format jpeg|png|webp] [--quality N]
 browseros pdf [path] [--landscape] [--no-background]
 ```
 
-`--depth` is clamped to 1..=100. `--quality` is 0..=100. A screenshot comes back
+`--depth` is clamped to 1..=100. `--quality` is 0..=100. The grep pattern is a
+case-insensitive regex; `-i` is accepted and changes nothing.
+
+A link's `[url=...]` keeps its origin and path and drops the query string and
+fragment, marked `?...`; `--urls` prints it whole. `snapshot -i` drops `row` and
+`gridcell` lines with no ref of their own, and a cell whose only child is a ref
+of the same name. A snapshot too large to inline is read back whole, filtered,
+and printed whole if it then fits, else as its head and its tail with the count
+of lines between. A markdown `read` prints each run of spaces as one, outside
+code blocks. A screenshot comes back
 inline as an image, which a terminal cannot render, so the CLI writes it to the
 path given, or to the server's output folder, and prints where it went.
 `browseros status` shows that folder on its `outputs` line; saved outputs too
@@ -167,8 +179,10 @@ browseros upload @ref <file...>
 browseros download @ref
 ```
 
-Every acting verb takes `--diff none|summary|full|<N>`, which caps the automatic
-readback. Use it on a large page, where a full diff floods context.
+Every acting verb takes `--diff none|summary|full|<N>`, which sets the automatic
+readback, and `--no-context`, the same as `--diff none`. Without either, `fill`,
+`type` and `press` read back `summary`, one line of counts, and every other
+action reads back up to 3,000 characters of its diff.
 
 An action that opens a JavaScript dialog comes back saying so, and the page
 stays blocked until the dialog is accepted or dismissed, so do that before
@@ -233,8 +247,7 @@ Part names carry their extension, such as `result.json` or `read.txt`; list
 the parts to see them. Asking for a slice prints, on stderr, how much is left
 and the command for the next one.
 
-The server's own advisory for this names the `read_output` tool, because it is
-written for MCP callers. `browseros output` is the same thing.
+The notice that names a saved output ends with this command, part included.
 
 ```bash
 browseros skill run <name> --inputs '{"query":"ram"}'
@@ -313,8 +326,9 @@ written for an agent to read. `--json` wraps it:
   "text": "...", "structured": { }, "elapsedMs": 341 }
 ```
 
-The CLI's own notices go to stderr so stdout stays pipeable. `--quiet` silences
-them. Colour is off when output is piped and whenever `NO_COLOR` is set.
+The CLI's own notices and the server's tips go to stderr so stdout stays
+pipeable, and each tip prints once per task. `--quiet` or `BROWSEROS_QUIET=1`
+silences them. Colour is off when output is piped and whenever `NO_COLOR` is set.
 
 ## Gaps versus agent-browser
 

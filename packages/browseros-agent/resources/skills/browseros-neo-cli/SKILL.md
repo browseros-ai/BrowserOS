@@ -10,8 +10,9 @@ signed into the user's accounts. The current page and the task's tab group are
 remembered per directory, so commands carry no plumbing and there is no session
 to manage.
 
-Start with `browseros status`. It says whether the browser link is up and lists
-which optional commands this server has.
+Read `browseros guide core` before the first command: it is short and covers
+what `--help` cannot. Then run `browseros status`, which says whether the
+browser link is up and lists which optional commands this server has.
 
 ## A task is a tab group
 
@@ -84,10 +85,17 @@ browseros fill --fields @e1="Jane" @e2="jane@example.com"
 browseros read
 ```
 
-An action reads back a settled diff of what changed, so there is no need to
-snapshot again just to see the effect and no need to pause for the page. Refs
-go stale when the page changes; take another snapshot before reusing them.
-`e12`, `@e12` and `[ref=e12]` all work.
+An action reads back what it changed once the page settles, so there is no need
+to pause for the page. `fill`, `type` and `press` say it in one line; other
+actions show up to 3,000 characters of the change. `--diff full` shows all of
+it and `--no-context` none. Refs go stale when the page changes; take another
+snapshot before reusing them. After a navigation an old ref fails as unknown
+rather than clicking something new. `e12`, `@e12` and `[ref=e12]` all work.
+
+`grep` takes a case-insensitive regex (`"add to cart|buy now"`) and `-m N`.
+Link addresses print without their query strings; `--urls` shows them whole. A
+result too large to inline names the `browseros output` command that reads it.
+Tips print once per task on stderr, and `-q` or `BROWSEROS_QUIET=1` drops them.
 
 Wait on the thing rather than the clock: `browseros wait --text "Order placed"`
 returns the moment it appears. Opening and navigating already return settled.
@@ -141,7 +149,7 @@ browser tool.
 ```bash
 browseros guide core          # the working guide
 browseros guide core --full   # every flag, and what neo cannot do
-browseros <command> --help
+browseros help <command>
 ```
 
 `guide` works with no server running. If `browseros` is not on PATH, the
