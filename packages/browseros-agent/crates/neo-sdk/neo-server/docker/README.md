@@ -112,7 +112,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | Output | Where |
 |---|---|
 | Agent MCP (`run`), `/system/health`, `/system/ready` | `http://127.0.0.1:9010/mcp`, and the same over TLS (self-signed) on `https://127.0.0.1:9011/mcp`. No auth on either. |
-| Host API `/v1`: runs, operations and their screenshots, each run's downloads (`/v1/runs/{runId}/downloads/{index}`) and the bytes too large for its reply (`/v1/runs/{runId}/blobs/{blobId}`), the trace, events, the live view (`/v1/tabs/{tabId}/screencast`, `/video`), the VNC display, locks, fits, takeovers and the settings (`/v1/settings`) ([openapi.yaml](../../neo-sdk-api/openapi.yaml)) | `/run/neo/host.sock`, mode 0660, group `NEO_HOST_GID`, plus `Authorization: Bearer <token>` |
+| Host API `/v1`: runs, operations and their screenshots, each run's downloads (`/v1/runs/{runId}/downloads/{index}`) and the bytes too large for its reply (`/v1/runs/{runId}/blobs/{blobId}`), the trace, events, the live view (`/v1/tabs/{tabId}/screencast`, `/video`), the VNC display, locks, fits, takeovers, the settings (`/v1/settings`) and Neo's metrics as Prometheus text (`/v1/metrics`) ([openapi.yaml](../../neo-sdk-api/openapi.yaml)) | `/run/neo/host.sock`, mode 0660, group `NEO_HOST_GID`, plus `Authorization: Bearer <token>` |
 | Health | the image's `HEALTHCHECK`: the entrypoint finished and `/system/ready` answers through 9010 |
 | Provenance | `/usr/share/neo-sdk/provenance.json` (commit, the digest of the server's build sources, browser, the server's path, sha256, version and the source digest compiled into it, toolchain), `/usr/share/neo-sdk/browser.lock`, and the OCI `revision` and `version` labels |
 
