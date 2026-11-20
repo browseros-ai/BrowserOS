@@ -414,7 +414,7 @@ mod tests {
     use serde_json::json;
 
     fn saved() -> (String, Option<String>) {
-        ("d0b05dae".to_string(), Some("snapshot.md".to_string()))
+        ("out-1".to_string(), Some("snapshot.md".to_string()))
     }
 
     /// Every result sentence the server writes about `read_output`, read from its source so a
@@ -479,10 +479,10 @@ mod tests {
 
     #[test]
     fn the_saved_output_line_names_the_part_to_read() {
-        let text = "ok\n[Saved output: d0b05dae. Use read_output with outputId and part; omit part to list parts.]";
+        let text = "ok\n[Saved output: out-1. Use read_output with outputId and part; omit part to list parts.]";
         assert_eq!(
             cli_hints(text, Some(&saved())),
-            "ok\n[Saved output: d0b05dae. Read it with: browseros output d0b05dae --part snapshot.md]"
+            "ok\n[Saved output: out-1. Read it with: browseros output out-1 --part snapshot.md]"
         );
     }
 
@@ -491,7 +491,7 @@ mod tests {
         let text = "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=x] notice\nUse read_output for the full diff.\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]\nUse read_output for the full diff.";
         assert_eq!(
             cli_hints(text, Some(&saved())),
-            "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=x] notice\nUse read_output for the full diff.\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]\nRead the full diff with: browseros output d0b05dae --part snapshot.md"
+            "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=x] notice\nUse read_output for the full diff.\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]\nRead the full diff with: browseros output out-1 --part snapshot.md"
         );
     }
 

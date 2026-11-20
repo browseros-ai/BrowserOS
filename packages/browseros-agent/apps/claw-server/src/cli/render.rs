@@ -294,7 +294,7 @@ mod tests {
     fn the_output_folder_is_read_off_a_saved_output_path() {
         assert_eq!(
             output_root_of(
-                "/home/u/.browseros-dev/tool-output/s-3161316636323331/a54b7e3e-1f2a-4c3d-9e8f-0a1b2c3d4e5f/snapshot.md"
+                "/home/u/.browseros-dev/tool-output/s-746573742d73657373696f6e/00000000-0000-4000-8000-000000000001/snapshot.md"
             )
             .as_deref(),
             Some("/home/u/.browseros-dev/tool-output")
