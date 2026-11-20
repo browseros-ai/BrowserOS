@@ -12,7 +12,7 @@ use crate::config::{
 
 /// The config Chromium would give a hosted Neo, with its state and its browser profile under
 /// `state_dir` and the agent port left to the OS (port 0; `App::local_addr` reports the one it
-/// got). There is no host listener and no CAPTCHA provider key, whatever the test's environment
+/// got). There is no host listener, no CAPTCHA provider key and no Jev key, whatever the test's environment
 /// holds, and the CDP port goes unused once the app starts on a `FakeCdp`. Neo's screen is
 /// [`CLOSED_XVNC`].
 #[must_use]
@@ -30,6 +30,7 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
         profile_dir: Some(state_dir.join("profile")),
         neo_home: NeoHome::NotNeos,
         captcha_key_files: Vec::new(),
+        jev_key_file: None,
         log_filter: Defaults::LOG_FILTER.to_owned(),
         hosted_mode: HostedMode::On,
         native_version: None,
@@ -46,6 +47,7 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
         launch,
         env,
         captcha: CaptchaConfig::default(),
+        jev: None,
     }
 }
 

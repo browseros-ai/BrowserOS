@@ -68,6 +68,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
                 &mut registry,
                 builtins::BuiltinDeps {
                     solver: None,
+                    jev: None,
                     claims: Arc::default(),
                     settings: rig.settings.clone(),
                     playwright: Arc::clone(&facade),

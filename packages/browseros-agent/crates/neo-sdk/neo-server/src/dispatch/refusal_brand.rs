@@ -12,12 +12,16 @@ use serde_json::Value;
 
 use super::{ErrorCode, OperationError, TEXT_CHARS, operation_error};
 
-/// The codes a refusal may name: unsupported methods, invalid inputs and task lookup failures.
-const REFUSAL_CODES: [ErrorCode; 4] = [
+/// The codes a refusal may name: unsupported methods, invalid inputs, task lookup failures, and
+/// a Jev helper's stop (the prelude decides it from Jev's verdict, which is a value, or from the
+/// script's own `neo.stop`). A forged `stopped` brand buys only this row: the run's value is a
+/// stop only for an error the bootstrap branded itself.
+const REFUSAL_CODES: [ErrorCode; 5] = [
     ErrorCode::METHOD_UNAVAILABLE,
     ErrorCode::INVALID_INPUT,
     ErrorCode::TASK_NOT_FOUND,
     ErrorCode::TASK_PAGE_MISSING,
+    ErrorCode::STOPPED,
 ];
 
 /// The refusal brand a script call's input is, read once at admission. Only `code` and `reason`
@@ -60,7 +64,7 @@ impl<'a> RefusalBrand<'a> {
             Self::Malformed => OperationError::script(
                 ErrorCode::INVALID_INPUT,
                 format_args!(
-                    "`{shown}`: a refusal may name only method_unavailable, invalid_input, task_not_found or task_page_missing"
+                    "`{shown}`: a refusal may name only method_unavailable, invalid_input, task_not_found, task_page_missing or stopped"
                 ),
             ),
         }

@@ -531,7 +531,45 @@
    */
   function refuse(api, code, reason) {
     // Before anything async, while the agent's frame is still on the stack.
-    const site = callSite()
+    return doorRefusal(api, code, reason, callSite(), {})
+  }
+
+  // Every stop `stopError` made, with its record as JSON, fixed when it was made. `run` takes a
+  // thrown error for a stop only from here, so a script cannot forge one: an object it throws
+  // with a `stop` field is its own throw, and a real stop it edits still returns its own record.
+  const stops = new WeakMap()
+
+  // A stop record's fields are plain JSON data at most three levels deep (the lookalikes).
+  function frozen(value) {
+    if (value !== null && typeof value === 'object') {
+      for (const field of Object.values(value)) frozen(field)
+      Object.freeze(value)
+    }
+    return value
+  }
+
+  /**
+   * A Jev helper's stop (neo_prelude.js `stop`): the error a helper throws when it is not sure,
+   * instead of guessing. It is a refusal under `api` with code `stopped` whose brand carries
+   * `record`, so the op's row keeps the hand-back and the trace counts the stop. The script sees
+   * a `NeoError` with `stop: record` (frozen). Left uncaught, `run` ends the run normally with
+   * `{ stopped: record }` as its value. Synchronous, as `refuse` is, so `neo.stop` needs no await.
+   */
+  function stopError(api, record) {
+    const json = JSON.stringify(record)
+    const reason = `${api} stopped the script: ${record.why}`
+    // The record's `at` is the agent's line the helper captured at its entry, before its awaits.
+    const site = typeof record.at === 'string' ? record.at : ''
+    const error = doorRefusal(api, 'stopped', reason, site, { stop: record })
+    error.stop = frozen(JSON.parse(json))
+    stops.set(error, json)
+    return error
+  }
+
+  // `refuse` and `stopError` both: a NeoError the door's answer completes, and the door call
+  // that records it. `extra` rides on the brand for the op's row; the door reads only the code
+  // and the reason.
+  function doorRefusal(api, code, reason, site, extra) {
     const error = new NeoError({
       code,
       owner: 'script',
@@ -541,6 +579,7 @@
       message: reason,
     })
     const brand = JSON.stringify({
+      ...extra,
       $neo: 'refused',
       code: String(code),
       reason: String(reason),
@@ -624,12 +663,54 @@
       .join(' ')
   }
 
+  // The newest console lines, as the run's reply prints them (mcp/run_tool.rs `log_line`), for a
+  // stop's `log` (`consoleTail`). Some hosts show the model only the reply's value, never its
+  // console lines (Claude Code reads `structuredContent`), so a stop carries them in its record.
+  // Bounded as it fills, so a script that logs in a loop holds at most STOP_LOG_LINES lines here.
+  const STOP_LOG_LINES = 40
+  const STOP_LOG_CHARS = 4000
+  const tail = []
+  let tailDropped = 0
+
+  function logged(level, args) {
+    const text = format(args)
+    const line = level === 'log' ? text : `[${level}] ${text}`
+    tail.push(
+      line.length > STOP_LOG_CHARS ? `${line.slice(0, STOP_LOG_CHARS)}…` : line,
+    )
+    if (tail.length > STOP_LOG_LINES) {
+      tail.shift()
+      tailDropped++
+    }
+    return nativeLog(level, text)
+  }
+
+  /**
+   * The run's console lines so far, oldest first: the newest that fit in STOP_LOG_LINES lines and
+   * STOP_LOG_CHARS characters (the newest line always). When older ones were dropped, a first
+   * line says how many.
+   */
+  function consoleTail() {
+    const kept = []
+    let chars = 0
+    for (let at = tail.length - 1; at >= 0; at--) {
+      const line = tail[at]
+      if (kept.length > 0 && chars + line.length > STOP_LOG_CHARS) break
+      kept.unshift(line)
+      chars += line.length
+    }
+    const dropped = tailDropped + tail.length - kept.length
+    if (dropped > 0)
+      kept.unshift(`[${dropped} earlier console lines not shown]`)
+    return kept
+  }
+
   const console = Object.freeze({
-    log: (...args) => nativeLog('log', format(args)),
-    info: (...args) => nativeLog('info', format(args)),
-    warn: (...args) => nativeLog('warn', format(args)),
-    error: (...args) => nativeLog('error', format(args)),
-    debug: (...args) => nativeLog('debug', format(args)),
+    log: (...args) => logged('log', args),
+    info: (...args) => logged('info', args),
+    warn: (...args) => logged('warn', args),
+    error: (...args) => logged('error', args),
+    debug: (...args) => logged('debug', args),
   })
 
   // Timers ride on __neo_sleep, which the run's deadline caps and its stop cuts short, so a
@@ -690,7 +771,9 @@
 
   // Called once per run by run_script.rs with the agent's compiled function. Resolves to one
   // JSON string, {"ok": value} or {"thrown": …}: every throw is caught here, in JS, so only
-  // QuickJS stopping the script (its interrupt, its heap) makes the promise reject.
+  // QuickJS stopping the script (its interrupt, its heap) makes the promise reject. A stop the
+  // script left uncaught is {"ok": {"stopped": record}}: a helper's hand-back is a normal end,
+  // not a failure (Jev helpers v1 design, §1 "A stop").
   async function run(main, initJson) {
     let settledJson
     try {
@@ -714,7 +797,13 @@
       )
       settledJson = `{"ok":${json ?? 'null'}}`
     } catch (error) {
-      settledJson = await settleThrown(error)
+      const stopped = stops.get(error)
+      if (stopped === undefined) settledJson = await settleThrown(error)
+      else {
+        // The stop's own door call answers first, so its row is in the trace before the run ends.
+        await allAnswered()
+        settledJson = `{"ok":{"stopped":${stopped}}}`
+      }
     }
     // Both settlements cross here after their own codec, including thrown names and stacks.
     return wire.result(settledJson)
@@ -724,6 +813,8 @@
     invoke,
     callSite,
     refuse,
+    stopError,
+    consoleTail,
     // Local wait deadlines share the script's TimeoutError constructor. They have no
     // operation identity: only errors received from the dispatcher enter `genuine`.
     timeoutError(message) {

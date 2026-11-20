@@ -429,6 +429,37 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
     })
 }
 
+/// Claude Code shows the model only `structuredContent` (`{ value }`), never the text content
+/// that carries the console lines. A Jev stop's record carries them as `log`, so a host like
+/// that still sees what ran and what the script logged before the stop. `neo.stop` needs no Jev
+/// key: its stop is refused at the door and never reaches a method.
+#[test]
+fn a_stop_carries_its_console_lines_in_the_structured_value() -> TestResult {
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        let client = neo.modern_client().await?;
+        let code = "console.log('collected', 3);\nneo.stop(page, 'not the page I expected');";
+        let result = run(&client, json!({ "code": code }), None).await?;
+        assert_eq!(result.is_error, Some(false), "a stop is not an error");
+        assert_eq!(outcome(&result)?.get("status"), Some(&json!("ok")));
+        let structured = result.structured_content.ok_or("a structured value")?;
+        let stop = &structured["value"]["stopped"];
+        assert_eq!(
+            (&stop["why"], &stop["log"]),
+            (
+                &json!("script"),
+                &json!([
+                    "collected 3",
+                    "[info] neo.stop \"not the page I expected\" -> stopped: script"
+                ])
+            ),
+            "the value alone holds the console lines: {structured}"
+        );
+        client.cancel().await?;
+        Ok(())
+    })
+}
+
 #[test]
 fn without_a_provider_key_solve_captcha_is_unlisted_and_throws_for_the_host() -> TestResult {
     on_neo_runtime(async {

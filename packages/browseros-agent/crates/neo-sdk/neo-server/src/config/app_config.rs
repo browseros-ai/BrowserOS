@@ -6,6 +6,7 @@ use neo_http::{Settings, SettingsDefaults};
 use neo_playwright::{FileAccess, ProtectedPath};
 
 use neo_captcha::config::CaptchaConfig;
+use neo_jev::JevConfig;
 
 use super::{EnvConfig, LaunchConfig, NeoHome};
 
@@ -19,6 +20,10 @@ pub struct AppConfig {
     /// neighbors). The key files are read here, once, so the solver never touches the
     /// environment or the disk on a run. Its `Debug` redacts the keys.
     pub(crate) captcha: CaptchaConfig,
+    /// The Jev verbs' endpoint and key (`NEO_JEV_KEY_FILE`, `NEO_JEV_URL`, `NEO_JEV_MODEL`),
+    /// read here once like the CAPTCHA keys; `None` without a readable key file, and then the
+    /// verbs are off. Its `Debug` redacts the key.
+    pub(crate) jev: Option<JevConfig>,
 }
 
 /// A config Neo cannot start with. `main` prints it on one line and exits 1, never 2, which
@@ -63,6 +68,7 @@ impl AppConfig {
             // A key file that cannot be read leaves its provider off, as the crate decides;
             // app.rs logs the outcome once logging is up.
             captcha: CaptchaConfig::from_lookup(lookup),
+            jev: JevConfig::from_lookup(lookup),
         })
     }
 
@@ -112,6 +118,7 @@ impl AppConfig {
             self.env
                 .captcha_key_files
                 .iter()
+                .chain(&self.env.jev_key_file)
                 .cloned()
                 .map(ProtectedPath::File),
         );
@@ -167,6 +174,7 @@ mod tests {
                 profile_dir: None,
                 neo_home: NeoHome::NotNeos,
                 captcha_key_files: Vec::new(),
+                jev_key_file: None,
                 log_filter: "info".to_owned(),
                 hosted_mode: HostedMode::On,
                 native_version: env_version.map(str::to_owned),
@@ -180,6 +188,7 @@ mod tests {
                 ignored_trace_value_bytes: false,
             },
             captcha: CaptchaConfig::default(),
+            jev: None,
         }
     }
 
@@ -212,6 +221,7 @@ mod tests {
             dir.path().join("missing-key-one"),
             dir.path().join("missing-key-two"),
         ];
+        config.env.jev_key_file = Some(dir.path().join("missing-jev-key"));
         let settings = Settings::defaults(SettingsDefaults::new(vec!["/".into()])?);
         let policy = config.file_access(settings.clone());
         for path in [
@@ -219,6 +229,7 @@ mod tests {
             dir.path().join("missing-token"),
             dir.path().join("missing-key-one"),
             dir.path().join("missing-key-two"),
+            dir.path().join("missing-jev-key"),
         ] {
             assert_eq!(
                 policy.read(&path).await.err(),

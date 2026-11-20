@@ -2,6 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 use neo_captcha::config::CaptchaConfig;
+use neo_jev::JevConfig;
 
 use super::HostedError;
 use crate::config::{AppConfig, EnvConfig, LaunchConfig, NeoHome};
@@ -56,6 +57,7 @@ impl HostedOptions {
         };
         Ok(AppConfig {
             captcha: CaptchaConfig::from_lookup(lookup),
+            jev: JevConfig::from_lookup(lookup),
             env,
             launch,
         })

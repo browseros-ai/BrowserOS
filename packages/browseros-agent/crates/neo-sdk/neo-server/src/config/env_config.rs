@@ -23,6 +23,8 @@ pub(crate) struct EnvConfig {
     /// Both configured CAPTCHA key files, including missing files, protected independently
     /// of whether a solver could read and enable them at startup.
     pub(crate) captcha_key_files: Vec<PathBuf>,
+    /// `NEO_JEV_KEY_FILE`, protected like the CAPTCHA key files whether or not it could be read.
+    pub(crate) jev_key_file: Option<PathBuf>,
     /// `CLAW_LOG`, else `Defaults::LOG_FILTER`.
     pub(crate) log_filter: String,
     /// `BROWSERCLAW_HOSTED_MODE`.
@@ -165,6 +167,7 @@ impl EnvConfig {
             .into_iter()
             .filter_map(|name| read(name).map(PathBuf::from))
             .collect(),
+            jev_key_file: read("NEO_JEV_KEY_FILE").map(PathBuf::from),
         })
     }
 
@@ -239,6 +242,7 @@ mod tests {
                 profile_dir: None,
                 neo_home: NeoHome::NotNeos,
                 captcha_key_files: Vec::new(),
+                jev_key_file: None,
                 log_filter: Defaults::LOG_FILTER.to_owned(),
                 hosted_mode: HostedMode::Off { value: None },
                 native_version: None,
@@ -474,6 +478,7 @@ mod tests {
             ("CLAW_PROFILE_DIR", "/profile"),
             ("BROWSEROS_CAPSOLVER_API_KEY_FILE", "/keys/one"),
             ("BROWSEROS_2CAPTCHA_API_KEY_FILE", "/keys/two"),
+            ("NEO_JEV_KEY_FILE", "/keys/jev"),
         ])?;
         assert_eq!(config.downloads_dir, Some(PathBuf::from("/downloads")));
         assert_eq!(config.profile_dir, Some(PathBuf::from("/profile")));
@@ -481,6 +486,7 @@ mod tests {
             config.captcha_key_files,
             vec![PathBuf::from("/keys/one"), PathBuf::from("/keys/two")]
         );
+        assert_eq!(config.jev_key_file, Some(PathBuf::from("/keys/jev")));
         let config = env(&[("BROWSERCLAW_DIR", "/state")])?;
         assert_eq!(
             config.downloads_dir, None,

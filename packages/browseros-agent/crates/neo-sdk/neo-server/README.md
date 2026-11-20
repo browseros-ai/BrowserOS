@@ -93,6 +93,7 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 | `CLAW_XVNC_ADDR` | `127.0.0.1:5900` | Xvnc, which a takeover fit resizes. |
 | `NEO_SCREEN` | `1600x1000` | Neo's screen size between fits. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | unset | CAPTCHA provider keys. Without a readable one, `neo.solveCaptcha` is unlisted and fails `host / captcha_unavailable`. neo-captcha also reads `BROWSEROS_CAPSOLVER_API_URL`, `BROWSEROS_2CAPTCHA_API_URL`, and `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` (default 100). |
+| `NEO_JEV_KEY_FILE` | unset | A file holding the Jev key, any bearer the host mounts (today a dev key). It is read at start: without a readable one, `neo.find`, `neo.findAll`, `neo.check`, `neo.choose` and `neo.stop` are unlisted, the server logs that they are off, and a call to one of the first four fails `host / jev_unavailable`. After a 401 Neo reads the file again and, when the key there changed, sends the request once more with it, so a host rotates the key by rewriting the file; an unchanged key leaves the 401 as `jev_down`. The key is never logged or traced, and no file door a script has reads the file. `NEO_JEV_URL` (default `https://api.typesafe.ai/v1/systemone`) and `NEO_JEV_MODEL` (default `jev-latest`) override the endpoint and model. |
 
 Neo binds two listeners:
 
@@ -221,6 +222,23 @@ The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64
 
 A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
 
+### Jev helpers
+
+With a Jev key (`NEO_JEV_KEY_FILE`), a script can act on pages its writer has not seen: `await (await neo.find(page, 'the search box')).fill('…')`. `neo.find` and `neo.findAll` return Locators, `neo.check` a boolean, `neo.choose` one of the script's own strings, and `neo.stop(page, why)` ends the script on the script's own check. The `run` description then lists the five and says how far ahead to write and what a stop hands back (`AHEAD` in `src/mcp/run_description.rs`). All page work is in `src/runtime/js/neo_prelude.js`: it picks the tab (the newest tab opened from `page` this run, else `page`), takes a fresh `page.ariaSnapshot()` (`{ text: true }` for `check` and `choose`), and sends its text with the ask to the built-in (`src/builtins/jev_verbs.rs`), which asks Jev through `neo-jev` and returns a verdict value. `find` looks again every ~300 ms while the element is not there, up to `timeout` (5000 ms), and asks Jev again only when the snapshot changed. Each call writes one `console.info` line (one more when it follows a new tab), and the run's reply carries them. The built-ins never touch a page, so a read-only run may use them.
+
+A helper that is not sure stops the script instead of guessing, and no helper retries, rewords or guesses:
+
+| Helper | Stops as |
+|---|---|
+| `neo.find` | `not_found`: nothing fits by `timeout`. `ambiguous`, at once: two fit, or the best fit was already picked for another ask in this run. `optional: true` returns null instead. |
+| `neo.findAll` | `unsure`: Jev cannot tell for some element. |
+| `neo.check` | `unsure`: Jev cannot tell at the last look. |
+| `neo.choose` | `unsure`: no option clearly leads. |
+| any of the four | `too_big`: the page is over Jev's limit. `jev_down`: Jev did not answer. |
+| `neo.stop` | `script`, always. It needs no key and no `await`. |
+
+The helper throws a `NeoError` with `code: 'stopped'` and `stop`, the `Stop` record of `agent.d.ts`: where (`at`, `call`, `ask`), `why`, the `tab` and `url` it looked at, any `obstacle`, up to three `lookalikes` with refs, an optional `detail`, a `next` line saying how to carry on by hand from that tab, and `log`, the run's console lines so far (the last 40 lines and 4,000 characters). Left uncaught, the stop ends the run `ok`, not `isError`, with the value `{ stopped: Stop }`; a host that counts failed runs does not count stops. The record carries `log` because some hosts (Claude Code) show the model only the value, never the reply's console lines. Only an error the bootstrap made for a stop counts, so a script cannot forge one. The trace keeps the stop as a refused op under the helper's name, code `stopped`. A stop sends nothing to the page and closes no tab: the page stays as the last finished action left it, and the lookalikes' refs work with `getByRef` on that tab in later runs too, until the element goes or the tab navigates. `neo.stop` is registered only to be listed: its stop is a refusal brand the door turns down at admission, so its `call` answers only a raw call, with `script / invalid_input`. `jev_unavailable` (no key) stays an op error.
+
 ### Read-only access
 
 A host selects one read-only run with `access: "read"` in that metadata. Absence keeps ordinary
@@ -297,7 +315,7 @@ A host whose own scripts must reach every tab (resetting tabs, reading a kept ta
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus neo-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | Registers neo-playwright's ops on the process's one `Playwright`, `neo.solveCaptcha`, and the idle-tab janitor. `op_marks.rs` maps capability declarations to dispatch metadata; main-world answers and pulled events pass the takeover rules on their targeted tab. File uploads use Playwright's path handling, and navigation delegates URL handling to Chromium. |
+| `builtins` | Registers neo-playwright's ops on the process's one `Playwright`, `neo.solveCaptcha`, the Jev helpers (`jev_verbs.rs`: snapshot text in, neo-jev's verdict out, and `neo.stop`'s listing; the page work and the stop are `neo_prelude.js`'s), and the idle-tab janitor. `op_marks.rs` maps capability declarations to dispatch metadata; main-world answers and pulled events pass the takeover rules on their targeted tab. File uploads use Playwright's path handling, and navigation delegates URL handling to Chromium. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |

@@ -8,7 +8,9 @@
 //!              ├▶ neo_tasks: named task records, tab lists, and child opens/closes
 //!              ├▶ host_fill: host.fill and host.fillCheck, internal: the host's private typing,
 //!              │  which the run service submits in a run of its own for the host's fill route
-//!              └▶ solve_captcha: neo.solveCaptcha ─ CaptchaClaims (also the door's busy rule)
+//!              ├▶ solve_captcha: neo.solveCaptcha ─ CaptchaClaims (also the door's busy rule)
+//!              └▶ jev_verbs: neo.find, neo.findAll, neo.check, neo.choose ─ neo-jev's client;
+//!                 snapshot text in, a verdict value out, no page touched
 //!  TabJanitor::sweep ─▶ a Neo-origin run ─▶ Dispatcher::submit(page.close) per idle agent tab
 //!  keep_downloads ─▶ at a run's end, the finished files its download events handed it, copied
 //!                    beside the trace for the host (the run service calls it before it answers)
@@ -30,6 +32,7 @@ mod builtin_set;
 mod captcha_claims;
 mod event_release;
 mod host_fill;
+mod jev_verbs;
 mod keep_downloads;
 mod neo_tasks;
 mod op_marks;

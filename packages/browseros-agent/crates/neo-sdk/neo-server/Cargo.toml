@@ -94,6 +94,8 @@ axum.workspace = true
 base64.workspace = true
 # neo.solveCaptcha: detection and the paid providers, one solver per process.
 neo-captcha.workspace = true
+# neo.find, neo.findAll, neo.check, neo.choose: Jev's decisions over snapshot text.
+neo-jev.workspace = true
 browseros-cdp.workspace = true
 # `ts-rs`: the tab id and viewport size in the run envelope print as TypeScript.
 browseros-core = { workspace = true, features = ["ts-rs"] }

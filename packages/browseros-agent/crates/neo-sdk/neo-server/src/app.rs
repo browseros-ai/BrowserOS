@@ -11,6 +11,7 @@ use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_http::Settings;
+use neo_jev::Jev;
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
     TraceSink, TraceStore, WriterConfig,
@@ -110,8 +111,8 @@ async fn forget_closed_filled_tabs(browser: Arc<BrowserLink>, filled: Arc<Filled
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ TabHolders (the task
 ///          book's writer: on the link's first connect it gives every task back the saved tabs
 ///          the browser still has, then saves each change) ─ PlaywrightFacade (built on the
-///          link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry (built-ins,
-///          neo-playwright's ops)
+///          link's first connect) ─ CaptchaSolver (with a provider key) ─ Jev (with a Jev
+///          key) ─ Registry (built-ins, neo-playwright's ops)
 ///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer ─ FillService
 ///          (the host's private typing, with its request record beside the trace)
 ///        ─ host API task (starts neo-http once the link connects, then serves the
@@ -291,6 +292,7 @@ impl App {
         // One solver for the process: its paid-task budget and page reservations are its own.
         let deps = BuiltinDeps {
             solver: CaptchaSolver::new(config.captcha.clone()).map(Arc::new),
+            jev: config.jev.clone().map(Jev::new),
             claims: Arc::clone(&claims),
             settings: settings.clone(),
             playwright: Arc::clone(&playwright),
@@ -576,7 +578,7 @@ fn after(token: &CancellationToken, budget: time::Duration) -> impl Future<Outpu
     }
 }
 
-/// The start's facts and its warnings, one line each. The hosted-mode and CAPTCHA lines are
+/// The start's facts and its warnings, one line each. The hosted-mode, CAPTCHA and Jev lines are
 /// never failures: `run` works without either. `HostApi::bind` logs the host socket's own line.
 fn log_startup(config: &AppConfig, address: SocketAddr) {
     let launch = &config.launch;
@@ -623,6 +625,17 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
     } else {
         warn!(
             "neo.solveCaptcha is off: no readable CAPTCHA provider key ({CAPSOLVER_KEY_FILE_ENV}, {TWOCAPTCHA_KEY_FILE_ENV}); a call fails host / captcha_unavailable"
+        );
+    }
+    // The key itself is never logged; `JevConfig`'s Debug redacts it.
+    if let Some(jev) = &config.jev {
+        info!(
+            ?jev,
+            "neo.find, neo.findAll, neo.check and neo.choose are on"
+        );
+    } else {
+        warn!(
+            "neo.find, neo.findAll, neo.check and neo.choose are off: no readable Jev key (NEO_JEV_KEY_FILE); a call fails host / jev_unavailable"
         );
     }
 }

@@ -13,6 +13,7 @@ use std::{panic, process};
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
 use neo_http::{Settings, SettingsDefaults};
+use neo_jev::Jev;
 use neo_playwright::FileAccess;
 use neo_trace::{
     DiagnosticCode, Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore,
@@ -134,6 +135,15 @@ impl TestRig {
     /// The production builtin registry over this rig's browser and trace, for permission pins.
     /// Ordinary lifecycle tests retain their synthetic methods and deterministic synchronization.
     pub(crate) fn builtin_dispatcher(&self) -> Result<Arc<Dispatcher>, RegistryError> {
+        self.builtin_dispatcher_with_jev(None)
+    }
+
+    /// As [`TestRig::builtin_dispatcher`], with the process's Jev client: `Some` is a Neo with a
+    /// Jev key, which lists the Jev helpers (the `run` description's tests read both).
+    pub(crate) fn builtin_dispatcher_with_jev(
+        &self,
+        jev: Option<Jev>,
+    ) -> Result<Arc<Dispatcher>, RegistryError> {
         let file_access = Arc::new(FileAccess::new(Vec::new, Vec::new()));
         let playwright = builtins::PlaywrightFacade::start(
             Arc::clone(&self.link),
@@ -147,6 +157,7 @@ impl TestRig {
             &mut registry,
             builtins::BuiltinDeps {
                 solver: None,
+                jev,
                 claims: Arc::default(),
                 settings: self.settings.clone(),
                 playwright: Arc::clone(&playwright),

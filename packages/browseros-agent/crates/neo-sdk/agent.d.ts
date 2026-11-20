@@ -22,8 +22,9 @@
  * `page.taskId` are null and `page.url()` is 'about:blank'.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
- * The reply is what you return, plus console lines and existing notes. Return `task.id`
- * to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
+ * The reply is what you return; some MCP clients (Claude Code) show you only that value, never
+ * console lines or notes, so return what you need. A Jev stop carries its console lines as
+ * `stopped.log`. Return `task.id` to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
  * `context.pages()` lists the tabs this run may use. When the host binds runs to their task,
  * those are only this task's tabs: the ones its runs opened, their popups, and the tabs of
  * tasks you created; any other tab is refused with `page_not_in_task`.
@@ -98,6 +99,48 @@ declare global {
   /** Playwright 1.64's Page plus `tabId` and `taskId`. */
   type Page = pw.Page
 
+  /** Why and where a helper stopped the script. Uncaught, it is the run's result: `{ stopped: Stop }`. */
+  interface Stop {
+    /** The script line that stopped, e.g. `run:12:9`. */
+    at: string
+    call: 'neo.find' | 'neo.findAll' | 'neo.check' | 'neo.choose' | 'neo.stop'
+    /** The ask, claim or question; for `neo.stop`, your own words. */
+    ask: string
+    /** `not_found`: nothing fits, after `timeout`. `ambiguous`: two or more fit, or the best fit was
+     * already picked for another ask. `unsure`: Jev cannot tell. `too_big`: the page is over Jev's
+     * limit; do this step by hand. `jev_down`: Jev did not answer. `script`: `neo.stop`. */
+    why:
+      | 'not_found'
+      | 'ambiguous'
+      | 'unsure'
+      | 'too_big'
+      | 'jev_down'
+      | 'script'
+    /** The tab the helper looked at (the tab your page opened, when it followed one) and its address.
+     * `null` only when the page never got a tab. */
+    tab: number | null
+    url: string
+    /** What is in the way, when Jev saw something. */
+    obstacle?:
+      | 'captcha'
+      | 'login_wall'
+      | 'cookie_banner'
+      | 'error_page'
+      | 'modal'
+    /** Up to three nearest elements, best first. Each `ref` works with `getByRef` on tab `tab`, in this
+     * run and later ones, until its element goes or the tab navigates. Empty for check, choose and stop. */
+    lookalikes: { ref: string; is: string; p: number }[]
+    /** One more fact when there is one, e.g. `e180 is already picked for "the State dropdown"`. */
+    detail?: string
+    /** What ran and what you logged: the run's console lines up to the stop, oldest first, a
+     * helper's as `[info] neo.find "the search box" -> e90 …`, your `console.log` lines as written.
+     * At most 40 lines and 4,000 characters; when older ones were dropped, the first line says how
+     * many. */
+    log: string[]
+    /** What to do now, in one line. */
+    next: string
+  }
+
   interface Neo {
     /** Create and pick a task. `name` is an optional label. Return `task.id`. */
     createTask(name?: string): Promise<Task>
@@ -121,6 +164,69 @@ declare global {
       /** The last provider that charged for this solve, including a failed task. Free solves return null. */
       provider: 'capsolver' | '2captcha' | null
     }>
+    /**
+     * The Jev helpers: `find`, `findAll`, `check`, `choose`, `stop`. Only when this Neo has a Jev key;
+     * the `run` description lists them then. Without one `find`, `findAll`, `check` and `choose`
+     * throw `jev_unavailable`.
+     *
+     * Jev, a fast decision model, reads the page at the moment of the call, so a script can act on
+     * pages you have not looked at: describe the usual control ("the search box", "the Sign in
+     * button"); if it is not there, the stop costs no more than the snapshot you would have taken.
+     * After an action, confirm what it did with `check` instead of returning a snapshot, and `stop`
+     * when it is not so. Write as far ahead as you can see, run it, then write the next stretch from
+     * what came back; return a snapshot only when you must read the page to decide the next step.
+     *
+     * A helper that is not sure stops the script instead of guessing. It throws a `NeoError` with
+     * `code: 'stopped'` and `stop: Stop`; leave it uncaught. The run then ends normally and returns
+     * `{ stopped: Stop }`; `stopped.log` lists what ran and what you logged. A stop is not an error
+     * and undoes nothing: the tab is as the last finished step left it. Carry on from that tab by
+     * hand (`getByRef` on a lookalike, or `ariaSnapshot()`); do not run the script again from the top.
+     *
+     * Each call looks at the newest tab `page` opened during this run (a popup), else `page`, and
+     * writes one console line (one more when it follows a new tab), which a stop's `log` lists:
+     * `neo.find "the search box" -> e90 searchbox "Search" p1.00`.
+     *
+     * `find`: the one element `ask` describes in plain words ("the product search box"). Not there
+     * yet: looks again every ~300 ms until `timeout` (default 5000 ms; 0 looks once). Stops as
+     * `not_found` when nothing fits, as `ambiguous` when two fit; `optional: true` returns null
+     * instead. `role` keeps only elements of that ARIA role. The Locator belongs to the tab the call
+     * looked at.
+     */
+    find(
+      page: Page,
+      ask: string,
+      options?: { optional?: false; timeout?: number; role?: string },
+    ): Promise<pw.Locator>
+    find(
+      page: Page,
+      ask: string,
+      options: { optional: true; timeout?: number; role?: string },
+    ): Promise<pw.Locator | null>
+    /** Every element `ask` describes, in page order; count and index in code (`rows[8]`), never in the
+     * ask. No match is an empty array. Stops as `unsure` when it cannot tell for some element. */
+    findAll(
+      page: Page,
+      ask: string,
+      options?: { role?: string },
+    ): Promise<pw.Locator[]>
+    /** Whether the page shows `claim` is true, read with the page's text. With `timeout` (ms) it looks
+     * again every ~300 ms until it is true: a wait for a state, in place of a sleep. Default 0: look
+     * once. Stops as `unsure` when it cannot tell at the last look. */
+    check(
+      page: Page,
+      claim: string,
+      options?: { timeout?: number },
+    ): Promise<boolean>
+    /** Which of `options` the page answers `question` with, returned exactly as given. Add `'other'`
+     * yourself when none may fit. Stops as `unsure` when no option clearly leads. */
+    choose<T extends string>(
+      page: Page,
+      question: string,
+      options: readonly T[],
+    ): Promise<T>
+    /** Ends the script here with the same hand-back a helper gives, `why` in your own words. For when
+     * your own check says the page is not what you expected. Synchronous: no `await`. */
+    stop(page: Page, why: string): never
   }
 
   const neo: Neo
@@ -144,7 +250,8 @@ declare global {
   /** Every SDK failure. */
   class NeoError extends Error {
     constructor(message: string)
-    /** e.g. `task_not_found`, `task_page_missing`, `page_closed`, `method_unavailable`. */
+    /** e.g. `task_not_found`, `task_page_missing`, `page_closed`, `method_unavailable`,
+     * `stopped`. */
     code?: string
     /** Optional detail, e.g. `target_crashed` beside primary `internal_error`. Ignore unknown values. */
     diagnosticCode?: string
@@ -158,6 +265,8 @@ declare global {
      */
     retryable?: boolean
     operationId?: string
+    /** With `code: 'stopped'`: why and where a Jev helper or `neo.stop` ended the script. */
+    stop?: Stop
     /**
      * With `code: 'covered'`: what took the pointer at the element's point until the timeout
      * ran out. The message shows it, its controls and what to do; `ref` works with `getByRef`.
@@ -182,8 +291,8 @@ declare global {
   class TimeoutError extends NeoError {}
   // Actions and reads wait up to 30 s (expect: 5 s, toPass: no limit); pass { timeout } to fail sooner, 0 for none.
 
-  // Also given to every script: `console` (its lines come back with the result),
-  // `setTimeout` and `clearTimeout`. The engine is QuickJS: no `Intl`, no Node APIs but Buffer.
+  // Also given to every script: `console` (some clients never show its lines: return what you
+  // need; a Jev stop's `log` holds them), `setTimeout` and `clearTimeout`. The engine is QuickJS: no `Intl`, no Node APIs but Buffer.
 }
 
 /**

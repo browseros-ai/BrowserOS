@@ -282,6 +282,22 @@ error_codes! {
     /// This Neo has no CAPTCHA provider key, so `neo.solveCaptcha` is off. The deployment adds
     /// one; the script cannot.
     CAPTCHA_UNAVAILABLE = "captcha_unavailable";
+    /// This Neo has no Jev key, so `neo.find`, `neo.findAll`, `neo.check` and `neo.choose` are
+    /// off. The deployment adds one (`NEO_JEV_KEY_FILE`); the script cannot.
+    JEV_UNAVAILABLE = "jev_unavailable";
+    /// Jev did not answer, or refused this Neo's key: the deployment's service, not the page.
+    /// The Jev built-in's op fails with it; the prelude then stops the script (`stopped`, why
+    /// `jev_down`), so a script never sees this code.
+    JEV_DOWN = "jev_down";
+    /// The page is over Jev's hard input cap even with its long-context header. As `jev_down`,
+    /// the built-in's op keeps it and the script sees a stop (why `too_big`: do the step by
+    /// hand; `role` narrows the options, not the page text Jev reads).
+    JEV_TOO_BIG = "jev_too_big";
+    /// A Jev helper was not sure (nothing fit, two fit, Jev could not tell, Jev down), or the
+    /// script called `neo.stop`: the prelude refuses the call at the door with the `Stop` record
+    /// on the op's args (`dispatch/refusal_brand.rs`). Left uncaught, the run still ends `ok`, with
+    /// `{ stopped: Stop }` as its value (`runtime/js/bootstrap.js` `run`). Nothing was sent.
+    STOPPED = "stopped";
 
     // neo-playwright's codes. The crate's own error table picks each one's owner, whether
     // it is a timeout and whether Neo can vouch for what happened; builtins/playwright_ops.rs

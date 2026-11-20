@@ -1261,7 +1261,15 @@ mod read_only_tests {
         "locator.scrollIntoViewIfNeeded",
         "locator.textContent",
         "locator.waitFor",
+        // The Jev verbs read only the snapshot text the script sends and touch no page; a
+        // read-only run may already read and return that text. `neo.stop` is listed beside them
+        // and answers only a raw call, with a refusal: the prelude's stop never reaches it.
+        "neo.check",
+        "neo.choose",
         "neo.createTask",
+        "neo.find",
+        "neo.findAll",
+        "neo.stop",
         "neo.task",
         "page.addLocatorHandler",
         "page.ariaSnapshot",
