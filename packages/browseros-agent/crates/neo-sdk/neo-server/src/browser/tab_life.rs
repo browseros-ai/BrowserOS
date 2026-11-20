@@ -435,9 +435,12 @@ impl TabLedger {
         known.peek().is_some() && !known.any(|(tab, target)| shown(tab, target))
     }
 
-    /// The browser went: every born tab closes at the last listing that saw it, and nothing
-    /// keyed by its tab ids survives, since the new browser numbers its tabs anew and a reused
-    /// id must not inherit an intent, a claim or a crash.
+    /// The browser went: every born tab closes at the last listing that saw it, and the held
+    /// tabs, close intents and crashes keyed by its tab ids go, since the new browser numbers its
+    /// tabs anew and a reused id must not inherit them. Claims stay: `NeoTab` opens its tab on the
+    /// new socket's first news, so its claim on the new browser's tab can land before the listing
+    /// that shows the browser changed. A claim left from the old browser matches only a tab id
+    /// the new one reuses, and is evicted in time.
     fn lose_browser(&mut self, facts: &mut Vec<TabFact>) {
         let mut gone: Vec<TabId> = self.open.keys().copied().collect();
         gone.sort_unstable();
@@ -445,7 +448,6 @@ impl TabLedger {
             self.close(tab, Ended::LastSeen, Gone::Browser, facts);
         }
         self.unclaimed.clear();
-        self.claimed.clear();
         self.closes.clear();
         self.crashes.clear();
     }
@@ -835,7 +837,7 @@ mod tests {
 
     use browseros_core::{TabId, TargetId};
     use neo_telemetry::label::{CloseReason, TabOrigin};
-    use neo_telemetry::{OpenTabCounts, Telemetry, TelemetryCall};
+    use neo_telemetry::{OpenTabCounts, Telemetry, TelemetryCall, TelemetryConfig};
     use tokio::time::{Duration, Instant};
 
     use super::{
@@ -1096,6 +1098,26 @@ mod tests {
             "the old browser's tabs close at their last listing; the new one's are born"
         );
         assert_eq!(book.counts().found, 2, "only the new browser's tabs count");
+    }
+
+    #[test]
+    fn neos_tab_claimed_on_a_new_socket_before_its_listing_survives_a_browser_change() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]);
+        // The browser restarted. On the new socket's first news NeoTab opens its blank tab, and
+        // the browser names it before the watch's first listing there settles.
+        let neo = book.ledger.expect_open(OpenFor::Neo);
+        assert_eq!(book.claim(neo, 9, 30), [], "not listed yet");
+        assert_eq!(
+            book.listed(31, Gap::Socket, &[tab(8), tab(9)], &[]),
+            [
+                closed(TabOrigin::Found, CloseReason::Shutdown, 0),
+                closed(TabOrigin::Found, CloseReason::Shutdown, 0),
+                opened(TabOrigin::Found),
+                opened(TabOrigin::Neo),
+            ],
+            "the old browser's tabs close; Neo's new tab is born Neo all the same"
+        );
     }
 
     #[test]
@@ -1682,5 +1704,96 @@ mod tests {
             }),
             "one tab left open"
         );
+    }
+
+    /// Label pairs a Prometheus sample must carry, in any order.
+    type Labels = &'static [(&'static str, &'static str)];
+
+    /// The value of the Prometheus sample of `family` whose labels include every pair in
+    /// `labels`, in any order.
+    fn sample<'a>(text: &'a str, family: &str, labels: &[(&str, &str)]) -> Option<&'a str> {
+        text.lines()
+            .filter(|line| !line.starts_with('#'))
+            .find(|line| {
+                let series = line.split(' ').next().unwrap_or_default();
+                series.split('{').next() == Some(family)
+                    && labels
+                        .iter()
+                        .all(|(key, value)| series.contains(&format!("{key}=\"{value}\"")))
+            })
+            .and_then(|line| line.split(' ').nth(1))
+    }
+
+    /// The ledger over the live pipeline (`Telemetry::in_memory`), read as the host API's scrape
+    /// reads it: its facts become the tab metrics, and `neo_tabs_open` is its own map.
+    #[test]
+    fn the_ledger_s_facts_are_the_live_tab_metrics() {
+        let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+        let tabs = TabRegistry::new_with_telemetry(telemetry.clone());
+        let life = tabs.life();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        life.listed(Listing {
+            tabs: &[tab(1), tab(2)],
+            destroyed: &[],
+            targeted: &[],
+            gap: Gap::Socket,
+            now: at(0),
+        });
+        let open = life.expect_open(OpenFor::Agent);
+        life.listed(Listing {
+            tabs: &[tab(1), tab(2), tab(3)],
+            destroyed: &[],
+            targeted: &[],
+            gap: Gap::None,
+            now: at(1),
+        });
+        open.claim(TabId(3));
+        life.crashed(TabId(2), &target(2));
+        let _close = life.intend_close(TabId(3), IntentReason::Script);
+        life.listed(Listing {
+            tabs: &[tab(1)],
+            destroyed: &[TabId(2), TabId(3)],
+            targeted: &[],
+            gap: Gap::None,
+            now: at(5),
+        });
+
+        let text = telemetry.render_prometheus();
+        let expected: [(&str, Labels, &str); 10] = [
+            ("neo_tabs_open", &[("origin", "found")], "1"),
+            ("neo_tabs_open", &[("origin", "agent")], "0"),
+            ("neo_tabs_open", &[("origin", "neo")], "0"),
+            ("neo_tabs_opened_total", &[("origin", "found")], "2"),
+            ("neo_tabs_opened_total", &[("origin", "agent")], "1"),
+            (
+                "neo_tabs_closed_total",
+                &[("origin", "found"), ("close_reason", "crash")],
+                "1",
+            ),
+            (
+                "neo_tabs_closed_total",
+                &[("origin", "agent"), ("close_reason", "script")],
+                "1",
+            ),
+            (
+                "neo_tab_lifetime_seconds_sum",
+                &[("origin", "found"), ("close_reason", "crash")],
+                "5",
+            ),
+            (
+                "neo_tab_lifetime_seconds_sum",
+                &[("origin", "agent"), ("close_reason", "script")],
+                "4",
+            ),
+            ("neo_renderer_crashes_total", &[], "1"),
+        ];
+        for (family, labels, value) in expected {
+            assert_eq!(
+                sample(&text, family, labels),
+                Some(value),
+                "{family}{labels:?} in the scrape:\n{text}"
+            );
+        }
     }
 }
