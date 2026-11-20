@@ -91,7 +91,7 @@ impl TabScript for CrashedTab {
         .then_some("Target crashed")
     }
 
-    fn delay(&self, method: &str) -> Duration {
+    fn delay(&self, method: &str, _params: &Value) -> Duration {
         if self.delay_navigation && method == "Page.navigate" {
             Duration::from_millis(10)
         } else {

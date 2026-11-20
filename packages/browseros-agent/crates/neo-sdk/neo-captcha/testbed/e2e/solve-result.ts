@@ -13,6 +13,7 @@ export interface SolveResult {
   message: string
   durationMs: number | null
   paidTasks: number | null
+  provider: 'capsolver' | '2captcha' | null
   costUsd: number | null
   /** Why the call failed, e.g. `host/captcha_unavailable`. */
   error: string | null
@@ -26,6 +27,7 @@ export const notSolved = (): SolveResult => ({
   message: '',
   durationMs: null,
   paidTasks: null,
+  provider: null,
   costUsd: null,
   error: null,
 })
@@ -35,6 +37,8 @@ const object = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {}
 const word = (value: unknown) => (typeof value === 'string' ? value : 'n/a')
+const provider = (value: unknown) =>
+  value === 'capsolver' || value === '2captcha' ? value : null
 const number = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
 const clip = (text: string) =>
@@ -51,6 +55,7 @@ export function parseSdkSolve(value: unknown): SolveResult {
     message: typeof data.message === 'string' ? clip(data.message) : '',
     durationMs: number(data.durationMs),
     paidTasks: number(data.paidTasks),
+    provider: provider(data.provider),
     error:
       typeof data.verdict === 'string'
         ? null
@@ -89,6 +94,7 @@ export function parseClawServerSolve(result: McpToolResult): SolveResult {
       data.durationMs ?? data.duration_ms ?? data.elapsedMs ?? data.elapsed_ms,
     ),
     paidTasks: number(data.paidTasks ?? data.paid_tasks),
+    provider: provider(data.provider),
     costUsd: number(data.costUsd ?? data.cost_usd),
     error: known ? null : clip(result.isError ? text : 'malformed result'),
   }
@@ -111,6 +117,7 @@ export function stubSdkSolve(verdict: Verdict, type: string | null) {
     message: `stub ${verdict}`,
     durationMs: 1,
     paidTasks: 0,
+    provider: null,
   }
 }
 
@@ -118,6 +125,8 @@ export function stubSdkSolve(verdict: Verdict, type: string | null) {
 export function stubClawServerSolve(
   status: string,
   type: string | null,
+  /** The page's expected reason, as the SDK stub answers; else the status's usual one. */
+  reason?: string,
 ): McpToolResult {
   const reasons: Record<string, string> = {
     solved: 'auto_passed',
@@ -137,9 +146,10 @@ export function stubClawServerSolve(
         : status === 'solved'
           ? 'auto_pass'
           : 'none',
-    reason: reasons[status],
+    reason: reason ?? reasons[status],
     durationMs: 1,
     paidTasks: 0,
+    provider: null,
     costUsd: 0,
     events:
       status === 'token_applied'

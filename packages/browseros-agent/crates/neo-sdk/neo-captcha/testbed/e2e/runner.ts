@@ -38,6 +38,10 @@ export interface ResultRecord extends SolveResult {
   callbackFired: boolean | null
   /** The page's own server, after the runner submitted its form. */
   site: 'accepted' | 'rejected' | 'n/a' | 'error'
+  /** Whether the page's pre-solve trigger reached its condition; null when it has none. */
+  triggered: boolean | null
+  /** The page's recorded value (`CaptchaPage.reading`); it never decides the outcome. */
+  reading: { label: string; value: string | null } | null
   outcome: 'PASS' | 'FAIL' | 'UNVERIFIED'
   note: string
 }
@@ -146,6 +150,22 @@ function describe(error: unknown) {
   return message.length > 200 ? `${message.slice(0, 200)}…` : message
 }
 
+/**
+ * Clicks the page's pre-solve control and records whether its state came. Absence runs skip it:
+ * the control may be missing (a consent or error page), and the click would throw before the call
+ * that must show the solver is absent.
+ */
+async function runTrigger(
+  entry: CaptchaPage,
+  page: PageSession,
+  record: ResultRecord,
+  options: RunOptions,
+): Promise<void> {
+  if (!entry.trigger || options.expectToolMissing) return
+  record.triggered = await page.trigger(entry.trigger)
+  if (!record.triggered) record.note = 'trigger condition never held'
+}
+
 async function runPage(
   entry: CaptchaPage,
   page: PageSession,
@@ -165,6 +185,8 @@ async function runPage(
     tokenLength: null,
     callbackFired: null,
     site: entry.site ? 'error' : 'n/a',
+    triggered: null,
+    reading: null,
     outcome: 'FAIL',
     note: '',
   }
@@ -174,6 +196,7 @@ async function runPage(
     if (!options.expectToolMissing && !(await page.ready(entry.ready)))
       record.note = 'widget never rendered'
     else {
+      await runTrigger(entry, page, record, options)
       const started = performance.now()
       Object.assign(record, await page.solve())
       record.latencyMs = Math.round(performance.now() - started)
@@ -205,15 +228,31 @@ async function runPage(
         record.note ||= 'site check failed'
       }
     }
+    if (entry.reading) {
+      record.reading = { label: entry.reading.label, value: null }
+      try {
+        record.reading.value = await page.read(entry.reading)
+      } catch {
+        record.note ||= 'reading failed'
+      }
+    }
   } catch (error) {
     record.note = `page run failed: ${describe(error)}`
   } finally {
     await page.close().catch(() => {})
   }
   const classification = classifyOutcome(entry, record, record.site, options)
+  // A page whose trigger never produced its state (say, no image challenge appeared) did not
+  // test what it is for: its result proves nothing either way.
+  if (record.triggered === false && classification.outcome === 'FAIL')
+    classification.outcome = 'UNVERIFIED'
   record.outcome = classification.outcome
-  if (classification.note)
-    record.note = [classification.note, record.note].filter(Boolean).join('; ')
+  const reading = record.reading
+    ? `${record.reading.label}=${record.reading.value ?? 'none'}`
+    : ''
+  record.note = [classification.note, record.note, reading]
+    .filter(Boolean)
+    .join('; ')
   return record
 }
 

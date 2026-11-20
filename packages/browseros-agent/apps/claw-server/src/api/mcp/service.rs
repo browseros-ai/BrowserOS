@@ -610,6 +610,8 @@ impl ClawMcpService {
             title,
         };
         let entry = self.state.help.open(started.session.id(), params).await;
+        // The extension's takeover bar owns the page while the person helps.
+        self.state.page_hold.quiet(&PageId(page)).await;
         self.run_help_wait(started, &entry, request_ct).await
     }
 

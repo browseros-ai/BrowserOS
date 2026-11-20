@@ -1,6 +1,9 @@
 use std::{
     future::Future,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
@@ -11,7 +14,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    arkose, aws_waf,
+    Payments, arkose, aws_waf,
     config::{CaptchaConfig, ProviderConfig},
     geetest,
     types::{
@@ -103,6 +106,12 @@ pub trait VendorClient: Send + Sync {
 }
 
 pub struct ProviderChain {
+    vendors: Arc<Vendors>,
+    payments: Option<Arc<Mutex<Payments>>>,
+}
+
+/// All requests share these clients and the instance's spend limit.
+struct Vendors {
     clients: Vec<Box<dyn VendorClient>>,
     paid: AtomicU32,
     limit: u32,
@@ -135,19 +144,28 @@ impl ProviderChain {
     }
     pub fn with_clients(clients: Vec<Box<dyn VendorClient>>, limit: u32) -> Self {
         Self {
-            clients,
-            paid: AtomicU32::new(0),
-            limit,
+            vendors: Arc::new(Vendors {
+                clients,
+                paid: AtomicU32::new(0),
+                limit,
+            }),
+            payments: None,
+        }
+    }
+    pub(super) fn for_solve(&self, payments: Arc<Mutex<Payments>>) -> Self {
+        Self {
+            vendors: Arc::clone(&self.vendors),
+            payments: Some(payments),
         }
     }
     pub fn paid_tasks(&self) -> u32 {
-        self.paid.load(Ordering::Relaxed)
+        self.vendors.paid.load(Ordering::Relaxed)
     }
 }
 
 impl CaptchaBackend for ProviderChain {
     fn is_configured(&self) -> bool {
-        !self.clients.is_empty()
+        !self.vendors.clients.is_empty()
     }
 
     async fn solve_fresh<'a, F, Fut>(
@@ -197,9 +215,9 @@ impl ProviderChain {
     {
         let mut previous = None;
         let mut errors = Vec::new();
-        let mut charged = false;
+        let mut last_charged = None;
         let mut prior_cost = 0.0;
-        for (index, client) in self.clients.iter().enumerate() {
+        for (index, client) in self.vendors.clients.iter().enumerate() {
             if !client.supports(current.as_ref()) {
                 continue;
             }
@@ -208,7 +226,8 @@ impl ProviderChain {
                     Ok(Some(fresh_task)) => current = std::borrow::Cow::Owned(fresh_task),
                     Ok(None) => return Err(previous_error),
                     Err(mut error) => {
-                        error.charged = charged;
+                        error.provider = last_charged;
+                        error.charged = last_charged.is_some();
                         return Err(error);
                     }
                 }
@@ -221,18 +240,18 @@ impl ProviderChain {
             {
                 errors.push("provider attempt cancelled or insufficient time remaining".into());
                 return Err(ProviderError {
-                    provider: Some(provider),
+                    provider: last_charged.or(Some(provider)),
                     kind: if cancel.is_cancelled() {
                         ProviderErrorKind::Cancelled
                     } else {
                         ProviderErrorKind::Timeout
                     },
                     message: errors.join("; "),
-                    charged,
+                    charged: last_charged.is_some(),
                 });
             }
             let result = async {
-                let mut slot = PaidSlot::reserve(&self.paid, self.limit).ok_or_else(|| ProviderError {provider:Some(provider),kind:ProviderErrorKind::SpendLimit,message:"paid-task limit reached".into(),charged:false})?;
+                let mut slot = PaidSlot::reserve(&self.vendors.paid, self.vendors.limit).ok_or_else(|| ProviderError {provider:Some(provider),kind:ProviderErrorKind::SpendLimit,message:"paid-task limit reached".into(),charged:false})?;
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), "provider task started");
                 // Keep the reservation if the caller drops this future after submission.
                 slot.charged = true;
@@ -247,30 +266,33 @@ impl ProviderChain {
                     return Ok(answer);
                 }
                 Err(mut error) => {
-                    charged |= error.charged;
                     if error.charged {
+                        last_charged = Some(provider);
                         prior_cost += estimate(task);
+                        if let Some(payments) = &self.payments {
+                            payments.lock().unwrap_or_else(|e| e.into_inner()).pending =
+                                Some(provider);
+                        }
                     }
                     errors.push(format!("{provider:?} {:?}: {}", error.kind, error.message));
                     let next = self
+                        .vendors
                         .clients
                         .iter()
                         .skip(index + 1)
                         .any(|client| client.supports(task));
-                    if error.kind.may_fallback() && next && self.paid_tasks() >= self.limit {
+                    if error.kind.may_fallback() && next && self.paid_tasks() >= self.vendors.limit
+                    {
                         error.kind = ProviderErrorKind::SpendLimit;
                         errors.push("paid-task limit reached".into());
                     }
+                    error.message = errors.join("; ");
+                    error.provider = last_charged.or(error.provider);
+                    error.charged = last_charged.is_some();
                     if !error.kind.may_fallback() || !next {
-                        error.message = errors.join("; ");
-                        error.charged = charged;
                         return Err(error);
                     }
-                    previous = Some(ProviderError {
-                        message: errors.join("; "),
-                        charged,
-                        ..error
-                    });
+                    previous = Some(error);
                 }
             }
         }
@@ -952,7 +974,7 @@ mod tests {
             if kind.is_supported() {
                 continue;
             }
-            for client in &chain.clients {
+            for client in &chain.vendors.clients {
                 let error = client
                     .solve(
                         &task,
@@ -1596,6 +1618,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_chain_names_the_last_vendor_that_charged() -> anyhow::Result<()> {
+        for (backup_charged, expected) in [
+            (false, ProviderName::Capsolver),
+            (true, ProviderName::TwoCaptcha),
+        ] {
+            let (primary, _) = fake(
+                "PRIMARY_FAILED",
+                Some(ProviderErrorKind::Unsolvable),
+                true,
+                true,
+            );
+            let backup = FakeVendor {
+                provider: ProviderName::TwoCaptcha,
+                code: "BACKUP_FAILED",
+                failure: Some(ProviderErrorKind::Unsolvable),
+                charged: backup_charged,
+                supported: true,
+                calls: Arc::default(),
+            };
+            let chain = ProviderChain::with_clients(vec![primary, Box::new(backup)], 2);
+            let Err(error) = solve(&chain, &recaptcha()).await else {
+                anyhow::bail!("both vendors failed");
+            };
+            assert!(error.charged);
+            assert_eq!(error.provider, Some(expected));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_unsupported_vendors_are_skipped_without_an_attempt() -> anyhow::Result<()> {
         let (primary, first) = fake("UNSUPPORTED", None, true, false);
         let (backup, second) = fake("SUPPORTED", None, true, true);
@@ -1916,6 +1968,46 @@ mod tests {
                     }),
                 }
             })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fallback_keeps_the_confirmed_charge_until_the_next_vendor_answers() {
+        use crate::types::PageError;
+
+        for (wait, expected) in [(1, ProviderName::TwoCaptcha), (3, ProviderName::Capsolver)] {
+            let first = FakeVendor {
+                provider: ProviderName::TwoCaptcha,
+                code: "FIRST_CHARGED",
+                failure: Some(ProviderErrorKind::Unsolvable),
+                charged: true,
+                supported: true,
+                calls: Arc::default(),
+            };
+            let backup = SlowVendor(Duration::from_secs(2));
+            let chain = ProviderChain::with_clients(vec![Box::new(first), Box::new(backup)], 2);
+            let payments = Arc::default();
+            let scoped = chain.for_solve(Arc::clone(&payments));
+            let reply =
+                tokio::time::timeout(Duration::from_secs(wait), solve(&scoped, &recaptcha())).await;
+            assert_eq!(reply.is_ok(), wait > 2);
+            let mut paid = payments.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(reply) = reply {
+                assert!(reply.is_ok());
+                paid.finish_task(&reply);
+            }
+            let mut flow = crate::page_failure(PageError::Cancelled);
+            paid.apply_to(&mut flow);
+            assert_eq!(flow.provider, Some(expected));
+            assert_eq!(
+                flow.paid_tasks, 1,
+                "a pending charge and its combined reply are the same task"
+            );
+            assert_eq!(
+                chain.paid_tasks(),
+                2,
+                "the process budget reserved both attempts"
+            );
         }
     }
 

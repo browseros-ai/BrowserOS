@@ -30,7 +30,9 @@ minutes for a cold build, or set `--startup-timeout`.
 
 `--pages fixtures` (default) runs the ten local fixtures and the eleven fake-key GeeTest, AWS WAF
 and FunCaptcha pages, which include cross-site frames and closed shadow roots; `spotting` runs only
-those eleven; `demo` runs the eight public demos; `all` runs all 29. `--only id,id` narrows any
+those eleven; `demo` runs the thirteen public demos; `all` runs all 34; `owner` runs the owner's
+six-site check (`neo-server/docker/CLAUDE.md`) in its order, with invisible reCAPTCHA twice:
+untouched, and after its own submit has shown the image challenge. `--only id,id` narrows any
 group. Fixtures use two listeners on different sites, `127.0.0.1:A` for top pages and `localhost:B`
 for embedded widgets; `--fixture-frame-host` changes the frame host. See
 [`fixtures/README.md`](fixtures/README.md).
@@ -41,6 +43,14 @@ length, click the submit button inside the page (as claw-server's runner did, so
 left over the button cannot swallow the click), wait for the site's own verdict, and close the task. Each script starts with a
 `/* captcha-e2e:<step> {…} */` tag, which the stub reads instead of running JavaScript.
 
+A page may click something first (`trigger`), as a visitor would, and wait for the state it
+tests; if that state never comes (say, Google shows no challenge to a trusted IP), a failing page
+is UNVERIFIED. A page may also record one value after the site check (`reading`), such as the
+v3 demo's score, Turnstile's siteverify answer, or the title once the Cloudflare page lets the
+browser through; the reading is printed in the note and never decides the outcome. The site check
+clicks nothing when the page has no submit control or already shows its acceptance (an
+invisible reCAPTCHA callback submits the form itself).
+
 ## Outcomes
 
 A result keeps the SDK's `verdict`, `type`, `reason`, `message`, `durationMs` and `paidTasks` exactly
@@ -50,9 +60,13 @@ are kept, never tokens.
 - A page lists the verdicts that pass (`expect`), and may pin the type, the reason and a paid-task
   cap. `unsolved` is the SDK's verdict for every definite failure, and only its reason keeps
   claw-server's `unsupported` apart: `unsolved` / `unsupported_type` fails, and is never UNVERIFIED,
-  unless the page allows it. hCaptcha, the Cloudflare wall and PerimeterX's check pass only that
+  unless the page allows it. hCaptcha and PerimeterX's check pass only that
   way, with the right type (PerimeterX's is `unknown` on purpose: claw-server's closed `type` enum
   does not list it); the spotting pages accept it beside any other `unsolved`.
+- Neo waits up to 10 seconds for Cloudflare's full-page check. It reports `solved` when the
+  replacement page has cleared and carries the site's clearance cookie. A persistent wall returns
+  `unsolved` with `challenge_not_passed`, which the static wall fixture expects. The ScrapingCourse
+  demo passes as `solved` or `already_clear` once the page itself says the browser got through.
 - `solved`, and `already_clear` on a CAPTCHA page, pass only if the site accepted the submission.
   `token_applied` passes a `solved` page only if the site accepted. A site that accepts a page the
   solver called `unsolved` fails it.

@@ -2,7 +2,8 @@ mod background;
 
 use crate::target::page_access::PageAccess;
 use crate::{
-    CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, pointer, snapshot::RefEntry,
+    CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, overlay, pointer,
+    snapshot::RefEntry,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -14,7 +15,7 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::timeout;
 
 const SCREENSHOT_CAPTURE_DEADLINE: Duration = Duration::from_millis(1_200);
@@ -212,7 +213,7 @@ pub async fn capture_screenshot_with_annotations(
     options: ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
     let annotate = options.annotate.unwrap_or(false);
-    run_exclusive_screenshot_capture(&page_session, || async {
+    with_screenshot_lock(&page_session, || async {
         if annotate {
             capture_annotated_screenshot(page_session.clone(), observer, options).await
         } else {
@@ -227,7 +228,12 @@ async fn capture_plain_screenshot(
     options: &ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
-    let captured = without_pointer(page_session, capture_image(page_session, options)).await?;
+    let overlay_hidden = overlay::hide_for_capture(page_session).await;
+    let captured = without_pointer(page_session, capture_image(page_session, options)).await;
+    if overlay_hidden {
+        overlay::restore_after_capture(page_session).await;
+    }
+    let captured = captured?;
     Ok(ScreenshotCaptureResult {
         data: captured.data,
         mime_type: format!("image/{}", format.as_str()),
@@ -311,8 +317,12 @@ async fn capture_annotated_screenshot(
                 .await?;
             overlay_injected = true;
         }
-        let captured =
-            without_pointer(&page_session, capture_image(&page_session, &options)).await?;
+        let overlay_hidden = overlay::hide_for_capture(&page_session).await;
+        let captured = without_pointer(&page_session, capture_image(&page_session, &options)).await;
+        if overlay_hidden {
+            overlay::restore_after_capture(&page_session).await;
+        }
+        let captured = captured?;
         Ok(ScreenshotCaptureResult {
             data: captured.data,
             mime_type: format!("image/{}", format.as_str()),
@@ -770,19 +780,21 @@ async fn remove_annotation_overlay(
     Ok(())
 }
 
-async fn run_exclusive_screenshot_capture<F, Fut, T>(
+/// Serialize a page visual change with captures on this session. A cursor can create its
+/// canvas only outside the interval between hiding the old canvas and reading pixels.
+/// Input may already be locked by the caller. Work under this lock must never acquire it.
+pub async fn with_screenshot_lock<F: Future>(
     page_session: &ProtocolSession,
-    task: F,
-) -> Result<T, CoreError>
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<T, CoreError>>,
-{
-    // Plain captures share this protocol-session lock because annotated capture
-    // temporarily overlays the DOM; overlap could include that overlay in a plain image.
-    let mutex = screenshot_mutex(page_session);
-    let _guard = mutex.lock().await;
+    task: impl FnOnce() -> F,
+) -> F::Output {
+    let _guard = acquire_screenshot_lock(page_session).await;
     task().await
+}
+
+/// Acquire the session's capture queue so callers can bound the wait independently of the
+/// work under the lock. As with [`with_screenshot_lock`], do not acquire input while held.
+pub async fn acquire_screenshot_lock(page_session: &ProtocolSession) -> OwnedMutexGuard<()> {
+    screenshot_mutex(page_session).lock_owned().await
 }
 
 fn screenshot_mutex(page_session: &ProtocolSession) -> Arc<Mutex<()>> {

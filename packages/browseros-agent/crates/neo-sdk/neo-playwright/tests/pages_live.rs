@@ -24,6 +24,7 @@ mod live_run;
 mod page_server;
 
 use std::error::Error;
+use std::fs;
 use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -1569,6 +1570,25 @@ impl OutsideTab {
             .unwrap_or(Value::Null))
     }
 
+    /// The URL of the tab's child frame named `name`, read on this client's own session (its own
+    /// `Page` on, which no session of the run's sees).
+    async fn child_url(&self, name: &str) -> TestResult<String> {
+        self.session.send_value("Page.enable", json!({})).await?;
+        let tree = self
+            .session
+            .send_value("Page.getFrameTree", json!({}))
+            .await?;
+        let url = tree
+            .pointer("/frameTree/childFrames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|child| child.pointer("/frame/name").and_then(Value::as_str) == Some(name))
+            .and_then(|child| child.pointer("/frame/url").and_then(Value::as_str))
+            .ok_or_else(|| format!("no child frame named {name}"))?;
+        Ok(url.to_owned())
+    }
+
     /// Closes the tab, then the connection: dropping a `CdpClient` does not stop its tasks.
     async fn close(&self) {
         let _closed = self
@@ -1651,19 +1671,262 @@ async fn tests_that_a_child_commit_in_a_tab_neo_never_touched_moves_its_frame_ve
                 asked.elapsed()
             );
         }
-        assert!(
-            run.browser()
-                .pages
-                .get_attached_session(info.page_id)
-                .await
-                .is_none(),
-            "the run's core never attached to the tab"
-        );
+        if run
+            .browser()
+            .pages
+            .get_attached_session(info.page_id)
+            .await
+            .is_some()
+        {
+            return Err("the run's core attached to the tab".into());
+        }
         Ok::<(), Box<dyn Error>>(())
     }
     .await;
     tab.close().await;
     result
+}
+
+/// How long a tab's frame version must stay unchanged to count as at rest after a page loaded:
+/// longer than the gap between the watcher's handling of a loaded page's last frame events (its
+/// observer's seed, its frames' attaches and commits, each behind a tick at most). Read from code,
+/// not measured; the row prints how long the version took to settle.
+const UNTOUCHED_VERSION_SETTLE: Duration = Duration::from_millis(1_000);
+
+/// A tab another client opened on a `file:` page, which the door refuses, reports nothing of its
+/// own frames: the watcher sends such a tab nothing of a page domain. Its cross-site child, on the
+/// test server, still gives the tab a frame version, as the observer's auto-attach reports it
+/// (the attach moves the version before any door check, and its frame session is never read);
+/// then a same-process child's commit leaves that version where it was for the whole bound a
+/// child's commit gets in an untouched tab. Once the same client navigates the tab to a page the
+/// door allows, the watcher seeds its observer, and once the new page is loaded and its version
+/// at rest, a child's commit moves the version. Core never attaches to the tab. The `file:`
+/// fixture is three local files written to a fresh directory and opened by their path, as the
+/// browser reads the host's own files. Every check returns an error, so the tab is always closed.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "each step prints how long it waited or took, the measure its bound is checked \
+              against"
+)]
+async fn tests_that_an_untouched_tab_on_a_file_page_reports_no_frames_until_it_leaves_it()
+-> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = PageServer::start().await?;
+    let dir = tempfile::tempdir()?;
+    let parent = file_parent(dir.path(), &server)?;
+    let tab = OutsideTab::open(&parent).await?;
+    let result = async {
+        let info = run
+            .browser()
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|info| info.target_id.as_str() == tab.target)
+            .ok_or("the tab is not listed")?;
+        let version = || {
+            run.frame_versions()
+                .into_iter()
+                .find(|(listed, _)| *listed == info.tab_id)
+                .map(|(_, version)| version)
+        };
+
+        // The cross-site child's attach gives the tab a version while its `Page` stays off.
+        let observing = Instant::now();
+        while version().is_none() {
+            if observing.elapsed() > UNTOUCHED_TAB_OBSERVED_BOUND {
+                return Err(format!(
+                    "the file tab's cross-site child gave it no frame version within \
+                     {UNTOUCHED_TAB_OBSERVED_BOUND:?}"
+                )
+                .into());
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        eprintln!("UNTOUCHED_FILE_TAB step=observed took={:?}", observing.elapsed());
+        let before = version();
+        set_child_src(&tab, "same", "moved.html").await?;
+        time::sleep(UNTOUCHED_CHILD_COMMIT_BOUND).await;
+        let committed = tab.child_url("same").await?;
+        if !committed.ends_with("/moved.html") {
+            return Err(format!("the file page's child did not commit: {committed}").into());
+        }
+        if version() != before {
+            return Err(format!(
+                "a same-process child's commit on a file page moved the tab's frame version \
+                 within {UNTOUCHED_CHILD_COMMIT_BOUND:?}: {before:?} to {:?}",
+                version()
+            )
+            .into());
+        }
+        eprintln!(
+            "UNTOUCHED_FILE_TAB step=file waited={UNTOUCHED_CHILD_COMMIT_BOUND:?} version={before:?}"
+        );
+
+        tab.session
+            .send_value("Page.navigate", json!({ "url": server.url("/frames.html") }))
+            .await?;
+        let asked = Instant::now();
+        loaded_over_http(&tab).await?;
+        let rest = settled(&version, asked).await?;
+        if rest <= before {
+            return Err(format!(
+                "the move to an allowed page left the tab's frame version at {before:?}"
+            )
+            .into());
+        }
+        eprintln!(
+            "UNTOUCHED_FILE_TAB step=allowed settled={:?} version={rest:?}",
+            asked.elapsed()
+        );
+        let child_src = server.url("/child.html?moved");
+        let ChildCommit { committed, moved } =
+            child_commit_moves(&tab, &child_src, &version, rest).await?;
+        eprintln!("UNTOUCHED_FILE_TAB step=child committed={committed:?} moved={moved:?}");
+        if run
+            .browser()
+            .pages
+            .get_attached_session(info.page_id)
+            .await
+            .is_some()
+        {
+            return Err("the run's core attached to the tab".into());
+        }
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    tab.close().await;
+    result
+}
+
+/// Writes the `file:` fixture into `dir`: a parent with a same-process child named `same` (a local
+/// file) and a cross-site one named `cross` (on `server`), and the local page the child moves to.
+/// Returns the parent's `file://` URL.
+fn file_parent(dir: &Path, server: &PageServer) -> TestResult<String> {
+    fs::write(
+        dir.join("parent.html"),
+        format!(
+            "<!doctype html><title>file parent</title>\
+             <iframe name=\"same\" src=\"child.html\"></iframe>\
+             <iframe name=\"cross\" src=\"{}\"></iframe>",
+            server.url("/child.html")
+        ),
+    )?;
+    for child in ["child.html", "moved.html"] {
+        fs::write(
+            dir.join(child),
+            format!("<!doctype html><title>{child}</title>"),
+        )?;
+    }
+    Ok(format!("file://{}", dir.join("parent.html").display()))
+}
+
+/// Waits until the tab shows the allowed page it was sent to, loaded, within
+/// [`UNTOUCHED_TAB_OBSERVED_BOUND`]. The old document answers until the new one commits, and an
+/// evaluate that meets the swap fails, so only the new page, complete, counts.
+async fn loaded_over_http(tab: &OutsideTab) -> TestResult {
+    let asked = Instant::now();
+    loop {
+        let state = tab
+            .eval("[location.protocol, document.readyState].join(' ')")
+            .await;
+        if matches!(&state, Ok(state) if *state == json!("http: complete")) {
+            return Ok(());
+        }
+        if asked.elapsed() > UNTOUCHED_TAB_OBSERVED_BOUND {
+            return Err(format!(
+                "the allowed page did not load within {UNTOUCHED_TAB_OBSERVED_BOUND:?}: {state:?}"
+            )
+            .into());
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// How long [`child_commit_moves`] took for each of its two waits, both from when it set the
+/// child's `src`.
+struct ChildCommit {
+    /// Until the outside client's own tree read showed the child at its new URL.
+    committed: Duration,
+    /// Until the tab's frame version moved past its resting value.
+    moved: Duration,
+}
+
+/// Points the tab's `same` child at `src` and waits, within [`UNTOUCHED_CHILD_COMMIT_BOUND`], for
+/// the outside client's own tree read to show it committed, then for the tab's frame version to
+/// move past `rest`.
+async fn child_commit_moves(
+    tab: &OutsideTab,
+    src: &str,
+    version: &impl Fn() -> Option<u64>,
+    rest: Option<u64>,
+) -> TestResult<ChildCommit> {
+    set_child_src(tab, "same", src).await?;
+    let asked = Instant::now();
+    while tab.child_url("same").await? != src {
+        if asked.elapsed() > UNTOUCHED_CHILD_COMMIT_BOUND {
+            return Err(format!(
+                "the allowed page's child did not commit within {UNTOUCHED_CHILD_COMMIT_BOUND:?}"
+            )
+            .into());
+        }
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    let committed = asked.elapsed();
+    while version() <= rest {
+        if asked.elapsed() > UNTOUCHED_CHILD_COMMIT_BOUND {
+            return Err(format!(
+                "the child's commit on the allowed page did not move the tab's frame version \
+                 within {UNTOUCHED_CHILD_COMMIT_BOUND:?}"
+            )
+            .into());
+        }
+        time::sleep(Duration::from_millis(20)).await;
+    }
+    Ok(ChildCommit {
+        committed,
+        moved: asked.elapsed(),
+    })
+}
+
+/// Points the tab's child frame named `name` at `src`, from the tab's main world, and checks the
+/// frame was there to take it: the page answers with the child's resolved `src`.
+async fn set_child_src(tab: &OutsideTab, name: &str, src: &str) -> TestResult {
+    let set = tab
+        .eval(&format!(
+            "(() => {{ const frame = document.querySelector('iframe[name={name}]'); \
+             if (!frame) return null; frame.src = {src:?}; return frame.src; }})()"
+        ))
+        .await?;
+    match set.as_str() {
+        Some(resolved) if resolved.ends_with(src) => Ok(()),
+        _ => Err(format!("the {name} child did not take {src}: {set}").into()),
+    }
+}
+
+/// The tab's frame version once it stayed unchanged for [`UNTOUCHED_VERSION_SETTLE`], waiting at
+/// most [`UNTOUCHED_TAB_OBSERVED_BOUND`] from `since`.
+async fn settled(version: &impl Fn() -> Option<u64>, since: Instant) -> TestResult<Option<u64>> {
+    let mut seen = version();
+    let mut steady = Instant::now();
+    while steady.elapsed() < UNTOUCHED_VERSION_SETTLE {
+        if since.elapsed() > UNTOUCHED_TAB_OBSERVED_BOUND {
+            return Err(format!(
+                "the tab's frame version did not rest for {UNTOUCHED_VERSION_SETTLE:?} within \
+                 {UNTOUCHED_TAB_OBSERVED_BOUND:?}"
+            )
+            .into());
+        }
+        time::sleep(Duration::from_millis(50)).await;
+        let now = version();
+        if now != seen {
+            seen = now;
+            steady = Instant::now();
+        }
+    }
+    Ok(seen)
 }
 
 /// A run lists a listed tab's whole frame tree from its first statement, as a host's observer

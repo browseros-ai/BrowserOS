@@ -2,7 +2,11 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { type CaptchaPage, SPOTTING_PAGES } from '../fixtures/catalog'
+import {
+  type CaptchaPage,
+  OWNER_PAGE_IDS,
+  SPOTTING_PAGES,
+} from '../fixtures/catalog'
 import { launchConfiguredBrowser } from './browser-launch'
 import { startDevWatch } from './dev-watch'
 import { configureKeys, type KeyMode } from './keys'
@@ -79,8 +83,8 @@ export function parseOptions(argv: string[]) {
     throw new Error(
       '--dev-watch uses its own headed browser; cannot combine with --mcp-url, --headless or --browser-arg',
     )
-  if (!['fixtures', 'demo', 'all', 'spotting'].includes(values.pages))
-    throw new Error('--pages must be fixtures, demo, all, or spotting')
+  if (!['fixtures', 'demo', 'all', 'spotting', 'owner'].includes(values.pages))
+    throw new Error('--pages must be fixtures, demo, all, spotting, or owner')
   if (!['placeholder', 'real', 'none'].includes(values.keys))
     throw new Error('--keys must be placeholder, real, or none')
   const solveTimeout = milliseconds(
@@ -132,11 +136,16 @@ export function parseOptions(argv: string[]) {
 export type Options = ReturnType<typeof parseOptions>
 
 export function selectPages(pages: readonly CaptchaPage[], options: Options) {
-  const selected = pages.filter(
+  // The owner's check runs in the owner's order, not the catalog's.
+  const pool =
+    options.pages === 'owner'
+      ? OWNER_PAGE_IDS.flatMap((id) => pages.filter((p) => p.id === id))
+      : pages
+  const selected = pool.filter(
     (p) =>
       (options.pages === 'spotting'
         ? SPOTTING_PAGES.some((spotting) => spotting.id === p.id)
-        : options.pages === 'all' ||
+        : ['all', 'owner'].includes(options.pages) ||
           p.kind === (options.pages === 'fixtures' ? 'fixture' : 'demo')) &&
       (!options.only || options.only.includes(p.id)),
   )

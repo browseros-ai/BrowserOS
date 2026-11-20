@@ -34,6 +34,8 @@ pub mod fit_browser_bar;
 pub use self::fit_browser_bar::FitBrowserBar;
 pub mod fit_keyboard;
 pub use self::fit_keyboard::FitKeyboard;
+pub mod input_settings;
+pub use self::input_settings::InputSettings;
 pub mod lock;
 pub use self::lock::Lock;
 pub mod lock_request;

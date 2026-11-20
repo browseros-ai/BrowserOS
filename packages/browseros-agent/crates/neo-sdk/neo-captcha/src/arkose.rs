@@ -495,17 +495,11 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
             .await)
     })
     .await?;
+    ctx.record_payment(result, &answer);
     let answer = match answer {
         Ok(answer) => answer,
-        Err(error) => {
-            result.paid_tasks = u32::from(error.charged);
-            return Ok(provider_failure(error));
-        }
+        Err(error) => return Ok(provider_failure(error)),
     };
-    result.cost_usd = answer
-        .cost_usd
-        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .unwrap_or(0.0);
     guard(ctx).await?;
     let SolveAnswer::Token(token) = answer.answer else {
         return Ok(unconfirmed());
@@ -856,6 +850,7 @@ mod tests {
 
     struct FakeBackend<'a> {
         page: &'a FakePage,
+        provider: ProviderName,
         tasks: Mutex<Vec<SolveTask>>,
         error: Option<ProviderError>,
         change: Option<(&'static str, Value)>,
@@ -866,6 +861,7 @@ mod tests {
         fn new(page: &'a FakePage) -> Self {
             Self {
                 page,
+                provider: ProviderName::TwoCaptcha,
                 tasks: Mutex::default(),
                 error: None,
                 change: None,
@@ -899,7 +895,7 @@ mod tests {
             }
             Ok(ProviderAnswer {
                 answer: SolveAnswer::Token("vendor-token'\"\\".into()),
-                provider: ProviderName::TwoCaptcha,
+                provider: self.provider,
                 task_id: Some("task-1".into()),
                 cost_usd: Some(0.002),
             })
@@ -935,6 +931,7 @@ mod tests {
             &SolveCtx {
                 page,
                 backend,
+                payments: &Default::default(),
                 events: &events,
                 lease: &lease,
                 cancel,
@@ -1037,6 +1034,7 @@ mod tests {
             (result.paid_tasks, result.cost_usd, result.method),
             (1, 0.002, SolveMethod::Token)
         );
+        assert_eq!(result.provider, Some(ProviderName::TwoCaptcha));
         assert_eq!(*backend.tasks(), vec![task()]);
         assert!(page.state().applied);
         Ok(())
@@ -1046,13 +1044,12 @@ mod tests {
     async fn tests_that_callback_completion_alone_is_token_applied() -> anyhow::Result<()> {
         let page = FakePage::default();
         page.state().transition = false;
-        let result = run(
-            &page,
-            &FakeBackend::new(&page),
-            &CancellationToken::new(),
-            false,
-        )
-        .await?;
+        let backend = FakeBackend {
+            provider: ProviderName::Capsolver,
+            ..FakeBackend::new(&page)
+        };
+        let result = run(&page, &backend, &CancellationToken::new(), false).await?;
+        assert_eq!(result.provider, Some(ProviderName::Capsolver));
         assert_eq!(
             (result.status, result.reason),
             (SolveStatus::TokenApplied, SolveReason::AwaitingSubmit)
@@ -1195,6 +1192,7 @@ mod tests {
                 (result.status, result.reason, result.paid_tasks),
                 (SolveStatus::NeedsHuman, reason, u32::from(charged))
             );
+            assert_eq!(result.provider, charged.then_some(ProviderName::TwoCaptcha));
             assert!(!page.state().applied);
         }
         Ok(())

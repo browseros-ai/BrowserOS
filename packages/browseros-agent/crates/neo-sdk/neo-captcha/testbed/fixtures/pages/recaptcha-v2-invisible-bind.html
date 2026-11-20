@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invisible reCAPTCHA v2 bound to a button</title>
+</head>
+<body>
+<h1>Invisible reCAPTCHA v2 bound to a button</h1>
+<form id="captcha-form" method="post" action="/submit/recaptcha-v2-invisible-bind">
+  <div class="g-recaptcha" data-bind="submit" data-callback="onSuccess"
+       data-error-callback="onError" data-expired-callback="onExpired"
+       data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI"></div>
+  <button id="submit" type="submit">Submit</button>
+</form>
+<script>
+  const state = window.__captchaFixture = {
+    id: 'recaptcha-v2-invisible-bind',
+    family: 'recaptcha_v2',
+    sitekey: document.querySelector('.g-recaptcha').dataset.sitekey,
+    rendered: false,
+    callbackFired: false,
+    tokenLength: 0,
+    errors: []
+  };
+  function mirror() {
+    document.documentElement.dataset.captchaFixture = JSON.stringify(state);
+  }
+  document.addEventListener('load', event => {
+    if (event.target instanceof HTMLIFrameElement && event.target.closest('.grecaptcha-badge')) {
+      state.rendered = true;
+      mirror();
+    }
+  }, true);
+  function onSuccess(token) {
+    state.callbackFired = true;
+    state.tokenLength = token.length;
+    mirror();
+    document.getElementById('captcha-form').requestSubmit();
+  }
+  function onError(code) {
+    state.tokenLength = 0;
+    state.errors.push(String(code || 'widget-error'));
+    mirror();
+  }
+  function onExpired() { onError('expired'); }
+  mirror();
+</script>
+<script async defer src="https://www.google.com/recaptcha/api.js" onerror="onError('script-load-error')"></script>
+</body>
+</html>

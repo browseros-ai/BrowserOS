@@ -30,6 +30,12 @@ export interface AgentSettings {
      * @memberof AgentSettings
      */
     taskCleanupTipEnabled: boolean;
+    /**
+     * Whether a page neo acts on shows that neo is working on it and holds the person's clicks and typing until they take over.
+     * @type {boolean}
+     * @memberof AgentSettings
+     */
+    workingOverlayEnabled: boolean;
 }
 
 /**
@@ -76,6 +82,12 @@ export interface UpdateAgentSettingsRequest {
      * @memberof UpdateAgentSettingsRequest
      */
     taskCleanupTipEnabled?: boolean;
+    /**
+     * Omit to preserve the saved working overlay preference.
+     * @type {boolean}
+     * @memberof UpdateAgentSettingsRequest
+     */
+    workingOverlayEnabled?: boolean;
 }
 
 /**

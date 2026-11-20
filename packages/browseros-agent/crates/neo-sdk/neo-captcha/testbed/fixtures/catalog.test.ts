@@ -29,7 +29,6 @@ test('tests that unsupported families are detections refused as unsupported, nev
   for (const [id, type] of [
     ['hcaptcha-test', 'hcaptcha'],
     ['hcaptcha-demo', 'hcaptcha'],
-    ['cloudflare-wall', 'cloudflare_challenge'],
     ['perimeterx-modal', 'unknown'],
   ]) {
     const page = pages.find((p) => p.id === id)
@@ -74,6 +73,7 @@ test('tests that always-pass Turnstile pages also accept a widget that already p
 test('tests that the catalog contains every required page with unique ids and existing paths', async () => {
   expect(FIXTURE_PAGES.map((page) => page.id)).toEqual([
     'recaptcha-v2-test',
+    'recaptcha-v2-invisible-bind',
     'turnstile-pass',
     'turnstile-block',
     'turnstile-interactive',
@@ -334,15 +334,68 @@ test('tests that frame readiness accepts only its own child origin, source and f
   }
 })
 
+test('tests that the bound v2 fixture becomes ready with its badge and submits through its callback', async () => {
+  const page = FIXTURE_PAGES.find((p) => p.id === 'recaptcha-v2-invisible-bind')
+  if (!page) throw new Error('missing button-bound fixture')
+  const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
+  const widget = html.match(/<div\b[^>]*class="g-recaptcha"[^>]*>/)?.[0] ?? ''
+  expect(widget).toContain('data-bind="submit"')
+  expect(widget).toContain('data-callback="onSuccess"')
+  expect(widget).toContain(`data-sitekey="${page.sitekey}"`)
+  expect(widget).not.toContain('data-size')
+  expect(page).toMatchObject({ expectType: 'recaptcha_v2', maxPaidTasks: 0 })
+
+  class Frame {
+    constructor(readonly badge: boolean) {}
+    closest(selector: string) {
+      return this.badge && selector === '.grecaptcha-badge'
+    }
+  }
+  const dataset: Record<string, string> = {}
+  let loaded = (_event: { target: Frame }) => {}
+  let submissions = 0
+  const document = {
+    documentElement: { dataset },
+    querySelector: () => ({ dataset: { sitekey: page.sitekey } }),
+    addEventListener: (type: string, handler: typeof loaded) => {
+      if (type === 'load') loaded = handler
+    },
+    getElementById: (id: string) =>
+      id === 'captcha-form' ? { requestSubmit: () => submissions++ } : null,
+  }
+  const context = { window: {}, document, HTMLIFrameElement: Frame }
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? ''
+  runInNewContext(script, context)
+  loaded({ target: new Frame(false) })
+  expect(runInNewContext(page.ready, context)).toBe(false)
+  loaded({ target: new Frame(true) })
+  expect(runInNewContext(page.ready, context)).toBe(true)
+  expect(submissions).toBe(0)
+  runInNewContext('onSuccess("test")', context)
+  expect(submissions).toBe(1)
+  expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+    callbackFired: true,
+    tokenLength: 4,
+  })
+  runInNewContext('onExpired(); onError()', context)
+  expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+    tokenLength: 0,
+    errors: ['expired', 'widget-error'],
+  })
+})
+
 test('tests that standalone pages mirror their lifecycle state and wait for visible iframes', async () => {
   for (const page of FIXTURE_PAGES) {
     const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
     expect(html.match(/<form\b/g)).toHaveLength(1)
     expect(html).toContain('id="captcha-form"')
     expect(html).toContain('id="submit" type="submit"')
-    // The PerimeterX pages build their frame themselves and load no vendor script; the test
-    // below runs them in a real DOM's place.
-    if (page.id.startsWith('perimeterx-')) continue
+    // The bound and PerimeterX fixtures have their own lifecycle tests.
+    if (
+      page.id === 'recaptcha-v2-invisible-bind' ||
+      page.id.startsWith('perimeterx-')
+    )
+      continue
     let visible = false
     let observe = () => {}
     let resize = () => {}
@@ -491,3 +544,100 @@ test.each([
     expect(runInNewContext(page.ready, { document })).toBe(true)
   },
 )
+
+test('tests that invisible reCAPTCHA runs untouched and after its own submit shows the challenge', () => {
+  const [untouched, triggered] = [
+    'google-recaptcha-invisible-untouched-demo',
+    'google-recaptcha-invisible-triggered-demo',
+  ].map((id) => DEMO_PAGES.find((p) => p.id === id))
+  if (!untouched || !triggered) throw new Error('invisible demo missing')
+  expect(untouched.trigger).toBeUndefined()
+  expect(triggered.trigger?.click).toBe('#recaptcha-demo-submit')
+  for (const page of [untouched, triggered])
+    expect(page).toMatchObject({
+      expect: ['solved'],
+      expectType: 'recaptcha_v2',
+      mayNeedPaid: true,
+      site: { acceptedPattern: 'Verification Success' },
+    })
+  const visible = new Function(
+    'document',
+    'getComputedStyle',
+    `return ${triggered.trigger?.until}`,
+  )
+  const frame = (visibility: string, height: number) => ({
+    style: { visibility },
+    getBoundingClientRect: () => ({ height }),
+  })
+  const run = (frames: unknown[]) =>
+    visible(
+      { querySelectorAll: () => frames },
+      (f: { style: unknown }) => f.style,
+    )
+  expect(run([frame('hidden', 580)])).toBe(false)
+  expect(run([frame('visible', 580)])).toBe(true)
+})
+
+test('tests that the v3 page needs no submit and records the score its server returns', () => {
+  const page = DEMO_PAGES.find((p) => p.id === 'recaptcha-v3-scores-demo')
+  if (!page?.reading || !page.site) throw new Error('v3 demo missing')
+  expect(page.site.submitSelector).toBeUndefined()
+  expect(page).toMatchObject({
+    family: 'recaptcha_v3',
+    expectType: 'recaptcha_v3',
+    expect: ['already_clear', 'solved'],
+  })
+  const read = (text: string | null) =>
+    new Function('document', `return ${page.reading?.expression}`)({
+      querySelector: () => (text === null ? null : { textContent: text }),
+    })
+  expect(read('{\n  "success": true,\n  "score": 0.9\n}')).toBe('0.9')
+  expect(read(null)).toBeNull()
+})
+
+test('tests that a static Cloudflare wall is handed to a person, not refused as unsupported', () => {
+  expect(FIXTURE_PAGES.find((p) => p.id === 'cloudflare-wall')).toMatchObject({
+    expect: ['unsolved'],
+    expectType: 'cloudflare_challenge',
+    expectReason: ['challenge_not_passed'],
+  })
+})
+
+test('tests that the Cloudflare full page passes only when the site lets the browser through, and records leaving it', () => {
+  const page = DEMO_PAGES.find(
+    (p) => p.id === 'scrapingcourse-cloudflare-challenge',
+  )
+  if (!page?.reading) throw new Error('Cloudflare page missing')
+  expect(pageCheck(page)).toBe('solve')
+  expect(page).toMatchObject({
+    expect: ['solved', 'already_clear'],
+    expectType: 'cloudflare_challenge',
+    site: { acceptedPattern: 'You bypassed the Cloudflare challenge' },
+    mayNeedPaid: true,
+  })
+  const read = (title: string, innerText: string) =>
+    new Function('document', `return ${page.reading?.expression}`)({
+      title,
+      body: { innerText },
+    })
+  expect(read('Just a moment...', 'Verify you are human')).toBeNull()
+  expect(read('Cloudflare Challenge', 'You bypassed the challenge')).toBe(
+    'Cloudflare Challenge',
+  )
+})
+
+test('tests that the 2Captcha Enterprise demo waits for its hydrated widget and reads its own check', () => {
+  const page = DEMO_PAGES.find(
+    (p) => p.id === '2captcha-recaptcha-enterprise-demo',
+  )
+  expect(page).toMatchObject({
+    url: 'https://2captcha.com/demo/recaptcha-v2-enterprise',
+    expect: ['solved'],
+    expectType: 'recaptcha_v2',
+    site: {
+      submitSelector: 'main form button[type="submit"]',
+      acceptedPattern: '"success"\\s*:\\s*true',
+    },
+  })
+  expect(page?.ready).toContain('.g-recaptcha iframe')
+})

@@ -9,6 +9,7 @@ pub mod frames;
 pub mod input;
 pub mod navigation;
 pub mod observer;
+pub mod overlay;
 pub mod page_js;
 pub mod page_signals;
 pub mod pages;

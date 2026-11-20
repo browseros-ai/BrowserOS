@@ -20,14 +20,22 @@ pub struct AgentSettings {
     /// Whether successful MCP tool replies include a tip to close the task's tab group when finished.
     #[serde(rename = "taskCleanupTipEnabled")]
     pub task_cleanup_tip_enabled: bool,
+    /// Whether a page neo acts on shows that neo is working on it and holds the person's clicks and typing until they take over.
+    #[serde(rename = "workingOverlayEnabled")]
+    pub working_overlay_enabled: bool,
 }
 
 impl AgentSettings {
     /// User settings for the tools BrowserOS neo offers to agents.
-    pub fn new(human_help_enabled: bool, task_cleanup_tip_enabled: bool) -> AgentSettings {
+    pub fn new(
+        human_help_enabled: bool,
+        task_cleanup_tip_enabled: bool,
+        working_overlay_enabled: bool,
+    ) -> AgentSettings {
         AgentSettings {
             human_help_enabled,
             task_cleanup_tip_enabled,
+            working_overlay_enabled,
         }
     }
 }
@@ -63,6 +71,12 @@ pub struct UpdateAgentSettingsRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub task_cleanup_tip_enabled: Option<bool>,
+    /// Omit to preserve the saved working overlay preference.
+    #[serde(
+        rename = "workingOverlayEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub working_overlay_enabled: Option<bool>,
 }
 
 impl UpdateAgentSettingsRequest {
@@ -70,6 +84,7 @@ impl UpdateAgentSettingsRequest {
         UpdateAgentSettingsRequest {
             human_help_enabled: None,
             task_cleanup_tip_enabled: None,
+            working_overlay_enabled: None,
         }
     }
 }

@@ -148,6 +148,7 @@ impl TestRig {
             builtins::BuiltinDeps {
                 solver: None,
                 claims: Arc::default(),
+                settings: self.settings.clone(),
                 playwright: Arc::clone(&playwright),
             },
         )?;
