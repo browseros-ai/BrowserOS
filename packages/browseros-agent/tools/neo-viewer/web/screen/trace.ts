@@ -37,19 +37,14 @@ export interface TraceFact {
 
 /**
  * `9 spans`, `1 failed`, `1.23 s`, and `waiting for neo.run` while it has not arrived: what a
- * trace holds, shown joined by commas wherever a trace is summed up. Failures are counted as
- * Neo's metrics count them (decision D10): each once, where it happened, so a run that failed
- * because an operation did adds nothing, and a run that failed on its own (an exception, a
- * timeout) counts once.
+ * trace holds, shown joined by commas wherever a trace is summed up. "Failed" counts the
+ * operations whose `neo.op.outcome` is `error` (as `TraceSpan.error` does): a cancelled op is not
+ * a failure (decision D11), and the run's own status is the run's, not a failed span.
  */
 export function traceFacts(trace: RunTrace): TraceFact[] {
-  const opsFailed = trace.spans.filter(
+  const failed = trace.spans.filter(
     (span) => span.name === 'neo.op' && spanEnd(span) === 'failed',
   ).length
-  const runFailed = trace.spans.some(
-    (span) => span.name === 'neo.run' && spanEnd(span) === 'failed',
-  )
-  const failed = opsFailed + (runFailed && opsFailed === 0 ? 1 : 0)
   return [
     { text: plural(trace.spans.length, 'span'), tone: 'plain' },
     ...(failed > 0 ? [{ text: `${failed} failed`, tone: 'bad' } as const] : []),
@@ -63,8 +58,8 @@ export function traceFacts(trace: RunTrace): TraceFact[] {
 /**
  * How a span ended, from what Neo says on it: an op's `neo.op.outcome`, the run's
  * `neo.run.status`; never its OTel status. A cancelled op is not a failure (decision D11): Neo's
- * own `events.next` long-poll ends cancelled in every run. A run fails when it ended neither ok
- * nor cancelled (an error, a timeout).
+ * own `events.next` long-poll ends cancelled in every run. For the run it is the run's status (an
+ * error or a timeout reads `failed`), shown on its dot only: only operations count as failed.
  */
 export function spanEnd(span: TraceSpan): 'ok' | 'failed' | 'cancelled' {
   if (span.name === 'neo.run') {

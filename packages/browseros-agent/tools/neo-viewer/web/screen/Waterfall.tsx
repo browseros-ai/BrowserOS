@@ -10,8 +10,8 @@
  * run's own span is a light track the operations sit on. The script's own operations come first;
  * Neo's own work for the run (operations with no source line, `isInternalSpan`: per open tab
  * `page.frames` and `events.listen`, the `events.next` long-poll) folds under one quiet row, as the
- * run block folds it, and opens when clicked or when one of its spans is picked. What failed is
- * what Neo says failed (`spanEnd`), never the span's status: a cancelled op is not red.
+ * run block folds it, and opens when clicked or when one of its spans is picked. An operation is
+ * red when Neo says it failed (`neo.op.outcome`, never the span's status): a cancelled op is not.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -120,19 +120,19 @@ function SpanRow({
   const bar = spanBar(span, durationMs)
   const run = span.name === 'neo.run'
   const end = spanEnd(span)
-  // The run's own span is the track its operations sit on: light, and only tinted when picked.
-  const tone =
-    end === 'failed'
+  // The run's own span is the track its operations sit on: light, only tinted when picked, and
+  // never red (its status shows on its dot); an operation is red when Neo says it failed.
+  const tone = run
+    ? selected
+      ? 'bg-neo-soft'
+      : 'bg-control'
+    : end === 'failed'
       ? 'bg-bad'
-      : run
-        ? selected
-          ? 'bg-neo-soft'
-          : 'bg-control'
-        : selected
-          ? 'bg-neo'
-          : quiet
-            ? 'bg-ink-4'
-            : 'bg-ink-2'
+      : selected
+        ? 'bg-neo'
+        : quiet
+          ? 'bg-ink-4'
+          : 'bg-ink-2'
   return (
     <button
       type="button"

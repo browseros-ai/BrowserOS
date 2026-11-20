@@ -179,7 +179,7 @@ describe("Neo's own work in a trace (e2e F4, decision D11)", () => {
     expect(isInternalSpan(byId('span-5'))).toBe(false)
   })
 
-  it('counts each failure once, as the metrics do: a cancelled op is none', () => {
+  it('counts as failed only the operations Neo says failed: not a cancelled op, not the run', () => {
     const facts = (shape: typeof withInternal) =>
       traceFacts(shape).map((fact) => fact.text)
     expect(facts(withInternal)).toEqual(['15 spans', '1 failed', '1.23 s'])
@@ -199,9 +199,16 @@ describe("Neo's own work in a trace (e2e F4, decision D11)", () => {
             : span,
       ),
     })
-    // The run failed because its click did: one failure.
-    expect(facts(runStatus('error', 'error'))[1]).toBe('1 failed')
-    // The run failed on its own (a timeout, its ops cancelled): one failure, at the run.
-    expect(facts(runStatus('timeout', 'cancelled'))[1]).toBe('1 failed')
+    // The run failed because its click did: the click is the failure.
+    expect(facts(runStatus('error', 'error'))).toEqual([
+      '15 spans',
+      '1 failed',
+      '1.23 s',
+    ])
+    // A run that timed out with its ops cancelled has no failed operation; its row says how it ended.
+    expect(facts(runStatus('timeout', 'cancelled'))).toEqual([
+      '15 spans',
+      '1.23 s',
+    ])
   })
 })

@@ -230,3 +230,36 @@ describe("the waterfall with Neo's own work (e2e F4)", () => {
     await dom.restore()
   })
 })
+
+describe("the run's own row", () => {
+  it('shows how the run ended on its dot, and keeps its bar the light track', () => {
+    const trace = runTrace('neo-run')
+    const failedRun = {
+      ...trace,
+      spans: trace.spans.map((span) =>
+        span.name === 'neo.run'
+          ? {
+              ...span,
+              attributes: { ...span.attributes, 'neo.run.status': 'error' },
+            }
+          : span,
+      ),
+    }
+    const markup = renderToStaticMarkup(
+      <Waterfall
+        trace={failedRun}
+        selectedSpanId={null}
+        onSelectSpan={() => {}}
+      />,
+    )
+    const row = /<button[^>]*data-span="span-run"[^>]*>.*?<\/button>/.exec(
+      markup,
+    )?.[0]
+    expect(row).toContain('aria-label="neo.run, 1.23 s, failed"')
+    expect(row).toContain(
+      'title="failed" class="block size-1.5 rounded-full bg-bad"',
+    )
+    expect(row).toContain('block bg-control')
+    expect(row).not.toContain('block bg-bad"')
+  })
+})
