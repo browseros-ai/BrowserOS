@@ -121,7 +121,18 @@ The page at `/` (the approved design, "Viewer C v2"):
 
 - **Top bar.** Whether the container is running and its image tag (read-only; with `--upstream`
   it says the image is managed outside the viewer and where MCP goes), the MCP URL with **Copy**,
-  **Clear**, **Export** (below), and **Take over** (below).
+  **Clear**, **Export** (below), and **Take over** (below). Once Neo's telemetry arrives (see
+  Neo's telemetry), Neo's health follows the container line: runs in flight, the run and
+  operation error rates and renderer crashes since the last Clear, tabs open, and how fresh
+  that is (**live**, `7 s ago`, or **no metrics** once no source has answered for 10 s). An image
+  older than telemetry shows none of it, nor anything below that comes from telemetry.
+- **Neo health.** Clicking the health opens Neo's metrics in place of the runs (the top bar,
+  the strip and the sidebar keep streaming; **← Runs** or Escape go back to the runs as they
+  were): runs by status, each operation's calls, failures, p50 and p95 with its duration
+  histogram (one column per bucket of Neo's own bounds, so reading down shows which op is slow),
+  errors by owner and code, tabs open and opened by origin and closed by reason with their
+  lifetimes, renderer crashes, and every metric family in Prometheus' text form, folded. These
+  counts are Neo's own since it started.
 - **Where the time went.** The wall clock since the last Clear, from the first call to the last
   reply (to now while a run is running): each run sits where it happened, its time in Neo in blue
   (red if it failed, amber while running) after a grey sliver for the time the viewer held the call.
@@ -152,7 +163,10 @@ The page at `/` (the approved design, "Viewer C v2"):
   timeout, the name the script used when it differs, a long string by its start), call log and
   outcome open under it, and what it returned shows on the right. Under the code, **Model read**:
   the reply in one line, its size, and **Open full**; clicking **Model read** shows the reply on
-  the right again. A run still running, or one without Neo's record, shows its code alone.
+  the right again. A run still running, or one without Neo's record, shows its code alone. With
+  no host API (`--upstream`) the record is folded from Neo's spans: the same rows, and one line
+  saying spans carry no arguments, call logs or results. Once Neo's spans reach the viewer, a
+  **Trace** row follows: the run's trace id, its spans, what failed and how long it took.
 - **The right panel.** The sidebar's lower half shows the selection. A selected call shows what
   it returned, titled where it sits (`page.ariaSnapshot · run 8 · line 7 · call 2 of 3`), with
   its size. **Formatted** is what the script's `await` got wherever that can be recovered: a
@@ -163,10 +177,17 @@ The page at `/` (the approved design, "Viewer C v2"):
   panel says which. **Raw** is Neo's record of the result, as JSON. Otherwise the panel is
   **What the model read**: the selected run's whole reply, exactly as the agent got it,
   formatted (keys aligned, a snapshot line by line) or raw. Until you click a row it follows the
-  newest run. Drag the handle between the runs and the sidebar to resize it.
+  newest run. Drag the handle between the runs and the sidebar to resize it. **Trace** shows the
+  run's OpenTelemetry waterfall there: `neo.run`, its `neo.op` spans under it (one that ran inside
+  another a step further in), each a bar on the run's time with its duration, red when it
+  failed; and the picked span's attributes exactly as Neo emitted them, with whether any span
+  carries site detail (`url.*`), which is how redaction is checked. A span and its method row are
+  one operation (`neo.op.id`): picking a span opens its call in the block, and a call picked
+  while the trace shows marks its span.
 - **Open full.** The selection in a large pop-up with line numbers, find (Enter and Shift+Enter
   step through the matches), copy, and previous / next: the run's other calls for a call, the
-  other runs' outputs for a reply. Escape closes it.
+  other runs' outputs for a reply. Escape closes it. A trace's is the waterfall wide, the span's
+  attributes and Neo's resource beside it, and previous / next span (or ↑ ↓).
 - **The live screen.** The sidebar's upper half: Neo's screen, live. **Follow agent** watches the
   tab the agent's latest run used and moves with it; **Control** lets you click and type (the agent
   is not held). Docked, it is as wide as the sidebar (drag the handle to make it bigger) and keeps

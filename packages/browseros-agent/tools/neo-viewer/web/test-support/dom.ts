@@ -8,7 +8,7 @@
 import { parseHTML } from 'linkedom'
 import { act, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
-import type { RunDetail } from '../../shared/api'
+import type { MetricsView, RunDetail, RunTrace } from '../../shared/api'
 
 const GLOBALS = [
   'window',
@@ -33,9 +33,18 @@ export interface TestDom {
   restore(): Promise<void>
 }
 
-/** Installs the DOM; `/api/runs/:id` answers from `details`. */
+/** What the fake API answers beyond `/api/runs/:id`: a run's trace, and the metrics. */
+export interface TelemetryRoutes {
+  /** `/api/runs/:id/trace`, by run id; a run not here answers 404. */
+  traces?: Map<string, RunTrace | null>
+  /** `/api/metrics`, read at each request. */
+  metrics?: () => MetricsView | null
+}
+
+/** Installs the DOM; `/api/runs/:id` answers from `details`, the telemetry routes from `routes`. */
 export async function installDom(
   details: Map<string, RunDetail> = new Map(),
+  routes: TelemetryRoutes = {},
 ): Promise<TestDom> {
   const saved = new Map(
     GLOBALS.map((name) => [
@@ -66,6 +75,16 @@ export async function installDom(
   const fetch = async (input: string | URL) => {
     fetched.push(String(input))
     const path = String(input).split('?')[0] ?? ''
+    if (path === '/api/metrics')
+      return Response.json({ metrics: routes.metrics?.() ?? null })
+    const traceOf = /^\/api\/runs\/([^/]+)\/trace$/.exec(path)?.[1]
+    if (traceOf !== undefined) {
+      const traces = routes.traces ?? new Map()
+      const id = decodeURIComponent(traceOf)
+      return traces.has(id)
+        ? Response.json({ trace: traces.get(id) ?? null })
+        : Response.json({ error: 'no such run' }, { status: 404 })
+    }
     const id = decodeURIComponent(path.split('/').at(-1) ?? '')
     const run = details.get(id)
     return run

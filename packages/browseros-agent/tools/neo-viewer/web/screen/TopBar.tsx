@@ -6,13 +6,19 @@
  * over, which hands the agent's tab to you (PR C2's `TakeOverButton`, on the screen's controller).
  * The container line is read-only (owner, 2026-11-11: the command that starts the viewer is the
  * control): the image tag and whether it is up when the viewer started it; otherwise that the
- * image is managed outside the viewer, and where MCP is forwarded.
+ * image is managed outside the viewer, and where MCP is forwarded. After it, Neo's health
+ * (`HealthLine`) once Neo's telemetry arrives, which opens the Health view; nothing without it.
  */
 
 import { useEffect, useState } from 'react'
-import type { ExportResponse, ViewerInfo } from '../../shared/api'
+import type {
+  ExportResponse,
+  TelemetryHealth,
+  ViewerInfo,
+} from '../../shared/api'
 import { TakeOverButton } from '../live-screen/LiveScreen'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
+import { HealthLine } from './HealthLine'
 
 export function TopBar({
   info,
@@ -20,6 +26,9 @@ export function TopBar({
   onExport,
   exporting,
   live,
+  health = null,
+  healthOpen = false,
+  onHealth,
 }: {
   info: ViewerInfo | null
   onClear: () => void
@@ -27,6 +36,11 @@ export function TopBar({
   /** An export is being written: the button waits. */
   exporting: boolean
   live: LiveScreenController
+  /** Neo's health; null (no telemetry) shows no health line at all. */
+  health?: TelemetryHealth | null
+  /** The Health view is open. */
+  healthOpen?: boolean
+  onHealth?: () => void
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-line border-b bg-white px-5">
@@ -52,6 +66,9 @@ export function TopBar({
         </h1>
       </div>
       <ContainerLine info={info} />
+      {health && onHealth && (
+        <HealthLine health={health} open={healthOpen} onToggle={onHealth} />
+      )}
       <div className="flex-1" />
       <McpUrl url={info?.mcpUrl ?? null} />
       <div className="flex h-7 shrink-0 items-center gap-2 border-line border-l pl-3">

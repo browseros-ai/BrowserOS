@@ -21,6 +21,10 @@
 //!               opener is noted at its announcement, before any listing
 //!  NeoTab ── Neo's one blank tab (TabOrigin::Neo), kept open on every watch start and after
 //!            each close of it, so no other close ends the browser (the sidecar only)
+//!  TabLife ── tab telemetry's ledger, owned by TabRegistry: every listed tab by birth origin
+//!             (the neo_tabs_open gauge), each open and close once with one reason, each
+//!             renderer crash; fed only by tab_watch, told of Neo's own opens and closes first
+//!             by intents (the newPage and page.close wrappers, the janitor, NeoTab)
 //! ```
 //!
 //! Views are unbound. On BrowserOS 0.51.1.3 and later a bound capture costs 4 to 6 CDP round
@@ -34,6 +38,7 @@ mod browser_link;
 mod neo_tab;
 mod page_ref;
 mod run_scope;
+mod tab_life;
 mod tab_registry;
 mod tab_watch;
 mod task_book;
@@ -47,6 +52,7 @@ pub(crate) use neo_tab::Adopt;
 pub(crate) use neo_tab::NeoTab;
 pub(crate) use page_ref::PageRef;
 pub(crate) use run_scope::{RunScope, Sight, TabsScope};
+pub(crate) use tab_life::{IntentReason, OpenFor, OpenIntent};
 pub(crate) use tab_registry::{Seen, TabRegistry, TaskPage};
 pub(crate) use tab_watch::{TabEvent, TabListing, Watched};
 pub(crate) use task_book::{Holder, TaskError, TaskOrigin, TaskRecord};

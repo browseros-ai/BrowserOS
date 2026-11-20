@@ -5,6 +5,7 @@
 //!  prelude ─ __neo.invoke(op, json) ─ Dispatcher::submit ─ OpInput: the brand at `page` or
 //!    `target.page` ─ the door resolves it to one tab and runs its rules on that tab
 //!      ─ PlaywrightOp::call: the resolved page written back into the input
+//!          ─ a close or open intent for tab telemetry's ledger, before the browser is asked
 //!          ─ Playwright::invoke(OpCtxEnv, op, json), raced with the run's stop
 //!              ├─ recheck, mark_sent, note ─▶ OpCtx
 //!              └─ PlaywrightError ─ leaf_error ─▶ LeafError: owner, code, timeout, answer
@@ -18,7 +19,8 @@
 //! crate never sees the call.
 
 use std::future::{self, Future};
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
@@ -34,7 +36,7 @@ use serde_json::{Map, Value, json};
 use super::PlaywrightFacade;
 use super::event_release::EventRelease;
 use super::op_marks::{self, Hold, OpMarks};
-use crate::browser::{NeoTab, PageRef, Sight};
+use crate::browser::{IntentReason, NeoTab, OpenFor, OpenIntent, PageRef, Sight};
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
     RegistryBuilder, RegistryError, RunCtx,
@@ -207,7 +209,7 @@ impl Method for PlaywrightOp {
             && matches!(self.op.spec().target, OpTarget::Field(_))
             && self.pages != PageEffect::Closes;
         let playwright = self.facade.get().await;
-        let env = OpCtxEnv {
+        let mut env = OpCtxEnv {
             settings: Some(&self.settings),
             blank_tab: self.facade.blank_tab().cloned(),
             ..OpCtxEnv::new(
@@ -259,9 +261,28 @@ impl Method for PlaywrightOp {
         } else {
             None
         };
+        // Tab telemetry's intents, taken before the browser is asked: the tab watch may list the
+        // new tab before the engine names it (which claims it, so it is born `agent`), and may
+        // confirm a close before this op answers (so it closes as `script`).
+        if self.pages == PageEffect::Opens {
+            env.opening = Mutex::new(Some(op.tabs().life().expect_open(OpenFor::Agent)));
+        }
+        let closing = page.filter(|_| self.closes_tab()).map(|closing| {
+            op.tabs()
+                .life()
+                .intend_close(closing.tab, IntentReason::Script)
+        });
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await;
+        // A close never sent leaves the tab open, so its later close is whoever's makes it.
+        // Once sent, the intent stays even if the op then failed or stopped: a close that lands
+        // late is still this script's.
+        if let Some(closing) = closing
+            && !env.sent()
+        {
+            closing.withdraw();
+        }
         // Read once the op ended, failed or not: by then the pump replies that carry the events
         // before it are counted (`Playwright::events_before_reply`).
         op.answer_after_pump(env.run_state().pump_replies());
@@ -662,6 +683,12 @@ pub(super) struct OpCtxEnv<'a, M> {
     run_state: Arc<RunState>,
     /// Neo's blank tab, which the engine keeps out of the op's listings and events.
     blank_tab: Option<Arc<NeoTab>>,
+    /// `context.newPage`'s open intent, claimed when the engine names the tab it opened
+    /// (`OpEnv::opened_tab`); dropped unclaimed with the env when the open named none.
+    opening: Mutex<Option<OpenIntent>>,
+    /// The engine marked the op sent (`OpEnv::mark_sent`): its write may have reached the
+    /// browser, so a close intent stays.
+    sent: AtomicBool,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
@@ -680,7 +707,14 @@ impl<'a, M> OpCtxEnv<'a, M> {
             run_state: op.run().slot::<RunState>(),
             blank_tab: None,
             settings: None,
+            opening: Mutex::new(None),
+            sent: AtomicBool::new(false),
         }
+    }
+
+    /// Whether the engine marked the op sent.
+    fn sent(&self) -> bool {
+        self.sent.load(Ordering::Relaxed)
     }
 }
 
@@ -717,9 +751,19 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         })
     }
 
-    /// The run's own from the moment the browser names it, while `newPage` still readies it.
+    /// The run's own from the moment the browser names it, while `newPage` still readies it,
+    /// and the agent's for tab telemetry, whether or not the op then readies it.
     fn opened_tab(&self, tab: TabId) {
         self.op.run().named(self.op.id(), tab);
+        // Taken out first: the claim reports to telemetry, never under the env's lock.
+        let opening = self
+            .opening
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(opening) = opening {
+            opening.claim(tab);
+        }
     }
 
     /// Noted again as the engine judges the popup: the tab watch notes it at the browser's
@@ -745,6 +789,7 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
     }
 
     fn mark_sent(&self) {
+        self.sent.store(true, Ordering::Relaxed);
         self.op.mark_sent();
     }
 
