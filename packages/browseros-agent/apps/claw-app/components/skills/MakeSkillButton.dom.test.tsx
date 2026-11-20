@@ -23,7 +23,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useParams } from 'react-router'
+import type { ToastInput } from '@/components/motion/animated-toast-stack'
+import { connectToastHost } from '@/modules/toast/toast'
 
 const api = await import('@/modules/api/client')
 const posthog = await import('@/modules/analytics/posthog')
@@ -48,6 +50,7 @@ let features: string[]
 let draftReply: SkillDraftStatus
 let draftCalls: number
 let created: SkillCreate[]
+let deleted: string[]
 
 const ready: SkillDraftStatus = {
   status: 'ready',
@@ -113,6 +116,9 @@ mock.module('@/modules/api/client', () => ({
         createdAt: 0,
         updatedAt: 0,
       }
+    },
+    deleteSkill: async ({ name }: { name: string }) => {
+      deleted.push(name)
     },
     listSkills: async () => ({ items: [] }),
     listSessions: async () => ({ items: [] }),
@@ -203,6 +209,7 @@ beforeEach(async () => {
   draftReply = ready
   draftCalls = 0
   created = []
+  deleted = []
   captured = []
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -255,12 +262,18 @@ async function mount(summary: SessionSummary) {
               element={<MakeSkillButton task={summary} surface="page" />}
             />
             <Route path="/skills" element={<p>Skills page</p>} />
+            <Route path="/skills/:name" element={<SkillPage />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
   })
   await settle()
+}
+
+function SkillPage() {
+  const { name } = useParams()
+  return <p>Skill page {name}</p>
 }
 
 function text(): string {
@@ -344,7 +357,7 @@ describe('making a skill from a task', () => {
       'Set the price filter to a maximum of {budget}.',
     ])
     expect(created[0]?.inputs?.map((input) => input.name)).toEqual(['budget'])
-    expect(text()).toContain('Skills page')
+    expect(text()).toContain('Skill page neo-flipkart-phones-under-budget')
 
     const events = captured.filter(
       ({ event }) => event !== 'skill_from_task_cta_shown',
@@ -374,6 +387,43 @@ describe('making a skill from a task', () => {
         },
       },
     ])
+  })
+
+  it('tests that undo after saving deletes the skill and goes back to the list', async () => {
+    const shown: ToastInput[] = []
+    const disconnect = connectToastHost({
+      show: (input) => {
+        shown.push(input)
+        return String(shown.length)
+      },
+      update: () => {},
+    })
+    // Connecting shows toasts earlier tests queued with no host; only this test's count.
+    shown.length = 0
+    try {
+      await mount(task())
+      await click(button('Make it a skill'))
+      await settle()
+      const form = container.querySelector('[role="dialog"] form')
+      await act(async () => {
+        form?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        )
+      })
+      await settle()
+      expect(text()).toContain('Skill page neo-flipkart-phones-under-budget')
+
+      const saved = shown.find(({ title }) => title === 'Skill saved.')
+      if (!saved?.action) throw new Error('no undo on the saved toast')
+      const undo = saved.action
+      await act(async () => undo.onClick({ ...saved, id: '1' }))
+      await settle()
+
+      expect(deleted).toEqual(['neo-flipkart-phones-under-budget'])
+      expect(text()).toContain('Skills page')
+    } finally {
+      disconnect()
+    }
   })
 
   it('tests that the button counts as shown once per place, and closing a draft is counted', async () => {

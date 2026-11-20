@@ -131,13 +131,15 @@ export function useMakeSkill({
     if (state === 'idle' || state === 'error') requestDraft()
   }
 
+  // Saving opens the new skill's page, so this button is gone by the time Undo is clicked and
+  // callbacks passed to `mutate` would never run; the promise still settles.
   const undo = (name: string) => {
-    remove.mutate(
-      { name },
-      {
-        onSuccess: refreshTask,
-        onError: (error) => toastApiError('Couldn’t undo that', error),
+    remove.mutateAsync({ name }).then(
+      () => {
+        refreshTask()
+        navigate('/skills', { replace: true })
       },
+      (error) => toastApiError('Couldn’t undo that', error),
     )
   }
 
@@ -159,7 +161,7 @@ export function useMakeSkill({
           status: 'success',
           action: { label: 'Undo', onClick: () => undo(skill.name) },
         })
-        navigate('/skills', { state: { triedSkill: skill.name } })
+        navigate(`/skills/${encodeURIComponent(skill.name)}`)
       },
       onError: (error) => toastApiError('Couldn’t save this skill', error),
     })
