@@ -502,7 +502,7 @@ mod tests {
         const SECRET: &str = "s3cr3tCollectorToken";
         let credential = format!("authorization=Bearer%20{SECRET}");
         let bad_headers = format!("authorization Bearer {SECRET}");
-        let cases: [Case<'_>; 12] = [
+        let cases: [Case<'_>; 18] = [
             ("OTEL_EXPORTER_OTLP_ENDPOINT", "not a url", &[]),
             (
                 "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -515,8 +515,22 @@ mod tests {
                 &[],
             ),
             ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc", &[]),
+            ("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc", &[]),
+            ("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "http/xml", &[]),
             ("OTEL_EXPORTER_OTLP_HEADERS", bad_headers.as_str(), &[]),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+                bad_headers.as_str(),
+                &[],
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+                bad_headers.as_str(),
+                &[],
+            ),
             ("OTEL_EXPORTER_OTLP_TIMEOUT", "soon", &[]),
+            ("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "0", &[]),
+            ("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT", "1.5", &[]),
             ("OTEL_RESOURCE_ATTRIBUTES", "team", &[]),
             ("OTEL_TRACES_SAMPLER", "sometimes", &[]),
             (
