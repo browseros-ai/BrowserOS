@@ -1,7 +1,11 @@
 /**
  * Builds and starts the viewer: one Bun server on 127.0.0.1 that serves the agent's MCP
  * endpoint (`/mcp`, proxied to Neo), the JSON API (`/api/*`), the live screen's relay to Neo's
- * display (`/api/live/*`) and the web page (`/`).
+ * display (`/api/live/*`), Neo's OpenTelemetry push (`/otlp/*`) and the web page (`/`).
+ *
+ * Where each run's operations come from is decided here, once: with a host API, Neo's
+ * `/v1/runs` records; without one, the records the telemetry module folds from Neo's spans. The
+ * same joiner attaches either, so the page never sees two op lists for a run.
  */
 
 import { join } from 'node:path'
@@ -14,10 +18,11 @@ import { type LiveHost, viewerHost } from './live-screen/live-host'
 import { liveScreen } from './live-screen/live-routes'
 import { socketSessions } from './live-screen/socket-session'
 import { RunStore } from './log/run-store'
-import { containerUp, runCommand } from './neo-container'
-import { joinNeoRuns } from './neo-runs'
+import { containerOtlpEndpoint, containerUp, runCommand } from './neo-container'
+import { hostApiRecords, joinNeoRuns } from './neo-runs'
 import { buildPage, type PageFile } from './page'
 import { handleMcp, type McpProxyDeps } from './proxy/mcp-proxy'
+import { startTelemetry, type TelemetryDeps } from './telemetry'
 
 /** The longest `stop` waits for open connections to close. */
 const STOP_WAIT_MS = 2_000
@@ -32,6 +37,8 @@ export interface ViewerSeams {
   liveHost?: LiveHost
   exportRoot?: string
   neoRecordWaitMs?: number
+  /** The telemetry module's timings (scrape interval, read waits). */
+  telemetry?: Omit<TelemetryDeps, 'hostApi' | 'now'>
 }
 
 export interface RunningViewer {
@@ -58,14 +65,27 @@ export async function startViewer(
     clients: new Map(),
     now,
   }
-  // Neo's record of each run, read through the host API once its reply is in.
-  const joiner = joinNeoRuns(store)
+  const telemetry = startTelemetry({
+    ...seams.telemetry,
+    hostApi: config.hostApi != null,
+    now,
+  })
+  // Neo's record of each run once its reply is in: one source for the life of the process.
+  const joiner = joinNeoRuns(
+    store,
+    config.hostApi ? hostApiRecords() : telemetry.records,
+  )
+  // Health counts from the last Clear, as the run list does.
+  store.subscribe((event) => {
+    if (event.type === 'clear') telemetry.rebase()
+  })
   const recordWaitMs = seams.neoRecordWaitMs ?? NEO_RECORD_WAIT_MS
   const info: Omit<ViewerInfo, 'container'> = {
     mcpUrl: '',
     upstreamUrl: config.upstream.href,
     dataDir: config.dataDir,
     startedAt: new Date(now()).toISOString(),
+    otlp: { endpoint: '', containerEndpoint: '' },
   }
   const container = config.container ?? null
   const currentInfo = async (): Promise<ViewerInfo> => ({
@@ -98,6 +118,7 @@ export async function startViewer(
         runs,
         toolsList,
         rawLog: await rawLog,
+        metrics: telemetry.exportSnapshot(),
       },
       {
         now: now(),
@@ -123,8 +144,15 @@ export async function startViewer(
     idleTimeout: 0,
     routes: {
       ...pageRoutes(page),
-      ...apiRouteTable(store, currentInfo, exportRuns, awaitNeoRecord),
+      ...apiRouteTable(
+        store,
+        currentInfo,
+        exportRuns,
+        awaitNeoRecord,
+        telemetry,
+      ),
       ...live.routes,
+      ...telemetry.receiverRoutes,
     },
     // Each upgraded socket carries its own session (the live screen's display relay).
     websocket: socketSessions,
@@ -139,6 +167,10 @@ export async function startViewer(
   const port = server.port ?? config.port
   const url = `http://127.0.0.1:${port}`
   info.mcpUrl = `${url}/mcp`
+  info.otlp = {
+    endpoint: `${url}/otlp`,
+    containerEndpoint: containerOtlpEndpoint(port),
+  }
   return {
     url,
     mcpUrl: info.mcpUrl,
@@ -149,6 +181,8 @@ export async function startViewer(
       // WebSocket itself, as the display relay does; a local Bun can be older, and Ctrl+C
       // must still exit.
       await Promise.race([server.stop(true), Bun.sleep(STOP_WAIT_MS)])
+      // Wakes span reads with what they have, so the joiner's drain below is quick.
+      await telemetry.stop()
       await joiner.stop()
       await store.flush()
     },

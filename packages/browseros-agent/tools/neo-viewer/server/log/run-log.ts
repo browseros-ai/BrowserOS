@@ -15,6 +15,7 @@ import type {
   NeoRunRecord,
   RunDetail,
   RunStatus,
+  RunTraceContext,
   TextSize,
 } from '../../shared/api'
 
@@ -28,6 +29,8 @@ export interface StoredRunStart {
   timeoutMs: number | null
   client: ClientInfo | null
   agentTaskId: string | null
+  /** The W3C trace context the run went to Neo with; absent in logs written before telemetry. */
+  trace?: RunTraceContext | null
   sentAt: string
   proxyMs: number
   request: RunDetail['request']

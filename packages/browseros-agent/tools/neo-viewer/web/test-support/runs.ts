@@ -58,6 +58,7 @@ export function runSummary(
     neoEffects: null,
     neoDurationMs: null,
     operationCount: null,
+    trace: null,
   }
 }
 

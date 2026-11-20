@@ -1255,6 +1255,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/metrics:
+    get:
+      operationId: getMetrics
+      summary: Neo's metrics now, as Prometheus text, for a scraper.
+      description: |
+        Prometheus text exposition format 0.0.4: `# HELP` and `# TYPE` lines, a counter's name
+        ending in `_total`, and a histogram as `_bucket{le="…"}` (`+Inf` included), `_sum` and
+        `_count`. Neo renders it at each request from the same meter provider it pushes OTLP
+        from when push is on, so a scrape and a push agree. It is served whenever this listener
+        is, with no setting and no parameter, and never on the agent's MCP port. A family
+        appears once Neo has a value for it, so before anything is recorded the body can be
+        empty, which is still a valid exposition. A server older than this route answers 404.
+
+        The families, with their labels: `neo_runs_total` (`status`, `error_owner`),
+        `neo_runs_in_flight`, `neo_run_duration_seconds` (`status`), `neo_operations_total`
+        (`op`, `status`, `error_owner`), `neo_operation_duration_seconds` (`op`, `status`),
+        `neo_errors_total` (`error_owner`, `error_code`), `neo_tabs_open` (`origin`),
+        `neo_tabs_opened_total` (`origin`), `neo_tabs_closed_total` (`origin`, `close_reason`),
+        `neo_tab_lifetime_seconds` (`origin`, `close_reason`) and `neo_renderer_crashes_total`.
+        Durations are in seconds. Every label value comes from a closed set: `status` is how a
+        run ended (`Run.status`: `ok`, `error`, `cancelled` or `timeout`) or how an operation
+        did (`Operation.outcome`), `error_owner` an `OperationError.owner` or `none`,
+        `error_code` an `OperationError.code`, `op` a method Neo serves or `unknown`, `origin`
+        `agent`, `found` or `neo`, and `close_reason` `script`, `janitor`, `user`, `crash` or
+        `shutdown`. No URL, title, tab, run or task id is ever a label. Neo chooses the bucket
+        boundaries: read them from the data. Parse the text with a parser that also accepts
+        OpenMetrics extras (`# EOF`, `# UNIT`, exemplars).
+      responses:
+        '200':
+          description: The metrics as of this request.
+          content:
+            text/plain; version=0.0.4; charset=utf-8:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 components:
   securitySchemes:
     bearer:

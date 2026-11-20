@@ -10,6 +10,9 @@
  *   runs/NNN.json        that run complete: request and reply as they crossed, Neo's record
  *   runs/NNN.reply.txt   the text the model read, alone (`.reply.json` when it parses)
  *   log.jsonl            the raw log, for exactness
+ *   metrics/metrics.prom Neo's last `GET /v1/metrics` answer, as served (when the viewer scraped one)
+ *   metrics/summary.json Neo's metrics read out: health since the last Clear, the Health view's
+ *                        tables, the last ten minutes (when any metrics arrived)
  * ```
  *
  * The folder is outside the instance's state folder (an overlap is refused), so an export
@@ -41,6 +44,7 @@ import {
 } from '../../shared/run-markdown'
 import { neoMs, runTotals } from '../../web/screen/measures'
 import { replyParts } from '../../web/screen/reply'
+import type { TelemetryExport } from '../telemetry'
 import { exportReadme, REPLY_INLINE_CHARS } from './export-readme'
 
 /** Where exports go: under the system temp folder, one folder per instance. */
@@ -57,6 +61,14 @@ export interface ExportSource {
   toolsList: unknown
   /** The raw log, taken with the runs (`RunStore.snapshot`). */
   rawLog: string
+  /** Neo's metrics at the export; null when none ever arrived (an older image, no telemetry). */
+  metrics: TelemetryExport | null
+}
+
+/** The metrics files, relative to the export folder; each null when not written. */
+export interface MetricsFiles {
+  prometheus: string | null
+  summary: string | null
 }
 
 /** A run's files, relative to the export folder. */
@@ -90,16 +102,55 @@ export async function writeExport(
   }
   await writeFile(join(dir, 'log.jsonl'), source.rawLog)
   files.push('log.jsonl')
-  const session = sessionJson(source, runFiles, now, dir, width)
+  const metricsFiles = await writeMetrics(dir, source.metrics)
+  for (const file of [metricsFiles.prometheus, metricsFiles.summary])
+    if (file) files.push(file)
+  const session = sessionJson(source, runFiles, now, dir, width, metricsFiles)
   await writeFile(
     join(dir, 'session.json'),
     `${JSON.stringify(session, null, 2)}\n`,
   )
   await writeFile(
     join(dir, 'README.md'),
-    exportReadme({ source, runFiles, now, dir, width }),
+    exportReadme({ source, runFiles, now, dir, width, metricsFiles }),
   )
   return { dir, files, runs: source.runs.length }
+}
+
+/**
+ * `metrics/`: Neo's last scrape exactly as it answered, and the metrics read out as data. Nothing
+ * when no metric ever arrived, so an export of an older image has no empty folder.
+ */
+async function writeMetrics(
+  dir: string,
+  metrics: TelemetryExport | null,
+): Promise<MetricsFiles> {
+  const files: MetricsFiles = { prometheus: null, summary: null }
+  if (!metrics) return files
+  await mkdir(join(dir, 'metrics'), { mode: 0o700 })
+  if (metrics.prometheus !== null) {
+    files.prometheus = 'metrics/metrics.prom'
+    await writeFile(join(dir, files.prometheus), metrics.prometheus)
+  }
+  files.summary = 'metrics/summary.json'
+  const { families, ...tables } = metrics.metrics
+  await writeFile(
+    join(dir, files.summary),
+    `${JSON.stringify(
+      {
+        format: 1,
+        source: metrics.metrics.source,
+        observedAt: new Date(metrics.metrics.observedAt).toISOString(),
+        health: metrics.health,
+        metrics: tables,
+        history: metrics.history,
+        families,
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  return files
 }
 
 async function writeRun(
@@ -158,6 +209,7 @@ function sessionJson(
   now: number,
   dir: string,
   width: number,
+  metricsFiles: MetricsFiles,
 ) {
   const totals = runTotals(source.runs)
   const { info } = source
@@ -195,6 +247,11 @@ function sessionJson(
     toolsList: source.log.toolsList && {
       size: source.log.toolsList,
       reply: source.toolsList,
+    },
+    metrics: source.metrics && {
+      source: source.metrics.metrics.source,
+      observedAt: new Date(source.metrics.metrics.observedAt).toISOString(),
+      files: metricsFiles,
     },
     runs: source.runs.map((run) => {
       const { code, replyPreview, ...summary } = run
