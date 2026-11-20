@@ -10,13 +10,19 @@
  *
  * The methods come from Neo's record of the run (`RunDetail.neo`), read once the reply is in. A
  * run still running, or one whose record could not be read (no host API, image stopped), shows
- * its code alone with a note saying why.
+ * its code alone with a note saying why. With no host API the record is folded from Neo's spans
+ * (`source: 'spans'`): the same rows, and one line saying spans carry no arguments or results.
+ *
+ * Under "Model read", once Neo's spans have reached the viewer at all (`traceRev`), "Trace": the
+ * run's OpenTelemetry trace in one line, which shows its waterfall in the right panel. The row is
+ * there from the first span on, for every run, so it never appears under a run as it is read.
  */
 
 import { useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
 import type { FormattedCode } from '../../shared/code-format'
 import { RUN_VALUES_OFF_NOTICE } from '../../shared/trace-values'
+import { traceMayGrow, useRunTrace } from '../use-telemetry'
 import {
   MethodDetail,
   MethodHeader,
@@ -36,7 +42,13 @@ import {
 } from './operations'
 import { noReplyReason, replyFacts, valueChip } from './reply'
 import { codeLines, type Line } from './text-lines'
+import { shortTraceId } from './trace'
 import { plural } from './units'
+import { TraceFacts } from './Waterfall'
+
+/** Said once at the top of a block whose record came from Neo's spans. */
+export const SPANS_NOTICE =
+  "From Neo's spans (no host API): each call's name, line, time and outcome; spans carry no arguments, call logs or results."
 
 /**
  * A line that called more methods than this (a loop) shows the first `SHOWN_PER_LINE` and folds
@@ -53,6 +65,11 @@ export function RunBlock({
   selectedOperationId,
   onSelect,
   onOpenFull,
+  onShowReply,
+  traceRev = null,
+  traceShown = false,
+  onSelectTrace,
+  onOpenFullTrace,
 }: {
   run: RunSummary
   /** The script laid out by `shared/code-format.ts`; sites map to its lines. */
@@ -64,6 +81,14 @@ export function RunBlock({
   /** Select a call, or null for the run's reply. */
   onSelect: (selection: OperationSelection | null) => void
   onOpenFull: () => void
+  /** "Model read": the reply again (and not the trace); a call's toggle alone otherwise. */
+  onShowReply?: () => void
+  /** Neo's health `rev` once any span has arrived: shows the Trace row. Null: no spans, no row. */
+  traceRev?: number | null
+  /** The right panel shows this run's trace. */
+  traceShown?: boolean
+  onSelectTrace?: () => void
+  onOpenFullTrace?: () => void
 }) {
   // Laid out one statement per line (whitespace only); sites map to the line that holds them.
   const lines = codeLines(formatted.text)
@@ -73,9 +98,17 @@ export function RunBlock({
     : null
   const places = placed ? callPlaces(placed) : new Map<string, CallPlace>()
   const operations = record?.operations ?? []
+  const fromSpans = record?.source === 'spans'
   const outputOf = (operation: NeoOperation) =>
-    operationOutput(operation, operations, record?.traceGaps ?? 0)
+    operationOutput(
+      operation,
+      operations,
+      record?.traceGaps ?? 0,
+      record?.source,
+    )
   const openId = selectedOperationId
+  const showReply = onShowReply ?? (() => onSelect(null))
+  const replyShown = selected && openId === null && !traceShown
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set())
   const [showUnplaced, setShowUnplaced] = useState(false)
   const toggle = (id: string) =>
@@ -96,6 +129,13 @@ export function RunBlock({
       {record?.values === 'off' && (
         <p className="px-4 py-1 text-ink-3">{RUN_VALUES_OFF_NOTICE}</p>
       )}
+      {fromSpans && (
+        <p className="flex min-h-6 w-full shrink-0 items-start px-4 py-1 text-[11px] text-ink-3 leading-[14px]">
+          <Rail bleed />
+          <span className="w-[106px] shrink-0" />
+          <span className="pt-px">{SPANS_NOTICE}</span>
+        </p>
+      )}
       {placed && <MethodHeader />}
       {lines.map((line, index) => (
         <CodeLine
@@ -109,6 +149,7 @@ export function RunBlock({
           note={index === 0 && !placed ? missingRecord(run, detail) : null}
           openId={openId}
           onToggle={toggle}
+          fromSpans={fromSpans}
           unfolded={unfolded.has(index + 1)}
           onUnfold={() => setUnfolded(new Set(unfolded).add(index + 1))}
         />
@@ -122,15 +163,16 @@ export function RunBlock({
           openId={openId}
           onToggle={toggle}
           outputOf={outputOf}
+          fromSpans={fromSpans}
         />
       )}
       <div
-        className={`flex h-7 shrink-0 items-center px-4 ${selected && openId === null ? 'bg-[#DCE6FB]' : ''}`}
+        className={`flex h-7 shrink-0 items-center px-4 ${replyShown ? 'bg-[#DCE6FB]' : ''}`}
       >
         <Rail />
         <button
           type="button"
-          onClick={() => onSelect(null)}
+          onClick={showReply}
           title="Show the reply in the right panel"
           className="w-[106px] shrink-0 text-left font-semibold text-black hover:text-neo"
         >
@@ -139,12 +181,95 @@ export function RunBlock({
         <ModelRead
           run={run}
           detail={detail}
-          selected={selected && openId === null}
-          onSelect={() => onSelect(null)}
+          selected={replyShown}
+          onSelect={showReply}
           onOpenFull={onOpenFull}
         />
       </div>
+      {traceRev !== null && (
+        <div
+          className={`flex h-7 shrink-0 items-center px-4 ${selected && traceShown ? 'bg-[#DCE6FB]' : ''}`}
+        >
+          <Rail />
+          <button
+            type="button"
+            onClick={() => onSelectTrace?.()}
+            title="Show the run's OpenTelemetry trace in the right panel"
+            className="w-[106px] shrink-0 text-left font-semibold text-black hover:text-neo"
+          >
+            Trace
+          </button>
+          <TraceLine
+            run={run}
+            rev={traceRev}
+            shown={selected && traceShown}
+            onSelect={() => onSelectTrace?.()}
+            onOpenFull={() => onOpenFullTrace?.()}
+          />
+        </div>
+      )}
     </div>
+  )
+}
+
+/**
+ * The run's trace in one line, as "Model read" gives the reply: its trace id, its spans, what
+ * failed and how long it took; clicking it shows the waterfall on the right.
+ */
+function TraceLine({
+  run,
+  rev,
+  shown,
+  onSelect,
+  onOpenFull,
+}: {
+  run: RunSummary
+  rev: number
+  shown: boolean
+  onSelect: () => void
+  onOpenFull: () => void
+}) {
+  const trace = useRunTrace(run, true, rev)
+  if (run.status === 'running')
+    return (
+      <span className="text-[11px] text-ink-2">
+        Spans arrive when the run ends.
+      </span>
+    )
+  if (trace === undefined)
+    return <span className="text-[11px] text-ink-3">Loading…</span>
+  if (trace === null)
+    return (
+      <span className="text-[11px] text-ink-2">
+        {traceMayGrow(run, trace, Date.now())
+          ? "Waiting for Neo's spans."
+          : 'No spans from Neo for this run.'}
+      </span>
+    )
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2.5">
+      <button
+        type="button"
+        onClick={onSelect}
+        title={`Trace ${trace.traceId}: show its waterfall in the right panel`}
+        className="flex min-w-0 items-center gap-2.5 text-left"
+      >
+        <code className="shrink-0 rounded border border-neo-edge bg-white px-2 py-0.5 font-code text-ink">
+          {shortTraceId(trace.traceId)}
+        </code>
+        <span className="min-w-0 truncate whitespace-pre text-[11px] text-ink-2 leading-[14px]">
+          <TraceFacts trace={trace} />
+          {shown && ', shown on the right'}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onOpenFull}
+        className="shrink-0 font-medium text-neo hover:underline"
+      >
+        Open full
+      </button>
+    </span>
   )
 }
 
@@ -170,6 +295,7 @@ function CodeLine({
   note,
   openId,
   onToggle,
+  fromSpans,
   unfolded,
   onUnfold,
 }: {
@@ -181,6 +307,8 @@ function CodeLine({
   note: string | null
   openId: string | null
   onToggle: (id: string) => void
+  /** The record is folded from Neo's spans. */
+  fromSpans: boolean
   unfolded: boolean
   onUnfold: () => void
 }) {
@@ -211,6 +339,7 @@ function CodeLine({
         spanMs={spanMs}
         open={operation.id === openId}
         onToggle={() => onToggle(operation.id)}
+        fromSpans={fromSpans}
       />
     )
   }
@@ -265,6 +394,7 @@ function MethodOnLine({
   spanMs,
   open,
   onToggle,
+  fromSpans,
 }: {
   operation: NeoOperation
   /** Its output, worked out only while the row is open. */
@@ -276,6 +406,7 @@ function MethodOnLine({
   spanMs: number
   open: boolean
   onToggle: () => void
+  fromSpans: boolean
 }) {
   return (
     <>
@@ -290,7 +421,11 @@ function MethodOnLine({
         onToggle={onToggle}
       />
       {open && (
-        <MethodDetail operation={operation} output={outputOf(operation)} />
+        <MethodDetail
+          operation={operation}
+          output={outputOf(operation)}
+          fromSpans={fromSpans}
+        />
       )}
     </>
   )

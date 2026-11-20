@@ -8,6 +8,10 @@
  * a snapshot and the stream. A snapshot can still land after events that are newer than it: the
  * page keeps the events since the stream opened and re-applies those numbered above the
  * snapshot's `version`.
+ *
+ * Neo's health (`TelemetryHealth`) rides the same stream and snapshot but is not a change of the
+ * list: it has no `version` and never joins that replay. It is one full state with its own `rev`,
+ * so the page keeps the highest `rev` it heard (`keepNewer`), from events and snapshots alike.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -18,6 +22,7 @@ import type {
   RunResponse,
   RunSummary,
   RunsResponse,
+  TelemetryHealth,
   ViewerEvent,
   ViewerInfo,
 } from '../shared/api'
@@ -52,11 +57,25 @@ function apply(
   return { ...state, runs: upsert(state.runs, event.run) }
 }
 
+/**
+ * The health to show after `next` arrives: the one with the higher `rev`. Equal or lower is an
+ * older state (a snapshot read before an event it crossed), and null says nothing new.
+ */
+export function keepNewer(
+  current: TelemetryHealth | null,
+  next: TelemetryHealth | null,
+): TelemetryHealth | null {
+  if (next === null) return current
+  return current === null || next.rev > current.rev ? next : current
+}
+
 export interface ViewerState {
   info: ViewerInfo | null
   /** Every run since the last Clear, in arrival order. */
   runs: RunSummary[]
   log: LogSummary | null
+  /** Neo's health; null until Neo's telemetry first reaches the viewer (never, for older images). */
+  health: TelemetryHealth | null
   /** Empties the log (the server keeps the previous one as `log.prev.jsonl`). */
   clear: () => Promise<void>
   /** Writes every run since the last Clear to a new folder; null when the server refused. */
@@ -70,10 +89,16 @@ export function useViewer(): ViewerState {
     runs: RunSummary[]
     log: LogSummary | null
   }>({ runs: [], log: null })
+  const [health, setHealth] = useState<TelemetryHealth | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Bumped each time the event stream opens; the snapshot below is taken after it.
   const [opened, setOpened] = useState(0)
   const recent = useRef<ViewerEvent[]>([])
+  // The newest health heard since the stream last opened. `rev` counts within one viewer
+  // process, so each opening compares only with what it heard itself: a viewer restarted behind
+  // the stream starts again from rev 1, and its health still shows. Until the opening's first
+  // health arrives, the one shown stays, so a reconnect never blanks it.
+  const healthSinceOpen = useRef<TelemetryHealth | null>(null)
 
   useEffect(() => {
     getJson<ViewerInfo>(apiRoutes.info).then(setInfo, (cause) =>
@@ -86,11 +111,17 @@ export function useViewer(): ViewerState {
       listenToViewerEvents({
         opened() {
           recent.current = []
+          healthSinceOpen.current = null
           setOpened((n) => n + 1)
         },
         event(event) {
           // Health is not a change of the list: it has no `version` and is never replayed.
-          if (event.type === 'health') return
+          if (event.type === 'health') {
+            const next = keepNewer(healthSinceOpen.current, event.health)
+            healthSinceOpen.current = next
+            setHealth(next)
+            return
+          }
           recent.current.push(event)
           if (recent.current.length > KEPT_EVENTS) {
             recent.current.splice(0, recent.current.length - KEPT_EVENTS)
@@ -107,13 +138,21 @@ export function useViewer(): ViewerState {
     // would roll the list back to before that opening.
     let current = true
     getJson<RunsResponse>(apiRoutes.runs).then(
-      ({ runs, log, version }) => {
+      ({ runs, log, version, health: snapshotHealth }) => {
         if (!current) return
         let next: { runs: RunSummary[]; log: LogSummary | null } = { runs, log }
         for (const event of recent.current) {
           if (event.version > version) next = apply(next, event)
         }
         setState(next)
+        // A snapshot with no health, when this opening heard none either, is a viewer with no
+        // telemetry (one restarted behind the stream): nothing to show.
+        const newest = keepNewer(
+          healthSinceOpen.current,
+          snapshotHealth ?? null,
+        )
+        healthSinceOpen.current = newest
+        setHealth(newest)
       },
       (cause) => {
         if (current) setError(String(cause))
@@ -148,7 +187,15 @@ export function useViewer(): ViewerState {
     }
   }, [])
 
-  return { info, runs: state.runs, log: state.log, clear, exportRuns, error }
+  return {
+    info,
+    runs: state.runs,
+    log: state.log,
+    health,
+    clear,
+    exportRuns,
+    error,
+  }
 }
 
 /**

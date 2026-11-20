@@ -38,6 +38,14 @@ export interface RunTableProps {
   ) => void
   onOpenFull: (run: RunSummary) => void
   nowMs: number
+  /** Neo's health `rev` once any span has arrived (open blocks get a Trace row); null: none. */
+  traceRev?: number | null
+  /** The run whose trace the right panel shows. */
+  traceRunId?: string | null
+  /** "Model read": the run's reply again, over its call or trace. */
+  onShowReply?: (run: RunSummary) => void
+  onSelectTrace?: (run: RunSummary) => void
+  onOpenFullTrace?: (run: RunSummary) => void
 }
 
 export function RunTable(props: RunTableProps) {
@@ -71,6 +79,11 @@ export function RunTable(props: RunTableProps) {
             onSelectOperation={props.onSelectOperation}
             onOpenFull={props.onOpenFull}
             nowMs={props.nowMs}
+            traceRev={props.traceRev ?? null}
+            traceShown={props.traceRunId === run.id}
+            onShowReply={props.onShowReply}
+            onSelectTrace={props.onSelectTrace}
+            onOpenFullTrace={props.onOpenFullTrace}
           />
         ))
       )}
@@ -168,6 +181,11 @@ function RunEntry({
   onSelectOperation,
   onOpenFull,
   nowMs,
+  traceRev,
+  traceShown,
+  onShowReply,
+  onSelectTrace,
+  onOpenFullTrace,
 }: {
   run: RunSummary
   scale: BarScale
@@ -178,6 +196,11 @@ function RunEntry({
   onSelectOperation: RunTableProps['onSelectOperation']
   onOpenFull: (run: RunSummary) => void
   nowMs: number
+  traceRev: number | null
+  traceShown: boolean
+  onShowReply: RunTableProps['onShowReply']
+  onSelectTrace: RunTableProps['onSelectTrace']
+  onOpenFullTrace: RunTableProps['onOpenFullTrace']
 }) {
   const fetched = useRunDetail(run, open)
   // The hook keeps the last run it fetched; only this run's own detail counts.
@@ -215,6 +238,11 @@ function RunEntry({
           selectedOperationId={selectedOperationId}
           onSelect={(selection) => onSelectOperation(run, selection)}
           onOpenFull={() => onOpenFull(run)}
+          onShowReply={onShowReply && (() => onShowReply(run))}
+          traceRev={traceRev}
+          traceShown={traceShown}
+          onSelectTrace={() => onSelectTrace?.(run)}
+          onOpenFullTrace={() => onOpenFullTrace?.(run)}
         />
       )}
     </>
