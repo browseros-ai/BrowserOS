@@ -22,8 +22,9 @@ pub struct OpSettled<'a> {
     /// door's own `unknown` for a name with no method. `'static`, so no text a script or page
     /// chose can become a label; the pipeline also interns it against [`crate::Vocabulary`].
     pub op: &'static str,
-    /// The name exactly as the caller wrote it, only when it differs from `op` (an unregistered
-    /// name). The span's `neo.op.name` is `raw_name.unwrap_or(op)`; no metric sees it.
+    /// The name the caller wrote, as the door's refusal shows it, only when it differs from `op`
+    /// (an unregistered name). The door clips it, since a script can send any string; the
+    /// span's `neo.op.name` is `raw_name.unwrap_or(op)` as given. No metric sees it.
     pub raw_name: Option<&'a str>,
     /// The op id `/v1/runs/{id}` uses (`{run}.{seq}`), which links the span to the op's heavy
     /// blobs and screenshots. Formatted only when a span is recorded.
