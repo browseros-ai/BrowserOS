@@ -79,18 +79,21 @@ pub const AUTO_SNAPSHOT_MAX_CHARS: usize = 8_000;
 /// A navigating result with a large auto-included snapshot cut to one line saying how to see
 /// it. A small one is left as it is. The server's own budget stays as MCP agents have it.
 #[must_use]
-pub fn summarize_auto_snapshot(text: &str, max_chars: usize) -> String {
+pub fn summarize_auto_snapshot(text: &str, max_chars: usize, read_with: Option<&str>) -> String {
     let Some((head, context)) = text.split_once(AUTO_SNAPSHOT_MARKER) else {
         return text.to_string();
     };
     if context.chars().count() <= max_chars {
         return text.to_string();
     }
-    let saved = context
-        .lines()
-        .find_map(|line| line.split_once("saved to: ").map(|(_, path)| path.trim()))
-        .map(|path| format!(" The full snapshot is saved at {path}."))
-        .unwrap_or_default();
+    let saved = match read_with {
+        Some(command) => format!(" Read the whole snapshot with: {command}."),
+        None => context
+            .lines()
+            .find_map(|line| line.split_once("saved to: ").map(|(_, path)| path.trim()))
+            .map(|path| format!(" The full snapshot is saved at {path}."))
+            .unwrap_or_default(),
+    };
     format!(
         "{}\n[the page snapshot is large ({} chars), so it is left out. Run `browseros snapshot -i` to list the page's interactive elements, or `browseros read` for its text.{saved}]",
         head.trim_end(),
@@ -403,18 +406,27 @@ mod tests {
             "opened page 4\n{AUTO_SNAPSHOT_MARKER}\nLarge snapshot (68947 estimated tokens, 275788 chars) saved to: /tmp/out/snapshot.txt\n{}",
             "- link \"x\" [ref=e1]\n".repeat(600)
         );
-        let summary = summarize_auto_snapshot(&big, AUTO_SNAPSHOT_MAX_CHARS);
+        let summary = summarize_auto_snapshot(&big, AUTO_SNAPSHOT_MAX_CHARS, None);
         assert!(summary.starts_with("opened page 4\n[the page snapshot is large"));
         assert!(summary.contains("browseros snapshot -i"));
         assert!(summary.contains("/tmp/out/snapshot.txt"));
         assert!(!summary.contains("[ref=e1]"));
+        let named = summarize_auto_snapshot(
+            &big,
+            AUTO_SNAPSHOT_MAX_CHARS,
+            Some("browseros output abc --part snapshot.md"),
+        );
+        assert!(
+            named
+                .contains("Read the whole snapshot with: browseros output abc --part snapshot.md.")
+        );
     }
 
     #[test]
     fn a_small_auto_snapshot_is_printed_as_it_is() {
         let small = format!("opened page 4\n{AUTO_SNAPSHOT_MARKER}\n- button \"Go\" [ref=e1]");
         assert_eq!(
-            summarize_auto_snapshot(&small, AUTO_SNAPSHOT_MAX_CHARS),
+            summarize_auto_snapshot(&small, AUTO_SNAPSHOT_MAX_CHARS, None),
             small
         );
     }

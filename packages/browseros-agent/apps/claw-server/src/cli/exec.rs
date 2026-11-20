@@ -10,7 +10,7 @@ use crate::cli::client::{self, Client, result::ToolOutput};
 use crate::cli::exit::{Code, Failure};
 use crate::cli::grammar::{Cli, Command, Globals};
 use crate::cli::plan::{self, External, Local, Plan, ToolPlan};
-use crate::cli::{capability, guides, install, io, render, script, state};
+use crate::cli::{capability, guides, install, io, render, script, shape, state};
 
 /// Parses, plans and runs one invocation.
 ///
@@ -285,10 +285,18 @@ async fn run_tool(
     // full text, and only the printed copy is shortened.
     let navigates = plan.tool == "navigate"
         || (plan.tool == "tabs" && plan.args.get("action").and_then(Value::as_str) == Some("new"));
+    let saved = shape::saved_output(&output);
     if navigates {
-        output.text =
-            render::summarize_auto_snapshot(&output.text, render::AUTO_SNAPSHOT_MAX_CHARS);
+        output.text = render::summarize_auto_snapshot(
+            &output.text,
+            render::AUTO_SNAPSHOT_MAX_CHARS,
+            saved
+                .as_ref()
+                .map(|saved| shape::output_command(Some(saved)))
+                .as_deref(),
+        );
     }
+    output.text = shape::cli_hints(&output.text, saved.as_ref());
     report(&output, label, plan.tool, page, elapsed, &files, globals);
 
     // A page-scoped failure is usually a closed or recycled tab, and the one

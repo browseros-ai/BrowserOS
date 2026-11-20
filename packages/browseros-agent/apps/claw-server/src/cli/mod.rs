@@ -24,4 +24,5 @@ pub mod plan;
 pub mod refs;
 pub mod render;
 pub mod script;
+pub mod shape;
 pub mod state;
