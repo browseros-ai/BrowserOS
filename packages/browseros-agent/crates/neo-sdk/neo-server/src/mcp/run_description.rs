@@ -63,21 +63,38 @@ const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top nam
 /// them. In phase 2's bench agents wrote whole scripts blind and re-ran each from the top after a
 /// failure (flights: 6 versions), so the text says how far to write and to carry on from a stop's
 /// tab by hand. A fresh agent reads only this tool, so this paragraph alone must teach both.
-/// Shown only when `neo.find` is listed (this Neo has a Jev key), right after the loop it amends.
-/// The stop's record and its `next` line are the prelude's (`runtime/js/neo_prelude.js`); the
-/// record's fields named here are `agent.d.ts`'s `Stop`, which a test checks. Its samples compile
-/// as a run's body, which a test checks too.
-const AHEAD: &str = r#"With the `neo.find` helpers (under SDK methods) one script can cross pages you have not looked at.
-They read the page at the moment they run, so the script need not end at each click: `await (await neo.find(page, 'the search box')).fill('usb-c hub')`, then `neo.find` the search button and the first result in the same script.
-Write as far ahead as you can see, then run it, and write the next stretch from what comes back.
-You can see ahead while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.
+///
+/// Shown only when `neo.find` is listed (this Neo has a Jev key), with `HELPERS`, BEFORE the
+/// loop: in the `RealBench` round 5 runs, Claude Code showed its runners only the first ~4,090
+/// characters of this description, where the five listing lines never reached, and runners that
+/// read the loop's "end the script" rule first made no helper call at all. So `AHEAD` and
+/// `HELPERS` come first and end before character 3,800, and the loop's rule names the exception
+/// (`LOOK_AGAIN_AHEAD`); tests check both. The stop's record and its `next` line are the
+/// prelude's (`runtime/js/neo_prelude.js`); the record's fields named here are `agent.d.ts`'s
+/// `Stop`, which a test checks. Its samples compile as a run's body, which a test checks too.
+const AHEAD: &str = r#"On pages you have not looked at, the `neo` helpers below replace a snapshot-then-act turn: they read the page when they run, so a script can go on past a click: `await (await neo.find(page, 'the search box')).fill('usb-c hub')`, then `neo.find` the search button and the first result.
+Write as far ahead as you can see, while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.
 After a step that should change the page, say what you expect: `if (!(await neo.check(page, 'a list of results is showing', { timeout: 5000 }))) neo.stop(page, 'no results list')`.
-A helper that is not sure (nothing fits, two elements fit, it cannot tell) stops the script there instead of guessing.
-The run then returns `{ "stopped": { ask, at, call, log, lookalikes, next, tab, url, why } }`: a stop is a normal result, not an error.
-Nothing is undone: the tab stays as the last finished step left it, and `stopped.log` lists what ran and what you logged.
-Do not fix the script and run it again from the top: carry on from that tab by hand, as in the loop above. Act on a lookalike's ref with `page.getByRef`, or look with `page.ariaSnapshot()`, then write the next stretch.
+A helper that is not sure stops the script there instead of guessing; the run returns `{ "stopped": { ask, at, call, log, lookalikes, next, tab, url, why } }`, a normal result, not an error.
+Nothing is undone, and `stopped.log` lists what ran and what you logged: carry on by hand from that tab (`page.getByRef` on a lookalike, or `page.ariaSnapshot()`); do not fix the script and run it again from the top.
 The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.
 Return what you collect; `console.log` it as you go too, since a stop returns `stopped.log` in place of your value."#;
+
+/// The five helpers in one short line each, right after `AHEAD`, so they sit in the part of the
+/// description every host shows (see `AHEAD`). The full lines stay in the registry's listing
+/// (`builtins/jev_verbs.rs`), at the end; a test checks each listed helper has a line here.
+const HELPERS: &str = r"The helpers (each also listed in full under SDK methods):
+- `neo.find(page, ask, { role?, timeout? = 5000, optional? })` → the one Locator `ask` describes; stops when unsure (none or two fit; `optional: true` gives null).
+- `neo.findAll(page, ask, { role? })` → Locator[] of every match, in page order; stops when unsure of one.
+- `neo.check(page, claim, { timeout? = 0 })` → boolean; with `timeout`, looks again until true; stops when unsure.
+- `neo.choose(page, question, options)` → one of `options`, as given; stops when unsure which leads.
+- `neo.stop(page, why)`: stops the script here with the same hand-back; no `await`.";
+
+/// `LOOP`'s rule for ending a script, which a Neo with the Jev helpers replaces with
+/// `LOOK_AGAIN_AHEAD` (see `AHEAD`); a test checks `LOOP` holds it once.
+const LOOK_AGAIN: &str = "end the script by returning a new snapshot, and choose the next action from it.\n  Fills of one form can share a script; the click that submits it ends the script.";
+/// The same rule with its exception: a step the writer can name goes on with `neo.find`.
+const LOOK_AGAIN_AHEAD: &str = "end the script by returning a new snapshot, and choose the next action from it, unless you can name the next element in plain words: then `neo.find` it in the same script (above).\n  Fills of one form can share a script; the click that submits it ends the script unless you can name what follows it.";
 
 /// The wait times, which a test reads from the prelude's `timeouts.ts` so the two cannot drift
 /// (this text once said 5 s while the prelude waited 30). None of the 71 waits in that evaluation
@@ -140,8 +157,9 @@ const SNAPSHOT_METHOD: &str = "page.ariaSnapshot";
 const FIND_METHOD: &str = "neo.find";
 
 /// The description, in the order a model needs it: what a script is, the look-act loop with its
-/// waits and covers (once the snapshot method exists; with the Jev helpers, how far ahead to
-/// write and what a stop hands back), the error model, tasks, the realm and its
+/// waits and covers (once the snapshot method exists; with the Jev helpers, first how far ahead
+/// to write, what a stop hands back and the helpers, then the loop), the error model, tasks, the
+/// realm and its
 /// size limit, then the registry's listed methods: each `Own` line, and each `Grouped` line once
 /// (the Playwright API is one line, not 120). Built once at startup; the registry is frozen, so
 /// it never changes while Neo runs.
@@ -150,11 +168,14 @@ pub(crate) fn run_description(registry: &Registry) -> String {
     let listed = registry.listed();
     let mut lines = vec![USAGE.to_owned()];
     if listed.iter().any(|spec| spec.name == SNAPSHOT_METHOD) {
-        lines.push(LOOP.to_owned());
-        lines.push(SNAPSHOT_ON_TOP.to_owned());
         if listed.iter().any(|spec| spec.name == FIND_METHOD) {
             lines.push(AHEAD.to_owned());
+            lines.push(HELPERS.to_owned());
+            lines.push(LOOP.replace(LOOK_AGAIN, LOOK_AGAIN_AHEAD));
+        } else {
+            lines.push(LOOP.to_owned());
         }
+        lines.push(SNAPSHOT_ON_TOP.to_owned());
         lines.push(WAITS.to_owned());
         lines.push(COVERED_CLICK.to_owned());
     }
@@ -192,8 +213,8 @@ mod tests {
     use serde_json::{Map, Value};
 
     use super::{
-        AHEAD, COVERED_CLICK, ERRORS, GLOBALS, LOOP, READ_ONLY, SNAPSHOT_ON_TOP, TASKS, WAITS,
-        run_description,
+        AHEAD, COVERED_CLICK, ERRORS, GLOBALS, HELPERS, LOOK_AGAIN, LOOK_AGAIN_AHEAD, LOOP,
+        READ_ONLY, SNAPSHOT_ON_TOP, TASKS, USAGE, WAITS, run_description,
     };
     use crate::dispatch::{
         ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder,
@@ -618,6 +639,10 @@ mod tests {
                 description.contains(&format!("{SNAPSHOT_ON_TOP}\n\n{WAITS}")),
                 "the waits follow the on-top line directly: {description}"
             );
+            assert!(
+                description.starts_with(&format!("{USAGE}\n\n{LOOP}\n\n{SNAPSHOT_ON_TOP}")),
+                "the loop follows the usage, worded as without the helpers: {description}"
+            );
             for word in [
                 "neo.find",
                 "neo.findAll",
@@ -637,16 +662,21 @@ mod tests {
         })
     }
 
-    /// With a key a model learns decisions 1 and 4 from this text alone: `AHEAD` right after
-    /// the loop it amends, once, and the five helper lines, each whole.
+    /// With a key a model learns decisions 1 and 4 from this text alone: `AHEAD` and `HELPERS`
+    /// first, before the loop they amend, once, then the loop with its exception, and the five
+    /// helper lines, each whole, in the listing.
     #[test]
     fn with_a_jev_key_the_description_teaches_writing_ahead_and_the_stop() -> Result<(), TestError>
     {
         on_neo_runtime(async {
             let description = served(true).await?;
+            let keyed_loop = LOOP.replace(LOOK_AGAIN, LOOK_AGAIN_AHEAD);
             assert!(
-                description.contains(&format!("{SNAPSHOT_ON_TOP}\n\n{AHEAD}\n\n{WAITS}")),
-                "AHEAD amends the loop, so it follows it: {description}"
+                description.starts_with(&format!(
+                    "{USAGE}\n\n{AHEAD}\n\n{HELPERS}\n\n{keyed_loop}\n\n{SNAPSHOT_ON_TOP}\n\n{WAITS}"
+                )),
+                "AHEAD and the helpers come before the loop, which names its exception: \
+                 {description}"
             );
             assert_eq!(description.matches(AHEAD).count(), 1, "said once");
             for line in JEV_LINES {
@@ -657,15 +687,11 @@ mod tests {
                 );
             }
             for sentence in [
-                "With the `neo.find` helpers (under SDK methods) one script can cross pages you have not looked at.",
-                "They read the page at the moment they run, so the script need not end at each click: `await (await neo.find(page, 'the search box')).fill('usb-c hub')`, then `neo.find` the search button and the first result in the same script.",
-                "Write as far ahead as you can see, then run it, and write the next stretch from what comes back.",
-                "You can see ahead while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.",
+                "On pages you have not looked at, the `neo` helpers below replace a snapshot-then-act turn: they read the page when they run, so a script can go on past a click: `await (await neo.find(page, 'the search box')).fill('usb-c hub')`, then `neo.find` the search button and the first result.",
+                "Write as far ahead as you can see, while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.",
                 "After a step that should change the page, say what you expect: `if (!(await neo.check(page, 'a list of results is showing', { timeout: 5000 }))) neo.stop(page, 'no results list')`.",
-                "A helper that is not sure (nothing fits, two elements fit, it cannot tell) stops the script there instead of guessing.",
-                "The run then returns `{ \"stopped\": { ask, at, call, log, lookalikes, next, tab, url, why } }`: a stop is a normal result, not an error.",
-                "Nothing is undone: the tab stays as the last finished step left it, and `stopped.log` lists what ran and what you logged.",
-                "Do not fix the script and run it again from the top: carry on from that tab by hand, as in the loop above. Act on a lookalike's ref with `page.getByRef`, or look with `page.ariaSnapshot()`, then write the next stretch.",
+                "A helper that is not sure stops the script there instead of guessing; the run returns `{ \"stopped\": { ask, at, call, log, lookalikes, next, tab, url, why } }`, a normal result, not an error.",
+                "Nothing is undone, and `stopped.log` lists what ran and what you logged: carry on by hand from that tab (`page.getByRef` on a lookalike, or `page.ariaSnapshot()`); do not fix the script and run it again from the top.",
                 "The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.",
                 "Return what you collect; `console.log` it as you go too, since a stop returns `stopped.log` in place of your value.",
             ] {
@@ -677,6 +703,69 @@ mod tests {
             }
             Ok(())
         })
+    }
+
+    /// Claude Code shows a model only the first ~4,090 characters of this description (`RealBench`
+    /// round 5), so with a key every helper's name and the stop are inside the first 3,800, and
+    /// the loop's rule for ending a script names the helpers' exception.
+    #[test]
+    fn with_a_jev_key_the_helpers_and_the_stop_come_in_the_first_3800_characters()
+    -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let description = served(true).await?;
+            let head: String = description.chars().take(3800).collect();
+            for word in [
+                "neo.find(",
+                "neo.findAll(",
+                "neo.check(",
+                "neo.choose(",
+                "neo.stop(",
+                "stopped",
+                "Write as far ahead",
+            ] {
+                assert!(
+                    head.contains(word),
+                    "{word} is in the first 3,800 characters"
+                );
+            }
+            assert!(
+                head.contains(&format!("{AHEAD}\n\n{HELPERS}")),
+                "AHEAD and the helper lines end inside them too"
+            );
+            let ahead = description.find(AHEAD).ok_or("AHEAD is there")?;
+            let loop_start = description
+                .find("Work in a loop:")
+                .ok_or("the loop is there")?;
+            assert!(ahead < loop_start, "AHEAD precedes the loop");
+            assert_eq!(
+                description.matches(LOOK_AGAIN_AHEAD).count(),
+                1,
+                "the loop's rule names the exception: {description}"
+            );
+            assert!(
+                !description.contains(LOOK_AGAIN),
+                "and never says the rule without it"
+            );
+            Ok(())
+        })
+    }
+
+    /// `LOOK_AGAIN` is `LOOP`'s own text, once, so the keyed loop really replaces it.
+    #[test]
+    fn the_loop_holds_the_rule_the_helpers_amend_once() {
+        assert_eq!(LOOP.matches(LOOK_AGAIN).count(), 1, "{LOOP}");
+    }
+
+    /// Each helper the listing names has its short line in `HELPERS`.
+    #[test]
+    fn helpers_has_a_short_line_for_each_listed_helper() {
+        for line in JEV_LINES {
+            let name = line.split_once('(').map_or(line, |(name, _)| name);
+            assert!(
+                HELPERS.contains(&format!("\n- `{name}(")),
+                "{name} has a line in HELPERS"
+            );
+        }
     }
 
     /// The stop record `AHEAD` spells out is `agent.d.ts`'s `Stop`, its fields that are always
