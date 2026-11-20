@@ -92,6 +92,13 @@ tracing.workspace = true
 
 [dev-dependencies]
 neo-telemetry = { path = ".", features = ["test-support"] }
+# A mock OTLP collector, over TCP and a Unix socket (axum serves both), and what it decodes:
+# gzip bodies, OTLP protobuf (prost and opentelemetry-proto's messages) and OTLP JSON.
+axum.workspace = true
+flate2.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
+serde_json.workspace = true
 # A Unix socket's directory for the OTLP-over-Unix-socket tests.
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

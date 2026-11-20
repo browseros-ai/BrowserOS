@@ -115,6 +115,11 @@ opentelemetry-otlp = { version = "0.33.1", default-features = false, features = 
 opentelemetry-http = { version = "0.33.1", default-features = false }
 # opentelemetry-http's `HttpClient` is an async_trait; neo-telemetry implements it.
 async-trait = "0.1"
+# What neo-telemetry's tests decode from its exporters: OTLP protobuf messages and gzip bodies.
+# Already in the graph through opentelemetry-otlp, with these features.
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic-messages", "trace", "metrics", "with-serde"] }
+prost = "0.14"
+flate2 = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
