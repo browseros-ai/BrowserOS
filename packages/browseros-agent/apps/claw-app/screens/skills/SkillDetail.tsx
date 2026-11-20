@@ -72,7 +72,7 @@ const BACK = { to: '/skills', label: 'Skills' }
 
 /** One skill: the steps neo follows, what it learned, and its runs. */
 export function SkillDetail() {
-  const { detail, isLoading, isError } = useSkillDetailData()
+  const { detail, isLoading, isError, checking } = useSkillDetailData()
   const navigate = useNavigate()
 
   if (isError) {
@@ -102,7 +102,7 @@ export function SkillDetail() {
   const { skill, body, runs } = detail
   const { steps, learnedNotes } = parseSkillBody(body)
   const p50Ms = skill.ultrafast?.p50Ms
-  const learning = firstRunLearning(skill)
+  const learning = firstRunLearning(skill, checking)
 
   return (
     <Page>

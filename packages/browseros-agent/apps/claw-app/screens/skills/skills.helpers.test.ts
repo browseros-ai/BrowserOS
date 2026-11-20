@@ -14,11 +14,15 @@ import {
   runsChoice,
   skillCommand,
   skillSites,
+  stillVerifying,
   stuckWhile,
   turnedUltrafast,
   ultrafastMark,
   upgradeSeconds,
   usedLabel,
+  VERIFYING_POLL_MS,
+  VERIFYING_WINDOW_MS,
+  verifyingPoll,
   worksInAgents,
 } from './skills.helpers'
 
@@ -250,6 +254,17 @@ describe('firstRunLearning', () => {
     ])
   })
 
+  it('says it finishes on the next run once the page stops checking', () => {
+    const steps = firstRunLearning(fromTask, false)
+    expect(steps?.map((step) => step.text)).not.toContain(
+      'neo is checking the fast version',
+    )
+    expect(steps?.at(-1)).toEqual({
+      text: 'Finishes on its next run',
+      state: 'todo',
+    })
+  })
+
   it('says nothing once verified, when locked, or for a skill an agent saved', () => {
     expect(
       firstRunLearning({
@@ -433,5 +448,60 @@ describe('durationLabel', () => {
     expect(durationLabel(11_000)).toBe('about 11 sec')
     expect(durationLabel(92_000)).toBe('about 2 min')
     expect(durationLabel(undefined)).toBeNull()
+  })
+})
+
+describe('verifyingPoll', () => {
+  const pending: Skill = {
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'pending' }),
+  }
+  const openedAt = 1_000_000
+
+  it('checks a pending fast version while the page is fresh', () => {
+    expect(verifyingPoll(pending, openedAt, openedAt + 30_000)).toBe(
+      VERIFYING_POLL_MS,
+    )
+  })
+
+  it('runs one check past the window, then stops for good', () => {
+    expect(
+      verifyingPoll(pending, openedAt, openedAt + VERIFYING_WINDOW_MS + 1),
+    ).toBe(VERIFYING_POLL_MS)
+    expect(
+      verifyingPoll(
+        pending,
+        openedAt,
+        openedAt + VERIFYING_WINDOW_MS + VERIFYING_POLL_MS,
+      ),
+    ).toBe(false)
+    expect(verifyingPoll(pending, openedAt, openedAt + 3 * 86_400_000)).toBe(
+      false,
+    )
+  })
+
+  it('never checks a skill that is not pending', () => {
+    expect(
+      verifyingPoll(
+        { ...pending, ultrafast: ultrafast({ status: 'verified' }) },
+        openedAt,
+        openedAt,
+      ),
+    ).toBe(false)
+    expect(verifyingPoll(undefined, openedAt, openedAt)).toBe(false)
+  })
+
+  it('reads as still checking only for data fetched inside the window', () => {
+    expect(stillVerifying(openedAt, openedAt + 500)).toBe(true)
+    expect(stillVerifying(openedAt, openedAt - 60_000)).toBe(true)
+    expect(stillVerifying(openedAt, openedAt + VERIFYING_WINDOW_MS)).toBe(false)
   })
 })

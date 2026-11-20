@@ -12,6 +12,7 @@ import {
   expect,
   it,
   mock,
+  setSystemTime,
 } from 'bun:test'
 import type {
   SkillDetail as Detail,
@@ -28,6 +29,8 @@ const api = await import('@/modules/api/client')
 
 let ultrafast: SkillUltrafast
 let overrides: Partial<Skill> = {}
+// Runs inside each fetch, so a test can move the clock while the page waits on the server.
+let duringFetch = () => {}
 
 const detail = (): Detail => ({
   skill: {
@@ -52,7 +55,10 @@ const detail = (): Detail => ({
 mock.module('@/modules/api/client', () => ({
   ...api,
   apiClient: async () => ({
-    getSkill: async () => detail(),
+    getSkill: async () => {
+      duringFetch()
+      return detail()
+    },
   }),
 }))
 
@@ -111,6 +117,7 @@ function define(name: string, value: unknown) {
 
 beforeEach(async () => {
   overrides = {}
+  duringFetch = () => {}
   ultrafast = {
     status: 'verified',
     flowVersion: 0,
@@ -140,6 +147,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  setSystemTime()
   for (const [name, descriptor] of globalDescriptors) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor)
     else Reflect.deleteProperty(globalThis, name)
@@ -260,6 +268,17 @@ describe('the first run of a skill made from a task', () => {
     expect(text()).toContain('In progress: neo is checking the fast version')
     expect(text()).toContain('Still to come: Next time it takes seconds')
     expect(text()).not.toContain('Your agent is turning this skill')
+  })
+
+  it('tests that the page stops saying neo is checking after two minutes', async () => {
+    overrides = { origin: 'history', runCount: 0 }
+    ultrafast = { status: 'pending', flowVersion: 0, writeApproved: false }
+    duringFetch = () => setSystemTime(new Date(Date.now() + 3 * 60_000))
+    await mount()
+
+    expect(text()).toContain('Learning from this run')
+    expect(text()).not.toContain('neo is checking the fast version')
+    expect(text()).toContain('Still to come: Finishes on its next run')
   })
 
   it('tests that a verified task skill shows its fast version instead', async () => {

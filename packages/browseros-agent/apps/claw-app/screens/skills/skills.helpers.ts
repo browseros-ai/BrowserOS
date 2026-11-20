@@ -206,11 +206,41 @@ export interface LearningStep {
   state: 'done' | 'now' | 'todo'
 }
 
+/** How long the skill page keeps checking a pending fast version after it opens. */
+export const VERIFYING_WINDOW_MS = 2 * 60_000
+
+/** How often the skill page checks a pending fast version inside that window. */
+export const VERIFYING_POLL_MS = 3000
+
+/**
+ * The skill page's next check of a pending fast version, or false to stop. It runs one check past
+ * the window so the page re-renders and stops saying neo is checking.
+ */
+export function verifyingPoll(
+  skill: Skill | undefined,
+  openedAt: number,
+  now: number,
+): number | false {
+  if (skill?.ultrafast?.status !== 'pending') return false
+  return now - openedAt < VERIFYING_WINDOW_MS + VERIFYING_POLL_MS
+    ? VERIFYING_POLL_MS
+    : false
+}
+
+/** Whether a pending fast version still reads as being checked: only inside the window. */
+export function stillVerifying(openedAt: number, updatedAt: number): boolean {
+  return updatedAt - openedAt < VERIFYING_WINDOW_MS
+}
+
 /**
  * What the skill page says while a task skill's first run turns into its fast version: the agent
- * handed neo a flow and neo is checking it. Null once it is verified, or for any other skill.
+ * handed neo a flow and neo is checking it, or, once the page stops checking, that it finishes on
+ * the next run. Null once it is verified, or for any other skill.
  */
-export function firstRunLearning(skill: Skill): LearningStep[] | null {
+export function firstRunLearning(
+  skill: Skill,
+  checking = true,
+): LearningStep[] | null {
   const ultrafast = skill.ultrafast
   if (
     skill.origin !== 'history' ||
@@ -220,9 +250,14 @@ export function firstRunLearning(skill: Skill): LearningStep[] | null {
   ) {
     return null
   }
-  return [
+  const done: LearningStep[] = [
     { text: 'Your agent is doing the task the normal way', state: 'done' },
     { text: 'neo is learning the steps', state: 'done' },
+  ]
+  if (!checking)
+    return [...done, { text: 'Finishes on its next run', state: 'todo' }]
+  return [
+    ...done,
     { text: 'neo is checking the fast version', state: 'now' },
     { text: 'Next time it takes seconds', state: 'todo' },
   ]
