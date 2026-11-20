@@ -247,12 +247,12 @@ pub(super) async fn draft_skill(
         .sessions
         .lookup(&SessionId::new(session_id.clone()))
         .await;
-    if task.summary.status != TaskStatus::Done || live.is_some() {
+    if !digest::ended_cleanly(&task.summary) || live.is_some() {
         return Err(error(
             &request_id,
             StatusCode::UNPROCESSABLE_ENTITY,
             "not_finished",
-            "only a finished task can become a skill",
+            "only a finished task, or one stopped without errors, can become a skill",
         ));
     }
     let skill_name = saved_skill(&state, &session_id)

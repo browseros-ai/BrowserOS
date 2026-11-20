@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::redact::{bare_host, cut, host_and_path, scrub_text, search_term};
 use crate::db::{
-    audit_log::{TaskDetail, ToolDispatchRow},
+    audit_log::{TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
     pursue_runs::{PursueOutcome, PursueStepKind, pursue_run},
 };
 
@@ -74,6 +74,17 @@ impl DraftRequest {
             }
         }
         hosts
+    }
+}
+
+/// Whether a task ended in a way a skill can be drafted from: finished, or stopped before any
+/// call failed. A failed task, or one stopped after errors, would teach the skill its mistakes.
+#[must_use]
+pub fn ended_cleanly(summary: &TaskSummary) -> bool {
+    match summary.status {
+        TaskStatus::Done => true,
+        TaskStatus::Cancelled => summary.error_count == 0,
+        TaskStatus::Live | TaskStatus::Failed => false,
     }
 }
 
@@ -406,7 +417,6 @@ fn failed(row: &ToolDispatchRow) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::audit_log::{TaskStatus, TaskSummary};
 
     fn row(
         id: i64,
@@ -470,6 +480,21 @@ mod tests {
             screenshot_dispatch_ids: vec![],
             start_event: None,
             end_event: None,
+        }
+    }
+
+    #[test]
+    fn a_task_stopped_without_errors_can_become_a_skill() {
+        let mut summary = task(vec![]).summary;
+        assert!(ended_cleanly(&summary));
+        summary.status = TaskStatus::Cancelled;
+        assert!(ended_cleanly(&summary));
+        summary.error_count = 1;
+        assert!(!ended_cleanly(&summary));
+        summary.error_count = 0;
+        for status in [TaskStatus::Failed, TaskStatus::Live] {
+            summary.status = status;
+            assert!(!ended_cleanly(&summary));
         }
     }
 
