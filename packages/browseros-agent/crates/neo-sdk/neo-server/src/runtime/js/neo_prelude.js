@@ -322,7 +322,9 @@
      * The one way a helper ends the script. Callers `throw stop(…)`. It writes the stop's console
      * line and returns the bootstrap's branded error carrying the `Stop` record (agent.d.ts):
      * where (`at`, the agent's line captured at the call's entry), why, the tab looked at, up to
-     * three lookalikes with refs that work with `getByRef` on that tab, and the `next` line.
+     * three lookalikes with refs that work with `getByRef` on that tab, the `next` line, and
+     * `log`, the run's console lines so far (bootstrap.js `consoleTail`), for hosts that show the
+     * model only the value.
      */
     function stop(api, { site, ask, why, tab, picks = [], obstacle, detail }) {
       const lookalikes = picks
@@ -350,6 +352,8 @@
         `${api} ${quote(ask)} -> stopped: ${why}` +
           lookalikes.map((l) => ` · ${l.ref} ${p2(l.p)}`).join(''),
       )
+      // Read after the stop's own line, so the log ends with it.
+      record.log = __neo.consoleTail()
       return stopError(api, record)
     }
 

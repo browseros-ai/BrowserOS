@@ -663,12 +663,54 @@
       .join(' ')
   }
 
+  // The newest console lines, as the run's reply prints them (mcp/run_tool.rs `log_line`), for a
+  // stop's `log` (`consoleTail`). Some hosts show the model only the reply's value, never its
+  // console lines (Claude Code reads `structuredContent`), so a stop carries them in its record.
+  // Bounded as it fills, so a script that logs in a loop holds at most STOP_LOG_LINES lines here.
+  const STOP_LOG_LINES = 40
+  const STOP_LOG_CHARS = 4000
+  const tail = []
+  let tailDropped = 0
+
+  function logged(level, args) {
+    const text = format(args)
+    const line = level === 'log' ? text : `[${level}] ${text}`
+    tail.push(
+      line.length > STOP_LOG_CHARS ? `${line.slice(0, STOP_LOG_CHARS)}…` : line,
+    )
+    if (tail.length > STOP_LOG_LINES) {
+      tail.shift()
+      tailDropped++
+    }
+    return nativeLog(level, text)
+  }
+
+  /**
+   * The run's console lines so far, oldest first: the newest that fit in STOP_LOG_LINES lines and
+   * STOP_LOG_CHARS characters (the newest line always). When older ones were dropped, a first
+   * line says how many.
+   */
+  function consoleTail() {
+    const kept = []
+    let chars = 0
+    for (let at = tail.length - 1; at >= 0; at--) {
+      const line = tail[at]
+      if (kept.length > 0 && chars + line.length > STOP_LOG_CHARS) break
+      kept.unshift(line)
+      chars += line.length
+    }
+    const dropped = tailDropped + tail.length - kept.length
+    if (dropped > 0)
+      kept.unshift(`[${dropped} earlier console lines not shown]`)
+    return kept
+  }
+
   const console = Object.freeze({
-    log: (...args) => nativeLog('log', format(args)),
-    info: (...args) => nativeLog('info', format(args)),
-    warn: (...args) => nativeLog('warn', format(args)),
-    error: (...args) => nativeLog('error', format(args)),
-    debug: (...args) => nativeLog('debug', format(args)),
+    log: (...args) => logged('log', args),
+    info: (...args) => logged('info', args),
+    warn: (...args) => logged('warn', args),
+    error: (...args) => logged('error', args),
+    debug: (...args) => logged('debug', args),
   })
 
   // Timers ride on __neo_sleep, which the run's deadline caps and its stop cuts short, so a
@@ -772,6 +814,7 @@
     callSite,
     refuse,
     stopError,
+    consoleTail,
     // Local wait deadlines share the script's TimeoutError constructor. They have no
     // operation identity: only errors received from the dispatcher enter `genuine`.
     timeoutError(message) {

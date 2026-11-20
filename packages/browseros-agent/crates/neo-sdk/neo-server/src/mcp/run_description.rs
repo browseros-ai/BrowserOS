@@ -73,11 +73,11 @@ Write as far ahead as you can see, then run it, and write the next stretch from 
 You can see ahead while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.
 After a step that should change the page, say what you expect: `if (!(await neo.check(page, 'a list of results is showing', { timeout: 5000 }))) neo.stop(page, 'no results list')`.
 A helper that is not sure (nothing fits, two elements fit, it cannot tell) stops the script there instead of guessing.
-The run then returns `{ "stopped": { ask, at, call, lookalikes, next, tab, url, why } }`: a stop is a normal result, not an error.
-Nothing is undone: the tab stays as the last finished step left it, and the console lines list every helper call that ran.
+The run then returns `{ "stopped": { ask, at, call, log, lookalikes, next, tab, url, why } }`: a stop is a normal result, not an error.
+Nothing is undone: the tab stays as the last finished step left it, and `stopped.log` lists what ran and what you logged.
 Do not fix the script and run it again from the top: carry on from that tab by hand, as in the loop above. Act on a lookalike's ref with `page.getByRef`, or look with `page.ariaSnapshot()`, then write the next stretch.
 The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.
-`console.log` what you collect as you go: console lines come back with a stop too."#;
+Return what you collect; `console.log` it as you go too, since a stop returns `stopped.log` in place of your value."#;
 
 /// The wait times, which a test reads from the prelude's `timeouts.ts` so the two cannot drift
 /// (this text once said 5 s while the prelude waited 30). None of the 71 waits in that evaluation
@@ -663,11 +663,11 @@ mod tests {
                 "You can see ahead while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.",
                 "After a step that should change the page, say what you expect: `if (!(await neo.check(page, 'a list of results is showing', { timeout: 5000 }))) neo.stop(page, 'no results list')`.",
                 "A helper that is not sure (nothing fits, two elements fit, it cannot tell) stops the script there instead of guessing.",
-                "The run then returns `{ \"stopped\": { ask, at, call, lookalikes, next, tab, url, why } }`: a stop is a normal result, not an error.",
-                "Nothing is undone: the tab stays as the last finished step left it, and the console lines list every helper call that ran.",
+                "The run then returns `{ \"stopped\": { ask, at, call, log, lookalikes, next, tab, url, why } }`: a stop is a normal result, not an error.",
+                "Nothing is undone: the tab stays as the last finished step left it, and `stopped.log` lists what ran and what you logged.",
                 "Do not fix the script and run it again from the top: carry on from that tab by hand, as in the loop above. Act on a lookalike's ref with `page.getByRef`, or look with `page.ariaSnapshot()`, then write the next stretch.",
                 "The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.",
-                "`console.log` what you collect as you go: console lines come back with a stop too.",
+                "Return what you collect; `console.log` it as you go too, since a stop returns `stopped.log` in place of your value.",
             ] {
                 assert!(
                     AHEAD.contains(sentence),
@@ -702,7 +702,7 @@ mod tests {
                 record.insert(name.to_owned(), Value::Null);
             }
         }
-        assert_eq!(record.len(), 8, "Stop's required fields: {record:?}");
+        assert_eq!(record.len(), 9, "Stop's required fields: {record:?}");
         let printed: Vec<&str> = record.keys().map(String::as_str).collect();
         let named = format!("`{{ \"stopped\": {{ {} }} }}`", printed.join(", "));
         assert!(AHEAD.contains(&named), "AHEAD names {named}");

@@ -331,6 +331,7 @@ fn an_uncaught_stop_ends_the_run_ok_with_the_hand_back() -> Result<(), TestError
                 "call": "neo.find", "ask": "the cart button", "why": "not_found", "tab": 7,
                 "url": "https://shop.example/",
                 "lookalikes": [{ "ref": "e2", "is": "button \"Go\"", "p": 0.02 }],
+                "log": ["[info] neo.find \"the search box\" -> e1 searchbox \"Search\" p0.97", "[info] neo.find \"the cart button\" -> stopped: not_found · e2 0.02"],
                 "next": next_line(7, true),
             }),
             "a stop is the run's value, not its error"
@@ -553,6 +554,7 @@ fn unsure_answers_stop_find_all_check_and_choose() -> Result<(), TestError> {
                     { "ref": "e5", "is": "link \"Promo\"", "p": 0.41 },
                     { "ref": "e6", "is": "link \"New\"", "p": 0.6 },
                 ],
+                "log": ["[info] neo.findAll \"each story link\" -> stopped: unsure · e4 0.52 · e5 0.41 · e6 0.60"],
                 "next": next_line(7, true),
             }),
             "the elements Jev cannot call are the lookalikes, three at most"
@@ -575,6 +577,7 @@ fn unsure_answers_stop_find_all_check_and_choose() -> Result<(), TestError> {
             json!({
                 "call": "neo.check", "ask": "the order went through", "why": "unsure", "tab": 7,
                 "url": "https://shop.example/", "lookalikes": [], "detail": "p 0.52",
+                "log": ["[info] neo.check \"the order went through\" -> stopped: unsure"],
                 "next": next_line(7, false),
             }),
             "unsure at the last look stops; without lookalikes, the next line says to look"
@@ -596,6 +599,7 @@ fn unsure_answers_stop_find_all_check_and_choose() -> Result<(), TestError> {
             json!({
                 "call": "neo.choose", "ask": "which tab is open", "why": "unsure", "tab": 7,
                 "url": "https://shop.example/", "lookalikes": [],
+                "log": ["[info] neo.choose \"which tab is open\" -> stopped: unsure"],
                 "detail": "\"a\" 0.45 · \"b\" 0.40", "next": next_line(7, false),
             }),
             "no option clearly leads: the top two go in the detail"
@@ -849,6 +853,58 @@ fn a_popup_opened_from_a_popup_before_the_first_helper_is_followed() -> Result<(
     })
 }
 
+/// A stop's `log` is the run's console lines so far, for hosts that show the model only the
+/// value (Claude Code reads `structuredContent`): the script's own lines as written, a helper's
+/// as `[info] …`, the newest 40 lines and 4,000 characters, and a first line saying how many
+/// older ones were dropped.
+#[test]
+fn a_stop_logs_what_ran_and_what_the_script_logged_capped() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let mut rig = TestRig::new().await?;
+        jev_prelude(&mut rig, Vec::new())?;
+        let page = format!("{FAKE_PAGE}\nconst fake = stub('', '', 1000)\n");
+
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "{page}for (let i = 1; i <= 50; i++) console.log('row', i)\nneo.stop(fake, 'enough')"
+        );
+        let stop = stopped(run_code(&rig, &run, &code).await, &code, "enough")?;
+        let log: Vec<&str> = stop["log"]
+            .as_array()
+            .map(|lines| lines.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert_eq!(log.len(), 41, "40 lines and the note: {log:?}");
+        assert_eq!(
+            (log[0], log[1], log[39], log[40]),
+            (
+                "[11 earlier console lines not shown]",
+                "row 12",
+                "row 50",
+                "[info] neo.stop \"enough\" -> stopped: script"
+            ),
+            "the newest lines, oldest first, the script's own as written"
+        );
+
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "{page}for (let i = 1; i <= 10; i++) console.log(String(i % 10).repeat(1000))\nneo.stop(fake, 'big rows')"
+        );
+        let stop = stopped(run_code(&rig, &run, &code).await, &code, "big rows")?;
+        let log: Vec<&str> = stop["log"]
+            .as_array()
+            .map(|lines| lines.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let chars: usize = log.iter().skip(1).map(|line| line.chars().count()).sum();
+        assert!(chars <= 4000, "4,000 characters at most: {chars}");
+        assert_eq!(
+            (log[0], log.len()),
+            ("[7 earlier console lines not shown]", 5),
+            "three 1,000-character rows fit beside the stop's line: {log:?}"
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn neo_stop_needs_no_await_and_hands_back_the_newest_tab() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -873,6 +929,7 @@ fn neo_stop_needs_no_await_and_hands_back_the_newest_tab() -> Result<(), TestErr
             json!({
                 "call": "neo.stop", "ask": "the product page has no Add to cart button",
                 "why": "script", "tab": 8, "url": "https://shop.example/dp/1", "lookalikes": [],
+                "log": ["[info] neo.find \"the product link\" -> e1 searchbox \"Search\" p0.97", "[info] neo.stop follows the new tab https://shop.example/dp/1 (opened from https://shop.example/)", "[info] neo.stop \"the product page has no Add to cart button\" -> stopped: script"],
                 "next": next_line(8, false),
             }),
             "the script's own stop hands back the tab a helper would have looked at"

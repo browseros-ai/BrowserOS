@@ -131,6 +131,11 @@ declare global {
     lookalikes: { ref: string; is: string; p: number }[]
     /** One more fact when there is one, e.g. `e180 is already picked for "the State dropdown"`. */
     detail?: string
+    /** What ran and what you logged: the run's console lines up to the stop, oldest first, a
+     * helper's as `[info] neo.find "the search box" -> e90 …`, your `console.log` lines as written.
+     * At most 40 lines and 4,000 characters; when older ones were dropped, the first line says how
+     * many. */
+    log: string[]
     /** What to do now, in one line. */
     next: string
   }
@@ -170,7 +175,7 @@ declare global {
      *
      * A helper that is not sure stops the script instead of guessing. It throws a `NeoError` with
      * `code: 'stopped'` and `stop: Stop`; leave it uncaught. The run then ends normally and returns
-     * `{ stopped: Stop }` with the console lines written before it. A stop is not an error
+     * `{ stopped: Stop }`; `stopped.log` lists what ran and what you logged. A stop is not an error
      * and undoes nothing: the tab is as the last finished step left it. Carry on from that tab by
      * hand (`getByRef` on a lookalike, or `ariaSnapshot()`); do not run the script again from the top.
      *
