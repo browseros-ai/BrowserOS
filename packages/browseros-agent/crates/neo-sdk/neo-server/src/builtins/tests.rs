@@ -17,8 +17,7 @@ use neo_playwright::{
     ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
-use neo_telemetry::label::{CloseReason, TabOrigin};
-use neo_telemetry::{OpenTabCounts, Recording, Telemetry, TelemetryCall};
+use neo_telemetry::{Telemetry, TelemetryConfig};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -46,6 +45,7 @@ use crate::dispatch::{
 };
 use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
+use crate::telemetry_rig::Scrape;
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
 
@@ -1347,31 +1347,13 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     Ok(())
 }
 
-/// The tab hooks of the telemetry facade, as tab telemetry's ledger sent them so far, with each
-/// lifetime left out: the ledger's own tests pin those.
-fn tab_hooks(
-    calls: Vec<TelemetryCall>,
-) -> Vec<(&'static str, Option<TabOrigin>, Option<CloseReason>)> {
-    calls
-        .into_iter()
-        .filter_map(|call| match call {
-            TelemetryCall::TabOpened { origin } => Some(("opened", Some(origin), None)),
-            TelemetryCall::TabClosed { origin, reason, .. } => {
-                Some(("closed", Some(origin), Some(reason)))
-            }
-            TelemetryCall::RendererCrashed => Some(("crashed", None, None)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Waits until `done` holds for the live open-tab counts, as the gauge's source reads them.
+/// Waits until `done` holds for `neo_tabs_open`, as `(agent, found, neo)` in a scrape.
 async fn tabs_until(
-    recording: &Recording,
-    done: impl Fn(OpenTabCounts) -> bool,
+    telemetry: &Telemetry,
+    done: impl Fn((u64, u64, u64)) -> bool,
 ) -> Result<(), Box<dyn Error>> {
     within(async {
-        while !done(recording.open_tabs().unwrap_or_default()) {
+        while !Scrape::of(telemetry).is_ok_and(|scrape| done(scrape.open_tabs())) {
             time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -1384,12 +1366,12 @@ async fn tabs_until(
 /// and the owner's own close as `user`, each once.
 #[tokio::test]
 async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), Box<dyn Error>> {
-    let (telemetry, recording) = Telemetry::recording();
-    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
     let harness = Harness::with_tabs(None, false, tabs).await?;
     // The owner's tab, which also keeps the janitor from closing the browser's last tab.
     let owners = harness.owner_tab("https://example.com/").await?;
-    tabs_until(&recording, |open| open.found == 1).await?;
+    tabs_until(&telemetry, |(_, found, _)| found == 1).await?;
 
     let (run, guard) = harness.run()?;
     let closed_by_script = page_of(&value(
@@ -1398,7 +1380,7 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
     let closed_by_janitor = page_of(&value(
         harness.submit(&run, "context.newPage", json!({})).await,
     )?)?;
-    tabs_until(&recording, |open| open.agent == 2).await?;
+    tabs_until(&telemetry, |(agent, _, _)| agent == 2).await?;
     value(
         harness
             .submit(
@@ -1417,19 +1399,18 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
         !harness.is_open(closed_by_janitor.tab).await?,
         "the janitor closed the idle agent tab"
     );
-    tabs_until(&recording, |open| open.agent == 0).await?;
+    tabs_until(&telemetry, |(agent, _, _)| agent == 0).await?;
     assert!(harness.fake.close_tab(owners.tab), "the fake had the tab");
-    tabs_until(&recording, |open| open.found == 0).await?;
+    tabs_until(&telemetry, |(_, found, _)| found == 0).await?;
 
     assert_eq!(
-        tab_hooks(recording.calls()),
+        Scrape::of(&telemetry)?.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]),
         [
-            ("opened", Some(TabOrigin::Found), None),
-            ("opened", Some(TabOrigin::Agent), None),
-            ("opened", Some(TabOrigin::Agent), None),
-            ("closed", Some(TabOrigin::Agent), Some(CloseReason::Script)),
-            ("closed", Some(TabOrigin::Agent), Some(CloseReason::Janitor)),
-            ("closed", Some(TabOrigin::Found), Some(CloseReason::User)),
+            r#"neo_tabs_closed_total{close_reason="janitor",origin="agent"} 1"#,
+            r#"neo_tabs_closed_total{close_reason="script",origin="agent"} 1"#,
+            r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#,
+            r#"neo_tabs_opened_total{origin="agent"} 2"#,
+            r#"neo_tabs_opened_total{origin="found"} 1"#,
         ],
         "each tab opened and closed once, with who opened it and why it closed"
     );
@@ -5350,8 +5331,8 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
 /// with the blank tab it adopts, and a tab held meanwhile is born `found`.
 #[tokio::test]
 async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn Error>> {
-    let (telemetry, recording) = Telemetry::recording();
-    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
     let attach = tabs.life().expect_open(OpenFor::Neo);
     let harness = Harness::with_tabs(None, false, tabs).await?;
     let launch = harness.fake.open_tab("about:blank", "");
@@ -5360,7 +5341,7 @@ async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn 
     blank.set_attach_intent(attach);
     let shutdown = CancellationToken::new();
     let following = tokio::spawn(Arc::clone(&blank).follow(shutdown.clone()));
-    tabs_until(&recording, |open| open.neo == 1 && open.found == 1).await?;
+    tabs_until(&telemetry, |(_, found, neo)| neo == 1 && found == 1).await?;
     assert_eq!(blank.current(), Some(launch), "the launch tab, adopted");
     assert_eq!(
         harness.fake.count("Browser.createTab"),
@@ -5368,10 +5349,10 @@ async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn 
         "adopted, not opened"
     );
     assert_eq!(
-        tab_hooks(recording.calls()),
+        Scrape::of(&telemetry)?.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]),
         [
-            ("opened", Some(TabOrigin::Neo), None),
-            ("opened", Some(TabOrigin::Found), None),
+            r#"neo_tabs_opened_total{origin="found"} 1"#,
+            r#"neo_tabs_opened_total{origin="neo"} 1"#,
         ],
         "Neo's tab born neo, the owner's found, each once"
     );

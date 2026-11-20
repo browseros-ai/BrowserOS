@@ -235,7 +235,7 @@ mod tests {
     use std::sync::Arc;
 
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
-    use neo_telemetry::{Recording, Telemetry, TelemetryCall, TraceContext};
+    use neo_telemetry::{Probe, Telemetry, TelemetryConfig, TraceContext};
     use rmcp::ServiceExt;
     use rmcp::model::{
         CallToolRequestParams, CallToolResult, ClientInfo, MetaObject, ProtocolVersion,
@@ -325,14 +325,18 @@ mod tests {
         Ok(())
     }
 
-    /// The parent each run handed telemetry as it started (`RunFacts::parent`), in order.
-    fn parents(recording: &Recording) -> Vec<Option<TraceContext>> {
-        recording
-            .calls()
+    /// The caller's trace each run's exported `neo.run` span joined, in the order the runs
+    /// ended: the caller's context (trace id, parent span id, tracestate) when the span's parent
+    /// is remote, else `None` (a trace of the run's own).
+    fn parents(probe: &Probe) -> Vec<Option<TraceContext>> {
+        probe
+            .spans()
             .into_iter()
-            .filter_map(|call| match call {
-                TelemetryCall::RunStarted { parent, .. } => Some(parent),
-                _ => None,
+            .filter(|span| span.name == "neo.run")
+            .map(|span| {
+                let parent = span.parent_span_id.filter(|_| span.parent_is_remote)?;
+                let state = Some(span.trace_state.as_str()).filter(|state| !state.is_empty());
+                TraceContext::from_w3c(&format!("00-{}-{parent}-01", span.trace_id), state)
             })
             .collect()
     }
@@ -373,10 +377,11 @@ mod tests {
         result.meta.as_ref()?.get(RUN_META_KEY)?.pointer(pointer)
     }
 
-    /// Neo's agent router over a run service whose telemetry records, on a port the OS picked.
+    /// Neo's agent router over a run service reporting to the live pipeline, its spans kept in
+    /// memory, on a port the OS picked.
     struct Served {
         url: String,
-        recording: Recording,
+        probe: Probe,
         server: JoinHandle<io::Result<()>>,
         rig: TestRig,
     }
@@ -384,7 +389,7 @@ mod tests {
     impl Served {
         async fn start() -> Result<Self, TestError> {
             let rig = TestRig::new().await?;
-            let (telemetry, recording) = Telemetry::recording();
+            let (telemetry, probe) = Telemetry::in_memory(&TelemetryConfig::default());
             let runs = RunService::new(RunServiceParts {
                 dispatcher: Arc::clone(&rig.dispatcher),
                 browser: Arc::clone(&rig.link),
@@ -408,7 +413,7 @@ mod tests {
             let server = tokio::spawn(axum::serve(listener, router).into_future());
             Ok(Self {
                 url,
-                recording,
+                probe,
                 server,
                 rig,
             })
@@ -429,9 +434,9 @@ mod tests {
         why: &'static str,
     }
 
-    /// The caller's trace context crosses the MCP boundary into `RunService`, over Neo's real
-    /// agent router and rmcp's HTTP transport: the header's, else `_meta`'s, else none, and
-    /// the run runs either way.
+    /// The caller's trace context crosses the MCP boundary into the run's exported span, over
+    /// Neo's real agent router and rmcp's HTTP transport: the header's, else `_meta`'s, else
+    /// none, and the run runs either way.
     #[test]
     fn trace_context_reaches_the_run_service_from_the_header_or_the_meta() -> Result<(), TestError>
     {
@@ -481,15 +486,15 @@ mod tests {
                 why,
             } in cases
             {
-                let started = parents(&neo.recording).len();
+                let started = parents(&neo.probe).len();
                 let result = call(&neo.url, headers, meta).await?;
                 assert_eq!(
                     outcome(&result, "/status"),
                     Some(&json!("ok")),
                     "{why}: trace context never stops a run: {result:?}"
                 );
-                let after = parents(&neo.recording);
-                assert_eq!(after.len(), started + 1, "{why}: one run started");
+                let after = parents(&neo.probe);
+                assert_eq!(after.len(), started + 1, "{why}: one run span");
                 assert_eq!(after.last(), Some(&parent), "{why}");
             }
             neo.stop();
@@ -516,8 +521,8 @@ mod tests {
                 "an unknown _meta key is still refused, trace headers or not: {typo:?}"
             );
             assert!(
-                parents(&neo.recording).is_empty(),
-                "a refused call starts no run"
+                parents(&neo.probe).is_empty(),
+                "a refused call exports no run span"
             );
             neo.stop();
             Ok(())

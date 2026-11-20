@@ -36,6 +36,8 @@ pub struct CapturedSpan {
     pub parent_span_id: Option<String>,
     /// Whether the parent is the caller's (a `traceparent`), not a span of this process.
     pub parent_is_remote: bool,
+    /// The W3C `tracestate` the span carries (the caller's, inherited), `""` when none.
+    pub trace_state: String,
     /// Every attribute, by key.
     pub attributes: BTreeMap<String, SpanValue>,
     /// Its OpenTelemetry status.
@@ -127,6 +129,7 @@ fn captured(span: &SpanData) -> CapturedSpan {
         parent_span_id: (span.parent_span_id != SpanId::INVALID)
             .then(|| span.parent_span_id.to_string()),
         parent_is_remote: span.parent_span_is_remote,
+        trace_state: span.span_context.trace_state().header(),
         attributes: span
             .attributes
             .iter()

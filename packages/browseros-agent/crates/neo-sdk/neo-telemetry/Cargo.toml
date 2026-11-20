@@ -64,8 +64,8 @@ mod_module_files = "warn"
 # Types: either a plain data bag (all fields pub) or an encapsulated type (none pub).
 partial_pub_fields = "warn"
 [features]
-# `neo_telemetry::Recording`: a handle that keeps every hook call in memory, so the server's tests
-# can assert what fired before real metrics exist. Tests and test builds only.
+# `Telemetry::in_memory` and its `Probe`: the live pipeline with its spans kept in memory, so tests
+# read real metrics and spans with no collector. Tests and test builds only.
 test-support = []
 
 [dependencies]
