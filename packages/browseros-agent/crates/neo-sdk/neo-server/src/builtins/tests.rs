@@ -17,7 +17,8 @@ use neo_playwright::{
     ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
-use neo_telemetry::Telemetry;
+use neo_telemetry::label::{CloseReason, TabOrigin};
+use neo_telemetry::{OpenTabCounts, Recording, Telemetry, TelemetryCall};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -92,8 +93,17 @@ impl Harness {
         solver: Option<Arc<CaptchaSolver>>,
         hosted: bool,
     ) -> Result<Self, Box<dyn Error>> {
+        Self::with_tabs(solver, hosted, Arc::new(TabRegistry::new())).await
+    }
+
+    /// [`Harness::with_mode`] over `tabs`, a registry the test built: one whose telemetry
+    /// records what its tab ledger reports, say.
+    async fn with_tabs(
+        solver: Option<Arc<CaptchaSolver>>,
+        hosted: bool,
+        tabs: Arc<TabRegistry>,
+    ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
-        let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
         let link = BrowserLink::start_with(
             NativeCapabilities::default(),
@@ -1333,6 +1343,95 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     assert!(
         !harness.is_open(held.tab).await?,
         "a full idle time after the owner lets go, a sweep closes it"
+    );
+    Ok(())
+}
+
+/// The tab hooks of the telemetry facade, as tab telemetry's ledger sent them so far, with each
+/// lifetime left out: the ledger's own tests pin those.
+fn tab_hooks(
+    calls: Vec<TelemetryCall>,
+) -> Vec<(&'static str, Option<TabOrigin>, Option<CloseReason>)> {
+    calls
+        .into_iter()
+        .filter_map(|call| match call {
+            TelemetryCall::TabOpened { origin } => Some(("opened", Some(origin), None)),
+            TelemetryCall::TabClosed { origin, reason, .. } => {
+                Some(("closed", Some(origin), Some(reason)))
+            }
+            TelemetryCall::RendererCrashed => Some(("crashed", None, None)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Waits until `done` holds for the live open-tab counts, as the gauge's source reads them.
+async fn tabs_until(
+    recording: &Recording,
+    done: impl Fn(OpenTabCounts) -> bool,
+) -> Result<(), Box<dyn Error>> {
+    within(async {
+        while !done(recording.open_tabs().unwrap_or_default()) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+}
+
+/// Tab telemetry through the real ops, the janitor and the tab watch: a script's new tab is born
+/// the agent's (claimed when the engine names it, whatever the watch saw first), a script's close
+/// closes as `script`, the janitor's as `janitor` though it goes through the same `page.close`,
+/// and the owner's own close as `user`, each once.
+#[tokio::test]
+async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), Box<dyn Error>> {
+    let (telemetry, recording) = Telemetry::recording();
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let harness = Harness::with_tabs(None, false, tabs).await?;
+    // The owner's tab, which also keeps the janitor from closing the browser's last tab.
+    let owners = harness.owner_tab("https://example.com/").await?;
+    tabs_until(&recording, |open| open.found == 1).await?;
+
+    let (run, guard) = harness.run()?;
+    let closed_by_script = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let closed_by_janitor = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    tabs_until(&recording, |open| open.agent == 2).await?;
+    value(
+        harness
+            .submit(
+                &run,
+                "page.close",
+                json!({ "page": handle(&closed_by_script) }),
+            )
+            .await,
+    )?;
+    Harness::finish(guard);
+    let later = Instant::now() + harness.settings.tab_idle_close();
+    within(harness.janitor().sweep(later))
+        .await?
+        .ok_or("the sweep ran")?;
+    assert!(
+        !harness.is_open(closed_by_janitor.tab).await?,
+        "the janitor closed the idle agent tab"
+    );
+    tabs_until(&recording, |open| open.agent == 0).await?;
+    assert!(harness.fake.close_tab(owners.tab), "the fake had the tab");
+    tabs_until(&recording, |open| open.found == 0).await?;
+
+    assert_eq!(
+        tab_hooks(recording.calls()),
+        [
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Agent), None),
+            ("opened", Some(TabOrigin::Agent), None),
+            ("closed", Some(TabOrigin::Agent), Some(CloseReason::Script)),
+            ("closed", Some(TabOrigin::Agent), Some(CloseReason::Janitor)),
+            ("closed", Some(TabOrigin::Found), Some(CloseReason::User)),
+        ],
+        "each tab opened and closed once, with who opened it and why it closed"
     );
     Ok(())
 }

@@ -222,17 +222,22 @@ function MethodLanes({
 /**
  * The open method's arguments and call log under its row, and its outcome. What it returned is
  * in the right panel, whole and formatted; the Result column says how big it is and points there.
+ * A call from a span-made record (`fromSpans`) has no arguments, log or result to show (its block
+ * says so once): just its outcome.
  */
 export function MethodDetail({
   operation,
   output,
+  fromSpans = false,
 }: {
   operation: NeoOperation
   output: OperationOutput
+  fromSpans?: boolean
 }) {
   const args = argumentLines(operation.name, operation.args)
   // An operation can omit values even when the run ends after recording was turned back on.
   const valuesOff = operation.values === 'off'
+  if (fromSpans) return <SpanOutcome operation={operation} />
   return (
     <div className="flex shrink-0 bg-white px-4">
       <Rail />
@@ -301,6 +306,35 @@ export function MethodDetail({
   )
 }
 
+/** A span-made call's detail: its outcome and delivery, or the error its span recorded. */
+function SpanOutcome({ operation }: { operation: NeoOperation }) {
+  return (
+    <div className="flex shrink-0 bg-white px-4">
+      <Rail />
+      <div className="flex min-w-0 flex-1 border-neo-edge border-b pt-2 pb-2.5 pl-[84px] text-[11px] leading-4">
+        <section className="flex min-w-0 flex-1 flex-col gap-1">
+          <h4 className="font-semibold text-ink leading-[14px]">Outcome</h4>
+          {operation.error && (
+            <p className="font-code text-bad">
+              {operation.error.owner} / {operation.error.code}
+              {operation.error.message && (
+                <span className="ml-2 font-plex text-bad">
+                  {operation.error.message}
+                </span>
+              )}
+            </p>
+          )}
+          <p className="text-ink-2">
+            {operation.outcome ?? 'running'}
+            {operation.delivery ? `, delivery ${operation.delivery}` : ''}
+            {operation.tabId !== null ? `, tab ${operation.tabId}` : ''}
+          </p>
+        </section>
+      </div>
+    </div>
+  )
+}
+
 function Lines({ lines, empty }: { lines: Line[]; empty: string }) {
   if (lines.length === 0) return <p className="text-ink-3">{empty}</p>
   return (
@@ -333,6 +367,7 @@ export function UnplacedGroup({
   openId,
   onToggle,
   outputOf,
+  fromSpans = false,
 }: {
   operations: NeoOperation[]
   spanMs: number
@@ -341,6 +376,7 @@ export function UnplacedGroup({
   openId: string | null
   onToggle: (id: string) => void
   outputOf: (operation: NeoOperation) => OperationOutput
+  fromSpans?: boolean
 }) {
   return (
     <>
@@ -367,6 +403,7 @@ export function UnplacedGroup({
             open={operation.id === openId}
             onToggle={() => onToggle(operation.id)}
             outputOf={outputOf}
+            fromSpans={fromSpans}
           />
         ))}
     </>
@@ -380,6 +417,7 @@ function MethodGroupRow({
   open,
   onToggle,
   outputOf,
+  fromSpans,
 }: {
   operation: NeoOperation
   spanMs: number
@@ -387,6 +425,7 @@ function MethodGroupRow({
   onToggle: () => void
   /** Its output, worked out only while the row is open. */
   outputOf: (operation: NeoOperation) => OperationOutput
+  fromSpans: boolean
 }) {
   return (
     <>
@@ -402,7 +441,11 @@ function MethodGroupRow({
         }
       />
       {open && (
-        <MethodDetail operation={operation} output={outputOf(operation)} />
+        <MethodDetail
+          operation={operation}
+          output={outputOf(operation)}
+          fromSpans={fromSpans}
+        />
       )}
     </>
   )

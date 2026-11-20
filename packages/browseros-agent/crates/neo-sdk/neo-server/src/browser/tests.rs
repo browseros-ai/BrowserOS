@@ -1,5 +1,6 @@
 //! `BrowserLink` and `tab_watch` against the fake browser: the connect loop, the one session,
-//! closes noticed without anyone listing tabs, and the tab events the host API learns from.
+//! closes noticed without anyone listing tabs, the tab events the host API learns from, and what
+//! tab telemetry's ledger hears from the watch.
 
 use std::error::Error;
 use std::future;
@@ -8,7 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId, page_js};
+use neo_telemetry::label::{CloseReason, TabOrigin};
+use neo_telemetry::{OpenTabCounts, Recording, Telemetry, TelemetryCall};
 use neo_trace::TaskId;
+use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::time;
 
@@ -416,6 +420,97 @@ async fn a_popup_that_opened_and_closed_between_two_listings_leaves_no_announcem
         tabs.sight(&RunScope::Family(task), popup),
         Sight::Foreign,
         "the watch's confirmed close dropped the announcement"
+    );
+    Ok(())
+}
+
+/// The tab hooks the recording kept so far, each lifetime left out (the ledger's tests pin them).
+fn tab_hooks(recording: &Recording) -> Vec<(&'static str, Option<TabOrigin>, Option<CloseReason>)> {
+    recording
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            TelemetryCall::TabOpened { origin } => Some(("opened", Some(origin), None)),
+            TelemetryCall::TabClosed { origin, reason, .. } => {
+                Some(("closed", Some(origin), Some(reason)))
+            }
+            TelemetryCall::RendererCrashed => Some(("crashed", None, None)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The tab watch is the only writer of browser facts to tab telemetry: a tab open before Neo
+/// attached, the owner's tab and its popup are each born once; a renderer crash on an idle tab,
+/// no op on it, counts once and names its close; a reconnect to the same browser counts no tab
+/// again and closes the one that went meanwhile; a browser that comes back as another one closes
+/// every old tab as `shutdown`, even under a tab id it reused.
+#[tokio::test(start_paused = true)]
+async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let before = fake.open_tab("https://example.com/", "Example");
+    let (telemetry, recording) = Telemetry::recording();
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let recording = recording.clone();
+        move || {
+            recording.open_tabs()
+                == Some(OpenTabCounts {
+                    found: count,
+                    ..OpenTabCounts::default()
+                })
+        }
+    };
+    eventually(Duration::from_secs(5), found(1)).await?;
+    let owners = fake.open_tab("https://example.org/", "Other");
+    let popup = fake.open_popup(owners, "https://example.net/");
+    eventually(Duration::from_secs(5), found(3)).await?;
+
+    assert!(
+        fake.page_event(
+            owners,
+            "Target.targetCrashed",
+            json!({ "targetId": format!("target-{}", owners.0), "status": "crashed", "errorCode": 11 }),
+        ),
+        "the fake had the tab"
+    );
+    assert!(fake.close_tab(owners), "the fake had the tab");
+    eventually(Duration::from_secs(5), found(2)).await?;
+
+    fake.drop_connection();
+    assert!(fake.close_tab(popup), "closed while no socket hears of it");
+    fake.reconnect();
+    eventually(Duration::from_secs(5), found(1)).await?;
+
+    // Restarted while Neo was away: every target is new, and tab number `before` came back.
+    fake.drop_connection();
+    assert!(fake.replace_target(before), "the fake had the tab");
+    fake.reconnect();
+    let shutdown = (
+        "closed",
+        Some(TabOrigin::Found),
+        Some(CloseReason::Shutdown),
+    );
+    eventually(Duration::from_secs(5), || {
+        tab_hooks(&recording).contains(&shutdown)
+    })
+    .await?;
+    eventually(Duration::from_secs(5), found(1)).await?;
+
+    assert_eq!(
+        tab_hooks(&recording),
+        [
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Found), None),
+            ("crashed", None, None),
+            ("closed", Some(TabOrigin::Found), Some(CloseReason::Crash)),
+            ("closed", Some(TabOrigin::Found), Some(CloseReason::User)),
+            shutdown,
+            ("opened", Some(TabOrigin::Found), None),
+        ],
+        "each tab opened and closed once, a crash counted once, nothing counted twice"
     );
     Ok(())
 }

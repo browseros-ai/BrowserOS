@@ -212,8 +212,14 @@ impl Providers {
         let Self {
             meters,
             tracers,
-            transport: _transport,
+            transport,
         } = self;
+        // First: from here every export, in flight or final, ends within `budget` whatever the
+        // collector does, so both shutdowns below come back in time. Without it a hung collector
+        // holds the periodic reader for the 5 s its own shutdown waits, whatever `budget` says.
+        if let Some(transport) = &transport {
+            transport.arm_deadline(budget);
+        }
         let (spans, metrics) = thread::scope(|scope| {
             let spans = tracers.map(|tracers| {
                 thread::Builder::new()
