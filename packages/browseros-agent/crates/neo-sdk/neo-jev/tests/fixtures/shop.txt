@@ -1,0 +1,22 @@
+- banner [ref=e1]:
+  - link "Shop" [ref=e2]
+- search [ref=e3]:
+  - searchbox "Search the shop" [ref=e4]
+  - button "Go" [ref=e5]
+- heading "Results" [level=2]
+- link [aria-hidden] [ref=e10]: /p/blue-mug
+- heading "Mugs" [level=2]
+- link [ref=e11]: /p/blue-mug
+- heading "Blue mug, 350 ml" [level=2]
+- generic [ref=e12] [cursor=pointer]: Add to cart
+- button "Add to cart" [ref=e13]
+- link [ref=e30]: /p/red-mug
+- heading "Red mug, 350 ml" [level=2]
+- 'link "₹350 (it''s 20% off)" [ref=e31]'
+- radio "Female" [ref=e20]
+- generic [ref=e21] [cursor=pointer]: Female
+- text: City
+- textbox [ref=e40]
+- combobox [ref=e41]:
+  - /placeholder: Select State
+- button "Submit" [ref=e50]
