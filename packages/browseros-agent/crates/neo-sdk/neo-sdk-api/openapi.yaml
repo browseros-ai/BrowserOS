@@ -1273,9 +1273,8 @@ paths:
         ending in `_total`, and a histogram as `_bucket{le="…"}` (`+Inf` included), `_sum` and
         `_count`. Neo renders it at each request from the same meter provider it pushes OTLP
         from when push is on, so a scrape and a push agree. It is served whenever this listener
-        is, with no setting and no parameter, and never on the agent's MCP port. A family
-        appears once Neo has a value for it, so before anything is recorded the body can be
-        empty, which is still a valid exposition. A server older than this route answers 404.
+        is, with no setting and no parameter, and never on the agent's MCP port. A server older
+        than this route answers 404.
 
         The families, with their labels: `neo_runs_total` (`status`, `error_owner`),
         `neo_runs_in_flight`, `neo_run_duration_seconds` (`status`), `neo_operations_total`
@@ -1283,6 +1282,10 @@ paths:
         `neo_errors_total` (`error_owner`, `error_code`), `neo_tabs_open` (`origin`),
         `neo_tabs_opened_total` (`origin`), `neo_tabs_closed_total` (`origin`, `close_reason`),
         `neo_tab_lifetime_seconds` (`origin`, `close_reason`) and `neo_renderer_crashes_total`.
+        Every one has its `# HELP` and `# TYPE` lines from the first scrape, in this order, even
+        before it has a sample, so the body is never empty: `neo_runs_in_flight` and
+        `neo_renderer_crashes_total` start at `0`, `neo_tabs_open` has a series for each
+        `origin`, and any other family gains a series the first time Neo records its label set.
         Durations are in seconds. Every label value comes from a closed set: `status` is how a
         run ended (`Run.status`: `ok`, `error`, `cancelled` or `timeout`) or how an operation
         did (`Operation.outcome`), `error_owner` an `OperationError.owner` or `none`,

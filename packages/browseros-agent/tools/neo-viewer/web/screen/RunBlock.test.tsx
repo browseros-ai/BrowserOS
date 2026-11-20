@@ -6,8 +6,9 @@ import { fire, installDom, type TestDom } from '../test-support/dom'
 import { operation, record } from '../test-support/operations'
 import { runDetail, runSummary } from '../test-support/runs'
 import { runTrace } from '../test-support/telemetry'
+import { SPANS_NOTICE } from './operation-output'
 import type { OperationSelection } from './operations'
-import { RunBlock, SPANS_NOTICE } from './RunBlock'
+import { RunBlock } from './RunBlock'
 
 const code = [
   "await page.getByRef('e5').fill('Grace Hopper');",

@@ -32,7 +32,7 @@
  * in the waterfall opens its call in the block (one id, `neo.op.id`, names both).
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ExportResponse, RunSummary, TraceSpan } from '../../shared/api'
 import { LiveScreenPopup } from '../live-screen/LiveScreen'
 import { useLiveScreen } from '../live-screen/use-live-screen'
@@ -85,9 +85,20 @@ export function ViewerScreen() {
   const [popped, setPopped] = useState(false)
   const nowMs = useNow(runs.some((run) => run.status === 'running'))
   const [healthOpen, setHealthOpen] = useState(false)
-  // The view needs the health line that opens it: none without telemetry.
+  const healthButton = useRef<HTMLButtonElement>(null)
+  // The view needs the health line that opens it. Health gone (a viewer restarted without
+  // telemetry) closes it for good: it does not reopen by itself when health comes back.
   const healthShown = healthOpen && health !== null
-  const closeHealth = useCallback(() => setHealthOpen(false), [])
+  const noHealth = health === null
+  useEffect(() => {
+    if (noHealth) setHealthOpen(false)
+  }, [noHealth])
+  // "← Runs" and Escape take away the focused element with the view: focus goes back to the
+  // health line that opened it.
+  const closeHealth = useCallback(() => {
+    setHealthOpen(false)
+    healthButton.current?.focus()
+  }, [])
   useEscapeCloses(healthShown, closeHealth)
   const [trace, setTrace] = useState<TraceSelection | null>(null)
   const [fullTraceId, setFullTraceId] = useState<string | null>(null)
@@ -209,6 +220,7 @@ export function ViewerScreen() {
         health={health}
         healthOpen={healthShown}
         onHealth={() => setHealthOpen(!healthShown)}
+        healthButton={healthButton}
       />
       {exported && (
         <ExportNotice exported={exported} onDismiss={() => setExported(null)} />

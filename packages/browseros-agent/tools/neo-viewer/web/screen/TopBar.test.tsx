@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { TelemetryHealth, ViewerInfo } from '../../shared/api'
 import type { LiveTakeover } from '../../shared/live-screen'
@@ -14,6 +15,7 @@ import {
   liveScreenReducer,
 } from '../live-screen/live-screen-model'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
+import { installDom } from '../test-support/dom'
 import { health } from '../test-support/telemetry'
 import { errorRate, HealthLine } from './HealthLine'
 import { ExportNotice, TopBar } from './TopBar'
@@ -225,6 +227,30 @@ describe("the top bar's health line", () => {
     expect(quiet).toBe(
       'In flight – Run errors – Op errors – Tabs – Crashes – no metrics',
     )
+  })
+
+  it('is named by its figures, so a screen reader reads them, with the sentence as its description', () => {
+    const markup = line(health())
+    expect(markup).not.toContain('aria-label')
+    expect(markup).toMatch(
+      /<button[^>]*title="Neo&#x27;s health\. Since the last Clear/,
+    )
+  })
+
+  it('hands its button to the screen, which gives it focus back when the Health view closes', async () => {
+    const dom = await installDom()
+    const ref = createRef<HTMLButtonElement>()
+    await dom.render(
+      <HealthLine
+        health={health()}
+        open={false}
+        onToggle={() => {}}
+        now={NOW}
+        buttonRef={ref}
+      />,
+    )
+    expect(ref.current?.textContent).toContain('In flight')
+    await dom.restore()
   })
 
   it('opens the Health view, and reads as pressed while it is open', () => {

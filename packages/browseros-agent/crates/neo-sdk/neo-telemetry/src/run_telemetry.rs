@@ -42,9 +42,10 @@ impl RunTelemetry {
     }
 
     /// Records one settled op: `neo_operations_total`, `neo_operation_duration_seconds`,
-    /// `neo_errors_total` when it failed, and its `neo.op` span, built now with `op.started` as
-    /// its start. The door calls it exactly once per op, from its one settle, on every path
-    /// (answered, refused, stopped, aborted, panicked).
+    /// `neo_errors_total` when it failed on its own (outcome `error`; a cancelled op's error is
+    /// what stopped its run, which the run's end counts once), and its `neo.op` span, built now
+    /// with `op.started` as its start. The door calls it exactly once per op, from its one
+    /// settle, on every path (answered, refused, stopped, aborted, panicked).
     pub fn op_settled(&self, op: OpSettled<'_>) {
         match &self.backend {
             Backend::Noop => {}

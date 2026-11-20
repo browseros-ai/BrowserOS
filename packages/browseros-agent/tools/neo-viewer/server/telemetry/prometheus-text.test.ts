@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { MetricFamily } from '../../shared/api'
-import { fixtureFamilies, fixturePrometheus } from './fixtures'
-import { parsePrometheus, renderPrometheus } from './prometheus-text'
+import {
+  fixtureFamilies,
+  fixturePrometheus,
+  renderPrometheus,
+} from './fixtures'
+import { parsePrometheus } from './prometheus-text'
 
 function family(families: MetricFamily[], name: string) {
   const found = families.find((candidate) => candidate.name === name)
@@ -11,7 +15,7 @@ function family(families: MetricFamily[], name: string) {
 
 describe('Prometheus text 0.0.4', () => {
   test('counters and gauges, with HELP and TYPE', () => {
-    const { families, errors } = parsePrometheus(
+    const families = parsePrometheus(
       [
         '# HELP neo_runs_total Runs ended.',
         '# TYPE neo_runs_total counter',
@@ -23,7 +27,6 @@ describe('Prometheus text 0.0.4', () => {
         '',
       ].join('\n'),
     )
-    expect(errors).toBe(0)
     expect(family(families, 'neo_runs_total')).toEqual({
       name: 'neo_runs_total',
       kind: 'counter',
@@ -39,7 +42,7 @@ describe('Prometheus text 0.0.4', () => {
   })
 
   test('a histogram: cumulative buckets read from the data, +Inf last, sum and count', () => {
-    const { families } = parsePrometheus(
+    const families = parsePrometheus(
       [
         '# TYPE neo_run_duration_seconds histogram',
         'neo_run_duration_seconds_bucket{status="ok",le="0.5"} 1',
@@ -69,10 +72,9 @@ describe('Prometheus text 0.0.4', () => {
   })
 
   test('label escaping: backslash, quote and newline; a comma and braces inside a value', () => {
-    const { families, errors } = parsePrometheus(
+    const families = parsePrometheus(
       'neo_x{path="C:\\\\tmp",msg="say \\"hi\\"\\nbye",odd="a,b}{c"} 1\n',
     )
-    expect(errors).toBe(0)
     expect(family(families, 'neo_x').series[0]?.labels).toEqual({
       path: 'C:\\tmp',
       msg: 'say "hi"\nbye',
@@ -81,7 +83,7 @@ describe('Prometheus text 0.0.4', () => {
   })
 
   test('NaN and infinities parse; JSON cannot carry them, so they read as null', () => {
-    const { families, errors } = parsePrometheus(
+    const families = parsePrometheus(
       [
         '# TYPE g gauge',
         'g{k="nan"} NaN',
@@ -90,7 +92,6 @@ describe('Prometheus text 0.0.4', () => {
         'g{k="ok"} -0.5',
       ].join('\n'),
     )
-    expect(errors).toBe(0)
     expect(
       family(families, 'g').series.map((s) => [s.labels.k, s.value]),
     ).toEqual([
@@ -101,11 +102,10 @@ describe('Prometheus text 0.0.4', () => {
     ])
   })
 
-  test('a line that cannot be read is counted and skipped, never fatal', () => {
-    const { families, errors } = parsePrometheus(
+  test('a line that cannot be read is skipped, never fatal', () => {
+    const families = parsePrometheus(
       ['good 1', 'bad{oops 2', 'also_bad notanumber', 'fine 3'].join('\n'),
     )
-    expect(errors).toBe(2)
     expect(families.map((f) => f.name)).toEqual(['good', 'fine'])
     expect(family(families, 'good').kind).toBe('unknown')
   })
@@ -113,7 +113,7 @@ describe('Prometheus text 0.0.4', () => {
 
 describe('OpenMetrics extras are tolerated', () => {
   test('# EOF ends the text, # UNIT is skipped, a counter declared without _total keeps its canonical name, _created is dropped', () => {
-    const { families, errors } = parsePrometheus(
+    const families = parsePrometheus(
       [
         '# TYPE neo_runs counter',
         '# UNIT neo_runs runs',
@@ -124,7 +124,6 @@ describe('OpenMetrics extras are tolerated', () => {
         'after_eof 1',
       ].join('\n'),
     )
-    expect(errors).toBe(0)
     expect(families).toEqual([
       {
         name: 'neo_runs_total',
@@ -136,7 +135,7 @@ describe('OpenMetrics extras are tolerated', () => {
   })
 
   test('exemplars after # are cut, timestamps ignored, quoted UTF-8 names read', () => {
-    const { families, errors } = parsePrometheus(
+    const families = parsePrometheus(
       [
         '# TYPE neo_operation_duration_seconds histogram',
         'neo_operation_duration_seconds_bucket{op="page.goto",le="1"} 2 # {trace_id="4bf92f35"} 0.4 1700000000.1',
@@ -145,7 +144,6 @@ describe('OpenMetrics extras are tolerated', () => {
         '{"neo.dotted.name", k="v"} 7',
       ].join('\n'),
     )
-    expect(errors).toBe(0)
     expect(
       family(families, 'neo_operation_duration_seconds').series[0]?.buckets,
     ).toEqual([
@@ -161,8 +159,7 @@ describe('OpenMetrics extras are tolerated', () => {
 test("rendered text parses back to the same families (the fixture's 11 metrics)", () => {
   const families = fixtureFamilies(2)
   expect(families).toHaveLength(11)
-  const { families: parsed, errors } = parsePrometheus(fixturePrometheus(2))
-  expect(errors).toBe(0)
+  const parsed = parsePrometheus(fixturePrometheus(2))
   expect(parsed).toEqual(families)
   expect(renderPrometheus(parsed)).toBe(fixturePrometheus(2))
 })

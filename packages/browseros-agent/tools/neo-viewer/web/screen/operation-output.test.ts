@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import type { NeoOperation } from '../../shared/api'
 import { operation, record } from '../test-support/operations'
-import { operationOutput, SPANS_NO_RESULT } from './operation-output'
+import {
+  operationOutput,
+  recordNotice,
+  SPANS_NO_RESULT,
+  SPANS_NOTICE,
+} from './operation-output'
 import { argumentLines } from './operation-values'
 import { callPlaces, ordinal, placeOperations, placeText } from './operations'
 import { lineText } from './text-lines'
@@ -750,6 +755,17 @@ describe('where a call sits', () => {
 })
 
 describe('a call from a record folded from spans', () => {
+  it('is the one place that knows: a block says it once, and its calls open to their outcome', () => {
+    expect(recordNotice({ source: 'spans' })).toBe(SPANS_NOTICE)
+    expect(recordNotice({ source: 'host' })).toBeNull()
+    expect(recordNotice({})).toBeNull()
+    expect(recordNotice(null)).toBeNull()
+    const call = operation(3, 'page.title')
+    expect(operationOutput(call, [call], 0, 'spans').outcomeOnly).toBe(true)
+    expect(operationOutput(call, [call], 0, 'host').outcomeOnly).toBe(false)
+    expect(operationOutput(call, [call]).outcomeOnly).toBe(false)
+  })
+
   it('says spans carry no result instead of showing an empty one', () => {
     const call = operation(3, 'locator.textContent', {
       kind: '',

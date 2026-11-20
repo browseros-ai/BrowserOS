@@ -11,9 +11,9 @@
  * Rules, in order:
  * - the request has a `traceparent` header: the caller's. A valid one is the run's context; an
  *   invalid one (Neo ignores it and starts a new trace) leaves the run with none. Nothing is added.
- * - else the request's one `tools/call` carries `_meta[…].traceparent`: the caller's, the same
+ * - else the request's one `run` call carries `_meta[…].traceparent`: the caller's, the same
  *   way. Nothing is added: a header would override it.
- * - else the request holds exactly one `tools/call`: the viewer mints a sampled context
+ * - else the request holds exactly one `run` call: the viewer mints a sampled context
  *   (`00-<trace>-<span>-01`) and adds it as the header. Sampled, or Neo's parent-based sampler
  *   would drop every span of the run.
  * - else (no call, or a batch of several): none, and nothing is added. One header cannot name
@@ -23,7 +23,7 @@
 
 import { randomFillSync } from 'node:crypto'
 import type { RunTraceContext } from '../../shared/api'
-import { type RequestMessage, runMetaOf } from './request-body'
+import { isRunCall, type RequestMessage, runMetaOf } from './request-body'
 
 export interface TraceDecision {
   /** Stored on the run start (persisted) and shown as `RunSummary.trace`. */
@@ -43,8 +43,9 @@ export function traceContextFor(
 ): TraceDecision | null {
   const header = headers.get('traceparent')
   if (header !== null) return caller(header)
+  // Neo serves one tool, `run`; a call of any other is refused before a run (and a span) exists.
   const calls = messages.filter(
-    (message) => message.method === 'tools/call' && message.hasId,
+    (message) => isRunCall(message) && message.hasId,
   )
   if (calls.length !== 1) return null
   const meta = runMetaOf(calls[0] as RequestMessage)

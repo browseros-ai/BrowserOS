@@ -10,7 +10,7 @@
  * (`HealthLine`) once Neo's telemetry arrives, which opens the Health view; nothing without it.
  */
 
-import { useEffect, useState } from 'react'
+import { type Ref, useEffect, useState } from 'react'
 import type {
   ExportResponse,
   TelemetryHealth,
@@ -29,6 +29,7 @@ export function TopBar({
   health = null,
   healthOpen = false,
   onHealth,
+  healthButton,
 }: {
   info: ViewerInfo | null
   onClear: () => void
@@ -41,6 +42,8 @@ export function TopBar({
   /** The Health view is open. */
   healthOpen?: boolean
   onHealth?: () => void
+  /** The health line's button, which takes focus back when the Health view closes. */
+  healthButton?: Ref<HTMLButtonElement>
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-line border-b bg-white px-5">
@@ -67,7 +70,12 @@ export function TopBar({
       </div>
       <ContainerLine info={info} />
       {health && onHealth && (
-        <HealthLine health={health} open={healthOpen} onToggle={onHealth} />
+        <HealthLine
+          health={health}
+          open={healthOpen}
+          onToggle={onHealth}
+          buttonRef={healthButton}
+        />
       )}
       <div className="flex-1" />
       <McpUrl url={info?.mcpUrl ?? null} />

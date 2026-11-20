@@ -46,10 +46,6 @@ const ERROR_CODE: Key = Key::from_static_str("neo.error.code");
 const URL_DOMAIN: Key = Key::from_static_str("url.domain");
 const URL_FULL: Key = Key::from_static_str("url.full");
 
-/// How much of a script-chosen op name a span keeps: as much as the door's own refusal keeps
-/// (`NAME_CHARS` in the server's dispatcher), so an invented name cannot inflate every span.
-const NAME_CHARS: usize = 128;
-
 /// Starts and ends Neo's spans on one tracer, applying the privacy dial to `neo.op`.
 #[derive(Debug)]
 pub(crate) struct Spans {
@@ -105,8 +101,8 @@ impl Spans {
     }
 
     /// Records one settled op's `neo.op`, from `took` ago until now: a child of its run's span
-    /// (`run`), or a root for an op of an internal run. Status `ERROR` unless it ended ok, as for
-    /// the run.
+    /// (`run`), or a root for an op of an internal run. Status `ERROR` only when the op failed on
+    /// its own (outcome `error`, decision D11).
     pub(crate) fn op_settled(&self, run: Option<&SpanContext>, op: &OpSettled<'_>, took: Duration) {
         let end = SystemTime::now();
         let start = end.checked_sub(took).unwrap_or(end);
@@ -119,7 +115,7 @@ impl Spans {
             .build_with_context(SpanBuilder::from_name(OP).with_start_time(start), &parent);
         if span.is_recording() {
             span.set_attributes([
-                KeyValue::new(OP_NAME, clip(op.raw_name.unwrap_or(op.op)).to_owned()),
+                KeyValue::new(OP_NAME, op.raw_name.unwrap_or(op.op).to_owned()),
                 KeyValue::new(OP_ID, op.op_id.to_string()),
                 KeyValue::new(OP_OUTCOME, op.outcome.as_str()),
                 KeyValue::new(OP_DELIVERY, op.delivery.as_str()),
@@ -141,9 +137,12 @@ impl Spans {
             if let Some(full) = site.full {
                 span.set_attribute(KeyValue::new(URL_FULL, full));
             }
+            // A cancelled op leaves the status unset: it was cut short by what ended its run, and
+            // Neo's own long-poll (`events.next`) ends that way in every run, so an ERROR here
+            // would paint every trace red. Its outcome and error attributes still say why.
             let failed = match op.outcome {
-                OpOutcome::Ok => false,
-                OpOutcome::Error | OpOutcome::Cancelled => true,
+                OpOutcome::Error => true,
+                OpOutcome::Ok | OpOutcome::Cancelled => false,
             };
             if failed {
                 span.set_status(Status::error(description(op.error, op.outcome.as_str())));
@@ -163,40 +162,16 @@ fn set_error(span: &mut Span, error: Option<ErrorLabel>) {
     }
 }
 
-/// A failed span's status text: its error code when it has one, else how it ended
-/// (`cancelled`, `timeout`).
+/// A failed span's status text: its error code when it has one, else how it ended (a run's
+/// `cancelled` or `timeout`, an op's `error`).
 fn description(error: Option<ErrorLabel>, ended: &'static str) -> &'static str {
     error.map_or(ended, |error| error.code.as_str())
-}
-
-/// `name`, cut to [`NAME_CHARS`] characters.
-fn clip(name: &str) -> &str {
-    name.char_indices()
-        .nth(NAME_CHARS)
-        .and_then(|(end, _)| name.get(..end))
-        .unwrap_or(name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::label::{ErrorCode, ErrorOwner};
-
-    #[test]
-    fn a_long_invented_name_is_cut_on_a_character_boundary() {
-        assert_eq!(clip("page.goto"), "page.goto", "a real name is kept whole");
-        let long = "é".repeat(NAME_CHARS + 5);
-        let kept = clip(&long);
-        assert_eq!(
-            kept.chars().count(),
-            NAME_CHARS,
-            "an invented name keeps as many characters as the door's refusal does"
-        );
-        assert!(
-            long.starts_with(kept),
-            "the cut keeps the start of the name"
-        );
-    }
 
     #[test]
     fn a_failed_span_says_its_code_or_else_how_it_ended() {

@@ -171,7 +171,11 @@ describe('what the receiver refuses', () => {
       ).status,
     ).toBe(403)
     const port = new URL(url).port
-    for (const host of [`host.docker.internal:${port}`, `localhost:${port}`]) {
+    for (const host of [
+      `host.docker.internal:${port}`,
+      `localhost:${port}`,
+      `[::1]:${port}`,
+    ]) {
       const response = await post(`${url}/otlp/v1/metrics`, body, {
         ...json,
         host,
