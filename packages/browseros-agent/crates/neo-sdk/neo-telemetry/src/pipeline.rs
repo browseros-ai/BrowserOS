@@ -502,7 +502,7 @@ mod tests {
     use std::future;
     use std::sync::mpsc;
 
-    use opentelemetry::Context;
+    use opentelemetry::{Context, Key};
     use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
     use opentelemetry_sdk::trace::SpanData;
 
@@ -655,6 +655,22 @@ mod tests {
             "a second shutdown has nothing left to stop"
         );
         drop(release);
+        Ok(())
+    }
+
+    #[test]
+    fn the_metrics_carry_the_resource_the_push_door_builds() -> Result<(), Box<dyn Error>> {
+        let pipeline = Pipeline::start(&TelemetryConfig::default())?;
+        let mut collected = ResourceMetrics::default();
+        pipeline.scrape.collect(&mut collected)?;
+        assert_eq!(
+            collected
+                .resource()
+                .get(&Key::from_static_str("service.name"))
+                .map(|name| name.to_string()),
+            Some("browseros-neo".to_owned()),
+            "the meter provider takes `otlp::resource`, so OTLP metrics name the service"
+        );
         Ok(())
     }
 
