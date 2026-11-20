@@ -508,10 +508,45 @@ export interface RunningContainer {
 }
 
 /**
+ * Where a container sends its OpenTelemetry to the viewer on this machine. The viewer listens on
+ * 127.0.0.1 only, and stays there: Docker Desktop carries a container's connection to
+ * `host.docker.internal` to the host's loopback (probed 2026-11-20 on Docker Desktop 29.9.3: a
+ * container on its own network reached a server bound to 127.0.0.1, which saw
+ * `Host: host.docker.internal:<port>` from 127.0.0.1). A Linux engine routes that name to its
+ * bridge gateway instead, where a loopback viewer is not listening: there pushes do not arrive,
+ * and the viewer's metrics come from the host API scrape alone.
+ */
+export function containerOtlpEndpoint(viewerPort: number): string {
+  return `http://host.docker.internal:${viewerPort}/otlp`
+}
+
+/**
+ * The container's OpenTelemetry settings (wire-contract.md, "Neo Viewer receiver"): push to the
+ * viewer as OTLP/HTTP JSON (the viewer has no protobuf library), spans and metrics every 500 ms so
+ * the page follows a run as it happens. `--add-host` makes the name resolve on a Linux engine as
+ * Docker Desktop already does.
+ */
+export function otlpContainerArgs(endpoint: string): string[] {
+  return [
+    '--add-host=host.docker.internal:host-gateway',
+    '-e',
+    `OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`,
+    '-e',
+    'OTEL_EXPORTER_OTLP_PROTOCOL=http/json',
+    '-e',
+    'OTEL_BSP_SCHEDULE_DELAY=500',
+    '-e',
+    'OTEL_METRIC_EXPORT_INTERVAL=500',
+  ]
+}
+
+/**
  * `docker run` as the image's README shows for a standalone start: its own network, the MCP
  * port with `NEO_MCP_REMOTE=true`, and the host API over `CLAW_HOST_TCP` with the token file,
  * both published on 127.0.0.1 at ports Docker picks. Inside the container `CLAW_HOST_TCP` binds
- * 0.0.0.0: bound to 127.0.0.1 the published port reaches nothing (measured).
+ * 0.0.0.0: bound to 127.0.0.1 the published port reaches nothing (measured). With `otlpEndpoint`,
+ * Neo also pushes its OpenTelemetry to the viewer (`otlpContainerArgs`); an image older than
+ * telemetry ignores the settings.
  */
 export async function startContainer(
   run: Runner,
@@ -520,6 +555,8 @@ export async function startContainer(
     image: string
     tokenFile: string
     launch: string
+    /** The viewer's OTLP base as the container reaches it (`containerOtlpEndpoint`). */
+    otlpEndpoint?: string | null
   },
 ): Promise<RunningContainer> {
   const labels = [
@@ -566,6 +603,7 @@ export async function startContainer(
     `${options.tokenFile}:${TOKEN_PATH}:ro`,
     '-v',
     `${options.names.volume}:/data`,
+    ...(options.otlpEndpoint ? otlpContainerArgs(options.otlpEndpoint) : []),
     '-p',
     `127.0.0.1::${MCP_PORT}`,
     '-p',

@@ -25,6 +25,7 @@ use super::operation_guard::Settlement;
 use super::run_tasks::RunTasks;
 use super::{
     CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
+    telemetry_verdict,
 };
 use crate::browser::{PageRef, RunScope, RunView, Sight, TabRegistry, TabsScope, TaskRecord};
 
@@ -153,21 +154,19 @@ pub(crate) struct OpLine {
     pub(crate) site: Option<CallSite>,
 }
 
-/// Ends the run's record exactly once: [`RunGuard::finish`] on the normal path, `Drop` when
-/// the run's task unwound. On drop it also stops the run and aborts its op tasks, which settle
-/// themselves through their own guards. Either way the tabs the run used stop being in use
-/// for the idle-tab janitor (`TabRegistry::run_ended`).
+/// Ends the run's record and its telemetry exactly once: [`RunGuard::finish`] on the normal
+/// path, `Drop` when the run's task unwound. On drop it also stops the run and aborts its op
+/// tasks, which settle themselves through their own guards. Either way the tabs the run used
+/// stop being in use for the idle-tab janitor (`TabRegistry::run_ended`).
 #[must_use]
 pub(crate) struct RunGuard {
     run: Option<Arc<RunCtx>>,
     trace: TraceSink,
     tabs: Arc<TabRegistry>,
-    /// The run's telemetry, taken together with `run`: [`RunGuard::finish`] and the guard's
-    /// drop each end it once, beside `run_ended`, with the same verdict.
-    #[expect(
-        dead_code,
-        reason = "RunGuard's finish and drop end it with the trace's verdict (telemetry_verdict.rs)"
-    )]
+    /// The run's telemetry, taken together with `run`: both of the guard's ends finish it once,
+    /// beside `run_ended`, with the verdict read from the same end ([`telemetry_verdict()`]). It
+    /// holds the run in `neo_runs_in_flight`, so the count comes down on every path, a panic's
+    /// included.
     telemetry: Option<RunSpan>,
 }
 
@@ -296,10 +295,6 @@ impl RunCtx {
     /// The run as its ops' telemetry sees it: the door's one settle calls `op_settled` on it for
     /// every op, on every path, including ops that settle after the run ended.
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "OperationGuard's settle reports each op through it (operation_guard.rs)"
-    )]
     pub(crate) fn telemetry(&self) -> &RunTelemetry {
         &self.telemetry
     }
@@ -650,21 +645,32 @@ impl StopReason {
 
 impl RunGuard {
     /// Records the run's end, which the run service builds from the run's reply. Teardown drains
-    /// the run's ops first, so their `op_ended` records precede it; the trace turns any op still
-    /// open at a run's end into `unknown`.
+    /// the run's ops first, so their `op_ended` records, and their telemetry, precede it; the
+    /// trace turns any op still open at a run's end into `unknown`.
     pub(crate) fn finish(mut self, end: RunEnd) {
         if let Some(run) = self.run.take() {
-            run.end_slots();
-            self.tabs.run_ended(run.id);
-            self.trace.run_ended(RunEnded {
-                id: run.id,
-                status: end.status,
-                error: end.error,
-                result: end.result,
-                replay: end.replay,
-                at: EpochMillis::now(),
-            });
+            self.record_end(&run, end);
         }
+    }
+
+    /// The one end of both paths: the run's state goes, its tabs stop being in use, and its
+    /// telemetry and its record get the same end. Telemetry first, so whoever reads the end on
+    /// `/v1/runs` finds the run already counted. Channel sends and std locks only, so it is safe
+    /// while unwinding.
+    fn record_end(&mut self, run: &RunCtx, end: RunEnd) {
+        run.end_slots();
+        self.tabs.run_ended(run.id);
+        if let Some(telemetry) = self.telemetry.take() {
+            telemetry.finish(telemetry_verdict(&end));
+        }
+        self.trace.run_ended(RunEnded {
+            id: run.id,
+            status: end.status,
+            error: end.error,
+            result: end.result,
+            replay: end.replay,
+            at: EpochMillis::now(),
+        });
     }
 }
 
@@ -674,19 +680,17 @@ impl Drop for RunGuard {
             return;
         };
         run.stop(StopReason::Crashed);
+        // Aborted, not awaited: those ops settle in their own guards after this end, and their
+        // telemetry still finds the run through the `RunCtx` they hold.
         drop(run.close_ops());
-        run.end_slots();
-        self.tabs.run_ended(run.id);
         // Ops still in flight may have sent something, so the run is not called retryable.
-        let error = StopReason::Crashed.error().record(false, None);
-        self.trace.run_ended(RunEnded {
-            id: run.id,
+        let end = RunEnd {
             status: RunStatus::Error,
-            error: Some(error),
+            error: Some(StopReason::Crashed.error().record(false, None)),
             result: None,
             replay: None,
-            at: EpochMillis::now(),
-        });
+        };
+        self.record_end(&run, end);
     }
 }
 

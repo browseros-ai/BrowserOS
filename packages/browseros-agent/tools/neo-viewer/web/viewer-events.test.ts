@@ -15,7 +15,8 @@ function listen(deps: StreamDeps) {
   const stop = listenToViewerEvents(
     {
       opened: () => heard.push('opened'),
-      event: (event) => heard.push(`v${event.version}`),
+      event: (event) =>
+        heard.push('version' in event ? `v${event.version}` : event.type),
     },
     deps,
   )

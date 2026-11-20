@@ -96,14 +96,18 @@ describe('the event stream', () => {
     })
     expect(snapshots).toHaveLength(2)
     await dom.interact(() =>
-      snapshots[1]?.({ runs: [runSummary(1), runSummary(2)], version: 2 }),
+      snapshots[1]?.({
+        runs: [runSummary(1), runSummary(2)],
+        version: 2,
+        health: null,
+      }),
     )
     await dom.interact(() =>
       stream?.send({ version: 3, type: 'run', run: runSummary(3) }),
     )
     expect(dom.container.textContent).toBe('1 2 3')
     await dom.interact(() =>
-      snapshots[0]?.({ runs: [runSummary(1)], version: 1 }),
+      snapshots[0]?.({ runs: [runSummary(1)], version: 1, health: null }),
     )
     expect(dom.container.textContent).toBe('1 2 3')
     uninstall()

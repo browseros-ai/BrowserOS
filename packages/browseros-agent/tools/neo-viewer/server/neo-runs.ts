@@ -1,13 +1,17 @@
 /**
- * Joins Neo's own record of each run (its host API's `GET /v1/runs/{id}`) to the proxy's record.
+ * Joins Neo's own record of each run to the proxy's record.
  *
  *   proxy: a run's reply passes ─▶ store emits the ended run, with `neoRunId` from the reply's _meta
- *   joiner: GET /v1/runs/{neoRunId}?wait=10 (hostFetch) ─▶ toNeoRunRecord ─▶ store.attachNeoRun
+ *   joiner: source.read({neoRunId, trace}) ─▶ NeoRunRecord ─▶ store.attachNeoRun
  *
  * The proxy has what the agent sent and read; only Neo has the operations (each call's name,
- * site, timing, args, result, notes, delivery, error). The record is read once the reply is in;
- * `wait` holds the request until Neo has stored the run's last operation. A run whose record
- * cannot be read (no host API, image stopped) keeps a null record.
+ * site, timing, outcome, error). Where the record comes from is chosen once, when the viewer
+ * starts, and never changes, so a run's op table never switches source or shows an op twice:
+ * - a host API: `hostApiRecords()`, `GET /v1/runs/{id}?wait=10` (args, results, notes and all);
+ * - none (`--upstream` without a host token): the telemetry module's records, folded from Neo's
+ *   `neo.run` / `neo.op` spans (`server/telemetry/`).
+ * Both give the same `NeoRunRecord`, attached by the store's one writer, `attachNeoRun`, and kept
+ * in the log. A run whose record cannot be read (an older image, the image stopped) keeps none.
  */
 
 import type {
@@ -15,6 +19,7 @@ import type {
   NeoOperationError,
   NeoRunRecord,
   RunSummary,
+  RunTraceContext,
 } from '../shared/api'
 import { hostFetch } from './hostApi'
 
@@ -124,6 +129,42 @@ async function readNeoRun(
   return toNeoRunRecord((await response.json()) as Raw)
 }
 
+/** What the joiner knows about an ended run when it asks for its record. */
+export interface RunKey {
+  /** From the reply's `_meta["com.browseros.neo/run"].id`; null when no reply came. */
+  neoRunId: string | null
+  /** The context the run went to Neo with; a minted one (`injected`) binds a run with no reply. */
+  trace: RunTraceContext | null
+}
+
+/** Where Neo's records of runs come from: one source per viewer process. */
+export interface RunRecordSource {
+  /** Whether a run with this key can have a record from this source at all. */
+  canRead(key: RunKey): boolean
+  /**
+   * The run's record, once complete or after a bounded wait (an incomplete one then, when there
+   * is something to show); null when this source has none. Reading again gives the same record or
+   * a superset of it, never fewer operations.
+   */
+  read(key: RunKey, signal: AbortSignal): Promise<NeoRunRecord | null>
+  /**
+   * A run's record grew after its reads ended (its `neo.run` span came late); the joiner reads it
+   * once more. The host API never does this: its `wait` covers it.
+   */
+  onLateCompletion?(listener: (key: RunKey) => void): () => void
+}
+
+/** Today's read: `GET /v1/runs/{id}?wait=10` on Neo's host API. */
+export function hostApiRecords(
+  read: (neoRunId: string) => Promise<NeoRunRecord | null> = readNeoRun,
+): RunRecordSource {
+  return {
+    canRead: (key) => key.neoRunId !== null,
+    read: (key) =>
+      key.neoRunId === null ? Promise.resolve(null) : read(key.neoRunId),
+  }
+}
+
 /** Where the joiner reads ended runs and puts the records it read. */
 export interface RunRecords {
   subscribe(
@@ -137,25 +178,34 @@ export interface RunRecords {
 const DRAIN_MS = 3000
 
 /**
- * Watches the store for runs that ended with a Neo run id and joins Neo's record to each, one read
- * per run at a time. An incomplete record is attached and read again, up to `MAX_READS`.
+ * Watches the store for runs that ended and joins Neo's record to each from `source`, one read per
+ * run at a time. An incomplete record is attached and read again, up to `MAX_READS`; a record that
+ * grows after that (`onLateCompletion`) is read once more.
  */
 export function joinNeoRuns(
   store: RunRecords,
-  read = readNeoRun,
+  source: RunRecordSource,
 ): {
   settled: (maxMs: number) => Promise<void>
   settledFor: (runId: string, maxMs: number) => Promise<void>
   stop: () => Promise<void>
 } {
   const reading = new Map<string, Promise<void>>()
-  const join = async (runId: string, neoRunId: string) => {
+  /** The run each key was read for, so a late completion finds its run. */
+  const runsByKey = new Map<string, string>()
+  const stopping = new AbortController()
+  const join = async (runId: string, key: RunKey) => {
     for (let attempt = 1; attempt <= MAX_READS; attempt++) {
-      const record = await read(neoRunId).catch(() => null)
+      const record = await source.read(key, stopping.signal).catch(() => null)
       if (!record) return
       store.attachNeoRun(runId, record)
       if (record.complete) return
     }
+  }
+  const start = (runId: string, key: RunKey) => {
+    if (reading.has(runId)) return
+    const pending = join(runId, key).finally(() => reading.delete(runId))
+    reading.set(runId, pending)
   }
   const unsubscribe = store.subscribe((event) => {
     const run = event.run
@@ -166,12 +216,17 @@ export function joinNeoRuns(
       run.status === 'lost'
     )
       return
-    if (!run.neoRunId || store.hasNeoRun(run.id) || reading.has(run.id)) return
-    const pending = join(run.id, run.neoRunId).finally(() =>
-      reading.delete(run.id),
-    )
-    reading.set(run.id, pending)
+    const key: RunKey = { neoRunId: run.neoRunId, trace: run.trace ?? null }
+    if (!source.canRead(key) || store.hasNeoRun(run.id) || reading.has(run.id))
+      return
+    runsByKey.set(keyOf(key), run.id)
+    start(run.id, key)
   })
+  const unlisten =
+    source.onLateCompletion?.((key) => {
+      const runId = runsByKey.get(keyOf(key))
+      if (runId) start(runId, key)
+    }) ?? (() => {})
   const inFlight = (maxMs: number) =>
     Promise.race([Promise.allSettled(reading.values()), Bun.sleep(maxMs)])
   return {
@@ -196,7 +251,14 @@ export function joinNeoRuns(
      */
     async stop() {
       unsubscribe()
+      unlisten()
       await inFlight(DRAIN_MS)
+      stopping.abort()
     },
   }
+}
+
+/** A run's key as text: its Neo run id, else the span id the viewer minted for it. */
+function keyOf(key: RunKey): string {
+  return key.neoRunId ?? `span:${key.trace?.spanId ?? ''}`
 }

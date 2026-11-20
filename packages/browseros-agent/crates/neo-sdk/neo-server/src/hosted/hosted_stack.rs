@@ -178,6 +178,12 @@ impl HostedStack {
         self.shutdown.cancel();
     }
 
+    /// The handle every run, op and tab reports to, for tests that check it stays the no-op.
+    #[cfg(test)]
+    pub(super) fn telemetry(&self) -> &Telemetry {
+        &self.telemetry
+    }
+
     /// Behavior fixtures finish their runs before waiting for persistence. Their watchdog
     /// bounds test cleanup; the production close path keeps its one-second shutdown budget.
     #[cfg(test)]

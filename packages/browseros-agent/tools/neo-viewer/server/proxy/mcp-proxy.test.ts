@@ -530,6 +530,92 @@ describe('one log', () => {
   })
 })
 
+describe('trace context: the one header the viewer may add', () => {
+  const ANSWER = () => ({
+    chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+  })
+  const CALLER = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'
+
+  test('a run call without one gets a minted traceparent; the body reaches Neo as sent, and the run keeps the context', async () => {
+    const { neo, viewer, dataDir } = await setup(ANSWER)
+    const body = runCall(1, 'return 1')
+    await post(viewer.mcpUrl, body)
+    const run = await onlyRun(viewer)
+    const sent = neo.requests.at(-1)
+    expect(sent?.body).toBe(body)
+    const header = sent?.headers.get('traceparent') ?? ''
+    expect(header).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/)
+    expect(run.trace).toEqual({
+      traceId: header.split('-')[1] ?? '',
+      spanId: header.split('-')[2] ?? '',
+      injected: true,
+    })
+    // Kept in the log: a restart shows the same context.
+    await viewer.stop()
+    const again = await startViewer({
+      port: 0,
+      upstream: new URL(neo.url),
+      dataDir,
+    })
+    cleanups.push(() => again.stop())
+    expect(again.store.list()[0]?.trace).toEqual(run.trace)
+  })
+
+  test("the caller's traceparent and tracestate pass through unchanged and are the run's context", async () => {
+    const { neo, viewer } = await setup(ANSWER)
+    await post(viewer.mcpUrl, runCall(1, 'return 1'), {
+      ...MCP_HEADERS,
+      traceparent: CALLER,
+      tracestate: 'vendor=1',
+    })
+    const run = await onlyRun(viewer)
+    expect(neo.requests.at(-1)?.headers.get('traceparent')).toBe(CALLER)
+    expect(neo.requests.at(-1)?.headers.get('tracestate')).toBe('vendor=1')
+    expect(run.trace).toEqual({
+      traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+      spanId: '00f067aa0ba902b7',
+      injected: false,
+    })
+  })
+
+  test("a traceparent in the call's _meta: no header is added, which would override it", async () => {
+    const { neo, viewer } = await setup(ANSWER)
+    await post(
+      viewer.mcpUrl,
+      runCall(1, 'return 1', {
+        'com.browseros.neo/run': { traceparent: CALLER },
+      }),
+    )
+    const run = await onlyRun(viewer)
+    expect(neo.requests.at(-1)?.headers.get('traceparent')).toBeNull()
+    expect(run.trace).toMatchObject({ injected: false })
+  })
+
+  test('requests that are not one run call pass with no header added', async () => {
+    const { neo, viewer } = await setup(() => ({
+      chunks: [sseEvent({ jsonrpc: '2.0', id: 0, result: { tools: [] } })],
+    }))
+    await post(
+      viewer.mcpUrl,
+      JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'tools/list' }),
+    )
+    await post(
+      viewer.mcpUrl,
+      JSON.stringify([
+        JSON.parse(runCall(1, 'return 1')),
+        JSON.parse(runCall(2, 'return 2')),
+      ]),
+    )
+    expect(
+      neo.requests.map((request) => request.headers.get('traceparent')),
+    ).toEqual([null, null])
+    const runs = await waitFor(() =>
+      viewer.store.list().length === 2 ? viewer.store.list() : null,
+    )
+    expect(runs.map((run) => run.trace)).toEqual([null, null])
+  })
+})
+
 describe('the agent going away', () => {
   test('closes the upstream request, so Neo stops the run', async () => {
     const { neo, viewer } = await setup(() => ({
