@@ -445,16 +445,14 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
     let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
     let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
     let _link = start(&fake, &tabs);
-    let found = |count: f64| {
+    let found = |count: u64| {
         let telemetry = telemetry.clone();
-        move || {
-            Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0.0, count, 0.0))
-        }
+        move || Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0, count, 0))
     };
-    eventually(Duration::from_secs(5), found(1.0)).await?;
+    eventually(Duration::from_secs(5), found(1)).await?;
     let owners = fake.open_tab("https://example.org/", "Other");
     let popup = fake.open_popup(owners, "https://example.net/");
-    eventually(Duration::from_secs(5), found(3.0)).await?;
+    eventually(Duration::from_secs(5), found(3)).await?;
 
     assert!(
         fake.page_event(
@@ -465,12 +463,12 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
         "the fake had the tab"
     );
     assert!(fake.close_tab(owners), "the fake had the tab");
-    eventually(Duration::from_secs(5), found(2.0)).await?;
+    eventually(Duration::from_secs(5), found(2)).await?;
 
     fake.drop_connection();
     assert!(fake.close_tab(popup), "closed while no socket hears of it");
     fake.reconnect();
-    eventually(Duration::from_secs(5), found(1.0)).await?;
+    eventually(Duration::from_secs(5), found(1)).await?;
 
     // Restarted while Neo was away: every target is new, and tab number `before` came back.
     fake.drop_connection();
@@ -481,7 +479,7 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
         tab_counts(&telemetry).is_ok_and(|counts| counts.iter().any(|line| line == shutdown))
     })
     .await?;
-    eventually(Duration::from_secs(5), found(1.0)).await?;
+    eventually(Duration::from_secs(5), found(1)).await?;
 
     assert_eq!(
         tab_counts(&telemetry)?,

@@ -4,10 +4,15 @@
 //! whose `Content-Type` is not the one it was started for, so a test also proves the protocol.
 //!
 //! It serves on a runtime of its own: a test that blocks its thread in a flush (or whose runtime
-//! is the one being shut down) still has a collector that answers.
+//! is the one being shut down) still has a collector that answers. It never blocks on that
+//! runtime (the sockets are bound with std first) and stops it in the background, so it is
+//! started and dropped alike from a plain test thread or from inside Neo's runtime.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Read;
+use std::net::TcpListener as StdTcpListener;
+use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -21,6 +26,7 @@ use flate2::read::GzDecoder;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
+use opentelemetry_proto::tonic::trace::v1::Span as ProtoSpan;
 use prost::Message;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -68,6 +74,8 @@ pub(crate) struct ExportedSpan {
     pub(crate) span_id: String,
     /// `None` for a trace's root.
     pub(crate) parent_span_id: Option<String>,
+    /// The W3C `tracestate` it carries, `""` when none.
+    pub(crate) trace_state: String,
     /// Strings as JSON strings, integers as JSON numbers.
     pub(crate) attributes: BTreeMap<String, Value>,
 }
@@ -96,7 +104,8 @@ pub(crate) struct MockCollector {
     base: String,
     wire: Wire,
     received: Arc<Mutex<Vec<Received>>>,
-    _runtime: Runtime,
+    /// Always `Some` until dropped.
+    runtime: Option<Runtime>,
     _socket_dir: Option<TempDir>,
 }
 
@@ -114,16 +123,21 @@ impl MockCollector {
         });
         let (base, socket_dir) = match wire {
             Wire::ProtobufTcp | Wire::JsonTcp => {
-                let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;
+                let listener = StdTcpListener::bind("127.0.0.1:0")?;
+                listener.set_nonblocking(true)?;
                 let base = format!("http://{}", listener.local_addr()?);
-                runtime.spawn(async move { axum::serve(listener, app).await });
+                runtime
+                    .spawn(async move { axum::serve(TcpListener::from_std(listener)?, app).await });
                 (base, None)
             }
             Wire::ProtobufUnix => {
                 let dir = tempfile::tempdir()?;
                 let socket = dir.path().join("collector.sock");
-                let listener = runtime.block_on(async { UnixListener::bind(&socket) })?;
-                runtime.spawn(async move { axum::serve(listener, app).await });
+                let listener = StdUnixListener::bind(&socket)?;
+                listener.set_nonblocking(true)?;
+                runtime.spawn(
+                    async move { axum::serve(UnixListener::from_std(listener)?, app).await },
+                );
                 (unix_base(&socket), Some(dir))
             }
         };
@@ -131,23 +145,21 @@ impl MockCollector {
             base,
             wire,
             received,
-            _runtime: runtime,
+            runtime: Some(runtime),
             _socket_dir: socket_dir,
         })
     }
 
-    /// `OTEL_EXPORTER_OTLP_ENDPOINT` for it: Neo posts to `<base>/v1/traces` and
-    /// `<base>/v1/metrics`.
-    pub(crate) fn base(&self) -> &str {
-        &self.base
-    }
-
-    /// The telemetry variables that point Neo at this collector, with both batching delays cut
-    /// to `every_ms` so a test sees its spans and metrics promptly.
+    /// The telemetry variables that point Neo at this collector (`OTEL_EXPORTER_OTLP_ENDPOINT`
+    /// is its base: Neo posts to `<base>/v1/traces` and `<base>/v1/metrics`), with both
+    /// batching delays cut to `every_ms` so a test sees its spans and metrics promptly.
     pub(crate) fn env(&self, every_ms: u32) -> Vec<(&'static str, String)> {
         vec![
             ("OTEL_EXPORTER_OTLP_ENDPOINT", self.base.clone()),
-            ("OTEL_EXPORTER_OTLP_PROTOCOL", self.wire.protocol().to_owned()),
+            (
+                "OTEL_EXPORTER_OTLP_PROTOCOL",
+                self.wire.protocol().to_owned(),
+            ),
             ("OTEL_BSP_SCHEDULE_DELAY", every_ms.to_string()),
             ("OTEL_METRIC_EXPORT_INTERVAL", every_ms.to_string()),
         ]
@@ -202,7 +214,10 @@ impl MockCollector {
                 return Ok(spans);
             }
             if Instant::now() >= deadline {
-                return Err(format!("the collector did not get the spans in {limit:?}: {spans:#?}").into());
+                return Err(format!(
+                    "the collector did not get the spans in {limit:?}: {spans:#?}"
+                )
+                .into());
             }
             time::sleep(Duration::from_millis(20)).await;
         }
@@ -230,6 +245,15 @@ impl MockCollector {
     }
 }
 
+impl Drop for MockCollector {
+    fn drop(&mut self) {
+        // Not a blocking shutdown: the collector may be dropped inside another runtime.
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 /// Keeps a request whose `Content-Type` is the collector's, gunzipped; refuses any other with
 /// `415`, so it never decodes.
 async fn receive(
@@ -246,7 +270,10 @@ async fn receive(
         None => body.to_vec(),
         Some("gzip") => {
             let mut plain = Vec::new();
-            if GzDecoder::new(body.as_ref()).read_to_end(&mut plain).is_err() {
+            if GzDecoder::new(body.as_ref())
+                .read_to_end(&mut plain)
+                .is_err()
+            {
                 return StatusCode::BAD_REQUEST;
             }
             plain
@@ -264,12 +291,13 @@ async fn receive(
     StatusCode::OK
 }
 
-fn exported(span: opentelemetry_proto::tonic::trace::v1::Span) -> ExportedSpan {
+fn exported(span: ProtoSpan) -> ExportedSpan {
     ExportedSpan {
         name: span.name,
         trace_id: hex(&span.trace_id),
         span_id: hex(&span.span_id),
         parent_span_id: (!span.parent_span_id.is_empty()).then(|| hex(&span.parent_span_id)),
+        trace_state: span.trace_state,
         attributes: span
             .attributes
             .into_iter()
@@ -286,7 +314,11 @@ fn exported(span: opentelemetry_proto::tonic::trace::v1::Span) -> ExportedSpan {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    bytes.iter().fold(String::new(), |mut out, byte| {
+        // Writing to a String cannot fail.
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 /// `http+unix://<socket path, percent-encoded>`: the wire contract's spelling of a Unix socket

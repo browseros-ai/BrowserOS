@@ -8,8 +8,6 @@ use crate::label::{CloseReason, ErrorLabel, TabOrigin};
 use crate::pipeline::Pipeline;
 #[cfg(feature = "test-support")]
 use crate::probe::Probe;
-#[cfg(feature = "test-support")]
-use crate::recording::{Recorder, Recording, TelemetryCall};
 use crate::{OpenTabsSource, RunFacts, RunSpan, TelemetryConfig, TelemetryError, Vocabulary};
 
 /// Neo's telemetry, as the server sees it: the run hooks, the tab hooks, the Prometheus scrape
@@ -62,20 +60,6 @@ impl Telemetry {
         )
     }
 
-    /// The test double: a handle that keeps every call, and the [`Recording`] that reads them
-    /// back.
-    #[cfg(feature = "test-support")]
-    #[must_use]
-    pub fn recording() -> (Self, Recording) {
-        let recorder = Arc::new(Recorder::new());
-        (
-            Self {
-                backend: Backend::Recording(Arc::clone(&recorder)),
-            },
-            Recording::new(recorder),
-        )
-    }
-
     /// Binds Neo's own op names and error codes, from the server's tables (its method registry
     /// and its `ErrorCode` list), exactly once at startup: after the registry is built and before
     /// the door that runs it, so before any op or run can exist. The `op` and `error_code`
@@ -86,8 +70,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => {}
             Backend::Otel(pipeline) => pipeline.bind_vocabulary(vocabulary),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.bind_vocabulary(vocabulary),
         }
     }
 
@@ -98,16 +80,6 @@ impl Telemetry {
             Backend::Noop => RunSpan::noop(),
             Backend::Otel(pipeline) => {
                 RunSpan::otel(Arc::clone(pipeline), pipeline.run_started(&facts))
-            }
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => {
-                let run_id: Arc<str> = Arc::from(facts.run_id.to_string());
-                recorder.record(TelemetryCall::RunStarted {
-                    run_id: run_id.to_string(),
-                    task_id: facts.task_id.map(str::to_owned),
-                    parent: facts.parent.cloned(),
-                });
-                RunSpan::recorded(Arc::clone(recorder), run_id)
             }
         }
     }
@@ -126,8 +98,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => {}
             Backend::Otel(pipeline) => pipeline.run_refused(error),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.record(TelemetryCall::RunRefused { error }),
         }
     }
 
@@ -136,8 +106,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => {}
             Backend::Otel(pipeline) => pipeline.tab_opened(origin),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.record(TelemetryCall::TabOpened { origin }),
         }
     }
 
@@ -147,12 +115,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => {}
             Backend::Otel(pipeline) => pipeline.tab_closed(origin, reason, lifetime),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.record(TelemetryCall::TabClosed {
-                origin,
-                reason,
-                lifetime,
-            }),
         }
     }
 
@@ -161,8 +123,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => {}
             Backend::Otel(pipeline) => pipeline.renderer_crashed(),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.record(TelemetryCall::RendererCrashed),
         }
     }
 
@@ -172,8 +132,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => {}
             Backend::Otel(pipeline) => pipeline.set_open_tabs(source),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.set_open_tabs(source),
         }
     }
 
@@ -185,11 +143,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => String::new(),
             Backend::Otel(pipeline) => pipeline.render_prometheus(),
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => {
-                recorder.record(TelemetryCall::Scraped);
-                String::new()
-            }
         }
     }
 
@@ -202,11 +155,6 @@ impl Telemetry {
         match &self.backend {
             Backend::Noop => Ok(()),
             Backend::Otel(pipeline) => pipeline.shutdown(budget).await,
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => {
-                recorder.record(TelemetryCall::ShutDown { budget });
-                Ok(())
-            }
         }
     }
 }
@@ -214,8 +162,8 @@ impl Telemetry {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::fmt;
     use std::time::Instant;
-    use std::{fmt, thread};
 
     use super::*;
     use crate::label::{Delivery, ErrorCode, ErrorOwner, OpOutcome, RunStatus};
@@ -313,6 +261,22 @@ mod tests {
         Ok(())
     }
 
+    /// With no `OTEL_*` variable set, the live pipeline is the scrape alone: no tracer provider
+    /// (so no span batch thread), no push reader and no transport (so no `neo-telemetry-io`
+    /// thread and no socket), and no span is ever started.
+    #[test]
+    fn with_nothing_configured_nothing_pushes_and_no_thread_starts() -> Result<(), Box<dyn Error>> {
+        let telemetry = Telemetry::new(&TelemetryConfig::from_env(&|_| None)?)?;
+        let Backend::Otel(pipeline) = &telemetry.backend else {
+            return Err("the real constructor builds the live pipeline".into());
+        };
+        let shown = format!("{pipeline:?}");
+        for part in ["spans: None", "tracers: None", "transport: None"] {
+            assert!(shown.contains(part), "{part}: {shown}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn the_noop_run_span_holds_nothing() {
         let run = Telemetry::noop().start_run(run_facts(&"run-1"));
@@ -321,234 +285,5 @@ mod tests {
             "a no-op run span holds no state, so it allocated none"
         );
         assert!(run.ops().is_noop(), "its ops record nowhere");
-    }
-
-    #[test]
-    fn a_dropped_run_span_releases_in_flight_once() {
-        let (telemetry, recording) = Telemetry::recording();
-        let first = telemetry.start_run(run_facts(&"run-1"));
-        let second = telemetry.start_run(run_facts(&"run-2"));
-        assert_eq!(recording.runs_in_flight(), 2, "both runs are in flight");
-        drop(first);
-        assert_eq!(
-            recording.runs_in_flight(),
-            1,
-            "a run whose guard died without a verdict still leaves in-flight"
-        );
-        second.finish(OK_RUN);
-        assert_eq!(
-            recording.runs_in_flight(),
-            0,
-            "a finished run leaves in-flight"
-        );
-        let ended = recording
-            .calls()
-            .into_iter()
-            .filter(|call| {
-                matches!(
-                    call,
-                    TelemetryCall::RunDropped { .. } | TelemetryCall::RunFinished { .. }
-                )
-            })
-            .count();
-        assert_eq!(ended, 2, "each run ends exactly once");
-    }
-
-    #[test]
-    fn a_run_span_dropped_by_a_panic_releases_in_flight() {
-        let (telemetry, recording) = Telemetry::recording();
-        let panicked = thread::spawn(move || {
-            let _run = telemetry.start_run(run_facts(&"run-1"));
-            panic!("the run's task panicked");
-        })
-        .join();
-        assert!(panicked.is_err(), "the thread panicked");
-        assert_eq!(
-            recording.runs_in_flight(),
-            0,
-            "unwinding drops the span, which releases in-flight"
-        );
-        assert_eq!(
-            recording.calls().last(),
-            Some(&TelemetryCall::RunDropped {
-                run_id: "run-1".to_owned()
-            }),
-            "the run ends as dropped"
-        );
-    }
-
-    #[test]
-    fn an_internal_run_records_no_run_but_its_ops() {
-        let (telemetry, recording) = Telemetry::recording();
-        let sweep = telemetry.internal_run();
-        sweep
-            .ops()
-            .op_settled(settled("page.close", &"run-1.1", Instant::now()));
-        sweep.finish(OK_RUN);
-        assert_eq!(
-            recording.calls(),
-            vec![TelemetryCall::OpSettled {
-                run_id: None,
-                op: "page.close",
-                raw_name: None,
-                op_label: Vocabulary::UNKNOWN,
-                op_id: "run-1.1".to_owned(),
-                site: None,
-                tab_id: None,
-                outcome: OpOutcome::Ok,
-                delivery: Delivery::Done,
-                error: None,
-                url: None,
-            }],
-            "Neo's own runs leave neo_runs_* alone and their ops still count; with no vocabulary \
-             bound yet the op labels as unknown"
-        );
-        assert_eq!(
-            recording.runs_in_flight(),
-            0,
-            "an internal run is never in flight"
-        );
-    }
-
-    #[test]
-    fn the_recording_captures_run_and_op_calls_with_their_values() {
-        let (telemetry, recording) = Telemetry::recording();
-        telemetry.bind_vocabulary(vocabulary());
-        let parent = TraceContext::from_w3c(PARENT, Some("k=v"));
-        let run = telemetry.start_run(RunFacts {
-            run_id: &"run-1",
-            task_id: Some("task-a"),
-            parent: parent.as_ref(),
-        });
-        let started = Instant::now();
-        let ops = run.ops();
-        ops.op_settled(OpSettled {
-            site: Some(OpSite { line: 3, column: 9 }),
-            tab_id: Some(42),
-            url: Some("https://example.com/a?b=c"),
-            ..settled("page.goto", &"run-1.1", started)
-        });
-        let failure = ErrorLabel {
-            owner: ErrorOwner::Script,
-            code: ErrorCode::new("method_unavailable"),
-        };
-        ops.op_settled(OpSettled {
-            raw_name: Some("made.up"),
-            outcome: OpOutcome::Error,
-            delivery: Delivery::NotSent,
-            error: Some(failure),
-            ..settled("unknown", &"run-1.2", started)
-        });
-        let verdict = RunVerdict {
-            status: RunStatus::Error,
-            error: Some(ErrorLabel {
-                owner: ErrorOwner::Script,
-                code: ErrorCode::new("script_error"),
-            }),
-        };
-        run.finish(verdict);
-        telemetry.run_refused(failure);
-
-        let mut calls = recording.calls();
-        let Some(TelemetryCall::RunFinished { duration, .. }) = calls.get_mut(3) else {
-            panic!("the fourth call is the run's end: {calls:?}");
-        };
-        *duration = Duration::ZERO;
-        assert_eq!(
-            calls,
-            vec![
-                TelemetryCall::RunStarted {
-                    run_id: "run-1".to_owned(),
-                    task_id: Some("task-a".to_owned()),
-                    parent,
-                },
-                TelemetryCall::OpSettled {
-                    run_id: Some("run-1".to_owned()),
-                    op: "page.goto",
-                    raw_name: None,
-                    op_label: "page.goto",
-                    op_id: "run-1.1".to_owned(),
-                    site: Some(OpSite { line: 3, column: 9 }),
-                    tab_id: Some(42),
-                    outcome: OpOutcome::Ok,
-                    delivery: Delivery::Done,
-                    error: None,
-                    url: Some("https://example.com/a?b=c".to_owned()),
-                },
-                TelemetryCall::OpSettled {
-                    run_id: Some("run-1".to_owned()),
-                    op: "unknown",
-                    raw_name: Some("made.up".to_owned()),
-                    op_label: Vocabulary::UNKNOWN,
-                    op_id: "run-1.2".to_owned(),
-                    site: None,
-                    tab_id: None,
-                    outcome: OpOutcome::Error,
-                    delivery: Delivery::NotSent,
-                    error: Some(failure),
-                    url: None,
-                },
-                TelemetryCall::RunFinished {
-                    run_id: "run-1".to_owned(),
-                    verdict,
-                    duration: Duration::ZERO,
-                },
-                TelemetryCall::RunRefused { error: failure },
-            ],
-            "every hook is kept in call order with the values it was given, ops under their run"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_recording_captures_tab_scrape_and_shutdown_calls() -> Result<(), Box<dyn Error>> {
-        let (telemetry, recording) = Telemetry::recording();
-        assert_eq!(recording.open_tabs(), None, "no source until one is set");
-        telemetry.tab_opened(TabOrigin::Agent);
-        telemetry.tab_closed(
-            TabOrigin::Agent,
-            CloseReason::Janitor,
-            Duration::from_secs(5),
-        );
-        telemetry.renderer_crashed();
-        telemetry.set_open_tabs(Arc::new(|| OpenTabCounts {
-            agent: 2,
-            found: 1,
-            neo: 1,
-        }));
-        assert_eq!(
-            telemetry.render_prometheus(),
-            "",
-            "the double renders nothing"
-        );
-        telemetry.shutdown(Duration::from_secs(1)).await?;
-        assert_eq!(
-            recording.calls(),
-            vec![
-                TelemetryCall::TabOpened {
-                    origin: TabOrigin::Agent
-                },
-                TelemetryCall::TabClosed {
-                    origin: TabOrigin::Agent,
-                    reason: CloseReason::Janitor,
-                    lifetime: Duration::from_secs(5),
-                },
-                TelemetryCall::RendererCrashed,
-                TelemetryCall::Scraped,
-                TelemetryCall::ShutDown {
-                    budget: Duration::from_secs(1)
-                },
-            ],
-            "tab hooks, the scrape and the shutdown are kept with their values"
-        );
-        assert_eq!(
-            recording.open_tabs(),
-            Some(OpenTabCounts {
-                agent: 2,
-                found: 1,
-                neo: 1
-            }),
-            "the double reads the registered source as a collection would"
-        );
-        Ok(())
     }
 }

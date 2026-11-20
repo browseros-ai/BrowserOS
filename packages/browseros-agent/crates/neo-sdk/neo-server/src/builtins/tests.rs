@@ -1350,7 +1350,7 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
 /// Waits until `done` holds for `neo_tabs_open`, as `(agent, found, neo)` in a scrape.
 async fn tabs_until(
     telemetry: &Telemetry,
-    done: impl Fn((f64, f64, f64)) -> bool,
+    done: impl Fn((u64, u64, u64)) -> bool,
 ) -> Result<(), Box<dyn Error>> {
     within(async {
         while !Scrape::of(telemetry).is_ok_and(|scrape| done(scrape.open_tabs())) {
@@ -1371,7 +1371,7 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
     let harness = Harness::with_tabs(None, false, tabs).await?;
     // The owner's tab, which also keeps the janitor from closing the browser's last tab.
     let owners = harness.owner_tab("https://example.com/").await?;
-    tabs_until(&telemetry, |(_, found, _)| found == 1.0).await?;
+    tabs_until(&telemetry, |(_, found, _)| found == 1).await?;
 
     let (run, guard) = harness.run()?;
     let closed_by_script = page_of(&value(
@@ -1380,7 +1380,7 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
     let closed_by_janitor = page_of(&value(
         harness.submit(&run, "context.newPage", json!({})).await,
     )?)?;
-    tabs_until(&telemetry, |(agent, _, _)| agent == 2.0).await?;
+    tabs_until(&telemetry, |(agent, _, _)| agent == 2).await?;
     value(
         harness
             .submit(
@@ -1399,9 +1399,9 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
         !harness.is_open(closed_by_janitor.tab).await?,
         "the janitor closed the idle agent tab"
     );
-    tabs_until(&telemetry, |(agent, _, _)| agent == 0.0).await?;
+    tabs_until(&telemetry, |(agent, _, _)| agent == 0).await?;
     assert!(harness.fake.close_tab(owners.tab), "the fake had the tab");
-    tabs_until(&telemetry, |(_, found, _)| found == 0.0).await?;
+    tabs_until(&telemetry, |(_, found, _)| found == 0).await?;
 
     assert_eq!(
         Scrape::of(&telemetry)?.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]),

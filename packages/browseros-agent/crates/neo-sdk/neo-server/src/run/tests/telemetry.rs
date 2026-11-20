@@ -182,7 +182,12 @@ fn assert_ended_once(
         "run {}: the span's end is the one /v1/runs records",
         run.id
     );
-    assert_eq!(&WireEnd::recorded(run), expected, "run {}: how it ended", run.id);
+    assert_eq!(
+        &WireEnd::recorded(run),
+        expected,
+        "run {}: how it ended",
+        run.id
+    );
     assert_eq!(
         matches!(span.status, SpanStatus::Error { .. }),
         expected.status != "ok",
@@ -191,8 +196,8 @@ fn assert_ended_once(
         span.status
     );
     assert_eq!(
-        Scrape::of(telemetry)?.get("neo_runs_in_flight", &[]),
-        Some(0.0),
+        Scrape::of(telemetry)?.whole("neo_runs_in_flight", &[]),
+        Some(0),
         "run {}: in-flight comes back to zero on every path",
         run.id
     );
@@ -225,7 +230,11 @@ fn a_run_joins_its_callers_trace_and_ends_ok_once() -> Result<(), TestError> {
                 span.parent_span_id.as_deref(),
                 span.parent_is_remote
             ),
-            ("4bf92f3577b34da6a3ce929d0e0e4736", Some("00f067aa0ba902b7"), true),
+            (
+                "4bf92f3577b34da6a3ce929d0e0e4736",
+                Some("00f067aa0ba902b7"),
+                true
+            ),
             "the run's span joins the caller's trace under the caller's span"
         );
         assert_eq!(
@@ -294,8 +303,8 @@ fn a_run_whose_caller_left_is_in_flight_until_it_ends_cancelled() -> Result<(), 
         let leaving = caller(&service, request(code, meta(None, Some("task-left"))?)?);
         until_status(&rig, "task-left", RunStatus::Running).await?;
         assert_eq!(
-            Scrape::of(&telemetry)?.get("neo_runs_in_flight", &[]),
-            Some(1.0),
+            Scrape::of(&telemetry)?.whole("neo_runs_in_flight", &[]),
+            Some(1),
             "a running run is in flight"
         );
         leaving.abort();
@@ -402,7 +411,8 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
             "one span per op on the record, each a child of its run: {ops:#?}"
         );
         assert!(
-            ops.iter().all(|op| op.end <= run.end && op.trace_id == run.trace_id),
+            ops.iter()
+                .all(|op| op.end <= run.end && op.trace_id == run.trace_id),
             "every op settled before its run ended, in the run's trace"
         );
         for row in &detail.operations {
@@ -420,7 +430,10 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
                 "{op}: named as the script wrote it, as its record names it"
             );
             assert_eq!(
-                (int(span, "neo.op.site.line"), int(span, "neo.op.site.column")),
+                (
+                    int(span, "neo.op.site.line"),
+                    int(span, "neo.op.site.column")
+                ),
                 (
                     row.site.map(|site| i64::from(site.line)),
                     row.site.map(|site| i64::from(site.column))
@@ -493,7 +506,8 @@ fn a_timeout_with_ops_in_flight_counts_one_error() -> Result<(), TestError> {
         let rig = TestRig::new().await?;
         let (telemetry, probe) = telemetry(&rig);
         let service = rig.run_service_reporting(GRACE, telemetry.clone());
-        let code = "await Promise.all([__neo.invoke('test.hang', {}), __neo.invoke('test.hang', {})]);";
+        let code =
+            "await Promise.all([__neo.invoke('test.hang', {}), __neo.invoke('test.hang', {})]);";
         let mut short = request(code, meta(None, None)?)?;
         short.timeout = RunTimeout::from_millis(Some(300))?;
         let reply = service.run(short).await;
@@ -506,10 +520,7 @@ fn a_timeout_with_ops_in_flight_counts_one_error() -> Result<(), TestError> {
             &WireEnd::new("timeout", Some(("neo", "run_timeout"))),
         )?;
         let ops = op_spans(&probe, &span);
-        let cut: Vec<Option<&str>> = ops
-            .iter()
-            .map(|op| text(op, "neo.op.outcome"))
-            .collect();
+        let cut: Vec<Option<&str>> = ops.iter().map(|op| text(op, "neo.op.outcome")).collect();
         assert_eq!(cut, [Some("cancelled"); 2], "both ops were cut by the stop");
         assert_eq!(
             Scrape::of(&telemetry)?.lines_of(&["neo_errors_total", "neo_operations_total"]),
@@ -543,8 +554,8 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
             },
         );
         assert_eq!(
-            Scrape::of(&telemetry)?.get("neo_runs_in_flight", &[]),
-            Some(1.0),
+            Scrape::of(&telemetry)?.whole("neo_runs_in_flight", &[]),
+            Some(1),
             "the run is in flight"
         );
         drop(guard);
@@ -592,8 +603,8 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
             "the crash is one failure, whether the run or its cut op reported it first"
         );
         assert_eq!(
-            scrape.get("neo_runs_in_flight", &[]),
-            Some(0.0),
+            scrape.whole("neo_runs_in_flight", &[]),
+            Some(0),
             "the crash left no run in flight"
         );
         Ok(())
@@ -639,8 +650,8 @@ fn a_refused_call_is_counted_once_and_never_becomes_a_span() -> Result<(), TestE
              no duration"
         );
         assert_eq!(
-            scrape.get("neo_runs_in_flight", &[]),
-            Some(0.0),
+            scrape.whole("neo_runs_in_flight", &[]),
+            Some(0),
             "a refusal is never in flight"
         );
         Ok(())
@@ -684,7 +695,7 @@ fn a_refused_duplicate_is_counted_as_a_failed_run_with_no_span() -> Result<(), T
             ],
             "the duplicate is counted once, as the host's failure, with no duration"
         );
-        assert_eq!(scrape.get("neo_runs_in_flight", &[]), Some(0.0));
+        assert_eq!(scrape.whole("neo_runs_in_flight", &[]), Some(0));
         Ok(())
     })
 }
@@ -738,7 +749,11 @@ fn the_site_detail_dial_decides_what_of_the_page_address_an_op_span_keeps() -> R
                 .map(|value| format!("{value:?}"))
                 .filter(|value| value.contains("s3cr3t") || value.contains("pw@"))
                 .collect();
-            assert_eq!(leaked, Vec::<String>::new(), "{detail:?}: nothing secret leaves");
+            assert_eq!(
+                leaked,
+                Vec::<String>::new(),
+                "{detail:?}: nothing secret leaves"
+            );
         }
         Ok(())
     })

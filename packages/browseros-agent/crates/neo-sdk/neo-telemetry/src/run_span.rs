@@ -2,14 +2,10 @@
 
 use std::fmt;
 use std::sync::Arc;
-#[cfg(feature = "test-support")]
-use std::time::Instant;
 
 use crate::backend::Backend;
 use crate::label::{ErrorLabel, RunStatus};
 use crate::pipeline::{Pipeline, PipelineRun};
-#[cfg(feature = "test-support")]
-use crate::recording::{Recorder, TelemetryCall};
 use crate::run_telemetry::{RunLink, RunTelemetry};
 
 /// What a run is when it starts ([`crate::Telemetry::start_run`]). Borrowed, so the no-op never
@@ -68,12 +64,6 @@ enum OpenRun {
         pipeline: Arc<Pipeline>,
         run: PipelineRun,
     },
-    #[cfg(feature = "test-support")]
-    Recorded {
-        recorder: Arc<Recorder>,
-        run_id: Arc<str>,
-        started: Instant,
-    },
 }
 
 impl RunSpan {
@@ -97,21 +87,6 @@ impl RunSpan {
                 RunLink::Otel(run.ops()),
             ),
             open: Some(OpenRun::Otel { pipeline, run }),
-        }
-    }
-
-    #[cfg(feature = "test-support")]
-    pub(crate) fn recorded(recorder: Arc<Recorder>, run_id: Arc<str>) -> Self {
-        Self {
-            ops: RunTelemetry::new(
-                Backend::Recording(Arc::clone(&recorder)),
-                RunLink::Recorded(Arc::clone(&run_id)),
-            ),
-            open: Some(OpenRun::Recorded {
-                recorder,
-                run_id,
-                started: Instant::now(),
-            }),
         }
     }
 
@@ -149,20 +124,5 @@ impl Drop for RunSpan {
 fn end(open: OpenRun, verdict: Option<RunVerdict>) {
     match open {
         OpenRun::Otel { pipeline, run } => pipeline.run_ended(run, verdict),
-        #[cfg(feature = "test-support")]
-        OpenRun::Recorded {
-            recorder,
-            run_id,
-            started,
-        } => recorder.record(match verdict {
-            Some(verdict) => TelemetryCall::RunFinished {
-                run_id: run_id.to_string(),
-                verdict,
-                duration: started.elapsed(),
-            },
-            None => TelemetryCall::RunDropped {
-                run_id: run_id.to_string(),
-            },
-        }),
     }
 }

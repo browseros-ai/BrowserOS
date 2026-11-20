@@ -1622,8 +1622,8 @@ mod tests {
         let tabs = TabRegistry::new_with_telemetry(telemetry.clone());
         let life = tabs.life();
         assert_eq!(
-            Scrape::of(&telemetry)?.get("neo_tabs_open", &[("origin", "found")]),
-            Some(0.0),
+            Scrape::of(&telemetry)?.whole("neo_tabs_open", &[("origin", "found")]),
+            Some(0),
             "the registry registers its ledger as the gauge's source"
         );
         let start = Instant::now();
@@ -1646,7 +1646,7 @@ mod tests {
         open.claim(TabId(3));
         assert_eq!(
             Scrape::of(&telemetry)?.open_tabs(),
-            (1.0, 2.0, 0.0),
+            (1, 2, 0),
             "the gauge reads the ledger now: (agent, found, neo)"
         );
         life.crashed(TabId(2), &target(2));
@@ -1660,7 +1660,7 @@ mod tests {
         });
 
         let scrape = Scrape::of(&telemetry)?;
-        assert_eq!(scrape.open_tabs(), (0.0, 1.0, 0.0), "one tab left open");
+        assert_eq!(scrape.open_tabs(), (0, 1, 0), "one tab left open");
         assert_eq!(
             scrape.lines_of(&[
                 "neo_tabs_opened_total",

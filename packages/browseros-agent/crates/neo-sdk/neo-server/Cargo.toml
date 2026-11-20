@@ -107,7 +107,7 @@ neo-takeover.workspace = true
 # `ts-rs`: an error's owner, delivery and operation id in the run envelope print as TypeScript.
 neo-trace = { workspace = true, features = ["ts-rs"] }
 # Runs, ops and tabs as OpenTelemetry metrics and spans, behind one facade: nothing here names
-# an OpenTelemetry, OTLP or Prometheus crate. `test-support` above adds its recording double.
+# an OpenTelemetry, OTLP or Prometheus crate. `test-support` above adds its in-memory pipeline.
 neo-telemetry.workspace = true
 clap.workspace = true
 futures-util.workspace = true

@@ -1,13 +1,8 @@
 //! A run as its ops see it: where every op of the run reports its settlement.
 
-#[cfg(feature = "test-support")]
-use std::sync::Arc;
-
 use crate::OpSettled;
 use crate::backend::Backend;
 use crate::pipeline::PipelineParent;
-#[cfg(feature = "test-support")]
-use crate::recording::TelemetryCall;
 
 /// A run as its ops see it: the handle it records through and, for a counted run, the run's
 /// span context and shared per-run state, so each op's `neo.op` span is a child of the run's
@@ -31,9 +26,6 @@ pub(crate) enum RunLink {
     Internal,
     /// A counted run on the live pipeline.
     Otel(PipelineParent),
-    /// A counted run on the recording double, by its id.
-    #[cfg(feature = "test-support")]
-    Recorded(Arc<str>),
 }
 
 impl RunTelemetry {
@@ -52,28 +44,9 @@ impl RunTelemetry {
                 let parent = match &self.link {
                     RunLink::Otel(parent) => Some(parent),
                     RunLink::Internal => None,
-                    #[cfg(feature = "test-support")]
-                    RunLink::Recorded(_) => None,
                 };
                 pipeline.op_settled(parent, &op);
             }
-            #[cfg(feature = "test-support")]
-            Backend::Recording(recorder) => recorder.record(TelemetryCall::OpSettled {
-                run_id: match &self.link {
-                    RunLink::Recorded(run_id) => Some(run_id.to_string()),
-                    RunLink::Internal | RunLink::Otel(_) => None,
-                },
-                op: op.op,
-                raw_name: op.raw_name.map(str::to_owned),
-                op_label: recorder.vocabulary().op_label(op.op),
-                op_id: op.op_id.to_string(),
-                site: op.site,
-                tab_id: op.tab_id,
-                outcome: op.outcome,
-                delivery: op.delivery,
-                error: op.error,
-                url: op.url.map(str::to_owned),
-            }),
         }
     }
 

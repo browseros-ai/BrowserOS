@@ -964,9 +964,16 @@ mod shutdown_tests {
                 .into_iter()
                 .filter(|span| span.text("neo.run.id") == Some("run-before-sigterm"))
                 .collect();
-            assert_eq!(runs.len(), 1, "the pending run span arrived once: {runs:#?}");
+            assert_eq!(
+                runs.len(),
+                1,
+                "the pending run span arrived once: {runs:#?}"
+            );
             assert!(
-                collector.metric_names()?.iter().any(|name| name == "neo_runs_total"),
+                collector
+                    .metric_names()?
+                    .iter()
+                    .any(|name| name == "neo_runs_total"),
                 "the pending metrics arrived"
             );
             Ok::<(), TestError>(())

@@ -223,7 +223,7 @@ impl TestRig {
     }
 
     /// The run service over this rig, reporting its runs and their ops to `telemetry` (a test's
-    /// recording handle) instead of the no-op.
+    /// in-memory pipeline) instead of the no-op.
     pub(crate) fn run_service_reporting(
         &self,
         orphan_grace: Duration,

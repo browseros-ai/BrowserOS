@@ -12,8 +12,7 @@
 //!                                   │ Otel: pipeline.rs ─ meter + tracer providers
 //!                                   │   ├─ manual reader ─▶ prometheus.rs ─▶ render_prometheus (/v1/metrics)
 //!                                   │   └─ otlp::push ─▶ OTLP/HTTP (protobuf | JSON) on its own thread
-//!                                   │ in_memory (test-support): the same pipeline, spans kept for a Probe
-//!                                   └ Recording (test-support): every call kept in memory
+//!                                   └ in_memory (test-support): the same pipeline, spans kept for a Probe
 //! ```
 //!
 //! The crate depends on no browser, CDP, JavaScript engine or SQLite crate, and the server's
@@ -34,8 +33,6 @@ mod privacy;
 #[cfg(feature = "test-support")]
 mod probe;
 mod prometheus;
-#[cfg(feature = "test-support")]
-mod recording;
 mod run_span;
 mod run_telemetry;
 mod site_detail;
@@ -53,8 +50,6 @@ pub use open_tab_counts::{OpenTabCounts, OpenTabsSource};
 pub use otlp_protocol::OtlpProtocol;
 #[cfg(feature = "test-support")]
 pub use probe::{CapturedSpan, Probe, SpanStatus, SpanValue};
-#[cfg(feature = "test-support")]
-pub use recording::{Recording, TelemetryCall};
 pub use run_span::{RunFacts, RunSpan, RunVerdict};
 pub use run_telemetry::RunTelemetry;
 pub use site_detail::SiteDetail;

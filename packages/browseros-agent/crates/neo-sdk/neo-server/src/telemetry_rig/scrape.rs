@@ -1,4 +1,4 @@
-//! A Prometheus text exposition (0.0.4), parsed just far enough to read one series' value: what
+//! A Prometheus text exposition (0.0.4), parsed just far enough to read series values: what
 //! a scraper of `GET /v1/metrics` sees. The format's own rules (`# HELP` / `# TYPE`, histogram
 //! buckets) are neo-telemetry's tests' business; this reads numbers back.
 
@@ -16,7 +16,8 @@ pub(crate) struct Scrape {
 struct Sample {
     name: String,
     labels: BTreeMap<String, String>,
-    value: f64,
+    /// The value as written: `3`, `0.25`, `+Inf`.
+    text: String,
 }
 
 impl Scrape {
@@ -39,13 +40,22 @@ impl Scrape {
     }
 
     /// `neo_tabs_open` by origin, as `(agent, found, neo)`; a series not served reads as 0.
-    pub(crate) fn open_tabs(&self) -> (f64, f64, f64) {
-        let open = |origin| self.count("neo_tabs_open", &[("origin", origin)]);
+    pub(crate) fn open_tabs(&self) -> (u64, u64, u64) {
+        let open = |origin| {
+            self.whole("neo_tabs_open", &[("origin", origin)])
+                .unwrap_or(0)
+        };
         (open("agent"), open("found"), open("neo"))
     }
 
-    /// The value of the series named `name` whose labels are exactly `labels`, if it is there.
-    pub(crate) fn get(&self, name: &str, labels: &[(&str, &str)]) -> Option<f64> {
+    /// The value of a series that holds a whole number (a counter, a gauge, a count), compared
+    /// exactly; `None` when the series is absent or not whole.
+    pub(crate) fn whole(&self, name: &str, labels: &[(&str, &str)]) -> Option<u64> {
+        self.find(name, labels)?.text.parse().ok()
+    }
+
+    /// The series named `name` whose labels are exactly `labels`, if it is there.
+    fn find(&self, name: &str, labels: &[(&str, &str)]) -> Option<&Sample> {
         let wanted: BTreeMap<String, String> = labels
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
@@ -53,12 +63,6 @@ impl Scrape {
         self.samples
             .iter()
             .find(|sample| sample.name == name && sample.labels == wanted)
-            .map(|sample| sample.value)
-    }
-
-    /// As [`Scrape::get`], with an absent series read as 0: a counter nobody bumped yet.
-    pub(crate) fn count(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
-        self.get(name, labels).unwrap_or(0.0)
     }
 
     /// Every non-zero series of the families in `names`, one `name{key="value",..} value` line
@@ -68,7 +72,7 @@ impl Scrape {
         let mut lines: Vec<String> = self
             .samples
             .iter()
-            .filter(|sample| names.contains(&sample.name.as_str()) && sample.value != 0.0)
+            .filter(|sample| names.contains(&sample.name.as_str()) && sample.text != "0")
             .map(|sample| {
                 let labels: Vec<String> = sample
                     .labels
@@ -76,35 +80,24 @@ impl Scrape {
                     .map(|(key, value)| format!("{key}=\"{value}\""))
                     .collect();
                 if labels.is_empty() {
-                    format!("{} {}", sample.name, sample.value)
+                    format!("{} {}", sample.name, sample.text)
                 } else {
-                    format!("{}{{{}}} {}", sample.name, labels.join(","), sample.value)
+                    format!("{}{{{}}} {}", sample.name, labels.join(","), sample.text)
                 }
             })
             .collect();
         lines.sort();
         lines
     }
-
-    /// Every label set series `name` has, each as `key=value` pairs, for a failure message or a
-    /// check that no unexpected series appeared.
-    pub(crate) fn label_sets(&self, name: &str) -> Vec<Vec<(String, String)>> {
-        self.samples
-            .iter()
-            .filter(|sample| sample.name == name)
-            .map(|sample| sample.labels.clone().into_iter().collect())
-            .collect()
-    }
 }
 
 /// `name{key="value",...} 12.5` or `name 3`. Neo's label values never hold a quote or a comma,
 /// so the split below is exact for its own output.
 fn sample(line: &str) -> Option<Sample> {
-    let (series, value) = line.rsplit_once(' ')?;
-    let value = match value {
-        "+Inf" => f64::INFINITY,
-        other => other.parse().ok()?,
-    };
+    let (series, text) = line.rsplit_once(' ')?;
+    if text != "+Inf" && text.parse::<f64>().is_err() {
+        return None;
+    }
     let (name, labels) = match series.split_once('{') {
         None => (series, BTreeMap::new()),
         Some((name, rest)) => {
@@ -124,6 +117,6 @@ fn sample(line: &str) -> Option<Sample> {
     Some(Sample {
         name: name.to_owned(),
         labels,
-        value,
+        text: text.to_owned(),
     })
 }
