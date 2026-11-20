@@ -155,6 +155,53 @@ fn the_diff_flag_accepts_both_halves_of_the_tools_union() {
 }
 
 #[test]
+fn typing_reports_what_changed_in_one_line_and_other_actions_cap_their_readback() {
+    for argv in [
+        vec!["browseros", "fill", "@e1", "Chennai"],
+        vec!["browseros", "fill", "--fields", "e1=a", "e2=b"],
+        vec!["browseros", "type", "Singapore"],
+        vec!["browseros", "press", "Enter"],
+    ] {
+        let (_, args) = call(&argv);
+        assert_eq!(args["diff"], "summary", "{argv:?}");
+    }
+    for argv in [
+        vec!["browseros", "click", "@e143"],
+        vec!["browseros", "scroll", "down"],
+        vec!["browseros", "select", "@e2", "One way"],
+    ] {
+        let (_, args) = call(&argv);
+        assert_eq!(args["diff"], json!(3000.0), "{argv:?}");
+    }
+}
+
+#[test]
+fn an_explicit_readback_wins_over_the_default() {
+    let (_, args) = call(&["browseros", "fill", "@e1", "x", "--diff", "full"]);
+    assert_eq!(args["diff"], "full");
+    let (_, args) = call(&["browseros", "click", "@e1", "--diff", "summary"]);
+    assert_eq!(args["diff"], "summary");
+    for argv in [
+        vec!["browseros", "click", "@e1", "--no-context"],
+        vec!["browseros", "fill", "@e1", "x", "--no-context"],
+    ] {
+        let (_, args) = call(&argv);
+        assert_eq!(args["diff"], "none", "{argv:?}");
+    }
+    assert_eq!(
+        refused(&[
+            "browseros",
+            "click",
+            "@e1",
+            "--no-context",
+            "--diff",
+            "full"
+        ]),
+        "clap refused it"
+    );
+}
+
+#[test]
 fn fill_keeps_its_diff_flag_despite_building_its_plan_differently() {
     let (_, args) = call(&["browseros", "fill", "@e1", "x", "--diff", "summary"]);
     assert_eq!(args["diff"], "summary");

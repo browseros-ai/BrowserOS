@@ -74,9 +74,13 @@ pub struct Globals {
 /// post-settle diff, so the CLI never adds a snapshot after an action.
 #[derive(Debug, Args, Clone, Default)]
 pub struct DiffFlag {
-    /// Post-action readback: none, summary, full, or a character cap.
+    /// Post-action readback: none, summary, full, or a character cap. Defaults to summary for
+    /// fill, type and press, and to a 3000-character cap for every other action.
     #[arg(long, value_name = "MODE")]
     pub diff: Option<String>,
+    /// No readback after the action. The same as --diff none.
+    #[arg(long, conflicts_with = "diff")]
+    pub no_context: bool,
 }
 
 #[derive(Debug, Subcommand)]

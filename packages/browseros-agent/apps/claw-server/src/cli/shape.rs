@@ -95,21 +95,37 @@ const READ_OUTPUT_HINTS: [(&str, &str); 6] = [
     ),
 ];
 
-/// Rewrites the server's `read_output` hints into the `browseros output` command that does
-/// the same, outside page content only.
+/// What an action's one-line summary tells the caller to do next, and the command for it.
+const SNAPSHOT_HINTS: [(&str, &str); 2] = [
+    (
+        "Take a snapshot for the current state.",
+        "Run `browseros snapshot -i` for the current state.",
+    ),
+    (
+        "Take a snapshot to see details.",
+        "Run `browseros snapshot -i` to see the page now.",
+    ),
+];
+
+/// Rewrites the server's hints that name an MCP tool or step into the `browseros` command that
+/// does the same, outside page content only.
 #[must_use]
 pub fn cli_hints(text: &str, saved: Option<&(String, Option<String>)>) -> String {
-    if !text.contains("read_output") {
+    let names_mcp = |line: &str| line.contains("read_output") || line.contains("Take a snapshot");
+    if !names_mcp(text) {
         return text.to_string();
     }
     let command = output_command(saved);
     map_lines(text, |line, in_page| {
-        if in_page || !line.contains("read_output") {
+        if in_page || !names_mcp(line) {
             return Some(line.to_string());
         }
         let mut line = line.to_string();
         for (server, cli) in READ_OUTPUT_HINTS {
             line = line.replace(server, &cli.replace("{cmd}", &command));
+        }
+        for (server, cli) in SNAPSHOT_HINTS {
+            line = line.replace(server, cli);
         }
         Some(line)
     })
@@ -230,6 +246,24 @@ mod tests {
             assert!(!rewritten.contains("read_output"), "{rewritten}");
             assert!(rewritten.contains("browseros output"), "{rewritten}");
         }
+    }
+
+    #[test]
+    fn an_action_summary_names_the_command_to_see_the_page() {
+        assert_eq!(
+            cli_hints(
+                "changed: 120 added, 0 removed. Take a snapshot to see details.",
+                None
+            ),
+            "changed: 120 added, 0 removed. Run `browseros snapshot -i` to see the page now."
+        );
+        assert_eq!(
+            cli_hints(
+                "URL changed (https://a.test/ -> https://a.test/s?q=x); 9 added, 3 removed. Take a snapshot for the current state.",
+                None
+            ),
+            "URL changed (https://a.test/ -> https://a.test/s?q=x); 9 added, 3 removed. Run `browseros snapshot -i` for the current state."
+        );
     }
 
     #[test]

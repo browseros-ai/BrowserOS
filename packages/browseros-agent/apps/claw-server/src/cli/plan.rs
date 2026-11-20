@@ -1009,12 +1009,30 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
     })
 }
 
+/// How much of an action's readback a click and the other non-typing actions keep by default:
+/// enough to confirm what happened, such as a cart page's heading after "Add to cart", without
+/// the whole page the server would otherwise send.
+pub const ACTION_DIFF_CAP_CHARS: f64 = 3_000.0;
+
 fn act_base(kind: &'static str, diff: &DiffFlag) -> Result<ToolPlan, Failure> {
     let plan = ToolPlan::new("act").page().arg("kind", json!(kind));
-    Ok(match &diff.diff {
-        Some(raw) => plan.arg("diff", parse_diff(raw)?),
-        None => plan,
-    })
+    Ok(plan.arg("diff", diff_for(kind, diff)?))
+}
+
+/// The readback an action asks for. Typing into a search box readbacks its autocomplete list,
+/// which ran to 18,000 tokens on one news site, so typing reports what changed in one line. An
+/// explicit `--diff` or `--no-context` always wins.
+fn diff_for(kind: &str, diff: &DiffFlag) -> Result<Value, Failure> {
+    if diff.no_context {
+        return Ok(json!("none"));
+    }
+    match &diff.diff {
+        Some(raw) => parse_diff(raw),
+        None => Ok(match kind {
+            "fill" | "type" | "press" => json!("summary"),
+            _ => json!(ACTION_DIFF_CAP_CHARS),
+        }),
+    }
 }
 
 /// `fill` builds its plan before it knows its own diff flag, because the flag
@@ -1023,10 +1041,7 @@ fn reapply_diff(plan: ToolPlan, command: &Command) -> Result<ToolPlan, Failure> 
     let Command::Fill { diff, .. } = command else {
         return Ok(plan);
     };
-    Ok(match &diff.diff {
-        Some(raw) => plan.arg("diff", parse_diff(raw)?),
-        None => plan,
-    })
+    Ok(plan.arg("diff", diff_for("fill", diff)?))
 }
 
 /// `act`'s `diff` is an untagged union of a mode and a character cap.
