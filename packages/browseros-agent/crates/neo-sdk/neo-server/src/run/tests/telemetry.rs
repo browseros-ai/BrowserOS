@@ -468,7 +468,6 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
             [
                 r#"neo_errors_total{error_code="cdp_error",error_owner="website"} 1"#,
                 r#"neo_errors_total{error_code="method_unavailable",error_owner="script"} 1"#,
-                r#"neo_errors_total{error_code="not_awaited",error_owner="script"} 1"#,
                 r#"neo_operations_total{error_owner="none",op="context.newPage",status="ok"} 1"#,
                 r#"neo_operations_total{error_owner="none",op="test.echo",status="ok"} 1"#,
                 r#"neo_operations_total{error_owner="none",op="test.touch",status="ok"} 1"#,
@@ -477,8 +476,48 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
                 r#"neo_operations_total{error_owner="website",op="test.fail",status="error"} 1"#,
             ],
             "registered ops count under their names (the lazy page's newPage among them), the \
-             unregistered one as unknown (its span keeps the raw name), and each op failure \
-             counts once"
+             unregistered one as unknown (its span keeps the raw name), each failed op's error \
+             counts once, and the write the run cut short (cancelled, not_awaited) counts as an \
+             op but in no error total: the run that cut it succeeded"
+        );
+        Ok(())
+    })
+}
+
+/// A run stopped at its deadline with two ops in flight: teardown cuts both, and each settles
+/// cancelled with the stop's own error before the run ends, yet the timeout is one failure, the
+/// run's (wire-contract.md; review F1).
+#[test]
+fn a_timeout_with_ops_in_flight_counts_one_error() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
+        let code = "await Promise.all([__neo.invoke('test.hang', {}), __neo.invoke('test.hang', {})]);";
+        let mut short = request(code, meta(None, None)?)?;
+        short.timeout = RunTimeout::from_millis(Some(300))?;
+        let reply = service.run(short).await;
+        assert_eq!(reply.status, ReplyStatus::Timeout, "{reply:?}");
+        let run = recorded_run(&rig, reply.id).await?;
+        let span = assert_ended_once(
+            &telemetry,
+            &probe,
+            &run,
+            &WireEnd::new("timeout", Some(("neo", "run_timeout"))),
+        )?;
+        let ops = op_spans(&probe, &span);
+        let cut: Vec<Option<&str>> = ops
+            .iter()
+            .map(|op| text(op, "neo.op.outcome"))
+            .collect();
+        assert_eq!(cut, [Some("cancelled"); 2], "both ops were cut by the stop");
+        assert_eq!(
+            Scrape::of(&telemetry)?.lines_of(&["neo_errors_total", "neo_operations_total"]),
+            [
+                r#"neo_errors_total{error_code="run_timeout",error_owner="neo"} 1"#,
+                r#"neo_operations_total{error_owner="neo",op="test.hang",status="cancelled"} 2"#,
+            ],
+            "two cut ops, one timeout"
         );
         Ok(())
     })
