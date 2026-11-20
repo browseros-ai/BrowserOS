@@ -20,6 +20,8 @@
 //! that drops on overflow (the SDK warns once, at the first drop, and counts drops at shutdown);
 //! a metric write is an in-memory aggregate the reader collects on its own thread.
 
+use std::time::Duration;
+
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{
     Compression, ExporterBuildError, MetricExporter, Protocol, RetryPolicy, SpanExporter,
@@ -29,7 +31,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, Temporality};
 use opentelemetry_sdk::trace::{BatchConfigBuilder, BatchSpanProcessor, Sampler};
 
-use crate::config::{Endpoint, SamplerChoice};
+use crate::config::{SamplerChoice, SignalPush};
 use crate::transport::{Signal, Transport};
 use crate::{OtlpConfig, OtlpProtocol, TelemetryError};
 
@@ -66,13 +68,13 @@ pub(crate) fn push(config: &OtlpConfig) -> Result<Option<Push>, TelemetryError> 
     if config.traces.is_none() && config.metrics.is_none() {
         return Ok(None);
     }
-    let transport = Transport::start(config)?;
+    let transport = Transport::start()?;
     let spans = match &config.traces {
-        Some(endpoint) => Some(span_processor(config, endpoint, &transport)?),
+        Some(traces) => Some(span_processor(traces, config.batch_delay, &transport)?),
         None => None,
     };
     let metrics = match &config.metrics {
-        Some(endpoint) => Some(metric_reader(config, endpoint, &transport)?),
+        Some(metrics) => Some(metric_reader(metrics, config.metric_interval, &transport)?),
         None => None,
     };
     Ok(Some(Push {
@@ -83,29 +85,32 @@ pub(crate) fn push(config: &OtlpConfig) -> Result<Option<Push>, TelemetryError> 
 }
 
 fn span_processor(
-    config: &OtlpConfig,
-    endpoint: &Endpoint,
+    traces: &SignalPush,
+    batch_delay: Duration,
     transport: &Transport,
 ) -> Result<BatchSpanProcessor, TelemetryError> {
     let exporter = SpanExporter::builder()
         .with_http()
-        .with_protocol(protocol(config.protocol))
-        .with_endpoint(endpoint.exporter_url())
-        .with_timeout(config.timeout)
+        .with_protocol(protocol(traces.protocol))
+        .with_endpoint(traces.endpoint.exporter_url())
+        .with_timeout(traces.timeout)
         .with_retry_policy(RetryPolicy::disabled())
-        .with_http_client(transport.client(Signal::Traces, endpoint)?);
-    let exporter = match compression(config.protocol) {
+        .with_http_client(transport.client(Signal::Traces, traces)?);
+    let exporter = match compression(traces.protocol) {
         Some(compression) => exporter.with_compression(compression),
         None => exporter,
     };
     let exporter = exporter
         .build()
         .map_err(|error| not_built("span exporter", &error))?;
-    // Every field set here, so the SDK's own reading of `OTEL_BSP_*` decides nothing.
+    // Queue, batch size and delay are set here, so the SDK's own reading of `OTEL_BSP_*`
+    // decides none of them. It also reads `OTEL_BSP_EXPORT_TIMEOUT` and
+    // `OTEL_BSP_MAX_CONCURRENT_EXPORTS`, which this thread-based processor ignores: it exports
+    // one batch at a time, each bounded by the transport.
     let batches = BatchConfigBuilder::default()
         .with_max_queue_size(MAX_QUEUED_SPANS)
         .with_max_export_batch_size(SPANS_PER_EXPORT)
-        .with_scheduled_delay(config.batch_delay)
+        .with_scheduled_delay(batch_delay)
         .build();
     Ok(BatchSpanProcessor::builder(exporter)
         .with_batch_config(batches)
@@ -113,19 +118,19 @@ fn span_processor(
 }
 
 fn metric_reader(
-    config: &OtlpConfig,
-    endpoint: &Endpoint,
+    metrics: &SignalPush,
+    interval: Duration,
     transport: &Transport,
 ) -> Result<PeriodicReader<MetricExporter>, TelemetryError> {
     let exporter = MetricExporter::builder()
         .with_http()
-        .with_protocol(protocol(config.protocol))
-        .with_endpoint(endpoint.exporter_url())
-        .with_timeout(config.timeout)
+        .with_protocol(protocol(metrics.protocol))
+        .with_endpoint(metrics.endpoint.exporter_url())
+        .with_timeout(metrics.timeout)
         .with_retry_policy(RetryPolicy::disabled())
-        .with_http_client(transport.client(Signal::Metrics, endpoint)?)
+        .with_http_client(transport.client(Signal::Metrics, metrics)?)
         .with_temporality(Temporality::Cumulative);
-    let exporter = match compression(config.protocol) {
+    let exporter = match compression(metrics.protocol) {
         Some(compression) => exporter.with_compression(compression),
         None => exporter,
     };
@@ -133,7 +138,7 @@ fn metric_reader(
         .build()
         .map_err(|error| not_built("metric exporter", &error))?;
     Ok(PeriodicReader::builder(exporter)
-        .with_interval(config.metric_interval)
+        .with_interval(interval)
         .build())
 }
 
@@ -767,6 +772,56 @@ mod tests {
         Ok(())
     }
 
+    /// The review's case: an operator sets only `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, as vendors'
+    /// docs say. Spans must carry that credential; metrics keep the general headers and their
+    /// own protocol.
+    #[test]
+    fn each_signal_sends_its_own_headers_and_protocol() -> Result<(), Box<dyn Error>> {
+        let collector = MockCollector::start(Wire::Tcp, Answer::Ok)?;
+        let providers = Providers::new(&config(&[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", collector.base.as_str()),
+            ("OTEL_EXPORTER_OTLP_HEADERS", "x-general=yes"),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+                "authorization=Bearer%20traces-token",
+            ),
+            ("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "http/json"),
+        ])?)?;
+        providers.record_a_run();
+        providers.tracers.force_flush()?;
+        providers.meters.force_flush()?;
+        let mut arrived = HashMap::new();
+        for _ in 0..2 {
+            let received = collector.next()?;
+            arrived.insert(received.path.clone(), received);
+        }
+        let traces = arrived.remove("/v1/traces").ok_or("spans arrive")?;
+        let metrics = arrived.remove("/v1/metrics").ok_or("metrics arrive")?;
+        assert_eq!(
+            header(&traces, "authorization"),
+            Some("Bearer traces-token"),
+            "spans carry the traces-specific credential"
+        );
+        assert_eq!(
+            header(&traces, "x-general"),
+            None,
+            "a signal's headers replace the general ones"
+        );
+        assert_eq!(
+            header(&traces, "content-type"),
+            Some("application/x-protobuf")
+        );
+        assert_eq!(header(&metrics, "x-general"), Some("yes"));
+        assert_eq!(header(&metrics, "authorization"), None);
+        assert_eq!(
+            header(&metrics, "content-type"),
+            Some("application/json"),
+            "metrics take their own protocol"
+        );
+        providers.shut_down(Duration::from_secs(1))?;
+        Ok(())
+    }
+
     /// Exports race callers the whole time (every 1 ms) and every one fails.
     fn a_dead_collector_costs_callers_nothing(wire: Wire) -> Result<(), Box<dyn Error>> {
         let dir = tempfile::tempdir()?;
@@ -899,7 +954,8 @@ mod tests {
         let metrics = format!("{}/v1/metrics", collector.base);
         let providers = Providers::new(&config(&[
             ("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", metrics.as_str()),
-            ("OTEL_EXPORTER_OTLP_TIMEOUT", "300"),
+            ("OTEL_EXPORTER_OTLP_TIMEOUT", "60000"),
+            ("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT", "300"),
         ])?)?;
         providers.record_a_run();
         let start = Instant::now();
@@ -910,7 +966,8 @@ mod tests {
         let took = start.elapsed();
         assert!(
             took >= Duration::from_millis(300) && took < Duration::from_secs(2),
-            "OTEL_EXPORTER_OTLP_TIMEOUT=300 ends the request at 300 ms: took {took:?}"
+            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT=300 wins over the general 60 s and ends the \
+             request at 300 ms: took {took:?}"
         );
         providers.shut_down(Duration::from_secs(1))?;
         Ok(())

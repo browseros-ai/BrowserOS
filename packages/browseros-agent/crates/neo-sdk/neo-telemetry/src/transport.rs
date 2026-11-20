@@ -39,8 +39,8 @@ use tokio::sync::{oneshot, watch};
 use tokio::time::{self, Instant};
 use tracing::{info, warn};
 
-use crate::config::{Endpoint, Headers};
-use crate::{OtlpConfig, TelemetryError};
+use crate::TelemetryError;
+use crate::config::{Headers, SignalPush};
 
 /// The cap opentelemetry-http's own clients put on a collector's answer. An answer is a few bytes
 /// (an empty body or a partial-success note); anything bigger is not a collector.
@@ -49,22 +49,20 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// While exports keep failing, at most one warning per signal this often.
 const REPORT_EVERY: Duration = Duration::from_secs(60);
 
-/// The push door's I/O: the `neo-telemetry-io` thread, the shutdown deadline, and what every
-/// request carries. Built only when a signal pushes, and owned by `otlp::Push`. The clients it
-/// hands out hold the thread too, so it stops only once the last exporter is gone.
+/// The push door's I/O: the `neo-telemetry-io` thread and the shutdown deadline. Built only when
+/// a signal pushes, and owned by `otlp::Push`. The clients it hands out hold the thread too, so it
+/// stops only once the last exporter is gone.
 #[derive(Debug)]
 pub(crate) struct Transport {
     io: Arc<IoThread>,
     /// Unarmed (`None`) until shutdown starts. Every client's requests watch it.
     deadline: watch::Sender<Option<Instant>>,
-    headers: Headers,
-    timeout: Duration,
 }
 
 impl Transport {
     /// Spawns the I/O thread and waits for its runtime, so a failure is a startup error rather
     /// than a panic on the first export. Callable inside or outside a tokio runtime.
-    pub(crate) fn start(config: &OtlpConfig) -> Result<Self, TelemetryError> {
+    pub(crate) fn start() -> Result<Self, TelemetryError> {
         let io = IoThread::spawn().map_err(|error| TelemetryError::Pipeline {
             stage: "start",
             reason: format!("the telemetry I/O thread did not start: {error}"),
@@ -72,24 +70,22 @@ impl Transport {
         Ok(Self {
             io: Arc::new(io),
             deadline: watch::Sender::new(None),
-            headers: config.headers.clone(),
-            timeout: config.timeout,
         })
     }
 
-    /// The HTTP client `signal`'s OTLP exporter sends through, connected to `endpoint`: over TCP
-    /// (rustls for `https://`) or to its Unix socket. Redirects are not followed (they could carry
-    /// the headers elsewhere) and `HTTP(S)_PROXY` is not used: telemetry goes straight to its
-    /// collector.
+    /// The HTTP client `signal`'s OTLP exporter sends through, connected to its endpoint: over
+    /// TCP (rustls for `https://`) or to its Unix socket, with its headers and timeout. Redirects
+    /// are not followed (they could carry the headers elsewhere) and `HTTP(S)_PROXY` is not used:
+    /// telemetry goes straight to its collector.
     pub(crate) fn client(
         &self,
         signal: Signal,
-        endpoint: &Endpoint,
+        push: &SignalPush,
     ) -> Result<ExportClient, TelemetryError> {
         let builder = reqwest::Client::builder()
             .redirect(Policy::none())
             .no_proxy();
-        let builder = match endpoint.socket() {
+        let builder = match push.endpoint.socket() {
             Some(socket) => builder.unix_socket(socket),
             None => builder,
         };
@@ -106,8 +102,8 @@ impl Transport {
             http,
             io: Arc::clone(&self.io),
             deadline: self.deadline.subscribe(),
-            headers: self.headers.clone(),
-            timeout: self.timeout,
+            headers: push.headers.clone(),
+            timeout: push.timeout,
             failures: FailureLog::default(),
         })
     }
@@ -227,12 +223,16 @@ impl HttpClient for ExportClient {
         };
         match outcome {
             Ok(response) => {
-                self.failures.recovered(self.signal);
+                self.failures.delivered(self.signal);
                 Ok(response)
             }
             Err(error) => {
-                let shutting_down = self.deadline.borrow().is_some();
-                self.failures.failed(self.signal, &error, shutting_down);
+                let phase = if self.deadline.borrow().is_some() {
+                    Phase::ShuttingDown
+                } else {
+                    Phase::Running
+                };
+                self.failures.failed(self.signal, &error, phase);
                 Ok(absorbed())
             }
         }
@@ -241,9 +241,9 @@ impl HttpClient for ExportClient {
 
 impl ExportClient {
     /// The exporter's request as it goes on the wire: its URL, body, content type and encoding,
-    /// the configured `OTEL_EXPORTER_OTLP_HEADERS`, and no other header. The exporter also reads
-    /// header variables from the process environment on its own; dropping what it adds keeps
-    /// what is sent equal to what the config parsed and checked once.
+    /// this signal's configured headers, and no other header. The exporter also reads header
+    /// variables from the process environment on its own; dropping what it adds keeps what is
+    /// sent equal to what the config parsed and checked once.
     fn outgoing(&self, request: Request<Bytes>) -> Result<reqwest::Request, reqwest::Error> {
         let (mut parts, body) = request.into_parts();
         let mut headers = HeaderMap::new();
@@ -435,82 +435,101 @@ fn causes(error: &dyn Error) -> String {
     line
 }
 
-/// One signal's failed exports, logged at a bounded rate: the first failure of an outage at
-/// once, then at most one summary per [`REPORT_EVERY`] while it lasts, and one line when exports
-/// go through again. Once shutdown has armed the deadline every failure is logged: those
-/// batches are the last.
+/// One signal's export failures, logged at a bounded rate: at most one line per
+/// [`REPORT_EVERY`] whatever the collector does, flapping included, each line counting the batches
+/// dropped since the one before. A failure is logged at once when no line came in the last
+/// minute; failures that follow fold into the next line; once exports go through again, the next
+/// line due says so. Once shutdown has armed the deadline every failure is logged: those batches
+/// are the last.
 #[derive(Debug, Default)]
 struct FailureLog(Mutex<Outage>);
 
 #[derive(Debug, Default)]
 struct Outage {
-    /// Exports failed since the outage began; 0 while exports go through.
-    failed: u64,
-    /// Failures since the last line.
-    unreported: u64,
-    /// When the last line was written.
+    /// Batches dropped since the last line.
+    dropped: u64,
+    /// An export failed, and no line has said exports go through again since.
+    open: bool,
+    /// When the last line was written. Kept when exports recover, so a collector that flaps
+    /// still gets one line a minute, not two per flap.
     reported_at: Option<Instant>,
 }
 
-/// What one failure logs, decided apart from the logging so it can be tested.
+/// Where the transport is in its life. Once shutdown starts, every failure is logged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    Running,
+    ShuttingDown,
+}
+
+/// What one export's outcome logs, decided apart from the logging so it can be tested.
 #[derive(Debug, PartialEq, Eq)]
 enum Report {
-    /// The outage's first failure.
-    First,
-    /// A summary: the batches dropped since the last line, this one included.
-    Again { dropped: u64 },
-    /// Folded into the next summary.
+    /// Exports fail: `dropped` batches since the last line, this one included.
+    Failing { dropped: u64 },
+    /// Exports go through again, `dropped` batches after the last line.
+    Recovered { dropped: u64 },
+    /// Nothing now; the next line counts it.
     Quiet,
 }
 
 impl FailureLog {
-    fn failed(&self, signal: Signal, error: &ExportError, shutting_down: bool) {
-        let signal = signal.as_str();
-        match self.note_failure(Instant::now(), shutting_down) {
-            Report::First => warn!(
-                signal,
+    fn failed(&self, signal: Signal, error: &ExportError, phase: Phase) {
+        if let Report::Failing { dropped } = self.note_failure(Instant::now(), phase) {
+            warn!(
+                signal = signal.as_str(),
                 %error,
-                "OTLP push failed and its batch is dropped; while it keeps failing, one summary \
-                 is logged a minute"
-            ),
-            Report::Again { dropped } => {
-                warn!(signal, %error, dropped, "OTLP push still failing; batches dropped");
-            }
-            Report::Quiet => {}
+                dropped,
+                "OTLP push failing, batches dropped; at most one line a minute while it lasts"
+            );
         }
     }
 
-    fn note_failure(&self, now: Instant, shutting_down: bool) -> Report {
+    fn delivered(&self, signal: Signal) {
+        if let Report::Recovered { dropped } = self.note_delivery(Instant::now()) {
+            info!(
+                signal = signal.as_str(),
+                dropped, "OTLP push goes through again"
+            );
+        }
+    }
+
+    fn note_failure(&self, now: Instant, phase: Phase) -> Report {
         let mut outage = self.lock();
-        outage.failed += 1;
-        let Some(reported_at) = outage.reported_at else {
-            outage.reported_at = Some(now);
-            return Report::First;
-        };
-        if !shutting_down && now.duration_since(reported_at) < REPORT_EVERY {
-            outage.unreported += 1;
+        outage.dropped += 1;
+        outage.open = true;
+        if phase == Phase::Running && !outage.due(now) {
             return Report::Quiet;
         }
         outage.reported_at = Some(now);
-        Report::Again {
-            dropped: mem::take(&mut outage.unreported) + 1,
+        Report::Failing {
+            dropped: mem::take(&mut outage.dropped),
         }
     }
 
-    fn recovered(&self, signal: Signal) {
-        let outage = mem::take(&mut *self.lock());
-        if outage.failed > 0 {
-            info!(
-                signal = signal.as_str(),
-                dropped = outage.failed,
-                "OTLP push goes through again"
-            );
+    fn note_delivery(&self, now: Instant) -> Report {
+        let mut outage = self.lock();
+        if !outage.open || !outage.due(now) {
+            return Report::Quiet;
+        }
+        outage.open = false;
+        outage.reported_at = Some(now);
+        Report::Recovered {
+            dropped: mem::take(&mut outage.dropped),
         }
     }
 
     /// A poisoned lock is still a consistent `Outage`: every update is a plain field write.
     fn lock(&self) -> MutexGuard<'_, Outage> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Outage {
+    /// Whether a line may be written now: none yet, or the last one is [`REPORT_EVERY`] old.
+    fn due(&self, now: Instant) -> bool {
+        self.reported_at
+            .is_none_or(|reported_at| now.duration_since(reported_at) >= REPORT_EVERY)
     }
 }
 
@@ -521,36 +540,51 @@ mod tests {
     use http::HeaderValue;
 
     use super::*;
+    use crate::OtlpConfig;
 
     #[test]
-    fn a_failing_signal_logs_its_first_failure_then_a_summary_a_minute() {
+    fn a_failing_signal_logs_at_most_a_line_a_minute_even_when_its_collector_flaps() {
         let log = FailureLog::default();
         let start = Instant::now();
-        assert_eq!(log.note_failure(start, false), Report::First);
+        let at = |seconds| start + Duration::from_secs(seconds);
         assert_eq!(
-            log.note_failure(start + Duration::from_secs(1), false),
-            Report::Quiet,
-            "a second failure within the minute is folded into the next summary"
+            log.note_failure(start, Phase::Running),
+            Report::Failing { dropped: 1 },
+            "the first failure is logged at once"
         );
+        for second in 1..60 {
+            let report = if second % 2 == 0 {
+                log.note_failure(at(second), Phase::Running)
+            } else {
+                log.note_delivery(at(second))
+            };
+            assert_eq!(
+                report,
+                Report::Quiet,
+                "second {second}: a collector flapping every second folds into the next line"
+            );
+        }
         assert_eq!(
-            log.note_failure(start + Duration::from_secs(59), false),
-            Report::Quiet
-        );
-        assert_eq!(
-            log.note_failure(start + REPORT_EVERY, false),
-            Report::Again { dropped: 3 },
+            log.note_failure(at(60), Phase::Running),
+            Report::Failing { dropped: 30 },
             "a minute after the last line, one line counts every batch dropped since"
         );
+        assert_eq!(log.note_delivery(at(61)), Report::Quiet);
         assert_eq!(
-            log.note_failure(start + REPORT_EVERY + Duration::from_secs(1), true),
-            Report::Again { dropped: 1 },
-            "during shutdown every failure is logged: those batches are the last"
+            log.note_delivery(at(120)),
+            Report::Recovered { dropped: 0 },
+            "the first delivery a line is due for says exports go through again"
         );
-        log.recovered(Signal::Traces);
+        assert_eq!(log.note_delivery(at(200)), Report::Quiet, "said once");
         assert_eq!(
-            log.note_failure(start + REPORT_EVERY + Duration::from_secs(2), false),
-            Report::First,
-            "after exports went through again, the next failure starts a new outage"
+            log.note_failure(at(300), Phase::Running),
+            Report::Failing { dropped: 1 },
+            "a failure after a quiet minute is logged at once"
+        );
+        assert_eq!(
+            log.note_failure(at(301), Phase::ShuttingDown),
+            Report::Failing { dropped: 1 },
+            "during shutdown every failure is logged: those batches are the last"
         );
     }
 
@@ -603,18 +637,16 @@ mod tests {
     #[test]
     fn the_wire_carries_the_configured_headers_and_the_exporters_encoding_only()
     -> Result<(), Box<dyn Error>> {
-        let config = OtlpConfig::from_env(&|name| {
-            (name == "OTEL_EXPORTER_OTLP_HEADERS").then(|| {
-                "authorization=Bearer%20token,content-type=text/plain,user-agent=neo".to_owned()
-            })
-        })?;
-        let transport = Transport::start(&config)?;
-        let endpoint = OtlpConfig::from_env(&|name| {
-            (name == "OTEL_EXPORTER_OTLP_ENDPOINT").then(|| "http://127.0.0.1:9".to_owned())
+        let traces = OtlpConfig::from_env(&|name| match name {
+            "OTEL_EXPORTER_OTLP_ENDPOINT" => Some("http://127.0.0.1:9".to_owned()),
+            "OTEL_EXPORTER_OTLP_HEADERS" => Some(
+                "authorization=Bearer%20token,content-type=text/plain,user-agent=neo".to_owned(),
+            ),
+            _ => None,
         })?
         .traces
         .ok_or("the endpoint must turn traces on")?;
-        let client = transport.client(Signal::Traces, &endpoint)?;
+        let client = Transport::start()?.client(Signal::Traces, &traces)?;
         let request = Request::builder()
             .method("POST")
             .uri("http://127.0.0.1:9/v1/traces")
