@@ -79,8 +79,13 @@ export interface Decoded<T> {
 /** The body is not OTLP at all (a 400, not a partial success). */
 export class NotOtlp extends Error {}
 
-/** Attributes kept per span, and the longest string value kept (longer ones end in `…`). */
+/**
+ * Attributes kept per span, the longest key kept (a longer one drops its attribute) and the
+ * longest string value or status message kept (a longer one ends in `…`): what one span may hold
+ * is bounded, so the span store's byte cap means something.
+ */
 const MAX_ATTRIBUTES = 64
+const MAX_KEY_CHARS = 256
 const MAX_VALUE_CHARS = 4_096
 const HEX_TRACE = /^[0-9a-f]{32}$/
 const HEX_SPAN = /^[0-9a-f]{16}$/
@@ -128,7 +133,7 @@ function decodeSpan(raw: unknown, resource: Attributes): NeoSpan | null {
   const endMs = Math.max(startMs, nanosToMs(raw.endTimeUnixNano))
   const status = isObject(raw.status) ? raw.status : {}
   const failed = status.code === 2 || status.code === 'STATUS_CODE_ERROR'
-  const message = typeof status.message === 'string' ? status.message : ''
+  const message = typeof status.message === 'string' ? clip(status.message) : ''
   const attributes = attributesOf(raw.attributes)
   const base: SpanBase = {
     traceId,
@@ -334,7 +339,12 @@ function attributesOf(list: unknown): Attributes {
   let kept = 0
   for (const entry of listOf(list)) {
     if (kept >= MAX_ATTRIBUTES) break
-    if (!isObject(entry) || typeof entry.key !== 'string') continue
+    if (
+      !isObject(entry) ||
+      typeof entry.key !== 'string' ||
+      entry.key.length > MAX_KEY_CHARS
+    )
+      continue
     const value = anyValue(entry.value)
     if (value === undefined) continue
     out[entry.key] = typeof value === 'string' ? clip(value) : value

@@ -15,6 +15,9 @@ import { RunStore } from '../log/run-store'
 import { hostApiRecords, joinNeoRuns, toNeoRunRecord } from '../neo-runs'
 import { startTelemetry } from '.'
 import { fixtureHostRun, fixtureTraces } from './fixtures'
+import { decodeSpans } from './otlp-json'
+import { spanRecords } from './span-records'
+import { SpanStore } from './span-store'
 
 type Mode = 'host-api' | 'spans-only'
 type Arrival = 'reply' | 'host-record' | 'op-spans' | 'run-span'
@@ -335,6 +338,82 @@ test('a neo.run that comes after the reads ran out is read once more', async () 
   await post([0, 3, 4, 5, 6, 7, 8])
   await joiner.settled(1_000)
   expect(store.run(runId)?.neo).toMatchObject({ complete: true, status: 'ok' })
+  expect(store.run(runId)?.operationCount).toBe(8)
+  await telemetry.stop()
+  await joiner.stop()
+  await store.flush()
+})
+
+test('a late span for a run the store already dropped never announces a smaller record', async () => {
+  const spans = new SpanStore({
+    maxRuns: 2,
+    maxSpansPerRun: 100,
+    maxSpans: 1e6,
+    maxBytes: 1e9,
+  })
+  const records = spanRecords(spans, { now: Date.now, waitMs: 30 })
+  const announced: Array<string | null> = []
+  records.onLateCompletion?.((key) => announced.push(key.neoRunId))
+  const add = (neoRunId: string, ops: number[]) =>
+    records.changed(
+      spans.add(decodeSpans(fixtureTraces({ ...RUN, neoRunId }, { ops })).items)
+        .changed,
+    )
+  const read = (neoRunId: string) =>
+    records.read({ neoRunId, trace: null }, new AbortController().signal)
+  add('r1', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+  expect((await read('r1'))?.operations).toHaveLength(8)
+  // Two newer runs push r1 out; then an exporter's retry of one of its ops arrives.
+  add('r2', [0])
+  add('r3', [0])
+  expect(spans.get('r1')).toBeNull()
+  add('r1', [3])
+  expect(announced).toEqual([])
+  // A record that grows is still announced: r4 read before its neo.run came.
+  add('r4', [1, 2])
+  expect((await read('r4'))?.complete).toBe(false)
+  add('r4', [0, 3])
+  expect(announced).toEqual(['r4'])
+})
+
+test('a run whose first spans come after its read gave up empty is read again when they arrive', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-records-'))
+  dirs.push(dataDir)
+  const store = await RunStore.open(dataDir)
+  // The very first spans of a viewer's life, slower than the first-span grace.
+  const telemetry = startTelemetry({
+    hostApi: false,
+    now: Date.now,
+    firstSpanGraceMs: 20,
+  })
+  const joiner = joinNeoRuns(store, telemetry.records)
+  const runId = store.startRun({
+    arrival: store.nextArrival(),
+    tool: 'run',
+    code: 'return 1',
+    timeoutMs: null,
+    client: null,
+    agentTaskId: null,
+    trace: MINTED,
+    sentAt: new Date().toISOString(),
+    proxyMs: 0,
+    request: { raw: '{}', jsonRpcId: 1 },
+  })
+  store.endRun(runId, ended(RUN.neoRunId))
+  await joiner.settled(1_000)
+  expect(store.run(runId)?.neo).toBeNull()
+  await telemetry.receiverRoutes['/otlp/v1/traces']?.POST(
+    new Request('http://127.0.0.1/otlp/v1/traces', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', host: '127.0.0.1' },
+      body: JSON.stringify(fixtureTraces(RUN)),
+    }),
+  )
+  await joiner.settled(1_000)
+  expect(store.run(runId)?.neo).toMatchObject({
+    source: 'spans',
+    complete: true,
+  })
   expect(store.run(runId)?.operationCount).toBe(8)
   await telemetry.stop()
   await joiner.stop()

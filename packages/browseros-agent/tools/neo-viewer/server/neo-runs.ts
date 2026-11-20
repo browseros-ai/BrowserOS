@@ -176,6 +176,8 @@ export interface RunRecords {
 
 /** Longest a stopping viewer waits for reads in flight, so Ctrl-C stays quick. */
 const DRAIN_MS = 3000
+/** Runs a late completion can still find: the most recent, and none from before a Clear. */
+const REMEMBERED_RUNS = 1_000
 
 /**
  * Watches the store for runs that ended and joins Neo's record to each from `source`, one read per
@@ -208,6 +210,7 @@ export function joinNeoRuns(
     reading.set(runId, pending)
   }
   const unsubscribe = store.subscribe((event) => {
+    if (event.type === 'clear') runsByKey.clear()
     const run = event.run
     if (
       event.type !== 'run' ||
@@ -220,6 +223,8 @@ export function joinNeoRuns(
     if (!source.canRead(key) || store.hasNeoRun(run.id) || reading.has(run.id))
       return
     runsByKey.set(keyOf(key), run.id)
+    if (runsByKey.size > REMEMBERED_RUNS)
+      runsByKey.delete(runsByKey.keys().next().value as string)
     start(run.id, key)
   })
   const unlisten =

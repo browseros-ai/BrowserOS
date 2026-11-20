@@ -150,6 +150,42 @@ describe('OTLP JSON spans', () => {
     expect(String(attributes.long)).toHaveLength(4097)
   })
 
+  test('what one span may hold is bounded: an over-long key drops its attribute, a long status message is cut', () => {
+    const { items } = decodeSpans({
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: RUN.traceId,
+                  spanId: 'aaaaaaaaaaaaaaaa',
+                  name: 'neo.run',
+                  status: { code: 2, message: 'm'.repeat(10_000) },
+                  attributes: [
+                    { key: 'neo.run.id', value: { stringValue: 'r1' } },
+                    { key: 'k'.repeat(257), value: { stringValue: 'dropped' } },
+                    { key: 'k'.repeat(256), value: { stringValue: 'kept' } },
+                    { key: 'neo.error.owner', value: { stringValue: 'neo' } },
+                    { key: 'neo.error.code', value: { stringValue: 'x' } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    const span = items[0]
+    expect(Object.keys(span?.attributes ?? {})).toEqual([
+      'neo.run.id',
+      'k'.repeat(256),
+      'neo.error.owner',
+      'neo.error.code',
+    ])
+    expect(span?.kind === 'run' && span.error?.message.length).toBe(4_097)
+  })
+
   test('spans the viewer cannot file under a run are rejected and counted', () => {
     const base = {
       traceId: RUN.traceId,
