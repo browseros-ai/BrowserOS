@@ -229,6 +229,100 @@ fn log_file(logs: &Path) -> Result<PathBuf, Box<dyn Error>> {
     Err(format!("no claw-sdk.log* in {}", logs.display()).into())
 }
 
+/// A telemetry value Neo cannot use is a config error like any other: one line naming the
+/// variable, exit 1, and nothing bound or written first.
+#[tokio::test]
+async fn a_telemetry_value_neo_cannot_use_exits_1_naming_it() -> TestResult {
+    let scratch = Scratch::new()?;
+    let launch = scratch.launch_file(fork_lock::free_port()?)?;
+    let output = time::timeout(
+        PATIENCE,
+        fork_lock::spawn(
+            scratch
+                .neo()
+                .arg("--config")
+                .arg(&launch)
+                .env("CLAW_TELEMETRY_SITE_DETAIL", "everything"),
+        )?
+        .wait_with_output(),
+    )
+    .await??;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a config error, which Chromium must not read as a taken port: {stderr}"
+    );
+    assert!(
+        stderr.contains("CLAW_TELEMETRY_SITE_DETAIL"),
+        "the operator learns which variable to fix: {stderr}"
+    );
+    assert!(
+        !scratch.state_dir().exists(),
+        "the environment is read before logging starts or any state is written"
+    );
+    Ok(())
+}
+
+/// The last telemetry flush is bounded: with push configured to a collector that is down or
+/// hung, SIGTERM still exits 0 well inside the 5 s before Chromium's SIGKILL, and the
+/// exporter's credential reaches neither stderr nor the log.
+#[tokio::test]
+async fn sigterm_exits_0_in_time_with_the_collector_down_or_hung() -> TestResult {
+    const SECRET: &str = "s3cr3tCollectorToken";
+    let hung = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    for collector in [fork_lock::free_port()?, hung.local_addr()?.port()] {
+        let scratch = Scratch::new()?;
+        let port = fork_lock::free_port()?;
+        let launch = scratch.launch_file(port)?;
+        let child = fork_lock::spawn(
+            scratch
+                .neo()
+                .arg("--config")
+                .arg(&launch)
+                .env("CLAW_TELEMETRY_SITE_DETAIL", "url")
+                .env(
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    format!("http://127.0.0.1:{collector}"),
+                )
+                .env(
+                    "OTEL_EXPORTER_OTLP_HEADERS",
+                    format!("authorization=Bearer%20{SECRET}"),
+                ),
+        )?;
+        let response = get_when_up(port, "/system/health").await?;
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "a collector that is not there costs the start nothing: {response}"
+        );
+
+        let pid = child.id().ok_or("the binary exited before SIGTERM")?;
+        let stopping = Instant::now();
+        let kill = fork_lock::spawn(Command::new("kill").args(["-TERM", &pid.to_string()]))?
+            .wait()
+            .await?;
+        assert!(kill.success(), "kill -TERM {pid}");
+        let output = time::timeout(PATIENCE, child.wait_with_output()).await??;
+        let stopped = stopping.elapsed();
+        let stderr = String::from_utf8(output.stderr)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "collector on port {collector}: an unanswered flush is no failure: {stderr}"
+        );
+        assert!(
+            stopped < Duration::from_secs(4),
+            "collector on port {collector}: SIGTERM took {stopped:?}; Chromium kills at 5 s"
+        );
+        let log = fs::read_to_string(log_file(&scratch.state_dir().join("logs"))?)?;
+        assert!(
+            !stderr.contains(SECRET) && !log.contains(SECRET),
+            "an exporter header's value is never logged"
+        );
+    }
+    Ok(())
+}
+
 /// The image build reads the source digest back from the binary to prove the server was compiled
 /// from its own checkout (docker/build-server.sh); a build outside the image says it has none.
 #[test]
