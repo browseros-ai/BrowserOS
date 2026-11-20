@@ -58,6 +58,13 @@ pub struct State {
     /// The scope's human-readable path, for `task list`.
     pub scope_path: Option<String>,
     pub started_at: Option<String>,
+    /// The kinds of tip this task has been shown, so each prints once per task. An agent
+    /// reads stderr along with stdout, so a tip on every call is noise however it is routed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tips_shown: Vec<String>,
+    /// The task `tips_shown` belongs to. A new task is shown its tips again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tips_task: Option<String>,
 }
 
 /// A task named with `task start` before it has a page.
@@ -82,12 +89,44 @@ impl State {
         }
     }
 
+    /// The tips this task has not been shown yet, now recorded as shown.
+    pub fn first_showing(&mut self, tips: &[String]) -> Vec<String> {
+        if self.tips_task != self.group_id {
+            self.tips_shown.clear();
+            self.tips_task.clone_from(&self.group_id);
+        }
+        let mut fresh = Vec::new();
+        for tip in tips {
+            let kind = tip_kind(tip);
+            if !self.tips_shown.contains(&kind) {
+                self.tips_shown.push(kind);
+                fresh.push(tip.clone());
+            }
+        }
+        fresh
+    }
+
     /// Whether this server is known to offer a tool. An empty cache means
     /// "not yet asked", which must read as offered rather than as absent.
     #[must_use]
     pub fn offers(&self, tool: &str) -> bool {
         self.tools.is_empty() || self.tools.iter().any(|name| name == tool)
     }
+}
+
+/// What makes two tips the same tip: their text without what they quote, since the rename tip
+/// names the task it is about.
+#[must_use]
+pub fn tip_kind(tip: &str) -> String {
+    tip.split('"').step_by(2).collect::<Vec<_>>().join("\"\"")
+}
+
+/// Whether `BROWSEROS_QUIET` asks for what `-q` does. Any value but empty, `0` or `false`.
+#[must_use]
+pub fn quiet_from_env(value: Option<&str>) -> bool {
+    value.map(str::trim).is_some_and(|value| {
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 /// Where the state for one working directory lives.
@@ -413,6 +452,42 @@ mod tests {
         assert_eq!(state.page, Some(3));
         assert!(!serde_json::to_string(&state)?.contains("mcpSessionId"));
         Ok(())
+    }
+
+    #[test]
+    fn a_tip_prints_once_per_task_even_when_it_names_the_task() {
+        let mut state = State {
+            group_id: Some("G1".into()),
+            ..State::default()
+        };
+        let rename = |name: &str| {
+            format!("Tip: this task is \"{name}\". Name it with: browseros task name \"<label>\"")
+        };
+        let done =
+            "Tip: when the user says this task is done, run: browseros task done".to_string();
+        assert_eq!(
+            state.first_showing(&[rename("a/breezy"), done.clone()]),
+            vec![rename("a/breezy"), done.clone()]
+        );
+        assert!(
+            state
+                .first_showing(&[rename("a/breezy"), done.clone()])
+                .is_empty()
+        );
+        assert!(state.first_showing(&[rename("a/other")]).is_empty());
+
+        state.group_id = Some("G2".into());
+        assert_eq!(state.first_showing(std::slice::from_ref(&done)), vec![done]);
+    }
+
+    #[test]
+    fn browseros_quiet_is_on_for_any_value_but_off_ones() {
+        for on in ["1", "true", "yes"] {
+            assert!(quiet_from_env(Some(on)), "{on}");
+        }
+        for off in [None, Some(""), Some("0"), Some("false"), Some("FALSE")] {
+            assert!(!quiet_from_env(off), "{off:?}");
+        }
     }
 
     #[test]

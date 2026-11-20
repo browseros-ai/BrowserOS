@@ -52,6 +52,7 @@ pub struct Globals {
     #[arg(long, global = true)]
     pub json: bool,
     /// Suppress the notices and tips printed on stderr. Results on stdout are unaffected.
+    /// BROWSEROS_QUIET=1 does the same for every command.
     #[arg(long, short, global = true)]
     pub quiet: bool,
     /// Client read timeout in ms. The default is 180000, which must exceed the

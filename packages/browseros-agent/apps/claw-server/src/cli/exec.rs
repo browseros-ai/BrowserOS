@@ -17,7 +17,10 @@ use crate::cli::{capability, guides, install, io, render, script, shape, state};
 /// # Errors
 /// Any failure already classified with an exit code.
 pub async fn run(cli: Cli) -> Result<Code> {
-    io::set_quiet(cli.globals.quiet);
+    io::set_quiet(
+        cli.globals.quiet
+            || state::quiet_from_env(std::env::var("BROWSEROS_QUIET").ok().as_deref()),
+    );
     let external = match plan::needs_external(&cli.command) {
         Some(source) => Some(read_external(&source)?),
         None => None,
@@ -297,6 +300,12 @@ async fn run_tool(
         );
     }
     output.text = shape::cli_hints(&output.text, saved.as_ref());
+    if !output.notices.is_empty() {
+        let tips = std::mem::take(&mut output.notices);
+        let mut fresh = Vec::new();
+        client.persist(|state| fresh = state.first_showing(&tips))?;
+        output.notices = fresh;
+    }
     report(&output, label, plan.tool, page, elapsed, &files, globals);
 
     // A page-scoped failure is usually a closed or recycled tab, and the one
