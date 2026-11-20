@@ -22,8 +22,9 @@
  * `page.taskId` are null and `page.url()` is 'about:blank'.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
- * The reply is what you return, plus console lines and existing notes. Return `task.id`
- * to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
+ * The reply is what you return; some MCP clients (Claude Code) show you only that value, never
+ * console lines or notes, so return what you need. A Jev stop carries its console lines as
+ * `stopped.log`. Return `task.id` to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
  * `context.pages()` lists the tabs this run may use. When the host binds runs to their task,
  * those are only this task's tabs: the ones its runs opened, their popups, and the tabs of
  * tasks you created; any other tab is refused with `page_not_in_task`.
@@ -180,7 +181,7 @@ declare global {
      * hand (`getByRef` on a lookalike, or `ariaSnapshot()`); do not run the script again from the top.
      *
      * Each call looks at the newest tab `page` opened during this run (a popup), else `page`, and
-     * writes one console line (one more when it follows a new tab):
+     * writes one console line (one more when it follows a new tab), which a stop's `log` lists:
      * `neo.find "the search box" -> e90 searchbox "Search" p1.00`.
      *
      * `find`: the one element `ask` describes in plain words ("the product search box"). Not there
@@ -288,8 +289,8 @@ declare global {
   class TimeoutError extends NeoError {}
   // Actions and reads wait up to 30 s (expect: 5 s, toPass: no limit); pass { timeout } to fail sooner, 0 for none.
 
-  // Also given to every script: `console` (its lines come back with the result),
-  // `setTimeout` and `clearTimeout`. The engine is QuickJS: no `Intl`, no Node APIs but Buffer.
+  // Also given to every script: `console` (some clients never show its lines: return what you
+  // need; a Jev stop's `log` holds them), `setTimeout` and `clearTimeout`. The engine is QuickJS: no `Intl`, no Node APIs but Buffer.
 }
 
 /**

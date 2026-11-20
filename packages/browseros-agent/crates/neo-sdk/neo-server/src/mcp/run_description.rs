@@ -69,12 +69,16 @@ const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top nam
 /// characters of this description, where the five listing lines never reached, and runners that
 /// read the loop's "end the script" rule first made no helper call at all. So `AHEAD` and
 /// `HELPERS` come first and end before character 3,800, and the loop's rule names the exception
-/// (`LOOK_AGAIN_AHEAD`); tests check both. The stop's record and its `next` line are the
-/// prelude's (`runtime/js/neo_prelude.js`); the record's fields named here are `agent.d.ts`'s
-/// `Stop`, which a test checks. Its samples compile as a run's body, which a test checks too.
-const AHEAD: &str = r#"On pages you have not looked at, the `neo` helpers below replace a snapshot-then-act turn: they read the page when they run, so a script can go on past a click: `await (await neo.find(page, 'the search box')).fill('usb-c hub')`, then `neo.find` the search button and the first result.
+/// (`LOOK_AGAIN_AHEAD`); tests check both. Round 5 runners still found one element and returned
+/// a snapshot anyway, so the first sentence covers "this page or the next", one whole flow shows
+/// what a script can hold, and the loop opens as the fallback (`LOOP_HEAD_AHEAD`). The stop's
+/// record and its `next` line are the prelude's (`runtime/js/neo_prelude.js`); the record's
+/// fields named here are `agent.d.ts`'s `Stop`, which a test checks. Its whole-flow sample
+/// compiles as a run's body, which a test checks too.
+const AHEAD: &str = r#"Each `neo.find` replaces a snapshot-then-act turn, on this page or the next: when you can name the next element in plain words, find it and act in the same script instead of returning a snapshot.
+A whole flow is one script: `await (await neo.find(page, 'the search box')).fill('usb-c hub'); await (await neo.find(page, 'the Search button')).click(); await (await neo.find(page, 'the first result')).click(); if (!(await neo.check(page, 'a USB-C hub product page', { timeout: 5000 }))) neo.stop(page, 'not a hub page'); await (await neo.find(page, 'the Add to cart button')).click(); return 'added'`.
 Write as far ahead as you can see, while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.
-After a step that should change the page, say what you expect: `if (!(await neo.check(page, 'a list of results is showing', { timeout: 5000 }))) neo.stop(page, 'no results list')`.
+After a step that should change the page, say what you expect with `neo.check`, and `neo.stop` when it is not so, as above.
 A helper that is not sure stops the script there instead of guessing; the run returns `{ "stopped": { ask, at, call, log, lookalikes, next, tab, url, why } }`, a normal result, not an error.
 Nothing is undone, and `stopped.log` lists what ran and what you logged: carry on by hand from that tab (`page.getByRef` on a lookalike, or `page.ariaSnapshot()`); do not fix the script and run it again from the top.
 The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.
@@ -95,6 +99,12 @@ const HELPERS: &str = r"The helpers (each also listed in full under SDK methods)
 const LOOK_AGAIN: &str = "end the script by returning a new snapshot, and choose the next action from it.\n  Fills of one form can share a script; the click that submits it ends the script.";
 /// The same rule with its exception: a step the writer can name goes on with `neo.find`.
 const LOOK_AGAIN_AHEAD: &str = "end the script by returning a new snapshot, and choose the next action from it, unless you can name the next element in plain words: then `neo.find` it in the same script (above).\n  Fills of one form can share a script; the click that submits it ends the script unless you can name what follows it.";
+/// `LOOP`'s first line, which a Neo with the Jev helpers replaces with `LOOP_HEAD_AHEAD`, so the
+/// look-act loop reads as the fallback for a step the writer cannot name (see `AHEAD`).
+const LOOP_HEAD: &str = "Work in a loop: look, act, look again.";
+/// The loop's first line with the helpers: what to do when the next element has no plain name.
+const LOOP_HEAD_AHEAD: &str =
+    "When you cannot name the next element, work in a loop: look, act, look again.";
 
 /// The wait times, which a test reads from the prelude's `timeouts.ts` so the two cannot drift
 /// (this text once said 5 s while the prelude waited 30). None of the 71 waits in that evaluation
@@ -171,7 +181,7 @@ pub(crate) fn run_description(registry: &Registry) -> String {
         if listed.iter().any(|spec| spec.name == FIND_METHOD) {
             lines.push(AHEAD.to_owned());
             lines.push(HELPERS.to_owned());
-            lines.push(LOOP.replace(LOOK_AGAIN, LOOK_AGAIN_AHEAD));
+            lines.push(keyed_loop());
         } else {
             lines.push(LOOP.to_owned());
         }
@@ -201,6 +211,13 @@ pub(crate) fn run_description(registry: &Registry) -> String {
     lines.join("\n\n")
 }
 
+/// `LOOP` as a Neo with the Jev helpers serves it: it opens as the fallback for a step the writer
+/// cannot name, and its rule for ending a script names the helpers' exception.
+fn keyed_loop() -> String {
+    LOOP.replacen(LOOP_HEAD, LOOP_HEAD_AHEAD, 1)
+        .replacen(LOOK_AGAIN, LOOK_AGAIN_AHEAD, 1)
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -214,7 +231,8 @@ mod tests {
 
     use super::{
         AHEAD, COVERED_CLICK, ERRORS, GLOBALS, HELPERS, LOOK_AGAIN, LOOK_AGAIN_AHEAD, LOOP,
-        READ_ONLY, SNAPSHOT_ON_TOP, TASKS, USAGE, WAITS, run_description,
+        LOOP_HEAD, LOOP_HEAD_AHEAD, READ_ONLY, SNAPSHOT_ON_TOP, TASKS, USAGE, WAITS, keyed_loop,
+        run_description,
     };
     use crate::dispatch::{
         ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder,
@@ -670,10 +688,10 @@ mod tests {
     {
         on_neo_runtime(async {
             let description = served(true).await?;
-            let keyed_loop = LOOP.replace(LOOK_AGAIN, LOOK_AGAIN_AHEAD);
+            let served_loop = keyed_loop();
             assert!(
                 description.starts_with(&format!(
-                    "{USAGE}\n\n{AHEAD}\n\n{HELPERS}\n\n{keyed_loop}\n\n{SNAPSHOT_ON_TOP}\n\n{WAITS}"
+                    "{USAGE}\n\n{AHEAD}\n\n{HELPERS}\n\n{served_loop}\n\n{SNAPSHOT_ON_TOP}\n\n{WAITS}"
                 )),
                 "AHEAD and the helpers come before the loop, which names its exception: \
                  {description}"
@@ -687,9 +705,10 @@ mod tests {
                 );
             }
             for sentence in [
-                "On pages you have not looked at, the `neo` helpers below replace a snapshot-then-act turn: they read the page when they run, so a script can go on past a click: `await (await neo.find(page, 'the search box')).fill('usb-c hub')`, then `neo.find` the search button and the first result.",
+                "Each `neo.find` replaces a snapshot-then-act turn, on this page or the next: when you can name the next element in plain words, find it and act in the same script instead of returning a snapshot.",
+                "A whole flow is one script: `await (await neo.find(page, 'the search box')).fill('usb-c hub'); await (await neo.find(page, 'the Search button')).click(); await (await neo.find(page, 'the first result')).click(); if (!(await neo.check(page, 'a USB-C hub product page', { timeout: 5000 }))) neo.stop(page, 'not a hub page'); await (await neo.find(page, 'the Add to cart button')).click(); return 'added'`.",
                 "Write as far ahead as you can see, while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.",
-                "After a step that should change the page, say what you expect: `if (!(await neo.check(page, 'a list of results is showing', { timeout: 5000 }))) neo.stop(page, 'no results list')`.",
+                "After a step that should change the page, say what you expect with `neo.check`, and `neo.stop` when it is not so, as above.",
                 "A helper that is not sure stops the script there instead of guessing; the run returns `{ \"stopped\": { ask, at, call, log, lookalikes, next, tab, url, why } }`, a normal result, not an error.",
                 "Nothing is undone, and `stopped.log` lists what ran and what you logged: carry on by hand from that tab (`page.getByRef` on a lookalike, or `page.ariaSnapshot()`); do not fix the script and run it again from the top.",
                 "The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.",
@@ -734,9 +753,17 @@ mod tests {
             );
             let ahead = description.find(AHEAD).ok_or("AHEAD is there")?;
             let loop_start = description
-                .find("Work in a loop:")
-                .ok_or("the loop is there")?;
+                .find(LOOP_HEAD_AHEAD)
+                .ok_or("the loop opens as the fallback")?;
             assert!(ahead < loop_start, "AHEAD precedes the loop");
+            assert!(
+                !description.contains(LOOP_HEAD),
+                "the loop never opens as the default"
+            );
+            assert!(
+                head.contains("A whole flow is one script: `await"),
+                "the whole-flow example is in the first 3,800 characters"
+            );
             assert_eq!(
                 description.matches(LOOK_AGAIN_AHEAD).count(),
                 1,
@@ -750,9 +777,12 @@ mod tests {
         })
     }
 
-    /// `LOOK_AGAIN` is `LOOP`'s own text, once, so the keyed loop really replaces it.
+    /// `LOOP_HEAD` and `LOOK_AGAIN` are `LOOP`'s own text, once each, so the keyed loop really
+    /// replaces them.
     #[test]
-    fn the_loop_holds_the_rule_the_helpers_amend_once() {
+    fn the_loop_holds_the_lines_the_helpers_amend_once() {
+        assert!(LOOP.starts_with(LOOP_HEAD), "{LOOP}");
+        assert_eq!(LOOP.matches(LOOP_HEAD).count(), 1, "{LOOP}");
         assert_eq!(LOOP.matches(LOOK_AGAIN).count(), 1, "{LOOP}");
     }
 
@@ -809,7 +839,7 @@ mod tests {
                 .step_by(2)
                 .filter(|code| code.contains("await "))
                 .collect();
-            assert_eq!(samples.len(), 2, "the fill and the check: {samples:?}");
+            assert_eq!(samples.len(), 1, "the whole flow: {samples:?}");
             let rig = TestRig::new().await?;
             let (run, _guard) = rig.run(Duration::from_mins(1), None)?;
             let script = Script {
