@@ -20,15 +20,6 @@
 //! that drops on overflow (the SDK warns once, at the first drop, and counts drops at shutdown);
 //! a metric write is an in-memory aggregate the reader collects on its own thread.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "until the providers plug the push door in (pipeline.rs), only this crate's \
-                  tests call it; delete this line once they do"
-    )
-)]
-
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{
     Compression, ExporterBuildError, MetricExporter, Protocol, RetryPolicy, SpanExporter,
