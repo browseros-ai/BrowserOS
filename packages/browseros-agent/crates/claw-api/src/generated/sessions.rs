@@ -472,6 +472,9 @@ pub struct SessionSummary {
     /// Present only on summaries returned by an explicit `status=live` list query.
     #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
     pub live: Option<Box<models::LiveSessionState>>,
+    /// The skill saved from this task, when there is one.
+    #[serde(rename = "skillName", skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
 }
 
 impl SessionSummary {
@@ -509,6 +512,7 @@ impl SessionSummary {
             ultrafast: None,
             pursue: None,
             live: None,
+            skill_name: None,
         }
     }
 }

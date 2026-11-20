@@ -286,6 +286,9 @@ SessionSummary:
       allOf:
         - $ref: '#/LiveSessionState'
       description: Present only on summaries returned by an explicit `status=live` list query.
+    skillName:
+      type: string
+      description: The skill saved from this task, when there is one.
 SessionList:
   type: object
   additionalProperties: false

@@ -308,7 +308,12 @@ describe('skills API schema', () => {
     expect(paths.directoryItem?.get?.operationId).toBe('getDirectorySkill')
     expect(paths.directoryAdd?.post?.operationId).toBe('addDirectorySkill')
 
-    expect(schemas.SkillOrigin?.enum).toEqual(['agent', 'manual', 'directory'])
+    expect(schemas.SkillOrigin?.enum).toEqual([
+      'agent',
+      'manual',
+      'directory',
+      'history',
+    ])
     expect(schemas.Skill?.required).toEqual([
       'name',
       'description',
@@ -347,6 +352,54 @@ describe('skills API schema', () => {
       'description',
       'installs',
     ])
+  })
+
+  test('defines skill drafts made from a finished task', () => {
+    const sessionPaths = yaml('paths/sessions.yaml') as Record<
+      string,
+      Record<string, { operationId?: string }>
+    >
+    const schemas = yaml('schemas/skills.yaml') as Record<
+      string,
+      {
+        enum?: string[]
+        required?: string[]
+        properties?: Record<string, unknown>
+      }
+    >
+
+    expect(sessionPaths.skillDraft?.get?.operationId).toBe('getSkillDraft')
+    expect(sessionPaths.skillDraft?.post?.operationId).toBe(
+      'draftSkillFromSession',
+    )
+    expect(schemas.SkillDraftState?.enum).toEqual([
+      'none',
+      'writing',
+      'ready',
+      'failed',
+      'saved',
+    ])
+    expect(schemas.SkillDraftFailureCode?.enum).toEqual([
+      'limit_reached',
+      'drafts_paused',
+      'draft_unusable',
+      'upstream_error',
+      'in_progress',
+    ])
+    expect(schemas.SkillDraft?.required).toEqual([
+      'name',
+      'title',
+      'description',
+      'site',
+      'steps',
+      'inputs',
+      'notes',
+      'effects',
+      'confidence',
+    ])
+    expect(Object.keys(schemas.SkillCreate?.properties ?? {})).toEqual(
+      expect.arrayContaining(['sourceSessionId', 'summary', 'inputs']),
+    )
   })
 })
 

@@ -250,6 +250,24 @@ export interface SkillCreate {
      * @memberof SkillCreate
      */
     linkAgents?: Array<Harness>;
+    /**
+     * The finished task this skill is made from. Saving twice for one task returns the skill already saved.
+     * @type {string}
+     * @memberof SkillCreate
+     */
+    sourceSessionId?: string;
+    /**
+     * One sentence on what the skill does, written above its steps.
+     * @type {string}
+     * @memberof SkillCreate
+     */
+    summary?: string;
+    /**
+     * The parts that change between runs, each with an example.
+     * @type {Array<SkillDraftInput>}
+     * @memberof SkillCreate
+     */
+    inputs?: Array<SkillDraftInput>;
 }
 
 /**
@@ -287,6 +305,237 @@ export interface SkillDetail {
 /**
  *
  * @export
+ * @interface SkillDraft
+ */
+export interface SkillDraft {
+    /**
+     * The skill's slug, without the neo- prefix.
+     * @type {string}
+     * @memberof SkillDraft
+     */
+    name: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraft
+     */
+    title: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraft
+     */
+    description: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraft
+     */
+    site: string;
+    /**
+     *
+     * @type {Array<string>}
+     * @memberof SkillDraft
+     */
+    steps: Array<string>;
+    /**
+     *
+     * @type {Array<SkillDraftInput>}
+     * @memberof SkillDraft
+     */
+    inputs: Array<SkillDraftInput>;
+    /**
+     *
+     * @type {Array<string>}
+     * @memberof SkillDraft
+     */
+    notes: Array<string>;
+    /**
+     *
+     * @type {SkillDraftEffects}
+     * @memberof SkillDraft
+     */
+    effects: SkillDraftEffects;
+    /**
+     *
+     * @type {SkillDraftConfidence}
+     * @memberof SkillDraft
+     */
+    confidence: SkillDraftConfidence;
+}
+
+/**
+ *
+ * @export
+ */
+export const SkillDraftConfidence = {
+    High: 'high',
+    Low: 'low'
+} as const;
+export type SkillDraftConfidence = typeof SkillDraftConfidence[keyof typeof SkillDraftConfidence];
+
+/**
+ *
+ * @export
+ */
+export const SkillDraftEffects = {
+    Read: 'read',
+    Write: 'write'
+} as const;
+export type SkillDraftEffects = typeof SkillDraftEffects[keyof typeof SkillDraftEffects];
+
+/**
+ *
+ * @export
+ * @interface SkillDraftFailure
+ */
+export interface SkillDraftFailure {
+    /**
+     *
+     * @type {SkillDraftFailureCode}
+     * @memberof SkillDraftFailure
+     */
+    code: SkillDraftFailureCode;
+    /**
+     *
+     * @type {SkillDraftLimitScope}
+     * @memberof SkillDraftFailure
+     */
+    scope?: SkillDraftLimitScope;
+    /**
+     * When the limit resets, as an ISO 8601 UTC time.
+     * @type {string}
+     * @memberof SkillDraftFailure
+     */
+    resetsAt?: string;
+}
+
+/**
+ *
+ * @export
+ */
+export const SkillDraftFailureCode = {
+    LimitReached: 'limit_reached',
+    DraftsPaused: 'drafts_paused',
+    DraftUnusable: 'draft_unusable',
+    UpstreamError: 'upstream_error',
+    InProgress: 'in_progress'
+} as const;
+export type SkillDraftFailureCode = typeof SkillDraftFailureCode[keyof typeof SkillDraftFailureCode];
+
+/**
+ *
+ * @export
+ * @interface SkillDraftInput
+ */
+export interface SkillDraftInput {
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraftInput
+     */
+    name: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraftInput
+     */
+    label: string;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraftInput
+     */
+    example: string;
+    /**
+     *
+     * @type {SkillDraftInputKind}
+     * @memberof SkillDraftInput
+     */
+    kind: SkillDraftInputKind;
+}
+
+/**
+ *
+ * @export
+ */
+export const SkillDraftInputKind = {
+    Text: 'text',
+    Number: 'number',
+    Date: 'date'
+} as const;
+export type SkillDraftInputKind = typeof SkillDraftInputKind[keyof typeof SkillDraftInputKind];
+
+/**
+ *
+ * @export
+ */
+export const SkillDraftLimitScope = {
+    Day: 'day',
+    Month: 'month'
+} as const;
+export type SkillDraftLimitScope = typeof SkillDraftLimitScope[keyof typeof SkillDraftLimitScope];
+
+/**
+ *
+ * @export
+ */
+export const SkillDraftState = {
+    None: 'none',
+    Writing: 'writing',
+    Ready: 'ready',
+    Failed: 'failed',
+    Saved: 'saved'
+} as const;
+export type SkillDraftState = typeof SkillDraftState[keyof typeof SkillDraftState];
+
+/**
+ *
+ * @export
+ * @interface SkillDraftStatus
+ */
+export interface SkillDraftStatus {
+    /**
+     *
+     * @type {SkillDraftState}
+     * @memberof SkillDraftStatus
+     */
+    status: SkillDraftState;
+    /**
+     *
+     * @type {string}
+     * @memberof SkillDraftStatus
+     */
+    draftId?: string;
+    /**
+     *
+     * @type {SkillDraft}
+     * @memberof SkillDraftStatus
+     */
+    draft?: SkillDraft;
+    /**
+     * The skill saved from this task, once it is saved.
+     * @type {string}
+     * @memberof SkillDraftStatus
+     */
+    skillName?: string;
+    /**
+     * Epoch ms after which a draft that was not saved is written again.
+     * @type {number}
+     * @memberof SkillDraftStatus
+     */
+    expiresAt?: number;
+    /**
+     *
+     * @type {SkillDraftFailure}
+     * @memberof SkillDraftStatus
+     */
+    failure?: SkillDraftFailure;
+}
+
+/**
+ *
+ * @export
  * @interface SkillFlowSource
  */
 export interface SkillFlowSource {
@@ -313,13 +562,14 @@ export interface SkillList {
 }
 
 /**
- * How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
+ * How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog, `history` made in the app from a finished task.
  * @export
  */
 export const SkillOrigin = {
     Agent: 'agent',
     Manual: 'manual',
-    Directory: 'directory'
+    Directory: 'directory',
+    History: 'history'
 } as const;
 export type SkillOrigin = typeof SkillOrigin[keyof typeof SkillOrigin];
 

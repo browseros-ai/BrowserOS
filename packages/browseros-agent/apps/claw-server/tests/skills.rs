@@ -839,3 +839,222 @@ async fn concurrent_upserts_of_a_new_name_keep_one_skill_intact() -> anyhow::Res
 
     Ok(())
 }
+
+/// A finished task with a couple of steps, the kind the app offers to turn into a skill.
+async fn finished_task(state: &AppState, session_id: &str) -> anyhow::Result<()> {
+    state
+        .audit_log
+        .record_session_start(
+            session_id,
+            "convo-hist",
+            "claude-code",
+            "claude-code",
+            "claude-code",
+            "1",
+        )
+        .await?;
+    for tool in ["navigate", "act"] {
+        let mut row = dispatch(session_id, tool, false);
+        row.url = Some("https://www.flipkart.com/search?q=phones".to_string());
+        row.title = Some("Mobiles".to_string());
+        state.audit_log.record_tool_dispatch(row).await?;
+    }
+    state
+        .audit_log
+        .record_session_end(session_id, "closed", None)
+        .await?;
+    Ok(())
+}
+
+fn task_skill(session_id: &str) -> Value {
+    json!({
+        "name": "neo-flipkart-phones-under-budget",
+        "description": "Find phones under a budget on Flipkart",
+        "site": "flipkart.com",
+        "steps": ["Open flipkart.com and search for phones.", "Set the price filter to {budget}."],
+        "learnedNotes": [],
+        "sourceSessionId": session_id,
+        "summary": "Lists the most popular phones on Flipkart under a price you choose.",
+        "inputs": [{ "name": "budget", "label": "Highest price", "example": "30000", "kind": "number" }]
+    })
+}
+
+#[tokio::test]
+async fn a_skill_saved_from_a_task_is_kept_once_and_linked_to_it() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+    finished_task(&app.state, "hist-sess").await?;
+
+    let (status, draft) = request(
+        router,
+        "GET",
+        "/api/v1/sessions/hist-sess/skill-draft",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(draft["status"], "none");
+
+    let (status, created) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-sess")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["origin"], "history");
+    assert_eq!(created["sourceSessionId"], "hist-sess");
+
+    let body = std::fs::read_to_string(
+        app.root
+            .join("skills/neo-flipkart-phones-under-budget/SKILL.md"),
+    )?;
+    assert!(body.contains("Lists the most popular phones"), "{body}");
+    assert!(body.contains("## Inputs"), "{body}");
+    assert!(
+        body.contains("- {budget}: Highest price (number), for example 30000"),
+        "{body}"
+    );
+    assert!(body.contains("mark_skill_run"), "{body}");
+
+    // Saving the same task again, under any name, returns the skill already saved.
+    let mut again = task_skill("hist-sess");
+    again["name"] = json!("neo-something-else");
+    let (status, existing) = request(router, "POST", "/api/v1/skills", Some(again)).await?;
+    assert_eq!(status, StatusCode::OK, "{existing}");
+    assert_eq!(existing["name"], "neo-flipkart-phones-under-budget");
+    let (_, list) = request(router, "GET", "/api/v1/skills", None).await?;
+    assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
+
+    let (_, draft) = request(
+        router,
+        "GET",
+        "/api/v1/sessions/hist-sess/skill-draft",
+        None,
+    )
+    .await?;
+    assert_eq!(draft["status"], "saved");
+    assert_eq!(draft["skillName"], "neo-flipkart-phones-under-budget");
+    let (_, detail) = request(router, "GET", "/api/v1/sessions/hist-sess", None).await?;
+    assert_eq!(
+        detail["session"]["skillName"],
+        "neo-flipkart-phones-under-budget"
+    );
+    let (_, sessions) = request(router, "GET", "/api/v1/sessions", None).await?;
+    assert_eq!(
+        sessions["items"][0]["skillName"],
+        "neo-flipkart-phones-under-budget"
+    );
+
+    // Undo frees the task, so it can be saved again.
+    let (status, _) = request(
+        router,
+        "DELETE",
+        "/api/v1/skills/neo-flipkart-phones-under-budget",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-sess")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+    Ok(())
+}
+
+#[tokio::test]
+async fn drafting_a_skill_needs_the_plan_and_a_known_task() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+    finished_task(&app.state, "hist-sess").await?;
+
+    let (status, refused) = request(
+        router,
+        "POST",
+        "/api/v1/sessions/hist-sess/skill-draft",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(refused["code"], "not_entitled");
+
+    let (status, _) = request(router, "GET", "/api/v1/sessions/nope/skill-draft", None).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_tasks_with_the_same_draft_name_both_save() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+    finished_task(&app.state, "hist-one").await?;
+    finished_task(&app.state, "hist-two").await?;
+
+    let (status, first) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-one")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["name"], "neo-flipkart-phones-under-budget");
+
+    let (status, second) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-two")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    assert_eq!(second["name"], "neo-flipkart-phones-under-budget-2");
+    assert_eq!(second["sourceSessionId"], "hist-two");
+    Ok(())
+}
+
+#[tokio::test]
+async fn editing_a_task_skill_keeps_its_summary_and_inputs() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let router = &app.router;
+    finished_task(&app.state, "hist-sess").await?;
+    let (status, _) = request(
+        router,
+        "POST",
+        "/api/v1/skills",
+        Some(task_skill("hist-sess")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, edited) = request(
+        router,
+        "PUT",
+        "/api/v1/skills/neo-flipkart-phones-under-budget",
+        Some(json!({
+            "site": "flipkart.com",
+            "steps": ["Open flipkart.com and search for phones.", "Sort by popularity under {budget}."],
+            "learnedNotes": []
+        })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+
+    let body = std::fs::read_to_string(
+        app.root
+            .join("skills/neo-flipkart-phones-under-budget/SKILL.md"),
+    )?;
+    assert!(body.contains("Sort by popularity"), "{body}");
+    assert!(body.contains("Lists the most popular phones"), "{body}");
+    assert!(
+        body.contains("- {budget}: Highest price (number), for example 30000"),
+        "{body}"
+    );
+    assert_eq!(body.matches("## Inputs").count(), 1, "{body}");
+    Ok(())
+}

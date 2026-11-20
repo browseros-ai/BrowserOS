@@ -9,7 +9,10 @@ use crate::{
             consent::{self, Decision},
             prose, store,
         },
-        skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
+        skills::{
+            CreateSkill, FromTask, Saved, SkillDetailView, SkillInput, SkillOrigin, SkillView,
+            UpdateSkill,
+        },
     },
 };
 use axum::{
@@ -104,24 +107,65 @@ pub(super) async fn create(
     State(state): State<AppState>,
     Json(body): Json<SkillCreate>,
 ) -> Result<(StatusCode, Json<Skill>), CanonicalError> {
-    let view = state
-        .skills
-        .create(CreateSkill {
-            name: body.name,
-            description: body.description,
-            site: body.site,
-            steps: body.steps.unwrap_or_default(),
-            learned_notes: body.learned_notes.unwrap_or_default(),
-            origin: SkillOrigin::Manual,
-            source_session_id: None,
-        })
-        .await
-        .map_err(|source| map_error(&request_id, source))?;
+    let input = CreateSkill {
+        name: body.name,
+        description: body.description,
+        site: body.site,
+        steps: body.steps.unwrap_or_default(),
+        learned_notes: body.learned_notes.unwrap_or_default(),
+        origin: SkillOrigin::Manual,
+        source_session_id: body.source_session_id.clone(),
+    };
+    // A skill made from a finished task: one per task, so a repeated save returns the first.
+    let (status, view) = if body.source_session_id.is_some() {
+        let from = FromTask {
+            summary: body.summary,
+            inputs: body
+                .inputs
+                .unwrap_or_default()
+                .into_iter()
+                .map(|input| SkillInput {
+                    name: input.name,
+                    label: input.label,
+                    example: input.example,
+                    kind: input.kind.to_string(),
+                })
+                .collect(),
+        };
+        match state
+            .skills
+            .create_from_task(input, from)
+            .await
+            .map_err(|source| map_error(&request_id, source))?
+        {
+            Saved::Created(view) => (StatusCode::CREATED, view),
+            Saved::Existing(view) => (StatusCode::OK, view),
+        }
+    } else {
+        let view = state
+            .skills
+            .create(CreateSkill {
+                source_session_id: None,
+                ..input
+            })
+            .await
+            .map_err(|source| map_error(&request_id, source))?;
+        (StatusCode::CREATED, view)
+    };
+    let flow = if shows_ultrafast(&state) {
+        state
+            .skills
+            .flow_row(&view.model.name)
+            .await
+            .map_err(|source| map_error(&request_id, source))?
+    } else {
+        None
+    };
     let mut skill = skill_to_dto(view);
     if shows_ultrafast(&state) {
-        skill.ultrafast = Some(Box::new(ultrafast_to_dto(&state, None, None)));
+        skill.ultrafast = Some(Box::new(ultrafast_to_dto(&state, flow.as_ref(), None)));
     }
-    Ok((StatusCode::CREATED, Json(skill)))
+    Ok((status, Json(skill)))
 }
 
 pub(super) async fn update(
@@ -546,6 +590,7 @@ fn origin_to_dto(origin: &str) -> models::SkillOrigin {
     match origin {
         "manual" => models::SkillOrigin::Manual,
         "directory" => models::SkillOrigin::Directory,
+        "history" => models::SkillOrigin::History,
         _ => models::SkillOrigin::Agent,
     }
 }

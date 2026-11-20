@@ -1,4 +1,5 @@
 use crate::{
+    analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     db::{
         AuditLog, SkillsRepository,
         audit_log::{TaskStatus, TaskSummary},
@@ -7,6 +8,7 @@ use crate::{
     },
     error::{AppError, AppResult},
 };
+use serde_json::json;
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -25,15 +27,26 @@ pub struct SkillRunService {
     /// Serializes projection so concurrent finalizers of the same skill cannot
     /// read the same max run number and assign duplicate run numbers.
     finalize_lock: Mutex<()>,
+    analytics: Arc<dyn AnalyticsSink>,
 }
 
 impl SkillRunService {
     #[must_use]
     pub fn new(repo: SkillsRepository, audit_log: Arc<AuditLog>) -> Self {
+        Self::new_with_analytics(repo, audit_log, Arc::new(NoopAnalyticsSink))
+    }
+
+    #[must_use]
+    pub fn new_with_analytics(
+        repo: SkillsRepository,
+        audit_log: Arc<AuditLog>,
+        analytics: Arc<dyn AnalyticsSink>,
+    ) -> Self {
         Self {
             repo,
             audit_log,
             finalize_lock: Mutex::new(()),
+            analytics,
         }
     }
 
@@ -159,13 +172,120 @@ impl SkillRunService {
             handover_step: mark.handover_step,
             handover_cause: mark.handover_cause.clone(),
         };
-        self.repo.insert_run_if_absent(row).await
+        let recorded = self.repo.insert_run_if_absent(row).await?;
+        if recorded && run_number == 1 {
+            self.report_first_run(skill_name).await?;
+        }
+        Ok(recorded)
+    }
+
+    async fn report_first_run(&self, skill_name: &str) -> AppResult<()> {
+        let Some(skill) = self.repo.get(skill_name).await? else {
+            return Ok(());
+        };
+        let days = (now_ms() - skill.created_at).max(0) / DAY_MS;
+        self.analytics.capture(
+            events::SKILL_FIRST_RUN,
+            json!({ "origin": skill.origin, "days_since_saved": days }),
+        );
+        Ok(())
     }
 }
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analytics::events::EventDefinition,
+        db::{DATABASE_FILENAME, Database, entities::skills},
+    };
+    use serde_json::Value;
+
+    #[derive(Default)]
+    struct RecordingAnalytics {
+        events: std::sync::Mutex<Vec<(&'static str, Value)>>,
+    }
+
+    impl AnalyticsSink for RecordingAnalytics {
+        fn capture(&self, event: EventDefinition, properties: Value) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((event.name(), properties));
+        }
+    }
+
+    impl RecordingAnalytics {
+        fn names(&self) -> Vec<(&'static str, Value)> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    fn skill(name: &str, origin: &str) -> skills::Model {
+        skills::Model {
+            name: name.to_string(),
+            description: "Find phones under a budget".to_string(),
+            site: None,
+            origin: origin.to_string(),
+            source_session_id: None,
+            version: 1,
+            body_path: format!("{name}/SKILL.md"),
+            linked_agents_json: "[]".to_string(),
+            inputs_json: None,
+            created_at: now_ms() - 2 * DAY_MS,
+            updated_at: now_ms(),
+        }
+    }
+
+    async fn finished_run(
+        audit_log: &AuditLog,
+        service: &SkillRunService,
+        session_id: &str,
+        skill_name: &str,
+    ) -> AppResult<bool> {
+        audit_log
+            .record_session_start(session_id, "convo", "codex", "codex/run", "codex", "1")
+            .await?;
+        audit_log
+            .record_session_end(session_id, "closed", None)
+            .await?;
+        service.mark(session_id, skill_name).await?;
+        service.finalize(session_id).await
+    }
+
+    #[tokio::test]
+    async fn only_a_skills_first_recorded_run_is_counted() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let repo = SkillsRepository::new(db.clone());
+        repo.try_insert(skill("neo-phones", "history")).await?;
+        let audit_log = Arc::new(AuditLog::new(db.clone()));
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service =
+            SkillRunService::new_with_analytics(repo, audit_log.clone(), analytics.clone());
+
+        assert!(finished_run(&audit_log, &service, "run-1", "neo-phones").await?);
+        assert!(finished_run(&audit_log, &service, "run-2", "neo-phones").await?);
+
+        assert_eq!(
+            analytics.names(),
+            vec![(
+                events::SKILL_FIRST_RUN.name(),
+                json!({ "origin": "history", "days_since_saved": 2 })
+            )]
+        );
+        Ok(())
+    }
 }

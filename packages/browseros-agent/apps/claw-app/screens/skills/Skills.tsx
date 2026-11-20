@@ -16,6 +16,7 @@ import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/motion/button/base'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
+import { useUpgradeToasts } from '@/components/skills/NowUltrafast'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { SkillActions } from '@/components/skills/SkillActions'
@@ -24,7 +25,12 @@ import { UltrafastState } from '@/components/skills/UltrafastState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import { SAVE_PHRASE, skillSites, usedLabel } from './skills.helpers'
+import {
+  awaitsFirstRun,
+  SAVE_PHRASE,
+  skillSites,
+  usedLabel,
+} from './skills.helpers'
 
 /** Two columns at the page's full width, one on narrow screens. */
 const GRID_CLASS =
@@ -34,6 +40,7 @@ const GRID_CLASS =
 export function Skills() {
   const { skills, agents, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
+  useUpgradeToasts(skills)
   const now = Date.now()
 
   return (
@@ -196,6 +203,7 @@ function SkillCard({ skill, now }: { skill: Skill; now: number }) {
         <span className="flex min-w-0 items-center gap-2 text-[13px] text-ink-3 leading-4">
           <UltrafastState
             ultrafast={skill.ultrafast}
+            afterFirstRun={awaitsFirstRun(skill)}
             wordmarkClassName="text-[13.5px]"
           />
           <span className="truncate">

@@ -35,6 +35,7 @@ import type {
   Skill,
   SkillCreate,
   SkillDetail,
+  SkillDraftStatus,
   SkillFlowSource,
   SkillList,
   SkillRunList,
@@ -230,6 +231,26 @@ export class ClawApiClient {
   async cancelSession(request: SessionRequest): Promise<CancelSessionResponse> {
     return this.unwrap(
       await this.client.POST('/api/v1/sessions/{sessionId}/cancel', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  /** Where making a skill from this finished task stands. */
+  async getSkillDraft(request: SessionRequest): Promise<SkillDraftStatus> {
+    return this.unwrap(
+      await this.client.GET('/api/v1/sessions/{sessionId}/skill-draft', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  /** Writes a skill draft from this finished task, or returns the one already written. */
+  async draftSkillFromSession(
+    request: SessionRequest,
+  ): Promise<SkillDraftStatus> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/sessions/{sessionId}/skill-draft', {
         params: { path: request },
       }),
     )

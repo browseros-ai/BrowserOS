@@ -7,14 +7,17 @@
 import type { Skill, SkillRun } from '@browseros/claw-api'
 import { skipToken } from '@tanstack/react-query'
 import {
+  Check,
   ChevronDown,
   Eye,
   FileText,
+  LoaderCircle,
   Lock,
   MessageCircle,
   MessageCircleQuestion,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   TriangleAlert,
   UserRoundCheck,
 } from 'lucide-react'
@@ -34,6 +37,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
 import { SkillPicture } from '@/components/pro/UltrafastPictures'
+import { NowUltrafastStrip } from '@/components/skills/NowUltrafast'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { RunsChoiceDialog } from '@/components/skills/RunsChoiceDialog'
@@ -47,8 +51,11 @@ import { useSkillFlow } from '@/modules/api/skills.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { useSkillDetailData } from './skill-detail.data'
 import {
+  awaitsFirstRun,
   chosenLine,
+  firstRunLearning,
   healthLine,
+  type LearningStep,
   parseSkillBody,
   type RunsChoice,
   runModeCounts,
@@ -65,7 +72,7 @@ const BACK = { to: '/skills', label: 'Skills' }
 
 /** One skill: the steps neo follows, what it learned, and its runs. */
 export function SkillDetail() {
-  const { detail, isLoading, isError } = useSkillDetailData()
+  const { detail, isLoading, isError, checking } = useSkillDetailData()
   const navigate = useNavigate()
 
   if (isError) {
@@ -95,6 +102,7 @@ export function SkillDetail() {
   const { skill, body, runs } = detail
   const { steps, learnedNotes } = parseSkillBody(body)
   const p50Ms = skill.ultrafast?.p50Ms
+  const learning = firstRunLearning(skill, checking)
 
   return (
     <Page>
@@ -125,11 +133,12 @@ export function SkillDetail() {
             <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[14px] text-ink-3">
               <UltrafastState
                 ultrafast={skill.ultrafast}
+                afterFirstRun={awaitsFirstRun(skill)}
                 wordmarkClassName="text-[14.5px]"
               >
                 {p50Ms ? <span>{runSpeed(p50Ms)}</span> : null}
               </UltrafastState>
-              {ultrafastMark(skill.ultrafast) ? (
+              {ultrafastMark(skill.ultrafast, awaitsFirstRun(skill)) ? (
                 <span aria-hidden className="h-3.5 w-px bg-border-2" />
               ) : null}
               {usedLabel(skill.runCount, skill.lastRunAt, Date.now())}
@@ -137,6 +146,8 @@ export function SkillDetail() {
           </div>
         }
       />
+
+      <NowUltrafastStrip skill={skill} />
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-5">
@@ -176,7 +187,11 @@ export function SkillDetail() {
           </Section>
         </div>
         <div className="flex flex-col gap-5">
-          <UltrafastSection skill={skill} runs={runs} />
+          {learning ? (
+            <LearningPanel steps={learning} reason={skill.ultrafast?.reason} />
+          ) : (
+            <UltrafastSection skill={skill} runs={runs} />
+          )}
           <WorksIn skill={skill} />
           <RecentRuns runs={runs} />
         </div>
@@ -271,6 +286,77 @@ function UltrafastSection({ skill, runs }: { skill: Skill; runs: SkillRun[] }) {
         ) : null}
         {choice ? <RunsChoiceBlock skill={skill} choice={choice} /> : null}
         {ultrafast.flowVersion > 0 ? <FlowFile name={skill.name} /> : null}
+      </div>
+    </Card>
+  )
+}
+
+const LEARNING_ICON: Record<LearningStep['state'], ReactNode> = {
+  done: <Check />,
+  now: <LoaderCircle className="motion-safe:animate-spin" />,
+  todo: <Sparkles />,
+}
+
+const LEARNING_ICON_CLASS: Record<LearningStep['state'], string> = {
+  done: 'bg-green-tint text-green-ink',
+  now: 'bg-accent-tint text-accent-ink',
+  todo: 'bg-bg-sunken text-ink-4',
+}
+
+const LEARNING_STATE_WORDS: Record<LearningStep['state'], string> = {
+  done: 'Done:',
+  now: 'In progress:',
+  todo: 'Still to come:',
+}
+
+/** The first run of a task skill, in plain words, while neo turns it into its fast version. */
+function LearningPanel({
+  steps,
+  reason,
+}: {
+  steps: LearningStep[]
+  reason?: string
+}) {
+  return (
+    <Card
+      size="compact"
+      className="gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 border-border-2 border-b bg-bg-sunken px-5 py-4">
+        <h2>
+          <UltrafastWordmark className="text-[19px] text-ink-3" />
+        </h2>
+        <p className="text-[13.5px] text-ink-2">Learning from this run</p>
+      </div>
+      <div className="flex flex-col gap-3 px-5 pt-[18px] pb-5">
+        <ul className="flex flex-col gap-2.5 text-[14.5px]">
+          {steps.map((step) => (
+            <li
+              key={step.text}
+              className={cn(
+                'flex items-start gap-2.5',
+                step.state === 'todo' ? 'text-ink-3' : 'text-ink',
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'grid size-[22px] shrink-0 place-items-center rounded-full [&_svg]:size-[13px]',
+                  LEARNING_ICON_CLASS[step.state],
+                )}
+              >
+                {LEARNING_ICON[step.state]}
+              </span>
+              <span className="pt-px">
+                <span className="sr-only">
+                  {LEARNING_STATE_WORDS[step.state]}{' '}
+                </span>
+                {step.text}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {reason ? <p className="text-[13.5px] text-ink-3">{reason}</p> : null}
       </div>
     </Card>
   )

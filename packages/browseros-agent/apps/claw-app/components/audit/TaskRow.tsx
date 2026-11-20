@@ -8,6 +8,7 @@ import { Globe } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router'
 import { SiteChip } from '@/components/favicon/SiteChip'
 import { AgentMark } from '@/components/harness/AgentMark'
+import { MakeSkillButton } from '@/components/skills/MakeSkillButton'
 import { cn } from '@/lib/utils'
 import {
   type TaskSummary,
@@ -28,10 +29,27 @@ interface TaskRowProps {
   now: number
   /** Under a day heading the day is already said, so show only the time. */
   timeOnly?: boolean
+  /**
+   * Whether "Make it a skill" shows all the time. Only the newest finished task in a list does;
+   * the rest show it on hover and focus.
+   */
+  skillAlways?: boolean
+  /** Which list the row is in, for analytics on "Make it a skill". */
+  skillPlace?: 'home' | 'history'
 }
 
-/** One finished or running task: picture, name, summary, agent, when and status. */
-export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
+/**
+ * One finished or running task: picture, name, summary, agent, when and status. The whole row
+ * links to the task page through the title's stretched link, so the skill button beside the
+ * status can be a real button rather than one nested inside a link.
+ */
+export function TaskRow({
+  task,
+  now,
+  timeOnly = false,
+  skillAlways = false,
+  skillPlace = 'history',
+}: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const note = ultrafastNote(task.pursue, task.ultrafast)
@@ -45,11 +63,9 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
       : null
 
   return (
-    <NavLink
-      to={`/audit/${encodeURIComponent(task.sessionId)}`}
-      state={{ from: location.pathname }}
+    <div
       data-task-row={task.sessionId}
-      className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas focus-visible:bg-bg-canvas focus-visible:outline-none sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
+      className="group relative grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 px-4 py-3.5 transition-colors hover:bg-bg-canvas has-[a:focus-visible]:bg-bg-canvas sm:grid-cols-[112px_minmax(0,1fr)_auto] sm:gap-x-[18px] sm:px-[18px]"
     >
       <span
         className={cn(
@@ -80,10 +96,14 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
         )}
       </span>
       <span className="flex min-w-0 flex-col gap-[3px]">
-        <span className="truncate font-semibold text-[15.5px] text-cyanotype-ink">
+        <NavLink
+          to={`/audit/${encodeURIComponent(task.sessionId)}`}
+          state={{ from: location.pathname }}
+          className="truncate font-semibold text-[15.5px] text-cyanotype-ink after:absolute after:inset-0 focus-visible:outline-none"
+        >
           {task.name}
           {task.site ? <span className="sr-only">, on {task.site}</span> : null}
-        </span>
+        </NavLink>
         {task.taskSummary ? (
           <span className="line-clamp-1 text-[14px] text-ink-2">
             {task.taskSummary}
@@ -106,11 +126,15 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
         </span>
         {note ? <UltrafastNote className="mt-0.5">{note}</UltrafastNote> : null}
       </span>
-      <SessionStatusBadge
-        status={task.status}
-        sessionId={task.sessionId}
-        className="col-start-2 justify-self-start sm:col-start-auto sm:justify-self-end"
-      />
-    </NavLink>
+      <span className="relative col-start-2 flex w-full flex-row-reverse items-center justify-between gap-2.5 sm:col-start-auto sm:w-auto sm:flex-row sm:justify-end">
+        <MakeSkillButton
+          task={task}
+          surface="row"
+          place={skillPlace}
+          revealOnHover={!skillAlways}
+        />
+        <SessionStatusBadge status={task.status} sessionId={task.sessionId} />
+      </span>
+    </div>
   )
 }

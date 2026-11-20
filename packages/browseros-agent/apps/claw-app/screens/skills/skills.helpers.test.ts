@@ -1,20 +1,29 @@
 import { describe, expect, it } from 'bun:test'
 import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
+  awaitsFirstRun,
   chosenLine,
   durationLabel,
+  firstRunLearning,
   healthLine,
   neoName,
   parseSkillBody,
   runModeCounts,
   runModeLabel,
   runSpeed,
+  runsByItself,
   runsChoice,
   skillCommand,
   skillSites,
+  stillVerifying,
   stuckWhile,
+  turnedUltrafast,
   ultrafastMark,
+  upgradeSeconds,
   usedLabel,
+  VERIFYING_POLL_MS,
+  VERIFYING_WINDOW_MS,
+  verifyingPoll,
   worksInAgents,
 } from './skills.helpers'
 
@@ -189,6 +198,126 @@ describe('ultrafastMark', () => {
     expect(ultrafastMark(ultrafast({ status: 'none' }))).toBeNull()
     expect(ultrafastMark(undefined)).toBeNull()
   })
+
+  it('says a skill made from a task turns ultrafast after its first run', () => {
+    const fromTask: Skill = {
+      name: 'neo-flipkart-phones',
+      description: 'Find phones under a budget on Flipkart',
+      origin: 'history',
+      version: 1,
+      linkedAgents: [],
+      runCount: 0,
+      cleanRunCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+      ultrafast: ultrafast({ status: 'none' }),
+    }
+    expect(awaitsFirstRun(fromTask)).toBe(true)
+    expect(ultrafastMark(fromTask.ultrafast, true)).toEqual({
+      dim: true,
+      word: 'after its first run',
+      tone: 'muted',
+    })
+    expect(awaitsFirstRun({ ...fromTask, runCount: 1 })).toBe(false)
+    expect(awaitsFirstRun({ ...fromTask, origin: 'agent' })).toBe(false)
+    expect(
+      awaitsFirstRun({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'none', locked: true }),
+      }),
+    ).toBe(false)
+    expect(ultrafastMark(ultrafast({ status: 'pending' }), true)?.word).toBe(
+      'on the way',
+    )
+  })
+})
+
+describe('firstRunLearning', () => {
+  const fromTask: Skill = {
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'pending' }),
+  }
+
+  it('walks through the first run while neo checks the fast version', () => {
+    expect(firstRunLearning(fromTask)?.map((step) => step.state)).toEqual([
+      'done',
+      'done',
+      'now',
+      'todo',
+    ])
+  })
+
+  it('says it finishes on the next run once the page stops checking', () => {
+    const steps = firstRunLearning(fromTask, false)
+    expect(steps?.map((step) => step.text)).not.toContain(
+      'neo is checking the fast version',
+    )
+    expect(steps?.at(-1)).toEqual({
+      text: 'Finishes on its next run',
+      state: 'todo',
+    })
+  })
+
+  it('says nothing once verified, when locked, or for a skill an agent saved', () => {
+    expect(
+      firstRunLearning({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'verified', verifiedAt: 1 }),
+      }),
+    ).toBeNull()
+    expect(
+      firstRunLearning({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'pending', locked: true }),
+      }),
+    ).toBeNull()
+    expect(firstRunLearning({ ...fromTask, origin: 'agent' })).toBeNull()
+    expect(
+      firstRunLearning({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'none' }),
+      }),
+    ).toBeNull()
+  })
+})
+
+describe('turnedUltrafast', () => {
+  const fromTask: Skill = {
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 1,
+    cleanRunCount: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'verified', verifiedAt: 5, p50Ms: 7300 }),
+  }
+
+  it('is the moment a task skill’s fast version is verified', () => {
+    expect(turnedUltrafast(fromTask)).toBe(true)
+    expect(turnedUltrafast({ ...fromTask, origin: 'agent' })).toBe(false)
+    expect(
+      turnedUltrafast({
+        ...fromTask,
+        ultrafast: ultrafast({ status: 'pending' }),
+      }),
+    ).toBe(false)
+  })
+
+  it('rounds the speed to whole seconds, never below one', () => {
+    expect(upgradeSeconds(7300)).toBe(7)
+    expect(upgradeSeconds(200)).toBe(1)
+  })
 })
 
 describe('healthLine', () => {
@@ -320,5 +449,107 @@ describe('durationLabel', () => {
     expect(durationLabel(11_000)).toBe('about 11 sec')
     expect(durationLabel(92_000)).toBe('about 2 min')
     expect(durationLabel(undefined)).toBeNull()
+  })
+})
+
+describe('verifyingPoll', () => {
+  const pending: Skill = {
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'pending' }),
+  }
+  const openedAt = 1_000_000
+
+  it('checks a pending fast version while the page is fresh', () => {
+    expect(verifyingPoll(pending, openedAt, openedAt + 30_000)).toBe(
+      VERIFYING_POLL_MS,
+    )
+  })
+
+  it('runs one check past the window, then stops for good', () => {
+    expect(
+      verifyingPoll(pending, openedAt, openedAt + VERIFYING_WINDOW_MS + 1),
+    ).toBe(VERIFYING_POLL_MS)
+    expect(
+      verifyingPoll(
+        pending,
+        openedAt,
+        openedAt + VERIFYING_WINDOW_MS + VERIFYING_POLL_MS,
+      ),
+    ).toBe(false)
+    expect(verifyingPoll(pending, openedAt, openedAt + 3 * 86_400_000)).toBe(
+      false,
+    )
+  })
+
+  it('never checks a skill that is not pending', () => {
+    expect(
+      verifyingPoll(
+        { ...pending, ultrafast: ultrafast({ status: 'verified' }) },
+        openedAt,
+        openedAt,
+      ),
+    ).toBe(false)
+    expect(verifyingPoll(undefined, openedAt, openedAt)).toBe(false)
+  })
+
+  it('reads as still checking only for data fetched inside the window', () => {
+    expect(stillVerifying(openedAt, openedAt + 500)).toBe(true)
+    expect(stillVerifying(openedAt, openedAt - 60_000)).toBe(true)
+    expect(stillVerifying(openedAt, openedAt + VERIFYING_WINDOW_MS)).toBe(false)
+  })
+})
+
+describe('runsByItself', () => {
+  const skill = (patch: Partial<SkillUltrafast>): Skill => ({
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 1,
+    cleanRunCount: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'verified', verifiedAt: 5, ...patch }),
+  })
+
+  it('is true for a read flow and a write chosen to run without the agent', () => {
+    expect(runsByItself(skill({}))).toBe(true)
+    expect(
+      runsByItself(
+        skill({
+          effects: 'write',
+          runs: writeRuns({ chosen: true, mode: 'without_agent' }),
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('is false when the plan is off or the run still needs the agent', () => {
+    expect(runsByItself(skill({ locked: true }))).toBe(false)
+    expect(
+      runsByItself(
+        skill({
+          effects: 'write',
+          runs: writeRuns({ alwaysWithAgent: 'pay' }),
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      runsByItself(
+        skill({
+          effects: 'write',
+          runs: writeRuns({}),
+        }),
+      ),
+    ).toBe(false)
   })
 })

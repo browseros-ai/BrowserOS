@@ -22,17 +22,20 @@ const WORD_TONE: Record<UltrafastMark['tone'], string> = {
 /** The wordmark for an ultrafast skill, then its state in words when it isn't verified. */
 export function UltrafastState({
   ultrafast,
+  afterFirstRun = false,
   wordmarkClassName,
   children,
   className,
 }: {
   ultrafast: SkillUltrafast | undefined
+  /** A skill made from a task that has not run yet reads "after its first run". */
+  afterFirstRun?: boolean
   wordmarkClassName?: string
   /** Shown after the wordmark while the skill is verified, such as its speed. */
   children?: ReactNode
   className?: string
 }) {
-  const mark = ultrafastMark(ultrafast)
+  const mark = ultrafastMark(ultrafast, afterFirstRun)
   if (!mark) return null
   return (
     <span

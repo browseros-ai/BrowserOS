@@ -36,6 +36,8 @@ paths:
     $ref: ./paths/sessions.yaml#/cancel
   /api/v1/sessions/{sessionId}/help/resolve:
     $ref: ./paths/sessions.yaml#/resolveHelp
+  /api/v1/sessions/{sessionId}/skill-draft:
+    $ref: ./paths/sessions.yaml#/skillDraft
   /api/v1/sessions/{sessionId}/recording:
     $ref: ./paths/recordings.yaml#/metadata
   /api/v1/sessions/{sessionId}/recording/events:
@@ -302,6 +304,26 @@ components:
       $ref: ./schemas/skills.yaml#/SkillCreate
     SkillUpdate:
       $ref: ./schemas/skills.yaml#/SkillUpdate
+    SkillDraftEffects:
+      $ref: ./schemas/skills.yaml#/SkillDraftEffects
+    SkillDraftConfidence:
+      $ref: ./schemas/skills.yaml#/SkillDraftConfidence
+    SkillDraftInputKind:
+      $ref: ./schemas/skills.yaml#/SkillDraftInputKind
+    SkillDraftInput:
+      $ref: ./schemas/skills.yaml#/SkillDraftInput
+    SkillDraft:
+      $ref: ./schemas/skills.yaml#/SkillDraft
+    SkillDraftState:
+      $ref: ./schemas/skills.yaml#/SkillDraftState
+    SkillDraftFailureCode:
+      $ref: ./schemas/skills.yaml#/SkillDraftFailureCode
+    SkillDraftLimitScope:
+      $ref: ./schemas/skills.yaml#/SkillDraftLimitScope
+    SkillDraftFailure:
+      $ref: ./schemas/skills.yaml#/SkillDraftFailure
+    SkillDraftStatus:
+      $ref: ./schemas/skills.yaml#/SkillDraftStatus
     DirectorySkill:
       $ref: ./schemas/skills.yaml#/DirectorySkill
     DirectorySkillList:

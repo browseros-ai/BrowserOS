@@ -35,6 +35,9 @@ impl MigratorTrait for Migrator {
             Box::new(m0026_add_site_and_outcome_to_ultrafast_sessions::Migration),
             Box::new(m0027_backfill_task_active_duration::Migration),
             Box::new(m0028_align_efficiency_active_duration::Migration),
+            Box::new(m0029_add_skill_drafts::Migration),
+            Box::new(m0030_add_inputs_json_to_skills::Migration),
+            Box::new(m0031_index_source_session_id_on_skills::Migration),
         ]
     }
 }
@@ -3073,5 +3076,166 @@ mod m0020_add_feedback_invite_snooze {
     enum FeedbackInvite {
         Table,
         SnoozedAtMs,
+    }
+}
+
+mod m0029_add_skill_drafts {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0029_add_skill_drafts"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // One skill draft per finished task, written by the decisions worker from a redacted
+            // digest. Keeping it lets a closed review sheet reopen without a second paid draft,
+            // and keeps the worker request id so a retry is never counted twice.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(SkillDrafts::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(SkillDrafts::SessionId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(ColumnDef::new(SkillDrafts::Status).string().not_null())
+                        .col(ColumnDef::new(SkillDrafts::RequestId).string().not_null())
+                        .col(ColumnDef::new(SkillDrafts::DraftJson).text().null())
+                        .col(ColumnDef::new(SkillDrafts::FailureJson).text().null())
+                        .col(
+                            ColumnDef::new(SkillDrafts::CreatedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(SkillDrafts::UpdatedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(
+                    Table::drop()
+                        .table(SkillDrafts::Table)
+                        .if_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum SkillDrafts {
+        Table,
+        SessionId,
+        Status,
+        RequestId,
+        DraftJson,
+        FailureJson,
+        CreatedAt,
+        UpdatedAt,
+    }
+}
+
+mod m0030_add_inputs_json_to_skills {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0030_add_inputs_json_to_skills"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // The parts of a skill that change between runs, with an example each, saved when a
+            // skill is made from a finished task. Null for every other skill.
+            if !manager.has_column("skills", "inputs_json").await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Skills::Table)
+                            .add_column(ColumnDef::new(Skills::InputsJson).text().null())
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(Skills::Table)
+                        .drop_column(Skills::InputsJson)
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum Skills {
+        Table,
+        InputsJson,
+    }
+}
+
+mod m0031_index_source_session_id_on_skills {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0031_index_source_session_id_on_skills"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // At most one skill made from each finished task, so a replayed save cannot make a
+            // second copy. Partial on purpose: an agent may still save several skills from one
+            // session, and those rows predate this index.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_history_source_session \
+                     ON skills (source_session_id) \
+                     WHERE origin = 'history' AND source_session_id IS NOT NULL",
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("DROP INDEX IF EXISTS idx_skills_history_source_session")
+                .await?;
+            Ok(())
+        }
     }
 }

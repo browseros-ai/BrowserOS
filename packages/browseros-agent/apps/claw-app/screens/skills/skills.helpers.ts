@@ -164,9 +164,14 @@ export interface UltrafastMark {
   tone: 'amber' | 'red' | 'muted'
 }
 
-/** How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill. */
+/**
+ * How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill.
+ * `afterFirstRun` marks a skill made from a task that has not run yet: it has no flow, but its
+ * first run in an agent makes it ultrafast, so it says so.
+ */
 export function ultrafastMark(
   ultrafast: SkillUltrafast | undefined,
+  afterFirstRun = false,
 ): UltrafastMark | null {
   switch (ultrafast?.status) {
     case 'verified':
@@ -180,8 +185,102 @@ export function ultrafastMark(
     case 'off':
       return { dim: true, word: 'off', tone: 'muted' }
     default:
-      return null
+      return afterFirstRun
+        ? { dim: true, word: 'after its first run', tone: 'muted' }
+        : null
   }
+}
+
+/** A skill made from a finished task that is waiting for the run that makes it ultrafast. */
+export function awaitsFirstRun(skill: Skill): boolean {
+  return (
+    skill.origin === 'history' &&
+    skill.runCount === 0 &&
+    skill.ultrafast?.status === 'none' &&
+    skill.ultrafast.locked !== true
+  )
+}
+
+export interface LearningStep {
+  text: string
+  state: 'done' | 'now' | 'todo'
+}
+
+/** How long the skill page keeps checking a pending fast version after it opens. */
+export const VERIFYING_WINDOW_MS = 2 * 60_000
+
+/** How often the skill page checks a pending fast version inside that window. */
+export const VERIFYING_POLL_MS = 3000
+
+/**
+ * The skill page's next check of a pending fast version, or false to stop. It runs one check past
+ * the window so the page re-renders and stops saying neo is checking.
+ */
+export function verifyingPoll(
+  skill: Skill | undefined,
+  openedAt: number,
+  now: number,
+): number | false {
+  if (skill?.ultrafast?.status !== 'pending') return false
+  return now - openedAt < VERIFYING_WINDOW_MS + VERIFYING_POLL_MS
+    ? VERIFYING_POLL_MS
+    : false
+}
+
+/** Whether a pending fast version still reads as being checked: only inside the window. */
+export function stillVerifying(openedAt: number, updatedAt: number): boolean {
+  return updatedAt - openedAt < VERIFYING_WINDOW_MS
+}
+
+/**
+ * What the skill page says while a task skill's first run turns into its fast version: the agent
+ * handed neo a flow and neo is checking it, or, once the page stops checking, that it finishes on
+ * the next run. Null once it is verified, or for any other skill.
+ */
+export function firstRunLearning(
+  skill: Skill,
+  checking = true,
+): LearningStep[] | null {
+  const ultrafast = skill.ultrafast
+  if (
+    skill.origin !== 'history' ||
+    ultrafast?.status !== 'pending' ||
+    ultrafast.verifiedAt ||
+    ultrafast.locked === true
+  ) {
+    return null
+  }
+  const done: LearningStep[] = [
+    { text: 'Your agent is doing the task the normal way', state: 'done' },
+    { text: 'neo is learning the steps', state: 'done' },
+  ]
+  if (!checking)
+    return [...done, { text: 'Finishes on its next run', state: 'todo' }]
+  return [
+    ...done,
+    { text: 'neo is checking the fast version', state: 'now' },
+    { text: 'Next time it takes seconds', state: 'todo' },
+  ]
+}
+
+/** A skill made from a task whose fast version is verified: the one-time "now ultrafast" moment. */
+export function turnedUltrafast(skill: Skill): boolean {
+  return (
+    skill.origin === 'history' &&
+    skill.ultrafast?.status === 'verified' &&
+    skill.ultrafast.verifiedAt !== undefined
+  )
+}
+
+/** Whether a skill's next run goes without the agent: read flows, or writes chosen to. */
+export function runsByItself(skill: Skill): boolean {
+  const state = runsChoice(skill.ultrafast, [])?.state
+  return state === 'read' || state === 'without'
+}
+
+/** The big figure on the "now ultrafast" strip: whole seconds a run, at least 1. */
+export function upgradeSeconds(p50Ms: number): number {
+  return Math.max(1, Math.round(p50Ms / 1000))
 }
 
 /** "about 1.2 s a run" from a median in milliseconds. */

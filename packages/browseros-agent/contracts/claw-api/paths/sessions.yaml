@@ -97,6 +97,53 @@ cancel:
         $ref: ../responses.yaml#/Conflict
       '500':
         $ref: ../responses.yaml#/InternalError
+skillDraft:
+  get:
+    operationId: getSkillDraft
+    description: Where making a skill from this finished task stands, shared by every view of the task.
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: The draft's state, with the draft once it is ready.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/SkillDraftStatus
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  post:
+    operationId: draftSkillFromSession
+    description: >-
+      Write a skill draft from this finished task through the decisions worker. Nothing is saved.
+      A draft already written, or one being written, is returned instead of a new one.
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    responses:
+      '200':
+        description: The draft, or why it could not be written.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/SkillDraftStatus
+      '403':
+        description: not_entitled, when the plan does not include skill drafts.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '422':
+        description: not_finished, when the task did not finish.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '500':
+        $ref: ../responses.yaml#/InternalError
 resolveHelp:
   post:
     operationId: resolveHelp

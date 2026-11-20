@@ -1111,6 +1111,7 @@ impl ClawMcpService {
                 if matches!(before, FlowStatus::Degraded | FlowStatus::Broken) {
                     row.repaired_at = Some(now);
                 }
+                let first_verify = row.verified_at.is_none();
                 row.verified_at = Some(now);
                 row.source_session_id = Some(session_id.to_string());
                 row.updated_at = now;
@@ -1120,7 +1121,11 @@ impl ClawMcpService {
                     .publish_flow(name, &mut doc, row.clone(), is_patch)
                     .await
                 {
-                    Ok(Publish::Saved) => {}
+                    Ok(Publish::Saved) => {
+                        if first_verify {
+                            self.report_flow_verified(name, pass.p50_ms).await;
+                        }
+                    }
                     Ok(Publish::StepsChanged) => {
                         return ToolResult::error(
                             "ultrafast: the skill's steps were edited while this flow was being verified, so it was not saved. Read the skill again and call save_skill with a flow for its current steps.",
@@ -1333,6 +1338,24 @@ impl ClawMcpService {
         }
     }
 
+    /// Counts a skill's first verified flow, with how many runs it took to get there.
+    async fn report_flow_verified(&self, name: &str, p50_ms: i64) {
+        let skills = &self.state.skills;
+        let (Ok(Some(origin)), Ok(runs)) =
+            (skills.origin(name).await, skills.run_count(name).await)
+        else {
+            return;
+        };
+        self.state.analytics.capture(
+            crate::analytics::events::SKILL_FLOW_VERIFIED,
+            json!({
+                "origin": origin,
+                "runs_before_verify": runs,
+                "p50_bucket": crate::analytics::events::p50_bucket(p50_ms),
+            }),
+        );
+    }
+
     /// What `mark_skill_run` adds for a skill that has no working flow: repairing it is part of
     /// running it, so the user's saved skill gets fast again without being asked twice.
     pub(super) async fn upgrade_nudge(&self, name: &str) -> Option<String> {
@@ -1347,11 +1370,26 @@ impl ClawMcpService {
             .as_ref()
             .and_then(|row| row.status_reason.as_deref())
             .is_some_and(|reason| reason.starts_with("skipped"));
+        // A skill made from a finished task promises to turn ultrafast after its first run. If
+        // that run's flow failed to verify, it is left pending with nothing verified; ask again
+        // on the next run instead of leaving it pending for good.
+        let unverified_from_task = status == FlowStatus::Pending
+            && row.as_ref().is_some_and(|row| row.verified_at.is_none())
+            && self
+                .state
+                .skills
+                .origin(name)
+                .await
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("history");
         if skipped
-            || !matches!(
-                status,
-                FlowStatus::None | FlowStatus::Off | FlowStatus::Broken
-            )
+            || !(unverified_from_task
+                || matches!(
+                    status,
+                    FlowStatus::None | FlowStatus::Off | FlowStatus::Broken
+                ))
         {
             return None;
         }

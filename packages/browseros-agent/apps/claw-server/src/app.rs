@@ -49,6 +49,8 @@ pub struct AppState {
     pub harness: Arc<HarnessService>,
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
+    /// Skill drafts written from finished tasks, one per task, shared by every view of it.
+    pub skill_drafts: Arc<crate::services::skill_draft::SkillDraftService>,
     /// Read through `ultrafast_enabled`, which also keeps hosted servers out.
     pub ultrafast: Arc<crate::services::flow::switch::UltrafastSwitch>,
     /// Single-use answers to the "with your agent or without" question, minted per write flow.
@@ -195,14 +197,18 @@ impl AppState {
             .with_ultrafast_skill(ultrafast_skill)
             .with_read_only(config.dev_mode),
         );
+        let skill_drafts = Arc::new(crate::services::skill_draft::SkillDraftService::new(
+            SkillsRepository::new(database.clone()),
+        ));
         let skills = Arc::new(SkillService::new(
             SkillsRepository::new(database.clone()),
             harness.clone(),
             config.browserclaw_dir.join("skills"),
         ));
-        let skill_runs = Arc::new(SkillRunService::new(
+        let skill_runs = Arc::new(SkillRunService::new_with_analytics(
             SkillsRepository::new(database.clone()),
             audit_log.clone(),
+            analytics_sink.clone(),
         ));
         let profiles = Arc::new(ProfileService::new(store.clone()));
         let session_efficiency = Arc::new(SessionEfficiencyService::new_with_analytics(
@@ -328,6 +334,7 @@ impl AppState {
             harness,
             skills,
             skill_runs,
+            skill_drafts,
             ultrafast: Arc::default(),
             consent_tokens: Arc::default(),
             analytics,
