@@ -45,4 +45,4 @@ packages/browseros/build/extensions/
 .crabbox/
 target
 
-.cargo-build-neo-cli
+.cargo-build-*/
