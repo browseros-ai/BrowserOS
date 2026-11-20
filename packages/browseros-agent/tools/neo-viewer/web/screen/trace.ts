@@ -29,15 +29,99 @@ export function shortTraceId(traceId: string): string {
   return traceId.slice(0, 8)
 }
 
-/** `9 spans, 1 failed, 1.23 s`, and that it is still partial while `neo.run` has not arrived. */
-export function traceFacts(trace: RunTrace): string {
-  const failed = trace.spans.filter((span) => span.error).length
+/** One fact about a trace, and its tone: what failed in the error tone, a partial trace in amber. */
+export interface TraceFact {
+  text: string
+  tone: 'plain' | 'bad' | 'busy'
+}
+
+/**
+ * `9 spans`, `1 failed`, `1.23 s`, and `waiting for neo.run` while it has not arrived: what a
+ * trace holds, shown joined by commas wherever a trace is summed up. Failures are counted as
+ * Neo's metrics count them (decision D10): each once, where it happened, so a run that failed
+ * because an operation did adds nothing, and a run that failed on its own (an exception, a
+ * timeout) counts once.
+ */
+export function traceFacts(trace: RunTrace): TraceFact[] {
+  const opsFailed = trace.spans.filter(
+    (span) => span.name === 'neo.op' && spanEnd(span) === 'failed',
+  ).length
+  const runFailed = trace.spans.some(
+    (span) => span.name === 'neo.run' && spanEnd(span) === 'failed',
+  )
+  const failed = opsFailed + (runFailed && opsFailed === 0 ? 1 : 0)
   return [
-    plural(trace.spans.length, 'span'),
-    ...(failed > 0 ? [`${failed} failed`] : []),
-    seconds(trace.durationMs),
-    ...(trace.complete ? [] : ['waiting for neo.run']),
-  ].join(', ')
+    { text: plural(trace.spans.length, 'span'), tone: 'plain' },
+    ...(failed > 0 ? [{ text: `${failed} failed`, tone: 'bad' } as const] : []),
+    { text: seconds(trace.durationMs), tone: 'plain' },
+    ...(trace.complete
+      ? []
+      : [{ text: 'waiting for neo.run', tone: 'busy' } as const]),
+  ]
+}
+
+/**
+ * How a span ended, from what Neo says on it: an op's `neo.op.outcome`, the run's
+ * `neo.run.status`; never its OTel status. A cancelled op is not a failure (decision D11): Neo's
+ * own `events.next` long-poll ends cancelled in every run. A run fails when it ended neither ok
+ * nor cancelled (an error, a timeout).
+ */
+export function spanEnd(span: TraceSpan): 'ok' | 'failed' | 'cancelled' {
+  if (span.name === 'neo.run') {
+    const status = span.attributes['neo.run.status']
+    if (status === undefined || status === 'ok') return 'ok'
+    return status === 'cancelled' ? 'cancelled' : 'failed'
+  }
+  const outcome = span.attributes['neo.op.outcome']
+  if (outcome === 'error') return 'failed'
+  return outcome === 'cancelled' ? 'cancelled' : 'ok'
+}
+
+/**
+ * A span Neo made for its own work rather than for a line of the script: an operation right
+ * under the run with no source line (`page.frames`, `events.listen`, `events.next`, opening the
+ * task's page). The run block folds the same calls as "Neo internal"; an operation that ran
+ * inside another stays under the call it ran in.
+ */
+export function isInternalSpan(span: TraceSpan): boolean {
+  return (
+    span.name === 'neo.op' &&
+    span.depth <= 1 &&
+    span.attributes['neo.op.site.line'] === undefined
+  )
+}
+
+/**
+ * The spans in the waterfall's order: the run and the script's own operations first, then Neo's
+ * own work (`isInternalSpan`), each with what ran inside it; draw order kept within each.
+ */
+export function splitSpans(spans: TraceSpan[]): {
+  script: TraceSpan[]
+  internal: TraceSpan[]
+} {
+  const script: TraceSpan[] = []
+  const internal: TraceSpan[] = []
+  // The depth of the internal span whose subtree is being walked, while inside one.
+  let inside: number | null = null
+  for (const span of spans) {
+    if (inside !== null && span.depth > inside) {
+      internal.push(span)
+      continue
+    }
+    inside = isInternalSpan(span) ? span.depth : null
+    ;(inside === null ? script : internal).push(span)
+  }
+  return { script, internal }
+}
+
+/** `events.next, page.frames ×6, events.listen ×6`: spans by name in order, repeats counted. */
+export function namesWithCounts(spans: TraceSpan[]): string {
+  const counts = new Map<string, number>()
+  for (const span of spans)
+    counts.set(spanName(span), (counts.get(spanName(span)) ?? 0) + 1)
+  return [...counts]
+    .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
+    .join(', ')
 }
 
 /** What a span's row is called: `neo.run`, or the op's name. */

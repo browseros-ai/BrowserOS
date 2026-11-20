@@ -5,12 +5,16 @@ import { runTrace } from '../test-support/telemetry'
 import { lineText } from './text-lines'
 import {
   attributeLines,
+  isInternalSpan,
+  namesWithCounts,
   operationFor,
   selectedSpan,
   shortTraceId,
   siteDetail,
   spanBar,
+  spanEnd,
   spanName,
+  splitSpans,
   traceFacts,
 } from './trace'
 
@@ -20,10 +24,27 @@ describe("a run's trace", () => {
     trace.spans.find((one) => one.spanId === `span-${seq}`) ?? trace.spans[0]
 
   it('says what it holds in one line, and while neo.run has not arrived, that it is partial', () => {
-    expect(traceFacts(trace)).toBe('9 spans, 1 failed, 1.23 s')
-    expect(traceFacts(runTrace('neo-run', { complete: false }))).toBe(
-      '8 spans, 1 failed, 1.23 s, waiting for neo.run',
-    )
+    const facts = (shape: typeof trace) =>
+      traceFacts(shape).map(
+        (fact) =>
+          `${fact.text}${fact.tone === 'plain' ? '' : ` [${fact.tone}]`}`,
+      )
+    expect(facts(trace)).toEqual(['9 spans', '1 failed [bad]', '1.23 s'])
+    expect(facts(runTrace('neo-run', { complete: false }))).toEqual([
+      '8 spans',
+      '1 failed [bad]',
+      '1.23 s',
+      'waiting for neo.run [busy]',
+    ])
+    // Nothing failed: no failure fact at all.
+    const allOk = {
+      ...trace,
+      spans: trace.spans.map((span) => ({
+        ...span,
+        attributes: { ...span.attributes, 'neo.op.outcome': 'ok' },
+      })),
+    }
+    expect(facts(allOk)).toEqual(['9 spans', '1.23 s'])
     expect(shortTraceId(trace.traceId)).toBe('4bf92f35')
   })
 
@@ -108,5 +129,79 @@ describe("a run's trace", () => {
       'error',
       'note',
     ])
+  })
+})
+
+describe("Neo's own work in a trace (e2e F4, decision D11)", () => {
+  const withInternal = runTrace('neo-run', { internal: true })
+  const byId = (id: string) => {
+    const found = withInternal.spans.find((span) => span.spanId === id)
+    if (!found) throw new Error(id)
+    return found
+  }
+
+  it('takes how a span ended from what Neo says on it, never its status', () => {
+    // events.next ends cancelled in every run, and Neo marked that ERROR before D11.
+    expect(byId('span-10').error).toBe(true)
+    expect(spanEnd(byId('span-10'))).toBe('cancelled')
+    expect(spanEnd(byId('span-7'))).toBe('failed')
+    expect(spanEnd(byId('span-1'))).toBe('ok')
+    const run = byId('span-run')
+    const status = (value: string) =>
+      spanEnd({
+        ...run,
+        attributes: { ...run.attributes, 'neo.run.status': value },
+      })
+    expect(status('ok')).toBe('ok')
+    expect(status('error')).toBe('failed')
+    expect(status('timeout')).toBe('failed')
+    expect(status('cancelled')).toBe('cancelled')
+  })
+
+  it("puts the script's calls first and Neo's own work after, each with what ran inside it", () => {
+    const { script, internal } = splitSpans(withInternal.spans)
+    expect(script.map((span) => span.spanId)).toEqual([
+      'span-run',
+      'span-1',
+      'span-2',
+      'span-3',
+      'span-4',
+      'span-5',
+      'span-6',
+      'span-7',
+      'span-8',
+    ])
+    expect(internal.every(isInternalSpan)).toBe(true)
+    expect(namesWithCounts(internal)).toBe(
+      'context.newPage, events.next, page.frames ×2, events.listen ×2',
+    )
+    // An operation that ran inside another is not Neo's own: it stays under its call.
+    expect(isInternalSpan(byId('span-5'))).toBe(false)
+  })
+
+  it('counts each failure once, as the metrics do: a cancelled op is none', () => {
+    const facts = (shape: typeof withInternal) =>
+      traceFacts(shape).map((fact) => fact.text)
+    expect(facts(withInternal)).toEqual(['15 spans', '1 failed', '1.23 s'])
+    const runStatus = (status: string, outcome7: string) => ({
+      ...withInternal,
+      spans: withInternal.spans.map((span) =>
+        span.spanId === 'span-run'
+          ? {
+              ...span,
+              attributes: { ...span.attributes, 'neo.run.status': status },
+            }
+          : span.spanId === 'span-7'
+            ? {
+                ...span,
+                attributes: { ...span.attributes, 'neo.op.outcome': outcome7 },
+              }
+            : span,
+      ),
+    })
+    // The run failed because its click did: one failure.
+    expect(facts(runStatus('error', 'error'))[1]).toBe('1 failed')
+    // The run failed on its own (a timeout, its ops cancelled): one failure, at the run.
+    expect(facts(runStatus('timeout', 'cancelled'))[1]).toBe('1 failed')
   })
 })

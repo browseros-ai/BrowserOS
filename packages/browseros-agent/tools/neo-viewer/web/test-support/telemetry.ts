@@ -124,10 +124,20 @@ export function metricsView(): MetricsView {
   }
 }
 
-/** The fixture's trace for one run: `neo.run`, then its eight operations (seq 7 failed, 5 nested in 4). */
+/**
+ * The fixture's trace for one run: `neo.run`, then its eight operations (seq 7 failed, 5 nested in
+ * 4, the script's on lines 1-7). With `internal`, Neo's own work for the run as a real Neo sends it
+ * (wire-contract: no source line): the `events.next` long-poll, cancelled when the run ends and
+ * marked ERROR as Neo did before decision D11, `page.frames` and `events.listen` per open tab, and
+ * the task's page opening; the spans come in draw order, siblings by start.
+ */
 export function runTrace(
   neoRunId = 'neo-3',
-  options: { complete?: boolean; attributes?: Record<string, string> } = {},
+  options: {
+    complete?: boolean
+    attributes?: Record<string, string>
+    internal?: boolean
+  } = {},
 ): RunTrace {
   const run: TraceSpan = {
     spanId: 'span-run',
@@ -141,44 +151,74 @@ export function runTrace(
     error: false,
     attributes: { 'neo.run.id': neoRunId, 'neo.run.status': 'ok' },
   }
-  const ops: Array<[number, string, number, number, number]> = [
-    [1, 'page.goto', 5, 420, 1],
-    [2, 'locator.textContent', 425, 450, 1],
-    [3, 'locator.count', 452, 470, 1],
-    [4, 'locator.click', 472, 640, 1],
-    [5, 'frame.waitForLoadState', 500, 620, 2],
-    [6, 'page.waitForLoadState', 642, 700, 1],
-    [7, 'locator.click', 702, 1210, 1],
-    [8, 'page.title', 1212, 1220, 1],
+  type Op = [number, string, number, number, number, number | null, string]
+  const script: Op[] = [
+    [1, 'page.goto', 5, 420, 1, 1, 'ok'],
+    [2, 'locator.textContent', 425, 450, 1, 2, 'ok'],
+    [3, 'locator.count', 452, 470, 1, 3, 'ok'],
+    [4, 'locator.click', 472, 640, 1, 4, 'ok'],
+    [5, 'frame.waitForLoadState', 500, 620, 2, null, 'ok'],
+    [6, 'page.waitForLoadState', 642, 700, 1, 5, 'ok'],
+    [7, 'locator.click', 702, 1210, 1, 6, 'error'],
+    [8, 'page.title', 1212, 1220, 1, 7, 'ok'],
   ]
-  const spans = ops.map(
-    ([seq, name, start, end, depth]): TraceSpan => ({
-      spanId: `span-${seq}`,
-      parentSpanId: depth === 2 ? 'span-4' : 'span-run',
-      name: 'neo.op',
-      label: name,
-      opId: `${neoRunId}.${seq}`,
-      startOffsetMs: start,
-      durationMs: end - start,
-      depth,
-      error: seq === 7,
-      attributes: {
-        'neo.op.name': name,
-        'neo.op.id': `${neoRunId}.${seq}`,
-        'neo.op.outcome': seq === 7 ? 'error' : 'ok',
-        ...(seq === 7
-          ? { 'neo.error.owner': 'script', 'neo.error.code': 'no_match' }
-          : {}),
-        ...options.attributes,
-      },
-    }),
+  const internal: Op[] = options.internal
+    ? [
+        [9, 'context.newPage', 0, 1, 1, null, 'ok'],
+        [10, 'events.next', 1, 1226, 1, null, 'cancelled'],
+        [11, 'page.frames', 1, 3, 1, null, 'ok'],
+        [12, 'events.listen', 2, 3, 1, null, 'ok'],
+        [13, 'page.frames', 3, 4, 1, null, 'ok'],
+        [14, 'events.listen', 4, 5, 1, null, 'ok'],
+      ]
+    : []
+  const span = ([
+    seq,
+    name,
+    start,
+    end,
+    depth,
+    line,
+    outcome,
+  ]: Op): TraceSpan => ({
+    spanId: `span-${seq}`,
+    parentSpanId: depth === 2 ? 'span-4' : 'span-run',
+    name: 'neo.op',
+    label: name,
+    opId: `${neoRunId}.${seq}`,
+    startOffsetMs: start,
+    durationMs: end - start,
+    depth,
+    // As the server reads OTel status: a cancelled op was ERROR before D11.
+    error: outcome !== 'ok',
+    attributes: {
+      'neo.op.name': name,
+      'neo.op.id': `${neoRunId}.${seq}`,
+      ...(line === null
+        ? {}
+        : { 'neo.op.site.line': line, 'neo.op.site.column': 7 }),
+      'neo.op.outcome': outcome,
+      ...(outcome === 'error'
+        ? { 'neo.error.owner': 'script', 'neo.error.code': 'no_match' }
+        : {}),
+      ...options.attributes,
+    },
+  })
+  // Draw order: the run's children by start, each followed by what ran inside it (5 in 4).
+  const children = [...internal, ...script.filter((op) => op[4] === 1)].sort(
+    (a, b) => a[2] - b[2] || a[0] - b[0],
+  )
+  const ops = children.flatMap((op) =>
+    op[0] === 4
+      ? [span(op), ...script.filter((inner) => inner[4] === 2).map(span)]
+      : [span(op)],
   )
   const complete = options.complete ?? true
   return {
     traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
     complete,
     durationMs: 1230,
-    spans: complete ? [run, ...spans] : spans,
+    spans: complete ? [run, ...ops] : ops,
     resource: { 'service.name': 'browseros-neo' },
   }
 }

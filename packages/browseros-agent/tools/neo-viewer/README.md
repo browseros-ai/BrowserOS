@@ -180,7 +180,11 @@ The page at `/` (the approved design, "Viewer C v2"):
   newest run. Drag the handle between the runs and the sidebar to resize it. **Trace** shows the
   run's OpenTelemetry waterfall there: `neo.run`, its `neo.op` spans under it (one that ran inside
   another a step further in), each a bar on the run's time with its duration, red when it
-  failed; and the picked span's attributes exactly as Neo emitted them, with whether any span
+  failed (as Neo says it: `neo.op.outcome` `error`; a cancelled op is not a failure). Neo's own
+  work for the run (operations with no source line: `page.frames`, `events.listen`, the
+  `events.next` long-poll, opening the task's page) folds under one quiet **Neo internal** row
+  after the script's calls, as in the run block. Beside it, the picked span's attributes exactly
+  as Neo emitted them, with whether any span
   carries site detail (`url.*`), which is how redaction is checked. A span and its method row are
   one operation (`neo.op.id`): picking a span opens its call in the block, and a call picked
   while the trace shows marks its span.

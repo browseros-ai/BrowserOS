@@ -32,7 +32,8 @@ import { listenToViewerEvents } from './viewer-events'
 /** Events kept for re-applying over a late snapshot; older ones are long since in any snapshot. */
 const KEPT_EVENTS = 2000
 
-async function getJson<T>(path: string): Promise<T> {
+/** A JSON answer from the viewer's API; throws on a status that is not 2xx. */
+export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path)
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`)
   return (await response.json()) as T

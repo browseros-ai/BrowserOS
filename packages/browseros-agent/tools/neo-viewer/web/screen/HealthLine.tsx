@@ -15,7 +15,7 @@
  * last, so a changing number never moves its neighbours.
  */
 
-import { useEffect, useState } from 'react'
+import { type Ref, useEffect, useState } from 'react'
 import type { TelemetryHealth } from '../../shared/api'
 import { count, plural } from './units'
 
@@ -65,8 +65,8 @@ export function errorRate(
   return { text: percent < 1 ? '<1%' : `${Math.round(percent)}%`, bad: true }
 }
 
-/** Seconds since the page opened, ticking once a second while the line is shown. */
-function useSecondClock(): number {
+/** The time now, epoch ms, read again once a second while the caller is shown. */
+export function useSecondClock(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -80,6 +80,7 @@ export function HealthLine({
   open,
   onToggle,
   now,
+  buttonRef,
 }: {
   health: TelemetryHealth
   /** The Health view is showing: the line reads as pressed. */
@@ -87,6 +88,8 @@ export function HealthLine({
   onToggle: () => void
   /** For tests; the line keeps its own one-second clock otherwise. */
   now?: number
+  /** The line's button, so focus can come back to it when the Health view closes. */
+  buttonRef?: Ref<HTMLButtonElement>
 }) {
   const clock = useSecondClock()
   const fresh = freshness(health, now ?? clock)
@@ -96,11 +99,13 @@ export function HealthLine({
   const crashes = since?.crashes
   return (
     <div className="flex h-7 shrink-0 items-center border-line border-l pl-3">
+      {/* Named by its figures (no aria-label), so a screen reader reads them; the tooltip
+          sentence is its description. */}
       <button
+        ref={buttonRef}
         type="button"
         onClick={onToggle}
         aria-pressed={open}
-        aria-label="Neo's health"
         title={tooltip(health, fresh)}
         className={`flex items-end gap-3.5 rounded-md px-2 py-[3px] text-left ${open ? 'bg-neo-tint' : 'hover:bg-panel'}`}
       >
