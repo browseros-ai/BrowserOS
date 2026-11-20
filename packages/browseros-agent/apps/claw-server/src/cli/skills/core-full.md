@@ -141,7 +141,9 @@ browseros pdf [path] [--landscape] [--no-background]
 
 `--depth` is clamped to 1..=100. `--quality` is 0..=100. A screenshot comes back
 inline as an image, which a terminal cannot render, so the CLI writes it to the
-path given, or to `~/.browseros/tool-output/`, and prints where it went.
+path given, or to the server's output folder, and prints where it went.
+`browseros status` shows that folder on its `outputs` line; saved outputs too
+large to inline go there as well.
 
 ### Acting
 

@@ -62,6 +62,10 @@ pub struct State {
     /// reads stderr along with stdout, so a tip on every call is noise however it is routed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tips_shown: Vec<String>,
+    /// Where the server keeps saved outputs, learned from a path it reported. The server's
+    /// environment can differ from the CLI's, so its own word beats the CLI's guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
     /// The task `tips_shown` belongs to. A new task is shown its tips again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tips_task: Option<String>,
@@ -85,6 +89,7 @@ impl State {
             self.tools.clear();
             self.run_budget_ms = None;
             self.server_version = None;
+            self.output_dir = None;
             self.endpoint = Some(endpoint.to_string());
         }
     }

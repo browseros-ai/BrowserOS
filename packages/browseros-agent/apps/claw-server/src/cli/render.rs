@@ -136,6 +136,22 @@ pub fn written_path(output: &ToolOutput) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The folder the server saves outputs under, read off a path it reported: the parent of the
+/// `s-<hex>` session folder each saved output sits in.
+#[must_use]
+pub fn output_root_of(path: &str) -> Option<String> {
+    std::path::Path::new(path)
+        .ancestors()
+        .find(|dir| {
+            dir.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("s-"))
+                .is_some_and(|key| !key.is_empty() && key.chars().all(|ch| ch.is_ascii_hexdigit()))
+        })
+        .and_then(std::path::Path::parent)
+        .map(|root| root.display().to_string())
+}
+
 /// The tab group a listing reports for one page, as `[group <ID>]` on the
 /// page's line. The server names the task's own group in every result, so this
 /// is for the other groups a listing shows, such as which pages are in one.
@@ -272,6 +288,19 @@ mod tests {
             written_path(&output).as_deref(),
             Some("/home/u/.browseros/tool-output/pdf-1.pdf")
         );
+    }
+
+    #[test]
+    fn the_output_folder_is_read_off_a_saved_output_path() {
+        assert_eq!(
+            output_root_of(
+                "/home/u/.browseros-dev/tool-output/s-3161316636323331/a54b7e3e-1f2a-4c3d-9e8f-0a1b2c3d4e5f/snapshot.md"
+            )
+            .as_deref(),
+            Some("/home/u/.browseros-dev/tool-output")
+        );
+        assert_eq!(output_root_of("/home/u/Downloads/report.pdf"), None);
+        assert_eq!(output_root_of("/home/u/s-notes/x.md"), None);
     }
 
     #[test]

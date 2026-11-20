@@ -244,9 +244,17 @@ async fn run_tool(
         name_pending_task(client, pending).await?;
     }
 
+    if let Some(root) = render::written_path(&output)
+        .as_deref()
+        .and_then(render::output_root_of)
+        .filter(|root| client.state().output_dir.as_deref() != Some(root))
+    {
+        client.persist(|state| state.output_dir = Some(root))?;
+    }
+
     let mut files = Vec::new();
     if let Some(target) = plan.save_image.clone() {
-        files = write_images(&output, target.as_deref())?;
+        files = write_images(&output, target.as_deref(), &output_dir(client.state()))?;
     }
     if let Some(destination) = plan.copy_to.clone()
         && !output.is_error
@@ -430,6 +438,7 @@ async fn status(client: &mut Client, globals: &Globals) -> Result<Code> {
             },
         ),
         ("scope", state.scope_path.clone().unwrap_or_default()),
+        ("outputs", output_dir(&state).display().to_string()),
         (
             "server",
             state
@@ -777,12 +786,15 @@ fn report(
 }
 
 /// Writes inline image blocks to disk, because a terminal cannot render one.
-fn write_images(output: &ToolOutput, target: Option<&str>) -> Result<Vec<String>> {
+fn write_images(
+    output: &ToolOutput,
+    target: Option<&str>,
+    dir: &std::path::Path,
+) -> Result<Vec<String>> {
     if output.images.is_empty() {
         return Ok(Vec::new());
     }
-    let dir = default_output_dir();
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(dir)?;
     let mut written = Vec::new();
     for (index, image) in output.images.iter().enumerate() {
         let extension = match image.mime_type.as_str() {
@@ -805,15 +817,13 @@ fn write_images(output: &ToolOutput, target: Option<&str>) -> Result<Vec<String>
     Ok(written)
 }
 
-fn default_output_dir() -> std::path::PathBuf {
-    if let Some(raw) = std::env::var_os("BROWSEROS_DIR").filter(|value| !value.is_empty()) {
-        return std::path::PathBuf::from(raw).join("tool-output");
-    }
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".browseros")
-        .join("tool-output")
+/// Where the CLI writes the files it saves, the folder the server keeps its outputs in: as the
+/// server reported it, else by the server's own rule, which a CLI built with it shares.
+fn output_dir(state: &state::State) -> std::path::PathBuf {
+    state.output_dir.as_ref().map_or_else(
+        browseros_mcp::output_file::output_root,
+        std::path::PathBuf::from,
+    )
 }
 
 /// Standard base64, decoded by hand rather than adding a dependency for the
