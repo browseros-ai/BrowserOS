@@ -4,6 +4,7 @@
 //! operations, and a reader for the event stream.
 
 use crate::browser::ScriptedBrowser;
+use crate::metrics::FakeMetrics;
 use axum::Router;
 use axum::body::{Body, BodyDataStream, Bytes, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
@@ -165,6 +166,9 @@ pub(crate) struct Harness {
     /// The task holding each tab, as `ServiceInputs::tab_task` reports it; empty until a test
     /// gives a tab to a task.
     pub(crate) tab_tasks: Arc<Mutex<HashMap<i64, String>>>,
+    /// The app's telemetry as `ServiceInputs::metrics` renders it for `GET /v1/metrics`: empty,
+    /// as a telemetry that recorded nothing renders, until a test sets a text.
+    pub(crate) metrics: Arc<FakeMetrics>,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
@@ -303,6 +307,7 @@ async fn start(
     };
     let neo_tab: Arc<Mutex<Option<i64>>> = Arc::default();
     let tab_tasks: Arc<Mutex<HashMap<i64, String>>> = Arc::default();
+    let metrics = Arc::new(FakeMetrics::default());
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -336,7 +341,10 @@ async fn start(
                 })
             },
             tab_opener: Arc::new(|_| None),
-            metrics: Arc::new(String::new),
+            metrics: {
+                let metrics = Arc::clone(&metrics);
+                Arc::new(move || metrics.render())
+            },
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );
@@ -360,6 +368,7 @@ async fn start(
         settings,
         neo_tab,
         tab_tasks,
+        metrics,
     })
 }
 

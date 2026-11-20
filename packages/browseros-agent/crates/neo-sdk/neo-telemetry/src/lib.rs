@@ -12,6 +12,7 @@
 //!                                   │ Otel: pipeline.rs ─ meter + tracer providers
 //!                                   │   ├─ manual reader ─▶ prometheus.rs ─▶ render_prometheus (/v1/metrics)
 //!                                   │   └─ otlp::push ─▶ OTLP/HTTP (protobuf | JSON) on its own thread
+//!                                   │ in_memory (test-support): the same pipeline, spans kept for a Probe
 //!                                   └ Recording (test-support): every call kept in memory
 //! ```
 //!
@@ -30,17 +31,19 @@ mod otlp;
 mod otlp_protocol;
 mod pipeline;
 mod privacy;
+#[cfg(feature = "test-support")]
+mod probe;
 mod prometheus;
 #[cfg(feature = "test-support")]
 mod recording;
 mod run_span;
 mod run_telemetry;
 mod site_detail;
+mod spans;
 mod telemetry;
 mod telemetry_config;
 mod telemetry_error;
 mod trace_context;
-mod tracing_otel;
 mod transport;
 mod vocabulary;
 
@@ -48,6 +51,8 @@ pub use config::OtlpConfig;
 pub use op_settled::{OpSettled, OpSite};
 pub use open_tab_counts::{OpenTabCounts, OpenTabsSource};
 pub use otlp_protocol::OtlpProtocol;
+#[cfg(feature = "test-support")]
+pub use probe::{CapturedSpan, Probe, SpanStatus, SpanValue};
 #[cfg(feature = "test-support")]
 pub use recording::{Recording, TelemetryCall};
 pub use run_span::{RunFacts, RunSpan, RunVerdict};

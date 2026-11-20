@@ -17,6 +17,7 @@ import {
   buildScript,
   checkoutAt,
   checkoutImage,
+  containerOtlpEndpoint,
   imageId,
   imageLabel,
   instanceNames,
@@ -34,6 +35,7 @@ import { applyViewerSettings } from './neo-settings'
 import { buildPage } from './page'
 import {
   claimStateFolder,
+  freePort,
   liveViewer,
   otherInstanceStates,
   portFree,
@@ -90,13 +92,15 @@ try {
   }
   // Before any Docker work: a missing or broken package fails here, in a second.
   const page = await buildPage()
+  // The container's OTLP endpoint names the viewer's port, so `--port 0` is settled first.
+  const port = options.port === 0 ? freePort() : options.port
   const neo = options.upstream
     ? { mcpUrl: options.upstream, hostApi: options.hostApi }
-    : await startNeo(options)
+    : await startNeo(options, port)
   viewer = await startViewer({
     page,
     hostApi: neo.hostApi,
-    port: options.port,
+    port,
     upstream: neo.mcpUrl,
     dataDir: options.dataDir,
     container: ownsContainer ? { names, image: currentImage } : null,
@@ -106,7 +110,7 @@ try {
   Viewer:         ${viewer.url}
   Agent MCP URL:  ${viewer.mcpUrl}
   Claude Code:    claude mcp add --transport http neo-viewer ${viewer.mcpUrl}
-`)
+${options.upstream ? telemetryHint(viewer.url) : ''}`)
   await writeFile(
     viewerFile,
     // The port it listens on (not --port, which 0 leaves to the OS), for the same-port check.
@@ -124,9 +128,21 @@ try {
   }
 }
 
+/**
+ * With `--upstream` the viewer starts no Neo, so it cannot set Neo's telemetry: it says how. The
+ * viewer receives OTLP/HTTP JSON only.
+ */
+function telemetryHint(viewerUrl: string): string {
+  const port = Number(new URL(viewerUrl).port)
+  return `  Neo telemetry:  OTEL_EXPORTER_OTLP_ENDPOINT=${viewerUrl}/otlp OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+                  (a Neo in a container: OTEL_EXPORTER_OTLP_ENDPOINT=${containerOtlpEndpoint(port)})
+`
+}
+
 /** Picks or builds the image, clears the last start, starts the container; returns where Neo answers. */
 async function startNeo(
   launch: LaunchOptions,
+  viewerPort: number,
 ): Promise<{ mcpUrl: URL; hostApi: HostApiConfig }> {
   const run = startupRun
   const removed = await removeLeftovers(run, names, launch.keepData)
@@ -149,6 +165,7 @@ async function startNeo(
     image: currentImage,
     tokenFile,
     launch: launchId,
+    otlpEndpoint: containerOtlpEndpoint(viewerPort),
   })
   const hostApi = { url: container.hostApiUrl, tokenFile }
   // The viewer's own Neo keeps whole values for the operation panel (neo-settings.ts), set

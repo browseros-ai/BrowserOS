@@ -3,8 +3,9 @@
 //! protocol version and nothing is kept between requests (design D3, D5).
 //!
 //! ```text
-//!  rmcp ─▶ McpServer::call_tool ─ RunMeta::parse (_meta, the host's) + RunArgs::parse (the
-//!          model's) ─▶ RunService::run ─▶ RunReply ─▶ RunTool::result ─▶ CallToolResult
+//!  rmcp ─▶ McpServer::call_tool ─ RunMeta::parse (_meta, the host's, and the request's W3C
+//!          trace headers, which win over _meta's) + RunArgs::parse (the model's)
+//!          ─▶ RunService::run ─▶ RunReply ─▶ RunTool::result ─▶ CallToolResult
 //!          a refusal at the boundary ─▶ RunService::refuse (recorded, then the same rendering)
 //! ```
 //!

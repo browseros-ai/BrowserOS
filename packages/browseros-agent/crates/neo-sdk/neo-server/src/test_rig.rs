@@ -222,6 +222,22 @@ impl TestRig {
         )
     }
 
+    /// The run service over this rig, reporting its runs and their ops to `telemetry` (a test's
+    /// recording handle) instead of the no-op.
+    pub(crate) fn run_service_reporting(
+        &self,
+        orphan_grace: Duration,
+        telemetry: Telemetry,
+    ) -> Arc<RunService> {
+        let mut parts = self.service_parts(
+            Arc::clone(&self.dispatcher),
+            Arc::clone(&self.tabs),
+            orphan_grace,
+        );
+        parts.telemetry = telemetry;
+        RunService::new(parts)
+    }
+
     /// A run service as Neo has it after a restart of its server, the browser kept: no memory of
     /// requests, and a task book restored from the tab-holders file, over the same browser and
     /// the same trace. (The link's close hook and tab watch still feed the rig's first registry.)

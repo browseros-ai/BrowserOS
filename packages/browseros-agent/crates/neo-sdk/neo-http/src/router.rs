@@ -10,8 +10,8 @@ use crate::api_error::ApiError;
 use crate::host_service::Authenticated;
 use crate::service::ServiceState;
 use crate::{
-    display_route, events_route, fill_route, fit_routes, keep_routes, live_tabs, part_routes,
-    record_routes, response_id, settings_routes, tab_routes, takeover_routes,
+    display_route, events_route, fill_route, fit_routes, keep_routes, live_tabs, metrics_route,
+    part_routes, record_routes, response_id, settings_routes, tab_routes, takeover_routes,
 };
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -76,6 +76,7 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
                 .put(settings_routes::put_settings)
                 .patch(settings_routes::patch_settings),
         )
+        .route("/v1/metrics", get(metrics_route::get_metrics))
         .fallback(not_found)
         .with_state(state)
         .layer(middleware::from_fn(require_authenticated))

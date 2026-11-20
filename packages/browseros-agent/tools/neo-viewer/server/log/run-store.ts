@@ -343,6 +343,7 @@ function summarizeRun(
     neoEffects: typeof runMeta?.effects === 'string' ? runMeta.effects : null,
     neoDurationMs: run.neo?.durationMs ?? null,
     operationCount: run.neo ? run.neo.operations.length : null,
+    trace: start.trace ?? null,
   }
 }
 
