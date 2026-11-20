@@ -22,15 +22,6 @@
 //!   batch for as long as Neo runs. Nothing else reads an export's result: the SDK neither
 //!   retries nor backs off on it.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "until the providers plug the push door in (pipeline.rs), only this crate's \
-                  tests call it; delete this line once they do"
-    )
-)]
-
 use std::error::Error;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
