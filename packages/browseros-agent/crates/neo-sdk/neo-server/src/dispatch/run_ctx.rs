@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::{BrowserView, TabId};
 use neo_takeover::LockId;
+use neo_telemetry::{RunSpan, RunTelemetry};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, Outcome, RequestId, RunAccess,
     RunEffects, RunEnded, RunId, RunStarted, RunStatus, TaskId, TraceSink,
@@ -63,6 +64,9 @@ pub(crate) struct RunCtx {
     lock_pass: OnceLock<LockId>,
     /// A bound run's opens whose tab the browser has not named yet ([`RunCtx::opening`]).
     opens: OpensInFlight,
+    /// The run as its ops' telemetry sees it ([`RunCtx::telemetry`]): the door's settle reports
+    /// each op through it. Holds no gauge, so a `RunCtx` outliving its run leaks nothing.
+    telemetry: RunTelemetry,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -104,6 +108,11 @@ pub(crate) struct RunStart {
     pub(crate) tabs_scope: TabsScope,
     /// The host's operation restriction; Neo's own runs leave it absent.
     pub(crate) access: Option<RunAccess>,
+    /// The run's telemetry, decided by the caller: `Telemetry::start_run` for an agent's run
+    /// (counted in the run metrics, with a `neo.run` span), `Telemetry::internal_run` for
+    /// Neo's own (the idle-tab janitor, the host's private typing). Required, so every caller
+    /// chooses. Its guard ends it with the same verdict the trace records.
+    pub(crate) telemetry: RunSpan,
 }
 
 /// The run's end record. A plain data bag.
@@ -153,6 +162,13 @@ pub(crate) struct RunGuard {
     run: Option<Arc<RunCtx>>,
     trace: TraceSink,
     tabs: Arc<TabRegistry>,
+    /// The run's telemetry, taken together with `run`: [`RunGuard::finish`] and the guard's
+    /// drop each end it once, beside `run_ended`, with the same verdict.
+    #[expect(
+        dead_code,
+        reason = "RunGuard's finish and drop end it with the trace's verdict (telemetry_verdict.rs)"
+    )]
+    telemetry: Option<RunSpan>,
 }
 
 enum DefaultPage {
@@ -208,6 +224,7 @@ impl RunCtx {
             default_page,
             tabs_scope,
             access,
+            telemetry,
         } = start;
         let trace = door.trace();
         if let Some(task) = &task_id {
@@ -259,11 +276,13 @@ impl RunCtx {
             tasks,
             lock_pass: OnceLock::new(),
             opens: OpensInFlight::default(),
+            telemetry: telemetry.ops(),
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
             trace: trace.clone(),
             tabs: Arc::clone(door.tabs()),
+            telemetry: Some(telemetry),
         };
         (run, guard)
     }
@@ -272,6 +291,17 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn id(&self) -> RunId {
         self.id
+    }
+
+    /// The run as its ops' telemetry sees it: the door's one settle calls `op_settled` on it for
+    /// every op, on every path, including ops that settle after the run ended.
+    #[must_use]
+    #[expect(
+        dead_code,
+        reason = "OperationGuard's settle reports each op through it (operation_guard.rs)"
+    )]
+    pub(crate) fn telemetry(&self) -> &RunTelemetry {
+        &self.telemetry
     }
 
     /// Lets this run's ops pass host lock `lock`, as the takeover rule reads it

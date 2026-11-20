@@ -1219,6 +1219,7 @@ fn read_only_admission(
 mod read_only_tests {
     use std::time::Duration;
 
+    use neo_telemetry::Telemetry;
     use neo_trace::{Delivery, Effect, RunAccess, RunId};
     use serde_json::json;
     use tokio::time::Instant;
@@ -1303,6 +1304,7 @@ mod read_only_tests {
                 default_page: None,
                 tabs_scope: TabsScope::Browser,
                 access: Some(RunAccess::Read),
+                telemetry: Telemetry::noop().internal_run(),
             },
         );
         run.opened(page.tab);

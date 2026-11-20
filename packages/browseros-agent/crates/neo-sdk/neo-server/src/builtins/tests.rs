@@ -17,6 +17,7 @@ use neo_playwright::{
     ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
+use neo_telemetry::Telemetry;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -212,6 +213,7 @@ impl Harness {
             default_page: None,
             tabs_scope: TabsScope::Browser,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -5754,6 +5756,7 @@ fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), 
         default_page: None,
         tabs_scope: TabsScope::Browser,
         access: None,
+        telemetry: Telemetry::noop().internal_run(),
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }
@@ -5776,6 +5779,7 @@ fn run_scoped(
         default_page: None,
         tabs_scope: scope,
         access: None,
+        telemetry: Telemetry::noop().internal_run(),
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }

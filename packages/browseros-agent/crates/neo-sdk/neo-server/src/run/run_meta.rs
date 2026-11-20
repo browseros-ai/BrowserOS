@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use neo_telemetry::TraceContext;
 use neo_trace::{IdError, RequestId, RunAccess, TaskId};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -25,6 +26,10 @@ pub(crate) struct RunMeta {
     pub(crate) host_data: Option<HostData>,
     /// The host's restriction on this run's operations, independent of task reach.
     pub(crate) access: Option<RunAccess>,
+    /// The caller's W3C trace context, already resolved (`TraceContext::resolve`: a valid
+    /// `traceparent` HTTP header wins over this `_meta`'s, else none), which the run's
+    /// `neo.run` span joins. `None` starts a new trace; nothing fills it yet.
+    pub(crate) trace: Option<TraceContext>,
 }
 
 /// The host's own JSON, at most `Defaults::HOST_DATA_MAX_BYTES` serialized. The trace writer
@@ -84,6 +89,7 @@ impl RunMeta {
             task_id,
             host_data,
             access: wire.access,
+            trace: None,
         })
     }
 }

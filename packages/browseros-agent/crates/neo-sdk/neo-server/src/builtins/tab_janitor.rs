@@ -142,6 +142,8 @@ impl TabJanitor {
                 default_page: None,
                 tabs_scope: TabsScope::Browser,
                 access: None,
+                // Neo's own run: not in the run metrics; its closes still count as ops.
+                telemetry: self.tabs.telemetry().internal_run(),
             },
         );
         let Swept { closed, kept } = self.close_each(&run, &idle, idle_time, now, deadline).await;

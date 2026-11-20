@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use neo_http::{Settings, SettingsDefaults, TookPrivateText};
+use neo_telemetry::Telemetry;
 use neo_trace::{
     Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
     RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
@@ -100,6 +101,10 @@ impl Host {
 
     /// Like [`Host::start`], over `fake` as the test set it up and the trace store in `dir`
     /// (`trace.db`, created when absent). The fake links in the background, as Chromium does.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the host's composition as app.rs writes it, top to bottom, so tests run its wiring"
+    )]
     async fn start_on(
         fake: Arc<FakeCdp>,
         dir: TempDir,
@@ -140,6 +145,7 @@ impl Host {
             settings_file: dir.path().join("settings.json"),
             settings_defaults: SettingsDefaults::default(),
             tabs: Arc::clone(&tabs),
+            telemetry: Telemetry::noop(),
         };
         let sink = inputs.sink.clone();
         let host = HostApi::bind(&config, inputs).await?;
@@ -183,6 +189,7 @@ impl Host {
             pictures_never: settings_pictures_never(&settings),
             shutdown: shutdown.clone(),
             took: entry_took(&entry, &settings),
+            telemetry: Telemetry::noop(),
         });
         let serving = tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&link),

@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use neo_telemetry::{RunFacts, Telemetry};
 use neo_trace::RunId;
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -54,6 +55,7 @@ impl HostedRun {
     pub(super) fn start(
         dispatcher: &Arc<Dispatcher>,
         browser: &BrowserLink,
+        telemetry: &Telemetry,
         shutdown: CancellationToken,
         timeout: Duration,
         tabs_scope: TabsScope,
@@ -64,10 +66,11 @@ impl HostedRun {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or_else(|| HostedError("the run timeout is too large".to_owned()))?;
+        let id = RunId::new();
         let (context, guard) = RunCtx::start(
             dispatcher,
             RunStart {
-                id: RunId::new(),
+                id,
                 code: "/* JavaScript supplied by the hosted-run caller */".to_owned(),
                 request_id: None,
                 task_id: None,
@@ -77,6 +80,13 @@ impl HostedRun {
                 default_page: None,
                 tabs_scope,
                 access: None,
+                // An agent's run, counted as the sidecar counts its own (on the embedding's
+                // no-op handle, so nothing is recorded).
+                telemetry: telemetry.start_run(RunFacts {
+                    run_id: &id,
+                    task_id: None,
+                    parent: None,
+                }),
             },
         );
         let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));

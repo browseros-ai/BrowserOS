@@ -4,6 +4,7 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use neo_telemetry::Telemetry;
 use neo_trace::{Delivery, ErrorOwner, RunAccess, RunEffects, RunId, TaskId};
 use serde_json::{Value, json};
 use tokio::task;
@@ -32,6 +33,7 @@ fn read_only(
             default_page: None,
             tabs_scope: scope,
             access: Some(RunAccess::Read),
+            telemetry: Telemetry::noop().internal_run(),
         },
     ))
 }

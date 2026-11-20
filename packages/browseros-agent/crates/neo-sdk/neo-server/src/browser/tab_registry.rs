@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::{TabId, TargetId};
 use neo_takeover::TabHold;
+use neo_telemetry::Telemetry;
 use neo_trace::{RunId, TaskId};
 use tokio::time::{Duration, Instant};
 
@@ -40,6 +41,10 @@ pub(crate) struct TabRegistry {
     /// host's takeovers, which list the tabs opened during each (`openedTabs`). Set once by the
     /// host API; until then opens go nowhere.
     opens: OnceLock<OpenSink>,
+    /// The process's telemetry, for the tab hooks (opens, closes, lifetimes, renderer crashes)
+    /// and the live open-tab counts. Given at construction, before the browser link starts, so
+    /// no tab event happens before it can be counted.
+    telemetry: Telemetry,
 }
 
 /// Takes each tab the tab watch sees open and the tab that opened it, synchronously, before the
@@ -93,13 +98,27 @@ struct TabEntry {
 }
 
 impl TabRegistry {
-    /// An empty registry.
+    /// An empty registry, with telemetry off, for tests that do not look at it.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new() -> Self {
+        Self::new_with_telemetry(Telemetry::noop())
+    }
+
+    /// An empty registry whose tab hooks report to `telemetry`: the app's, built before this.
+    #[must_use]
+    pub(crate) fn new_with_telemetry(telemetry: Telemetry) -> Self {
         Self {
             state: Mutex::default(),
             opens: OnceLock::new(),
+            telemetry,
         }
+    }
+
+    /// The process's telemetry: the tab watch and the idle-tab janitor reach it here.
+    #[must_use]
+    pub(crate) fn telemetry(&self) -> &Telemetry {
+        &self.telemetry
     }
 
     /// A ticket for a liveness read. It must be taken immediately before asking core, never
