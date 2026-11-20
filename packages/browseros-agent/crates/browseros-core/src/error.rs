@@ -91,6 +91,10 @@ pub enum CoreError {
         required: BrowserOsVersion,
         reported: Option<BrowserOsVersion>,
     },
+    #[error(
+        "The person took over this page and is using it. Stop and check with the user before you act on it again."
+    )]
+    PersonControl,
     #[error(transparent)]
     Cdp(#[from] CdpError),
     #[error(transparent)]

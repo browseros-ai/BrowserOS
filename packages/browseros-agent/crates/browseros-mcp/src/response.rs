@@ -14,7 +14,7 @@ use crate::{
 };
 use browseros_core::{
     ConsoleEntry, ConsoleMark, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult,
-    pointer, settle::SettleOutcome,
+    overlay, pointer, settle::SettleOutcome,
 };
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
@@ -421,6 +421,7 @@ impl ToolResponse {
                     data: String,
                 }
                 let hidden = pointer::hide_for_capture(&page_session.session).await;
+                let overlay_hidden = overlay::hide_for_capture(&page_session.session).await;
                 let result = page_session
                     .session
                     .send::<_, CaptureScreenshotResult>(
@@ -430,6 +431,9 @@ impl ToolResponse {
                     .await;
                 if hidden {
                     pointer::restore_after_capture(&page_session.session).await;
+                }
+                if overlay_hidden {
+                    overlay::restore_after_capture(&page_session.session).await;
                 }
                 let result = result?;
                 if let Err(error) = ctx

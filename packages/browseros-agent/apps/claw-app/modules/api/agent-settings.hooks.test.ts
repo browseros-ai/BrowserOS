@@ -6,10 +6,12 @@ import * as api from './client'
 const on: AgentSettings = {
   humanHelpEnabled: true,
   taskCleanupTipEnabled: false,
+  workingOverlayEnabled: true,
 }
 const off: AgentSettings = {
   humanHelpEnabled: false,
   taskCleanupTipEnabled: false,
+  workingOverlayEnabled: true,
 }
 const read = Promise.withResolvers<AgentSettings>()
 const readStarted = Promise.withResolvers<void>()

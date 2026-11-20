@@ -283,6 +283,9 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "agent_session_efficiency_computed",
         "harness_connected",
         "harness_disconnected",
+        "page_hold_started",
+        "page_reach_in",
+        "page_taken_over",
         "tool_calls_daily",
     ];
     let mut wire_locations = wire_names
@@ -568,6 +571,9 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("replay", "recordings")
             | ("tab_cleanup", "browser")
             | ("skills", "harness")
+            // A take over interrupts the session's calls on the page; the person's own switch
+            // gates the overlay.
+            | ("page_hold", "agent_settings" | "browser" | "sessions")
             // SKILL.md is rendered from the prose a skill's ultrafast flow is numbered against.
             | ("skills", "flow")
             // The decisions worker is reached with the licence billing holds.

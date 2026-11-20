@@ -225,6 +225,10 @@ impl ErrorCode {
             | CoreError::ClickFallbackUnavailable { .. }
             | CoreError::ClickOutcomeUnknown(_)
             | CoreError::IsolatedWorldUnavailable
+            // The working overlay lowers its shield only in browseros-core's Input path, so an
+            // SDK op never yields to the person and this never reaches here; the owner-has-control
+            // refusal reads as `host / owner_has_control` on the path that can raise it.
+            | CoreError::PersonControl
             | CoreError::Message(_) => Self::Internal,
         }
     }

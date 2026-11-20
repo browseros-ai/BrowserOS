@@ -76,6 +76,8 @@ Signing in counts: when `credentials` lists no saved account for the page, or se
 
 If `request_human_help` is not among your tools, the user turned human help off: stop and tell them in your chat what you need.
 
+A person can also take over a page while you work on it, from the page itself. When a tool says the person took over a page, stop and check with the user before you act on that page again, and take a fresh snapshot when you do.
+
 ## Failure
 
 This skill may be installed before your agent is connected. If BrowserOS neo's MCP tools are unavailable, open its MCP connections page and connect your agent, or copy the endpoint from Manual Setup into your agent's MCP settings. Then refresh its MCP connections or start a new session. The skill alone does not provide browser tools.

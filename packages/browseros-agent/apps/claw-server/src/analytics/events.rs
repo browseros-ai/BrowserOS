@@ -34,6 +34,8 @@ const EFFICIENCY_ESTIMATOR_VERSION: &str = "efficiency_estimator_version";
 const SCREENSHOT_BASELINE_WIDTH: &str = "screenshot_baseline_width";
 const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
 const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
+const PHASE: &str = "phase";
+const VIA: &str = "via";
 const DAY: &str = "day";
 const TOTAL_CALLS: &str = "total_calls";
 const ERROR_CALLS: &str = "error_calls";
@@ -63,6 +65,12 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
 
 pub(crate) const END_KIND_VALUES: [&str; 3] = ["closed", "errored", "cancelled"];
 
+/// Where neo was when the person reached into a held page.
+pub(crate) const HOLD_PHASE_VALUES: [&str; 2] = ["working", "between"];
+
+/// How the person took a held page over.
+pub(crate) const TAKE_OVER_VIA_VALUES: [&str; 2] = ["button", "esc"];
+
 /// Fixed set of task kinds the agent may declare. Only these tokens leave the
 /// machine; the free-form session name never does. An unrecognized value is
 /// coerced to `other` rather than dropped, so the declaration still counts and a
@@ -88,6 +96,8 @@ enum PropertyKind {
     TaskSummary,
     Harness,
     EndKind,
+    HoldPhase,
+    TakeOverVia,
     ToolName,
     UnsignedInteger,
     SignedInteger,
@@ -145,6 +155,8 @@ impl PropertyDefinition {
             }
             PropertyKind::Harness => normalize_token(value, &HARNESS_VALUES),
             PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
+            PropertyKind::HoldPhase => normalize_token(value, &HOLD_PHASE_VALUES),
+            PropertyKind::TakeOverVia => normalize_token(value, &TAKE_OVER_VIA_VALUES),
             PropertyKind::ToolName => {
                 let raw = value.as_str()?;
                 known_tool_names()
@@ -387,6 +399,28 @@ pub const AGENT_SESSION_EFFICIENCY_COMPUTED: EventDefinition = EventDefinition::
     ],
 );
 
+pub const PAGE_HOLD_STARTED: EventDefinition = EventDefinition::new(
+    "page_hold_started",
+    &[PropertyDefinition::new(
+        CLIENT_NAME,
+        PropertyKind::ClientName,
+    )],
+);
+pub const PAGE_REACH_IN: EventDefinition = EventDefinition::new(
+    "page_reach_in",
+    &[
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::new(PHASE, PropertyKind::HoldPhase),
+    ],
+);
+pub const PAGE_TAKEN_OVER: EventDefinition = EventDefinition::new(
+    "page_taken_over",
+    &[
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::new(VIA, PropertyKind::TakeOverVia),
+    ],
+);
+
 /// One per install and finished UTC day: how many tool calls it made, by tool and by client.
 pub const TOOL_CALLS_DAILY: EventDefinition = EventDefinition::new(
     "tool_calls_daily",
@@ -400,7 +434,7 @@ pub const TOOL_CALLS_DAILY: EventDefinition = EventDefinition::new(
     ],
 );
 
-pub const ALL: [EventDefinition; 9] = [
+pub const ALL: [EventDefinition; 12] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -409,6 +443,9 @@ pub const ALL: [EventDefinition; 9] = [
     HARNESS_DISCONNECTED,
     AGENT_SESSION_TOOL_USAGE,
     AGENT_SESSION_EFFICIENCY_COMPUTED,
+    PAGE_HOLD_STARTED,
+    PAGE_REACH_IN,
+    PAGE_TAKEN_OVER,
     TOOL_CALLS_DAILY,
 ];
 
@@ -460,8 +497,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn page_hold_tokens_are_fixed_sets() {
+        let via = PropertyDefinition::new(VIA, PropertyKind::TakeOverVia);
+        assert_eq!(via.normalize(&json!("esc")), Some(json!("esc")));
+        assert_eq!(via.normalize(&json!("keyboard")), None);
+        let phase = PropertyDefinition::new(PHASE, PropertyKind::HoldPhase);
+        assert_eq!(phase.normalize(&json!("between")), Some(json!("between")));
+        assert_eq!(phase.normalize(&json!("person")), None);
+    }
+
+    #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 9);
+        assert_eq!(ALL.len(), 12);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -473,6 +520,9 @@ mod tests {
                 HARNESS_DISCONNECTED.name(),
                 AGENT_SESSION_TOOL_USAGE.name(),
                 AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
+                PAGE_HOLD_STARTED.name(),
+                PAGE_REACH_IN.name(),
+                PAGE_TAKEN_OVER.name(),
                 TOOL_CALLS_DAILY.name(),
             ]
         );
@@ -487,6 +537,8 @@ mod tests {
                 "by_client",
             ]
         );
+        assert_eq!(PAGE_TAKEN_OVER.property_names(), vec!["client_name", "via"]);
+        assert_eq!(PAGE_REACH_IN.property_names(), vec!["client_name", "phase"]);
         assert_eq!(
             AGENT_SESSION_TASK_DECLARED.property_names(),
             vec!["task_category", "client_name", "task_summary"]
