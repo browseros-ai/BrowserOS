@@ -11,7 +11,7 @@ import { operation, record } from '../test-support/operations'
 import { runDetail, runSummary } from '../test-support/runs'
 import { runTrace } from '../test-support/telemetry'
 import type { OperationSelection } from './operations'
-import { TracePanel } from './Sidebar'
+import { TracePanel } from './TracePanel'
 
 const code = [
   "await page.goto('https://example.com')",

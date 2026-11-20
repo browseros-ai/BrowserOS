@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { TraceSpan } from '../../shared/api'
 import { fire, installDom, type TestDom } from '../test-support/dom'
+import { runSummary } from '../test-support/runs'
 import { runTrace } from '../test-support/telemetry'
-import { SpanAttributes, Waterfall } from './Waterfall'
+import { SpanAttributes, TraceFull, Waterfall } from './Waterfall'
 
 describe('the waterfall', () => {
   let dom: TestDom | null = null
@@ -83,5 +85,46 @@ describe('the waterfall', () => {
       .replaceAll('&quot;', '"')
     expect(text).toContain('locator.clickneo.op, span span-7')
     expect(text).toContain('neo.error.code   "no_match"')
+  })
+})
+
+describe("a trace's Open full", () => {
+  it('opens on the picked span, steps with ↑ ↓ and the buttons, and shows the resource once', async () => {
+    const dom = await installDom()
+    const trace = runTrace('neo-run')
+    const run = runSummary(3)
+    function Full() {
+      const [spanId, setSpanId] = useState<string | null>('span-7')
+      return (
+        <TraceFull
+          run={run}
+          trace={trace}
+          selectedSpanId={spanId}
+          onSelectSpan={(span) => setSpanId(span.spanId)}
+          onClose={() => {}}
+        />
+      )
+    }
+    await dom.render(<Full />)
+    const dialog = dom.container.querySelector('dialog') as Element
+    const picked = () =>
+      dialog.querySelector('[aria-pressed="true"]')?.getAttribute('data-span')
+    expect(dialog.hasAttribute('open')).toBe(true)
+    expect(picked()).toBe('span-7')
+    expect(dialog.textContent).toContain('service.name')
+    await dom.interact(() => fire(dialog, 'keydown', { key: 'ArrowDown' }))
+    expect(picked()).toBe('span-8')
+    // The last span has no next.
+    await dom.interact(() => fire(dialog, 'keydown', { key: 'ArrowDown' }))
+    expect(picked()).toBe('span-8')
+    await dom.interact(() => fire(dialog, 'keydown', { key: 'ArrowUp' }))
+    await dom.interact(() => fire(dialog, 'keydown', { key: 'ArrowUp' }))
+    expect(picked()).toBe('span-6')
+    const previous = [...dialog.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Previous span',
+    ) as Element
+    await dom.interact(() => fire(previous, 'click'))
+    expect(picked()).toBe('span-5')
+    await dom.restore()
   })
 })

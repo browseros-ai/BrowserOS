@@ -22,7 +22,6 @@ import { useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
 import type { FormattedCode } from '../../shared/code-format'
 import { RUN_VALUES_OFF_NOTICE } from '../../shared/trace-values'
-import { traceMayGrow, useRunTrace } from '../use-telemetry'
 import {
   MethodDetail,
   MethodHeader,
@@ -41,10 +40,9 @@ import {
   placeOperations,
 } from './operations'
 import { noReplyReason, replyFacts, valueChip } from './reply'
+import { TraceLine } from './TracePanel'
 import { codeLines, type Line } from './text-lines'
-import { shortTraceId } from './trace'
 import { plural } from './units'
-import { TraceFacts } from './Waterfall'
 
 /** Said once at the top of a block whose record came from Neo's spans. */
 export const SPANS_NOTICE =
@@ -209,67 +207,6 @@ export function RunBlock({
         </div>
       )}
     </div>
-  )
-}
-
-/**
- * The run's trace in one line, as "Model read" gives the reply: its trace id, its spans, what
- * failed and how long it took; clicking it shows the waterfall on the right.
- */
-function TraceLine({
-  run,
-  rev,
-  shown,
-  onSelect,
-  onOpenFull,
-}: {
-  run: RunSummary
-  rev: number
-  shown: boolean
-  onSelect: () => void
-  onOpenFull: () => void
-}) {
-  const trace = useRunTrace(run, true, rev)
-  if (run.status === 'running')
-    return (
-      <span className="text-[11px] text-ink-2">
-        Spans arrive when the run ends.
-      </span>
-    )
-  if (trace === undefined)
-    return <span className="text-[11px] text-ink-3">Loading…</span>
-  if (trace === null)
-    return (
-      <span className="text-[11px] text-ink-2">
-        {traceMayGrow(run, trace, Date.now())
-          ? "Waiting for Neo's spans."
-          : 'No spans from Neo for this run.'}
-      </span>
-    )
-  return (
-    <span className="flex min-w-0 flex-1 items-center gap-2.5">
-      <button
-        type="button"
-        onClick={onSelect}
-        title={`Trace ${trace.traceId}: show its waterfall in the right panel`}
-        className="flex min-w-0 items-center gap-2.5 text-left"
-      >
-        <code className="shrink-0 rounded border border-neo-edge bg-white px-2 py-0.5 font-code text-ink">
-          {shortTraceId(trace.traceId)}
-        </code>
-        <span className="min-w-0 truncate whitespace-pre text-[11px] text-ink-2 leading-[14px]">
-          <TraceFacts trace={trace} />
-          {shown && ', shown on the right'}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={onOpenFull}
-        className="shrink-0 font-medium text-neo hover:underline"
-      >
-        Open full
-      </button>
-    </span>
   )
 }
 

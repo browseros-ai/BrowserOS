@@ -15,22 +15,14 @@ import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { type RunSummary, type TraceSpan, textSize } from '../../shared/api'
 import { LiveScreen } from '../live-screen/LiveScreen'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
-import { traceMayGrow, useRunTrace } from '../use-telemetry'
 import { useRunDetail } from '../use-viewer'
 import { operationOutput } from './operation-output'
 import { isNeoInternal, type OperationSelection, placeText } from './operations'
 import { formattedLines, noReplyReason, rawLines, replyFacts } from './reply'
+import { TracePanel, type TraceSelection } from './TracePanel'
 import type { Line } from './text-lines'
-import { operationFor, selectedSpan, shortTraceId, siteDetail } from './trace'
 import { LineSpans, OpenIcon, REPLY_VIEWS, type ReplyView, Switch } from './ui'
 import { count, plural } from './units'
-import { SpanAttributes, TraceFacts, Waterfall } from './Waterfall'
-
-/** The sidebar shows a run's trace: the span picked in its waterfall, if any. */
-export interface TraceSelection {
-  runId: string
-  spanId: string | null
-}
 
 export function Sidebar({
   width,
@@ -265,121 +257,6 @@ function OperationPanel({
         {formatted ? output?.source : "Neo's record of the result, as JSON."}
         {(formatted ? output?.cut : output?.rawCut) &&
           ' Neo kept only the start of it.'}{' '}
-        <button
-          type="button"
-          onClick={onShowReply}
-          className="font-medium text-neo hover:underline"
-        >
-          Show the reply
-        </button>
-      </p>
-    </section>
-  )
-}
-
-/**
- * A run's trace: its spans as a waterfall, the selected span's attributes as Neo emitted them,
- * and whether any span carries site detail. Picking a span opens its call in the run's block;
- * the call's own output is one link away. Read again as spans arrive, until `neo.run` has.
- */
-export function TracePanel({
-  run,
-  spanId,
-  operationId,
-  rev,
-  onSelectSpan,
-  onShowCall,
-  onShowReply,
-  onOpenFull,
-}: {
-  run: RunSummary
-  spanId: string | null
-  operationId: string | null
-  rev: number | undefined
-  onSelectSpan: (span: TraceSpan, call: OperationSelection | null) => void
-  /** Null when no call is selected. */
-  onShowCall: (() => void) | null
-  onShowReply: () => void
-  onOpenFull: () => void
-}) {
-  const trace = useRunTrace(run, true, rev)
-  const fetched = useRunDetail(run, true)
-  const detail = fetched?.id === run.id ? fetched : null
-  const span = trace ? selectedSpan(trace, spanId, operationId) : null
-  const injected = run.trace?.injected ?? false
-  return (
-    <section
-      aria-label="Trace"
-      className="flex min-h-[280px] flex-1 flex-col gap-2"
-    >
-      <div className="flex items-center gap-2">
-        <h2 className="font-semibold text-[13px] text-ink leading-4">Trace</h2>
-        <span className="text-ink-2 text-xs leading-4">run {run.seq}</span>
-        <span className="flex-1" />
-        <button
-          type="button"
-          onClick={onOpenFull}
-          disabled={!trace}
-          className="flex items-center gap-[5px] rounded-[5px] border border-control px-2 py-[3px] font-medium text-ink text-xs leading-4 hover:bg-panel disabled:opacity-50"
-        >
-          <OpenIcon />
-          Open full
-        </button>
-      </div>
-      <p
-        className="min-w-0 truncate text-[11px] text-ink-2 leading-[14px]"
-        title={trace ? `Trace ${trace.traceId}` : undefined}
-      >
-        {trace ? (
-          <>
-            <span className="font-code text-ink">
-              {shortTraceId(trace.traceId)}
-            </span>{' '}
-            · <TraceFacts trace={trace} /> ·{' '}
-            {injected
-              ? 'traceparent from the viewer'
-              : run.trace
-                ? 'traceparent from the caller'
-                : 'no traceparent'}
-          </>
-        ) : trace === null ? (
-          traceMayGrow(run, trace, Date.now()) ? (
-            "Waiting for Neo's spans: they arrive about half a second after the run ends."
-          ) : (
-            'No spans from Neo for this run: an image older than telemetry, or none were sent.'
-          )
-        ) : (
-          'Loading…'
-        )}
-      </p>
-      {trace && (
-        <Waterfall
-          trace={trace}
-          selectedSpanId={span?.spanId ?? null}
-          onSelectSpan={(picked) =>
-            onSelectSpan(picked, operationFor(run, detail?.neo ?? null, picked))
-          }
-        />
-      )}
-      {span && <SpanAttributes span={span} />}
-      {trace && (
-        <p className="text-[11px] text-ink-2 leading-4">
-          {siteDetail(trace).text}
-        </p>
-      )}
-      <p className="mt-auto shrink-0 text-[11px] text-ink-2 leading-4">
-        Exactly what Neo emitted, as the viewer received it.{' '}
-        {onShowCall && (
-          <>
-            <button
-              type="button"
-              onClick={onShowCall}
-              className="font-medium text-neo hover:underline"
-            >
-              Show what the call returned
-            </button>{' '}
-          </>
-        )}
         <button
           type="button"
           onClick={onShowReply}

@@ -31,7 +31,7 @@ export function Waterfall({
   const name = wide ? 'w-[280px]' : 'w-[150px]'
   const label = 'text-[10px] text-ink-3 uppercase leading-[14px] tracking-wide'
   return (
-    <div className="flex flex-col" data-waterfall="">
+    <div className="flex shrink-0 flex-col" data-waterfall="">
       <div className="flex h-5 shrink-0 items-end px-2 pb-0.5">
         <span className={`${name} shrink-0 ${label}`}>Span</span>
         <span className="w-3.5 shrink-0" />
@@ -143,7 +143,7 @@ export function TraceFacts({ trace }: { trace: RunTrace }) {
 export function SpanAttributes({ span }: { span: TraceSpan }) {
   const lines = attributeLines(span.attributes)
   return (
-    <div className="flex min-w-0 flex-col gap-1.5" data-attributes="">
+    <div className="flex min-w-0 shrink-0 flex-col gap-1.5" data-attributes="">
       <div className="flex min-w-0 items-baseline gap-2">
         <h3 className="min-w-0 truncate font-semibold text-ink text-xs leading-4">
           {spanName(span)}
@@ -189,8 +189,11 @@ export function TraceFull({
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [copied, setCopied] = useState(false)
+  // The pop-up takes focus itself, not its first button, so ↑ and ↓ step through the spans at
+  // once and no button opens looking pressed.
   useEffect(() => {
     dialog.current?.showModal()
+    dialog.current?.focus()
   }, [])
   useEffect(() => {
     if (!copied) return
@@ -206,9 +209,21 @@ export function TraceFull({
   return (
     <dialog
       ref={dialog}
+      tabIndex={-1}
       aria-label={`Trace, run ${run.seq}`}
       onClose={onClose}
-      className="m-auto h-[min(760px,calc(100vh-40px))] w-[min(1000px,calc(100vw-40px))] max-w-none flex-col overflow-clip rounded-[10px] bg-white p-0 font-plex text-ink text-xs leading-4 shadow-[0_24px_60px_#0D173047] backdrop:bg-[#0D173052] open:flex"
+      onKeyDown={(event) => {
+        const to =
+          event.key === 'ArrowDown'
+            ? next
+            : event.key === 'ArrowUp'
+              ? previous
+              : undefined
+        if (!to) return
+        event.preventDefault()
+        onSelectSpan(to)
+      }}
+      className="m-auto h-[min(760px,calc(100vh-40px))] w-[min(1000px,calc(100vw-40px))] max-w-none flex-col overflow-clip rounded-[10px] bg-white p-0 font-plex text-ink text-xs leading-4 shadow-[0_24px_60px_#0D173047] outline-none backdrop:bg-[#0D173052] open:flex"
     >
       <header className="flex h-[54px] shrink-0 items-center gap-3 border-line border-b pr-4 pl-5">
         <h2 className="font-semibold text-base leading-5">Trace</h2>
@@ -280,7 +295,8 @@ export function TraceFull({
       </div>
       <footer className="flex h-[46px] shrink-0 items-center gap-3 border-line border-t px-5">
         <p className="min-w-0 truncate text-ink-2">
-          Exactly what Neo emitted, as the viewer received it over OTLP.
+          Exactly what Neo emitted, as the viewer received it over OTLP. ↑ and ↓
+          step through the spans.
         </p>
         <span className="flex-1" />
         <button
