@@ -305,6 +305,9 @@ async fn run_tool(
         );
     }
     output.text = shape::cli_hints(&output.text, saved.as_ref());
+    if plan.tool == "read" && plan.args.get("format").and_then(Value::as_str) == Some("markdown") {
+        output.text = shape::collapse_spaces(&output.text);
+    }
     if !globals.urls && shape::carries_link_urls(plan.tool) {
         output.text = shape::short_link_urls(&output.text);
     }

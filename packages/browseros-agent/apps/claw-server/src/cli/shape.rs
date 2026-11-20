@@ -362,6 +362,52 @@ pub fn fit_interactive(full: &str, read_with: &str) -> String {
     )
 }
 
+/// A markdown read with each run of spaces cut to one, outside code blocks. The page's own
+/// layout whitespace survives the conversion, and a cart page read back with a run of over a
+/// thousand spaces between items. A list item keeps its indent, which is its nesting.
+#[must_use]
+pub fn collapse_spaces(text: &str) -> String {
+    let mut in_code = false;
+    map_lines(text, |line, in_page| {
+        if !in_page {
+            return Some(line.to_string());
+        }
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            return Some(line.trim_end().to_string());
+        }
+        if in_code {
+            return Some(line.to_string());
+        }
+        let body = line.trim_start();
+        let indent = if is_list_item(body) {
+            &line[..line.len() - body.len()]
+        } else {
+            ""
+        };
+        let mut out = String::with_capacity(line.len());
+        out.push_str(indent);
+        let mut previous_space = false;
+        for ch in body.trim_end().chars() {
+            let space = ch == ' ' || ch == '\t';
+            if !(space && previous_space) {
+                out.push(if space { ' ' } else { ch });
+            }
+            previous_space = space;
+        }
+        Some(out)
+    })
+}
+
+fn is_list_item(body: &str) -> bool {
+    body.starts_with("- ")
+        || body.starts_with("* ")
+        || body.starts_with("+ ")
+        || body.split_once(". ").is_some_and(|(number, _)| {
+            !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +645,18 @@ mod tests {
         assert_eq!(
             fit_interactive(DATE_PICKER, "browseros output abc"),
             interactive_lines(DATE_PICKER)
+        );
+    }
+
+    #[test]
+    fn a_markdown_read_loses_its_runs_of_spaces_but_not_its_code_or_list_nesting() {
+        let gap = " ".repeat(1_089);
+        let text = format!(
+            "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=https://www.amazon.in/cart] n\n# Shopping Cart\n{gap}Sensodyne Fresh Mint{gap}₹ 160.00   \n- Qty:  1\n  - Delete    Save for later\n```\nkeep    this\n```\n{gap}\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]\noutside    the fence"
+        );
+        assert_eq!(
+            collapse_spaces(&text),
+            "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=https://www.amazon.in/cart] n\n# Shopping Cart\nSensodyne Fresh Mint ₹ 160.00\n- Qty: 1\n  - Delete Save for later\n```\nkeep    this\n```\n\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]\noutside    the fence"
         );
     }
 }
