@@ -142,6 +142,12 @@ sqlx.workspace = true
 # MCP clients for tests/mcp_run.rs, on the legacy protocol and on 2026-07-28. Plain HTTP to
 # 127.0.0.1, so no TLS features.
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+# The in-process OTLP collector the telemetry tests export to (src/telemetry_rig): gzip bodies,
+# OTLP protobuf (prost and opentelemetry-proto's messages); JSON reads through serde_json.
+# Already in the graph through neo-telemetry.
+flate2.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
 # Paused time for the connect loop's backoff and tab_watch's epoch check.
 tokio = { workspace = true, features = ["test-util"] }
 # Only for tests/style_boundaries.rs, which parses src/ and the lint tables.
