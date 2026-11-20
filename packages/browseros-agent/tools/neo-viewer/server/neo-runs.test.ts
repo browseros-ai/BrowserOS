@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NeoRunRecord, RunSummary } from '../shared/api'
 import { RunStore } from './log/run-store'
-import { joinNeoRuns, toNeoRunRecord } from './neo-runs'
+import { hostApiRecords, joinNeoRuns, toNeoRunRecord } from './neo-runs'
 
 /** A `GET /v1/runs/{id}` body as Neo returns it (openapi.yaml `Run`), with one nested call. */
 const RUN = {
@@ -201,12 +201,15 @@ test('the joiner reads the record of each run that ended, re-reading one that wa
   const fake = fakeStore()
   const reads: string[] = []
   let answers = [{ ...RUN, complete: false }, RUN]
-  joinNeoRuns(fake.store, async (neoRunId) => {
-    reads.push(neoRunId)
-    const next = answers[0]
-    answers = answers.slice(1)
-    return next ? toNeoRunRecord(next) : null
-  })
+  joinNeoRuns(
+    fake.store,
+    hostApiRecords(async (neoRunId) => {
+      reads.push(neoRunId)
+      const next = answers[0]
+      answers = answers.slice(1)
+      return next ? toNeoRunRecord(next) : null
+    }),
+  )
   fake.emit({ id: 'r1', status: 'running', neoRunId: null })
   fake.emit({ id: 'r1', status: 'error', neoRunId: '01a1' })
   fake.emit({ id: 'r1', status: 'error', neoRunId: '01a1' })
@@ -220,7 +223,10 @@ test('the joiner reads the record of each run that ended, re-reading one that wa
 
 test('a run without a Neo run id, or whose record cannot be read, keeps no record', async () => {
   const fake = fakeStore()
-  joinNeoRuns(fake.store, async () => null)
+  joinNeoRuns(
+    fake.store,
+    hostApiRecords(async () => null),
+  )
   fake.emit({ id: 'r1', status: 'http-error', neoRunId: null })
   fake.emit({ id: 'r2', status: 'ok', neoRunId: '01a2' })
   await Bun.sleep(10)
@@ -281,10 +287,13 @@ test('a joined record is in the run detail and the list, and survives a restart'
 
 test('stopping waits for a read in flight, so its record is attached before the final flush', async () => {
   const fake = fakeStore()
-  const joiner = joinNeoRuns(fake.store, async () => {
-    await Bun.sleep(50)
-    return toNeoRunRecord(RUN)
-  })
+  const joiner = joinNeoRuns(
+    fake.store,
+    hostApiRecords(async () => {
+      await Bun.sleep(50)
+      return toNeoRunRecord(RUN)
+    }),
+  )
   fake.emit({ id: 'r1', status: 'ok', neoRunId: '01a1' })
   await joiner.stop()
   expect(fake.attached.map(([id]) => id)).toEqual(['r1'])
@@ -292,10 +301,13 @@ test('stopping waits for a read in flight, so its record is attached before the 
 
 test('settling waits for a read in flight and keeps joining (an export right after a run)', async () => {
   const fake = fakeStore()
-  const joiner = joinNeoRuns(fake.store, async () => {
-    await Bun.sleep(50)
-    return toNeoRunRecord(RUN)
-  })
+  const joiner = joinNeoRuns(
+    fake.store,
+    hostApiRecords(async () => {
+      await Bun.sleep(50)
+      return toNeoRunRecord(RUN)
+    }),
+  )
   fake.emit({ id: 'r1', status: 'ok', neoRunId: '01a1' })
   await joiner.settled(1_000)
   expect(fake.attached.map(([id]) => id)).toEqual(['r1'])
@@ -304,7 +316,10 @@ test('settling waits for a read in flight and keeps joining (an export right aft
   await joiner.settled(1_000)
   expect(fake.attached.map(([id]) => id)).toEqual(['r1', 'r2'])
   // A read slower than the wait does not hold the caller past it.
-  const slow = joinNeoRuns(fakeStore().store, () => new Promise(() => {}))
+  const slow = joinNeoRuns(
+    fakeStore().store,
+    hostApiRecords(() => new Promise(() => {})),
+  )
   const started = Date.now()
   await slow.settled(30)
   expect(Date.now() - started).toBeLessThan(500)

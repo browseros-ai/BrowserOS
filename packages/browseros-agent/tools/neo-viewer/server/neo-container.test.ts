@@ -3,6 +3,7 @@ import { launchOptionsFrom } from './config'
 import {
   type CheckoutImage,
   type CommandResult,
+  containerOtlpEndpoint,
   createNetwork,
   imageTag,
   instanceNames,
@@ -517,6 +518,50 @@ test('the container gets no CLAW_TRACE_VALUE_BYTES: the viewer sets trace.valueB
   expect(run.some((arg) => arg.startsWith('CLAW_TRACE_VALUE_BYTES'))).toBe(
     false,
   )
+})
+
+test("the viewer's container pushes its OpenTelemetry to the viewer: the four contract variables and host.docker.internal", async () => {
+  const argsOf = async (otlpEndpoint?: string) => {
+    // docker run fails here, after its arguments are recorded: they are what this checks.
+    const docker = fakeDocker((args) =>
+      args[0] === 'run'
+        ? { code: 1, stdout: '', stderr: 'stopped by the test' }
+        : ok(),
+    )
+    await expect(
+      startContainer(docker.run, {
+        names: NAMES,
+        image: 'neo-sdk:test',
+        tokenFile: '/tmp/token',
+        launch: 'launch-a',
+        ...(otlpEndpoint ? { otlpEndpoint } : {}),
+      }),
+    ).rejects.toThrow()
+    return docker.calls.find((call) => call[1] === 'run') ?? []
+  }
+  const endpoint = containerOtlpEndpoint(7391)
+  expect(endpoint).toBe('http://host.docker.internal:7391/otlp')
+  const run = await argsOf(endpoint)
+  const env = run.flatMap((arg, index) =>
+    run[index - 1] === '-e' && arg.startsWith('OTEL_') ? [arg] : [],
+  )
+  expect(env).toEqual([
+    'OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:7391/otlp',
+    'OTEL_EXPORTER_OTLP_PROTOCOL=http/json',
+    'OTEL_BSP_SCHEDULE_DELAY=500',
+    'OTEL_METRIC_EXPORT_INTERVAL=500',
+  ])
+  expect(run).toContain('--add-host=host.docker.internal:host-gateway')
+  // Ports stay published on 127.0.0.1 only; the viewer opens nothing new.
+  expect(run.filter((arg) => arg.startsWith('127.0.0.1::'))).toHaveLength(2)
+  expect(
+    run.some((arg) => arg.startsWith('0.0.0.0:') && arg !== '0.0.0.0:9300'),
+  ).toBe(false)
+  // Without an endpoint (a caller that wants none), no telemetry settings at all.
+  const plain = await argsOf()
+  expect(
+    plain.some((arg) => arg.includes('OTEL_') || arg.includes('add-host')),
+  ).toBe(false)
 })
 
 test('a machine whose Docker address pools are used up still gets a network, on an explicit subnet', async () => {
