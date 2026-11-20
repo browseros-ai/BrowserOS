@@ -614,7 +614,7 @@ impl Observer {
     async fn refs_for_capture(&self, state: &MainFrameState) -> RefMap {
         let current = self.state.lock().await;
         if should_reset_refs(current.ref_scope.as_ref(), state) {
-            RefMap::new()
+            current.refs.for_new_document()
         } else {
             current.refs.fork_for_snapshot()
         }
@@ -1810,7 +1810,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observer_reload_resets_public_ref_namespace() -> Result<(), CoreError> {
+    async fn observer_reload_never_reuses_a_ref_from_the_old_document() -> Result<(), CoreError> {
         let state = harness_state(vec![
             root_with(&["2", "3"]),
             ax_button("2", "A", 1),
@@ -1823,7 +1823,10 @@ mod tests {
             state.nodes = vec![root_with(&["4"]), ax_button("4", "Reloaded", 10)];
         }
         let snapshot = observer.snapshot().await?;
-        assert_eq!(snapshot.text, "- button \"Reloaded\" [ref=e1]");
+        assert_eq!(snapshot.text, "- button \"Reloaded\" [ref=e3]");
+        let refs = observer.last_refs().await;
+        assert!(refs.get(&crate::Ref("e1".to_string())).is_none());
+        assert!(refs.get(&crate::Ref("e2".to_string())).is_none());
         Ok(())
     }
 

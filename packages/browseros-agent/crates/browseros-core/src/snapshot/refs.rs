@@ -437,6 +437,15 @@ impl RefMap {
         fork
     }
 
+    /// Refs for a new document keep counting, so a ref read before a navigation can only fail as
+    /// unknown, never name whatever the new document put at the same number.
+    #[must_use]
+    pub fn for_new_document(&self) -> Self {
+        let mut fresh = Self::new();
+        fresh.next_ref_num = self.next_ref_num;
+        fresh
+    }
+
     pub fn reset(&mut self) {
         self.by_ref.clear();
         self.order.clear();
