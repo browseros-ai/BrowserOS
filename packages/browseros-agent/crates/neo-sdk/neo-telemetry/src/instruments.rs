@@ -1,8 +1,10 @@
 //! The 11 foundational instruments, as one catalog (wire-contract.md, "Metrics").
 //!
 //! [`CATALOG`] is the one list of families: name, help, kind, unit and buckets. [`Instruments::new`]
-//! builds every instrument from its entry, and the Prometheus renderer (`prometheus.rs`) walks the
-//! same list for its `# HELP` / `# TYPE` lines and family order, so the pull door and the OTLP push
+//! takes each instrument's name, help, unit and buckets from its entry: the counters and the
+//! histograms through one helper each, the in-flight up-down counter and the open-tabs gauge
+//! written out, as their builders differ. The Prometheus renderer (`prometheus.rs`) walks the same
+//! list for its `# HELP` / `# TYPE` lines and family order, so the pull door and the OTLP push
 //! door cannot drift apart.
 //!
 //! Labels are closed by the record methods' signatures: each takes only the closed label enums

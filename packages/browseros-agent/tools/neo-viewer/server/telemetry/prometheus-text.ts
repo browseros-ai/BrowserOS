@@ -4,17 +4,11 @@
  * OpenMetrics adds, so an exporter that speaks it does not break the panel: `# EOF`, `# UNIT`,
  * counters declared without `_total`, `_created` samples, exemplars after `#`, quoted names.
  *
- * A line it cannot read is skipped and counted, never fatal: one odd line must not blank the
- * Health view. Histogram buckets come from the data; no bound is assumed (wire-contract.md).
+ * A line it cannot read is skipped, never fatal: one odd line must not blank the Health view.
+ * Histogram buckets come from the data; no bound is assumed (wire-contract.md).
  */
 
 import type { MetricFamily } from '../../shared/api'
-
-export interface ParsedText {
-  families: MetricFamily[]
-  /** Sample lines that could not be read. */
-  errors: number
-}
 
 /** A declared type, and the sample-name suffixes that belong to a family of it. */
 const SUFFIXES: Record<string, string[]> = {
@@ -38,10 +32,9 @@ interface Declared {
   help: string | null
 }
 
-export function parsePrometheus(text: string): ParsedText {
+export function parsePrometheus(text: string): MetricFamily[] {
   const declared = new Map<string, Declared>()
   const samples: Sample[] = []
-  let errors = 0
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim()
     if (line === '') continue
@@ -52,9 +45,8 @@ export function parsePrometheus(text: string): ParsedText {
     }
     const sample = readSample(line)
     if (sample) samples.push(sample)
-    else errors++
   }
-  return { families: build(declared, samples), errors }
+  return build(declared, samples)
 }
 
 /** `# HELP name text` and `# TYPE name type`; `# UNIT` and other comments are skipped. */
@@ -286,52 +278,4 @@ function histogram(
 
 function finite(value: number): number | null {
   return Number.isFinite(value) ? value : null
-}
-
-/**
- * Families back to text exposition 0.0.4 — for an export whose only metrics came by push. A
- * null value is written `NaN`.
- */
-export function renderPrometheus(families: MetricFamily[]): string {
-  const lines: string[] = []
-  const number = (value: number | null | undefined) =>
-    value === null || value === undefined ? 'NaN' : String(value)
-  for (const family of families) {
-    if (family.help)
-      lines.push(
-        `# HELP ${family.name} ${family.help.replace(/\\/g, '\\\\').replace(/\n/g, '\\n')}`,
-      )
-    lines.push(
-      `# TYPE ${family.name} ${family.kind === 'unknown' ? 'untyped' : family.kind}`,
-    )
-    for (const series of family.series) {
-      if (family.kind !== 'histogram') {
-        lines.push(
-          `${family.name}${labelText(series.labels)} ${number(series.value)}`,
-        )
-        continue
-      }
-      for (const bucket of series.buckets ?? [])
-        lines.push(
-          `${family.name}_bucket${labelText({ ...series.labels, le: bucket.le === null ? '+Inf' : String(bucket.le) })} ${bucket.count}`,
-        )
-      lines.push(
-        `${family.name}_sum${labelText(series.labels)} ${number(series.sum)}`,
-      )
-      lines.push(
-        `${family.name}_count${labelText(series.labels)} ${number(series.value)}`,
-      )
-    }
-  }
-  return `${lines.join('\n')}\n`
-}
-
-function labelText(labels: Record<string, string>): string {
-  const entries = Object.entries(labels)
-  if (entries.length === 0) return ''
-  const escaped = entries.map(
-    ([key, value]) =>
-      `${key}="${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`,
-  )
-  return `{${escaped.join(',')}}`
 }

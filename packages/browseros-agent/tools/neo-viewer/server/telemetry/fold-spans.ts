@@ -93,7 +93,9 @@ export function buildTrace(spans: RunSpans): RunTrace | null {
       span.parentSpanId && known.has(span.parentSpanId)
         ? span.parentSpanId
         : null
-    children.set(parent, [...(children.get(parent) ?? []), span])
+    const siblings = children.get(parent)
+    if (siblings) siblings.push(span)
+    else children.set(parent, [span])
   }
   const ordered: TraceSpan[] = []
   const visit = (span: NeoSpan, depth: number) => {
@@ -123,7 +125,8 @@ function traceSpan(span: NeoSpan, depth: number, start: number): TraceSpan {
     startOffsetMs: ms(span.startMs - start),
     durationMs: ms(span.endMs - span.startMs),
     depth,
-    error: span.failed || span.error !== null,
+    // D11: only an operation that failed; Neo marks a cancelled op's span ERROR as well.
+    error: span.kind === 'op' && span.outcome === 'error',
     attributes: span.attributes,
   }
 }

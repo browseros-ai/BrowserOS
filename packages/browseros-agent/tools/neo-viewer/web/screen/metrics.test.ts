@@ -42,6 +42,12 @@ describe("the Health view's numbers", () => {
     expect(quantileText(mixed, 0.95)).toBe('250 ms')
     const tail = quantiles([...Array(18).fill(0.2), 30, 30], 0.2, 10)
     expect(quantileText(tail, 0.95)).toBe('> 10 s')
+    // In the bucket holding the slowest observations only its bound is known: `≤`, not a guess.
+    const slow = quantiles([0.2, 0.3, 4], 0.25, 5, {
+      p50Is: 'estimate',
+      p95Is: 'atMost',
+    })
+    expect(quantileText(slow, 0.95)).toBe('≤ 5.00 s')
   })
 
   it("names a histogram's axis and every bucket for its tooltip", () => {

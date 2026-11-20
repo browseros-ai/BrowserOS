@@ -54,7 +54,7 @@ export function apiRouteTable(
     }),
     // A run's spans, found by Neo's run id (or the span id the viewer minted for a run with no
     // reply), never by trace id alone: a caller may share one trace across many runs.
-    '/api/runs/:runId/trace': local((req: RouteRequest<'runId'>) => {
+    [`${apiRoutes.runs}/:runId/trace`]: local((req: RouteRequest<'runId'>) => {
       const run = store.run(req.params.runId)
       if (!run) return notFound('run')
       const trace = telemetry.runTrace({

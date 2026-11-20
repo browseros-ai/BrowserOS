@@ -32,8 +32,11 @@ export interface SpanRecords extends RunRecordSource {
 
 const WAIT_MS = 10_000
 const FIRST_SPAN_GRACE_MS = 2_000
-/** Records handed out, remembered so a late span can announce a grown one. */
-const DELIVERED = 1_000
+/**
+ * Records handed out, and reads that ran out with nothing, remembered so a late span can announce
+ * the run (at most this many of each).
+ */
+const REMEMBERED = 1_000
 
 export function spanRecords(
   spans: SpanStore,
@@ -44,7 +47,16 @@ export function spanRecords(
   const wakers = new Set<() => void>()
   const lateListeners = new Set<(key: RunKey) => void>()
   /** neoRunId → the key it was read with and the size of the record given. */
-  const delivered = new Map<string, { key: RunKey; size: string }>()
+  const delivered = new Map<
+    string,
+    { key: RunKey; size: string; operations: number }
+  >()
+  /**
+   * Reads that found no span before their wait ran out (the first spans of a viewer's life can
+   * trail a reply by more than the first-span grace), by Neo run id or minted span id: if the
+   * run's spans come after all, it is read again.
+   */
+  const missed = new Map<string, RunKey>()
   const waiting = new Set<string>()
   let stopped = false
 
@@ -54,9 +66,23 @@ export function spanRecords(
 
   const deliver = (key: RunKey, neoRunId: string, record: NeoRunRecord) => {
     delivered.delete(neoRunId)
-    delivered.set(neoRunId, { key, size: sizeOf(record) })
-    if (delivered.size > DELIVERED)
+    delivered.set(neoRunId, {
+      key,
+      size: sizeOf(record),
+      operations: record.operations.length,
+    })
+    if (delivered.size > REMEMBERED)
       delivered.delete(delivered.keys().next().value as string)
+  }
+
+  const miss = (key: RunKey) => {
+    missed.set(key.neoRunId ?? `span:${key.trace?.spanId ?? ''}`, key)
+    if (missed.size > REMEMBERED)
+      missed.delete(missed.keys().next().value as string)
+  }
+
+  const announce = (key: RunKey) => {
+    for (const listener of lateListeners) listener(key)
   }
 
   /** The record of what a run's spans say now, remembered as handed out. */
@@ -102,8 +128,11 @@ export function spanRecords(
           if (run?.run) return give(key, run)
           const left =
             started + (spans.spansSeen ? waitMs : graceMs) - options.now()
-          if (stopped || signal.aborted || left <= 0)
-            return run && run.ops.size > 0 ? give(key, run) : null
+          if (stopped || signal.aborted || left <= 0) {
+            if (run && run.ops.size > 0) return give(key, run)
+            miss(key)
+            return null
+          }
           await wake(wakers, left, signal)
         }
       } finally {
@@ -122,8 +151,21 @@ export function spanRecords(
         const given = delivered.get(neoRunId)
         const run = spans.get(neoRunId)
         if (!given || !run || waiting.has(neoRunId)) continue
-        if (sizeOf(foldSpans(run)) === given.size) continue
-        for (const listener of lateListeners) listener(given.key)
+        const record = foldSpans(run)
+        // A run the store dropped and a late span refiled holds less than was handed out: a
+        // record only grows, so that one is never announced.
+        if (
+          record.operations.length < given.operations ||
+          sizeOf(record) === given.size
+        )
+          continue
+        announce(given.key)
+      }
+      for (const [id, key] of missed) {
+        const neoRunId = neoRunIdOf(key)
+        if (!neoRunId || !neoRunIds.has(neoRunId)) continue
+        missed.delete(id)
+        announce(key)
       }
     },
 

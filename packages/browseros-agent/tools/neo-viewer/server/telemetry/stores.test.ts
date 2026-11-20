@@ -44,26 +44,77 @@ describe('the span store is bounded', () => {
       true,
       true,
     ])
-    expect(store.stats()).toMatchObject({ runs: 3, spans: 27 })
+    // Whole: a kept run keeps every span it had.
+    expect(store.get('c')?.ops.size).toBe(8)
+    expect(store.get('c')?.run).not.toBeNull()
   })
 
-  test('a flood of spans or of large attributes cannot grow it; a run waited on is kept', () => {
+  /** The flood runs still held, of `count`. */
+  const held = (store: SpanStore, count: number) =>
+    Array.from({ length: count }, (_, i) => `flood-${i}`).filter(
+      (id) => store.get(id) !== null,
+    )
+
+  test('a flood of spans cannot grow it; a run waited on is kept', () => {
     const store = new SpanStore({
       maxRuns: 1_000,
       maxSpansPerRun: 100,
       maxSpans: 50,
-      maxBytes: 40_000,
+      maxBytes: 1e9,
     })
     const release = store.pin('pinned')
     store.add(runSpans('pinned'))
     for (let i = 0; i < 200; i++) store.add(runSpans(`flood-${i}`))
-    const { spans, bytes } = store.stats()
-    expect(spans).toBeLessThanOrEqual(50)
-    expect(bytes).toBeLessThanOrEqual(40_000)
+    // 9 spans a run, 50 at most, the pinned run among them: the newest four floods.
+    expect(held(store, 200)).toEqual([
+      'flood-196',
+      'flood-197',
+      'flood-198',
+      'flood-199',
+    ])
     expect(store.get('pinned')).not.toBeNull()
     release()
     for (let i = 200; i < 210; i++) store.add(runSpans(`flood-${i}`))
     expect(store.get('pinned')).toBeNull()
+  })
+
+  test("the byte cap counts what a span holds: its attributes, its batch's resource, its error message", () => {
+    const limits = (maxBytes: number) => ({
+      maxRuns: 1_000,
+      maxSpansPerRun: 100,
+      maxSpans: 1e9,
+      maxBytes,
+    })
+    const big = (neoRunId: string, where: 'resource' | 'message') => {
+      const traces = fixtureTraces(
+        { neoRunId, traceId: TRACE, parentSpanId: null, startMs: 1_000 },
+        { ops: [7] },
+      )
+      const block = traces.resourceSpans[0]
+      const span = block?.scopeSpans[0]?.spans[0]
+      if (!block || !span) throw new Error('no fixture span')
+      if (where === 'resource')
+        // 64 attributes of 4 KiB: about 260 KB carried by each span of the batch.
+        block.resource.attributes = Array.from({ length: 64 }, (_, i) => ({
+          key: `big.${i}`,
+          value: { stringValue: 'x'.repeat(4_096) },
+        }))
+      else span.status = { code: 2, message: 'm'.repeat(300_000) }
+      return decodeSpans(traces).items
+    }
+    // A resource of about 260 KB a span against 1 MiB; a message (clipped to 4 KiB when read)
+    // against 20 KB: a few runs either way, never all forty.
+    for (const [where, cap] of [
+      ['resource', 1024 * 1024],
+      ['message', 20_000],
+    ] as const) {
+      const store = new SpanStore(limits(cap))
+      for (let i = 0; i < 40; i++) store.add(big(`flood-${i}`, where))
+      const kept = held(store, 40)
+      expect(kept.length).toBeGreaterThan(0)
+      expect(kept.length).toBeLessThanOrEqual(4)
+      expect(kept.at(-1)).toBe('flood-39')
+    }
   })
 
   test("a run's spans over its cap are refused, its own neo.run still fits; a retried span replaces, never adds", () => {
@@ -77,8 +128,8 @@ describe('the span store is bounded', () => {
     expect(first.rejected).toBe(2)
     expect(store.add(runSpans('r', [0])).rejected).toBe(0)
     expect(store.add(runSpans('r', [1, 2, 3, 0])).rejected).toBe(0)
-    expect(store.stats().spans).toBe(4)
     expect(store.get('r')?.ops.size).toBe(3)
+    expect(store.get('r')?.run).not.toBeNull()
     expect(store.spansSeen).toBe(true)
   })
 
@@ -178,6 +229,59 @@ describe('the metric store', () => {
     })
   })
 
+  test("after Neo restarts, the old process's families go once the new one has not sent them for 10 s", () => {
+    const store = new MetricStore()
+    const names = () =>
+      (store.latest('push')?.families ?? []).map((family) => family.name)
+    // The old process had recorded everything.
+    store.pushedFamilies(sample(40, 3, 1), at(0))
+    expect(names()).toContain('neo_errors_total')
+    // The new one has only its gauges and its first runs so far.
+    const fresh = sample(1, 0).filter((family) =>
+      ['neo_runs_total', 'neo_runs_in_flight', 'neo_tabs_open'].includes(
+        family.name,
+      ),
+    )
+    store.pushedFamilies(fresh, at(5))
+    expect(names()).toContain('neo_errors_total')
+    store.pushedFamilies(fresh, at(10.5))
+    expect(names().sort()).toEqual([
+      'neo_runs_in_flight',
+      'neo_runs_total',
+      'neo_tabs_open',
+    ])
+    // Not the old process's 40 runs, crashes and errors beside the new one's.
+    expect(store.totals('push')).toMatchObject({
+      runs: 1,
+      crashes: 0,
+      ops: 0,
+    })
+  })
+
+  test('what pushes merge into stays bounded: families and series over all pushes, not per push', () => {
+    const store = new MetricStore()
+    const family = (name: string, series: number): MetricFamily => ({
+      name,
+      kind: 'gauge',
+      help: null,
+      series: Array.from({ length: series }, (_, i) => ({
+        labels: { i: String(i) },
+        value: i,
+      })),
+    })
+    for (let i = 0; i < 600; i++)
+      store.pushedFamilies([family(`f${i}`, 1)], at(i / 100))
+    expect(store.latest('push')?.families.length).toBe(512)
+    const many = new MetricStore()
+    for (let i = 0; i < 3; i++)
+      many.pushedFamilies([family(`big${i}`, 15_000)], at(i))
+    const series = (many.latest('push')?.families ?? []).reduce(
+      (total, one) => total + one.series.length,
+      0,
+    )
+    expect(series).toBe(20_000)
+  })
+
   test('history: one point a second, cumulative; pushes merge by family', () => {
     const store = new MetricStore()
     store.pushedFamilies(sample(1, 0), at(0))
@@ -210,6 +314,50 @@ describe('the metric store', () => {
 })
 
 describe('reading the 11 metrics', () => {
+  test('a quantile never reads above the slowest observation: in its bucket, only that bound, "at most" (live test F5)', () => {
+    // Twenty runs: ten up to 30 s, eight up to 60 s, and the slowest two at 61.0 s and 62.2 s.
+    const runs = [
+      { le: 30, count: 10 },
+      { le: 60, count: 18 },
+      { le: 120, count: 20 },
+      { le: null, count: 20 },
+    ]
+    // Interpolated, p95 would read 90 s for a slowest run of 62.2 s.
+    expect(histogramQuantile(0.95, runs)).toEqual({ sec: 120, is: 'atMost' })
+    // p50 sits below the slowest bucket: a true estimate, under its bound.
+    const p50 = histogramQuantile(0.5, runs)
+    expect(p50).toEqual({ sec: 30, is: 'estimate' })
+    // One 60 s op: every quantile is "at most" its bucket's bound, never 114 s.
+    const one = [
+      { le: 30, count: 0 },
+      { le: 120, count: 1 },
+      { le: null, count: 1 },
+    ]
+    expect(histogramQuantile(0.95, one)).toEqual({ sec: 120, is: 'atMost' })
+    expect(histogramQuantile(0.5, one)).toEqual({ sec: 120, is: 'atMost' })
+    // The same through a family, as the Health view gets it.
+    const view = metricsView(
+      [
+        {
+          name: 'neo_run_duration_seconds',
+          kind: 'histogram',
+          help: null,
+          series: [
+            { labels: { status: 'ok' }, value: 20, sum: 700, buckets: runs },
+          ],
+        },
+      ],
+      'scrape',
+      0,
+    )
+    expect(view.runs.duration).toMatchObject({
+      p95Sec: 120,
+      p95Is: 'atMost',
+      p50Sec: 30,
+      p50Is: 'estimate',
+    })
+  })
+
   test('totals for health: errors are the runs and operations Neo attributed to someone', () => {
     expect(totalsOf(fixtureFamilies(1))).toEqual({
       runs: 5,
@@ -244,8 +392,12 @@ describe('reading the 11 metrics', () => {
       total: 7,
       errors: 4,
     })
-    // 3 clicks at 0.168 s and 4 at 0.508 s: the median falls in the (0.5, 1] bucket.
-    expect(view.operations[0]?.duration.p50Sec).toBeCloseTo(0.5625, 4)
+    // 3 clicks at 0.168 s and 4 at 0.508 s: the median falls in the (0.5, 1] bucket, which holds
+    // the slowest: only "at most 1 s" is known (interpolating would say 0.56 s).
+    expect(view.operations[0]?.duration).toMatchObject({
+      p50Sec: 1,
+      p50Is: 'atMost',
+    })
     expect(view.errors).toEqual([
       { owner: 'script', code: 'no_match', count: 4 },
       { owner: 'website', code: 'navigation_failed', count: 1 },
@@ -259,16 +411,18 @@ describe('reading the 11 metrics', () => {
     expect(view.families).toHaveLength(11)
   })
 
-  test("quantiles as Prometheus' histogram_quantile: linear in the bucket, the top finite bound in +Inf", () => {
+  test("quantiles as Prometheus' histogram_quantile below the slowest observations' bucket, the top finite bound past it", () => {
     const buckets = [
       { le: 1, count: 2 },
       { le: 2, count: 6 },
       { le: null, count: 8 },
     ]
-    expect(histogramQuantile(0.5, buckets)).toBeCloseTo(1.5)
-    expect(histogramQuantile(0.25, buckets)).toBeCloseTo(1)
-    expect(histogramQuantile(0.95, buckets)).toBe(2)
-    expect(histogramQuantile(0.5, [{ le: null, count: 0 }])).toBeNull()
+    const p50 = histogramQuantile(0.5, buckets)
+    expect(p50.is).toBe('estimate')
+    expect(p50.sec).toBeCloseTo(1.5)
+    expect(histogramQuantile(0.25, buckets).sec).toBeCloseTo(1)
+    expect(histogramQuantile(0.95, buckets)).toEqual({ sec: 2, is: 'over' })
+    expect(histogramQuantile(0.5, [{ le: null, count: 0 }]).sec).toBeNull()
     // Series with different bounds sum at every bound either has.
     const merged = quantiles([
       {

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
+use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -22,13 +23,14 @@ const OPS: [&str; 4] = [
     "page.close",
     "context.newPage",
 ];
-const CODES: [&str; 6] = [
+const CODES: [&str; 7] = [
     "no_match",
     "script_error",
     "run_timeout",
     "run_cancelled",
     "browser_unavailable",
     "internal_error",
+    "not_awaited",
 ];
 
 /// A caller's sampled trace, and the same trace marked "not sampled".
@@ -83,6 +85,24 @@ fn ago(elapsed: Duration) -> Result<Instant, String> {
     Instant::now()
         .checked_sub(elapsed)
         .ok_or_else(|| format!("the clock cannot go {elapsed:?} back"))
+}
+
+/// Telemetry pushing to a collector that takes connections and never answers, with one
+/// finished run waiting to leave on each signal. Keep the listener: dropping it refuses
+/// connections, and a refused export ends at once.
+fn pushing_to_a_hung_collector() -> Result<(Telemetry, TcpListener), Box<dyn Error>> {
+    // Bound and never accepted: the kernel takes the connection and the request; nobody answers.
+    let collector = TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = format!("http://{}", collector.local_addr()?);
+    let config = TelemetryConfig::from_env(&|name| match name {
+        "OTEL_EXPORTER_OTLP_ENDPOINT" => Some(endpoint.clone()),
+        // Nothing leaves on a timer first, so the run waits for the last flush.
+        "OTEL_BSP_SCHEDULE_DELAY" | "OTEL_METRIC_EXPORT_INTERVAL" => Some("600000".to_owned()),
+        _ => None,
+    })?;
+    let telemetry = Telemetry::new(&config)?;
+    telemetry.start_run(facts(&"run-1")).finish(OK);
+    Ok((telemetry, collector))
 }
 
 /// One sample line of the exposition.
@@ -1275,6 +1295,147 @@ fn an_op_that_settles_after_its_run_ended_still_counts_and_nests() -> Result<(),
         (op.trace_id.as_str(), op.parent_span_id.as_deref()),
         (run.trace_id.as_str(), Some(run.span_id.as_str())),
         "the late op's span still nests under its run's"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Error>> {
+    let (telemetry, probe) = live(SiteDetail::None);
+    let timeout = failure(ErrorOwner::Neo, "run_timeout");
+    let run = telemetry.start_run(facts(&"run-1"));
+    // The deadline cuts three hung ops, and teardown settles them before the run's guard ends
+    // the run: the real order of a timeout.
+    for op_id in ["run-1.1", "run-1.2", "run-1.3"] {
+        run.ops().op_settled(OpSettled {
+            outcome: OpOutcome::Cancelled,
+            delivery: Delivery::Unknown,
+            error: Some(timeout),
+            ..settled("locator.click", &op_id)
+        });
+    }
+    run.finish(RunVerdict {
+        status: RunStatus::Timeout,
+        error: Some(timeout),
+    });
+    // An ok run whose script returned without awaiting an op: the leftover is cut.
+    let ok = telemetry.start_run(facts(&"run-2"));
+    ok.ops().op_settled(OpSettled {
+        outcome: OpOutcome::Cancelled,
+        delivery: Delivery::NotSent,
+        error: Some(failure(ErrorOwner::Script, "not_awaited")),
+        ..settled("page.goto", &"run-2.1")
+    });
+    ok.finish(OK);
+
+    let metrics = scrape(&telemetry)?;
+    assert_eq!(
+        metrics.value(
+            "neo_errors_total",
+            &[("error_owner", "neo"), ("error_code", "run_timeout")]
+        ),
+        Some("1"),
+        "the deadline is one failure, counted at the run, not once per op it cut"
+    );
+    assert_eq!(
+        metrics.named("neo_errors_total").len(),
+        1,
+        "the ok run's cut leftover counts in no error total: that run succeeded"
+    );
+    assert_eq!(
+        metrics.value(
+            "neo_operations_total",
+            &[
+                ("op", "locator.click"),
+                ("status", "cancelled"),
+                ("error_owner", "neo")
+            ]
+        ),
+        Some("3"),
+        "each cut op still counts, as cancelled, with its error's owner"
+    );
+    let cut: Vec<CapturedSpan> = probe
+        .spans()
+        .into_iter()
+        .filter(|span| span.attributes.get("neo.op.name") == Some(&text("locator.click")))
+        .collect();
+    assert_eq!(cut.len(), 3, "one span per cut op");
+    assert!(
+        cut.iter().all(|span| {
+            span.attributes.get("neo.error.code") == Some(&text("run_timeout"))
+                && span.attributes.get("neo.op.outcome") == Some(&text("cancelled"))
+                && span.status == SpanStatus::Unset
+        }),
+        "each cut op's span keeps the error that cut it, and is no error span itself (D11)"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_ok_run_whose_own_long_poll_was_cut_has_no_error_span() -> Result<(), Box<dyn Error>> {
+    let (telemetry, probe) = live(SiteDetail::None);
+    let run = telemetry.start_run(facts(&"run-1"));
+    run.ops().op_settled(settled("page.goto", &"run-1.1"));
+    // Neo's own long-poll, cut when the script returns: it ends this way in every run.
+    run.ops().op_settled(OpSettled {
+        outcome: OpOutcome::Cancelled,
+        delivery: Delivery::NotSent,
+        ..settled("events.next", &"run-1.2")
+    });
+    run.finish(OK);
+    let spans = probe.spans();
+    assert_eq!(spans.len(), 3, "two ops and the run");
+    assert!(
+        spans.iter().all(|span| span.status == SpanStatus::Unset),
+        "an ok run's trace has no error span, though its long-poll was cut: {spans:#?}"
+    );
+    let poll = spans
+        .iter()
+        .find(|span| span.attributes.get("neo.op.name") == Some(&text("events.next")))
+        .ok_or("the long-poll's span")?;
+    assert_eq!(
+        poll.attributes.get("neo.op.outcome"),
+        Some(&text("cancelled")),
+        "its outcome still says it was cut"
+    );
+    assert!(
+        !poll.attributes.contains_key("neo.error.code"),
+        "with no error label, a cut op carries no error attributes"
+    );
+    Ok(())
+}
+
+#[test]
+fn dropping_pushing_telemetry_without_shutdown_never_waits_on_its_collector()
+-> Result<(), Box<dyn Error>> {
+    let (telemetry, _collector) = pushing_to_a_hung_collector()?;
+    let started = Instant::now();
+    drop(telemetry);
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_secs(1),
+        "dropped without shutdown (a start that failed later, say), telemetry waited {took:?} on \
+         a collector that never answers; the SDK's own drops wait about 5 s each"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_hung_collector_still_lets_shutdown_report_done_within_its_budget()
+-> Result<(), Box<dyn Error>> {
+    let (telemetry, _collector) = pushing_to_a_hung_collector()?;
+    let budget = Duration::from_secs(1);
+    let started = Instant::now();
+    let outcome = telemetry.shutdown(budget).await;
+    let took = started.elapsed();
+    assert!(
+        outcome.is_ok(),
+        "the deadline, armed before the wait and a margin short of it, cut the last exports in \
+         time, so the stop reports done rather than late: {outcome:?}"
+    );
+    assert!(
+        took <= budget,
+        "shutdown({budget:?}) returned after {took:?}"
     );
     Ok(())
 }

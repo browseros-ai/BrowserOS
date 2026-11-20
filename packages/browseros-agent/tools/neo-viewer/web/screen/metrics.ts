@@ -43,10 +43,14 @@ function trim(value: number): string {
  * A histogram's p50 or p95 as the screen writes times (`168 ms`, `1.23 s`); `–` with no data. A
  * quantile that falls past Neo's last finite bound is only known to be beyond it: Prometheus'
  * estimate is then that bound itself, so it reads `> 10 s` rather than a precise-looking `10.0 s`.
+ * One that falls in the bucket holding the slowest observations is only known to be within it
+ * (`atMost`, from the server): `≤ 2 min`, never an interpolation above the slowest observation.
  */
 export function quantileText(quantiles: Quantiles, q: 0.5 | 0.95): string {
   const sec = q === 0.5 ? quantiles.p50Sec : quantiles.p95Sec
   if (sec === null) return '–'
+  if ((q === 0.5 ? quantiles.p50Is : quantiles.p95Is) === 'atMost')
+    return `≤ ${seconds(sec * 1000)}`
   const total = quantiles.buckets.at(-1)?.count ?? 0
   const lastFinite = quantiles.buckets.findLast((bucket) => bucket.le !== null)
   if (lastFinite && lastFinite.le !== null && lastFinite.count < q * total)

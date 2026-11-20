@@ -10,7 +10,6 @@
 
 import { createHash } from 'node:crypto'
 import type { MetricFamily } from '../../shared/api'
-import { renderPrometheus } from './prometheus-text'
 
 /** The script the fixture's spans describe, one statement per line. */
 export const FIXTURE_CODE = [
@@ -392,4 +391,52 @@ function int(key: string, value: number) {
 /** Epoch ms → OTLP's unix nanoseconds, a decimal string. */
 function nanos(ms: number): string {
   return (BigInt(Math.round(ms * 1000)) * 1000n).toString()
+}
+
+/**
+ * Families back to text exposition 0.0.4, as Neo's `GET /v1/metrics` serves them (the stand-in's
+ * answer, and the parser's round-trip test). A null value is written `NaN`.
+ */
+export function renderPrometheus(families: MetricFamily[]): string {
+  const lines: string[] = []
+  const number = (value: number | null | undefined) =>
+    value === null || value === undefined ? 'NaN' : String(value)
+  for (const family of families) {
+    if (family.help)
+      lines.push(
+        `# HELP ${family.name} ${family.help.replace(/\\/g, '\\\\').replace(/\n/g, '\\n')}`,
+      )
+    lines.push(
+      `# TYPE ${family.name} ${family.kind === 'unknown' ? 'untyped' : family.kind}`,
+    )
+    for (const series of family.series) {
+      if (family.kind !== 'histogram') {
+        lines.push(
+          `${family.name}${labelText(series.labels)} ${number(series.value)}`,
+        )
+        continue
+      }
+      for (const bucket of series.buckets ?? [])
+        lines.push(
+          `${family.name}_bucket${labelText({ ...series.labels, le: bucket.le === null ? '+Inf' : String(bucket.le) })} ${bucket.count}`,
+        )
+      lines.push(
+        `${family.name}_sum${labelText(series.labels)} ${number(series.sum)}`,
+      )
+      lines.push(
+        `${family.name}_count${labelText(series.labels)} ${number(series.value)}`,
+      )
+    }
+  }
+  return `${lines.join('\n')}\n`
+}
+
+function labelText(labels: Record<string, string>): string {
+  const entries = Object.entries(labels)
+  if (entries.length === 0) return ''
+  const escaped = entries.map(
+    ([key, value]) =>
+      `${key}="${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`,
+  )
+  return `{${escaped.join(',')}}`
 }
