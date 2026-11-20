@@ -24,10 +24,6 @@ use crate::{OtlpConfig, TelemetryError};
 /// and the reader that send through it, so dropping the pipeline cannot leave one without the
 /// other.
 #[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "the providers take the processor and the reader once they are built (pipeline.rs)"
-)]
 pub(crate) struct Push {
     /// The trace push: a bounded, non-blocking batch processor over an OTLP/HTTP span
     /// exporter; `None` when no traces endpoint is configured.
@@ -41,9 +37,8 @@ pub(crate) struct Push {
 
 /// The push door for `config`, or `None` when no OTLP endpoint is set (the default).
 #[expect(
-    dead_code,
     clippy::unnecessary_wraps,
-    reason = "the providers plug it in once they are built (pipeline.rs)"
+    reason = "building the exporters can fail; nothing is built yet"
 )]
 pub(crate) fn push(_config: &OtlpConfig) -> Result<Option<Push>, TelemetryError> {
     Ok(None)
@@ -51,10 +46,6 @@ pub(crate) fn push(_config: &OtlpConfig) -> Result<Option<Push>, TelemetryError>
 
 /// The resource both providers share: `service.name` (`OTEL_SERVICE_NAME`, default
 /// `browseros-neo`), then `OTEL_RESOURCE_ATTRIBUTES`, applied last so it wins.
-#[expect(
-    dead_code,
-    reason = "both providers take it once they are built (pipeline.rs)"
-)]
 pub(crate) fn resource(_config: &OtlpConfig) -> Resource {
     Resource::builder_empty()
         .with_service_name("browseros-neo")
@@ -63,10 +54,6 @@ pub(crate) fn resource(_config: &OtlpConfig) -> Resource {
 
 /// The tracer provider's sampler (`OTEL_TRACES_SAMPLER` / `_ARG`, default
 /// `parentbased_always_on`).
-#[expect(
-    dead_code,
-    reason = "the tracer provider takes it once it is built (pipeline.rs)"
-)]
 pub(crate) fn sampler(_config: &OtlpConfig) -> Sampler {
     Sampler::ParentBased(Box::new(Sampler::AlwaysOn))
 }

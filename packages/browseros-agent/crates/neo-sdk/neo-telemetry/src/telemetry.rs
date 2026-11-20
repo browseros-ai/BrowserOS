@@ -7,6 +7,8 @@ use crate::backend::Backend;
 use crate::label::{CloseReason, ErrorLabel, TabOrigin};
 use crate::pipeline::Pipeline;
 #[cfg(feature = "test-support")]
+use crate::probe::Probe;
+#[cfg(feature = "test-support")]
 use crate::recording::{Recorder, Recording, TelemetryCall};
 use crate::{OpenTabsSource, RunFacts, RunSpan, TelemetryConfig, TelemetryError, Vocabulary};
 
@@ -33,16 +35,31 @@ impl Telemetry {
         }
     }
 
-    /// The live pipeline for `config`: the meter and tracer providers, the Prometheus reader,
-    /// and the OTLP push when `config` turns it on (its transport runs on a thread of its own,
-    /// never on the caller's runtime). Starts no connection.
+    /// The live pipeline for `config`: the meter provider and its Prometheus reader (the scrape
+    /// is always on), and the OTLP push when `config` turns it on, with a tracer provider when
+    /// spans are pushed (its transport runs on a thread of its own, never on the caller's
+    /// runtime). Starts no connection.
     pub fn new(config: &TelemetryConfig) -> Result<Self, TelemetryError> {
-        Ok(match Pipeline::start(config)? {
-            Some(pipeline) => Self {
+        Ok(Self {
+            backend: Backend::Otel(Arc::new(Pipeline::start(config)?)),
+        })
+    }
+
+    /// The live pipeline with its spans kept in memory instead of pushed, and the [`Probe`] that
+    /// reads them back; its metrics read through [`Telemetry::render_prometheus`], as the host API
+    /// reads them. For tests that assert on real output: the labels, counting rules and span
+    /// attributes are the production ones, not a double's copy. `config.otlp` gives the resource
+    /// and the sampler; nothing is pushed.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn in_memory(config: &TelemetryConfig) -> (Self, Probe) {
+        let (pipeline, probe) = Pipeline::in_memory(config);
+        (
+            Self {
                 backend: Backend::Otel(Arc::new(pipeline)),
             },
-            None => Self::noop(),
-        })
+            probe,
+        )
     }
 
     /// The test double: a handle that keeps every call, and the [`Recording`] that reads them
@@ -288,8 +305,8 @@ mod tests {
         telemetry.shutdown(Duration::ZERO).await?;
         assert!(
             Telemetry::new(&TelemetryConfig::default())
-                .is_ok_and(|built| matches!(built.backend, Backend::Noop)),
-            "until the pipeline is built, the real constructor hands back the no-op"
+                .is_ok_and(|built| matches!(built.backend, Backend::Otel(_))),
+            "the real constructor always builds the live pipeline: the scrape is always on"
         );
         Ok(())
     }

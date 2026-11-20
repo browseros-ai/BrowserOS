@@ -46,10 +46,6 @@ impl TraceContext {
     /// The caller's span, as the root span's parent. Crate-private: the facade never hands out
     /// OpenTelemetry types.
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "the neo.run span reads it once spans are built (tracing_otel.rs)"
-    )]
     pub(crate) fn span_context(&self) -> &SpanContext {
         &self.span_context
     }
