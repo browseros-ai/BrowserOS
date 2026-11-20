@@ -30,9 +30,12 @@ export function canDraftSkills(
   )
 }
 
-/** A finished task with at least two steps and no skill yet can become one. */
+/** A finished, or stopped but error-free, task with at least two steps and no skill yet can become one. */
 export function isDraftable(task: SessionSummary): boolean {
-  return task.status === 'done' && task.dispatchCount >= 2 && !task.skillName
+  const ended =
+    task.status === 'done' ||
+    (task.status === 'cancelled' && task.errorCount === 0)
+  return ended && task.dispatchCount >= 2 && !task.skillName
 }
 
 /** The newest task in a list that could become a skill: its button is always shown. */

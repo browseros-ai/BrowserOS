@@ -67,9 +67,12 @@ describe('who sees the button', () => {
     expect(canDraftSkills(undefined)).toBe(false)
   })
 
-  test('only finished tasks with steps and no skill', () => {
+  test('only finished or cleanly stopped tasks with steps and no skill', () => {
     expect(isDraftable(task())).toBe(true)
-    expect(isDraftable(task({ status: 'cancelled' }))).toBe(false)
+    expect(isDraftable(task({ status: 'cancelled', errorCount: 0 }))).toBe(true)
+    expect(isDraftable(task({ status: 'cancelled', errorCount: 2 }))).toBe(
+      false,
+    )
     expect(isDraftable(task({ status: 'failed' }))).toBe(false)
     expect(isDraftable(task({ dispatchCount: 1 }))).toBe(false)
     expect(isDraftable(task({ skillName: 'neo-x' }))).toBe(false)

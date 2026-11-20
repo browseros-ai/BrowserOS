@@ -289,8 +289,13 @@ describe('making a skill from a task', () => {
     expect(button('Make it a skill')).toBeUndefined()
   })
 
-  it('tests that a stopped task gets no button', async () => {
-    await mount(task({ status: 'cancelled' }))
+  it('tests that a task stopped without errors gets the button', async () => {
+    await mount(task({ status: 'cancelled', errorCount: 0 }))
+    expect(button('Make it a skill')).toBeDefined()
+  })
+
+  it('tests that a task stopped after errors gets no button', async () => {
+    await mount(task({ status: 'cancelled', errorCount: 1 }))
     expect(button('Make it a skill')).toBeUndefined()
   })
 
