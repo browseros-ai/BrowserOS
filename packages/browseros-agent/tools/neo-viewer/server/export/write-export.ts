@@ -10,7 +10,7 @@
  *   runs/NNN.json        that run complete: request and reply as they crossed, Neo's record
  *   runs/NNN.reply.txt   the text the model read, alone (`.reply.json` when it parses)
  *   log.jsonl            the raw log, for exactness
- *   metrics/metrics.prom Neo's last `GET /v1/metrics` answer, as served (when the viewer scraped one)
+ *   metrics/metrics.prom Neo's last `GET /v1/metrics` answer, as served (when summary.json is that scrape's)
  *   metrics/summary.json Neo's metrics read out: health since the last Clear, the Health view's
  *                        tables, the last ten minutes (when any metrics arrived)
  * ```

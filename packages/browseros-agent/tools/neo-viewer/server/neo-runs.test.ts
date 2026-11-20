@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { NeoRunRecord, RunSummary } from '../shared/api'
 import { RunStore } from './log/run-store'
-import { hostApiRecords, joinNeoRuns, toNeoRunRecord } from './neo-runs'
+import {
+  hostApiRecords,
+  joinNeoRuns,
+  type RunKey,
+  type RunRecordSource,
+  toNeoRunRecord,
+} from './neo-runs'
 
 /** A `GET /v1/runs/{id}` body as Neo returns it (openapi.yaml `Run`), with one nested call. */
 const RUN = {
@@ -182,6 +188,7 @@ function fakeStore() {
     attached,
     emit: (run: Partial<RunSummary>) =>
       listener?.({ type: 'run', run: run as RunSummary }),
+    clear: () => listener?.({ type: 'clear' }),
     store: {
       subscribe(next: (event: { type: string; run?: RunSummary }) => void) {
         listener = next
@@ -323,4 +330,41 @@ test('settling waits for a read in flight and keeps joining (an export right aft
   const started = Date.now()
   await slow.settled(30)
   expect(Date.now() - started).toBeLessThan(500)
+})
+
+test('the joiner forgets the runs it read at a Clear, and all but the last 1,000: a late completion then reads nothing', async () => {
+  const fake = fakeStore()
+  const reads: string[] = []
+  let late: (key: RunKey) => void = () => {}
+  const source: RunRecordSource = {
+    canRead: (key) => key.neoRunId !== null,
+    read: async (key) => {
+      reads.push(key.neoRunId ?? '')
+      return toNeoRunRecord(RUN)
+    },
+    onLateCompletion: (listener) => {
+      late = listener
+      return () => {}
+    },
+  }
+  joinNeoRuns(fake.store, source)
+  const key = (neoRunId: string): RunKey => ({ neoRunId, trace: null })
+  fake.emit({ id: 'r1', status: 'ok', neoRunId: 'n1' })
+  await Bun.sleep(5)
+  late(key('n1'))
+  await Bun.sleep(5)
+  expect(reads).toEqual(['n1', 'n1'])
+  fake.clear()
+  late(key('n1'))
+  await Bun.sleep(5)
+  expect(reads).toEqual(['n1', 'n1'])
+  // Past 1,000 runs the oldest is forgotten, the newest still found.
+  for (let i = 0; i <= 1_000; i++)
+    fake.emit({ id: `r-${i}`, status: 'ok', neoRunId: `m${i}` })
+  await Bun.sleep(20)
+  reads.length = 0
+  late(key('m0'))
+  late(key('m1000'))
+  await Bun.sleep(5)
+  expect(reads).toEqual(['m1000'])
 })

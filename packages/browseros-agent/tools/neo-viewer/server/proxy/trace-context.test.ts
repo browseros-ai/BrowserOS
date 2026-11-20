@@ -131,6 +131,18 @@ describe('traceContextFor', () => {
     expect(
       traceContextFor(new Headers(), messages([runCall(1), runCall(2)])),
     ).toBeNull()
+    // A call of another tool: Neo refuses it before any run, so no span would name it.
+    expect(
+      traceContextFor(
+        new Headers(),
+        messages({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'other', arguments: {} },
+        }),
+      ),
+    ).toBeNull()
     // A notification-shaped call (no id) is not a run.
     const { id: _, ...notification } = runCall(1)
     expect(traceContextFor(new Headers(), messages(notification))).toBeNull()

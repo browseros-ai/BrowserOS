@@ -105,9 +105,11 @@ describe('the scrape door', () => {
       intervalMs: 5,
     })
     await until(() => texts.length >= 2)
-    expect(poller.state()).toBe('polling')
     await poller.stop()
-    expect(poller.state()).toBe('stopped')
+    const heard = texts.length
+    await Bun.sleep(30)
+    // Stopped: no scrape after it.
+    expect(texts).toHaveLength(heard)
     expect(texts[0]).toBe('neo_runs_in_flight 2\n')
   })
 })
@@ -160,8 +162,9 @@ describe('health', () => {
       sinceClear: null,
     })
     expect(telemetry.metrics()).toBeNull()
-    // An export still has the last numbers heard.
+    // An export still has the last numbers heard: the push's, so not the scrape's text beside them.
     expect(telemetry.exportSnapshot()?.metrics.source).toBe('push')
+    expect(telemetry.exportSnapshot()?.prometheus).toBeNull()
   })
 
   test('changes reach subscribers at most once per interval, with a rising rev; sinceClear counts from the Clear', async () => {
