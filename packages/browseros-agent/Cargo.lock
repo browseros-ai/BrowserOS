@@ -2065,6 +2065,7 @@ dependencies = [
  "futures-util",
  "neo-captcha",
  "neo-http",
+ "neo-jev",
  "neo-playwright",
  "neo-sdk-api",
  "neo-server",

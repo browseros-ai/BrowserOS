@@ -13,6 +13,7 @@ use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
 use neo_http::{Settings, SettingsDefaults};
+use neo_jev::Jev;
 use neo_playwright::{
     ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
 };
@@ -47,6 +48,7 @@ use crate::runtime::{Script, ScriptOutcome, run_script};
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
 
+mod jev_verbs;
 mod read_only;
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order
@@ -89,6 +91,19 @@ impl Harness {
     /// A browser with explicit event capabilities: the fake can emit native console events.
     async fn with_mode(
         solver: Option<Arc<CaptchaSolver>>,
+        hosted: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::with_parts(solver, None, hosted).await
+    }
+
+    /// A Neo with the chosen Jev client (`None`: no Jev key).
+    async fn with_jev(jev: Option<Jev>) -> Result<Self, Box<dyn Error>> {
+        Self::with_parts(None, jev, false).await
+    }
+
+    async fn with_parts(
+        solver: Option<Arc<CaptchaSolver>>,
+        jev: Option<Jev>,
         hosted: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
@@ -142,6 +157,7 @@ impl Harness {
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
+            jev,
             claims: Arc::clone(&claims),
             settings: settings.clone(),
             playwright: Arc::clone(&playwright),

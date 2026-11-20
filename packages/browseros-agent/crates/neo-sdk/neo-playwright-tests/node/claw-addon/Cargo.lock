@@ -1572,6 +1572,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-jev"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "neo-playwright"
 version = "0.1.0"
 dependencies = [
@@ -1627,6 +1640,7 @@ dependencies = [
  "futures-util",
  "neo-captcha",
  "neo-http",
+ "neo-jev",
  "neo-playwright",
  "neo-sdk-api",
  "neo-takeover",

@@ -4,6 +4,7 @@ use std::time::Duration;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_http::{Settings, SettingsDefaults};
+use neo_jev::Jev;
 use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -74,12 +75,14 @@ impl HostedStack {
             None,
         );
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
+        let jev = config.jev.map(Jev::new);
         let claims = Arc::new(CaptchaClaims::default());
         let mut methods = RegistryBuilder::default();
         builtins::builtin_set(
             &mut methods,
             BuiltinDeps {
                 solver,
+                jev,
                 claims: Arc::clone(&claims),
                 settings: settings.clone(),
                 playwright: Arc::clone(&playwright),

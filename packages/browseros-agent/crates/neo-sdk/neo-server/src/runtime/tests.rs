@@ -24,6 +24,8 @@ use crate::dispatch::{
 };
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
 
+mod jev_prelude;
+
 /// Far longer than any test here takes, so only the tests about the deadline meet it.
 const BUDGET: Duration = Duration::from_mins(1);
 

@@ -4,8 +4,11 @@ use std::sync::Arc;
 
 use neo_captcha::CaptchaSolver;
 use neo_http::Settings;
+use neo_jev::Jev;
 
-use super::{CaptchaClaims, PlaywrightFacade, host_fill, neo_tasks, playwright_ops, solve_captcha};
+use super::{
+    CaptchaClaims, PlaywrightFacade, host_fill, jev_verbs, neo_tasks, playwright_ops, solve_captcha,
+};
 use crate::dispatch::{Policy, RegistryBuilder, RegistryError};
 use crate::host::TakeoverLock;
 
@@ -14,6 +17,9 @@ pub(crate) struct BuiltinDeps {
     /// The process's one CAPTCHA solver; `None` without a provider key, and then
     /// `neo.solveCaptcha` is registered but unlisted and fails `host / captcha_unavailable`.
     pub(crate) solver: Option<Arc<CaptchaSolver>>,
+    /// The process's one Jev client; `None` without a key, and then the four Jev verbs are
+    /// registered but unlisted and fail `host / jev_unavailable`.
+    pub(crate) jev: Option<Jev>,
     /// The tabs solves hold, which the door's CAPTCHA busy rule reads too.
     pub(crate) claims: Arc<CaptchaClaims>,
     /// Live host settings read by Playwright operations.
@@ -29,6 +35,7 @@ pub(crate) fn builtin_set(
 ) -> Result<(), RegistryError> {
     let BuiltinDeps {
         solver,
+        jev,
         claims,
         playwright,
         settings,
@@ -36,7 +43,8 @@ pub(crate) fn builtin_set(
     neo_tasks::neo_tasks(builder)?;
     playwright_ops::playwright_ops(builder, &playwright, &settings)?;
     host_fill::host_fill(builder, &playwright)?;
-    solve_captcha::solve_captcha(builder, solver, claims)
+    solve_captcha::solve_captcha(builder, solver, claims)?;
+    jev_verbs::jev_verbs(builder, jev)
 }
 
 /// The dispatcher's rules, in their fixed order: the takeover lock, then the CAPTCHA busy rule.

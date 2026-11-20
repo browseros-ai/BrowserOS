@@ -739,7 +739,7 @@ async fn a_refusal_brand_is_refused_under_its_name_and_never_runs() -> Result<()
 /// script, never Neo, the host or the website. Its other fields are recorded and otherwise ignored.
 #[tokio::test]
 async fn a_refusal_brand_cannot_claim_another_owner_or_code() -> Result<(), Box<dyn Error>> {
-    const MALFORMED: &str = "`page.route`: a refusal may name only method_unavailable, invalid_input, task_not_found or task_page_missing";
+    const MALFORMED: &str = "`page.route`: a refusal may name only method_unavailable, invalid_input, task_not_found, task_page_missing or stopped";
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
 
@@ -807,6 +807,34 @@ async fn a_refusal_brand_cannot_claim_another_owner_or_code() -> Result<(), Box<
             "page.screenshot: path is not available in Neo"
         ),
         "the other code a refusal may name, with its reason"
+    );
+
+    // A Jev helper's stop (neo_prelude.js `stop`): the brand carries the `Stop` record, which the
+    // door never reads and the row keeps. Forged, it buys only this row: the run's value is a
+    // stop only for an error the bootstrap branded (runtime/js/bootstrap.js `stopError`).
+    let stop = json!({
+        "$neo": "refused", "code": "stopped", "reason": "neo.find stopped the script: ambiguous",
+        "stop": { "call": "neo.find", "why": "ambiguous", "tab": 7, "lookalikes": [] },
+    });
+    let (operation, reply) = harness.submit(&run, "neo.find", stop.clone()).await;
+    let refusal = failure(reply)?;
+    assert_eq!(
+        (
+            owner_and_code(&refusal),
+            refusal.error.message(),
+            refusal.delivery
+        ),
+        (
+            (ErrorOwner::Script, ErrorCode::STOPPED),
+            "neo.find stopped the script: ambiguous",
+            Delivery::NotSent
+        ),
+        "a stop is the script's own refusal, and sends nothing"
+    );
+    assert_eq!(
+        harness.row(operation).await?.args,
+        Some(stop),
+        "the row keeps the stop's record"
     );
     Ok(())
 }

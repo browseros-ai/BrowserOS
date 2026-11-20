@@ -105,6 +105,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
 | `NEO_SLIMVIEWER` | `true` | Starts the phone viewer when installed. Set to `0` to disable it. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The published image carries both; a local or pull request build none ([CAPTCHA keys](#captcha-keys)). |
+| `NEO_JEV_KEY_FILE` | unset | A Jev key file for the Jev helpers, `neo.find`, `neo.findAll`, `neo.check`, `neo.choose` and `neo.stop`; no image carries one ([Jev key](#jev-key)). `NEO_JEV_URL` and `NEO_JEV_MODEL` override the endpoint and model. |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |
 | `NEO_CLEAR_SESSIONS` | `false` | `true`: before every start of the browser, the entrypoint removes the profile's saved sessions, `/data/profile/Default/Sessions`, where values typed into pages rest ([Saved sessions](#saved-sessions)). |
 | `BROWSERCLAW_HOSTED_MODE` | `1` | Must stay `1`. It also starts the browser with `--disable-browseros-metrics` ([Product analytics](#product-analytics)). |
@@ -129,8 +130,8 @@ folders. Empty denies path reads; nonexistent folders grant nothing. Symlinks re
 component containment is checked. Changes apply to the next file use in an existing run and
 survive a server restart. `PUT {}` restores the downloads default.
 
-Even `["/"]` cannot allow Neo's state directory, browser profile, host token or CAPTCHA key
-files. Scripts cannot overwrite those locations with a download or screenshot either.
+Even `["/"]` cannot allow Neo's state directory, browser profile, host token, CAPTCHA key
+files or Jev key file. Scripts cannot overwrite those locations with a download or screenshot either.
 
 The same goes for Neo's home, `/home/neo`, the `HOME` of the server, the browser, its crash
 reporter, Xvnc and the window manager. They read files there without being asked: the
@@ -326,6 +327,26 @@ They become 0400 files owned by neo in the `neo-sdk-keyed` target, `provenance.j
 `captchaKeys` (provider names only), and the image gets the label `com.browseros.neo-sdk.captcha-keys=baked`.
 Anyone who has that image can read them. That stage is rebuilt without its cache every time, so a rotated key never survives in a
 cached layer, and a keyless build never mounts a key at all.
+
+## Jev key
+
+`neo.find`, `neo.findAll`, `neo.check` and `neo.choose` ask Jev, a fast decision model, which
+element, value or yes/no the page answers a script's plain-words ask with. No image carries a Jev
+key; a host mounts its own, read-only and outside `/home/neo` (the entrypoint re-owns that tree):
+
+```sh
+-v ./jev.key:/run/neo-keys/jev-api-key:ro -e NEO_JEV_KEY_FILE=/run/neo-keys/jev-api-key
+```
+
+The file must be readable by Neo's uid (`PUID`) when Neo starts. Without a readable key the five
+helpers are unlisted, the server logs that they are off, and a call to `neo.find`, `neo.findAll`,
+`neo.check` or `neo.choose` fails `host / jev_unavailable`. After a 401 Neo reads the file again
+and, when the key there changed, sends the request once more with it, so a host rotates the key by
+rewriting the file, with no restart. A single-file mount keeps the file it was given: rewrite it in
+place, or mount its directory to replace it. The key goes only to Jev (`NEO_JEV_URL`, default
+`https://api.typesafe.ai/v1/systemone`): it is never logged, never in a reply or the trace, and no
+file door a script has reads the file, even with `/` listed. Point `NEO_JEV_URL` at another server
+only with that server's own key.
 
 ## Use it from a host
 
