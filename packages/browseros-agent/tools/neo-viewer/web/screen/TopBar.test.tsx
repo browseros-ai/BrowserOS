@@ -22,6 +22,10 @@ const INFO: ViewerInfo = {
   dataDir: '/tmp/viewer',
   startedAt: '2026-11-11T10:00:00.000Z',
   container: null,
+  otlp: {
+    endpoint: 'http://127.0.0.1:7310/otlp',
+    containerEndpoint: 'http://host.docker.internal:7310/otlp',
+  },
 }
 
 const AGENT_ON_A_TAB: LiveScreenAction = {

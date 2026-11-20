@@ -12,6 +12,7 @@ mod keeps;
 mod listener_compatibility;
 mod live;
 mod locks;
+mod metrics;
 mod reconcile;
 mod records;
 mod screenshots;
