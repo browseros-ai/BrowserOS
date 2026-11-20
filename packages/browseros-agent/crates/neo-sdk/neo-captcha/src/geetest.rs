@@ -370,6 +370,7 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         result.paid_tasks = 1;
     }
     let answer = answer?;
+    ctx.record_payment(result, &answer);
     if let Some(error) = fresh_error.into_inner().unwrap_or_else(|e| e.into_inner()) {
         return Err(error);
     }
@@ -377,7 +378,6 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
     let answer = match answer {
         Ok(answer) => answer,
         Err(error) => {
-            result.paid_tasks = u32::from(error.charged);
             if error.kind == ProviderErrorKind::BadRequest
                 && error.provider.is_none()
                 && !error.charged
@@ -391,11 +391,6 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
             return Ok(provider_failure(error));
         }
     };
-    result.paid_tasks = 1;
-    result.cost_usd = answer
-        .cost_usd
-        .filter(|c| c.is_finite() && *c >= 0.0)
-        .unwrap_or(0.0);
     guard(ctx).await?;
     let task = params(&state, ctx.user_agent.clone())
         .ok_or_else(|| PageError::Browser("GeeTest parameters changed".into()))?;
@@ -890,6 +885,10 @@ mod tests {
     }
     impl FakeBackend {
         fn new(version: u8) -> Self {
+            Self::from_provider(version, ProviderName::Capsolver)
+        }
+
+        fn from_provider(version: u8, provider: ProviderName) -> Self {
             let fields = solution(version)
                 .as_object()
                 .into_iter()
@@ -900,7 +899,7 @@ mod tests {
             Self {
                 answer: Ok(ProviderAnswer {
                     answer: SolveAnswer::Fields(fields),
-                    provider: ProviderName::Capsolver,
+                    provider,
                     task_id: Some("task".into()),
                     cost_usd: Some(0.0012),
                 }),
@@ -967,6 +966,7 @@ mod tests {
             &SolveCtx {
                 page,
                 backend,
+                payments: &Default::default(),
                 events: &events,
                 lease: &lease,
                 cancel,
@@ -1001,6 +1001,7 @@ mod tests {
                 assert_eq!(result.method, SolveMethod::Token);
                 assert_eq!(result.paid_tasks, 1);
                 assert_eq!(result.cost_usd, 0.0012);
+                assert_eq!(result.provider, Some(ProviderName::Capsolver));
                 assert_eq!(result.attempts.token, 1);
                 let calls = backend.calls.lock().unwrap_or_else(|e| e.into_inner());
                 assert_eq!(calls.as_slice(), [task(version)]);
@@ -1031,10 +1032,11 @@ mod tests {
             state.read["loading"] = json!(true);
             state.ready_at = Some(3);
         }
-        let backend = FakeBackend::new(3);
+        let backend = FakeBackend::from_provider(3, ProviderName::TwoCaptcha);
         let result = run(&page, &backend, false, &CancellationToken::new()).await?;
         assert_eq!(result.status, SolveStatus::TokenApplied);
         assert_eq!(result.paid_tasks, 1);
+        assert_eq!(result.provider, Some(ProviderName::TwoCaptcha));
         Ok(())
     }
 
@@ -1193,6 +1195,7 @@ mod tests {
                 let result = run(&page, &backend, false, &CancellationToken::new()).await?;
                 assert_eq!(result.reason, reason);
                 assert_eq!(result.paid_tasks, u32::from(charged));
+                assert_eq!(result.provider, charged.then_some(ProviderName::Capsolver));
                 assert!(page.state().applied.is_none());
             }
         }

@@ -474,7 +474,7 @@ mod tests {
             self.child
         }
 
-        fn delay(&self, method: &str) -> Duration {
+        fn delay(&self, method: &str, _params: &Value) -> Duration {
             if self.timeout && method == "DOMSnapshot.captureSnapshot" {
                 MARK_BUDGET + Duration::from_millis(1)
             } else {

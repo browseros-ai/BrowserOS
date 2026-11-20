@@ -10,6 +10,12 @@ const cases = [
     '6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe',
   ],
   [
+    'recaptcha-v2-invisible-bind',
+    'recaptcha_v2',
+    'g-recaptcha-response',
+    '6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe',
+  ],
+  [
     'turnstile-pass',
     'turnstile',
     'cf-turnstile-response',

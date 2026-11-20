@@ -116,6 +116,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
         reason: SolveReason::BrowserError,
         attempts: Attempts::default(),
         paid_tasks: 0,
+        provider: None,
         cost_usd: 0.0,
         callback_ran: false,
         message: String::new(),
@@ -423,17 +424,11 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
             .await)
     })
     .await?;
+    ctx.record_payment(result, &answer);
     let answer = match answer {
         Ok(answer) => answer,
-        Err(error) => {
-            result.paid_tasks = u32::from(error.charged);
-            return Ok(provider_failure(error));
-        }
+        Err(error) => return Ok(provider_failure(error)),
     };
-    result.cost_usd = answer
-        .cost_usd
-        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .unwrap_or(0.0);
     guard(ctx).await?;
     let SolveAnswer::Token(token) = answer.answer else {
         return Ok((
@@ -728,7 +723,7 @@ mod tests {
                     provider: Some(ProviderName::Capsolver),
                     kind,
                     message: "ERROR_KEY_DENIED_ACCESS; ERROR_ZERO_BALANCE".into(),
-                    charged: false,
+                    charged: kind == ProviderErrorKind::Unsolvable,
                 }),
                 tasks: Mutex::default(),
                 on_solve: None,
@@ -738,10 +733,14 @@ mod tests {
         }
 
         fn token() -> Self {
+            Self::token_from(ProviderName::Capsolver)
+        }
+
+        fn token_from(provider: ProviderName) -> Self {
             Self {
                 answer: Ok(ProviderAnswer {
                     answer: SolveAnswer::Token("test-token'\\\"".into()),
-                    provider: ProviderName::Capsolver,
+                    provider,
                     task_id: Some("task".into()),
                     cost_usd: Some(0.001),
                 }),
@@ -844,6 +843,7 @@ mod tests {
             &SolveCtx {
                 page,
                 backend,
+                payments: &Default::default(),
                 events: &events,
                 lease: &lease,
                 cancel,
@@ -879,8 +879,9 @@ mod tests {
                 state.callback_declared = callback_declared;
                 state.callback = callback_declared;
             }
-            let result = finish(&page, &FakeBackend::token()).await?;
+            let result = finish(&page, &FakeBackend::token_from(ProviderName::TwoCaptcha)).await?;
             assert_eq!(serde_json::to_value(result.status)?, "token_applied");
+            assert_eq!(result.provider, Some(ProviderName::TwoCaptcha));
             assert_eq!(serde_json::to_value(result.reason)?, "awaiting_submit");
             assert_eq!(result.method, SolveMethod::Token);
             assert_eq!(result.paid_tasks, 1);
@@ -1207,6 +1208,7 @@ mod tests {
         assert!(page.state().clicks.is_empty());
         assert!(backend.tasks().is_empty());
         assert_eq!(result.paid_tasks, 0);
+        assert_eq!(result.provider, None);
         Ok(())
     }
 
@@ -1302,6 +1304,7 @@ mod tests {
             assert_eq!(result.method, SolveMethod::Token);
             assert_eq!(result.paid_tasks, 1);
             assert_eq!(result.cost_usd, 0.001);
+            assert_eq!(result.provider, Some(ProviderName::Capsolver));
             assert_eq!(result.attempts.token, 1);
             let tasks = backend.tasks();
             assert!(matches!(&tasks[..], [SolveTask::TurnstileToken(params)]
@@ -1343,6 +1346,10 @@ mod tests {
             let result = finish(&FakePage::default(), &FakeBackend::error(kind)).await?;
             assert_eq!(result.status, SolveStatus::NeedsHuman);
             assert_eq!(result.reason, reason);
+            assert_eq!(
+                result.provider,
+                (kind == ProviderErrorKind::Unsolvable).then_some(ProviderName::Capsolver)
+            );
             if kind == ProviderErrorKind::Auth {
                 assert!(result.message.contains("ERROR_KEY_DENIED_ACCESS"));
             }
@@ -1702,6 +1709,7 @@ mod tests {
                 &SolveCtx {
                     page: &page,
                     backend: &backend,
+                    payments: &Default::default(),
                     events: &events,
                     lease: &lease,
                     cancel: &CancellationToken::new(),

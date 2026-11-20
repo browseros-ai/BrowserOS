@@ -83,6 +83,13 @@ pub trait CaptchaPage: Send + Sync {
     fn screenshot_clip(&self, rect: Rect)
     -> impl Future<Output = Result<String, PageError>> + Send;
     fn document(&self) -> impl Future<Output = Result<DocumentId, PageError>> + Send;
+    /// Cookie names applicable to this URL. Values stay inside the browser adapter.
+    fn cookie_names(
+        &self,
+        _url: &str,
+    ) -> impl Future<Output = Result<Vec<String>, PageError>> + Send {
+        std::future::ready(Err(bad("cookie names unavailable")))
+    }
     /// Viewport rect (top-level CSS px) of the first visible element matching a CSS selector
     /// inside `frame`, searching through closed shadow roots (CDP DOM.getDocument pierce).
     /// None when nothing visible matches.
@@ -409,6 +416,20 @@ impl CaptchaPage for LivePage {
             url: text(frame, "url")?,
             loader_id: text(frame, "loaderId")?,
         })
+    }
+    async fn cookie_names(&self, url: &str) -> Result<Vec<String>, PageError> {
+        let reply = send(
+            &self.top().await?,
+            "Network.getCookies",
+            json!({"urls": [url]}),
+        )
+        .await?;
+        reply["cookies"]
+            .as_array()
+            .ok_or_else(|| bad("Missing cookies"))?
+            .iter()
+            .map(|cookie| text(cookie, "name"))
+            .collect()
     }
     async fn query_rect_in_frame(
         &self,
@@ -861,6 +882,10 @@ mod tests {
                     json!({"result":{"value":if params["objectId"] == "node-42" && params["arguments"][0]["value"] == "input[type=checkbox]" {json!({"x":9,"y":20,"width":24,"height":24})} else {Value::Null}}})
                 }
                 "Page.captureScreenshot" => json!({"data":"iVBORw0KGgo="}),
+                "Network.getCookies" => json!({"cookies":[
+                    {"name":"session","value":"fixture-session"},
+                    {"name":"cf_clearance","value":"fixture-clearance"}
+                ]}),
                 "Page.enable"
                 | "DOM.enable"
                 | "Runtime.enable"
@@ -948,6 +973,17 @@ mod tests {
     }
 
     const DOM_PROBE: &str = "function(closedRoots, truncated) { /* dom-probe */ }";
+
+    #[tokio::test]
+    async fn cookie_names_only_reads_the_requested_url() -> TestResult {
+        let (native, page) = fixture();
+        let url = "http://fixture.test/checkout";
+        assert_eq!(page.cookie_names(url).await?, ["session", "cf_clearance"]);
+        let calls = native.calls("Network.getCookies")?;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, json!({"urls":[url]}));
+        Ok(())
+    }
 
     fn scanned(native: &Native, value: Value) -> Result<(), String> {
         native
@@ -1226,6 +1262,7 @@ mod tests {
         let ctx = SolveCtx {
             page: &page,
             backend: &backend,
+            payments: &Default::default(),
             events: &events,
             lease: &lease,
             cancel: &cancel,

@@ -405,19 +405,18 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             _=tokio::time::sleep_until(self.ctx.deadline)=>return Err(fail(SolveReason::DeadlineExceeded,"CAPTCHA deadline exceeded")),
             r=self.ctx.backend.solve(task,self.ctx.deadline,self.ctx.cancel)=>r,
         };
+        self.ctx.record_payment(&mut self.out, &result);
         match result {
             Ok(answer) => {
-                self.out.paid_tasks += 1;
-                if let Some(cost) = answer.cost_usd {
-                    if !cost.is_finite() || cost < 0. {
-                        return Err(provider_error("Invalid provider cost"));
-                    }
-                    self.out.cost_usd += cost;
+                if answer
+                    .cost_usd
+                    .is_some_and(|cost| !cost.is_finite() || cost < 0.)
+                {
+                    return Err(provider_error("Invalid provider cost"));
                 }
                 Ok(answer.answer)
             }
             Err(e) => {
-                self.out.paid_tasks += u32::from(e.charged);
                 let (status, reason) = match e.kind {
                     ProviderErrorKind::NotConfigured => {
                         (SolveStatus::NeedsHuman, SolveReason::NoProvider)
@@ -850,6 +849,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
             reason: SolveReason::BrowserError,
             attempts: Attempts::default(),
             paid_tasks: 0,
+            provider: None,
             cost_usd: 0.0,
             callback_ran: false,
             message: String::new(),
@@ -884,7 +884,7 @@ mod tests {
         sync::{Arc, Mutex},
         time::Duration,
     };
-    use tokio::time::Instant;
+    use tokio::{sync::Notify, time::Instant};
     use tokio_util::sync::CancellationToken;
 
     struct State {
@@ -1165,6 +1165,8 @@ mod tests {
         answers: Mutex<VecDeque<Result<ProviderAnswer, ProviderError>>>,
         tasks: Mutex<Vec<SolveTask>>,
         after: Option<Arc<Mutex<State>>>,
+        configured: bool,
+        pending_request: Option<Arc<Notify>>,
     }
     impl FakeBackend {
         fn new(answers: Vec<SolveAnswer>) -> Self {
@@ -1184,15 +1186,23 @@ mod tests {
                 ),
                 tasks: Mutex::new(vec![]),
                 after: None,
+                configured: true,
+                pending_request: None,
             }
         }
         fn tasks(&self) -> Vec<SolveTask> {
             self.tasks.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
+        fn push_reply(&mut self, reply: Result<ProviderAnswer, ProviderError>) {
+            self.answers
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .push_back(reply);
+        }
     }
     impl CaptchaBackend for FakeBackend {
         fn is_configured(&self) -> bool {
-            true
+            self.configured
         }
         async fn solve(
             &self,
@@ -1204,6 +1214,10 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(task.clone());
+            if let Some(started) = &self.pending_request {
+                started.notify_one();
+                return std::future::pending().await;
+            }
             if let Some(state) = &self.after {
                 let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                 s.navigated = true;
@@ -1251,6 +1265,7 @@ mod tests {
             &SolveCtx {
                 page,
                 backend,
+                payments: &Default::default(),
                 events: &events,
                 lease: &lease,
                 cancel,
@@ -1441,6 +1456,7 @@ mod tests {
         );
         assert_eq!(result.attempts.checkbox, 1);
         assert!(backend.tasks().is_empty());
+        assert_eq!(result.provider, None);
         let (x, y) = page.read(|s| s.clicks[0]);
         assert!((x - 64.).abs() < 3. && (y - 94.).abs() < 3.);
     }
@@ -1454,6 +1470,7 @@ mod tests {
             (SolveStatus::Solved, SolveReason::TilesAccepted)
         );
         assert_eq!((result.attempts.tile_rounds, result.paid_tasks), (1, 1));
+        assert_eq!(result.provider, Some(ProviderName::Capsolver));
         assert_eq!(result.cost_usd, 0.002);
         let clicks = page.read(|s| s.clicks.clone());
         for (actual, expected) in
@@ -1484,12 +1501,17 @@ mod tests {
     async fn tests_that_three_failed_rounds_fall_back_to_a_token() {
         let page = FakePage::new(true);
         page.edit(|s| s.rejected = 3);
-        let backend = FakeBackend::new(vec![
+        let mut backend = FakeBackend::new(vec![
             SolveAnswer::Tiles(vec![]),
             SolveAnswer::Tiles(vec![]),
             SolveAnswer::Tiles(vec![]),
-            SolveAnswer::Token("test-token".into()),
         ]);
+        backend.push_reply(Ok(ProviderAnswer {
+            answer: SolveAnswer::Token("test-token".into()),
+            provider: ProviderName::TwoCaptcha,
+            task_id: None,
+            cost_usd: Some(0.002),
+        }));
         let result = attempt(&page, &backend).await;
         assert_eq!(
             (result.status, result.reason),
@@ -1504,6 +1526,29 @@ mod tests {
             (3, 1, 4)
         );
         assert!((result.cost_usd - 0.008).abs() < 0.00001);
+        assert_eq!(result.provider, Some(ProviderName::TwoCaptcha));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_round_names_the_last_provider_that_charged() {
+        for (charged, expected) in [
+            (false, ProviderName::Capsolver),
+            (true, ProviderName::TwoCaptcha),
+        ] {
+            let page = FakePage::new(true);
+            page.edit(|s| s.rejected = 1);
+            let mut backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![])]);
+            backend.push_reply(Err(ProviderError {
+                provider: Some(ProviderName::TwoCaptcha),
+                kind: ProviderErrorKind::Unsolvable,
+                message: "round failed".into(),
+                charged,
+            }));
+            let result = attempt(&page, &backend).await;
+            assert_eq!(result.reason, SolveReason::ProviderError);
+            assert_eq!(result.paid_tasks, 1 + u32::from(charged));
+            assert_eq!(result.provider, Some(expected));
+        }
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_tokens_with_an_uninvoked_callback_remain_unconfirmed() {
@@ -1609,17 +1654,13 @@ mod tests {
             (ProviderErrorKind::Uncertain, SolveReason::ProviderError),
         ] {
             let page = FakePage::new(true);
-            let backend = FakeBackend::new(vec![]);
-            backend
-                .answers
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push_back(Err(ProviderError {
-                    provider: Some(ProviderName::Capsolver),
-                    kind,
-                    message: "ERROR_KEY_DENIED_ACCESS".into(),
-                    charged: false,
-                }));
+            let mut backend = FakeBackend::new(vec![]);
+            backend.push_reply(Err(ProviderError {
+                provider: Some(ProviderName::Capsolver),
+                kind,
+                message: "ERROR_KEY_DENIED_ACCESS".into(),
+                charged: false,
+            }));
             let result = attempt(&page, &backend).await;
             assert_eq!(
                 (result.status, result.reason),
@@ -1628,6 +1669,7 @@ mod tests {
             assert_eq!(page.read(|s| s.clicks.len()), 1);
             assert_eq!(backend.tasks().len(), 1);
             if kind == ProviderErrorKind::Auth {
+                assert_eq!(result.provider, None);
                 assert!(result.message.contains("ERROR_KEY_DENIED_ACCESS"));
             }
         }
@@ -1653,6 +1695,67 @@ mod tests {
             (SolveStatus::Cancelled, SolveReason::Navigated)
         );
         assert_eq!(page.read(|s| s.clicks.len()), 1);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaTiles(_)]
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_unconfigured_provider_receives_no_request() {
+        let page = FakePage::new(true);
+        let backend = FakeBackend {
+            configured: false,
+            ..FakeBackend::new(vec![])
+        };
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.reason, result.paid_tasks),
+            (SolveStatus::NeedsHuman, SolveReason::NoProvider, 0)
+        );
+        assert!(backend.tasks().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_interrupting_an_in_flight_request_never_starts_another()
+    -> anyhow::Result<()> {
+        for (status, reason) in [
+            (SolveStatus::Cancelled, SolveReason::CallerCancelled),
+            (SolveStatus::Failed, SolveReason::DeadlineExceeded),
+        ] {
+            let page = FakePage::new(true);
+            let started = Arc::new(Notify::new());
+            let backend = FakeBackend {
+                pending_request: Some(started.clone()),
+                ..FakeBackend::new(vec![])
+            };
+            let cancel = CancellationToken::new();
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let challenge = challenge();
+            let interrupt = async {
+                if reason == SolveReason::CallerCancelled {
+                    assert!(
+                        tokio::time::timeout_at(deadline, started.notified())
+                            .await
+                            .is_ok(),
+                        "the provider must receive a request before cancellation"
+                    );
+                    cancel.cancel();
+                }
+            };
+            let attempt = tokio::time::timeout_at(
+                deadline + Duration::from_secs(1),
+                run(&page, &backend, &challenge, &cancel, deadline),
+            );
+            let (result, ()) = tokio::join!(attempt, interrupt);
+            let result = result?;
+            assert_eq!((result.status, result.reason), (status, reason));
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::RecaptchaTiles(_)]
+            ));
+        }
+        Ok(())
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_cancel_and_deadline_stop_before_any_action() {

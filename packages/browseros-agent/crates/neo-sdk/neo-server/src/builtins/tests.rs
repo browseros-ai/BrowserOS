@@ -143,6 +143,7 @@ impl Harness {
         let deps = BuiltinDeps {
             solver,
             claims: Arc::clone(&claims),
+            settings: settings.clone(),
             playwright: Arc::clone(&playwright),
         };
         super::builtin_set(&mut registry, deps)?;
@@ -1731,6 +1732,7 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
         "claw-sdk's own line, not the crate's MCP wording"
     );
     assert_eq!(answer["paidTasks"], 0, "no provider was ever asked");
+    assert_eq!(answer.get("provider"), Some(&Value::Null));
     let row = harness.row(op).await?;
     assert_eq!(
         (row.outcome, row.delivery),
@@ -1980,7 +1982,7 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let mut builder = RegistryBuilder::default();
-    playwright_ops::playwright_ops(&mut builder, &harness.playwright)?;
+    playwright_ops::playwright_ops(&mut builder, &harness.playwright, &harness.settings)?;
     let listed = builder.build().listed();
     let mut names: Vec<&str> = Op::all()
         .map(Op::spec)
@@ -2465,8 +2467,9 @@ async fn a_reload_reloads_only_a_page_on_an_allowed_scheme() -> Result<(), Box<d
 async fn registering_the_playwright_ops_twice_fails_the_start() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let mut builder = RegistryBuilder::default();
-    playwright_ops::playwright_ops(&mut builder, &harness.playwright)?;
-    let again = playwright_ops::playwright_ops(&mut builder, &harness.playwright);
+    playwright_ops::playwright_ops(&mut builder, &harness.playwright, &harness.settings)?;
+    let again =
+        playwright_ops::playwright_ops(&mut builder, &harness.playwright, &harness.settings);
     assert!(
         matches!(again, Err(RegistryError::Duplicate(_))),
         "the registry reports a duplicate instead of keeping two methods"
@@ -2800,7 +2803,7 @@ async fn a_rule_that_refuses_the_crates_own_recheck_is_what_the_script_sees()
     let page = harness.owner_tab("https://example.com/").await?;
     let door = harness.dispatcher_with(
         vec![Arc::new(TakenWhileWaiting::default()) as Arc<dyn Policy>],
-        |registry| playwright_ops::playwright_ops(registry, &harness.playwright),
+        |registry| playwright_ops::playwright_ops(registry, &harness.playwright, &harness.settings),
     )?;
     let (run, _guard) = harness.run()?;
     let reload = json!({

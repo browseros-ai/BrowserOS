@@ -23,8 +23,8 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::input::{
-    BurstFailure, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton, PageInput, Point,
-    Typed, UnknownKey,
+    BurstFailure, ClickCursor, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton,
+    PageInput, Point, Typed, UnknownKey,
 };
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -254,7 +254,7 @@ async fn keyboard_down(
     scope: &OpScope<'_>,
     input: KeyInput,
 ) -> Result<Nothing, PlaywrightError> {
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         devices.keyboard.down(&input.key.0)
     })
     .await
@@ -265,7 +265,7 @@ async fn keyboard_up(
     scope: &OpScope<'_>,
     input: KeyInput,
 ) -> Result<Nothing, PlaywrightError> {
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         devices.keyboard.up(&input.key.0)
     })
     .await
@@ -277,7 +277,7 @@ async fn keyboard_press(
     input: PressInput,
 ) -> Result<Nothing, PlaywrightError> {
     let delay = millis(input.delay);
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         devices.keyboard.press(&input.key.0, delay)
     })
     .await
@@ -289,7 +289,7 @@ async fn keyboard_type(
     input: TypeInput,
 ) -> Result<Nothing, PlaywrightError> {
     let delay = millis(input.delay);
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         Ok(devices.keyboard.type_text(&input.text.0, delay))
     })
     .await
@@ -300,7 +300,7 @@ async fn keyboard_insert_text(
     scope: &OpScope<'_>,
     input: InsertTextInput,
 ) -> Result<Nothing, PlaywrightError> {
-    burst(pw, scope, &input.page, |_| {
+    burst(pw, scope, &input.page, None, |_| {
         Ok(Keyboard::insert_text(&input.text.0))
     })
     .await
@@ -316,7 +316,7 @@ async fn mouse_move(
         y: input.y,
     };
     let steps = input.steps.unwrap_or(1);
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.move_to(to, steps, held))
     })
@@ -330,7 +330,7 @@ async fn mouse_down(
 ) -> Result<Nothing, PlaywrightError> {
     let pressed = button(input.button);
     let count = input.click_count.unwrap_or(1);
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.down(pressed, count, held))
     })
@@ -344,7 +344,7 @@ async fn mouse_up(
 ) -> Result<Nothing, PlaywrightError> {
     let pressed = button(input.button);
     let count = input.click_count.unwrap_or(1);
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.up(pressed, count, held))
     })
@@ -367,7 +367,7 @@ async fn mouse_click(
         x: input.x,
         y: input.y,
     };
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, Some(at), |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.click(at, options, held))
     })
@@ -379,7 +379,7 @@ async fn mouse_wheel(
     scope: &OpScope<'_>,
     input: WheelInput,
 ) -> Result<Nothing, PlaywrightError> {
-    burst(pw, scope, &input.page, |devices| {
+    burst(pw, scope, &input.page, None, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.wheel(input.delta_x, input.delta_y, held))
     })
@@ -392,6 +392,7 @@ async fn burst(
     pw: &Playwright,
     scope: &OpScope<'_>,
     page: &PageRef,
+    click: Option<Point>,
     build: impl FnOnce(&mut InputDevices) -> Result<Vec<InputStep>, UnknownKey>,
 ) -> Result<(), PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, page).await?;
@@ -400,6 +401,14 @@ async fn burst(
     let mut planned = input.plan();
     let steps = build(&mut planned)
         .map_err(|unknown| scope.fail(ErrorCode::InvalidInput, &unknown.to_string()))?;
+    if let Some(at) = click.filter(|_| scope.draws_cursor()) {
+        let root = page.root_session();
+        let mut cursor = ClickCursor::new(true);
+        if cursor.needs_glide(scope, at) {
+            cursor.glide(scope, &root, at).await?;
+        }
+        cursor.ripple(scope, &root, at).await?;
+    }
     let sent = scope.send_effect()?;
     input
         .send_planned(&sent, scope, planned, steps)

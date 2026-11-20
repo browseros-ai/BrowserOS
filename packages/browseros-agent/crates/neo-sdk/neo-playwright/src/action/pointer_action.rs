@@ -37,8 +37,8 @@ use crate::action::requested_navigations::{NavigationCut, RequestedNavigations};
 use crate::action::subject::Subject;
 use crate::backoff::{Backoff, STABLE_GAP};
 use crate::input::{
-    self, BurstFailure, ClickOptions, InputDevices, InputStep, Modifiers, MouseButton, PageInput,
-    Point as PagePoint, UnknownKey,
+    self, BurstFailure, ClickCursor, ClickOptions, InputDevices, InputStep, Modifiers, MouseButton,
+    PageInput, Point as PagePoint, UnknownKey,
 };
 use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
@@ -80,8 +80,14 @@ const SCROLL_ROTATION: [ScrollPlan; 4] = [
 
 /// One pointer action: which of upstream's actions it is and the input it plans.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "force, trial and scroll are independent Playwright options; cursor distinguishes an explicit click from checking"
+)]
 pub(crate) struct PointerAction {
     pub(crate) kind: PointerKind,
+    /// Only explicit clicks animate, even though checking a box also presses the mouse.
+    pub(crate) cursor: bool,
     pub(crate) perform: Perform,
     pub(crate) wait_after: WaitAfter,
     /// Skips the states, stability and every hit test, as upstream's `force`.
@@ -260,6 +266,7 @@ pub(crate) struct PointerRunner<'a> {
     /// The cover's facts could not be read when the action would have stopped early: it keeps
     /// the whole wait, since the timing never comes before the facts.
     early_unread: bool,
+    cursor: ClickCursor,
 }
 
 impl<'a> PointerRunner<'a> {
@@ -283,6 +290,7 @@ impl<'a> PointerRunner<'a> {
             wrapper_before: None,
             early_answer: None,
             early_unread: false,
+            cursor: ClickCursor::default(),
         }
     }
 
@@ -320,6 +328,7 @@ impl<'a> PointerRunner<'a> {
         action: &PointerAction,
         drag: Option<&mut Drag>,
     ) -> Result<(), PlaywrightError> {
+        self.cursor = ClickCursor::new(action.cursor && !action.trial && self.scope.draws_cursor());
         let ran = self.attempts(action, drag).await;
         self.answered(action, ran).await
     }
@@ -563,11 +572,14 @@ impl<'a> PointerRunner<'a> {
         let inner = Backoff::inner();
         // The attempt's lines wait until the element is seen (`attempt_log.rs`).
         let mut attempt = AttemptLog::new(self.scope, pin.is_some());
-        for retry in 0.. {
+        let mut glide_rechecks = 0;
+        for pass in 0.. {
+            // A glide needs fresh geometry, not the next scroll alignment and retry delay.
+            let retry = pass - glide_rechecks;
             let wait = inner.wait(retry);
-            if retry == 0 {
+            if pass == 0 {
                 attempt.log(format!("attempting {} action{trial}", req.name));
-            } else {
+            } else if retry > 0 {
                 attempt.log(format!("retrying {} action{trial}", req.name));
                 if !wait.is_zero() {
                     attempt.log(format!("  waiting {}ms", wait.as_millis()));
@@ -682,7 +694,7 @@ impl<'a> PointerRunner<'a> {
                 },
                 None => own.insert(self.hold().await?),
             };
-            let (page_point, browser_mapped) =
+            let (mut page_point, browser_mapped) =
                 match self.place(located, pin, measured, action).await? {
                     Placed::At {
                         point,
@@ -798,7 +810,8 @@ impl<'a> PointerRunner<'a> {
                                 }
                             };
                             planned = input.plan();
-                            burst = self::burst(&mut planned, moved, action)?;
+                            page_point = moved;
+                            burst = self::burst(&mut planned, page_point, action)?;
                         }
                         self.covers.cleared();
                         own_note = press.as_ref().map(own_line);
@@ -840,6 +853,30 @@ impl<'a> PointerRunner<'a> {
                     Called::Expired => return Err(self.timed_out()),
                 }
                 self.scope.log(format!("  element is {}", req.waits_for()));
+            }
+            // Arming checks the target's own cover and can redirect a label press. A glide
+            // uses that accepted point, then the next pass checks the page again before input.
+            if self.cursor.needs_glide(self.scope, page_point) {
+                // A verdict stops this specific interceptor. Wait for it before releasing the
+                // input lock so the owner's input can pass freely during travel.
+                if let Some(mut armed) = guard {
+                    let stopped = self
+                        .scope
+                        .within(armed.verdict(self.scope, self.page))
+                        .await;
+                    match stopped {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(ProbeFailure::Gone(_))) => {
+                            return self.subject.lost(located).map(|()| Inner::Reresolve);
+                        }
+                        Ok(Err(failure)) => return Err(resolve::failed(self.scope, failure)),
+                        Err(_expired) => return Err(self.timed_out()),
+                    }
+                }
+                drop(own);
+                self.cursor.glide(self.scope, &root, page_point).await?;
+                glide_rechecks += 1;
+                continue;
             }
             self.scope.log("  scrolling into view if needed".to_owned());
             self.scope.log("  done scrolling".to_owned());
@@ -900,6 +937,7 @@ impl<'a> PointerRunner<'a> {
                     Called::Expired => return Err(self.timed_out()),
                 },
             };
+            self.cursor.ripple(self.scope, &root, page_point).await?;
             let sent = self.scope.send_effect()?;
             let dialogs_from = self.pw.events().head();
             // Every action that reads its verdict watches the navigations its input requests:

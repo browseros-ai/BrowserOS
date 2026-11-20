@@ -138,7 +138,7 @@ pub fn solve_captcha_tool() -> Tool {
     ]);
     let output = json!({
         "type":"object",
-        "required":["status","type","method","reason","requestId","page","durationMs","attempts","paidTasks","costUsd","message","events"],
+        "required":["status","type","method","reason","requestId","page","durationMs","attempts","paidTasks","provider","costUsd","message","events"],
         "properties": {
             "status":{"type":"string","enum":["solved","token_applied","already_clear","unsupported","failed","cancelled","needs_human"]},
             "type":{"type":["string","null"],"enum":["recaptcha_v2","recaptcha_v3","turnstile","cloudflare_challenge","hcaptcha","geetest","aws_waf","arkose","unknown",null]},
@@ -150,6 +150,7 @@ pub fn solve_captcha_tool() -> Tool {
             "attempts":{"type":"object","required":["checkbox","tileRounds","token"],"properties":{
                 "checkbox":{"type":"integer","minimum":0},"tileRounds":{"type":"integer","minimum":0},"token":{"type":"integer","minimum":0}}},
             "paidTasks":{"type":"integer","minimum":0},
+            "provider":{"type":["string","null"],"enum":["capsolver","2captcha",null]},
             "costUsd":{"type":"number","minimum":0},
             "message":{"type":"string"},
             "events":{"type":"array","items":{"type":"object","required":["event","requestId","page","atMs","data"],"properties":{
@@ -233,6 +234,10 @@ mod tests {
     fn tests_that_output_schema_accepts_token_applied() -> anyhow::Result<()> {
         let tool = solve_captcha_tool();
         let output = serde_json::to_value(tool.output_schema)?;
+        assert_eq!(
+            output.pointer("/properties/provider/enum"),
+            Some(&json!(["capsolver", "2captcha", null]))
+        );
         for (pointer, value) in [
             ("/properties/status/enum", "token_applied"),
             ("/properties/reason/enum", "awaiting_submit"),

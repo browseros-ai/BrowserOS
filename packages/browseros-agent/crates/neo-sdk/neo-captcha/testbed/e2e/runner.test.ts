@@ -303,8 +303,8 @@ for (const server of ['sdk', 'claw-server'] as const) {
     expect(records.filter((r) => r.outcome !== 'PASS')).toEqual([])
     expect(exitCode(records)).toBe(0)
     expect(summarize(records)).toMatchObject({
-      pass: 21,
-      siteAccepted: 6,
+      pass: 22,
+      siteAccepted: 7,
       deliveredOnly: 0,
       detected: 15,
       paidTasks: 0,
@@ -423,14 +423,14 @@ test('tests that an absent SDK solver passes every page only when absence is exp
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
   expect(summarize(expected.records)).toMatchObject({
-    pass: 21,
+    pass: 22,
     siteAccepted: 0,
     deliveredOnly: 0,
     detected: 0,
-    absent: 21,
+    absent: 22,
   })
   expect(renderSummary(expected.records)).toContain(
-    'solver absent as expected: 21',
+    'solver absent as expected: 22',
   )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),
@@ -652,4 +652,62 @@ test('tests that the SDK submits by clicking the form button inside the page', a
   const submit = String(calls.find((call) => call.step === 'submit')?.args.code)
   expect(submit).toContain('return await page.evaluate(() => {')
   expect(submit).toContain('button.click()')
+})
+
+test('tests that a trigger runs before the solve and a reading is recorded without deciding the outcome', async () => {
+  const page: CaptchaPage = {
+    ...solvePage,
+    trigger: { click: '#submit', until: 'true' },
+    reading: { label: 'score', expression: 'null', waitMs: 20 },
+  }
+  for (const server of ['sdk', 'claw-server'] as Server[]) {
+    const { records, calls } = await run('contract', { server, pages: [page] })
+    expect(records[0]).toMatchObject({
+      triggered: true,
+      reading: { label: 'score', value: null },
+      outcome: 'PASS',
+      note: 'score=none',
+    })
+    if (server === 'sdk')
+      expect(calls.map((call) => call.step)).toEqual([
+        'open',
+        'goto',
+        'ready',
+        'trigger',
+        'ready',
+        'solve',
+        'observe',
+        'submit',
+        'site',
+        'read',
+        'close',
+      ])
+  }
+})
+
+test('tests that a claw-server reading that looks like a number keeps its text', async () => {
+  const page: CaptchaPage = {
+    ...solvePage,
+    reading: { label: 'score', expression: "'0.9'", waitMs: 20 },
+  }
+  const { records } = await run('contract', {
+    server: 'claw-server',
+    pages: [page],
+  })
+  expect(records[0]).toMatchObject({
+    reading: { label: 'score', value: '0.9' },
+  })
+})
+
+test('tests that an absence run never clicks a page trigger', async () => {
+  const page: CaptchaPage = {
+    ...solvePage,
+    trigger: { click: '#missing', until: 'true' },
+  }
+  const { records, calls } = await run('no-tool', {
+    pages: [page],
+    expectToolMissing: true,
+  })
+  expect(records[0]).toMatchObject({ triggered: null, outcome: 'PASS' })
+  expect(calls.some((call) => call.step === 'trigger')).toBe(false)
 })

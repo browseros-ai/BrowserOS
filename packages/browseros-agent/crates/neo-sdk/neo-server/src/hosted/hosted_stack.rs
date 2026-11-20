@@ -81,6 +81,7 @@ impl HostedStack {
             BuiltinDeps {
                 solver,
                 claims: Arc::clone(&claims),
+                settings: settings.clone(),
                 playwright: Arc::clone(&playwright),
             },
         )

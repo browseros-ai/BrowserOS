@@ -21,6 +21,7 @@ fn defaults() -> Value {
         "tabs": { "idleCloseSeconds": 1800, "scope": "task" },
         "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
+        "input": { "cursor": "off" },
         "fill": { "pictures": "allowed" },
     })
 }
@@ -65,6 +66,35 @@ async fn get_on_a_new_folder_answers_the_defaults() -> TestResult {
         reply.body
     );
     assert!(!harness.settings_file().exists(), "a read saves nothing");
+    Ok(())
+}
+
+#[tokio::test]
+async fn cursor_changes_apply_live_and_survive_restart() -> TestResult {
+    let harness = harness().await?;
+    let on = r#"{"input":{"cursor":"on"}}"#;
+    for method in [Method::PUT, Method::PATCH] {
+        assert!(!harness.settings.draws_cursor());
+        let reply = harness.call(method, "/v1/settings", Body::from(on)).await?;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.body["settings"]["input"]["cursor"], "on");
+        assert!(harness.settings.draws_cursor());
+
+        let unknown = harness.patch(r#"{"input":{"cursor":"future"}}"#).await?;
+        assert_eq!(unknown.body["unknownValues"], json!(["input.cursor"]));
+        assert!(harness.settings.draws_cursor());
+        let file = harness.settings_file();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(&file)?)?,
+            serde_json::from_str::<Value>(on)?
+        );
+        assert!(
+            Settings::load(file, Default::default())
+                .await
+                .draws_cursor()
+        );
+        harness.put("{}").await?;
+    }
     Ok(())
 }
 
@@ -156,6 +186,7 @@ async fn a_partial_startup_file_reports_sorted_names_without_echoing_values() ->
             "tabs": { "idleCloseSeconds": 300, "scope": "task" },
             "trace": { "retentionSeconds": 604_800, "screenshots": "off", "valueBytes": 0, "values": "off" },
             "files": { "readDirs": [] },
+            "input": { "cursor": "off" },
             "fill": { "pictures": "allowed" }
         }),
         "good siblings apply and every unusable setting keeps its existing fallback"
@@ -236,6 +267,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         "tabs": { "idleCloseSeconds": 300, "scope": "task" },
         "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
+        "input": { "cursor": "off" },
         "fill": { "pictures": "allowed" },
     });
     assert_eq!(put.status, StatusCode::OK, "{}", put.body);
@@ -259,6 +291,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
             "tabs": { "idleCloseSeconds": 600, "scope": "task" },
             "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
+            "input": { "cursor": "off" },
             "fill": { "pictures": "allowed" },
         }),
         "PATCH keeps what it does not name"
@@ -302,6 +335,7 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
             "tabs": { "idleCloseSeconds": 300, "scope": "task" },
             "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
+            "input": { "cursor": "off" },
             "fill": { "pictures": "allowed" },
         }),
         "the known settings in the same call still apply"

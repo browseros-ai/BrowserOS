@@ -118,6 +118,8 @@ declare global {
       message: string
       durationMs: number
       paidTasks: number
+      /** The last provider that charged for this solve, including a failed task. Free solves return null. */
+      provider: 'capsolver' | '2captcha' | null
     }>
   }
 

@@ -962,7 +962,10 @@ mod tests {
                 ProviderErrorKind::BadRequest,
             ),
         ] {
-            let mock = mock_server(vec![json!({"errorId":1,"errorCode":code,"errorDescription":"secret-test-key image-body answer-token"})]).await?;
+            let mock = mock_server(vec![json!({
+                "errorId":1, "errorCode":code,
+                "errorDescription":"secret-test-key image-body answer-token pagedata=private-page-data"
+            })]).await?;
             let error = solve(&mock.client, &token_task(false))
                 .await
                 .err()
@@ -970,7 +973,12 @@ mod tests {
             assert_eq!(error.kind, kind);
             assert!(error.message.contains(code));
             assert!(!error.charged);
-            for secret in ["secret-test-key", "image-body", "answer-token"] {
+            for secret in [
+                "secret-test-key",
+                "image-body",
+                "answer-token",
+                "private-page-data",
+            ] {
                 assert!(!format!("{error:?} {error} {:?}", mock.client).contains(secret));
             }
             assert_eq!(mock.state.calls.lock().await.len(), 1);
