@@ -48,6 +48,10 @@ pub struct Globals {
     // workspace and would unify onto claw-server's build.
     #[arg(long, global = true, value_name = "NAME")]
     pub agent: Option<String>,
+    /// Print link addresses whole. By default a link's [url=...] keeps its origin and path and
+    /// drops the query string, which is mostly tracking.
+    #[arg(long, global = true)]
+    pub urls: bool,
     /// Wrap the result in a JSON envelope on stdout.
     #[arg(long, global = true)]
     pub json: bool,

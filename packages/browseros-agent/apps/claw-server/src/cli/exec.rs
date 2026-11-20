@@ -300,6 +300,9 @@ async fn run_tool(
         );
     }
     output.text = shape::cli_hints(&output.text, saved.as_ref());
+    if !globals.urls && shape::carries_link_urls(plan.tool) {
+        output.text = shape::short_link_urls(&output.text);
+    }
     if !output.notices.is_empty() {
         let tips = std::mem::take(&mut output.notices);
         let mut fresh = Vec::new();

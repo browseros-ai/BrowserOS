@@ -115,6 +115,72 @@ pub fn cli_hints(text: &str, saved: Option<&(String, Option<String>)>) -> String
     })
 }
 
+/// How core marks a link's address on a snapshot line: after the link's ref, JSON-quoted. A
+/// page cannot write it, since the names and values it controls are quoted with escapes.
+const URL_OPEN: &str = " [url=\"";
+const GREP_TRUNCATED: &str = "... [truncated]";
+
+/// The tools whose text is snapshot lines. A script's return value, a read and a saved part
+/// read back on purpose are printed as they are.
+#[must_use]
+pub fn carries_link_urls(tool: &str) -> bool {
+    !matches!(tool, "run" | "evaluate_in_page" | "read" | "read_output")
+}
+
+/// Every link address cut to its origin and path. Tracking queries made up most of the bytes of
+/// a search results page, three per product, and the path is what tells links apart.
+#[must_use]
+pub fn short_link_urls(text: &str) -> String {
+    if !text.contains(URL_OPEN) {
+        return text.to_string();
+    }
+    map_lines(text, |line, _| Some(short_link_url(line)))
+}
+
+fn short_link_url(line: &str) -> String {
+    let Some(at) = line.find(URL_OPEN) else {
+        return line.to_string();
+    };
+    if !line[..at].contains("link") {
+        return line.to_string();
+    }
+    let start = at + URL_OPEN.len();
+    let rest = &line[start..];
+    let mut escaped = false;
+    let mut close = None;
+    for (index, ch) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => {
+                close = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let (url, tail) = match close {
+        Some(index) => (&rest[..index], rest[index..].to_string()),
+        // grep cut the line inside the address, so what followed it is already gone.
+        None => {
+            let end = rest.find(GREP_TRUNCATED).unwrap_or(rest.len());
+            (&rest[..end], format!("\"] {}", &GREP_TRUNCATED[4..]))
+        }
+    };
+    let Some(cut) = url.find(['?', '#']) else {
+        return line.to_string();
+    };
+    format!(
+        "{}{}{}...{tail}",
+        &line[..start],
+        &url[..cut],
+        &url[cut..=cut]
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +280,51 @@ mod tests {
                 ("out".to_string(), false),
             ]
         );
+    }
+
+    const AMAZON_LINE: &str = "  - link \"9,515 ratings\" [ref=e107] [url=\"https://www.amazon.in/sspa/click?ie=UTF8&spc=MTo1OTU1&url=%2FSensodyne-Multi-Pack%2Fdp%2FB0C%3Fpsc%3D1#customerReviews\"]";
+
+    #[test]
+    fn a_link_keeps_its_origin_and_path_and_drops_the_query() {
+        assert_eq!(
+            short_link_urls(AMAZON_LINE),
+            "  - link \"9,515 ratings\" [ref=e107] [url=\"https://www.amazon.in/sspa/click?...\"]"
+        );
+    }
+
+    #[test]
+    fn a_link_with_a_value_keeps_it() {
+        let line = "- link \"Go\" [ref=e1] [url=\"https://x.test/a?b=c\"]: \"v\"";
+        assert_eq!(
+            short_link_urls(line),
+            "- link \"Go\" [ref=e1] [url=\"https://x.test/a?...\"]: \"v\""
+        );
+    }
+
+    #[test]
+    fn an_address_grep_cut_short_is_closed_and_still_marked_truncated() {
+        let line = "- link \"x\" [ref=e3] [url=\"https://a.test/p?q=1234567... [truncated]";
+        assert_eq!(
+            short_link_urls(line),
+            "- link \"x\" [ref=e3] [url=\"https://a.test/p?...\"] [truncated]"
+        );
+    }
+
+    #[test]
+    fn a_link_with_no_query_and_text_that_is_not_a_link_are_left_alone() {
+        for line in [
+            "- link \"Home\" [ref=e1] [url=\"https://x.test/home\"]",
+            "- heading \"About [url=\\\"a?b\\\"]\" [level=2]",
+            "price [url=\"https://x.test/?a\"] in visible text",
+        ] {
+            assert_eq!(short_link_urls(line), line);
+        }
+    }
+
+    #[test]
+    fn a_result_page_of_tracking_links_shrinks_to_a_fraction() {
+        let page = AMAZON_LINE.repeat(29);
+        let page = page.replace("]  - ", "]\n  - ");
+        assert!(short_link_urls(&page).len() * 2 < page.len());
     }
 }
