@@ -24,28 +24,21 @@ const TIMEOUT_MS = 5_000
 const MAX_TEXT_BYTES = 4 * 1024 * 1024
 
 export interface Poller {
-  /** 'absent' once Neo answered 404: this image has no metrics. */
-  state(): 'polling' | 'absent' | 'stopped'
   stop(): Promise<void>
 }
 
 export function pollMetrics(deps: PollerDeps): Poller {
   const stopping = new AbortController()
-  let state: 'polling' | 'absent' | 'stopped' = 'polling'
   const loop = (async () => {
     while (!stopping.signal.aborted) {
       const delay = await scrapeOnce(deps, stopping.signal)
-      if (delay === null) {
-        state = 'absent'
-        return
-      }
+      // 404: this image has no metrics; stop for the life of the process.
+      if (delay === null) return
       await sleep(delay, stopping.signal)
     }
   })()
   return {
-    state: () => state,
     async stop() {
-      if (state === 'polling') state = 'stopped'
       stopping.abort()
       await loop
     },

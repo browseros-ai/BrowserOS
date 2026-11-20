@@ -164,6 +164,43 @@ describe('buildTrace', () => {
     expect(trace?.spans[0]).toMatchObject({ name: 'neo.run', opId: null })
   })
 
+  test("a trace's failed spans are the operations whose outcome is error: a cancelled op is not one (D11), nor the run", () => {
+    const store = new SpanStore()
+    const traces = fixtureTraces(RUN)
+    const spans = traces.resourceSpans[0]?.scopeSpans[0]?.spans ?? []
+    // Neo's internal long poll ends cancelled in every run, with its span's status ERROR.
+    const cancelled = spans.find((span) =>
+      span.attributes.some(
+        (attribute) =>
+          'stringValue' in attribute.value &&
+          attribute.value.stringValue === 'page.title',
+      ),
+    ) as {
+      attributes: Array<{ key: string; value: Record<string, string> }>
+      status: unknown
+    }
+    cancelled.attributes = cancelled.attributes.map((attribute) =>
+      attribute.key === 'neo.op.outcome'
+        ? { key: attribute.key, value: { stringValue: 'cancelled' } }
+        : attribute,
+    )
+    cancelled.attributes.push(
+      { key: 'neo.error.owner', value: { stringValue: 'host' } },
+      { key: 'neo.error.code', value: { stringValue: 'cancelled' } },
+    )
+    cancelled.status = { code: 2, message: 'the caller went away' }
+    // A run that failed: its own status, not a failed span.
+    const run = spans.find((span) => span.name === 'neo.run') as {
+      status: unknown
+    }
+    run.status = { code: 2, message: 'run failed' }
+    store.add(decodeSpans(traces).items)
+    const trace = store.get('r1') && buildTrace(store.get('r1') as never)
+    expect(
+      trace?.spans.filter((span) => span.error).map((span) => span.opId),
+    ).toEqual(['r1.7'])
+  })
+
   test('before neo.run arrives, operations still sit one level in, and the trace is not complete', () => {
     const trace = buildTrace(filed([1, 2]))
     expect(trace?.complete).toBe(false)

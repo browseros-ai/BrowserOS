@@ -16,14 +16,19 @@
 //! verdict of `None` is a run dropped unfinished: it records as `error` / `neo` /
 //! `internal_error`, and in-flight comes down all the same.
 //!
-//! `neo_errors_total` counts each failure once, where it is attributed (wire-contract.md): every
-//! counted run keeps the codes its ops reported ([`RunErrors`]), shared with its ops through
-//! [`PipelineParent`]. That state may outlive the run, because ops aborted at the run's teardown
-//! settle after it ended.
+//! `neo_errors_total` counts each failure once, where it is attributed (wire-contract.md). An op
+//! counts only when it failed on its own (outcome `error`, decision D10): a cancelled op was cut
+//! short by what stopped its run (the deadline, the caller leaving, shutdown, the script returning
+//! first), and the run's end counts that once, however many ops it cut. Every counted run keeps
+//! the codes its failed ops reported ([`RunErrors`]), shared with its ops through
+//! [`PipelineParent`], so a run that fails because an op did is not counted again. That state may
+//! outlive the run: an op a crash cut short settles after its run ended.
 //!
-//! Shutdown stops both providers on a thread of its own and awaits it for at most the budget: the
-//! periodic reader's own shutdown ignores its timeout (5 s), and a `spawn_blocking` task would hold
-//! the server's runtime past exit. A late thread is abandoned, never joined.
+//! Shutdown first arms the transport's deadline, a little short of the budget, then stops both
+//! providers on a thread of its own and awaits it for at most the budget: the periodic reader's
+//! own shutdown ignores its timeout (5 s), and a `spawn_blocking` task would hold the server's
+//! runtime past exit. A late thread is abandoned, never joined. A pipeline dropped without
+//! shutdown arms the deadline at zero, so the providers' own drops cannot wait on a collector.
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread;
@@ -45,7 +50,9 @@ use tokio::sync::oneshot;
 use tokio::time;
 
 use crate::instruments::{CodeLabel, Instruments, OpLabel, OpenTabs};
-use crate::label::{CloseReason, ErrorCode, ErrorLabel, ErrorOwner, RunStatus, TabOrigin};
+use crate::label::{
+    CloseReason, ErrorCode, ErrorLabel, ErrorOwner, OpOutcome, RunStatus, TabOrigin,
+};
 use crate::otlp::{self, Push};
 #[cfg(feature = "test-support")]
 use crate::probe::Probe;
@@ -64,6 +71,11 @@ const DROPPED: RunVerdict = RunVerdict {
         code: ErrorCode::new("internal_error"),
     }),
 };
+
+/// How long before the caller's shutdown budget ends the transport cuts every export: the time
+/// the SDK's export threads get to come back and report once cut, so a stop that the cut ended in
+/// time reports as done rather than late.
+const STOP_MARGIN: Duration = Duration::from_millis(50);
 
 /// The providers, instruments, readers and push door one process records into.
 #[derive(Debug)]
@@ -119,10 +131,10 @@ enum RunErrors {
 }
 
 impl RunErrors {
-    /// An op of the run failed with `code`: whether `neo_errors_total` counts it. While the run
-    /// is open, every op failure counts and its code is remembered. After the run ended (an op
-    /// aborted at its teardown settles late) it counts unless it is the very failure the run
-    /// ended with, which the run's end already accounted for.
+    /// An op of the run failed on its own with `code`: whether `neo_errors_total` counts it.
+    /// While the run is open, every such failure counts and its code is remembered. After the
+    /// run ended (an op settling late) it counts unless it is the very failure the run ended
+    /// with, which the run's end already accounted for.
     fn op_failed(&mut self, code: ErrorCode) -> bool {
         match self {
             Self::Open { reported } => {
@@ -205,21 +217,15 @@ struct Providers {
 impl Providers {
     /// Stops both providers, the span side on a second thread so a collector that holds the last
     /// span batch does not eat the metrics' share of `budget`, or the other way round. Each
-    /// exports what it still holds.
+    /// exports what it still holds, by the deadline the caller armed.
     fn shut_down(self, budget: Duration) -> Result<(), TelemetryError> {
         // `transport` is dropped when this returns, after both shutdowns: the exporters send
         // their last batches through it.
         let Self {
             meters,
             tracers,
-            transport,
+            transport: _transport,
         } = self;
-        // First: from here every export, in flight or final, ends within `budget` whatever the
-        // collector does, so both shutdowns below come back in time. Without it a hung collector
-        // holds the periodic reader for the 5 s its own shutdown waits, whatever `budget` says.
-        if let Some(transport) = &transport {
-            transport.arm_deadline(budget);
-        }
         let (spans, metrics) = thread::scope(|scope| {
             let spans = tracers.map(|tracers| {
                 thread::Builder::new()
@@ -386,9 +392,15 @@ impl Pipeline {
             took,
         );
         if let Some(error) = op.error {
-            // An internal run has no end that could count the failure again: it always counts.
-            let counted =
-                parent.is_none_or(|parent| parent.shared.lock_errors().op_failed(error.code));
+            // A cancelled op's failure is what stopped its run, which the run's end counts once
+            // (D10): it stays on the op's span and its `status="cancelled"` count only. An
+            // internal run has no end that could count a failure again: its ops' always count.
+            let failed = match op.outcome {
+                OpOutcome::Error => true,
+                OpOutcome::Ok | OpOutcome::Cancelled => false,
+            };
+            let counted = failed
+                && parent.is_none_or(|parent| parent.shared.lock_errors().op_failed(error.code));
             if counted {
                 self.instruments
                     .error_counted(error.owner, self.code_label(error.code));
@@ -442,6 +454,13 @@ impl Pipeline {
         else {
             return Ok(());
         };
+        // Before the wait below starts: from here every export, in flight or final, ends a
+        // margin short of `budget` whatever the collector does, so the SDK's threads come back
+        // and report in time. Unarmed, a hung collector would hold the periodic reader for the
+        // 5 s its own shutdown waits.
+        if let Some(transport) = &providers.transport {
+            transport.arm_deadline(budget.saturating_sub(STOP_MARGIN));
+        }
         let (answer, answered) = oneshot::channel();
         thread::Builder::new()
             .name("neo-telemetry-stop".to_owned())
@@ -463,6 +482,30 @@ impl Pipeline {
 
     fn code_label(&self, code: ErrorCode) -> CodeLabel {
         CodeLabel::of(self.vocabulary.get(), code)
+    }
+}
+
+impl Drop for Pipeline {
+    /// A pipeline dropped without [`Pipeline::shutdown`] (startup failed after
+    /// `Telemetry::new`, say): the providers' own drops shut the SDK down and wait for its export
+    /// threads, which a hung collector would hold about 5 s each. Arming the deadline at zero
+    /// first cuts every request at once, so dropping never waits on a collector.
+    fn drop(&mut self) {
+        let Some(providers) = self
+            .running
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        else {
+            return;
+        };
+        if let Some(transport) = &providers.transport {
+            transport.arm_deadline(Duration::ZERO);
+        }
+        // The tracer holds the tracer provider too: let it go first, so the provider's last
+        // flush runs here while the transport still stands, and is cut by the deadline.
+        self.spans = None;
+        drop(providers);
     }
 }
 

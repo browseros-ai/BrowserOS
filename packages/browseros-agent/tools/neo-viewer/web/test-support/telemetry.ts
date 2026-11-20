@@ -30,16 +30,24 @@ export function health(
 
 const BOUNDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
 
-/** A histogram of `observations` (seconds) at the fixture's bounds, with p50 and p95 given. */
+/**
+ * A histogram of `observations` (seconds) at the fixture's bounds, with p50 and p95 given (and how
+ * to read them: `estimate` unless said).
+ */
 export function quantiles(
   observations: number[],
   p50Sec: number | null,
   p95Sec: number | null,
+  reading: Pick<Quantiles, 'p50Is' | 'p95Is'> = {
+    p50Is: 'estimate',
+    p95Is: 'estimate',
+  },
 ): Quantiles {
   return {
     count: observations.length,
     p50Sec,
     p95Sec,
+    ...reading,
     buckets: [...BOUNDS, null].map((le) => ({
       le,
       count: observations.filter((value) => le === null || value <= le).length,

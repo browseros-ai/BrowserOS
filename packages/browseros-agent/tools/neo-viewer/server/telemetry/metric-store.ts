@@ -51,8 +51,14 @@ export class MetricStore {
     scrape: null,
     push: null,
   }
-  /** Pushes may split families over requests: each push replaces the families it carries. */
-  private readonly pushed = new Map<string, MetricFamily>()
+  /**
+   * Pushes may split families over requests: each push replaces the families it carries, and
+   * each family remembers when it last came.
+   */
+  private readonly pushed = new Map<
+    string,
+    { family: MetricFamily; at: number }
+  >()
   private readonly history: Record<Door, HealthPoint[]> = {
     scrape: [],
     push: [],
@@ -72,14 +78,24 @@ export class MetricStore {
     this.put('scrape', bounded(families), at)
   }
 
-  /** A push's families: merged by name into what earlier pushes said. */
+  /**
+   * A push's families, merged by name into what earlier pushes said. A pusher re-sends every
+   * family it has recorded at each interval (cumulative), so one not heard for as long as a door
+   * counts as live was not sent by the Neo pushing now: after a restart, the old process's
+   * counters must not sit beside the new one's. The merged set is bounded as one push is.
+   */
   pushedFamilies(families: MetricFamily[], at: number): void {
-    for (const family of bounded(families)) {
-      if (!this.pushed.has(family.name) && this.pushed.size >= MAX_FAMILIES)
-        continue
-      this.pushed.set(family.name, family)
+    for (const family of families) this.pushed.set(family.name, { family, at })
+    for (const [name, entry] of this.pushed)
+      if (at - entry.at > this.liveWithinMs) this.pushed.delete(name)
+    const kept = bounded([...this.pushed.values()].map((entry) => entry.family))
+    const keptNames = new Map(kept.map((family) => [family.name, family]))
+    for (const [name, entry] of this.pushed) {
+      const family = keptNames.get(name)
+      if (family) entry.family = family
+      else this.pushed.delete(name)
     }
-    this.put('push', [...this.pushed.values()], at)
+    this.put('push', kept, at)
   }
 
   /** Which door the viewer shows now; null when neither is live. */

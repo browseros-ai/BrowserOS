@@ -105,15 +105,17 @@ healthy, the viewer sends `PUT /v1/settings {"trace":{"valueBytes":262144}}` thr
 (`server/neo-settings.ts`), so Neo's trace keeps each call's arguments and result whole up to Neo's
 own reply limit rather than its 2 KiB default: the right panel shows them whole. Neo keeps the
 setting under the container's `/data`; with `--upstream` the viewer sets nothing, since the server
-is someone else's. The container also pushes its OpenTelemetry to the viewer (see Neo's telemetry):
-`OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:<viewer port>/otlp`,
-`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, `OTEL_BSP_SCHEDULE_DELAY=500`,
-`OTEL_METRIC_EXPORT_INTERVAL=500` and `--add-host=host.docker.internal:host-gateway`; an image older
-than telemetry ignores them. An image older than the setting gets a warning and keeps its cut values. Inside the container
+is someone else's. An image older than the setting gets a warning and keeps its cut values. Inside the container
 `CLAW_HOST_TCP` binds `0.0.0.0:9300`: bound to `127.0.0.1` the published port answers nothing,
 since Docker's port forward arrives from outside the container's loopback. When Docker's address
 pools are used up it names a /24 itself and says so. The command is the only control: the page
 shows the image and whether the container is up, read-only.
+
+The container also pushes its OpenTelemetry to the viewer (see Neo's telemetry):
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:<viewer port>/otlp`,
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, `OTEL_BSP_SCHEDULE_DELAY=500`,
+`OTEL_METRIC_EXPORT_INTERVAL=500` and `--add-host=host.docker.internal:host-gateway`; an image older
+than telemetry ignores them.
 
 ## The screen
 
@@ -275,7 +277,7 @@ for an agent to read, and shows its path with Copy path until dismissed; the ter
 Two more when Neo sent metrics (none for an image older than telemetry):
 
 ```text
-  metrics/metrics.prom   Neo's last GET /v1/metrics answer, byte for byte (only when it was scraped)
+  metrics/metrics.prom   Neo's last GET /v1/metrics answer, byte for byte (when the summary is the scrape's)
   metrics/summary.json   the metrics read out: health since the last Clear, runs, operations,
                          errors, tabs, crashes, ten minutes of history, every family
 ```

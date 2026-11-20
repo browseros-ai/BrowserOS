@@ -474,12 +474,25 @@ export interface MetricsView {
 /** A duration histogram summed over its label sets. */
 export interface Quantiles {
   count: number
-  /** Estimated as Prometheus' `histogram_quantile` does; null with no observations. */
+  /** Read off the buckets (see `p50Is`, `p95Is`); null with no observations. */
   p50Sec: number | null
   p95Sec: number | null
+  /** How to read `p50Sec` and `p95Sec`: never as more than the data supports. */
+  p50Is: QuantileReading
+  p95Is: QuantileReading
   /** Cumulative counts at Neo's own bucket bounds (read from the data, never assumed); `le: null` is +Inf. */
   buckets: Array<{ le: number | null; count: number }>
 }
+
+/**
+ * - `estimate`: interpolated inside a bucket that slower observations lie above (Prometheus'
+ *   `histogram_quantile`), so never above the slowest one;
+ * - `atMost`: the quantile falls in the bucket holding the slowest observations, where
+ *   interpolation could pass them (a 62 s run in the 60–120 s bucket would read 81 s): the value
+ *   is that bucket's upper bound, to be read "≤ 120 s";
+ * - `over`: it falls past Neo's largest finite bound: the value is that bound, read "> 120 s".
+ */
+export type QuantileReading = 'estimate' | 'atMost' | 'over'
 
 /**
  * One metric family as the scrape or the push delivered it, in one model for both. A counter's
@@ -522,8 +535,7 @@ export interface RunTrace {
 export interface TraceSpan {
   spanId: string
   parentSpanId: string | null
-  /** `neo.run` or `neo.op`. */
-  name: string
+  name: 'neo.run' | 'neo.op'
   /** A `neo.op`'s `neo.op.name`, or the `neo.run`'s run id. */
   label: string
   /** `neo.op.id` (= `NeoOperation.id`): links the span to its method row; null on `neo.run`. */
@@ -533,6 +545,11 @@ export interface TraceSpan {
   durationMs: number
   /** 0 for `neo.run`, 1 for its operations, deeper for an operation inside another. */
   depth: number
+  /**
+   * A `neo.op` whose `neo.op.outcome` is `error`: what a trace's "failed" counts. A cancelled op
+   * is not a failure (decision D11), whatever its OTel status says, and `neo.run` is never one:
+   * the run's own status is the run's.
+   */
   error: boolean
   /** Every attribute as Neo emitted it: what a span carries is how redaction is checked. */
   attributes: Record<string, string | number | boolean>

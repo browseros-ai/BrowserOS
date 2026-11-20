@@ -51,7 +51,10 @@ export interface TelemetryDeps {
 
 /** What export writes under `metrics/`. */
 export interface TelemetryExport {
-  /** The last scrape's text, byte for byte; null when the scrape never answered. */
+  /**
+   * The last scrape's text, byte for byte; null when the exported numbers came by push (or the
+   * scrape never answered), so the file always matches the summary beside it.
+   */
   prometheus: string | null
   /** The door shown last (live, else the one heard from last). */
   metrics: MetricsView
@@ -183,7 +186,7 @@ export function startTelemetry(deps: TelemetryDeps): Telemetry {
         fetch: deps.scrape?.fetch ?? hostFetch,
         now,
         onText(text, at) {
-          store.scraped(parsePrometheus(text).families, text, at)
+          store.scraped(parsePrometheus(text), text, at)
           sample()
         },
         ...(deps.scrape?.intervalMs === undefined
@@ -221,7 +224,8 @@ export function startTelemetry(deps: TelemetryDeps): Telemetry {
       const latest = door ? store.latest(door) : null
       if (!door || !latest) return null
       return {
-        prometheus: store.scrapeText(),
+        // The raw text only beside a summary read from that same scrape, never a push's.
+        prometheus: door === 'scrape' ? store.scrapeText() : null,
         metrics: metricsView(latest.families, door, latest.at),
         health: health(),
         history: store.points(door),

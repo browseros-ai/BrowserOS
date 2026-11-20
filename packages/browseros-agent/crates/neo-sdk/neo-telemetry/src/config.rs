@@ -7,11 +7,13 @@
 //! that names it. Nothing here touches the network or the SDK: `otlp.rs` turns the result into
 //! exporters, `transport.rs` into the client they send through.
 //!
-//! `OTEL_EXPORTER_OTLP_HEADERS` carries secrets (tokens, API keys). Its values leave [`Headers`]
-//! only onto a request: `Debug` prints header names, errors name an entry by its name or its
-//! position, and an endpoint may not carry `user:password@`, since headers are where credentials
-//! go. Signal-specific headers, protocol and timeout variables are not read: one setting serves
-//! both signals.
+//! Headers, protocol and timeout are per signal, as the specification orders them: a signal's own
+//! variable (`OTEL_EXPORTER_OTLP_TRACES_HEADERS`) when set, else the general one
+//! (`OTEL_EXPORTER_OTLP_HEADERS`); a signal's headers replace the general ones, they do not add.
+//!
+//! The headers variables carry secrets (tokens, API keys). Their values leave [`Headers`] only
+//! onto a request: `Debug` prints header names, errors name an entry by its name or its position,
+//! and an endpoint may not carry `user:password@`, since headers are where credentials go.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -25,8 +27,6 @@ use crate::{OtlpProtocol, TelemetryError};
 
 // The variables, as the OpenTelemetry specification spells them.
 const ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
-const TRACES_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
-const METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
 const PROTOCOL: &str = "OTEL_EXPORTER_OTLP_PROTOCOL";
 const HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 const TIMEOUT: &str = "OTEL_EXPORTER_OTLP_TIMEOUT";
@@ -44,22 +44,40 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(15);
 const DEFAULT_BATCH_DELAY: Duration = Duration::from_secs(5);
 
+/// One signal's variables, and its path under a base `OTEL_EXPORTER_OTLP_ENDPOINT`.
+struct SignalVars {
+    endpoint: &'static str,
+    protocol: &'static str,
+    headers: &'static str,
+    timeout: &'static str,
+    path: &'static str,
+}
+
+const TRACES: SignalVars = SignalVars {
+    endpoint: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    protocol: "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    headers: "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    timeout: "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+    path: "v1/traces",
+};
+
+const METRICS: SignalVars = SignalVars {
+    endpoint: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    protocol: "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+    headers: "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    timeout: "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+    path: "v1/metrics",
+};
+
 /// The standard OpenTelemetry environment, parsed. [`Default`] is push off (no exporter, thread
 /// or socket), with the default resource and sampler: what an empty environment reads as.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OtlpConfig {
-    /// Where spans go: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` as given, else
-    /// `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1/traces`. `None` turns trace push off, and with it
-    /// every span, since spans leave Neo only over OTLP.
-    pub(crate) traces: Option<Endpoint>,
-    /// Where metrics go, the same way with `/v1/metrics`. `None` leaves them to the scrape.
-    pub(crate) metrics: Option<Endpoint>,
-    /// The body encoding of both signals.
-    pub(crate) protocol: OtlpProtocol,
-    /// Sent on every export request of both signals.
-    pub(crate) headers: Headers,
-    /// How long one export may take, retries included (`OTEL_EXPORTER_OTLP_TIMEOUT`).
-    pub(crate) timeout: Duration,
+    /// The span push. `None` turns it off, and with it every span, since spans leave Neo only
+    /// over OTLP.
+    pub(crate) traces: Option<SignalPush>,
+    /// The metric push. `None` leaves metrics to the scrape.
+    pub(crate) metrics: Option<SignalPush>,
     /// The resource's `service.name` (`OTEL_SERVICE_NAME`).
     pub(crate) service_name: String,
     /// `OTEL_RESOURCE_ATTRIBUTES`, applied after the service name, so it wins (wire contract).
@@ -77,9 +95,6 @@ impl Default for OtlpConfig {
         Self {
             traces: None,
             metrics: None,
-            protocol: OtlpProtocol::default(),
-            headers: Headers::default(),
-            timeout: DEFAULT_TIMEOUT,
             service_name: DEFAULT_SERVICE_NAME.to_owned(),
             resource_attributes: Vec::new(),
             sampler: SamplerChoice::default(),
@@ -95,17 +110,15 @@ impl OtlpConfig {
     /// variable, which fails Neo's startup. No error echoes a header value.
     pub fn from_env(lookup: &dyn Fn(&str) -> Option<String>) -> Result<Self, TelemetryError> {
         let env = Env { lookup };
-        let base = env.parse(ENDPOINT, Endpoint::parse)?;
-        let signal_endpoint = |name, signal_path| -> Result<Option<Endpoint>, TelemetryError> {
-            let given = env.parse(name, Endpoint::parse)?;
-            Ok(given.or_else(|| base.as_ref().map(|base| base.with_signal_path(signal_path))))
-        };
-        Ok(Self {
-            traces: signal_endpoint(TRACES_ENDPOINT, "v1/traces")?,
-            metrics: signal_endpoint(METRICS_ENDPOINT, "v1/metrics")?,
+        let general = General {
+            endpoint: env.parse(ENDPOINT, Endpoint::parse)?,
             protocol: env.parse(PROTOCOL, parse_protocol)?.unwrap_or_default(),
             headers: env.parse(HEADERS, Headers::parse)?.unwrap_or_default(),
             timeout: env.parse(TIMEOUT, parse_millis)?.unwrap_or(DEFAULT_TIMEOUT),
+        };
+        Ok(Self {
+            traces: SignalPush::from_env(&env, &TRACES, &general)?,
+            metrics: SignalPush::from_env(&env, &METRICS, &general)?,
             service_name: env
                 .get(SERVICE_NAME)
                 .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_owned()),
@@ -120,6 +133,54 @@ impl OtlpConfig {
                 .parse(BATCH_DELAY, parse_millis)?
                 .unwrap_or(DEFAULT_BATCH_DELAY),
         })
+    }
+}
+
+/// One signal's push: where it goes, in which encoding, with which headers, and how long one
+/// export may take, retries included.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SignalPush {
+    /// The signal's endpoint as given, else the base endpoint with the signal's path appended.
+    pub(crate) endpoint: Endpoint,
+    /// The body encoding.
+    pub(crate) protocol: OtlpProtocol,
+    /// Sent on every export request of this signal.
+    pub(crate) headers: Headers,
+    /// One export's limit (`OTEL_EXPORTER_OTLP_TIMEOUT` or the signal's own).
+    pub(crate) timeout: Duration,
+}
+
+/// The general variables, which a signal falls back on where its own are unset.
+struct General {
+    endpoint: Option<Endpoint>,
+    protocol: OtlpProtocol,
+    headers: Headers,
+    timeout: Duration,
+}
+
+impl SignalPush {
+    /// The push for the signal `vars` names, or `None` when neither its endpoint nor the base is
+    /// set. Each of its variables is checked even then: a typo fails startup either way.
+    fn from_env(
+        env: &Env<'_>,
+        vars: &SignalVars,
+        general: &General,
+    ) -> Result<Option<Self>, TelemetryError> {
+        let endpoint = env.parse(vars.endpoint, Endpoint::parse)?;
+        let protocol = env.parse(vars.protocol, parse_protocol)?;
+        let headers = env.parse(vars.headers, Headers::parse)?;
+        let timeout = env.parse(vars.timeout, parse_millis)?;
+        let base = general.endpoint.as_ref();
+        let Some(endpoint) = endpoint.or_else(|| base.map(|base| base.with_signal_path(vars.path)))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            endpoint,
+            protocol: protocol.unwrap_or(general.protocol),
+            headers: headers.unwrap_or_else(|| general.headers.clone()),
+            timeout: timeout.unwrap_or(general.timeout),
+        }))
     }
 }
 
@@ -184,9 +245,24 @@ impl Endpoint {
     }
 }
 
+/// Scheme, host, port and path only: a query can carry a token, so it shows as `?<redacted>`.
 impl fmt::Debug for Endpoint {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.url.as_str())
+        let url = &self.url;
+        write!(
+            formatter,
+            "{}://{}",
+            url.scheme(),
+            url.host_str().unwrap_or_default()
+        )?;
+        if let Some(port) = url.port() {
+            write!(formatter, ":{port}")?;
+        }
+        formatter.write_str(url.path())?;
+        if url.query().is_some() {
+            formatter.write_str("?<redacted>")?;
+        }
+        Ok(())
     }
 }
 
@@ -461,10 +537,29 @@ mod tests {
     }
 
     fn urls(config: &OtlpConfig) -> (Option<String>, Option<String>) {
+        let url = |push: &SignalPush| push.endpoint.exporter_url();
         (
-            config.traces.as_ref().map(Endpoint::exporter_url),
-            config.metrics.as_ref().map(Endpoint::exporter_url),
+            config.traces.as_ref().map(url),
+            config.metrics.as_ref().map(url),
         )
+    }
+
+    /// Both signals' push, with a base endpoint added to `vars`.
+    fn pushed(vars: &[(&str, &str)]) -> Result<(SignalPush, SignalPush), Box<dyn Error>> {
+        let mut vars = vars.to_vec();
+        vars.push((ENDPOINT, "http://collector:4318"));
+        let config = read(&vars)?;
+        Ok((
+            config.traces.ok_or("the base endpoint turns traces on")?,
+            config.metrics.ok_or("the base endpoint turns metrics on")?,
+        ))
+    }
+
+    fn header_names(push: &SignalPush) -> Vec<String> {
+        push.headers
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect()
     }
 
     #[test]
@@ -476,10 +571,8 @@ mod tests {
             "nothing set must read as the default, so TelemetryConfig::default() stays the same"
         );
         assert_eq!(urls(&config), (None, None), "no endpoint means no push");
-        assert_eq!(config.protocol, OtlpProtocol::HttpProtobuf);
         assert_eq!(config.service_name, "browseros-neo");
         assert_eq!(config.sampler, SamplerChoice::ParentBasedAlwaysOn);
-        assert_eq!(config.timeout, Duration::from_secs(10));
         assert_eq!(config.metric_interval, Duration::from_secs(15));
         assert_eq!(config.batch_delay, Duration::from_secs(5));
         assert_eq!(
@@ -487,6 +580,11 @@ mod tests {
             OtlpConfig::default(),
             "a blank value is unset, as every other Neo variable reads it"
         );
+        for push in <[SignalPush; 2]>::from(pushed(&[])?) {
+            assert_eq!(push.protocol, OtlpProtocol::HttpProtobuf);
+            assert_eq!(push.timeout, Duration::from_secs(10));
+            assert!(header_names(&push).is_empty());
+        }
         Ok(())
     }
 
@@ -527,7 +625,7 @@ mod tests {
     fn a_signal_endpoint_is_used_as_given_and_wins_over_the_base() -> Result<(), Box<dyn Error>> {
         let config = read(&[
             (ENDPOINT, "http://base:4318"),
-            (TRACES_ENDPOINT, "http://traces:4318/custom"),
+            (TRACES.endpoint, "http://traces:4318/custom"),
         ])?;
         assert_eq!(
             urls(&config),
@@ -543,12 +641,12 @@ mod tests {
     #[test]
     fn each_signal_pushes_only_when_an_endpoint_covers_it() -> Result<(), Box<dyn Error>> {
         assert_eq!(
-            urls(&read(&[(TRACES_ENDPOINT, "http://traces/v1/traces")])?),
+            urls(&read(&[(TRACES.endpoint, "http://traces/v1/traces")])?),
             (Some("http://traces/v1/traces".to_owned()), None),
             "a traces endpoint alone pushes no metrics"
         );
         assert_eq!(
-            urls(&read(&[(METRICS_ENDPOINT, "http://metrics/v1/metrics")])?),
+            urls(&read(&[(METRICS.endpoint, "http://metrics/v1/metrics")])?),
             (None, Some("http://metrics/v1/metrics".to_owned())),
             "a metrics endpoint alone pushes no spans"
         );
@@ -561,21 +659,24 @@ mod tests {
         let config = read(&[
             (ENDPOINT, "http+unix://%2Frun%2Fneo%20otel.sock"),
             (
-                METRICS_ENDPOINT,
+                METRICS.endpoint,
                 "HTTP+UNIX://%2ftmp%2Fm.sock/custom/metrics?x=1",
             ),
         ])?;
         let traces = config.traces.as_ref().ok_or("traces must push")?;
         let metrics = config.metrics.as_ref().ok_or("metrics must push")?;
-        assert_eq!(traces.socket(), Some(Path::new("/run/neo otel.sock")));
-        assert_eq!(traces.exporter_url(), "http://localhost/v1/traces");
         assert_eq!(
-            metrics.socket(),
+            traces.endpoint.socket(),
+            Some(Path::new("/run/neo otel.sock"))
+        );
+        assert_eq!(traces.endpoint.exporter_url(), "http://localhost/v1/traces");
+        assert_eq!(
+            metrics.endpoint.socket(),
             Some(Path::new("/tmp/m.sock")),
             "the scheme is case-blind and the encoding's hex digits too"
         );
         assert_eq!(
-            metrics.exporter_url(),
+            metrics.endpoint.exporter_url(),
             "http://localhost/custom/metrics?x=1",
             "a signal endpoint's path and query are kept as given"
         );
@@ -585,7 +686,7 @@ mod tests {
     #[test]
     fn a_malformed_endpoint_fails_naming_its_variable_without_echoing_it()
     -> Result<(), Box<dyn Error>> {
-        for name in [ENDPOINT, TRACES_ENDPOINT, METRICS_ENDPOINT] {
+        for name in [ENDPOINT, TRACES.endpoint, METRICS.endpoint] {
             for (value, why) in [
                 ("collector:4318/secret-path", "no scheme"),
                 ("ftp://collector/secret-path", "an unknown scheme"),
@@ -621,31 +722,62 @@ mod tests {
     #[test]
     fn the_protocol_is_one_of_the_two_http_encodings() -> Result<(), Box<dyn Error>> {
         assert_eq!(
-            read(&[(PROTOCOL, "http/protobuf")])?.protocol,
+            pushed(&[(PROTOCOL, "http/protobuf")])?.0.protocol,
             OtlpProtocol::HttpProtobuf
         );
         assert_eq!(
-            read(&[(PROTOCOL, " http/json ")])?.protocol,
+            pushed(&[(PROTOCOL, " http/json ")])?.1.protocol,
             OtlpProtocol::HttpJson
         );
-        for value in ["grpc", "http/proto", "HTTP/JSON", "json"] {
-            assert_eq!(
-                refusal(&[(PROTOCOL, value)])?.0,
-                PROTOCOL,
-                "`{value}` must fail startup: Neo speaks OTLP/HTTP only, in protobuf or JSON"
-            );
+        for name in [PROTOCOL, TRACES.protocol, METRICS.protocol] {
+            for value in ["grpc", "http/proto", "HTTP/JSON", "json"] {
+                assert_eq!(
+                    refusal(&[(name, value)])?.0,
+                    name,
+                    "`{value}` must fail startup: Neo speaks OTLP/HTTP only, in protobuf or JSON"
+                );
+            }
         }
+        Ok(())
+    }
+
+    /// An operator following a vendor's docs sets only `OTEL_EXPORTER_OTLP_TRACES_HEADERS`: its
+    /// spans must carry that credential, not go out without it.
+    #[test]
+    fn a_signals_own_variable_wins_over_the_general_one() -> Result<(), Box<dyn Error>> {
+        let (traces, metrics) = pushed(&[
+            (HEADERS, "x-general=yes"),
+            (TRACES.headers, "authorization=Bearer%20traces-token"),
+            (PROTOCOL, "http/json"),
+            (METRICS.protocol, "http/protobuf"),
+            (TIMEOUT, "3000"),
+            (TRACES.timeout, "700"),
+        ])?;
+        assert_eq!(
+            header_names(&traces),
+            ["authorization"],
+            "a signal's headers replace the general ones, as the specification has it"
+        );
+        assert_eq!(traces.protocol, OtlpProtocol::HttpJson);
+        assert_eq!(traces.timeout, Duration::from_millis(700));
+        assert_eq!(header_names(&metrics), ["x-general"]);
+        assert_eq!(metrics.protocol, OtlpProtocol::HttpProtobuf);
+        assert_eq!(metrics.timeout, Duration::from_secs(3));
         Ok(())
     }
 
     #[test]
     fn headers_are_percent_decoded_and_debug_shows_only_their_names() -> Result<(), Box<dyn Error>>
     {
-        let config = read(&[(
-            HEADERS,
-            " Authorization = Bearer%20s3cr3t-token , x-tenant=neo,,api-key=raw space ok,",
-        )])?;
-        let headers: Vec<(String, String)> = config
+        let config = read(&[
+            (ENDPOINT, "http://collector:4318"),
+            (
+                HEADERS,
+                " Authorization = Bearer%20s3cr3t-token , x-tenant=neo,,api-key=raw space ok,",
+            ),
+        ])?;
+        let traces = config.traces.as_ref().ok_or("traces must push")?;
+        let headers: Vec<(String, String)> = traces
             .headers
             .iter()
             .map(|(name, value)| -> Result<_, Box<dyn Error>> {
@@ -662,7 +794,7 @@ mod tests {
             "names are trimmed and lower-cased, values percent-decoded, empty entries skipped"
         );
         assert!(
-            config.headers.iter().all(|(_, value)| value.is_sensitive()),
+            traces.headers.iter().all(|(_, value)| value.is_sensitive()),
             "every value is marked sensitive, so http's and reqwest's Debug hide it too"
         );
         let shown = format!("{config:?}");
@@ -686,13 +818,52 @@ mod tests {
             ("x-key=s3cr3t%FF", "a value that is not UTF-8 once decoded"),
             ("x-key=s3cr3t%0Abreak", "a value with a line break"),
         ] {
-            let (named, message) = refusal(&[(HEADERS, value)])?;
-            assert_eq!(named, HEADERS, "{why} must fail startup naming {HEADERS}");
-            assert!(
-                !message.contains("s3cr3t"),
-                "{why}: the error must not echo a header value: {message}"
-            );
+            for name in [HEADERS, TRACES.headers, METRICS.headers] {
+                let (named, message) = refusal(&[(name, value)])?;
+                assert_eq!(named, name, "{why} must fail startup naming {name}");
+                assert!(
+                    !message.contains("s3cr3t"),
+                    "{why}: the error must not echo a header value: {message}"
+                );
+            }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn an_endpoints_debug_hides_its_query() -> Result<(), Box<dyn Error>> {
+        let config = read(&[
+            (
+                ENDPOINT,
+                "https://collector.example:4318/otlp?api_key=s3cret",
+            ),
+            (
+                METRICS.endpoint,
+                "http+unix://%2Frun%2Fotel.sock/v1/metrics?token=s3cret",
+            ),
+        ])?;
+        let shown = format!("{config:?}");
+        assert!(
+            !shown.contains("s3cret"),
+            "a query can carry a token, so Debug never prints one: {shown}"
+        );
+        assert!(
+            shown.contains("https://collector.example:4318/otlp/v1/traces?<redacted>"),
+            "scheme, host, port and path stay readable: {shown}"
+        );
+        assert!(
+            shown.contains("http+unix://%2Frun%2Fotel.sock/v1/metrics?<redacted>"),
+            "{shown}"
+        );
+        assert_eq!(
+            config
+                .traces
+                .ok_or("traces must push")?
+                .endpoint
+                .exporter_url(),
+            "https://collector.example:4318/otlp/v1/traces?api_key=s3cret",
+            "the request itself still carries the query"
+        );
         Ok(())
     }
 
@@ -784,15 +955,20 @@ mod tests {
 
     #[test]
     fn durations_are_whole_milliseconds_of_at_least_one() -> Result<(), Box<dyn Error>> {
-        let config = read(&[
-            (METRIC_INTERVAL, "500"),
-            (BATCH_DELAY, "250"),
-            (TIMEOUT, "2000"),
-        ])?;
+        let config = read(&[(METRIC_INTERVAL, "500"), (BATCH_DELAY, "250")])?;
         assert_eq!(config.metric_interval, Duration::from_millis(500));
         assert_eq!(config.batch_delay, Duration::from_millis(250));
-        assert_eq!(config.timeout, Duration::from_secs(2));
-        for name in [METRIC_INTERVAL, BATCH_DELAY, TIMEOUT] {
+        assert_eq!(
+            pushed(&[(TIMEOUT, "2000")])?.0.timeout,
+            Duration::from_secs(2)
+        );
+        for name in [
+            METRIC_INTERVAL,
+            BATCH_DELAY,
+            TIMEOUT,
+            TRACES.timeout,
+            METRICS.timeout,
+        ] {
             for value in ["0", "-1", "1.5", "5s", "soon", "18446744073709551616"] {
                 assert_eq!(
                     refusal(&[(name, value)])?.0,

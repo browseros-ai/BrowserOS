@@ -48,10 +48,14 @@ export class SpanStore {
   private readonly pins = new Map<string, number>()
   private spans = 0
   private bytes = 0
-  /** A neo span has been accepted since the viewer started. */
-  spansSeen = false
+  private seen = false
 
   constructor(private readonly limits: SpanLimits = SPAN_LIMITS) {}
+
+  /** A neo span has been accepted since the viewer started. */
+  get spansSeen(): boolean {
+    return this.seen
+  }
 
   /** Files spans under their runs; returns the runs that changed and the spans refused. */
   add(spans: NeoSpan[]): { changed: Set<string>; rejected: number } {
@@ -85,7 +89,7 @@ export class SpanStore {
       this.runs.delete(span.neoRunId)
       this.runs.set(span.neoRunId, entry)
       changed.add(span.neoRunId)
-      this.spansSeen = true
+      this.seen = true
     }
     this.evict()
     return { changed, rejected }
@@ -113,10 +117,6 @@ export class SpanStore {
     }
   }
 
-  stats(): { runs: number; spans: number; bytes: number } {
-    return { runs: this.runs.size, spans: this.spans, bytes: this.bytes }
-  }
-
   private entry(neoRunId: string): Entry {
     const known = this.runs.get(neoRunId)
     if (known) return known
@@ -125,8 +125,17 @@ export class SpanStore {
     return entry
   }
 
+  /**
+   * What a span holds, estimated from its text: its attributes, its error message and its
+   * batch's resource (shared by the batch's spans, but counted for each, which only errs safe).
+   */
   private sizeOf(span: NeoSpan): number {
-    return SPAN_OVERHEAD_BYTES + JSON.stringify(span.attributes).length
+    return (
+      SPAN_OVERHEAD_BYTES +
+      JSON.stringify(span.attributes).length +
+      JSON.stringify(span.resource).length +
+      (span.error?.message.length ?? 0)
+    )
   }
 
   private over(): boolean {

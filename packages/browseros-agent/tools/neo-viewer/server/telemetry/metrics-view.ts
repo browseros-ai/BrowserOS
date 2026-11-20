@@ -5,7 +5,12 @@
  * missing (an older image, or an instrument that has recorded nothing yet) counts as zero.
  */
 
-import type { MetricFamily, MetricsView, Quantiles } from '../../shared/api'
+import type {
+  MetricFamily,
+  MetricsView,
+  QuantileReading,
+  Quantiles,
+} from '../../shared/api'
 
 type Series = MetricFamily['series'][number]
 
@@ -117,40 +122,58 @@ export function quantiles(series: Series[]): Quantiles {
     count: series.reduce((total, one) => total + atBound(one, le), 0),
   }))
   const count = series.reduce((total, one) => total + (one.value ?? 0), 0)
+  const p50 = histogramQuantile(0.5, buckets)
+  const p95 = histogramQuantile(0.95, buckets)
   return {
     count,
-    p50Sec: histogramQuantile(0.5, buckets),
-    p95Sec: histogramQuantile(0.95, buckets),
+    p50Sec: p50.sec,
+    p95Sec: p95.sec,
+    p50Is: p50.is,
+    p95Is: p95.is,
     buckets,
   }
 }
 
 /**
- * The q-quantile of cumulative buckets, interpolated linearly inside the bucket it falls in (the
- * first bucket from 0); in the +Inf bucket, the highest finite bound. Null with no observations.
+ * The q-quantile of cumulative buckets, never more than the data supports. Inside a bucket that
+ * slower observations lie above, it is interpolated linearly as Prometheus' `histogram_quantile`
+ * does (the first bucket from 0): that cannot pass the slowest observation. In the bucket that
+ * holds the slowest observations it can (a 62 s run in the 60–120 s bucket would read 81 s), so
+ * there it is that bucket's upper bound, read "at most"; past the largest finite bound, that bound,
+ * read "over". Null with no observations.
  */
 export function histogramQuantile(
   q: number,
   buckets: Array<{ le: number | null; count: number }>,
-): number | null {
+): { sec: number | null; is: QuantileReading } {
   const total = buckets.at(-1)?.count ?? 0
-  if (total <= 0) return null
+  if (total <= 0) return { sec: null, is: 'estimate' }
   const rank = q * total
+  // The bucket the slowest observations are in: the last one whose count rises.
+  let slowest = 0
+  buckets.forEach((bucket, index) => {
+    if (bucket.count > (buckets[index - 1]?.count ?? 0)) slowest = index
+  })
   let lowerBound = 0
   let lowerCount = 0
-  for (const bucket of buckets) {
+  for (const [index, bucket] of buckets.entries()) {
     if (bucket.count >= rank) {
-      if (bucket.le === null) return lowerBound
+      if (bucket.le === null) return { sec: lowerBound, is: 'over' }
+      if (index >= slowest) return { sec: bucket.le, is: 'atMost' }
       const inBucket = bucket.count - lowerCount
-      if (inBucket <= 0) return bucket.le
-      return (
-        lowerBound + (bucket.le - lowerBound) * ((rank - lowerCount) / inBucket)
-      )
+      return {
+        sec:
+          inBucket <= 0
+            ? bucket.le
+            : lowerBound +
+              (bucket.le - lowerBound) * ((rank - lowerCount) / inBucket),
+        is: 'estimate',
+      }
     }
     if (bucket.le !== null) lowerBound = bucket.le
     lowerCount = bucket.count
   }
-  return lowerBound
+  return { sec: lowerBound, is: 'over' }
 }
 
 function seriesOf(families: MetricFamily[], name: string): Series[] {
@@ -180,7 +203,9 @@ function groupBy(series: Series[], label: string): Map<string, Series[]> {
   const groups = new Map<string, Series[]>()
   for (const one of series) {
     const key = one.labels[label] ?? ''
-    groups.set(key, [...(groups.get(key) ?? []), one])
+    const group = groups.get(key)
+    if (group) group.push(one)
+    else groups.set(key, [one])
   }
   return groups
 }
