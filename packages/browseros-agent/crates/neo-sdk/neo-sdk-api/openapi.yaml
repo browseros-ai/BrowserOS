@@ -19,10 +19,11 @@ info:
     `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
     the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
     unique among the browser's tabs until the browser restarts. An old number may then name
-    a different tab. A host
-    may send two optional ids of its own with a run
-    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?}`), each at most 128
-    bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
+    a different tab. A host may send optional keys of its own with a run,
+    `_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?, traceparent?,
+    tracestate?}`, and Neo refuses any other key as `host / invalid_meta`. Its two ids,
+    `requestId` and `taskId`, are each at most 128 bytes. `requestId` names one call. Runs can
+    be looked up by it, and a repeat of it never
     runs again (within its task when the run has a `taskId`, else across Neo; under the `task`
     tab scope, a request without a `taskId` repeats only a run without one), as long as Neo's
     trace remembers it: a `requestId` whose run retention has removed (past
@@ -31,6 +32,14 @@ info:
     trace file, or any start on a fresh trace), is unknown, and a repeat of it runs again. A host that journals its request
     ids and retries them across a rollback must not count on the replay. `taskId` groups the
     calls of one task, so its runs, events and trace can be listed together.
+
+    `traceparent` and `tracestate` are W3C trace context, for a host that cannot set the HTTP
+    headers of those names on its MCP request: the run's OpenTelemetry span, `neo.run`, joins
+    that trace. A valid `traceparent` header wins over them, together with its own `tracestate`
+    header. An invalid value is ignored, never refused, and a `tracestate` counts only beside a
+    valid `traceparent`; with neither, the run starts a trace of its own. An older Neo refuses
+    the two keys, as it does any key it does not know, so a host that can set the headers sends
+    those instead.
 
     Task scope (`tabs.scope`, default `task`): a run that carries a `taskId` sees and acts on
     only its task family's tabs. A family starts at the task a host named; every task its runs
