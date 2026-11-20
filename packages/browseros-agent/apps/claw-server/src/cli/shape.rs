@@ -10,18 +10,24 @@ use crate::cli::client::result::ToolOutput;
 
 const PAGE_CONTENT_OPEN: &str = "[UNTRUSTED_PAGE_CONTENT nonce=";
 
-/// Maps each line of `text`, telling `map` whether the line sits inside a page-content fence.
-/// The fence lines themselves pass through untouched, and `None` drops a line.
-pub fn map_lines(text: &str, mut map: impl FnMut(&str, bool) -> Option<String>) -> String {
+/// Where a line of tool text sits relative to the page-content fences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Fence,
+    Page,
+    Outside,
+}
+
+fn placed_lines(text: &str) -> Vec<(&str, Place)> {
     let mut closing: Option<String> = None;
-    let mut out = Vec::new();
+    let mut placed = Vec::new();
     for line in text.split('\n') {
         if let Some(close) = &closing {
             if line.trim_end() == close {
                 closing = None;
-                out.push(line.to_string());
-            } else if let Some(mapped) = map(line, true) {
-                out.push(mapped);
+                placed.push((line, Place::Fence));
+            } else {
+                placed.push((line, Place::Page));
             }
             continue;
         }
@@ -30,14 +36,26 @@ pub fn map_lines(text: &str, mut map: impl FnMut(&str, bool) -> Option<String>) 
             .and_then(|rest| rest.split([' ', ']']).next())
         {
             closing = Some(format!("[END_UNTRUSTED_PAGE_CONTENT nonce={nonce}]"));
-            out.push(line.to_string());
+            placed.push((line, Place::Fence));
             continue;
         }
-        if let Some(mapped) = map(line, false) {
-            out.push(mapped);
-        }
+        placed.push((line, Place::Outside));
     }
-    out.join("\n")
+    placed
+}
+
+/// Maps each line of `text`, telling `map` whether the line sits inside a page-content fence.
+/// The fence lines themselves pass through untouched, and `None` drops a line.
+pub fn map_lines(text: &str, mut map: impl FnMut(&str, bool) -> Option<String>) -> String {
+    placed_lines(text)
+        .into_iter()
+        .filter_map(|(line, place)| match place {
+            Place::Fence => Some(line.to_string()),
+            Place::Page => map(line, true),
+            Place::Outside => map(line, false),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The saved output a result names, and the part worth reading from it: the one that is not
@@ -194,6 +212,153 @@ fn short_link_url(line: &str) -> String {
         &line[..start],
         &url[..cut],
         &url[cut..=cut]
+    )
+}
+
+/// Table structure that `snapshot -i` keeps only because a ref sits under it. A date picker is
+/// a grid of rows and cells around one button per day, and those lines filled the list before
+/// the dialog's own buttons could appear.
+const STRUCTURE_ROLES: [&str; 2] = ["row", "gridcell"];
+
+/// The most of an interactive snapshot printed whole, about the 5,000 tokens the server shows
+/// inline. Past it the CLI prints the head and the tail, where a dialog's buttons sit.
+pub const INTERACTIVE_INLINE_MAX_CHARS: usize = 20_000;
+const INTERACTIVE_HEAD_CHARS: usize = 14_000;
+
+struct SnapshotLine<'a> {
+    text: &'a str,
+    in_page: bool,
+    indent: usize,
+    role: &'a str,
+    name: Option<&'a str>,
+    has_ref: bool,
+}
+
+fn snapshot_line(text: &str, in_page: bool) -> SnapshotLine<'_> {
+    let body = text.trim_start();
+    let indent = text.len() - body.len();
+    let item = body.strip_prefix("- ").unwrap_or("");
+    let role = item.split([' ', ':']).next().unwrap_or("");
+    let rest = &item[role.len()..];
+    let (name, after_name) = match rest.strip_prefix(" \"") {
+        Some(quoted) => match closing_quote(quoted) {
+            Some(end) => (Some(&quoted[..end]), &quoted[end + 1..]),
+            None => (None, rest),
+        },
+        None => (None, rest),
+    };
+    SnapshotLine {
+        text,
+        in_page,
+        indent,
+        role,
+        name,
+        has_ref: after_name.contains("[ref="),
+    }
+}
+
+fn closing_quote(quoted: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (index, ch) in quoted.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// An interactive snapshot without the rows and cells that only frame its refs: a row or cell
+/// with no ref of its own, and a cell whose only child is a ref with the same name, which listed
+/// every date twice.
+#[must_use]
+pub fn interactive_lines(text: &str) -> String {
+    let lines = placed_lines(text)
+        .into_iter()
+        .map(|(line, place)| (place, snapshot_line(line, place == Place::Page)))
+        .collect::<Vec<_>>();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, (place, line))| {
+            *place != Place::Page || !frames_only(line, lines[index + 1..].iter().map(|(_, l)| l))
+        })
+        .map(|(_, (_, line))| line.text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn frames_only<'a>(
+    line: &SnapshotLine<'_>,
+    after: impl Iterator<Item = &'a SnapshotLine<'a>>,
+) -> bool {
+    if !STRUCTURE_ROLES.contains(&line.role) {
+        return false;
+    }
+    if !line.has_ref {
+        return true;
+    }
+    let children = after
+        .take_while(|child| child.in_page && child.indent > line.indent)
+        .collect::<Vec<_>>();
+    matches!(children.as_slice(), [child] if child.has_ref && child.name.is_some() && child.name == line.name)
+}
+
+/// A whole interactive snapshot fitted to the inline budget: all of it when it fits once its
+/// table structure is gone, else its head and its tail with the count left out between them
+/// and how to see it.
+#[must_use]
+pub fn fit_interactive(full: &str, read_with: &str) -> String {
+    let filtered = interactive_lines(full);
+    if filtered.chars().count() <= INTERACTIVE_INLINE_MAX_CHARS {
+        return filtered;
+    }
+    let mut lines = filtered.split('\n').collect::<Vec<_>>();
+    let (open, close) = match (lines.first(), lines.last()) {
+        (Some(first), Some(last))
+            if first.starts_with(PAGE_CONTENT_OPEN) && last.starts_with("[END_UNTRUSTED") =>
+        {
+            let fence = (first.to_string(), last.to_string());
+            lines.remove(0);
+            lines.pop();
+            fence
+        }
+        _ => (String::new(), String::new()),
+    };
+    let mut head = Vec::new();
+    let mut used = 0;
+    for line in &lines {
+        if used + line.len() > INTERACTIVE_HEAD_CHARS {
+            break;
+        }
+        used += line.len() + 1;
+        head.push(*line);
+    }
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for line in lines[head.len()..].iter().rev() {
+        if used + line.len() > INTERACTIVE_INLINE_MAX_CHARS - INTERACTIVE_HEAD_CHARS {
+            break;
+        }
+        used += line.len() + 1;
+        tail.push(*line);
+    }
+    tail.reverse();
+    let left_out = lines.len() - head.len() - tail.len();
+    let fenced = |part: &[&str]| {
+        if open.is_empty() {
+            part.join("\n")
+        } else {
+            format!("{open}\n{}\n{close}", part.join("\n"))
+        }
+    };
+    format!(
+        "{}\n[{left_out} lines of the middle left out. Read them with: {read_with}, or search with: browseros grep <pattern>]\n{}",
+        fenced(&head),
+        fenced(&tail)
     )
 }
 
@@ -360,5 +525,80 @@ mod tests {
         let page = AMAZON_LINE.repeat(29);
         let page = page.replace("]  - ", "]\n  - ");
         assert!(short_link_urls(&page).len() * 2 < page.len());
+    }
+
+    const DATE_PICKER: &str =
+        "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=https://www.google.com/travel/flights] notice
+- dialog \"Departure\" [ref=e70]
+  - grid \"November 2026\"
+    - row \"Sunday, November 29, 2026\"
+      - gridcell \"Monday, November 30, 2026, 10203 Indian rupees\" [ref=e81]
+        - button \"Monday, November 30, 2026, 10203 Indian rupees\" [ref=e82]
+    - row
+      - gridcell \"Tuesday, December 1, 2026\"
+        - button \"Tuesday, December 1, 2026, 11050 Indian rupees\" [ref=e84]
+      - gridcell \"A cell with two\" [ref=e85]
+        - button \"One\" [ref=e86]
+        - button \"Two\" [ref=e87]
+  - button \"Done. Search for one-way flights, departing on November 30, 2026\" [ref=e742]
+[END_UNTRUSTED_PAGE_CONTENT nonce=ab]";
+
+    #[test]
+    fn a_date_picker_keeps_its_buttons_and_loses_the_grid_around_them() {
+        assert_eq!(
+            interactive_lines(DATE_PICKER),
+            "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=https://www.google.com/travel/flights] notice
+- dialog \"Departure\" [ref=e70]
+  - grid \"November 2026\"
+        - button \"Monday, November 30, 2026, 10203 Indian rupees\" [ref=e82]
+        - button \"Tuesday, December 1, 2026, 11050 Indian rupees\" [ref=e84]
+      - gridcell \"A cell with two\" [ref=e85]
+        - button \"One\" [ref=e86]
+        - button \"Two\" [ref=e87]
+  - button \"Done. Search for one-way flights, departing on November 30, 2026\" [ref=e742]
+[END_UNTRUSTED_PAGE_CONTENT nonce=ab]"
+        );
+    }
+
+    #[test]
+    fn a_row_outside_page_content_and_a_name_mentioning_a_ref_are_left_alone() {
+        let text = "- row \"not page content\"\n[UNTRUSTED_PAGE_CONTENT nonce=ab origin=x] n\n- row \"names [ref=e1] in text\"\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]";
+        assert_eq!(
+            interactive_lines(text),
+            "- row \"not page content\"\n[UNTRUSTED_PAGE_CONTENT nonce=ab origin=x] n\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]"
+        );
+    }
+
+    #[test]
+    fn a_long_snapshot_keeps_the_dialog_buttons_at_its_end() {
+        let days = (1..=400)
+            .map(|day| format!("    - row \"Week {day}\"\n      - gridcell \"Day {day}\"\n        - button \"Day {day}, 10203 Indian rupees, a price for this date\" [ref=e{day}]"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let full = format!(
+            "[UNTRUSTED_PAGE_CONTENT nonce=ab origin=x] n\n- dialog \"Departure\" [ref=e1000]\n{days}\n  - button \"Done\" [ref=e742]\n[END_UNTRUSTED_PAGE_CONTENT nonce=ab]"
+        );
+        let fitted = fit_interactive(&full, "browseros output abc --part snapshot.md");
+        assert!(fitted.chars().count() < INTERACTIVE_INLINE_MAX_CHARS + 1_000);
+        assert!(fitted.contains("- dialog \"Departure\" [ref=e1000]"));
+        assert!(fitted.contains("- button \"Done\" [ref=e742]"));
+        assert!(fitted.contains(
+            "lines of the middle left out. Read them with: browseros output abc --part snapshot.md"
+        ));
+        assert!(!fitted.contains("gridcell"));
+        assert_eq!(
+            fitted
+                .matches("[END_UNTRUSTED_PAGE_CONTENT nonce=ab]")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_snapshot_that_fits_once_filtered_is_printed_whole() {
+        assert_eq!(
+            fit_interactive(DATE_PICKER, "browseros output abc"),
+            interactive_lines(DATE_PICKER)
+        );
     }
 }

@@ -289,6 +289,11 @@ async fn run_tool(
     let navigates = plan.tool == "navigate"
         || (plan.tool == "tabs" && plan.args.get("action").and_then(Value::as_str) == Some("new"));
     let saved = shape::saved_output(&output);
+    let interactive = plan.tool == "snapshot"
+        && plan.args.get("mode").and_then(Value::as_str) == Some("interactive");
+    if interactive && !output.is_error {
+        output.text = interactive_snapshot(client, &output, saved.as_ref()).await?;
+    }
     if navigates {
         output.text = render::summarize_auto_snapshot(
             &output.text,
@@ -640,6 +645,68 @@ pub async fn read_rest_of_output(
     }
     output.text = texts.join("\n");
     Ok(texts.len())
+}
+
+/// `snapshot -i` without the table structure around its refs. A snapshot too large to inline is
+/// read back whole from where the server saved it, so the filter sees all of it and what is
+/// printed ends with the page's last controls, not wherever the server's excerpt stopped.
+async fn interactive_snapshot(
+    client: &mut Client,
+    output: &ToolOutput,
+    saved: Option<&(String, Option<String>)>,
+) -> Result<String> {
+    let written = output
+        .structured
+        .as_ref()
+        .and_then(|value| value.get("writtenToFile"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let (true, Some((id, Some(part)))) = (written, saved) else {
+        return Ok(shape::interactive_lines(&output.text));
+    };
+    let Some(full) = read_saved_part(client, id, part).await? else {
+        return Ok(shape::interactive_lines(&output.text));
+    };
+    // A coverage warning the server put before its own notice stays.
+    let warnings = output
+        .text
+        .find("Large snapshot (")
+        .map_or("", |at| &output.text[..at]);
+    let read_with = shape::output_command(saved);
+    Ok(format!(
+        "{warnings}{}",
+        shape::fit_interactive(&full, &read_with)
+    ))
+}
+
+/// A saved part's text as it was stored, read chunk by chunk from the chunks' raw text rather
+/// than from the fenced copy each one prints, so a line split between two chunks stays whole.
+async fn read_saved_part(client: &mut Client, id: &str, part: &str) -> Result<Option<String>> {
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let arguments = json!({
+            "outputId": id,
+            "part": part,
+            "offset": offset,
+            "limit": plan::OUTPUT_CHUNK_BYTES,
+        });
+        let chunk = client.call("read_output", arguments).await?;
+        let Some(raw) = chunk
+            .structured
+            .as_ref()
+            .and_then(|value| value.get("text"))
+            .and_then(Value::as_str)
+            .filter(|_| !chunk.is_error)
+        else {
+            return Ok(None);
+        };
+        text.push_str(raw);
+        match next_output_offset(&chunk) {
+            Some(next) => offset = next,
+            None => return Ok(Some(text)),
+        }
+    }
 }
 
 /// For a slice the caller asked for, says how much of the part is left and how to read it.
