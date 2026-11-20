@@ -272,6 +272,12 @@ export function turnedUltrafast(skill: Skill): boolean {
   )
 }
 
+/** Whether a skill's next run goes without the agent: read flows, or writes chosen to. */
+export function runsByItself(skill: Skill): boolean {
+  const state = runsChoice(skill.ultrafast, [])?.state
+  return state === 'read' || state === 'without'
+}
+
 /** The big figure on the "now ultrafast" strip: whole seconds a run, at least 1. */
 export function upgradeSeconds(p50Ms: number): number {
   return Math.max(1, Math.round(p50Ms / 1000))

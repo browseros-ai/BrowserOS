@@ -177,6 +177,50 @@ describe('the now ultrafast strip', () => {
     expect(text()).not.toContain('Your skill is now ultrafast.')
   })
 
+  it('tests that a skill that still runs with the agent makes no promise to run by itself', async () => {
+    const verified = {
+      status: 'verified' as const,
+      flowVersion: 1,
+      writeApproved: false,
+      p50Ms: 7300,
+      verifiedAt: 10,
+    }
+    await render(
+      <NowUltrafastStrip
+        skill={taskSkill({
+          ultrafast: {
+            ...verified,
+            effects: 'write',
+            runs: {
+              mode: 'with_agent',
+              chosen: false,
+              reask: false,
+              alwaysWithAgent: 'order',
+            },
+          },
+        })}
+      />,
+    )
+    expect(text()).toContain('Your skill is now ultrafast.')
+    expect(text()).toContain('neo learned the fast version on the first run.')
+    expect(text()).not.toContain('Next time neo does it by itself.')
+
+    await remount(
+      <NowUltrafastStrip
+        skill={taskSkill({
+          ultrafast: {
+            ...verified,
+            effects: 'write',
+            runs: { mode: 'without_agent', chosen: true, reask: false },
+          },
+        })}
+      />,
+    )
+    expect(text()).toContain(
+      'neo learned it on the first run. Next time neo does it by itself.',
+    )
+  })
+
   it('tests that Got it puts it away', async () => {
     await render(<NowUltrafastStrip skill={taskSkill()} />)
 

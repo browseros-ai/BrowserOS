@@ -19,6 +19,7 @@ import { useSessionDetail } from '@/modules/api/audit.hooks'
 import { toast } from '@/modules/toast/toast'
 import {
   durationLabel,
+  runsByItself,
   turnedUltrafast,
   upgradeSeconds,
 } from '@/screens/skills/skills.helpers'
@@ -98,7 +99,9 @@ export function NowUltrafastStrip({ skill }: { skill: Skill }) {
           Your skill is now ultrafast.
         </h3>
         <p className={cn('m-0 text-[14.5px]', INK.ink2)}>
-          neo learned it on the first run. Next time neo does it by itself.
+          {runsByItself(skill)
+            ? 'neo learned it on the first run. Next time neo does it by itself.'
+            : 'neo learned the fast version on the first run.'}
         </p>
       </div>
       <div className="flex items-baseline gap-[18px]">

@@ -11,6 +11,7 @@ import {
   runModeCounts,
   runModeLabel,
   runSpeed,
+  runsByItself,
   runsChoice,
   skillCommand,
   skillSites,
@@ -503,5 +504,52 @@ describe('verifyingPoll', () => {
     expect(stillVerifying(openedAt, openedAt + 500)).toBe(true)
     expect(stillVerifying(openedAt, openedAt - 60_000)).toBe(true)
     expect(stillVerifying(openedAt, openedAt + VERIFYING_WINDOW_MS)).toBe(false)
+  })
+})
+
+describe('runsByItself', () => {
+  const skill = (patch: Partial<SkillUltrafast>): Skill => ({
+    name: 'neo-phones',
+    description: 'Find phones under a budget',
+    origin: 'history',
+    version: 1,
+    linkedAgents: [],
+    runCount: 1,
+    cleanRunCount: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    ultrafast: ultrafast({ status: 'verified', verifiedAt: 5, ...patch }),
+  })
+
+  it('is true for a read flow and a write chosen to run without the agent', () => {
+    expect(runsByItself(skill({}))).toBe(true)
+    expect(
+      runsByItself(
+        skill({
+          effects: 'write',
+          runs: writeRuns({ chosen: true, mode: 'without_agent' }),
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('is false when the plan is off or the run still needs the agent', () => {
+    expect(runsByItself(skill({ locked: true }))).toBe(false)
+    expect(
+      runsByItself(
+        skill({
+          effects: 'write',
+          runs: writeRuns({ alwaysWithAgent: 'pay' }),
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      runsByItself(
+        skill({
+          effects: 'write',
+          runs: writeRuns({}),
+        }),
+      ),
+    ).toBe(false)
   })
 })
