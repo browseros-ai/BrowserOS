@@ -498,6 +498,7 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             pattern,
             over,
             limit,
+            ..
         } => {
             if over != "ax" && over != "content" {
                 return Err(Failure::usage("grep --over takes \"ax\" or \"content\"."));

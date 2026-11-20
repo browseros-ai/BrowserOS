@@ -183,14 +183,19 @@ pub enum Command {
         #[arg(long)]
         include_images: bool,
     },
-    /// Search the page without dumping it.
+    /// Search the page without dumping it. Matching lines keep their [ref=eN].
     Grep {
+        /// A regular expression, always case-insensitive: `add to cart|buy now` matches either.
         pattern: String,
         /// "ax" greps snapshot lines and keeps their refs; "content" greps visible text.
         #[arg(long, default_value = "ax")]
         over: String,
-        #[arg(long, default_value_t = 50)]
+        /// The most matching lines to return.
+        #[arg(long, short = 'm', default_value_t = 50)]
         limit: u32,
+        /// Accepted out of habit. Matching is already case-insensitive.
+        #[arg(long = "ignore-case", short = 'i')]
+        ignore_case: bool,
     },
     /// Capture the page. Written to a file, because a terminal cannot render an image.
     Screenshot {

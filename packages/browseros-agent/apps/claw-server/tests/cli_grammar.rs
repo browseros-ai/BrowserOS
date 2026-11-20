@@ -202,6 +202,15 @@ fn an_explicit_readback_wins_over_the_default() {
 }
 
 #[test]
+fn grep_takes_the_flags_a_unix_grep_user_types() {
+    let (tool, args) = call(&["browseros", "grep", "-i", "add to cart|buy now", "-m", "5"]);
+    assert_eq!(tool, "grep");
+    assert_eq!(args["pattern"], "add to cart|buy now");
+    assert_eq!(args["limit"], 5);
+    assert!(args.get("ignoreCase").is_none(), "{args}");
+}
+
+#[test]
 fn fill_keeps_its_diff_flag_despite_building_its_plan_differently() {
     let (_, args) = call(&["browseros", "fill", "@e1", "x", "--diff", "summary"]);
     assert_eq!(args["diff"], "summary");
