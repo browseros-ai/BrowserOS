@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::test_rig::TestError;
+use neo_telemetry::Telemetry;
 
 /// Every sample of one scrape. A series is its family name plus its exact label set.
 #[derive(Debug)]
@@ -21,8 +21,9 @@ struct Sample {
 
 impl Scrape {
     /// Reads `text`; any sample line it cannot read fails the test, so a malformed exposition
-    /// never passes as an empty one.
-    pub(crate) fn parse(text: &str) -> Result<Self, TestError> {
+    /// never passes as an empty one. The error is a plain message, so `?` lifts it into either
+    /// of the crate's test error types.
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let samples = text
             .lines()
             .map(str::trim)
@@ -30,6 +31,17 @@ impl Scrape {
             .map(|line| sample(line).ok_or_else(|| format!("not a sample line: {line:?}")))
             .collect::<Result<_, _>>()?;
         Ok(Self { samples })
+    }
+
+    /// What `telemetry` would serve on `GET /v1/metrics` now.
+    pub(crate) fn of(telemetry: &Telemetry) -> Result<Self, String> {
+        Self::parse(&telemetry.render_prometheus())
+    }
+
+    /// `neo_tabs_open` by origin, as `(agent, found, neo)`; a series not served reads as 0.
+    pub(crate) fn open_tabs(&self) -> (f64, f64, f64) {
+        let open = |origin| self.count("neo_tabs_open", &[("origin", origin)]);
+        (open("agent"), open("found"), open("neo"))
     }
 
     /// The value of the series named `name` whose labels are exactly `labels`, if it is there.
@@ -47,6 +59,31 @@ impl Scrape {
     /// As [`Scrape::get`], with an absent series read as 0: a counter nobody bumped yet.
     pub(crate) fn count(&self, name: &str, labels: &[(&str, &str)]) -> f64 {
         self.get(name, labels).unwrap_or(0.0)
+    }
+
+    /// Every non-zero series of the families in `names`, one `name{key="value",..} value` line
+    /// each, labels sorted, lines sorted: a whole-set comparison shows any series too many as
+    /// plainly as one missing.
+    pub(crate) fn lines_of(&self, names: &[&str]) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .samples
+            .iter()
+            .filter(|sample| names.contains(&sample.name.as_str()) && sample.value != 0.0)
+            .map(|sample| {
+                let labels: Vec<String> = sample
+                    .labels
+                    .iter()
+                    .map(|(key, value)| format!("{key}=\"{value}\""))
+                    .collect();
+                if labels.is_empty() {
+                    format!("{} {}", sample.name, sample.value)
+                } else {
+                    format!("{}{{{}}} {}", sample.name, labels.join(","), sample.value)
+                }
+            })
+            .collect();
+        lines.sort();
+        lines
     }
 
     /// Every label set series `name` has, each as `key=value` pairs, for a failure message or a

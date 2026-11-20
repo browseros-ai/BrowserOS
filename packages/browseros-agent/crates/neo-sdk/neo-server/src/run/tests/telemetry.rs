@@ -1,17 +1,20 @@
-//! What the run service reports to telemetry, read back from the recording double beside the
-//! trace store: each run starts once with its caller's trace and ends once with the verdict
-//! `/v1/runs` records (ok, error, cancelled, timeout, a panic), in-flight comes back to zero,
-//! each op reports once under its run with the values of its record, and a refused call is
-//! counted without becoming a run.
+//! What the run service reports to telemetry, read from the live pipeline
+//! (`Telemetry::in_memory`) as a collector and the host API's scrape would read it, beside the
+//! trace store: each run ends once as one `neo.run` span carrying the end `/v1/runs` records
+//! (ok, error, cancelled, timeout, a panic), counted in the run metrics with in-flight back at
+//! zero; each op is one `neo.op` span under its run with the values of its record, counted
+//! under its registered name or `unknown`; each failure counts once; a refused call is counted
+//! without becoming a span; and the site-detail dial decides what of a page's address a span
+//! keeps.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_telemetry::label::{self, ErrorLabel};
 use neo_telemetry::{
-    OpSite, Recording, RunFacts, RunVerdict, Telemetry, TelemetryCall, TraceContext, Vocabulary,
+    CapturedSpan, Probe, RunFacts, SiteDetail, SpanStatus, SpanValue, Telemetry, TelemetryConfig,
+    TraceContext, Vocabulary,
 };
-use neo_trace::{Delivery, Outcome, RunId, RunStatus, RunSummary};
+use neo_trace::{Delivery, Outcome, RunId, RunStatus, RunSummary, WriterConfig};
 use serde_json::json;
 use tokio::time::Instant;
 
@@ -20,20 +23,52 @@ use crate::browser::TabsScope;
 use crate::dispatch::{
     Call, CallSite, Caller, ErrorCode, OperationError, RunCtx, RunGuard, RunStart,
 };
+use crate::telemetry_rig::Scrape;
 use crate::test_rig::{TestError, TestRig, on_neo_runtime};
 
 /// A W3C `traceparent` a caller could send.
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
-/// The recording handle a test's service reports to, labelled with the rig's own tables as
-/// startup labels Neo's: its method registry and Neo's error codes.
-fn telemetry(rig: &TestRig) -> (Telemetry, Recording) {
-    let (telemetry, recording) = Telemetry::recording();
+/// The run metrics a test compares whole, as `name{labels} value` lines.
+const RUN_METRICS: &[&str] = &[
+    "neo_runs_total",
+    "neo_run_duration_seconds_count",
+    "neo_errors_total",
+];
+
+/// The live pipeline a test's service reports to, with no URL detail on spans, labelled with
+/// the rig's own tables as startup labels Neo's: its method registry and Neo's error codes.
+fn telemetry(rig: &TestRig) -> (Telemetry, Probe) {
+    telemetry_with(rig, SiteDetail::None)
+}
+
+/// As [`telemetry`], with spans keeping `detail` of each page's address.
+fn telemetry_with(rig: &TestRig, site_detail: SiteDetail) -> (Telemetry, Probe) {
+    let (telemetry, probe) = Telemetry::in_memory(&TelemetryConfig {
+        site_detail,
+        ..TelemetryConfig::default()
+    });
     telemetry.bind_vocabulary(Vocabulary::new(
         rig.dispatcher.registry().names(),
         ErrorCode::all().map(ErrorCode::as_str),
     ));
-    (telemetry, recording)
+    (telemetry, probe)
+}
+
+/// The string attribute `key` of `span`.
+fn text<'a>(span: &'a CapturedSpan, key: &str) -> Option<&'a str> {
+    match span.attributes.get(key) {
+        Some(SpanValue::Str(value)) => Some(value),
+        _ => None,
+    }
+}
+
+/// The integer attribute `key` of `span`.
+fn int(span: &CapturedSpan, key: &str) -> Option<i64> {
+    match span.attributes.get(key) {
+        Some(SpanValue::Int(value)) => Some(*value),
+        _ => None,
+    }
 }
 
 /// How a run ended in the wire names `/v1/runs` serves and the run metrics label with. A plain
@@ -53,13 +88,10 @@ impl WireEnd {
         }
     }
 
-    fn reported(verdict: &RunVerdict) -> Self {
-        Self::new(
-            verdict.status.as_str(),
-            verdict
-                .error
-                .map(|error| (error.owner.as_str(), error.code.as_str())),
-        )
+    /// The end a `neo.run` span carries.
+    fn exported(span: &CapturedSpan) -> Self {
+        let error = text(span, "neo.error.owner").zip(text(span, "neo.error.code"));
+        Self::new(text(span, "neo.run.status").unwrap_or_default(), error)
     }
 
     fn recorded(run: &RunSummary) -> Self {
@@ -80,6 +112,29 @@ async fn recorded_run(rig: &TestRig, id: RunId) -> Result<RunSummary, TestError>
         .run_summary(id)
         .await?
         .ok_or("the run is on the record")?)
+}
+
+/// The one `neo.run` span of run `id`.
+fn run_span(probe: &Probe, id: RunId) -> Result<CapturedSpan, TestError> {
+    let id = id.to_string();
+    let spans: Vec<CapturedSpan> = probe
+        .spans()
+        .into_iter()
+        .filter(|span| span.name == "neo.run" && text(span, "neo.run.id") == Some(id.as_str()))
+        .collect();
+    match <[CapturedSpan; 1]>::try_from(spans) {
+        Ok([span]) => Ok(span),
+        Err(spans) => Err(format!("run {id} ends as exactly one neo.run span: {spans:#?}").into()),
+    }
+}
+
+/// The `neo.op` spans whose parent is `run`.
+fn op_spans(probe: &Probe, run: &CapturedSpan) -> Vec<CapturedSpan> {
+    probe
+        .spans()
+        .into_iter()
+        .filter(|span| span.name == "neo.op" && span.parent_span_id.as_ref() == Some(&run.span_id))
+        .collect()
 }
 
 /// A run started at the door as the run service starts an agent's run, counted by `telemetry`.
@@ -111,95 +166,121 @@ fn counted_run(
     Ok((id, run, guard))
 }
 
-/// Asserts that `run` reported one start and then one end, the end `/v1/runs` records for it,
-/// which is `expected`, and that no run is left in flight.
-fn assert_reported_once(
-    recording: &Recording,
+/// Asserts that `run` ended as one `neo.run` span carrying the end `/v1/runs` records for it,
+/// which is `expected`, with an error status exactly when it did not end ok, and that no run is
+/// left in flight. Returns the span.
+fn assert_ended_once(
+    telemetry: &Telemetry,
+    probe: &Probe,
     run: &RunSummary,
     expected: &WireEnd,
-) -> Result<(), TestError> {
-    let id = run.id.to_string();
-    let calls: Vec<TelemetryCall> = recording
-        .calls()
-        .into_iter()
-        .filter(|call| match call {
-            TelemetryCall::RunStarted { run_id, .. }
-            | TelemetryCall::RunFinished { run_id, .. }
-            | TelemetryCall::RunDropped { run_id } => *run_id == id,
-            _ => false,
-        })
-        .collect();
-    let [
-        TelemetryCall::RunStarted { .. },
-        TelemetryCall::RunFinished { verdict, .. },
-    ] = calls.as_slice()
-    else {
-        return Err(format!("run {id} reports one start, then one finish: {calls:?}").into());
-    };
+) -> Result<CapturedSpan, TestError> {
+    let span = run_span(probe, run.id)?;
     assert_eq!(
-        WireEnd::reported(verdict),
+        WireEnd::exported(&span),
         WireEnd::recorded(run),
-        "run {id}: telemetry's end is the one /v1/runs records"
+        "run {}: the span's end is the one /v1/runs records",
+        run.id
     );
-    assert_eq!(&WireEnd::recorded(run), expected, "run {id}: how it ended");
+    assert_eq!(&WireEnd::recorded(run), expected, "run {}: how it ended", run.id);
     assert_eq!(
-        recording.runs_in_flight(),
-        0,
-        "run {id}: in-flight comes back to zero on every path"
+        matches!(span.status, SpanStatus::Error { .. }),
+        expected.status != "ok",
+        "run {}: the span's status is ERROR exactly when the run did not end ok: {:?}",
+        run.id,
+        span.status
     );
-    Ok(())
+    assert_eq!(
+        Scrape::of(telemetry)?.get("neo_runs_in_flight", &[]),
+        Some(0.0),
+        "run {}: in-flight comes back to zero on every path",
+        run.id
+    );
+    Ok(span)
 }
 
 #[test]
-fn a_run_starts_with_its_callers_trace_and_ends_ok_once() -> Result<(), TestError> {
+fn a_run_joins_its_callers_trace_and_ends_ok_once() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         let parent =
             TraceContext::from_w3c(TRACEPARENT, Some("vendor=1")).ok_or("a valid traceparent")?;
         let reply = service
             .run(request(
-                "return 1;",
+                "await __neo.invoke('test.echo', {}); return 1;",
                 RunMeta {
-                    trace: Some(parent.clone()),
+                    trace: Some(parent),
                     ..meta(None, Some("task-traced"))?
                 },
             )?)
             .await;
         assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
-        let calls = recording.calls();
-        assert_eq!(
-            calls.first(),
-            Some(&TelemetryCall::RunStarted {
-                run_id: reply.id.to_string(),
-                task_id: Some("task-traced".to_owned()),
-                parent: Some(parent),
-            }),
-            "the run starts under the id /v1/runs knows it by, with its task and the caller's \
-             trace for its span to join"
-        );
         let run = recorded_run(&rig, reply.id).await?;
-        assert_reported_once(&recording, &run, &WireEnd::new("ok", None))
+        let span = assert_ended_once(&telemetry, &probe, &run, &WireEnd::new("ok", None))?;
+        assert_eq!(
+            (
+                span.trace_id.as_str(),
+                span.parent_span_id.as_deref(),
+                span.parent_is_remote
+            ),
+            ("4bf92f3577b34da6a3ce929d0e0e4736", Some("00f067aa0ba902b7"), true),
+            "the run's span joins the caller's trace under the caller's span"
+        );
+        assert_eq!(
+            text(&span, "neo.task.id"),
+            Some("task-traced"),
+            "the span names its task"
+        );
+        let ops = op_spans(&probe, &span);
+        assert!(
+            ops.len() == 1 && ops.iter().all(|op| op.trace_id == span.trace_id),
+            "its op is a child of the run in the caller's trace: {ops:#?}"
+        );
+        assert_eq!(
+            Scrape::of(&telemetry)?.lines_of(RUN_METRICS),
+            [
+                r#"neo_run_duration_seconds_count{status="ok"} 1"#,
+                r#"neo_runs_total{error_owner="none",status="ok"} 1"#,
+            ],
+            "one ok run, one duration, no error"
+        );
+        Ok(())
     })
 }
 
 #[test]
-fn a_run_that_throws_ends_with_the_scripts_error() -> Result<(), TestError> {
+fn a_run_that_throws_ends_with_the_scripts_error_counted_once() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         let reply = service
             .run(request("throw new Error('boom');", meta(None, None)?)?)
             .await;
         assert_eq!(reply.status, ReplyStatus::Error, "{reply:?}");
         let run = recorded_run(&rig, reply.id).await?;
-        assert_reported_once(
-            &recording,
+        let span = assert_ended_once(
+            &telemetry,
+            &probe,
             &run,
             &WireEnd::new("error", Some(("script", "script_error"))),
-        )
+        )?;
+        assert!(
+            span.parent_span_id.is_none(),
+            "with no caller trace the run starts a trace of its own"
+        );
+        assert_eq!(
+            Scrape::of(&telemetry)?.lines_of(RUN_METRICS),
+            [
+                r#"neo_errors_total{error_code="script_error",error_owner="script"} 1"#,
+                r#"neo_run_duration_seconds_count{status="error"} 1"#,
+                r#"neo_runs_total{error_owner="script",status="error"} 1"#,
+            ],
+            "the failed run and its one error, which no op had reported"
+        );
+        Ok(())
     })
 }
 
@@ -207,23 +288,25 @@ fn a_run_that_throws_ends_with_the_scripts_error() -> Result<(), TestError> {
 fn a_run_whose_caller_left_is_in_flight_until_it_ends_cancelled() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         let code = "await new Promise((resolve) => setTimeout(resolve, 600000));";
         let leaving = caller(&service, request(code, meta(None, Some("task-left"))?)?);
         until_status(&rig, "task-left", RunStatus::Running).await?;
         assert_eq!(
-            recording.runs_in_flight(),
-            1,
-            "a running run is in flight from before its start record"
+            Scrape::of(&telemetry)?.get("neo_runs_in_flight", &[]),
+            Some(1.0),
+            "a running run is in flight"
         );
         leaving.abort();
         let run = until_status(&rig, "task-left", RunStatus::Cancelled).await?;
-        assert_reported_once(
-            &recording,
+        assert_ended_once(
+            &telemetry,
+            &probe,
             &run,
             &WireEnd::new("cancelled", Some(("host", "cancelled"))),
-        )
+        )?;
+        Ok(())
     })
 }
 
@@ -231,18 +314,20 @@ fn a_run_whose_caller_left_is_in_flight_until_it_ends_cancelled() -> Result<(), 
 fn a_run_past_its_deadline_ends_timed_out() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         let mut short = request("await new Promise(() => {});", meta(None, None)?)?;
         short.timeout = RunTimeout::from_millis(Some(300))?;
         let reply = service.run(short).await;
         assert_eq!(reply.status, ReplyStatus::Timeout, "{reply:?}");
         let run = recorded_run(&rig, reply.id).await?;
-        assert_reported_once(
-            &recording,
+        assert_ended_once(
+            &telemetry,
+            &probe,
             &run,
             &WireEnd::new("timeout", Some(("neo", "run_timeout"))),
-        )
+        )?;
+        Ok(())
     })
 }
 
@@ -250,16 +335,17 @@ fn a_run_past_its_deadline_ends_timed_out() -> Result<(), TestError> {
 fn a_run_whose_task_panicked_ends_once_as_neos_failure() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         service.crash_next_run();
         let crashed = service
             .run(request("return 1;", meta(Some("call-crash"), None)?)?)
             .await;
         assert_eq!(crashed.status, ReplyStatus::Error, "{crashed:?}");
         let run = recorded_run(&rig, crashed.id).await?;
-        assert_reported_once(
-            &recording,
+        assert_ended_once(
+            &telemetry,
+            &probe,
             &run,
             &WireEnd::new("error", Some(("neo", "internal_error"))),
         )?;
@@ -267,7 +353,16 @@ fn a_run_whose_task_panicked_ends_once_as_neos_failure() -> Result<(), TestError
             .run(request("return 2;", meta(Some("call-after"), None)?)?)
             .await;
         let run = recorded_run(&rig, next.id).await?;
-        assert_reported_once(&recording, &run, &WireEnd::new("ok", None))
+        assert_ended_once(&telemetry, &probe, &run, &WireEnd::new("ok", None))?;
+        assert_eq!(
+            Scrape::of(&telemetry)?.lines_of(&["neo_runs_total"]),
+            [
+                r#"neo_runs_total{error_owner="neo",status="error"} 1"#,
+                r#"neo_runs_total{error_owner="none",status="ok"} 1"#,
+            ],
+            "the panic is counted as Neo's failure, and the next run as itself"
+        );
+        Ok(())
     })
 }
 
@@ -276,11 +371,11 @@ fn a_run_whose_task_panicked_ends_once_as_neos_failure() -> Result<(), TestError
     clippy::too_many_lines,
     reason = "one script's ops are checked field by field against their stored records"
 )]
-fn each_op_reports_once_under_its_run_as_its_record_says() -> Result<(), TestError> {
+fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         let code = [
             "await __neo.invoke('test.echo', { hello: 1 });",
             "try { await __neo.invoke('test.fail', {}); } catch (error) {}",
@@ -299,189 +394,104 @@ fn each_op_reports_once_under_its_run_as_its_record_says() -> Result<(), TestErr
             .run(reply.id)
             .await?
             .ok_or("the run is on the record")?;
-        let run_id = reply.id.to_string();
-        let calls = recording.calls();
-        let finished = calls
-            .iter()
-            .position(|call| {
-                matches!(call, TelemetryCall::RunFinished { run_id: id, .. } if *id == run_id)
-            })
-            .ok_or("the run finished")?;
-        let reports = calls
-            .iter()
-            .filter(|call| matches!(call, TelemetryCall::OpSettled { .. }))
-            .count();
+        let run = run_span(&probe, reply.id)?;
+        let ops = op_spans(&probe, &run);
         assert_eq!(
-            reports,
+            ops.len(),
             detail.operations.len(),
-            "one report per op on the record, and none beside them"
+            "one span per op on the record, each a child of its run: {ops:#?}"
+        );
+        assert!(
+            ops.iter().all(|op| op.end <= run.end && op.trace_id == run.trace_id),
+            "every op settled before its run ended, in the run's trace"
         );
         for row in &detail.operations {
             let op = row.id.to_string();
-            let reported: Vec<(usize, &TelemetryCall)> = calls
+            let spans: Vec<&CapturedSpan> = ops
                 .iter()
-                .enumerate()
-                .filter(|(_, call)| {
-                    matches!(call, TelemetryCall::OpSettled { op_id, .. } if *op_id == op)
-                })
+                .filter(|span| text(span, "neo.op.id") == Some(op.as_str()))
                 .collect();
-            let [
-                (
-                    at,
-                    TelemetryCall::OpSettled {
-                        run_id: under,
-                        op: spec_name,
-                        raw_name,
-                        op_label,
-                        site,
-                        tab_id,
-                        outcome,
-                        delivery,
-                        error,
-                        url,
-                        ..
-                    },
-                ),
-            ] = reported.as_slice()
-            else {
-                return Err(format!("op {op} reports exactly once: {reported:?}").into());
+            let [span] = spans.as_slice() else {
+                return Err(format!("op {op} is exactly one span: {spans:#?}").into());
             };
             assert_eq!(
-                under.as_deref(),
-                Some(run_id.as_str()),
-                "{op}: reported under its own run"
-            );
-            assert!(*at < finished, "{op}: settled before its run ended");
-            assert_eq!(
-                raw_name.as_deref().unwrap_or(spec_name),
-                row.name,
+                text(span, "neo.op.name"),
+                Some(row.name.as_str()),
                 "{op}: named as the script wrote it, as its record names it"
             );
             assert_eq!(
-                *op_label,
-                if row.name == "no.such.method" {
-                    Vocabulary::UNKNOWN
-                } else {
-                    row.name.as_str()
-                },
-                "{op}: a registered op labels as itself, anything else as unknown"
-            );
-            assert_eq!(
-                *site,
-                row.site.map(|site| OpSite {
-                    line: site.line,
-                    column: site.column,
-                }),
+                (int(span, "neo.op.site.line"), int(span, "neo.op.site.column")),
+                (
+                    row.site.map(|site| i64::from(site.line)),
+                    row.site.map(|site| i64::from(site.column))
+                ),
                 "{op}: the record's call site"
             );
-            assert_eq!(*tab_id, row.tab.map(|tab| tab.0), "{op}: the record's tab");
             assert_eq!(
-                Some(outcome.as_str()),
+                int(span, "neo.tab.id"),
+                row.tab.map(|tab| tab.0),
+                "{op}: the record's tab"
+            );
+            assert_eq!(
+                text(span, "neo.op.outcome"),
                 row.outcome.map(Outcome::as_str),
                 "{op}: the record's outcome"
             );
             assert_eq!(
-                Some(delivery.as_str()),
+                text(span, "neo.op.delivery"),
                 row.delivery.map(Delivery::as_str),
                 "{op}: the record's delivery"
             );
             assert_eq!(
-                error.map(|error| (error.owner.as_str(), error.code.as_str())),
+                text(span, "neo.error.owner").zip(text(span, "neo.error.code")),
                 row.error
                     .as_ref()
                     .map(|error| (error.owner.as_str(), error.code.as_str())),
                 "{op}: the record's error owner and code"
             );
-            assert_eq!(
-                url.as_deref(),
-                row.page.url.as_deref(),
-                "{op}: the URL the record keeps, read by no call of telemetry's"
+            assert!(
+                !span.attributes.contains_key("url.domain")
+                    && !span.attributes.contains_key("url.full"),
+                "{op}: with site detail off a span carries no address"
             );
         }
-        let named = |name: &str| {
-            calls.iter().find(|call| {
-                matches!(call, TelemetryCall::OpSettled { op, raw_name, .. }
-                    if raw_name.as_deref().unwrap_or(op) == name)
-            })
-        };
-        let Some(TelemetryCall::OpSettled {
-            op,
-            raw_name,
-            op_label,
-            error,
-            ..
-        }) = named("no.such.method")
-        else {
-            return Err("the unknown call reports".into());
-        };
-        assert_eq!(
-            (*op, raw_name.as_deref(), *op_label),
-            ("unknown", Some("no.such.method"), "unknown"),
-            "an unregistered name reaches telemetry raw, for the span only; its label is unknown"
-        );
-        assert_eq!(
-            *error,
-            Some(ErrorLabel {
-                owner: label::ErrorOwner::Script,
-                code: label::ErrorCode::new("method_unavailable"),
-            }),
-            "calling a method Neo does not have is the script's failure"
-        );
-        let Some(TelemetryCall::OpSettled { site, error, .. }) = named("test.fail") else {
-            return Err("the failing call reports".into());
-        };
-        assert_eq!(
-            (site.map(|site| site.line), *error),
-            (
-                Some(2),
-                Some(ErrorLabel {
-                    owner: label::ErrorOwner::Website,
-                    code: label::ErrorCode::new("cdp_error"),
-                })
-            ),
-            "the failure the page gave, at the line that called it"
-        );
-        let Some(TelemetryCall::OpSettled { tab_id, url, .. }) = named("test.touch") else {
-            return Err("the call on the lazy page reports".into());
-        };
+        let touched = ops
+            .iter()
+            .find(|span| text(span, "neo.op.name") == Some("test.touch"))
+            .ok_or("the call on the lazy page is a span")?;
         assert!(
-            tab_id.is_some() && url.is_some(),
-            "an op on the run's lazy page reports the tab the door opened for it, and the URL \
-             its page facts already held: {tab_id:?} {url:?}"
+            int(touched, "neo.tab.id").is_some(),
+            "an op on the run's lazy page carries the tab the door opened for it"
         );
-        let Some(TelemetryCall::OpSettled {
-            outcome,
-            delivery,
-            error,
-            ..
-        }) = named("test.hang")
-        else {
-            return Err("the call the script left behind reports".into());
-        };
         assert_eq!(
-            (outcome.as_str(), delivery.as_str(), *error),
-            (
-                "cancelled",
-                "unknown",
-                Some(ErrorLabel {
-                    owner: label::ErrorOwner::Script,
-                    code: label::ErrorCode::new("not_awaited"),
-                })
-            ),
-            "a sent write the script did not await is cut short, its effect unknown"
+            Scrape::of(&telemetry)?.lines_of(&["neo_operations_total", "neo_errors_total"]),
+            [
+                r#"neo_errors_total{error_code="cdp_error",error_owner="website"} 1"#,
+                r#"neo_errors_total{error_code="method_unavailable",error_owner="script"} 1"#,
+                r#"neo_errors_total{error_code="not_awaited",error_owner="script"} 1"#,
+                r#"neo_operations_total{error_owner="none",op="context.newPage",status="ok"} 1"#,
+                r#"neo_operations_total{error_owner="none",op="test.echo",status="ok"} 1"#,
+                r#"neo_operations_total{error_owner="none",op="test.touch",status="ok"} 1"#,
+                r#"neo_operations_total{error_owner="script",op="test.hang",status="cancelled"} 1"#,
+                r#"neo_operations_total{error_owner="script",op="unknown",status="error"} 1"#,
+                r#"neo_operations_total{error_owner="website",op="test.fail",status="error"} 1"#,
+            ],
+            "registered ops count under their names (the lazy page's newPage among them), the \
+             unregistered one as unknown (its span keeps the raw name), and each op failure \
+             counts once"
         );
         Ok(())
     })
 }
 
 /// A run whose task died with an op still running: the guard ends the run once, as the trace
-/// does, and the op it aborted settles on its own task, before or after that end, still under
-/// the run.
+/// does, and the op it aborted settles on its own task, before or after that end, still a child
+/// of the run, its failure (the run's own) counted once.
 #[test]
 fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
+        let (telemetry, probe) = telemetry(&rig);
         let (id, run, guard) = counted_run(&rig, &telemetry)?;
         let pending = rig.dispatcher.submit(
             &run,
@@ -493,7 +503,11 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
                 abort: None,
             },
         );
-        assert_eq!(recording.runs_in_flight(), 1, "the run is in flight");
+        assert_eq!(
+            Scrape::of(&telemetry)?.get("neo_runs_in_flight", &[]),
+            Some(1.0),
+            "the run is in flight"
+        );
         drop(guard);
         let reply = pending.wait().await;
         let failure = reply.outcome.err().ok_or("the cut op failed")?;
@@ -505,67 +519,42 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
             ),
             "the crash owns the op it cut"
         );
-        let crashed = ErrorLabel {
-            owner: label::ErrorOwner::Neo,
-            code: label::ErrorCode::new("internal_error"),
-        };
-        let calls = recording.calls();
-        let finished: Vec<&RunVerdict> = calls
-            .iter()
-            .filter_map(|call| match call {
-                TelemetryCall::RunFinished {
-                    run_id, verdict, ..
-                } if *run_id == id.to_string() => Some(verdict),
-                _ => None,
-            })
-            .collect();
+        let span = run_span(&probe, id)?;
         assert_eq!(
-            finished,
-            vec![&RunVerdict {
-                status: label::RunStatus::Error,
-                error: Some(crashed),
-            }],
+            WireEnd::exported(&span),
+            WireEnd::new("error", Some(("neo", "internal_error"))),
             "the guard's drop ends the run once, with the crash the trace records"
         );
-        let reported: Vec<&TelemetryCall> = calls
-            .iter()
-            .filter(|call| matches!(call, TelemetryCall::OpSettled { .. }))
-            .collect();
-        let [
-            TelemetryCall::OpSettled {
-                run_id,
-                op,
-                op_id,
-                site,
-                outcome,
-                error,
-                ..
-            },
-        ] = reported.as_slice()
-        else {
-            return Err(format!("the cut op reports once: {reported:?}").into());
+        let ops = op_spans(&probe, &span);
+        let [op] = ops.as_slice() else {
+            return Err(format!("the cut op is one span under the run: {ops:#?}").into());
         };
         assert_eq!(
-            (run_id.clone(), *op, op_id.clone(), *site, *outcome, *error),
             (
-                Some(id.to_string()),
-                "test.hang",
-                format!("{id}.1"),
-                Some(OpSite { line: 3, column: 7 }),
-                label::OpOutcome::Cancelled,
-                Some(crashed),
+                text(op, "neo.op.name"),
+                text(op, "neo.op.id"),
+                int(op, "neo.op.site.line"),
+                text(op, "neo.op.outcome"),
+                text(op, "neo.error.code"),
+            ),
+            (
+                Some("test.hang"),
+                Some(format!("{id}.1").as_str()),
+                Some(3),
+                Some("cancelled"),
+                Some("internal_error"),
             ),
             "the aborted op reports under the run it belonged to, cut by the crash"
         );
-        assert!(
-            !calls
-                .iter()
-                .any(|call| matches!(call, TelemetryCall::RunDropped { .. })),
-            "the guard always finishes the span; its drop backstop never fires"
+        let scrape = Scrape::of(&telemetry)?;
+        assert_eq!(
+            scrape.lines_of(&["neo_errors_total"]),
+            [r#"neo_errors_total{error_code="internal_error",error_owner="neo"} 1"#],
+            "the crash is one failure, whether the run or its cut op reported it first"
         );
         assert_eq!(
-            recording.runs_in_flight(),
-            0,
+            scrape.get("neo_runs_in_flight", &[]),
+            Some(0.0),
             "the crash left no run in flight"
         );
         Ok(())
@@ -573,11 +562,11 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
 }
 
 #[test]
-fn a_refused_call_is_counted_once_and_never_becomes_a_run() -> Result<(), TestError> {
+fn a_refused_call_is_counted_once_and_never_becomes_a_span() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let (telemetry, recording) = telemetry(&rig);
-        let service = rig.run_service_reporting(GRACE, telemetry);
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
         let invalid =
             OperationError::host(ErrorCode::INVALID_META, "taskId must be 1 to 128 bytes");
         let bad_meta = service.refuse("return 1;".to_owned(), meta(None, None)?, &invalid);
@@ -597,26 +586,121 @@ fn a_refused_call_is_counted_once_and_never_becomes_a_run() -> Result<(), TestEr
                 "the refusal is on the record as a failed run"
             );
         }
-        let counted: Vec<(&str, &str)> = recording
-            .calls()
-            .iter()
-            .map(|call| match call {
-                TelemetryCall::RunRefused { error } => {
-                    Ok((error.owner.as_str(), error.code.as_str()))
-                }
-                other => Err(format!("a refusal starts no run and no op: {other:?}")),
-            })
-            .collect::<Result<_, _>>()?;
+        assert_eq!(probe.spans(), [], "a refusal starts no span");
+        let scrape = Scrape::of(&telemetry)?;
         assert_eq!(
-            counted,
-            vec![("host", "invalid_meta"), ("neo", "browser_unavailable")],
-            "each refusal is counted once, with the error its record carries"
+            scrape.lines_of(RUN_METRICS),
+            [
+                r#"neo_errors_total{error_code="browser_unavailable",error_owner="neo"} 1"#,
+                r#"neo_errors_total{error_code="invalid_meta",error_owner="host"} 1"#,
+                r#"neo_runs_total{error_owner="host",status="error"} 1"#,
+                r#"neo_runs_total{error_owner="neo",status="error"} 1"#,
+            ],
+            "each refusal is a failed run and one error, with the error its record carries, and \
+             no duration"
         );
         assert_eq!(
-            recording.runs_in_flight(),
-            0,
+            scrape.get("neo_runs_in_flight", &[]),
+            Some(0.0),
             "a refusal is never in flight"
         );
+        Ok(())
+    })
+}
+
+/// A repeat of a `requestId` whose run ended before the replay window is refused as a
+/// duplicate: counted like every refusal, as `/v1/runs` lists it, and never a span.
+#[test]
+fn a_refused_duplicate_is_counted_as_a_failed_run_with_no_span() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::with_writer(WriterConfig {
+            replay_window: Duration::ZERO,
+            ..WriterConfig::default()
+        })
+        .await?;
+        let first = rig
+            .run_service(GRACE)
+            .run(request("return 1;", meta(Some("call-dup"), None)?)?)
+            .await;
+        assert_eq!(first.status, ReplyStatus::Ok, "{first:?}");
+        rig.sink.flush().await?;
+        // A service of its own: an empty in-memory ledger, so the repeat is decided by the store.
+        let (telemetry, probe) = telemetry(&rig);
+        let repeat = rig
+            .run_service_reporting(GRACE, telemetry.clone())
+            .run(request("return 1;", meta(Some("call-dup"), None)?)?)
+            .await;
+        assert_eq!(
+            WireEnd::recorded(&recorded_run(&rig, repeat.id).await?),
+            WireEnd::new("error", Some(("host", "duplicate_request"))),
+            "the duplicate is on the record as a failed run"
+        );
+        assert_eq!(probe.spans(), [], "a duplicate starts no span");
+        let scrape = Scrape::of(&telemetry)?;
+        assert_eq!(
+            scrape.lines_of(RUN_METRICS),
+            [
+                r#"neo_errors_total{error_code="duplicate_request",error_owner="host"} 1"#,
+                r#"neo_runs_total{error_owner="host",status="error"} 1"#,
+            ],
+            "the duplicate is counted once, as the host's failure, with no duration"
+        );
+        assert_eq!(scrape.get("neo_runs_in_flight", &[]), Some(0.0));
+        Ok(())
+    })
+}
+
+/// `CLAW_TELEMETRY_SITE_DETAIL`, end to end through a real op on an owner's tab: `none` keeps
+/// no address, `host` the domain, `url` the address without its userinfo, query or fragment;
+/// no mode lets a credential or a query value into a span.
+#[test]
+fn the_site_detail_dial_decides_what_of_the_page_address_an_op_span_keeps() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let page = rig
+            .owner_tab("https://user:pw@shop.example/cart?token=s3cr3t#frag")
+            .await?;
+        let code = format!(
+            "await __neo.invoke('test.touch', {{ page: {} }}); return 1;",
+            json!({ "$neo": "page", "tab": page.tab.0 })
+        );
+        let modes = [
+            (SiteDetail::None, None, None),
+            (SiteDetail::Host, Some("shop.example"), None),
+            (
+                SiteDetail::Url,
+                Some("shop.example"),
+                Some("https://shop.example/cart"),
+            ),
+        ];
+        for (detail, domain, full) in modes {
+            let (telemetry, probe) = telemetry_with(&rig, detail);
+            let reply = rig
+                .run_service_reporting(GRACE, telemetry)
+                .run(request(&code, meta(None, None)?)?)
+                .await;
+            assert_eq!(reply.status, ReplyStatus::Ok, "{detail:?}: {reply:?}");
+            let run = run_span(&probe, reply.id)?;
+            let ops = op_spans(&probe, &run);
+            let op = ops
+                .iter()
+                .find(|span| text(span, "neo.op.name") == Some("test.touch"))
+                .ok_or_else(|| format!("{detail:?}: the touch is an op span: {ops:#?}"))?;
+            assert_eq!(
+                (text(op, "url.domain"), text(op, "url.full")),
+                (domain, full),
+                "{detail:?}: what of the address the span keeps"
+            );
+            let leaked: Vec<String> = probe
+                .spans()
+                .iter()
+                .flat_map(|span| span.attributes.values())
+                .map(|value| format!("{value:?}"))
+                .filter(|value| value.contains("s3cr3t") || value.contains("pw@"))
+                .collect();
+            assert_eq!(leaked, Vec::<String>::new(), "{detail:?}: nothing secret leaves");
+        }
         Ok(())
     })
 }

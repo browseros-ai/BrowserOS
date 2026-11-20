@@ -9,8 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId, page_js};
-use neo_telemetry::label::{CloseReason, TabOrigin};
-use neo_telemetry::{OpenTabCounts, Recording, Telemetry, TelemetryCall};
+use neo_telemetry::{Telemetry, TelemetryConfig};
 use neo_trace::TaskId;
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -19,6 +18,7 @@ use tokio::time;
 use crate::browser::{
     BrowserLink, LinkStatus, PageRef, RunScope, Sight, TabEvent, TabListing, TabRegistry, Watched,
 };
+use crate::telemetry_rig::Scrape;
 use crate::test_support::FakeCdp;
 
 #[derive(Default)]
@@ -424,20 +424,13 @@ async fn a_popup_that_opened_and_closed_between_two_listings_leaves_no_announcem
     Ok(())
 }
 
-/// The tab hooks the recording kept so far, each lifetime left out (the ledger's tests pin them).
-fn tab_hooks(recording: &Recording) -> Vec<(&'static str, Option<TabOrigin>, Option<CloseReason>)> {
-    recording
-        .calls()
-        .into_iter()
-        .filter_map(|call| match call {
-            TelemetryCall::TabOpened { origin } => Some(("opened", Some(origin), None)),
-            TelemetryCall::TabClosed { origin, reason, .. } => {
-                Some(("closed", Some(origin), Some(reason)))
-            }
-            TelemetryCall::RendererCrashed => Some(("crashed", None, None)),
-            _ => None,
-        })
-        .collect()
+/// The tab metrics `telemetry` serves, as `name{labels} value` lines (the gauge left out).
+fn tab_counts(telemetry: &Telemetry) -> Result<Vec<String>, Box<dyn Error>> {
+    Ok(Scrape::of(telemetry)?.lines_of(&[
+        "neo_tabs_opened_total",
+        "neo_tabs_closed_total",
+        "neo_renderer_crashes_total",
+    ]))
 }
 
 /// The tab watch is the only writer of browser facts to tab telemetry: a tab open before Neo
@@ -449,23 +442,19 @@ fn tab_hooks(recording: &Recording) -> Vec<(&'static str, Option<TabOrigin>, Opt
 async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), Box<dyn Error>> {
     let fake = FakeCdp::new();
     let before = fake.open_tab("https://example.com/", "Example");
-    let (telemetry, recording) = Telemetry::recording();
-    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
     let _link = start(&fake, &tabs);
-    let found = |count: u64| {
-        let recording = recording.clone();
+    let found = |count: f64| {
+        let telemetry = telemetry.clone();
         move || {
-            recording.open_tabs()
-                == Some(OpenTabCounts {
-                    found: count,
-                    ..OpenTabCounts::default()
-                })
+            Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0.0, count, 0.0))
         }
     };
-    eventually(Duration::from_secs(5), found(1)).await?;
+    eventually(Duration::from_secs(5), found(1.0)).await?;
     let owners = fake.open_tab("https://example.org/", "Other");
     let popup = fake.open_popup(owners, "https://example.net/");
-    eventually(Duration::from_secs(5), found(3)).await?;
+    eventually(Duration::from_secs(5), found(3.0)).await?;
 
     assert!(
         fake.page_event(
@@ -476,41 +465,36 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
         "the fake had the tab"
     );
     assert!(fake.close_tab(owners), "the fake had the tab");
-    eventually(Duration::from_secs(5), found(2)).await?;
+    eventually(Duration::from_secs(5), found(2.0)).await?;
 
     fake.drop_connection();
     assert!(fake.close_tab(popup), "closed while no socket hears of it");
     fake.reconnect();
-    eventually(Duration::from_secs(5), found(1)).await?;
+    eventually(Duration::from_secs(5), found(1.0)).await?;
 
     // Restarted while Neo was away: every target is new, and tab number `before` came back.
     fake.drop_connection();
     assert!(fake.replace_target(before), "the fake had the tab");
     fake.reconnect();
-    let shutdown = (
-        "closed",
-        Some(TabOrigin::Found),
-        Some(CloseReason::Shutdown),
-    );
+    let shutdown = r#"neo_tabs_closed_total{close_reason="shutdown",origin="found"} 1"#;
     eventually(Duration::from_secs(5), || {
-        tab_hooks(&recording).contains(&shutdown)
+        tab_counts(&telemetry).is_ok_and(|counts| counts.iter().any(|line| line == shutdown))
     })
     .await?;
-    eventually(Duration::from_secs(5), found(1)).await?;
+    eventually(Duration::from_secs(5), found(1.0)).await?;
 
     assert_eq!(
-        tab_hooks(&recording),
+        tab_counts(&telemetry)?,
         [
-            ("opened", Some(TabOrigin::Found), None),
-            ("opened", Some(TabOrigin::Found), None),
-            ("opened", Some(TabOrigin::Found), None),
-            ("crashed", None, None),
-            ("closed", Some(TabOrigin::Found), Some(CloseReason::Crash)),
-            ("closed", Some(TabOrigin::Found), Some(CloseReason::User)),
+            "neo_renderer_crashes_total 1",
+            r#"neo_tabs_closed_total{close_reason="crash",origin="found"} 1"#,
             shutdown,
-            ("opened", Some(TabOrigin::Found), None),
+            r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#,
+            r#"neo_tabs_opened_total{origin="found"} 4"#,
         ],
-        "each tab opened and closed once, a crash counted once, nothing counted twice"
+        "three tabs found, each closed once (the crashed one as crash, the one gone while Neo \
+         was away as the user's, the restarted browser's as shutdown), the reborn tab found \
+         once more, and the crash counted once"
     );
     Ok(())
 }

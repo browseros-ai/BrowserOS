@@ -837,7 +837,7 @@ mod tests {
 
     use browseros_core::{TabId, TargetId};
     use neo_telemetry::label::{CloseReason, TabOrigin};
-    use neo_telemetry::{OpenTabCounts, Telemetry, TelemetryCall, TelemetryConfig};
+    use neo_telemetry::{OpenTabCounts, Telemetry, TelemetryConfig};
     use tokio::time::{Duration, Instant};
 
     use super::{
@@ -845,6 +845,8 @@ mod tests {
         TabLedger, TabTarget, close_reason,
     };
     use crate::browser::TabRegistry;
+    use crate::telemetry_rig::Scrape;
+    use crate::test_rig::TestError;
 
     const ORIGINS: [TabOrigin; 3] = [TabOrigin::Agent, TabOrigin::Found, TabOrigin::Neo];
 
@@ -1610,16 +1612,18 @@ mod tests {
         }
     }
 
-    /// The shell, through the registry that owns it: each fact reaches the facade once its lock
-    /// is released, and the registered source serves the ledger's live counts.
+    /// The shell over the live pipeline (`Telemetry::in_memory`), through the registry that owns
+    /// it, read as the host API's scrape reads it: the registry registers the ledger as the
+    /// gauge's source, `neo_tabs_open` is the ledger's own map at every scrape, and each fact
+    /// becomes exactly one count, once the ledger's lock is released.
     #[test]
-    fn the_registry_s_ledger_reports_each_fact_and_serves_the_gauge() {
-        let (telemetry, recording) = Telemetry::recording();
-        let tabs = TabRegistry::new_with_telemetry(telemetry);
+    fn the_ledger_s_facts_are_the_live_tab_metrics() -> Result<(), TestError> {
+        let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+        let tabs = TabRegistry::new_with_telemetry(telemetry.clone());
         let life = tabs.life();
         assert_eq!(
-            recording.open_tabs(),
-            Some(OpenTabCounts::default()),
+            Scrape::of(&telemetry)?.get("neo_tabs_open", &[("origin", "found")]),
+            Some(0.0),
             "the registry registers its ledger as the gauge's source"
         );
         let start = Instant::now();
@@ -1641,16 +1645,12 @@ mod tests {
         });
         open.claim(TabId(3));
         assert_eq!(
-            recording.open_tabs(),
-            Some(OpenTabCounts {
-                agent: 1,
-                found: 2,
-                neo: 0
-            }),
-            "the gauge reads the ledger now"
+            Scrape::of(&telemetry)?.open_tabs(),
+            (1.0, 2.0, 0.0),
+            "the gauge reads the ledger now: (agent, found, neo)"
         );
-        let _close = life.intend_close(TabId(3), IntentReason::Script);
         life.crashed(TabId(2), &target(2));
+        let _close = life.intend_close(TabId(3), IntentReason::Script);
         life.listed(Listing {
             tabs: &[tab(1)],
             destroyed: &[TabId(2), TabId(3)],
@@ -1658,142 +1658,28 @@ mod tests {
             gap: Gap::None,
             now: at(5),
         });
-        let tab_calls: Vec<TelemetryCall> = recording
-            .calls()
-            .into_iter()
-            .filter(|call| {
-                matches!(
-                    call,
-                    TelemetryCall::TabOpened { .. }
-                        | TelemetryCall::TabClosed { .. }
-                        | TelemetryCall::RendererCrashed
-                )
-            })
-            .collect();
+
+        let scrape = Scrape::of(&telemetry)?;
+        assert_eq!(scrape.open_tabs(), (0.0, 1.0, 0.0), "one tab left open");
         assert_eq!(
-            tab_calls,
+            scrape.lines_of(&[
+                "neo_tabs_opened_total",
+                "neo_tabs_closed_total",
+                "neo_tab_lifetime_seconds_sum",
+                "neo_renderer_crashes_total",
+            ]),
             [
-                TelemetryCall::TabOpened {
-                    origin: TabOrigin::Found
-                },
-                TelemetryCall::TabOpened {
-                    origin: TabOrigin::Found
-                },
-                TelemetryCall::TabOpened {
-                    origin: TabOrigin::Agent
-                },
-                TelemetryCall::RendererCrashed,
-                TelemetryCall::TabClosed {
-                    origin: TabOrigin::Found,
-                    reason: CloseReason::Crash,
-                    lifetime: Duration::from_secs(5),
-                },
-                TelemetryCall::TabClosed {
-                    origin: TabOrigin::Agent,
-                    reason: CloseReason::Script,
-                    lifetime: Duration::from_secs(4),
-                },
+                "neo_renderer_crashes_total 1",
+                r#"neo_tab_lifetime_seconds_sum{close_reason="crash",origin="found"} 5"#,
+                r#"neo_tab_lifetime_seconds_sum{close_reason="script",origin="agent"} 4"#,
+                r#"neo_tabs_closed_total{close_reason="crash",origin="found"} 1"#,
+                r#"neo_tabs_closed_total{close_reason="script",origin="agent"} 1"#,
+                r#"neo_tabs_opened_total{origin="agent"} 1"#,
+                r#"neo_tabs_opened_total{origin="found"} 2"#,
             ],
-            "each fact reached the facade once, in the ledger's order"
+            "each fact counted once: births by frozen origin, one close each with its one \
+             reason and lifetime, one crash"
         );
-        assert_eq!(
-            recording.open_tabs(),
-            Some(OpenTabCounts {
-                found: 1,
-                ..OpenTabCounts::default()
-            }),
-            "one tab left open"
-        );
-    }
-
-    /// Label pairs a Prometheus sample must carry, in any order.
-    type Labels = &'static [(&'static str, &'static str)];
-
-    /// The value of the Prometheus sample of `family` whose labels include every pair in
-    /// `labels`, in any order.
-    fn sample<'a>(text: &'a str, family: &str, labels: &[(&str, &str)]) -> Option<&'a str> {
-        text.lines()
-            .filter(|line| !line.starts_with('#'))
-            .find(|line| {
-                let series = line.split(' ').next().unwrap_or_default();
-                series.split('{').next() == Some(family)
-                    && labels
-                        .iter()
-                        .all(|(key, value)| series.contains(&format!("{key}=\"{value}\"")))
-            })
-            .and_then(|line| line.split(' ').nth(1))
-    }
-
-    /// The ledger over the live pipeline (`Telemetry::in_memory`), read as the host API's scrape
-    /// reads it: its facts become the tab metrics, and `neo_tabs_open` is its own map.
-    #[test]
-    fn the_ledger_s_facts_are_the_live_tab_metrics() {
-        let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
-        let tabs = TabRegistry::new_with_telemetry(telemetry.clone());
-        let life = tabs.life();
-        let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
-        life.listed(Listing {
-            tabs: &[tab(1), tab(2)],
-            destroyed: &[],
-            targeted: &[],
-            gap: Gap::Socket,
-            now: at(0),
-        });
-        let open = life.expect_open(OpenFor::Agent);
-        life.listed(Listing {
-            tabs: &[tab(1), tab(2), tab(3)],
-            destroyed: &[],
-            targeted: &[],
-            gap: Gap::None,
-            now: at(1),
-        });
-        open.claim(TabId(3));
-        life.crashed(TabId(2), &target(2));
-        let _close = life.intend_close(TabId(3), IntentReason::Script);
-        life.listed(Listing {
-            tabs: &[tab(1)],
-            destroyed: &[TabId(2), TabId(3)],
-            targeted: &[],
-            gap: Gap::None,
-            now: at(5),
-        });
-
-        let text = telemetry.render_prometheus();
-        let expected: [(&str, Labels, &str); 10] = [
-            ("neo_tabs_open", &[("origin", "found")], "1"),
-            ("neo_tabs_open", &[("origin", "agent")], "0"),
-            ("neo_tabs_open", &[("origin", "neo")], "0"),
-            ("neo_tabs_opened_total", &[("origin", "found")], "2"),
-            ("neo_tabs_opened_total", &[("origin", "agent")], "1"),
-            (
-                "neo_tabs_closed_total",
-                &[("origin", "found"), ("close_reason", "crash")],
-                "1",
-            ),
-            (
-                "neo_tabs_closed_total",
-                &[("origin", "agent"), ("close_reason", "script")],
-                "1",
-            ),
-            (
-                "neo_tab_lifetime_seconds_sum",
-                &[("origin", "found"), ("close_reason", "crash")],
-                "5",
-            ),
-            (
-                "neo_tab_lifetime_seconds_sum",
-                &[("origin", "agent"), ("close_reason", "script")],
-                "4",
-            ),
-            ("neo_renderer_crashes_total", &[], "1"),
-        ];
-        for (family, labels, value) in expected {
-            assert_eq!(
-                sample(&text, family, labels),
-                Some(value),
-                "{family}{labels:?} in the scrape:\n{text}"
-            );
-        }
+        Ok(())
     }
 }
