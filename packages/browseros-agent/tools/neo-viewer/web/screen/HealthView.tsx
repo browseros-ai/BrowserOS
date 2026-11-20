@@ -22,7 +22,7 @@
 import { type ReactNode, useState } from 'react'
 import type { MetricsView, TelemetryHealth, ViewerInfo } from '../../shared/api'
 import { useMetrics } from '../use-telemetry'
-import { freshness } from './HealthLine'
+import { freshness, useSecondClock } from './HealthLine'
 import {
   Bars,
   Columns,
@@ -50,6 +50,8 @@ export function HealthView({
   onBack: () => void
 }) {
   const metrics = useMetrics(true, health?.rev)
+  // Its own clock: the age keeps counting when Neo goes quiet and health stops changing.
+  const now = useSecondClock()
   return (
     <section className="flex min-w-[752px] flex-col" aria-label="Neo health">
       <div className="sticky top-0 z-10">
@@ -66,7 +68,7 @@ export function HealthView({
           <span className="flex-1" />
           {health && metrics && (
             <span className="truncate text-ink-2">
-              {freshness(health, Date.now()).where.replace(/\.$/, '')}
+              {freshness(health, now).where.replace(/\.$/, '')}
             </span>
           )}
         </div>

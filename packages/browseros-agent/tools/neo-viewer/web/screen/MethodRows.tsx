@@ -222,22 +222,20 @@ function MethodLanes({
 /**
  * The open method's arguments and call log under its row, and its outcome. What it returned is
  * in the right panel, whole and formatted; the Result column says how big it is and points there.
- * A call from a span-made record (`fromSpans`) has no arguments, log or result to show (its block
- * says so once): just its outcome.
+ * A call whose record holds its outcome alone (`output.outcomeOnly`: one folded from spans, which
+ * its block says once) shows just that.
  */
 export function MethodDetail({
   operation,
   output,
-  fromSpans = false,
 }: {
   operation: NeoOperation
   output: OperationOutput
-  fromSpans?: boolean
 }) {
   const args = argumentLines(operation.name, operation.args)
   // An operation can omit values even when the run ends after recording was turned back on.
   const valuesOff = operation.values === 'off'
-  if (fromSpans) return <SpanOutcome operation={operation} />
+  if (output.outcomeOnly) return <OutcomeOnly operation={operation} />
   return (
     <div className="flex shrink-0 bg-white px-4">
       <Rail />
@@ -306,8 +304,8 @@ export function MethodDetail({
   )
 }
 
-/** A span-made call's detail: its outcome and delivery, or the error its span recorded. */
-function SpanOutcome({ operation }: { operation: NeoOperation }) {
+/** A call known by its outcome alone: its outcome and delivery, or the error recorded for it. */
+function OutcomeOnly({ operation }: { operation: NeoOperation }) {
   return (
     <div className="flex shrink-0 bg-white px-4">
       <Rail />
@@ -367,7 +365,6 @@ export function UnplacedGroup({
   openId,
   onToggle,
   outputOf,
-  fromSpans = false,
 }: {
   operations: NeoOperation[]
   spanMs: number
@@ -376,7 +373,6 @@ export function UnplacedGroup({
   openId: string | null
   onToggle: (id: string) => void
   outputOf: (operation: NeoOperation) => OperationOutput
-  fromSpans?: boolean
 }) {
   return (
     <>
@@ -403,7 +399,6 @@ export function UnplacedGroup({
             open={operation.id === openId}
             onToggle={() => onToggle(operation.id)}
             outputOf={outputOf}
-            fromSpans={fromSpans}
           />
         ))}
     </>
@@ -417,7 +412,6 @@ function MethodGroupRow({
   open,
   onToggle,
   outputOf,
-  fromSpans,
 }: {
   operation: NeoOperation
   spanMs: number
@@ -425,7 +419,6 @@ function MethodGroupRow({
   onToggle: () => void
   /** Its output, worked out only while the row is open. */
   outputOf: (operation: NeoOperation) => OperationOutput
-  fromSpans: boolean
 }) {
   return (
     <>
@@ -441,11 +434,7 @@ function MethodGroupRow({
         }
       />
       {open && (
-        <MethodDetail
-          operation={operation}
-          output={outputOf(operation)}
-          fromSpans={fromSpans}
-        />
+        <MethodDetail operation={operation} output={outputOf(operation)} />
       )}
     </>
   )

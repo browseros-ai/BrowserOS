@@ -29,7 +29,11 @@ import {
   Rail,
   UnplacedGroup,
 } from './MethodRows'
-import { type OperationOutput, operationOutput } from './operation-output'
+import {
+  type OperationOutput,
+  operationOutput,
+  recordNotice,
+} from './operation-output'
 import {
   type CallPlace,
   callPlaces,
@@ -43,10 +47,6 @@ import { noReplyReason, replyFacts, valueChip } from './reply'
 import { TraceLine } from './TracePanel'
 import { codeLines, type Line } from './text-lines'
 import { plural } from './units'
-
-/** Said once at the top of a block whose record came from Neo's spans. */
-export const SPANS_NOTICE =
-  "From Neo's spans (no host API): each call's name, line, time and outcome; spans carry no arguments, call logs or results."
 
 /**
  * A line that called more methods than this (a loop) shows the first `SHOWN_PER_LINE` and folds
@@ -96,7 +96,7 @@ export function RunBlock({
     : null
   const places = placed ? callPlaces(placed) : new Map<string, CallPlace>()
   const operations = record?.operations ?? []
-  const fromSpans = record?.source === 'spans'
+  const notice = recordNotice(record)
   const outputOf = (operation: NeoOperation) =>
     operationOutput(
       operation,
@@ -127,11 +127,11 @@ export function RunBlock({
       {record?.values === 'off' && (
         <p className="px-4 py-1 text-ink-3">{RUN_VALUES_OFF_NOTICE}</p>
       )}
-      {fromSpans && (
+      {notice && (
         <p className="flex min-h-6 w-full shrink-0 items-start px-4 py-1 text-[11px] text-ink-3 leading-[14px]">
           <Rail bleed />
           <span className="w-[106px] shrink-0" />
-          <span className="pt-px">{SPANS_NOTICE}</span>
+          <span className="pt-px">{notice}</span>
         </p>
       )}
       {placed && <MethodHeader />}
@@ -147,7 +147,6 @@ export function RunBlock({
           note={index === 0 && !placed ? missingRecord(run, detail) : null}
           openId={openId}
           onToggle={toggle}
-          fromSpans={fromSpans}
           unfolded={unfolded.has(index + 1)}
           onUnfold={() => setUnfolded(new Set(unfolded).add(index + 1))}
         />
@@ -161,7 +160,6 @@ export function RunBlock({
           openId={openId}
           onToggle={toggle}
           outputOf={outputOf}
-          fromSpans={fromSpans}
         />
       )}
       <div
@@ -232,7 +230,6 @@ function CodeLine({
   note,
   openId,
   onToggle,
-  fromSpans,
   unfolded,
   onUnfold,
 }: {
@@ -244,8 +241,6 @@ function CodeLine({
   note: string | null
   openId: string | null
   onToggle: (id: string) => void
-  /** The record is folded from Neo's spans. */
-  fromSpans: boolean
   unfolded: boolean
   onUnfold: () => void
 }) {
@@ -276,7 +271,6 @@ function CodeLine({
         spanMs={spanMs}
         open={operation.id === openId}
         onToggle={() => onToggle(operation.id)}
-        fromSpans={fromSpans}
       />
     )
   }
@@ -331,7 +325,6 @@ function MethodOnLine({
   spanMs,
   open,
   onToggle,
-  fromSpans,
 }: {
   operation: NeoOperation
   /** Its output, worked out only while the row is open. */
@@ -343,7 +336,6 @@ function MethodOnLine({
   spanMs: number
   open: boolean
   onToggle: () => void
-  fromSpans: boolean
 }) {
   return (
     <>
@@ -358,11 +350,7 @@ function MethodOnLine({
         onToggle={onToggle}
       />
       {open && (
-        <MethodDetail
-          operation={operation}
-          output={outputOf(operation)}
-          fromSpans={fromSpans}
-        />
+        <MethodDetail operation={operation} output={outputOf(operation)} />
       )}
     </>
   )

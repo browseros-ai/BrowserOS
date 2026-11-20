@@ -7,12 +7,26 @@
  * so the run block's method rows follow (`trace.ts` says how a span names its call).
  *
  * Rows borrow the run block's method lanes: the label, an outcome dot, a bar, its duration; the
- * run's own span is a light track the operations sit on.
+ * run's own span is a light track the operations sit on. The script's own operations come first;
+ * Neo's own work for the run (operations with no source line, `isInternalSpan`: per open tab
+ * `page.frames` and `events.listen`, the `events.next` long-poll) folds under one quiet row, as the
+ * run block folds it, and opens when clicked or when one of its spans is picked. An operation is
+ * red when Neo says it failed (`neo.op.outcome`, never the span's status): a cancelled op is not.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import type { RunSummary, RunTrace, TraceSpan } from '../../shared/api'
-import { attributeLines, siteDetail, spanBar, spanName } from './trace'
+import {
+  attributeLines,
+  namesWithCounts,
+  siteDetail,
+  spanBar,
+  spanEnd,
+  spanName,
+  splitSpans,
+  type TraceFact,
+  traceFacts,
+} from './trace'
 import { LineSpans } from './ui'
 import { clock, plural, seconds } from './units'
 
@@ -30,6 +44,22 @@ export function Waterfall({
 }) {
   const name = wide ? 'w-[280px]' : 'w-[150px]'
   const label = 'text-[10px] text-ink-3 uppercase leading-[14px] tracking-wide'
+  const { script, internal } = splitSpans(trace.spans)
+  const [unfolded, setUnfolded] = useState(false)
+  // A picked span of Neo's own work (from the run block's "Neo internal" rows) shows itself.
+  const open =
+    unfolded || internal.some((span) => span.spanId === selectedSpanId)
+  const row = (span: TraceSpan, quiet: boolean) => (
+    <SpanRow
+      key={span.spanId}
+      span={span}
+      durationMs={trace.durationMs}
+      name={name}
+      quiet={quiet}
+      selected={span.spanId === selectedSpanId}
+      onSelect={() => onSelectSpan(span)}
+    />
+  )
   return (
     <div className="flex shrink-0 flex-col" data-waterfall="">
       <div className="flex h-5 shrink-0 items-end px-2 pb-0.5">
@@ -41,56 +71,79 @@ export function Waterfall({
         </span>
         <span className="w-11 shrink-0" />
       </div>
-      {trace.spans.map((span) => (
-        <SpanRow
-          key={span.spanId}
-          span={span}
-          durationMs={trace.durationMs}
-          name={name}
-          selected={span.spanId === selectedSpanId}
-          onSelect={() => onSelectSpan(span)}
-        />
-      ))}
+      {script.map((span) => row(span, false))}
+      {internal.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={open}
+          data-internal={internal.length}
+          onClick={() => setUnfolded(!open)}
+          title={`Neo's own work for the run, not a line of the script: ${namesWithCounts(internal)}`}
+          className="flex h-6 w-full shrink-0 items-center px-2 text-left text-[11px] text-ink-3 leading-[14px] hover:bg-neo-tint"
+        >
+          <span className="w-2.5 shrink-0">{open ? '▾' : '▸'}</span>
+          <span className="min-w-0 truncate">
+            Neo internal: {plural(internal.length, 'operation')} ·{' '}
+            {namesWithCounts(internal)}
+          </span>
+        </button>
+      )}
+      {open && internal.map((span) => row(span, true))}
     </div>
   )
 }
+
+/** The order rows are drawn and stepped through: the script's own, then Neo's own work. */
+export function drawOrder(trace: RunTrace): TraceSpan[] {
+  const { script, internal } = splitSpans(trace.spans)
+  return [...script, ...internal]
+}
+
+const OUTCOME_DOT = { ok: 'bg-ok', failed: 'bg-bad', cancelled: 'bg-ink-4' }
 
 function SpanRow({
   span,
   durationMs,
   name,
+  quiet,
   selected,
   onSelect,
 }: {
   span: TraceSpan
   durationMs: number
   name: string
+  /** Neo's own work, drawn quieter than the script's calls. */
+  quiet: boolean
   selected: boolean
   onSelect: () => void
 }) {
   const bar = spanBar(span, durationMs)
   const run = span.name === 'neo.run'
-  // The run's own span is the track its operations sit on: light, and only tinted when picked.
-  const tone = span.error
-    ? 'bg-bad'
-    : run
-      ? selected
-        ? 'bg-neo-soft'
-        : 'bg-control'
+  const end = spanEnd(span)
+  // The run's own span is the track its operations sit on: light, only tinted when picked, and
+  // never red (its status shows on its dot); an operation is red when Neo says it failed.
+  const tone = run
+    ? selected
+      ? 'bg-neo-soft'
+      : 'bg-control'
+    : end === 'failed'
+      ? 'bg-bad'
       : selected
         ? 'bg-neo'
-        : 'bg-ink-2'
+        : quiet
+          ? 'bg-ink-4'
+          : 'bg-ink-2'
   return (
     <button
       type="button"
       aria-pressed={selected}
-      aria-label={`${spanName(span)}, ${seconds(span.durationMs)}${span.error ? ', failed' : ''}`}
+      aria-label={`${spanName(span)}, ${seconds(span.durationMs)}${end === 'ok' ? '' : `, ${end}`}`}
       data-span={span.spanId}
       onClick={onSelect}
       className={`flex h-6 w-full shrink-0 items-center px-2 text-left font-code text-[11px] leading-[14px] ${selected ? 'bg-[#DCE6FB]' : 'hover:bg-neo-tint'}`}
     >
       <span
-        className={`${name} shrink-0 truncate pr-2 ${run ? 'font-semibold text-black' : selected ? 'text-black' : 'text-ink'}`}
+        className={`${name} shrink-0 truncate pr-2 ${run ? 'font-semibold text-black' : selected ? 'text-black' : quiet ? 'text-ink-3' : 'text-ink'}`}
         style={{ paddingLeft: `${Math.max(0, span.depth) * 10}px` }}
         title={`${span.name} ${span.label}`}
       >
@@ -98,7 +151,8 @@ function SpanRow({
       </span>
       <span className="flex w-3.5 shrink-0 justify-center">
         <span
-          className={`block size-1.5 rounded-full ${span.error ? 'bg-bad' : 'bg-ok'}`}
+          title={end}
+          className={`block size-1.5 rounded-full ${OUTCOME_DOT[end]}`}
         />
       </span>
       <span className="relative h-2 min-w-0 flex-1">
@@ -112,7 +166,7 @@ function SpanRow({
         />
       </span>
       <span
-        className={`w-11 shrink-0 text-right ${selected ? 'font-semibold text-black' : 'text-ink'}`}
+        className={`w-11 shrink-0 text-right ${selected ? 'font-semibold text-black' : quiet ? 'text-ink-3' : 'text-ink'}`}
       >
         {seconds(span.durationMs)}
       </span>
@@ -120,21 +174,22 @@ function SpanRow({
   )
 }
 
-/** `traceFacts`, with what failed in the error tone. */
+const FACT_TONE: Record<TraceFact['tone'], string | undefined> = {
+  plain: undefined,
+  bad: 'text-bad',
+  busy: 'text-busy-ink',
+}
+
+/** A trace's facts (`traceFacts`) joined by commas, each in its tone. */
 export function TraceFacts({ trace }: { trace: RunTrace }) {
-  const failed = trace.spans.filter((span) => span.error).length
   return (
     <>
-      {plural(trace.spans.length, 'span')}
-      {failed > 0 && (
-        <>
-          , <span className="text-bad">{failed} failed</span>
-        </>
-      )}
-      , {seconds(trace.durationMs)}
-      {!trace.complete && (
-        <span className="text-busy-ink">, waiting for neo.run</span>
-      )}
+      {traceFacts(trace).map((fact, index) => (
+        <span key={fact.text} className={FACT_TONE[fact.tone]}>
+          {index > 0 && ', '}
+          {fact.text}
+        </span>
+      ))}
     </>
   )
 }
@@ -200,11 +255,13 @@ export function TraceFull({
     const timer = setTimeout(() => setCopied(false), 1500)
     return () => clearTimeout(timer)
   }, [copied])
-  const at = trace.spans.findIndex((span) => span.spanId === selectedSpanId)
-  const span = trace.spans[at] ?? trace.spans[0] ?? null
-  const index = span ? trace.spans.indexOf(span) : -1
-  const previous = index > 0 ? trace.spans[index - 1] : undefined
-  const next = index >= 0 ? trace.spans[index + 1] : undefined
+  // Previous and next follow the rows as drawn: the script's own, then Neo's own work.
+  const order = drawOrder(trace)
+  const at = order.findIndex((span) => span.spanId === selectedSpanId)
+  const span = order[at] ?? order[0] ?? null
+  const index = span ? order.indexOf(span) : -1
+  const previous = index > 0 ? order[index - 1] : undefined
+  const next = index >= 0 ? order[index + 1] : undefined
   const resource = Object.entries(trace.resource)
   return (
     <dialog
@@ -236,7 +293,11 @@ export function TraceFull({
           onClick={() =>
             void navigator.clipboard
               .writeText(JSON.stringify(trace, null, 2))
-              .then(() => setCopied(true))
+              .then(
+                () => setCopied(true),
+                // Refused (no permission, page not focused): the button stays as it was.
+                () => {},
+              )
           }
           title="Copy the trace as the viewer's API serves it, as JSON"
           className="rounded-md border border-control px-2.5 py-[5px] font-medium hover:bg-panel"
