@@ -206,13 +206,7 @@ impl OperationGuard {
         let opened = Unsent {
             id: state.id(),
             parent: state.parent_id(),
-            // Background pulls must not borrow the script stack that started them. The
-            // subscription prelude supplies an explicit site for public listener changes
-            // and an empty site for its own pump and bookkeeping, so preserve that ownership.
-            site: match spec.lifetime {
-                Lifetime::Background if !neo_trace::is_subscription(spec.name) => None,
-                Lifetime::Operation | Lifetime::Background => site,
-            },
+            site: recorded_site(&spec, site),
             name,
             kind: spec.record,
             effect: spec.effect,
@@ -321,27 +315,7 @@ fn settle(
     let sent_at = state.sent_at();
     let pumped = state.after_pump();
     let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
-    // Notes remain debug output, not stored values. The settings watcher flips this live
-    // flag before answering; check each line so a change also reaches operations in flight.
-    // The host's private typing keeps no call-log line at all, as it keeps no page address
-    // (ruling R35): a shared typing helper's note could name the page, or worse.
-    let notes = state.take_notes();
-    // A tab's frame tree that Neo could not read whole is never silent: its read's notes
-    // (neo-playwright `frame_tree::frames`) name the frame and the error, at warn, whatever the
-    // values policy. They hold no page value, only a frame id and a browser error.
-    if spec.name == "page.frames" {
-        for note in notes.iter().filter(|note| note.starts_with("frame tree ")) {
-            tracing::warn!(operation = %id, tab = ?tab, %note, "a tab's frame tree is not whole");
-        }
-    }
-    for note in notes
-        .into_iter()
-        .filter(|_| spec.record != OperationKind::Protected)
-    {
-        if trace.values() == Values::On {
-            tracing::debug!(operation = %id, method = spec.name, %note, "op note");
-        }
-    }
+    log_notes(&trace, &state, &spec, id, tab);
     let (result, error) = match &settlement.result {
         Settled::Value(value) => (Some(value.clone()), None),
         Settled::Failed(error) => (None, Some(error.record(settlement.retryable, Some(id)))),
@@ -413,6 +387,47 @@ fn settle(
         completed_publications: state.take_publications(),
         frames,
     });
+}
+
+/// The op's call-log lines. Notes remain debug output, not stored values. The settings watcher
+/// flips the trace's live values flag before answering; each line checks it, so a change also
+/// reaches operations in flight. The host's private typing keeps no call-log line at all, as it
+/// keeps no page address (ruling R35): a shared typing helper's note could name the page, or
+/// worse.
+fn log_notes(
+    trace: &TraceSink,
+    state: &OpState,
+    spec: &MethodSpec,
+    id: OperationId,
+    tab: Option<TabId>,
+) {
+    let notes = state.take_notes();
+    // A tab's frame tree that Neo could not read whole is never silent: its read's notes
+    // (neo-playwright `frame_tree::frames`) name the frame and the error, at warn, whatever the
+    // values policy. They hold no page value, only a frame id and a browser error.
+    if spec.name == "page.frames" {
+        for note in notes.iter().filter(|note| note.starts_with("frame tree ")) {
+            tracing::warn!(operation = %id, tab = ?tab, %note, "a tab's frame tree is not whole");
+        }
+    }
+    for note in notes
+        .into_iter()
+        .filter(|_| spec.record != OperationKind::Protected)
+    {
+        if trace.values() == Values::On {
+            tracing::debug!(operation = %id, method = spec.name, %note, "op note");
+        }
+    }
+}
+
+/// The call site an op's records name. Background pulls must not borrow the script stack that
+/// started them: the subscription prelude supplies an explicit site for public listener changes
+/// and an empty site for its own pump and bookkeeping, so that ownership is preserved.
+fn recorded_site(spec: &MethodSpec, site: Option<CallSite>) -> Option<CallSite> {
+    match spec.lifetime {
+        Lifetime::Background if !neo_trace::is_subscription(spec.name) => None,
+        Lifetime::Operation | Lifetime::Background => site,
+    }
 }
 
 /// A missing target fact must not turn a related page into the operation's trace target.
