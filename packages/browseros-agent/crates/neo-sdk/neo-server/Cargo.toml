@@ -84,7 +84,7 @@ hosted-run = []
 # `neo_server::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
 # crate below turns it on for every test build, unit and integration; release builds never have
 # it.
-test-support = []
+test-support = ["neo-telemetry/test-support"]
 
 [dependencies]
 # DOM URL parsing and form encoding for the agent realm; already in the workspace graph.
@@ -106,6 +106,9 @@ neo-http.workspace = true
 neo-takeover.workspace = true
 # `ts-rs`: an error's owner, delivery and operation id in the run envelope print as TypeScript.
 neo-trace = { workspace = true, features = ["ts-rs"] }
+# Runs, ops and tabs as OpenTelemetry metrics and spans, behind one facade: nothing here names
+# an OpenTelemetry, OTLP or Prometheus crate. `test-support` above adds its recording double.
+neo-telemetry.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 # Stateless streamable HTTP for the one `run` tool; the server features only.

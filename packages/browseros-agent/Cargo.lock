@@ -2083,6 +2083,7 @@ dependencies = [
  "neo-sdk-api",
  "neo-server",
  "neo-takeover",
+ "neo-telemetry",
  "neo-trace",
  "rmcp",
  "rquickjs",

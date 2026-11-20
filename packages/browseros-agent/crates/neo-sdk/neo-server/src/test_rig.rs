@@ -14,6 +14,7 @@ use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
 use neo_http::{Settings, SettingsDefaults};
 use neo_playwright::FileAccess;
+use neo_telemetry::Telemetry;
 use neo_trace::{
     DiagnosticCode, Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore,
     WriterConfig, spawn_writer,
@@ -294,6 +295,7 @@ impl TestRig {
             orphan_grace,
             blank_tab: None,
             holders: None,
+            telemetry: Telemetry::noop(),
         }
     }
 
@@ -347,6 +349,7 @@ impl TestRig {
             default_page: None,
             tabs_scope: scope,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }

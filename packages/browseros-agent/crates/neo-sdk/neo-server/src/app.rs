@@ -11,6 +11,7 @@ use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_http::Settings;
+use neo_telemetry::{Telemetry, Vocabulary};
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
     TraceSink, TraceStore, WriterConfig,
@@ -27,7 +28,7 @@ use tracing::{debug, error, info, warn};
 use crate::browser::{BrowserLink, NeoTab, TabEvent, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
-use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
+use crate::dispatch::{Dispatcher, ErrorCode, Observer, RegistryBuilder};
 use crate::host::{
     AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HolderFeed, HostApi,
     HostHolds, HostInputs, TabHolders, TakeoverLock,
@@ -48,6 +49,7 @@ struct PrivateTypingParts<'a> {
     takeover: &'a Arc<TakeoverLock>,
     playwright: &'a Arc<PlaywrightFacade>,
     filled: Arc<FilledTabs>,
+    telemetry: &'a Telemetry,
 }
 
 async fn private_typing(
@@ -62,6 +64,7 @@ async fn private_typing(
         takeover,
         playwright,
         filled,
+        telemetry,
     } = parts;
     let retention = settings.clone();
     let pictures = settings.clone();
@@ -81,6 +84,7 @@ async fn private_typing(
         pictures_never: Arc::new(move || pictures.fill_pictures_never()),
         shutdown: shutdown.clone(),
         took: Arc::new(move |tab| entry.withholds_picture(tab)),
+        telemetry: telemetry.clone(),
     })
 }
 
@@ -237,7 +241,11 @@ impl App {
 
         let store = open_trace(&config.env.trace_dir()).await?;
         let (trace, screenshots) = start_trace(&store);
-        let tabs = Arc::new(TabRegistry::new());
+        // The process's one telemetry handle, built before anything that reports to it: the tab
+        // registry counts tabs from the browser link's first listing, and the host API's
+        // `GET /v1/metrics` renders it. Off until startup builds it from the environment.
+        let telemetry = Telemetry::noop();
+        let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -249,6 +257,7 @@ impl App {
                 settings_file: config.env.settings_file(),
                 settings_defaults: config.settings_defaults(),
                 tabs: Arc::clone(&tabs),
+                telemetry: telemetry.clone(),
             },
         )
         .await
@@ -297,9 +306,16 @@ impl App {
         };
         builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
+        let registry = methods.build();
+        // The only op and error-code label values, from Neo's own tables, bound before the door
+        // exists, so before any op or run: labels never come from a hand-kept list.
+        telemetry.bind_vocabulary(Vocabulary::new(
+            registry.names(),
+            ErrorCode::all().map(ErrorCode::as_str),
+        ));
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
-            methods.build(),
+            registry,
             builtins::door_rules(&takeover, &claims),
             trace.clone(),
             Arc::clone(&browser),
@@ -319,6 +335,7 @@ impl App {
             orphan_grace: Defaults::ORPHAN_GRACE,
             blank_tab: Some(Arc::clone(&blank_tab)),
             holders: Some(Arc::clone(&holders)),
+            telemetry: telemetry.clone(),
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
@@ -332,6 +349,7 @@ impl App {
                 takeover: &takeover,
                 playwright: &playwright,
                 filled,
+                telemetry: &telemetry,
             },
             &shutdown,
         )

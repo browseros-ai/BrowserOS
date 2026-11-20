@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
+use neo_telemetry::Telemetry;
 use neo_trace::{
     Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, TaskId, TraceSink,
     TraceStore, WriterConfig, spawn_writer,
@@ -137,6 +138,7 @@ impl Harness {
             default_page: None,
             tabs_scope: TabsScope::Browser,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -159,6 +161,7 @@ impl Harness {
             default_page: None,
             tabs_scope: scope,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
