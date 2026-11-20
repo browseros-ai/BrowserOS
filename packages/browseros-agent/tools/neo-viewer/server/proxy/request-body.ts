@@ -87,7 +87,10 @@ export function clientInfoOf(message: RequestMessage): ClientInfo | null {
   }
 }
 
-function runMetaOf(message: RequestMessage): Record<string, unknown> | null {
+/** The request's `_meta["com.browseros.neo/run"]` object, when it sent one. */
+export function runMetaOf(
+  message: RequestMessage,
+): Record<string, unknown> | null {
   const meta = message.params?._meta
   if (!isObject(meta)) return null
   const runMeta = meta[RUN_META_KEY]

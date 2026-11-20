@@ -89,6 +89,8 @@ export function useViewer(): ViewerState {
           setOpened((n) => n + 1)
         },
         event(event) {
+          // Health is not a change of the list: it has no `version` and is never replayed.
+          if (event.type === 'health') return
           recent.current.push(event)
           if (recent.current.length > KEPT_EVENTS) {
             recent.current.splice(0, recent.current.length - KEPT_EVENTS)

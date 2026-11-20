@@ -54,6 +54,22 @@ export function portFree(port: number): boolean {
   }
 }
 
+/**
+ * A port free on 127.0.0.1 now, picked by the OS. A container the viewer starts must know the
+ * viewer's port (its OTLP endpoint) before the viewer listens, so `--port 0` is resolved first.
+ */
+export function freePort(): number {
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(null),
+  })
+  const port = server.port
+  server.stop(true)
+  if (!port) throw new Error('neo-viewer: the OS gave no free port')
+  return port
+}
+
 export interface ViewerRecord {
   pid: number
   port: number

@@ -49,6 +49,10 @@ const INFO: ViewerInfo = {
     image: 'neo-sdk:0.52.1.2-85d411378-arm64',
     up: true,
   },
+  otlp: {
+    endpoint: 'http://127.0.0.1:27361/otlp',
+    containerEndpoint: 'http://host.docker.internal:27361/otlp',
+  },
 }
 
 interface Planned {
@@ -127,6 +131,7 @@ async function sourceOf(
     runs,
     toolsList,
     rawLog: await rawLog,
+    metrics: null,
   }
 }
 
@@ -364,6 +369,7 @@ describe('an export stays one coherent, separate thing', () => {
         runs,
         toolsList,
         rawLog: await rawLog,
+        metrics: null,
       },
       { root: await tempDir('neo-viewer-export-root-') },
     )
