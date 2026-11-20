@@ -109,6 +109,7 @@ pub enum Command {
     Reload,
     /// Recent browser history.
     History {
+        /// The most entries to list.
         #[arg(long, default_value_t = 100)]
         max: u32,
     },
@@ -159,6 +160,7 @@ pub enum Command {
         /// Actionables plus headings and ancestor context.
         #[arg(long, short = 'i')]
         interactive: bool,
+        /// How many levels of the tree to include, 1 to 100.
         #[arg(long, value_name = "N")]
         depth: Option<u32>,
     },
@@ -166,19 +168,25 @@ pub enum Command {
     Diff,
     /// Extract the page as markdown, text, links, or console errors.
     Read {
+        /// Read only the part of the page this CSS selector matches.
         #[arg(long, value_name = "CSS")]
         selector: Option<String>,
+        /// Plain visible text instead of markdown.
         #[arg(long, conflicts_with_all = ["links", "console"])]
         text: bool,
+        /// The page's links, with their text and address.
         #[arg(long, conflicts_with = "console")]
         links: bool,
+        /// The page's console errors.
         #[arg(long)]
         console: bool,
         /// Markdown reads only: visible viewport content.
         #[arg(long)]
         viewport: bool,
+        /// Markdown reads only: keep link addresses in the text.
         #[arg(long)]
         include_links: bool,
+        /// Markdown reads only: keep images as markdown image lines.
         #[arg(long)]
         include_images: bool,
     },
@@ -199,21 +207,26 @@ pub enum Command {
     /// Capture the page. Written to a file, because a terminal cannot render an image.
     Screenshot {
         path: Option<String>,
+        /// The whole scrollable page, not just the viewport.
         #[arg(long)]
         full: bool,
         /// Overlay numbered refs from a fresh snapshot.
         #[arg(long)]
         annotate: bool,
+        /// Image format: jpeg, png or webp.
         #[arg(long, default_value = "jpeg")]
         format: String,
+        /// Compression quality for jpeg and webp, 0 to 100.
         #[arg(long)]
         quality: Option<i64>,
     },
     /// Print the page to a PDF.
     Pdf {
         path: Option<String>,
+        /// Landscape orientation.
         #[arg(long)]
         landscape: bool,
+        /// Leave out background colors and images.
         #[arg(long)]
         no_background: bool,
     },
@@ -225,8 +238,10 @@ pub enum Command {
         /// Click viewport coordinates instead of a ref.
         #[arg(long, value_name = "X,Y", conflicts_with = "reference")]
         at: Option<String>,
+        /// Which mouse button: left, right or middle.
         #[arg(long, default_value = "left")]
         button: String,
+        /// How many clicks, for example 2 for a double click.
         #[arg(long, value_name = "N")]
         count: Option<i64>,
         #[command(flatten)]
@@ -258,10 +273,13 @@ pub enum Command {
     /// Type into whatever has focus.
     Type {
         text: Option<String>,
+        /// Read the text from stdin, so it never appears in argv.
         #[arg(long, conflicts_with = "text")]
         value_stdin: bool,
+        /// Read the text from this environment variable.
         #[arg(long, value_name = "VAR", conflicts_with = "text")]
         value_env: Option<String>,
+        /// Keep the text out of the audit log and skip its screenshot.
         #[arg(long)]
         sensitive: bool,
         #[command(flatten)]
@@ -277,6 +295,7 @@ pub enum Command {
     Hover {
         #[arg(value_name = "REF")]
         reference: Option<String>,
+        /// Hover viewport coordinates instead of a ref.
         #[arg(long, value_name = "X,Y", conflicts_with = "reference")]
         at: Option<String>,
         #[command(flatten)]
@@ -348,8 +367,10 @@ pub enum Command {
 
     /// Wait on a signal. Waiting on the thing beats waiting on the clock.
     Wait {
+        /// Wait until this text appears on the page.
         #[arg(long, conflicts_with_all = ["selector", "time"])]
         text: Option<String>,
+        /// Wait until an element matching this CSS selector appears.
         #[arg(long, conflicts_with = "time")]
         selector: Option<String>,
         /// A fixed pause in ms. A last resort.
@@ -364,24 +385,29 @@ pub enum Command {
     Run {
         /// The script. Use `-f` for a file or `-` for stdin.
         code: Option<String>,
+        /// Read the script from this file.
         #[arg(long, short = 'f', value_name = "FILE", conflicts_with = "code")]
         file: Option<String>,
         /// Do not predefine `page`.
         #[arg(long)]
         no_page: bool,
+        /// The script's time budget in ms, up to the server's maximum.
         #[arg(long, value_name = "MS")]
         script_timeout: Option<f64>,
     },
     /// Evaluate JavaScript inside the page. Prefer `run` for multi-step work.
     Eval {
         code: Option<String>,
+        /// Read the code from this file.
         #[arg(long, short = 'f', value_name = "FILE", conflicts_with = "code")]
         file: Option<String>,
         /// Wait for the page to go quiet even if nothing visibly changed.
         #[arg(long)]
         settle: bool,
+        /// The most characters of the result kept inline; more is saved for `browseros output`.
         #[arg(long, value_name = "N")]
         max_chars: Option<u64>,
+        /// The code's time budget in ms, up to the server's maximum.
         #[arg(long, value_name = "MS")]
         script_timeout: Option<f64>,
     },
@@ -429,10 +455,13 @@ pub enum TaskCmd {
     /// Name the task this directory is about to do. Its tab group opens with
     /// the first page, and the name is applied to it then.
     Start {
+        /// A short lowercase label of two or three words, for example "price check".
         #[arg(long)]
         name: Option<String>,
+        /// The kind of task, for anonymous aggregate analytics.
         #[arg(long)]
         category: Option<String>,
+        /// One line on what the task is for, which history search uses.
         #[arg(long)]
         summary: Option<String>,
     },
@@ -452,8 +481,10 @@ pub enum TaskCmd {
     /// Name or rename the current task.
     Name {
         name: String,
+        /// The kind of task, for anonymous aggregate analytics.
         #[arg(long)]
         category: Option<String>,
+        /// One line on what the task is for, which history search uses.
         #[arg(long)]
         summary: Option<String>,
     },
@@ -478,18 +509,23 @@ pub enum GroupCmd {
     Create {
         #[arg(required = true)]
         pages: Vec<u32>,
+        /// The group's title.
         #[arg(long)]
         title: Option<String>,
+        /// Add the pages to this existing group instead of a new one.
         #[arg(long, value_name = "ID")]
         group: Option<String>,
     },
     Update {
         #[arg(value_name = "ID")]
         group: String,
+        /// A new title.
         #[arg(long)]
         title: Option<String>,
+        /// A new color: grey, blue, red, yellow, green, pink, purple, cyan or orange.
         #[arg(long)]
         color: Option<String>,
+        /// true collapses the group, false expands it.
         #[arg(long)]
         collapsed: Option<bool>,
     },
@@ -518,6 +554,7 @@ pub enum ProfileCmd {
     List,
     Load {
         name: Option<String>,
+        /// The profile by id, from `profile list`, instead of by name.
         #[arg(long, value_name = "ID")]
         profile_id: Option<String>,
     },
@@ -528,12 +565,14 @@ pub enum TargetCmd {
     Get,
     Set {
         name: Option<String>,
+        /// The profile by id, from `profile list`, instead of by name.
         #[arg(long, value_name = "ID")]
         profile_id: Option<String>,
     },
     SetWindow {
         #[arg(value_name = "ID")]
         window: i64,
+        /// Restrict every call to this window, not only where new tabs open.
         #[arg(long)]
         strict: bool,
     },
@@ -555,11 +594,13 @@ pub enum CredentialsCmd {
         /// Case-insensitive substring of the username or site.
         #[arg(long)]
         query: Option<String>,
+        /// The most accounts to list.
         #[arg(long)]
         limit: Option<u32>,
         /// List the whole profile rather than matches for the current page.
         #[arg(long)]
         all: bool,
+        /// Continue a listing from the nextCursor the previous one returned.
         #[arg(long, value_name = "CURSOR")]
         cursor: Option<String>,
     },
@@ -568,6 +609,7 @@ pub enum CredentialsCmd {
     /// The password never passes through this process. Filling acknowledges
     /// the fields and does not submit, so check the page and submit yourself.
     Fill {
+        /// The credential's id from `credentials list`.
         #[arg(long = "id", value_name = "CREDENTIAL_ID")]
         credential_id: String,
     },
@@ -585,6 +627,7 @@ pub enum CardsCmd {
     /// Does not submit or pay. The browser's own payment checks still apply,
     /// so a card may report that the user must finish in the browser.
     Fill {
+        /// The card's id from `cards list`.
         #[arg(long = "id", value_name = "CARD_ID")]
         card_id: String,
     },
@@ -604,6 +647,7 @@ pub enum HelpersCmd {
     },
     Save {
         name: String,
+        /// Read the helper from this file instead of stdin.
         #[arg(long, short = 'f', value_name = "FILE")]
         file: Option<String>,
     },
@@ -613,13 +657,16 @@ pub enum HelpersCmd {
 pub enum SkillCmd {
     Save {
         name: String,
+        /// One line on what the skill does.
         #[arg(long)]
         description: String,
         /// The numbered steps, one per line. A leading `1.` or `-` is stripped.
         #[arg(long)]
         steps: Option<String>,
+        /// The site the skill works on.
         #[arg(long)]
         site: Option<String>,
+        /// Shortcuts learned this run that make the next one faster.
         #[arg(long)]
         learned: Option<String>,
         /// The second call: the flow that makes the skill runnable, as a JSON
@@ -665,10 +712,13 @@ pub enum SkillCmd {
 pub enum HumanCmd {
     Request {
         reason: String,
+        /// What the person should know before taking over.
         #[arg(long)]
         details: Option<String>,
+        /// login, captcha, approval or other.
         #[arg(long)]
         kind: Option<String>,
+        /// What you will do once the person hands the page back.
         #[arg(long)]
         resume_hint: Option<String>,
     },

@@ -305,3 +305,37 @@ fn help_text_carries_no_implementation_notes() {
         assert!(!help.contains(leak), "help mentions {leak}: {help}");
     }
 }
+
+/// An option an agent cannot read about is an option it guesses at. Every one says what it does.
+#[test]
+fn every_option_says_what_it_does() {
+    use clap::CommandFactory;
+    fn walk(command: &clap::Command, path: &str, missing: &mut Vec<String>) {
+        for arg in command.get_arguments() {
+            if arg.is_positional() || arg.is_hide_set() {
+                continue;
+            }
+            let id = arg.get_id().as_str();
+            if id == "help" || id == "version" {
+                continue;
+            }
+            if arg.get_help().is_none() && arg.get_long_help().is_none() {
+                missing.push(format!("{path} --{}", arg.get_long().unwrap_or(id)));
+            }
+        }
+        for sub in command.get_subcommands() {
+            walk(sub, &format!("{path} {}", sub.get_name()), missing);
+        }
+    }
+    let mut missing = Vec::new();
+    walk(
+        &claw_server::cli::grammar::Cli::command(),
+        "browseros",
+        &mut missing,
+    );
+    assert!(
+        missing.is_empty(),
+        "options with no help:\n{}",
+        missing.join("\n")
+    );
+}
