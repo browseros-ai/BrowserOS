@@ -25,7 +25,7 @@ use tokio::{fs, signal, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::browser::{BrowserLink, NeoTab, TabEvent, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, OpenFor, OpenIntent, TabEvent, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, ErrorCode, Observer, RegistryBuilder};
@@ -254,6 +254,9 @@ impl App {
         // the start nothing.
         let telemetry = Telemetry::new(&config.env.telemetry)?;
         let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+        // Before the link's first listing, so tab telemetry counts the blank tab Neo makes its
+        // own at attach born `neo` (decision D7, revised): `NeoTab::follow` claims it.
+        let attach = tabs.life().expect_open(OpenFor::Neo);
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -331,7 +334,25 @@ impl App {
             Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
-        let blank_tab = keep_blank_tab(&browser, &tabs, &store, &playwright, &holders, &shutdown);
+        // From Neo's own shutdown on, a tab that closes with no intent counts as `shutdown`
+        // (decision D12): the tab ledger hears of it as the token is cancelled.
+        tokio::spawn({
+            let tabs = Arc::clone(&tabs);
+            let shutdown = shutdown.clone();
+            async move {
+                shutdown.cancelled().await;
+                tabs.life().shutting_down();
+            }
+        });
+        let blank_tab = keep_blank_tab(
+            &browser,
+            &tabs,
+            &store,
+            &playwright,
+            &holders,
+            &shutdown,
+            attach,
+        );
         let runs = RunService::new(RunServiceParts {
             dispatcher: Arc::clone(&dispatcher),
             browser: Arc::clone(&browser),
@@ -483,8 +504,10 @@ fn keep_blank_tab(
     playwright: &Arc<PlaywrightFacade>,
     holders: &Arc<TabHolders>,
     shutdown: &CancellationToken,
+    attach: OpenIntent,
 ) -> Arc<NeoTab> {
     let blank_tab = NeoTab::new(Arc::clone(browser), Arc::clone(tabs), store.clone());
+    blank_tab.set_attach_intent(attach);
     playwright.keep(Arc::clone(&blank_tab));
     let follower = Arc::clone(&blank_tab);
     let holders = Arc::clone(holders);

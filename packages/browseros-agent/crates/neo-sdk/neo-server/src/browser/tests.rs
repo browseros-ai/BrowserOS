@@ -514,3 +514,96 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
     );
     Ok(())
 }
+
+/// Review F7: after core's event channel dropped events, the watch rebuilds its map of live page
+/// targets with one `Target.getTargets` before the next listing. A tab sitting on an excluded page
+/// is neither closed by the lag nor counted again when it comes back, and the watch is not left
+/// without that map for the rest of the socket.
+#[tokio::test(start_paused = true)]
+async fn after_a_lag_the_watch_still_knows_a_tab_on_an_excluded_page() -> Result<(), Box<dyn Error>>
+{
+    let fake = FakeCdp::new();
+    let shown = fake.open_tab("https://example.com/", "Example");
+    let parked = fake.open_tab("https://example.org/", "Parked");
+    let (telemetry, recording) = Telemetry::recording();
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let recording = recording.clone();
+        move || {
+            recording.open_tabs()
+                == Some(OpenTabCounts {
+                    found: count,
+                    ..OpenTabCounts::default()
+                })
+        }
+    };
+    eventually(Duration::from_secs(5), found(2)).await?;
+    // The parked tab moves to an extension page: core's listing leaves it out from now on.
+    assert!(
+        fake.navigate_tab(parked, "chrome-extension://abc/page.html", "Extension"),
+        "the fake had the tab"
+    );
+    let page = |tab: TabId, url: &str| json!({ "targetId": format!("target-{}", tab.0), "type": "page", "tabId": tab.0, "url": url });
+
+    // Core's channel overflows while the watch waits on a listing.
+    let listings = fake.count("Browser.getTabs");
+    let target_listings = fake.count("Target.getTargets");
+    fake.hold_next("Browser.getTabs");
+    let lagger = fake.open_tab("https://example.net/", "Lagger");
+    fake.answer(
+        "Target.getTargets",
+        json!({ "targetInfos": [
+            page(shown, "https://example.com/"),
+            page(parked, "chrome-extension://abc/page.html"),
+            page(lagger, "https://example.net/"),
+        ] }),
+    );
+    eventually(Duration::from_secs(5), || {
+        fake.count("Browser.getTabs") > listings
+    })
+    .await?;
+    let changed =
+        json!({ "targetInfo": { "targetId": format!("target-{}", shown.0), "type": "page" } });
+    for _ in 0..1100 {
+        assert!(
+            fake.page_event(shown, "Target.targetInfoChanged", changed.clone()),
+            "the fake had the tab"
+        );
+    }
+    fake.release_held();
+    // Read after the lag: the watch rebuilt its map, then listed.
+    let first = fake.open_tab("https://example.edu/", "First");
+    eventually(Duration::from_secs(5), found(4)).await?;
+    assert!(
+        fake.count("Target.getTargets") > target_listings,
+        "the watch listed the targets after the lag"
+    );
+
+    // Back on a listed page: the same tab, not a new one.
+    assert!(
+        fake.navigate_tab(parked, "https://example.org/", "Back"),
+        "the fake had the tab"
+    );
+    let second = fake.open_tab("https://example.edu/two", "Second");
+    eventually(Duration::from_secs(5), found(5)).await?;
+    assert!(
+        fake.close_tab(first) && fake.close_tab(second),
+        "the fake had both tabs"
+    );
+    eventually(Duration::from_secs(5), found(3)).await?;
+    assert_eq!(
+        tab_hooks(&recording),
+        [
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Found), None),
+            ("opened", Some(TabOrigin::Found), None),
+            ("closed", Some(TabOrigin::Found), Some(CloseReason::User)),
+            ("closed", Some(TabOrigin::Found), Some(CloseReason::User)),
+        ],
+        "the parked tab was never closed nor born twice"
+    );
+    Ok(())
+}

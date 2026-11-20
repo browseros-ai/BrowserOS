@@ -36,7 +36,7 @@ use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, FILE_PAGES, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
-use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry, TabsScope};
+use crate::browser::{Adopt, BrowserLink, NeoTab, OpenFor, PageRef, TabRegistry, TabsScope};
 use crate::config::Defaults;
 use crate::dispatch::{
     Call, CallSite, Dispatcher, ErrorCode, EventLog, FrameVersion, LeafError, Lifetime, Listing,
@@ -5342,6 +5342,41 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
         "adopted, not opened"
     );
     assert!(!harness.tabs.is_neo(tasked), "a task's tab is never Neo's");
+    Ok(())
+}
+
+/// Decision D7, revised: the blank tab Neo makes its own at attach is born `neo` in tab
+/// telemetry. The app takes the open intent before the link's first listing, `follow` claims it
+/// with the blank tab it adopts, and a tab held meanwhile is born `found`.
+#[tokio::test]
+async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn Error>> {
+    let (telemetry, recording) = Telemetry::recording();
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry));
+    let attach = tabs.life().expect_open(OpenFor::Neo);
+    let harness = Harness::with_tabs(None, false, tabs).await?;
+    let launch = harness.fake.open_tab("about:blank", "");
+    harness.owner_tab("https://example.com/").await?;
+    let blank = blank_tab(&harness);
+    blank.set_attach_intent(attach);
+    let shutdown = CancellationToken::new();
+    let following = tokio::spawn(Arc::clone(&blank).follow(shutdown.clone()));
+    tabs_until(&recording, |open| open.neo == 1 && open.found == 1).await?;
+    assert_eq!(blank.current(), Some(launch), "the launch tab, adopted");
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        0,
+        "adopted, not opened"
+    );
+    assert_eq!(
+        tab_hooks(recording.calls()),
+        [
+            ("opened", Some(TabOrigin::Neo), None),
+            ("opened", Some(TabOrigin::Found), None),
+        ],
+        "Neo's tab born neo, the owner's found, each once"
+    );
+    shutdown.cancel();
+    within(following).await??;
     Ok(())
 }
 

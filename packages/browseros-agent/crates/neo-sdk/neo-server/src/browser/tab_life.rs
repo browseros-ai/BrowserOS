@@ -44,6 +44,12 @@ const CLAIMS: usize = 64;
 /// bound ends a loop a bad announcement could make (as `TabRegistry`'s own opener bound does).
 const OPENER_HOPS: usize = 16;
 
+/// How long a close that asks the page (`page.runBeforeUnload`) names the tab's close. Its reply
+/// comes before the page decides, and its beforeunload may refuse; Neo answers a beforeunload
+/// dialog nobody listens to within a second, accepting it, so a tab that closes later than this
+/// stayed, and closed for another reason.
+const ASKED_CLOSE_LAPSE: Duration = Duration::from_secs(10);
+
 /// Tab telemetry's shell: the ledger behind its own lock, and the facade it reports to.
 ///
 /// Owned by `TabRegistry` (`TabRegistry::life`), so the tab watch, the janitor, the ops and
@@ -85,22 +91,47 @@ impl TabLife {
     }
 
     /// The tab watch read `Target.targetCrashed` for `target`, the page target it maps to `tab`:
-    /// one crash, whether or not an op was using the tab. Nothing else in Neo counts crashes, so
-    /// an op that fails on a crashed tab adds none.
+    /// one crash per renderer, whether or not an op was using the tab, however often the event
+    /// repeats before the renderer is back. Nothing else in Neo counts crashes, so an op that
+    /// fails on a crashed tab adds none.
     pub(crate) fn crashed(&self, tab: TabId, target: &TargetId) {
         let facts = self.lock().crashed(tab, target);
         self.emit(facts);
     }
 
-    /// The tab watch read `Target.targetInfoChanged` for `target` after it crashed: a page loaded
-    /// in it again, so its renderer is back and a later close is not the crash's.
+    /// The tab watch read `Target.targetInfoChanged` for `target`: if it had crashed, a page
+    /// loaded in it again, so its renderer is back and a later close is not the crash's.
     pub(crate) fn recovered(&self, tab: TabId, target: &TargetId) {
         self.lock().recovered(tab, target);
     }
 
+    /// Neo began its own shutdown (SIGTERM): from now on a tab that closes with no intent of
+    /// Neo's counts as `shutdown`, not `user` (decision D12).
+    pub(crate) fn shutting_down(&self) {
+        self.lock().shutting_down = true;
+    }
+
     /// Before Neo asks the browser to close `tab` (see [`CloseIntent`]).
     pub(crate) fn intend_close(self: &Arc<Self>, tab: TabId, reason: IntentReason) -> CloseIntent {
-        let id = self.lock().intend_close(tab, reason);
+        self.intent(tab, reason, None)
+    }
+
+    /// Before a script asks the page in `tab` to close itself (`page.runBeforeUnload`), which its
+    /// beforeunload may refuse after the op answered: the intent names the tab's close only if
+    /// the tab closes within [`ASKED_CLOSE_LAPSE`], so a refused one leaves the tab's later close
+    /// to whoever makes it.
+    pub(crate) fn intend_asked_close(self: &Arc<Self>, tab: TabId) -> CloseIntent {
+        let lapses = Instant::now().checked_add(ASKED_CLOSE_LAPSE);
+        self.intent(tab, IntentReason::Script, lapses)
+    }
+
+    fn intent(
+        self: &Arc<Self>,
+        tab: TabId,
+        reason: IntentReason,
+        lapses: Option<Instant>,
+    ) -> CloseIntent {
+        let id = self.lock().intend_close(tab, reason, lapses);
         CloseIntent {
             life: Arc::clone(self),
             tab,
@@ -148,10 +179,11 @@ fn open_counts_of(life: &Weak<TabLife>) -> OpenTabCounts {
 /// A close Neo is about to ask the browser for. Taken before the close is sent, since the tab
 /// watch may confirm the close before the op that asked for it answers.
 ///
-/// It stays on the tab until the tab closes or its browser goes. The earliest live intent on a
-/// tab names its close, so the janitor's, taken before it submits `page.close`, outranks that
-/// op's own `script` one. Dropping the token is not a withdrawal: an op cancelled or timed out
-/// after its send may still close the tab, and that close stays the one Neo asked for.
+/// It stays on the tab until the tab closes or its browser goes (an asked close only until it
+/// lapses). The earliest live intent on a tab names its close, so the janitor's, taken before it
+/// submits `page.close`, outranks that op's own `script` one. Dropping the token is not a
+/// withdrawal: an op cancelled or timed out after its send may still close the tab, and that
+/// close stays the one Neo asked for.
 #[must_use = "bind it until the close settles; only `withdraw` takes it back"]
 pub(crate) struct CloseIntent {
     life: Arc<TabLife>,
@@ -321,12 +353,16 @@ struct TabLedger {
     next_intent: u64,
     /// Orders close intents and crashes, which [`close_reason`] compares.
     step: u64,
+    /// Neo began its own shutdown: from then on a close nobody asked for is the shutdown's.
+    shutting_down: bool,
 }
 
 /// A born tab.
 struct Life {
-    /// Frozen at birth (decision D7): an adopted blank tab stays `found`, a Neo tab the owner
-    /// browsed in stays `neo`. The registry's own origin is janitor and sight policy.
+    /// Frozen at birth (decision D7, revised): the blank tab Neo makes its own at attach is born
+    /// `neo` (its intent comes before the first listing), one it adopts later keeps the origin it
+    /// was born with, and a Neo tab the owner browsed in stays `neo`. The registry's own origin
+    /// is janitor and sight policy.
     origin: TabOrigin,
     opened_at: Instant,
     /// The last listing that showed it, or that found its page target alive while leaving it
@@ -353,11 +389,18 @@ struct Claim {
     at: Instant,
 }
 
-/// A close intent on a tab.
+/// A close intent on a tab, shared by every token that asked for the same kind of close: a tab
+/// keeps at most one per reason and kind, however many closes are asked (a loop of refused
+/// `page.runBeforeUnload`s), and its step is the earliest taker's.
 struct Intent {
     id: IntentId,
     reason: IntentReason,
     taken: Step,
+    /// When it stops naming the tab's close, for a close the page may refuse; `None` for one
+    /// that names it until the tab closes.
+    lapses: Option<Instant>,
+    /// The tokens holding it. It goes when the last one withdraws.
+    holders: u32,
 }
 
 /// A renderer crash not seen recovered.
@@ -376,13 +419,14 @@ struct Step(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct IntentId(u64);
 
-/// How a born tab's close was found.
+/// What a born tab's close went with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Gone {
-    /// The tab went while its browser stayed.
+    /// The tab went while its browser stayed and Neo ran on.
     Tab,
-    /// Its browser went: it exited or restarted while Neo was not connected.
-    Browser,
+    /// A shutdown: its browser went (it exited or restarted while Neo was not connected), or Neo
+    /// itself is shutting down (decision D12).
+    Shutdown,
 }
 
 /// Where a closed tab's lifetime ends.
@@ -445,7 +489,7 @@ impl TabLedger {
         let mut gone: Vec<TabId> = self.open.keys().copied().collect();
         gone.sort_unstable();
         for tab in gone {
-            self.close(tab, Ended::LastSeen, Gone::Browser, facts);
+            self.close(tab, Ended::LastSeen, Gone::Shutdown, facts);
         }
         self.unclaimed.clear();
         self.closes.clear();
@@ -606,12 +650,20 @@ impl TabLedger {
         let Some(life) = self.open.remove(&tab) else {
             return;
         };
+        let gone = if self.shutting_down {
+            Gone::Shutdown
+        } else {
+            gone
+        };
         let crashed = self.crashes.remove(&tab).map(|crash| crash.at);
-        let intents = self.closes.remove(&tab).unwrap_or_default();
         let end = match ended {
             Ended::At(now) => now,
             Ended::LastSeen => life.last_seen,
         };
+        let mut intents = self.closes.remove(&tab).unwrap_or_default();
+        // A close the page could refuse names this one only if the tab went in time: one that
+        // came later is the page having stayed, then closing for another reason.
+        intents.retain(|intent| intent.lapses.is_none_or(|lapses| end <= lapses));
         facts.push(TabFact::Closed {
             origin: life.origin,
             reason: close_reason(crashed, &intents, gone),
@@ -673,14 +725,24 @@ impl TabLedger {
         false
     }
 
-    /// One crash per event. The first crash since the renderer was last seen alive dates the
-    /// tab's death, for [`close_reason`].
+    /// One crash per renderer: a repeated event for a target that crashed and was not seen back
+    /// counts nothing. The crash dates the tab's death, for [`close_reason`].
     fn crashed(&mut self, tab: TabId, target: &TargetId) -> Vec<TabFact> {
+        if self
+            .crashes
+            .get(&tab)
+            .is_some_and(|crash| crash.target == *target)
+        {
+            return Vec::new();
+        }
         let at = self.next_step();
-        self.crashes.entry(tab).or_insert_with(|| Crash {
-            target: target.clone(),
-            at,
-        });
+        self.crashes.insert(
+            tab,
+            Crash {
+                target: target.clone(),
+                at,
+            },
+        );
         vec![TabFact::RendererCrashed]
     }
 
@@ -694,19 +756,42 @@ impl TabLedger {
         }
     }
 
-    fn intend_close(&mut self, tab: TabId, reason: IntentReason) -> IntentId {
+    /// A close intent on `tab`, joining the one of the same reason and kind if the tab has it:
+    /// it keeps its earliest step, and a joined asked close lapses at the later deadline.
+    fn intend_close(
+        &mut self,
+        tab: TabId,
+        reason: IntentReason,
+        lapses: Option<Instant>,
+    ) -> IntentId {
+        if let Some(intent) = self.closes.get_mut(&tab).and_then(|intents| {
+            intents.iter_mut().find(|intent| {
+                intent.reason == reason && intent.lapses.is_some() == lapses.is_some()
+            })
+        }) {
+            intent.holders = intent.holders.saturating_add(1);
+            intent.lapses = intent.lapses.max(lapses);
+            return intent.id;
+        }
         let id = self.next_intent_id();
         let taken = self.next_step();
-        self.closes
-            .entry(tab)
-            .or_default()
-            .push(Intent { id, reason, taken });
+        self.closes.entry(tab).or_default().push(Intent {
+            id,
+            reason,
+            taken,
+            lapses,
+            holders: 1,
+        });
         id
     }
 
+    /// One holder of intent `id` lets go; the intent goes with its last holder.
     fn withdraw(&mut self, tab: TabId, id: IntentId) {
         if let Some(intents) = self.closes.get_mut(&tab) {
-            intents.retain(|intent| intent.id != id);
+            for intent in intents.iter_mut().filter(|intent| intent.id == id) {
+                intent.holders = intent.holders.saturating_sub(1);
+            }
+            intents.retain(|intent| intent.holders > 0);
             if intents.is_empty() {
                 self.closes.remove(&tab);
             }
@@ -815,7 +900,8 @@ const fn popup_origin(opener: TabOrigin) -> TabOrigin {
 /// 1. its renderer crashed and was not seen back → `crash`, unless the earliest live intent was
 ///    taken before the crash: that close was already under way when the renderer died;
 /// 2. else the earliest live intent → `script` or `janitor`;
-/// 3. else `shutdown` when its browser went (it exited or restarted), otherwise `user`.
+/// 3. else `shutdown` when its browser went (it exited or restarted) or Neo is shutting down
+///    (D12), otherwise `user`.
 ///
 /// Pure, so one table test covers every combination.
 fn close_reason(crashed: Option<Step>, intents: &[Intent], gone: Gone) -> CloseReason {
@@ -825,7 +911,7 @@ fn close_reason(crashed: Option<Step>, intents: &[Intent], gone: Gone) -> CloseR
         (Some(_), _) => CloseReason::Crash,
         (None, Some(intent)) => intent.reason.close_reason(),
         (None, None) => match gone {
-            Gone::Browser => CloseReason::Shutdown,
+            Gone::Shutdown => CloseReason::Shutdown,
             Gone::Tab => CloseReason::User,
         },
     }
@@ -1124,7 +1210,9 @@ mod tests {
     fn a_reused_tab_id_inherits_no_intent_and_no_crash_from_the_old_browser() {
         let mut book = Book::new();
         book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]);
-        let _intent = book.ledger.intend_close(TabId(2), IntentReason::Script);
+        let _intent = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Script, None);
         book.crashed(1);
         assert_eq!(
             book.listed(30, Gap::Socket, &[swapped(1), swapped(2)], &[]),
@@ -1278,11 +1366,17 @@ mod tests {
     fn script_janitor_and_user_closes_each_close_once_with_their_reason() {
         let mut book = Book::new();
         book.listed(0, Gap::Socket, &[tab(1), tab(2), tab(3)], &[]);
-        let _script = book.ledger.intend_close(TabId(1), IntentReason::Script);
+        let _script = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Script, None);
         // The janitor takes its intent before it submits `page.close`, whose wrapper takes the
         // op's own `script` one: the earliest names the close.
-        let _janitor = book.ledger.intend_close(TabId(2), IntentReason::Janitor);
-        let _op = book.ledger.intend_close(TabId(2), IntentReason::Script);
+        let _janitor = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Janitor, None);
+        let _op = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Script, None);
         assert_eq!(
             book.listed(30, Gap::None, &[], &[1, 2, 3]),
             [
@@ -1307,12 +1401,155 @@ mod tests {
     fn a_withdrawn_intent_leaves_the_close_to_whoever_makes_it() {
         let mut book = Book::new();
         book.listed(0, Gap::Socket, &[tab(1)], &[]);
-        let refused = book.ledger.intend_close(TabId(1), IntentReason::Janitor);
+        let refused = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Janitor, None);
         book.ledger.withdraw(TabId(1), refused);
         assert_eq!(
             book.listed(7, Gap::None, &[], &[1]),
             [closed(TabOrigin::Found, CloseReason::User, 7)],
             "a close Neo never sent is not Neo's"
+        );
+    }
+
+    #[test]
+    fn a_refused_asked_close_leaves_the_later_close_to_whoever_makes_it() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]);
+        // `page.runBeforeUnload` on both: tab 2's page leaves at once; tab 1's refuses (a
+        // listener dismissed its beforeunload dialog), and its owner closes it a minute later.
+        let lapses = Some(book.at(10));
+        let _refused = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Script, lapses);
+        let _asked = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Script, lapses);
+        assert_eq!(
+            book.listed(1, Gap::None, &[tab(1)], &[2]),
+            [closed(TabOrigin::Found, CloseReason::Script, 1)],
+            "a page that leaves in time closes for the script"
+        );
+        assert_eq!(
+            book.listed(60, Gap::None, &[], &[1]),
+            [closed(TabOrigin::Found, CloseReason::User, 60)],
+            "a page that stayed closes later for whoever closed it"
+        );
+    }
+
+    #[test]
+    fn a_loop_of_refused_asked_closes_keeps_one_intent_per_reason_and_kind() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1)], &[]);
+        for second in 0..1000 {
+            let _refused = book.ledger.intend_close(
+                TabId(1),
+                IntentReason::Script,
+                Some(book.at(second + 10)),
+            );
+        }
+        let _close = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Script, None);
+        let _janitor = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Janitor, None);
+        assert_eq!(
+            book.ledger.closes.get(&TabId(1)).map(Vec::len),
+            Some(3),
+            "one intent per reason and kind, however many closes were asked"
+        );
+        assert_eq!(
+            book.listed(2000, Gap::None, &[], &[1]),
+            [closed(TabOrigin::Found, CloseReason::Script, 2000)],
+            "the asked closes lapsed; the script's own close came before the janitor's"
+        );
+    }
+
+    #[test]
+    fn a_shared_intent_stays_until_its_last_holder_withdraws() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1)], &[]);
+        let refused = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Script, None);
+        let sent = book
+            .ledger
+            .intend_close(TabId(1), IntentReason::Script, None);
+        assert_eq!(refused, sent, "two closes of one kind share one intent");
+        book.ledger.withdraw(TabId(1), refused);
+        assert_eq!(
+            book.listed(5, Gap::None, &[], &[1]),
+            [closed(TabOrigin::Found, CloseReason::Script, 5)],
+            "the close that was sent still names it"
+        );
+    }
+
+    #[test]
+    fn a_repeated_crash_event_counts_once_until_the_renderer_is_back() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1)], &[]);
+        assert_eq!(book.crashed(1), [TabFact::RendererCrashed], "the crash");
+        assert_eq!(book.crashed(1), [], "the same renderer, reported again");
+        book.ledger.recovered(TabId(1), &target(1));
+        assert_eq!(
+            book.crashed(1),
+            [TabFact::RendererCrashed],
+            "the renderer came back, then crashed again"
+        );
+        assert_eq!(book.crashes, 2, "one per crashed renderer");
+    }
+
+    #[test]
+    fn once_neo_shuts_down_a_close_nobody_asked_for_is_the_shutdowns() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2), tab(3)], &[]);
+        let _script = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Script, None);
+        book.crashed(3);
+        // SIGTERM: Neo begins its own shutdown (decision D12).
+        book.ledger.shutting_down = true;
+        assert_eq!(
+            book.listed(9, Gap::None, &[], &[1, 2, 3]),
+            [
+                closed(TabOrigin::Found, CloseReason::Shutdown, 9),
+                closed(TabOrigin::Found, CloseReason::Script, 9),
+                closed(TabOrigin::Found, CloseReason::Crash, 9),
+            ],
+            "unasked closes are the shutdown's; an intent or a crash still names its own"
+        );
+    }
+
+    #[test]
+    fn the_blank_tab_neo_makes_its_own_at_attach_is_born_neo() {
+        let mut book = Book::new();
+        // Taken before the link's first listing, as the app takes it (decision D7, revised).
+        let attach = book.ledger.expect_open(OpenFor::Neo);
+        assert_eq!(
+            book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]),
+            [],
+            "the first listing's tabs wait for the attach"
+        );
+        assert_eq!(
+            book.claim(attach, 1, 2),
+            [opened(TabOrigin::Neo), opened(TabOrigin::Found)],
+            "the blank tab Neo adopted is born neo, the rest found"
+        );
+        let later = book.ledger.expect_open(OpenFor::Neo);
+        assert_eq!(
+            book.claim(later, 2, 5),
+            [],
+            "a tab adopted later in the session keeps its birth origin"
+        );
+        assert_eq!(
+            book.counts(),
+            OpenTabCounts {
+                agent: 0,
+                found: 1,
+                neo: 1
+            },
+            "each counted once, under its birth origin"
         );
     }
 
@@ -1343,12 +1580,16 @@ mod tests {
     fn a_crashed_tab_closes_as_crash_exactly_once_whoever_removes_it() {
         let mut book = Book::new();
         book.listed(0, Gap::Socket, &[tab(1), tab(2), tab(3)], &[]);
-        let _before = book.ledger.intend_close(TabId(3), IntentReason::Script);
+        let _before = book
+            .ledger
+            .intend_close(TabId(3), IntentReason::Script, None);
         book.crashed(1);
         book.crashed(2);
         book.crashed(3);
         // A script closes crashed tab 2 after the crash.
-        let _after = book.ledger.intend_close(TabId(2), IntentReason::Script);
+        let _after = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Script, None);
         assert_eq!(
             book.listed(4, Gap::None, &[], &[1, 2, 3]),
             [
@@ -1431,10 +1672,12 @@ mod tests {
             id: IntentId(taken),
             reason,
             taken: Step(taken),
+            lapses: None,
+            holders: 1,
         };
         let cases = [
             (None, vec![], Gone::Tab, CloseReason::User),
-            (None, vec![], Gone::Browser, CloseReason::Shutdown),
+            (None, vec![], Gone::Shutdown, CloseReason::Shutdown),
             (
                 None,
                 vec![intent(IntentReason::Script, 1)],
@@ -1444,7 +1687,7 @@ mod tests {
             (
                 None,
                 vec![intent(IntentReason::Script, 1)],
-                Gone::Browser,
+                Gone::Shutdown,
                 CloseReason::Script,
             ),
             (
@@ -1457,7 +1700,7 @@ mod tests {
                 CloseReason::Janitor,
             ),
             (Some(Step(5)), vec![], Gone::Tab, CloseReason::Crash),
-            (Some(Step(5)), vec![], Gone::Browser, CloseReason::Crash),
+            (Some(Step(5)), vec![], Gone::Shutdown, CloseReason::Crash),
             (
                 Some(Step(5)),
                 vec![intent(IntentReason::Script, 6)],
@@ -1476,7 +1719,7 @@ mod tests {
                     intent(IntentReason::Script, 7),
                     intent(IntentReason::Janitor, 3),
                 ],
-                Gone::Browser,
+                Gone::Shutdown,
                 CloseReason::Janitor,
             ),
         ];
@@ -1557,7 +1800,7 @@ mod tests {
                     3 => {
                         let tab = dice.tab();
                         let facts = book.crashed(tab);
-                        assert_eq!(facts, [TabFact::RendererCrashed], "one crash per event");
+                        assert!(facts.len() <= 1, "at most one crash per event");
                     }
                     4 => {
                         let tab = dice.tab();
@@ -1570,12 +1813,20 @@ mod tests {
                         } else {
                             IntentReason::Janitor
                         };
-                        closes.push((tab, book.ledger.intend_close(tab, reason)));
+                        let lapses = (dice.roll(2) == 0).then(|| book.at(step + dice.roll(20)));
+                        closes.push((tab, book.ledger.intend_close(tab, reason, lapses)));
                         if dice.roll(3) == 0
                             && let Some((tab, intent)) = closes.pop()
                         {
                             book.ledger.withdraw(tab, intent);
                         }
+                        assert!(
+                            book.ledger
+                                .closes
+                                .values()
+                                .all(|intents| intents.len() <= 4),
+                            "a tab keeps at most one intent per reason and kind"
+                        );
                     }
                     6 => {
                         let open = if dice.roll(2) == 0 {

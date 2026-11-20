@@ -268,9 +268,13 @@ impl Method for PlaywrightOp {
             env.opening = Mutex::new(Some(op.tabs().life().expect_open(OpenFor::Agent)));
         }
         let closing = page.filter(|_| self.closes_tab()).map(|closing| {
-            op.tabs()
-                .life()
-                .intend_close(closing.tab, IntentReason::Script)
+            let life = op.tabs().life();
+            if self.pages == PageEffect::Closes {
+                life.intend_close(closing.tab, IntentReason::Script)
+            } else {
+                // `page.runBeforeUnload`: the page's beforeunload may still refuse.
+                life.intend_asked_close(closing.tab)
+            }
         });
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))

@@ -1,6 +1,6 @@
 //! Ordered notice of the tabs that open and close, for whatever keeps state by tab.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
@@ -98,9 +98,11 @@ pub(crate) struct TabListing {
 ///
 /// It is also the only writer of browser facts to tab telemetry's ledger (`TabLife`): every
 /// settled listing, with what the watch may have missed before it (`Gap`), and each page
-/// target's `Target.targetCrashed`, idle tab or not, and its `Target.targetInfoChanged` once a
-/// page loads in it again. Neither costs a round trip: they ride the listing and the discovery
-/// stream the watch already has.
+/// target's `Target.targetCrashed`, idle tab or not, and its `Target.targetInfoChanged`, which
+/// after a crash means a page loaded in it again. They ride the listing and the discovery stream
+/// the watch already has; only after core's channel dropped events does one `Target.getTargets`
+/// rebuild the watch's map of live page targets, which the ledger needs to keep a tab on an
+/// excluded page open.
 ///
 /// Runs for the process's life: the session's event channel outlives every reconnect.
 pub(crate) async fn tab_watch(
@@ -215,15 +217,13 @@ struct Watch {
     open: Option<BTreeSet<TabId>>,
     /// A listing is due: target events came since the last one, or it failed.
     owes_listing: bool,
-    /// Page targets whose renderer crashed and has not loaded a page since: the next
-    /// `Target.targetInfoChanged` of one tells the ledger it recovered.
-    crashed: HashSet<String>,
     /// What the next listing must allow for having missed, for the ledger: a new socket, or
     /// events core's channel dropped. Each listing that settles takes it.
     gap: Gap,
-    /// `targets` may hold a page target whose destroy was among dropped events, since the watch
-    /// fell behind on this socket. Until the next socket the ledger is not told which unlisted
-    /// tabs have a live target: a dead one would keep a closed tab counted for good.
+    /// `targets` may hold a page target whose destroy was among dropped events, or lack one whose
+    /// announcement was: the watch fell behind, and the next listing first rebuilds the map
+    /// (`Watch::rebuild_targets`). Until a rebuild succeeds the ledger is not told which unlisted
+    /// tabs have a live target, since a dead one would keep a closed tab counted for good.
     targets_stale: bool,
 }
 
@@ -245,6 +245,13 @@ struct TargetInfo {
     tab_id: Option<i64>,
     #[serde(default)]
     opener_id: Option<String>,
+}
+
+/// `Target.getTargets`' reply, as far as the watch reads it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetInfos {
+    target_infos: Vec<TargetInfo>,
 }
 
 /// `Target.targetDestroyed`, which names only the target.
@@ -292,7 +299,6 @@ impl Watch {
             closing: BTreeSet::new(),
             open: None,
             owes_listing: false,
-            crashed: HashSet::new(),
             gap: Gap::Socket,
             targets_stale: false,
         }
@@ -310,7 +316,6 @@ impl Watch {
         self.openers.clear();
         self.opener_tabs.clear();
         self.closing.clear();
-        self.crashed.clear();
         self.tabs.forget_openers();
         // Discovery announces every live target afresh, so the map is whole again.
         self.gap = Gap::Socket;
@@ -320,7 +325,7 @@ impl Watch {
 
     /// Core's event channel dropped events the watch never read, which may have held a close:
     /// a new start on the same socket. The known targets stay, so a destroy still to come
-    /// finds its tab.
+    /// finds its tab, until the next listing rebuilds them.
     fn fell_behind(&mut self) {
         if let Some(current) = self.current {
             // A new socket's first listing still asks the ledger whether the browser changed.
@@ -378,11 +383,9 @@ impl Watch {
             "Target.targetDestroyed" => {
                 if let Ok(TargetDestroyed { target_id }) =
                     TargetDestroyed::deserialize(&event.params)
+                    && let Some(tab) = self.targets.remove(&target_id)
                 {
-                    self.crashed.remove(&target_id);
-                    if let Some(tab) = self.targets.remove(&target_id) {
-                        self.closing.insert(tab);
-                    }
+                    self.closing.insert(tab);
                 }
             }
             // Counted here and nowhere else (not from ops that fail on the dead tab), so an idle
@@ -391,15 +394,14 @@ impl Watch {
                 if let Ok(TargetCrashed { target_id }) = TargetCrashed::deserialize(&event.params)
                     && let Some(tab) = self.targets.get(&target_id).copied()
                 {
-                    self.tabs.life().crashed(tab, &TargetId(target_id.clone()));
-                    self.crashed.insert(target_id);
+                    self.tabs.life().crashed(tab, &TargetId(target_id));
                 }
                 return false;
             }
             "Target.targetInfoChanged" => {
+                // The ledger knows which renderers crashed; for any other target this is no-op.
                 if let Ok(TargetInfoChanged { target_info }) =
                     TargetInfoChanged::deserialize(&event.params)
-                    && self.crashed.remove(&target_info.target_id)
                     && let Some(tab) = self.targets.get(&target_info.target_id).copied()
                 {
                     self.tabs
@@ -439,6 +441,9 @@ impl Watch {
             }
             return;
         };
+        if self.targets_stale {
+            self.rebuild_targets(session, current.epoch).await;
+        }
         let seen = self.tabs.seen();
         let Some(pages) = watched_pages(session, current.epoch).await else {
             return;
@@ -492,6 +497,39 @@ impl Watch {
             }
         }
         self.open = Some(open);
+    }
+
+    /// After core's channel dropped events, rebuilds the map of live page targets from one
+    /// `Target.getTargets` on socket `epoch`, before the listing: a destroy among the dropped
+    /// events would leave a dead target in it, and an announcement a missing one. Asked first, so
+    /// a tab that closes between the two is unlisted but still mapped, and its destroy, read
+    /// later, finds it. On failure the map stays stale, and the next listing asks again.
+    async fn rebuild_targets(&mut self, session: &BrowserSession, epoch: u64) {
+        let reply = session
+            .connection()
+            .send_at_epoch(epoch, "Target.getTargets", json!({}), None)
+            .await;
+        let infos = match reply.map(|value| TargetInfos::deserialize(&value)) {
+            Ok(Ok(TargetInfos { target_infos })) => target_infos,
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "target listing unreadable; live targets stay unknown");
+                return;
+            }
+            Err(error) => {
+                tracing::debug!(%error, "target listing failed; live targets stay unknown");
+                return;
+            }
+        };
+        self.targets.clear();
+        for info in infos.into_iter().filter(|info| info.kind == "page") {
+            if let Some(opener) = info.opener_id {
+                self.openers.insert(info.target_id.clone(), opener);
+            }
+            if let Some(tab) = info.tab_id {
+                self.targets.insert(info.target_id, TabId(tab));
+            }
+        }
+        self.targets_stale = false;
     }
 
     /// Hands this listing to tab telemetry's ledger, with the close candidates and the gap since
