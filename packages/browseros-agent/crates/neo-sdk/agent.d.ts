@@ -170,9 +170,11 @@ declare global {
      * throw `jev_unavailable`.
      *
      * Jev, a fast decision model, reads the page at the moment of the call, so a script can act on
-     * pages you have not looked at. Write as far ahead as you can see, run it, then write the next
-     * stretch from what came back. End a script where the next step depends on something you must
-     * read first.
+     * pages you have not looked at: describe the usual control ("the search box", "the Sign in
+     * button"); if it is not there, the stop costs no more than the snapshot you would have taken.
+     * After an action, confirm what it did with `check` instead of returning a snapshot, and `stop`
+     * when it is not so. Write as far ahead as you can see, run it, then write the next stretch from
+     * what came back; return a snapshot only when you must read the page to decide the next step.
      *
      * A helper that is not sure stops the script instead of guessing. It throws a `NeoError` with
      * `code: 'stopped'` and `stop: Stop`; leave it uncaught. The run then ends normally and returns

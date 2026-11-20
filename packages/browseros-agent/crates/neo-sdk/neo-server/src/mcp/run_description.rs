@@ -71,14 +71,18 @@ const SNAPSHOT_ON_TOP: &str = r"A line `# on top: …` at the snapshot's top nam
 /// `HELPERS` come first and end before character 3,800, and the loop's rule names the exception
 /// (`LOOK_AGAIN_AHEAD`); tests check both. Round 5 runners still found one element and returned
 /// a snapshot anyway, so the first sentence covers "this page or the next", one whole flow shows
-/// what a script can hold, and the loop opens as the fallback (`LOOP_HEAD_AHEAD`). The stop's
+/// what a script can hold, and the loop opens as the fallback (`LOOP_HEAD_AHEAD`). The s3 runs
+/// (helpers in 13 of 24 tasks, no script past one page) still returned a snapshot after each
+/// action, so the text says to confirm an action with `neo.check` instead, and to name a page's
+/// usual control before seeing it, since a stop costs no more than that snapshot. The stop's
 /// record and its `next` line are the prelude's (`runtime/js/neo_prelude.js`); the record's
 /// fields named here are `agent.d.ts`'s `Stop`, which a test checks. Its whole-flow sample
 /// compiles as a run's body, which a test checks too.
-const AHEAD: &str = r#"Each `neo.find` replaces a snapshot-then-act turn, on this page or the next: when you can name the next element in plain words, find it and act in the same script instead of returning a snapshot.
+const AHEAD: &str = r#"Each `neo.find` replaces a snapshot-then-act turn, on this page or the next: when you can name the next element in plain words, find it and act in the same script.
+On a page you have not seen, describe its usual control ('the search box', 'the Sign in button'): if it is not there, the stop costs no more than the snapshot you would have taken.
 A whole flow is one script: `await (await neo.find(page, 'the search box')).fill('usb-c hub'); await (await neo.find(page, 'the Search button')).click(); await (await neo.find(page, 'the first result')).click(); if (!(await neo.check(page, 'a USB-C hub product page', { timeout: 5000 }))) neo.stop(page, 'not a hub page'); await (await neo.find(page, 'the Add to cart button')).click(); return 'added'`.
-Write as far ahead as you can see, while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.
-After a step that should change the page, say what you expect with `neo.check`, and `neo.stop` when it is not so, as above.
+After an action, confirm what it did with `neo.check` instead of returning a snapshot, and `neo.stop` when it is not so, as above.
+Write as far ahead as you can see: return a snapshot only when you must read the page to decide the next step.
 A helper that is not sure stops the script there instead of guessing; the run returns `{ "stopped": { ask, at, call, log, lookalikes, next, tab, url, why } }`, a normal result, not an error.
 Nothing is undone, and `stopped.log` lists what ran and what you logged: carry on by hand from that tab (`page.getByRef` on a lookalike, or `page.ariaSnapshot()`); do not fix the script and run it again from the top.
 The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.
@@ -87,7 +91,7 @@ Return what you collect; `console.log` it as you go too, since a stop returns `s
 /// The five helpers in one short line each, right after `AHEAD`, so they sit in the part of the
 /// description every host shows (see `AHEAD`). The full lines stay in the registry's listing
 /// (`builtins/jev_verbs.rs`), at the end; a test checks each listed helper has a line here.
-const HELPERS: &str = r"The helpers (each also listed in full under SDK methods):
+const HELPERS: &str = r"The helpers (also listed under SDK methods):
 - `neo.find(page, ask, { role?, timeout? = 5000, optional? })` → the one Locator `ask` describes; stops when unsure (none or two fit; `optional: true` gives null).
 - `neo.findAll(page, ask, { role? })` → Locator[] of every match, in page order; stops when unsure of one.
 - `neo.check(page, claim, { timeout? = 0 })` → boolean; with `timeout`, looks again until true; stops when unsure.
@@ -97,8 +101,9 @@ const HELPERS: &str = r"The helpers (each also listed in full under SDK methods)
 /// `LOOP`'s rule for ending a script, which a Neo with the Jev helpers replaces with
 /// `LOOK_AGAIN_AHEAD` (see `AHEAD`); a test checks `LOOP` holds it once.
 const LOOK_AGAIN: &str = "end the script by returning a new snapshot, and choose the next action from it.\n  Fills of one form can share a script; the click that submits it ends the script.";
-/// The same rule with its exception: a step the writer can name goes on with `neo.find`.
-const LOOK_AGAIN_AHEAD: &str = "end the script by returning a new snapshot, and choose the next action from it, unless you can name the next element in plain words: then `neo.find` it in the same script (above).\n  Fills of one form can share a script; the click that submits it ends the script unless you can name what follows it.";
+/// The same rule with its exception: a step the writer can name goes on with `neo.find`, and an
+/// outcome the writer can name is confirmed with `neo.check`.
+const LOOK_AGAIN_AHEAD: &str = "end the script by returning a new snapshot, and choose the next action from it, unless you can name the next element or what the page should now show: then `neo.find` or `neo.check` it in the same script (above).\n  Fills of one form can share a script; the click that submits it ends the script unless you can name what follows it.";
 /// `LOOP`'s first line, which a Neo with the Jev helpers replaces with `LOOP_HEAD_AHEAD`, so the
 /// look-act loop reads as the fallback for a step the writer cannot name (see `AHEAD`).
 const LOOP_HEAD: &str = "Work in a loop: look, act, look again.";
@@ -705,10 +710,11 @@ mod tests {
                 );
             }
             for sentence in [
-                "Each `neo.find` replaces a snapshot-then-act turn, on this page or the next: when you can name the next element in plain words, find it and act in the same script instead of returning a snapshot.",
+                "Each `neo.find` replaces a snapshot-then-act turn, on this page or the next: when you can name the next element in plain words, find it and act in the same script.",
+                "On a page you have not seen, describe its usual control ('the search box', 'the Sign in button'): if it is not there, the stop costs no more than the snapshot you would have taken.",
                 "A whole flow is one script: `await (await neo.find(page, 'the search box')).fill('usb-c hub'); await (await neo.find(page, 'the Search button')).click(); await (await neo.find(page, 'the first result')).click(); if (!(await neo.check(page, 'a USB-C hub product page', { timeout: 5000 }))) neo.stop(page, 'not a hub page'); await (await neo.find(page, 'the Add to cart button')).click(); return 'added'`.",
-                "Write as far ahead as you can see, while you know each next step and can say in plain words what to act on; end the script where the next step depends on something you must read first, and return that.",
-                "After a step that should change the page, say what you expect with `neo.check`, and `neo.stop` when it is not so, as above.",
+                "After an action, confirm what it did with `neo.check` instead of returning a snapshot, and `neo.stop` when it is not so, as above.",
+                "Write as far ahead as you can see: return a snapshot only when you must read the page to decide the next step.",
                 "A helper that is not sure stops the script there instead of guessing; the run returns `{ \"stopped\": { ask, at, call, log, lookalikes, next, tab, url, why } }`, a normal result, not an error.",
                 "Nothing is undone, and `stopped.log` lists what ran and what you logged: carry on by hand from that tab (`page.getByRef` on a lookalike, or `page.ariaSnapshot()`); do not fix the script and run it again from the top.",
                 "The same holds when an action fails part-way (a stale ref, a covered click): the steps before it were done.",
@@ -726,7 +732,7 @@ mod tests {
 
     /// Claude Code shows a model only the first ~4,090 characters of this description (`RealBench`
     /// round 5), so with a key every helper's name and the stop are inside the first 3,800, and
-    /// the loop's rule for ending a script names the helpers' exception.
+    /// the loop's rule for ending a script names the helpers' exception and ends before that cut.
     #[test]
     fn with_a_jev_key_the_helpers_and_the_stop_come_in_the_first_3800_characters()
     -> Result<(), TestError> {
@@ -772,6 +778,11 @@ mod tests {
             assert!(
                 !description.contains(LOOK_AGAIN),
                 "and never says the rule without it"
+            );
+            let visible: String = description.chars().take(4000).collect();
+            assert!(
+                visible.contains(LOOK_AGAIN_AHEAD),
+                "the rule with its exception ends before Claude Code's cut (~4,090): {description}"
             );
             Ok(())
         })
