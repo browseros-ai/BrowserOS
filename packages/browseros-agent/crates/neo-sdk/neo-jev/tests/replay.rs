@@ -507,6 +507,17 @@ impl Report {
         c
     }
 
+    /// Safe stops are allowed (the 93 cases have 3); a wrong answer or a case that could not be
+    /// graded (live: a fault) fails the replay, after the report is written.
+    fn assert_none_wrong_or_excluded(&self, mode: &str) {
+        let (_, _, wrong, excluded) = self.counts();
+        assert_eq!(
+            (wrong, excluded),
+            (0, 0),
+            "{mode}: a wrong answer acts on the wrong element, and an excluded case was never graded"
+        );
+    }
+
     /// The scores nearest each v1 stop line, over every graded case.
     fn margins(&self) -> String {
         let mut m = Margins::default();
@@ -656,6 +667,7 @@ fn offline_replay_matches_the_labels() -> TestResult {
         !cases.is_empty(),
         "NEO_JEV_EVAL_DIR names a folder of eval cases"
     );
+    report.assert_none_wrong_or_excluded("offline");
     Ok(())
 }
 
@@ -679,5 +691,6 @@ async fn live_replay_matches_the_labels() -> TestResult {
     }
     let text = report.write("live", &cases)?;
     eprintln!("{text}");
+    report.assert_none_wrong_or_excluded("live");
     Ok(())
 }

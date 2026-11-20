@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::view::View;
+use crate::view::{self, View};
 use crate::{EarlierPick, FindOutcome, Flags, Obstacle, Pick};
 
 /// The top twin group must reach this to be found; the top option, for `choose` to be clear.
@@ -34,6 +34,11 @@ pub const MATCH: f32 = 0.5;
 pub const OBSTACLE: f32 = 0.5;
 /// Groups carried into the re-ask when several batches each have a leader.
 pub const FINALISTS: usize = 20;
+// The re-ask is one Choice: its finalists' offered refs must fit one batch.
+const _: () = assert!(
+    FINALISTS * view::MAX_GROUP_REFS <= view::MAX_BATCH_REFS,
+    "the re-ask's finalists must fit one Choice"
+);
 /// Lookalikes a verdict reports.
 pub const LOOKALIKES: usize = 3;
 
@@ -69,11 +74,13 @@ pub enum FindGate {
 }
 
 /// A twin group with its summed probability. `group` is `None` for a ref the view never showed.
+/// Every rule reads `raw`; `p` is rounded for the verdict only, so 0.495 is never accepted as 0.50.
 #[derive(Debug, Clone)]
 struct Scored {
     group: Option<usize>,
     r#ref: String,
     label: String,
+    raw: f32,
     p: f32,
 }
 
@@ -87,7 +94,8 @@ fn score(view: &View, answer: &Answer) -> Vec<Scored> {
                 group: None,
                 r#ref: r.clone(),
                 label: "?".into(),
-                p: *p,
+                raw: *p,
+                p: round2(*p),
             }),
         }
     }
@@ -99,14 +107,19 @@ fn score(view: &View, answer: &Answer) -> Vec<Scored> {
                 group: Some(g),
                 r#ref: group.rep.clone(),
                 label: group.label.clone(),
+                raw: p,
                 p: round2(p),
             })
         })
         .chain(strays)
         .collect();
-    // Ties break by page order, so the verdict is the same on every run.
-    scored.sort_by(|a, b| b.p.total_cmp(&a.p).then(a.group.cmp(&b.group)));
+    scored.sort_by(by_score);
     scored
+}
+
+/// Best first; ties break by page order, so the verdict is the same on every run.
+fn by_score(a: &Scored, b: &Scored) -> std::cmp::Ordering {
+    b.raw.total_cmp(&a.raw).then(a.group.cmp(&b.group))
 }
 
 fn round2(p: f32) -> f32 {
@@ -130,7 +143,7 @@ pub fn find(view: &View, answers: &[Answer], ask: &str, picked: &[EarlierPick]) 
             let top = per_batch
                 .get(b)
                 .and_then(|s| s.first())
-                .map_or(0.0, |s| s.p);
+                .map_or(0.0, |s| s.raw);
             let none = answers.get(b).map_or(1.0, |a| a.none);
             top > 0.0 && top > none
         })
@@ -138,7 +151,7 @@ pub fn find(view: &View, answers: &[Answer], ask: &str, picked: &[EarlierPick]) 
 
     if leaders.len() > 1 {
         let mut finalists: Vec<&Scored> = per_batch.iter().flatten().collect();
-        finalists.sort_by(|a, b| b.p.total_cmp(&a.p).then(a.group.cmp(&b.group)));
+        finalists.sort_by(|a, b| by_score(a, b));
         let mut groups: Vec<usize> = finalists
             .iter()
             .filter_map(|s| s.group)
@@ -155,11 +168,11 @@ pub fn find(view: &View, answers: &[Answer], ask: &str, picked: &[EarlierPick]) 
             let pa = per_batch
                 .get(a)
                 .and_then(|s| s.first())
-                .map_or(0.0, |s| s.p);
+                .map_or(0.0, |s| s.raw);
             let pb = per_batch
                 .get(b)
                 .and_then(|s| s.first())
-                .map_or(0.0, |s| s.p);
+                .map_or(0.0, |s| s.raw);
             pa.total_cmp(&pb)
         })
     });
@@ -170,10 +183,12 @@ pub fn find(view: &View, answers: &[Answer], ask: &str, picked: &[EarlierPick]) 
         .and_then(|b| answers.get(b))
         .map_or(1.0, |a| a.none);
     let top = ranked.first();
-    let top_p = top.map_or(0.0, |s| s.p);
-    let next_p = ranked.get(1).map_or(0.0, |s| s.p);
+    let top_p = top.map_or(0.0, |s| s.raw);
+    let next_p = ranked.get(1).map_or(0.0, |s| s.raw);
 
-    let clear = top_p >= ACCEPT && next_p < RIVAL;
+    // Beating `none` matters only off the usual shape: a batch's probabilities sum to 1, so a top
+    // at ACCEPT already leads `none`, save a tie.
+    let clear = top_p >= ACCEPT && next_p < RIVAL && top_p > none;
     // A clear winner already picked this run under another ask is the one confident-wrong shape
     // the eval found (City answered with State's dropdown, 6 of 6 samples; never a right pick).
     // It stops as ambiguous so the script decides; `reused` names the earlier ask.
@@ -201,8 +216,8 @@ pub fn find(view: &View, answers: &[Answer], ask: &str, picked: &[EarlierPick]) 
     };
 
     // Lookalikes come from every batch: a miss should show the best of the whole page.
-    let mut others: Vec<&Scored> = per_batch.iter().flatten().filter(|s| s.p > 0.0).collect();
-    others.sort_by(|a, b| b.p.total_cmp(&a.p).then(a.group.cmp(&b.group)));
+    let mut others: Vec<&Scored> = per_batch.iter().flatten().filter(|s| s.raw > 0.0).collect();
+    others.sort_by(|a, b| by_score(a, b));
     let lookalikes: Vec<Pick> = others
         .into_iter()
         .filter(|s| pick.as_ref().is_none_or(|p| p.r#ref != s.r#ref))

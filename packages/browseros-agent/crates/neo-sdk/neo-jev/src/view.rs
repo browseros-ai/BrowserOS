@@ -14,6 +14,10 @@ use std::collections::HashMap;
 
 /// Most refs one Choice may carry; Jev allows 255 options and one is `none`.
 pub const MAX_BATCH_REFS: usize = 254;
+/// Most refs one group offers. Twins are two or three; only links to one href can be many (a grid
+/// of image links). The rest still count as members. It keeps any group inside one batch, and
+/// `gate::FINALISTS` groups inside one re-ask Choice.
+pub const MAX_GROUP_REFS: usize = 12;
 
 /// How far (in ref'd lines) an `[aria-hidden]` copy looks for its visible twin.
 const TWIN_REACH: usize = 8;
@@ -46,7 +50,7 @@ impl Line {
 pub struct Group {
     /// The ref a verdict names: the visible control, not a wrapper or a hidden copy.
     pub rep: String,
-    /// The refs offered to Jev, in page order (hidden copies left out).
+    /// The refs offered to Jev, in page order (hidden copies left out; at most `MAX_GROUP_REFS`).
     pub offered: Vec<String>,
     /// Every ref whose probability counts for this group, hidden copies included.
     pub members: Vec<String>,
@@ -120,14 +124,20 @@ impl View {
             }
         }
 
-        // Links to the same href (a nameless link shows its URL as text).
+        // Links to the same href (a nameless link shows its URL as text). A URL the snapshot
+        // clipped (over 80 characters, ending in `…`) proves nothing: two destinations can share
+        // the first 80, and merging them would name the first for both.
         let mut by_href: HashMap<&str, usize> = HashMap::new();
         for k in 0..refs.len() {
             let Some(line) = line_at(k) else { continue };
             if line.role != "link" {
                 continue;
             }
-            let Some(href) = line.text.as_deref().filter(|t| looks_like_href(t)) else {
+            let Some(href) = line
+                .text
+                .as_deref()
+                .filter(|t| looks_like_href(t) && !t.ends_with('…'))
+            else {
                 continue;
             };
             match by_href.get(href) {
@@ -194,7 +204,8 @@ impl View {
             });
             if let Some(group) = groups.get_mut(index) {
                 group.members.push(r.clone());
-                if !dropped.get(i).copied().unwrap_or(false) {
+                if !dropped.get(i).copied().unwrap_or(false) && group.offered.len() < MAX_GROUP_REFS
+                {
                     group.offered.push(r.clone());
                 }
             }

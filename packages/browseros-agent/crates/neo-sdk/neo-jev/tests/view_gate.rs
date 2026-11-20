@@ -5,7 +5,7 @@ use std::error::Error;
 use std::fmt::Write as _;
 
 use neo_jev::gate::{self, Answer, FindGate};
-use neo_jev::view::{MAX_BATCH_REFS, View};
+use neo_jev::view::{MAX_BATCH_REFS, MAX_GROUP_REFS, View};
 use neo_jev::{EarlierPick, FindOutcome, Obstacle};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -453,6 +453,84 @@ fn find_all_puts_scores_inside_the_band_in_unsure_page_order() -> TestResult {
             .chain(&all.unsure)
             .any(|p| p.r#ref == "e13"),
         "0.34 is a clear no, in neither list"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_clipped_url_never_merges_links_and_a_group_offers_a_bounded_few() -> TestResult {
+    // The snapshot clips a nameless link's URL to 80 characters: these two share the first 80.
+    let clipped =
+        "https://shop.example/catalogue/kitchen/mugs-and-cups/ceramic/hand-painted/blue-…";
+    let mut page = format!("- link [ref=e1]: {clipped}\n- link [ref=e2]: {clipped}\n");
+    for i in 0..20 {
+        page.push_str(&format!("- link [ref=e{}]: /p/same\n", i + 10));
+    }
+    let view = View::new(&page);
+    assert_ne!(
+        view.group_of("e1"),
+        view.group_of("e2"),
+        "a clipped URL is no proof of the same destination"
+    );
+    let same = group_of(&view, "e10")?;
+    assert_eq!(
+        same.members.len(),
+        20,
+        "full URLs that match are one element"
+    );
+    assert_eq!(
+        same.offered.len(),
+        MAX_GROUP_REFS,
+        "only the first few are offered, so any group fits one Choice"
+    );
+    assert_eq!(
+        group_of(&view, "e29")?.rep,
+        "e10",
+        "a member past the cap still counts for its group"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_gate_reads_unrounded_scores_and_a_pick_must_beat_none() -> TestResult {
+    let view = View::new(SHOP);
+    let below = decided(gate::find(
+        &view,
+        &[answer(&[("e11", 0.499)], 0.501)],
+        "mug",
+        &[],
+    ))?;
+    assert_eq!(
+        below.outcome,
+        FindOutcome::NotFound,
+        "0.499 shows as 0.50 but is under ACCEPT, and `none` leads"
+    );
+    let tie = decided(gate::find(
+        &view,
+        &[answer(&[("e11", 0.5)], 0.5)],
+        "mug",
+        &[],
+    ))?;
+    assert_eq!(
+        tie.outcome,
+        FindOutcome::NotFound,
+        "a pick that only ties `none` is not found"
+    );
+    let rival = decided(gate::find(
+        &view,
+        &[answer(&[("e11", 0.75), ("e30", 0.199)], 0.051)],
+        "mug",
+        &[],
+    ))?;
+    assert_eq!(
+        rival.outcome,
+        FindOutcome::Found,
+        "0.199 is under RIVAL even though it shows as 0.20"
+    );
+    assert_eq!(
+        rival.lookalikes.first().map(|p| p.p),
+        Some(0.2),
+        "the verdict still shows rounded scores"
     );
     Ok(())
 }

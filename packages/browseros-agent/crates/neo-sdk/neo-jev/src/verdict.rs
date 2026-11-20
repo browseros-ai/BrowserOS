@@ -18,7 +18,8 @@ pub struct PageText {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "snake_case", default)]
 pub struct FindOpts {
-    /// Keep only candidates of this ARIA role (also the way to shrink a page that is too big).
+    /// Keep only candidates of this ARIA role. It narrows the options, not the page text Jev reads,
+    /// so it does not make a page that is too big fit.
     pub role: Option<String>,
     /// Earlier picks this run; a pick of the same ref under another ask sets `Flags::reused`.
     pub picked: Vec<EarlierPick>,

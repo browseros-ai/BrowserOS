@@ -61,6 +61,8 @@ const OBSTACLES: &[(&str, &str)] = &[
     ),
 ];
 
+const NOUL: &str = "noul";
+
 /// One question in a request. Criteria keep their order: Jev leans to the first option, so
 /// candidates must go out in page order, not a map's sorted order.
 #[derive(Debug, Clone, Serialize)]
@@ -88,7 +90,7 @@ impl Question {
     /// A yes/no probability.
     pub(crate) fn noul(instructions: String) -> Question {
         Question {
-            kind: "noul",
+            kind: NOUL,
             instructions: serde_json::Value::String(instructions),
             criteria: None,
         }
@@ -268,6 +270,7 @@ impl Client {
         };
         match sent {
             Sent::Ok(mut reply) => {
+                complete(&questions, &reply)?;
                 reply.calls = calls;
                 Ok(reply)
             }
@@ -338,6 +341,26 @@ impl Client {
             status: status.as_u16(),
         })
     }
+}
+
+/// A reply that leaves a question unanswered is unreadable, never a "no": `check` would read a
+/// missing `noul` as 0.0, a confident false, and `find_all` would drop the element unseen.
+fn complete(questions: &Ordered<Question>, reply: &Reply) -> Result<(), JevFault> {
+    for (id, question) in &questions.0 {
+        let answered = reply
+            .answers
+            .get(id)
+            .is_some_and(|answer| match question.kind {
+                NOUL => answer.noul.is_some(),
+                _ => !answer.probabilities.is_empty(),
+            });
+        if !answered {
+            return Err(JevFault::Down(format!(
+                "unreadable reply: no answer for `{id}`"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// A transport error's message without its URL (it is not secret, but noise in a miss).

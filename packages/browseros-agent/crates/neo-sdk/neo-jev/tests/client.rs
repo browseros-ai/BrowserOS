@@ -454,9 +454,14 @@ fn from_file(url: &str, file: &std::path::Path) -> Result<Jev, Box<dyn Error>> {
     Ok(Jev::new(config))
 }
 
-/// Answers every question as `check_choose_and_find_all_round_trip` does.
+/// Answers every Noul 0.9 and every Choice with `o0` (the obstacle with `none`).
 fn yes() -> Reply {
-    Box::new(|_, body| (StatusCode::OK, answers(body, &json!({}), 0.9, "none")))
+    Box::new(|_, body| {
+        (
+            StatusCode::OK,
+            answers(body, &json!({ "o0": 1.0 }), 0.9, "none"),
+        )
+    })
 }
 
 fn bearers(log: &Arc<Mutex<Vec<Seen>>>) -> Vec<String> {
@@ -566,5 +571,72 @@ async fn parallel_requests_refused_by_the_same_stale_key_each_retry_once() -> Te
     if let Some(dir) = file.parent() {
         std::fs::remove_dir_all(dir)?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reply_that_leaves_a_question_unanswered_is_unreadable_not_a_no() -> TestResult {
+    let (jev, _) = stub(Box::new(|_, _| {
+        (
+            StatusCode::OK,
+            json!({ "answers": {}, "usage": { "input_tokens": 1 } }),
+        )
+    }))
+    .await?;
+    let fault = jev.check(&page(SHOP), "the page lists mugs").await;
+    assert!(
+        matches!(&fault, Err(JevFault::Down(m)) if m.contains("`claim`")),
+        "no answer at all is not a confident false: {fault:?}"
+    );
+
+    // Every answer but one link's Noul: `find_all` must not drop that element unseen.
+    let (jev, _) = stub(Box::new(|_, body| {
+        let mut reply = answers(body, &json!({}), 0.9, "none");
+        if let Some(out) = reply["answers"].as_object_mut() {
+            out.remove("e30");
+        }
+        (StatusCode::OK, reply)
+    }))
+    .await?;
+    let fault = jev
+        .find_all(
+            &page(SHOP),
+            "a product link",
+            &FindOpts {
+                role: Some("link".into()),
+                ..FindOpts::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(&fault, Err(JevFault::Down(m)) if m.contains("`e30`")),
+        "one missing Noul makes the reply unreadable: {fault:?}"
+    );
+
+    // A Noul answered without its probability, and a Choice with no probabilities.
+    let (jev, _) = stub(Box::new(|_, body| {
+        let mut reply = answers(body, &json!({}), 0.9, "none");
+        if let Some(claim) = reply["answers"]["claim"].as_object_mut() {
+            claim.remove("noul");
+        }
+        (StatusCode::OK, reply)
+    }))
+    .await?;
+    let fault = jev.check(&page(SHOP), "the page lists mugs").await;
+    assert!(
+        matches!(&fault, Err(JevFault::Down(_))),
+        "a Noul without `noul`: {fault:?}"
+    );
+    let (jev, _) = stub(Box::new(|_, body| {
+        (StatusCode::OK, answers(body, &json!({}), 0.9, "none"))
+    }))
+    .await?;
+    let fault = jev
+        .choose(&page(SHOP), "which", &["a".to_owned(), "b".to_owned()])
+        .await;
+    assert!(
+        matches!(&fault, Err(JevFault::Down(m)) if m.contains("`choose`")),
+        "a Choice with no probabilities: {fault:?}"
+    );
     Ok(())
 }

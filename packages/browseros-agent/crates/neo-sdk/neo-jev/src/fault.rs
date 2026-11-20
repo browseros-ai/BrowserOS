@@ -6,8 +6,9 @@ pub enum JevFault {
     /// Jev did not answer: network error, timeout, a 5xx, or a reply we could not read.
     #[error("Jev is down: {0}")]
     Down(String),
-    /// The request is over the hard cap even with the long-context header; scope it with `role`.
-    #[error("the page is too big for Jev ({tokens} tokens); narrow it with `role`")]
+    /// The request is over the hard cap even with the long-context header. `role` does not help:
+    /// it narrows the options, not the page text every question reads.
+    #[error("the page is too big for Jev ({tokens} tokens); do this step by hand")]
     TooBig {
         /// Estimated input tokens of the request that was refused.
         tokens: u32,
