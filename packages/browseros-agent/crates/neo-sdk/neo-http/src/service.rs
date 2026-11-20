@@ -75,6 +75,7 @@ pub type TabTask = Arc<dyn Fn(TabId) -> Option<String> + Send + Sync>;
 /// Names the tab that opened a tab, or `None` for one opened by hand. Asked once per tab a
 /// takeover's release lists; it must not wait.
 pub type TabOpener = Arc<dyn Fn(TabId) -> Option<TabId> + Send + Sync>;
+
 /// Renders Neo's metrics as Prometheus text exposition 0.0.4, for `GET /v1/metrics`: the app's
 /// telemetry read now, so this crate needs no OpenTelemetry crate. Asked once per scrape; it
 /// reads in-memory state and never waits on I/O.
@@ -116,11 +117,8 @@ pub(crate) struct ServiceState {
     pub(crate) tab_owner: TabOwner,
     /// The task holding each tab now (`ServiceInputs::tab_task`).
     pub(crate) tab_task: TabTask,
-    /// Neo's metrics as Prometheus text (`ServiceInputs::metrics`).
-    #[expect(
-        dead_code,
-        reason = "GET /v1/metrics (metrics_route.rs) reads it once it is routed"
-    )]
+    /// Neo's metrics as Prometheus text (`ServiceInputs::metrics`), rendered at each scrape of
+    /// `GET /v1/metrics` (`metrics_route`).
     pub(crate) metrics: MetricsText,
     /// The fill routes' door, armed by the app ([`Service::arm_fill`]).
     pub(crate) fill: FillGate,
