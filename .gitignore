@@ -44,3 +44,5 @@ packages/browseros/build/extensions/
 .llm/
 .crabbox/
 target
+
+.cargo-build-neo-cli
