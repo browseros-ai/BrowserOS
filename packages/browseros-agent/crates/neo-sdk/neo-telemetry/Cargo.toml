@@ -1,0 +1,97 @@
+[package]
+name = "neo-telemetry"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hosted BrowserOS Neo's telemetry: bounded OpenTelemetry metrics and the neo.run / neo.op spans, as Prometheus text for the host API and opt-in OTLP/HTTP push; a no-op until built from config"
+
+# Neo server's lint table and clippy.toml, restated verbatim (the owner's rule for this crate):
+# check.sh then gives it claw-sdk's lint set, Google's rustfmt options and the forbidden-dependency
+# check. Keep both equal to crates/neo-sdk/neo-server's when either changes.
+
+[lints.rust]
+# Workspace, restated.
+unsafe_code = "deny"                    # no unsafe in a server that parses untrusted input
+# Documentation (Google: document public APIs; owner: docs at seams).
+missing_docs = "warn"                   # every exported item says its job in the system
+unreachable_pub = "warn"                # `pub` means exported; internal items say `pub(crate)`
+missing_debug_implementations = "warn"  # exported types are loggable; secret types write a redacting Debug
+# Imports (Google: one module per `use`, types unqualified).
+unused_qualifications = "warn"          # no `a::B` when `B` is already in scope
+# Idioms.
+rust_2018_idioms = { level = "warn", priority = -1 }  # `Formatter<'_>`: borrows visible in types
+
+[lints.clippy]
+# Workspace, restated.
+unwrap_used = "deny"                    # a server must not panic on input
+expect_used = "deny"                    # stricter than Google's "prefer expect", on purpose
+print_stdout = "warn"                   # logs go through tracing; main's --version is the one expect
+print_stderr = "warn"
+dbg_macro = "warn"
+
+# Pedantic, on as a group (decisions.md 1). New pedantic lints on a toolchain bump show up
+# as warnings and get a deliberate decision.
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"            # `# Errors` would restate the error type, which carries owner + code
+similar_names = "allow"                 # flags pairs like `req`/`res`; noise, no Google rule behind it
+
+# Restriction lints, each tied to a rule. The group is never enabled whole.
+# No panics on input (workspace rule, extended). Tests are exempt via clippy.toml.
+panic = "warn"                          # return an OperationError; panics are for broken invariants only
+todo = "warn"                           # unfinished code does not ship
+unimplemented = "warn"                  # unsupported methods fail with method_unavailable, not a panic
+unreachable = "warn"                    # prove it with types or return an error
+indexing_slicing = "warn"               # `v[i]` panics; use `.get()`, patterns, or a typed struct
+string_slice = "warn"                   # `&s[..n]` panics inside a UTF-8 char; cutting page text is common here
+exit = "warn"                           # only `main` decides exit codes (Chromium reads 0/1/2)
+# Error ownership: keep the cause.
+map_err_ignore = "warn"                 # `.map_err(|_| ..)` drops the source that says who failed
+# Suppressions are rare and explained.
+allow_attributes = "warn"               # `#[expect]` fails once the lint stops firing; `#[allow]` rots
+allow_attributes_without_reason = "warn"  # every exception says why
+# Google: imports and qualification.
+absolute_paths = "warn"                 # `std::mem::take(..)` -> `use std::mem; mem::take(..)` (max 2 segments, clippy.toml)
+# Google: borrows over deep copies.
+clone_on_ref_ptr = "warn"               # `Arc::clone(&x)` for refcounts, so every `.clone()` is a deep copy to justify
+# Google: format!/write! over `+`.
+string_add = "warn"
+# Google: docs use capitalization and punctuation.
+doc_paragraphs_missing_punctuation = "warn"
+# Layout (Google: leaf modules named after their item): `dispatch.rs` + `dispatch/`, never `mod.rs`.
+mod_module_files = "warn"
+# Types: either a plain data bag (all fields pub) or an encapsulated type (none pub).
+partial_pub_fields = "warn"
+[features]
+# `neo_telemetry::Recording`: a handle that keeps every hook call in memory, so the server's tests
+# can assert what fired before real metrics exist. Tests and test builds only.
+test-support = []
+
+[dependencies]
+# The OpenTelemetry set (workspace manifest says why these features). The API crate is all the
+# facade names; the SDK builds the providers; otlp and http are the push door.
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry-http.workspace = true
+# The OTLP exporters' HTTP client: the workspace's reqwest 0.12 (rustls), over TCP or a Unix
+# socket, behind opentelemetry-http's async `HttpClient` trait.
+async-trait.workspace = true
+bytes.workspace = true
+http.workspace = true
+reqwest.workspace = true
+# `http+unix://<percent-encoded socket path>/<url path>` endpoints, and endpoint validation.
+percent-encoding.workspace = true
+url.workspace = true
+thiserror.workspace = true
+# The push transport's own thread runs a current-thread runtime for the exporters' requests, so
+# exports never touch the server's runtime.
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+neo-telemetry = { path = ".", features = ["test-support"] }
+# A Unix socket's directory for the OTLP-over-Unix-socket tests.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

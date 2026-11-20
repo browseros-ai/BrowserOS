@@ -12,6 +12,7 @@ members = [
     "crates/neo-sdk/neo-http",
     "crates/neo-sdk/neo-takeover",
     "crates/neo-sdk/neo-trace",
+    "crates/neo-sdk/neo-telemetry",
 ]
 exclude = ["crates/neo-sdk"]
 resolver = "3"
@@ -34,6 +35,7 @@ neo-http = { path = "crates/neo-sdk/neo-http" }
 neo-takeover = { path = "crates/neo-sdk/neo-takeover" }
 neo-playwright = { path = "crates/neo-sdk/neo-playwright" }
 neo-trace = { path = "crates/neo-sdk/neo-trace" }
+neo-telemetry = { path = "crates/neo-sdk/neo-telemetry" }
 claw-api = { path = "crates/claw-api" }
 neo-sdk-api = { path = "crates/neo-sdk/neo-sdk-api" }
 hosted-api = { path = "crates/hosted-api" }
@@ -100,6 +102,19 @@ tempfile = "3.14"
 percent-encoding = "2.3"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 toml = "0.8"
+# neo-telemetry's OpenTelemetry set. The four opentelemetry crates release in lockstep and a minor
+# mismatch fails at the type level, so they move together. OTLP over HTTP only, protobuf and JSON:
+# no gRPC, so no tonic. No HTTP client feature either: neo-telemetry hands the exporters its own
+# client over the reqwest 0.12 above, which also speaks Unix sockets, so neo-server's graph keeps
+# one HTTP/TLS stack (rustls, ring) and gains no reqwest 0.13. `internal-logs` reports dropped
+# spans and failed exports through tracing; `experimental_metrics_custom_reader` exposes the
+# manual reader that neo-telemetry's own Prometheus text renderer reads.
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "internal-logs"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "internal-logs", "experimental_metrics_custom_reader"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "http-json", "gzip-http", "trace", "metrics", "internal-logs"] }
+opentelemetry-http = { version = "0.33.1", default-features = false }
+# opentelemetry-http's `HttpClient` is an async_trait; neo-telemetry implements it.
+async-trait = "0.1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
