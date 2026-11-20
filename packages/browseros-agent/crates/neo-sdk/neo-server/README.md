@@ -77,7 +77,7 @@ Chromium starts the binary with its launch JSON and reads the exit code.
 
 From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`), and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
 
-`src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address or screen size fails the start with exit 1.
+`src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address, screen size or telemetry value fails the start with exit 1.
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -93,6 +93,8 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 | `CLAW_XVNC_ADDR` | `127.0.0.1:5900` | Xvnc, which a takeover fit resizes. |
 | `NEO_SCREEN` | `1600x1000` | Neo's screen size between fits. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | unset | CAPTCHA provider keys. Without a readable one, `neo.solveCaptcha` is unlisted and fails `host / captcha_unavailable`. neo-captcha also reads `BROWSEROS_CAPSOLVER_API_URL`, `BROWSEROS_2CAPTCHA_API_URL`, and `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` (default 100). |
+| `CLAW_TELEMETRY_SITE_DETAIL` | `none` | How much of a page's address a `neo.op` span carries: `none`, `host` (`url.domain`), or `url` (`url.full` without userinfo, query, or fragment). Spans only: no metric carries an address. |
+| `OTEL_*` | unset | The standard OpenTelemetry variables, which turn on OTLP/HTTP push of spans and metrics: `OTEL_EXPORTER_OTLP_ENDPOINT` (or its `_TRACES_` and `_METRICS_` forms), `_PROTOCOL` (`http/protobuf` or `http/json`), `_HEADERS`, `OTEL_SERVICE_NAME` (default `browseros-neo`), `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER` and `_ARG`, `OTEL_METRIC_EXPORT_INTERVAL`, and `OTEL_BSP_SCHEDULE_DELAY`. A header's value is never logged or shown. A collector that is down loses spans and metrics, never a run; at SIGTERM telemetry gets the trace writer's 1 s to flush. The Node embedding reads none of these: its telemetry is off. |
 
 Neo binds two listeners:
 
@@ -159,7 +161,7 @@ The realm provides `URL`, `URLSearchParams`, `atob`, `btoa` and `DOMException`. 
 
 The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and `playwright` (its `selectors` and `errors`), and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
-The host sends its ids and access in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData?, access? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
+The host sends its ids and access in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData?, access?, traceparent?, tracestate? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads. `traceparent` and `tracestate` are W3C trace context, which the run's `neo.run` span joins; the request's own `traceparent` and `tracestate` HTTP headers win over them. An invalid value is ignored, never refused: the run starts a trace of its own. An older Neo refuses the two keys, so a host that can set the headers sends those instead.
 
 A host's `taskId` is also a Neo task id and seeds the run's current task. Neo registers it when a run first opens a tab for it; `neo.task(hostId)` can then fetch it. After a restart of Neo's server it starts on the same tab as before (see below). The neo-viewer proxy still supplies the host's task metadata.
 
