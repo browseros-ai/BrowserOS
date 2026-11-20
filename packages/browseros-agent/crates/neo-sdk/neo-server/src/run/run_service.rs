@@ -32,6 +32,7 @@ use crate::config::Defaults;
 use crate::dispatch::FrameVersion;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
+    telemetry_verdict,
 };
 use crate::host::TabHolders;
 use crate::runtime::{Script, ScriptEnd, ScriptOutcome, run_script};
@@ -210,7 +211,9 @@ impl RunService {
     /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
     /// trace. Without the request id, though: nothing ran, and a recorded request id would
     /// make the store refuse that request's retry as a duplicate for good. Its code and host
-    /// data are stored all the same.
+    /// data are stored all the same. Every refusal passes here, so it is where telemetry counts
+    /// them, as `/v1/runs` lists them: a failed run with its error, with no span, in-flight or
+    /// duration, so a Neo whose browser is down still shows the calls it turned away.
     fn record_refused(&self, code: String, meta: RunMeta, reply: RunReply) -> Arc<RunReply> {
         // This is a new refused call, never a joined/replayed reply: retain its validated
         // metadata without overlaying a retry's access on the original run's answer.
@@ -227,6 +230,10 @@ impl RunService {
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
+        // A refused reply always carries its error; read it as the record gets it.
+        if let Some(error) = telemetry_verdict(&end).error {
+            self.telemetry.run_refused(error);
+        }
         self.trace.run_ended(RunEnded {
             id,
             status: end.status,

@@ -147,6 +147,7 @@ mod tests {
     use std::path::PathBuf;
 
     use neo_captcha::config::CaptchaConfig;
+    use neo_telemetry::TelemetryConfig;
 
     use super::AppConfig;
     use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig, NeoHome};
@@ -178,6 +179,7 @@ mod tests {
                 },
                 xvnc: CLOSED_XVNC,
                 ignored_trace_value_bytes: false,
+                telemetry: TelemetryConfig::default(),
             },
             captcha: CaptchaConfig::default(),
         }

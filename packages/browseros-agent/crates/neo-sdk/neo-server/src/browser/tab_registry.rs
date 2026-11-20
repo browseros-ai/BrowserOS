@@ -10,6 +10,7 @@ use neo_telemetry::Telemetry;
 use neo_trace::{RunId, TaskId};
 use tokio::time::{Duration, Instant};
 
+use super::tab_life::TabLife;
 use super::task_book::TaskBook;
 use super::{BookSink, Holder, PageRef, RunScope, SavedTask, Sight, TaskError, TaskRecord};
 
@@ -41,10 +42,13 @@ pub(crate) struct TabRegistry {
     /// host's takeovers, which list the tabs opened during each (`openedTabs`). Set once by the
     /// host API; until then opens go nowhere.
     opens: OnceLock<OpenSink>,
-    /// The process's telemetry, for the tab hooks (opens, closes, lifetimes, renderer crashes)
-    /// and the live open-tab counts. Given at construction, before the browser link starts, so
-    /// no tab event happens before it can be counted.
+    /// The process's telemetry, for Neo's own runs (the idle-tab janitor's). Given at
+    /// construction, before the browser link starts, as is the tab ledger built over it.
     telemetry: Telemetry,
+    /// Tab telemetry's ledger ([`TabLife`]): every tab the browser lists, by the origin it was
+    /// born with, kept apart from the admission map above under its own lock. The tab watch
+    /// tells it what the browser did; the ops, the janitor and `NeoTab` what Neo is about to do.
+    life: Arc<TabLife>,
 }
 
 /// Takes each tab the tab watch sees open and the tab that opened it, synchronously, before the
@@ -111,14 +115,23 @@ impl TabRegistry {
         Self {
             state: Mutex::default(),
             opens: OnceLock::new(),
+            // Registers itself as the telemetry's open-tab source, the one registration.
+            life: TabLife::new(telemetry.clone()),
             telemetry,
         }
     }
 
-    /// The process's telemetry: the tab watch and the idle-tab janitor reach it here.
+    /// The process's telemetry: the idle-tab janitor reaches it here.
     #[must_use]
     pub(crate) fn telemetry(&self) -> &Telemetry {
         &self.telemetry
+    }
+
+    /// Tab telemetry's ledger: the tab watch reports what the browser did to it, and whoever
+    /// opens or closes a tab takes an intent from it first.
+    #[must_use]
+    pub(crate) fn life(&self) -> &Arc<TabLife> {
+        &self.life
     }
 
     /// A ticket for a liveness read. It must be taken immediately before asking core, never
