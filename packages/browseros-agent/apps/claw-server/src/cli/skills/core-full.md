@@ -262,21 +262,21 @@ username, password or card number. **The CLI does not expose those, and will
 not.** They are the only ways to get a secret onto a command line, where it
 lands in shell history and in `ps` output. A human saves credentials in the
 browser; the CLI uses what is already there. For a secret that is not saved,
-use `help request`.
+use `human request`.
 
 ### Skills, humans and the decision loop
 
 ```bash
 browseros skill save <name> --description "..." [--steps S] [--site X] [--learned N]
 browseros skill ran <name>
-browseros help request "<reason>" [--kind login|captcha|approval|other]
-                                  [--details D] [--resume-hint R]
-browseros help wait [<id>]
+browseros human request "<reason>" [--kind login|captcha|approval|other]
+                                   [--details D] [--resume-hint R]
+browseros human wait [<id>]
 browseros pursue "<goal>" [--value name=value]... [--destination label=url]...
 ```
 
-`help request` blocks for a while and returns a status. If it says `waiting`,
-call `help wait` again and do nothing else on the page until it says `resolved`.
+`human request` blocks for a while and returns a status. If it says `waiting`,
+call `human wait` again and do nothing else on the page until it says `resolved`.
 This is the right answer for a sign-in, a one-time code, a captcha or an
 approval: a human does it in the real browser.
 

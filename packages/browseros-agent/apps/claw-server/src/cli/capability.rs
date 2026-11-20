@@ -27,7 +27,7 @@ pub const OPTIONAL: &[Optional] = &[
         absent_because: "the server has no decision-model credential",
     },
     Optional {
-        command: "help",
+        command: "human",
         tool: "request_human_help",
         absent_because: "human help is turned off in BrowserOS neo settings",
     },
@@ -110,7 +110,7 @@ pub const GAPS: &[Gap] = &[
     Gap {
         command: "auth",
         missing: "neo has no auth vault. A human signs in, in the real browser.",
-        nearest: Some("browseros help request \"sign in to <site>\" --kind login"),
+        nearest: Some("browseros human request \"sign in to <site>\" --kind login"),
     },
     Gap {
         command: "network",

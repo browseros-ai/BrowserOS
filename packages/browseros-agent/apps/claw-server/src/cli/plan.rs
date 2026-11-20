@@ -53,7 +53,7 @@ pub const OUTPUT_CHUNK_BYTES: u64 = 64 * 1024;
 
 const EVAL_TIMEOUT_CAP_MS: f64 = 30_000.0;
 use crate::cli::grammar::{
-    CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd,
+    CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpersCmd, HumanCmd,
     ProfileCmd, SkillCmd, TabCmd, TargetCmd, TaskCmd, WindowCmd,
 };
 use crate::cli::refs;
@@ -949,7 +949,7 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             plan.read_all = read_all;
             Plan::tool(plan)
         }
-        Command::Help(HelpCmd::Request {
+        Command::Human(HumanCmd::Request {
             reason,
             details,
             kind,
@@ -961,7 +961,7 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
                 .arg("kind", opt(kind))
                 .arg("resumeHint", opt(resume_hint)),
         ),
-        Command::Help(HelpCmd::Wait { request }) => {
+        Command::Human(HumanCmd::Wait { request }) => {
             Plan::tool(ToolPlan::new("await_human_help").arg("requestId", opt(request)))
         }
         Command::Pursue {

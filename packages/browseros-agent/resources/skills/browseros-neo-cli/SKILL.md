@@ -109,7 +109,7 @@ browseros cards list && browseros cards fill --id <id>
 The secret never enters this process, and neither command submits. There is no
 way to add a credential or card from the CLI, and no flag that takes one. For a
 secret that is not saved yet, use
-`browseros help request "sign in to <site>" --kind login`, which hands the page
+`browseros human request "sign in to <site>" --kind login`, which hands the page
 to a person in the real browser.
 
 ## Etiquette

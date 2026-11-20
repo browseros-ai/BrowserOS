@@ -159,7 +159,7 @@ browseros cards fill --id <id>          # the number never enters this process
 Neither submits: check the page and submit yourself. There is deliberately no
 way to *add* a credential or card from the CLI, and no flag that takes a
 password or a card number. For a secret that is not saved yet, hand the page to
-a person with `browseros help request "sign in" --kind login`.
+a person with `browseros human request "sign in" --kind login`.
 
 ## Waiting
 

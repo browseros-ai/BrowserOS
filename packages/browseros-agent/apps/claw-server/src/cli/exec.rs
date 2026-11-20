@@ -922,7 +922,7 @@ fn command_label(command: &Command) -> &'static str {
         Command::Eval { .. } => "eval",
         Command::Helpers(_) => "helpers",
         Command::Skill(_) => "skill",
-        Command::Help(_) => "help",
+        Command::Human(_) => "human",
         Command::Pursue { .. } => "pursue",
         Command::Guide { .. } => "guide",
         Command::InstallCli { .. } => "install-cli",

@@ -45,8 +45,8 @@ const PROBES: &[&[&str]] = &[
     &["browseros", "skill", "save", "x", "--description", "d"],
     &["browseros", "skill", "ran", "x"],
     &["browseros", "pursue", "do the thing"],
-    &["browseros", "help", "request", "sign in"],
-    &["browseros", "help", "wait"],
+    &["browseros", "human", "request", "sign in"],
+    &["browseros", "human", "wait"],
 ];
 
 fn wrapped() -> BTreeSet<String> {
@@ -285,6 +285,12 @@ fn the_guides_never_teach_what_the_sdk_or_cli_rejects() {
             !text.contains("browseros skills"),
             "{name} teaches `skills`, which is now `guide`"
         );
+        for old in ["help request", "help wait"] {
+            assert!(
+                !text.contains(old),
+                "{name} teaches `{old}`; asking a human is `browseros human`"
+            );
+        }
     }
 }
 

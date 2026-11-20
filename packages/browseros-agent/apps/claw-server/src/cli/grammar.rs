@@ -24,8 +24,7 @@ command in this directory joins it, and `browseros task done` closes it. The cur
 directory, so commands carry no plumbing and there is no session to manage. Start with `browseros status`, then \
 `browseros open <url>`.\n\n\
 Reach for `run` for anything multi-step: it is one call and the only place saved helpers work.",
-    version,
-    disable_help_subcommand = true
+    version
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -393,9 +392,9 @@ pub enum Command {
     /// Saved skills: repeatable tasks neo can re-run by name.
     #[command(subcommand)]
     Skill(SkillCmd),
-    /// Ask a human to take over the page.
+    /// Ask a human to take over the page: a sign-in, a one-time code, a captcha, an approval.
     #[command(subcommand)]
-    Help(HelpCmd),
+    Human(HumanCmd),
     /// Pursue a whole outcome on one page. Offered only where the server has a credential.
     Pursue {
         goal: String,
@@ -663,7 +662,7 @@ pub enum SkillCmd {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum HelpCmd {
+pub enum HumanCmd {
     Request {
         reason: String,
         #[arg(long)]

@@ -202,6 +202,34 @@ fn an_explicit_readback_wins_over_the_default() {
 }
 
 #[test]
+fn help_prints_help_and_asking_a_human_is_its_own_command() {
+    for argv in [
+        vec!["browseros", "help"],
+        vec!["browseros", "help", "click"],
+        vec!["browseros", "help", "grep"],
+    ] {
+        let error = Cli::try_parse_from(&argv).err();
+        assert_eq!(
+            error.map(|error| error.kind()),
+            Some(clap::error::ErrorKind::DisplayHelp),
+            "{argv:?}"
+        );
+    }
+    let (tool, args) = call(&[
+        "browseros",
+        "human",
+        "request",
+        "sign in",
+        "--kind",
+        "login",
+    ]);
+    assert_eq!(tool, "request_human_help");
+    assert_eq!(args["kind"], "login");
+    let (tool, _) = call(&["browseros", "human", "wait"]);
+    assert_eq!(tool, "await_human_help");
+}
+
+#[test]
 fn grep_takes_the_flags_a_unix_grep_user_types() {
     let (tool, args) = call(&["browseros", "grep", "-i", "add to cart|buy now", "-m", "5"]);
     assert_eq!(tool, "grep");
