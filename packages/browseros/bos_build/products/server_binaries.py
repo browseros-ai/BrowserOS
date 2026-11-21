@@ -9,7 +9,7 @@ cycle (product files import these types).
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,11 @@ class ServerBundle:
     # product's agent-side build settings (for BrowserOS,
     # browserosServerCargoEnv in scripts/build/server/descriptor.ts).
     cargo_env: Dict[str, str] = field(default_factory=dict)
+    # Server targets this product leaves out of its server releases, each
+    # mapped to the last released server version that has it. A held target
+    # gets no build, no OTA enclosure and no latest-alias update, so its
+    # browsers keep that version. Empty means every target ships.
+    held_targets: Mapping[str, str] = field(default_factory=dict)
 
     def unsigned_artifact_key(
         self,

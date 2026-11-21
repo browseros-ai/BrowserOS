@@ -61,6 +61,8 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    outputs:
+      payloads: ${{ steps.platforms.outputs.payloads }}
     steps:
       - name: Validate product snapshot ownership
         env:
@@ -85,32 +87,56 @@ jobs:
               ;;
           esac
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_sha }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      # The product's released platforms come from bos_build, so a target the
+      # product holds on an earlier server (ServerBundle.held_targets) gets no
+      # payload job and no fragment. The list arrives filtered because a matrix
+      # cannot drop an include entry: GitHub applies include after exclude, and
+      # an entry that matches no combination becomes a job of its own.
+      - name: Resolve released platforms
+        id: platforms
+        env:
+          PRODUCT: ${{ inputs.product }}
+        run: |
+          set -euo pipefail
+          uv run --directory packages/browseros python - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+          from bos_build.products.server_binaries import server_ota_bundles_for_product
+          try:
+              from bos_build.release.ota.common import released_server_platforms
+          except ImportError:
+              # A release commit from before held_targets existed released, and
+              # its payload jobs below sign, every platform.
+              from bos_build.release.ota.common import SERVER_PLATFORMS
+
+              def released_server_platforms(bundle):
+                  return list(SERVER_PLATFORMS)
+          bundle = server_ota_bundles_for_product(os.environ["PRODUCT"])[0]
+          payloads = [
+              {"platform": p["name"], "target": p["target"], "os": p["os"]}
+              for p in released_server_platforms(bundle)
+          ]
+          print("payloads=" + json.dumps(payloads))
+          PY
+
   build-payloads:
     needs: validate
     name: Sign OTA / ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    # codesign and notarytool never execute the payload, so the arm64 image
+    # signs both macOS architectures.
+    runs-on: ${{ matrix.os == 'macos' && 'macos-26' || matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # codesign and notarytool never execute the payload, so the arm64
-          # image signs both macOS architectures.
-          - platform: darwin_arm64
-            target: darwin-arm64
-            runner: macos-26
-          - platform: darwin_x64
-            target: darwin-x64
-            runner: macos-26
-          - platform: linux_arm64
-            target: linux-arm64
-            runner: ubuntu-latest
-          - platform: linux_x64
-            target: linux-x64
-            runner: ubuntu-latest
-          - platform: windows_x64
-            target: windows-x64
-            runner: windows-latest
+        include: ${{ fromJSON(needs.validate.outputs.payloads) }}
     env:
       PLATFORM: ${{ matrix.platform }}
       PRODUCT: ${{ inputs.product }}
@@ -322,6 +348,7 @@ jobs:
       queue: max
     timeout-minutes: 20
     env:
+      PAYLOADS: ${{ needs.validate.outputs.payloads }}
       PRODUCT: ${{ inputs.product }}
       SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
       VERSION: ${{ inputs.version }}
@@ -349,7 +376,10 @@ jobs:
           set -euo pipefail
           snapshot_name="$(basename "$SNAPSHOT_PATH")"
           fragments=()
-          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
+          # The same released platforms the payload matrix ran; assemble-appcast
+          # rejects a missing one or one the product holds.
+          mapfile -t targets < <(jq -r '.[].target' <<< "$PAYLOADS")
+          for target in "${targets[@]}"; do
             platform="${target//-/_}"
             fragment="server-ota-fragments/server-ota-fragment-${PRODUCT}-${target}/${snapshot_name}"
             if [ ! -f "$fragment" ]; then

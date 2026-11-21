@@ -54,6 +54,17 @@ pins come from that checkout's bundled manifest.
 This prevents another release from changing mutable `latest` or feed aliases
 while a native browser lane waits for a runner.
 
+BrowserOS's Windows lane is the exception: it bundles server 0.0.168, the last
+TypeScript server, because the Rust server cannot drive the browser on Windows
+yet. `held_targets` in `bos_build/products/browseros/product.py` records the
+hold. `release-server.yml` builds no Windows server, the OTA feed carries no
+Windows enclosure (Windows installs keep their server), and
+`artifacts/server/latest/browseros-server-resources-windows-x64.zip` stays on
+0.0.168. To ship Windows again, delete the entry, add `windows-x64` back to the
+server build matrix and `SERVER_TARGETS`, and give the Windows lane
+`needs.server.outputs.version`. `ci_workflow_test.py` fails until all of these
+agree.
+
 ## Dispatch
 
 A dispatch without inputs is a full release: it publishes the product's server
@@ -132,9 +143,9 @@ gh workflow run release-extensions.yml --ref main -f extension=browserclaw
 ```
 
 Direct server dispatches default to `publish_ota=true`. They publish the
-versioned and `latest` resources, render all five platform appcast fragments,
-merge the tracked snapshot through a short-lived pull request, and then publish
-that exact appcast to alpha.
+versioned and `latest` resources, render one appcast fragment per released
+platform, merge the tracked snapshot through a short-lived pull request, and
+then publish that exact appcast to alpha.
 
 Direct extension dispatches default to `publish_alpha_feed=true`. They publish
 the CRX release and canonical versioned R2 object, update the alpha and bundled

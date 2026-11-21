@@ -50,4 +50,10 @@ BROWSEROS_SERVER_BUNDLE = ServerBundle(
     cargo_env={
         "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS": "-C target-feature=+crt-static",
     },
+    # Windows stays on the last TypeScript server. The Rust server's browser
+    # engine (the neo SDK) does not build for Windows yet, so a Rust Windows
+    # server could not drive the browser. To ship Windows again, delete this
+    # entry and restore the windows-x64 lines in release-server.yml and
+    # release-browseros.yml that ci_workflow_test.py names.
+    held_targets={"windows-x64": "0.0.168"},
 )

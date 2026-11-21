@@ -320,6 +320,15 @@ The BrowserOS server was a Bun package (`apps/server/package.json` in
 manifest and lockfile at commits made before the move.
 `release/components.py` is the one place that names either layout.
 
+BrowserOS holds Windows on server 0.0.168, the last TypeScript release, because
+the Rust server's browser engine does not build for Windows yet. The hold is
+`held_targets` on the bundle in `products/browseros/product.py`. A held target
+gets no build in `release-server.yml`, no OTA payload or enclosure (the browser
+updater then keeps its current server), and no `latest` alias update, and the
+Windows lane of `release-browseros.yml` bundles 0.0.168. To ship it again,
+delete the entry and restore the workflow lines that
+`HeldServerTargetsWorkflowTest` in `ci_workflow_test.py` names.
+
 One dispatch-only family workflow builds both signed macOS nightlies on the
 self-hosted Mac and publishes the `nightly-browseros` and
 `nightly-browserclaw` rolling prereleases. It freezes one source SHA, reserves

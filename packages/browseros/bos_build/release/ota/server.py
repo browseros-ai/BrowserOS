@@ -25,7 +25,10 @@ from .common import (
     create_server_bundle_zip,
     get_appcast_path,
     find_server_resources_dir,
+    held_server_platforms,
     merge_base_appcast,
+    released_server_platforms,
+    without_platforms,
 )
 from ..feeds.publisher import FeedPublisher
 from .sign_binary import (
@@ -124,6 +127,8 @@ class ServerOTAModule(Step):
         if self.release_sha and _SOURCE_SHA_RE.fullmatch(self.release_sha) is None:
             raise ValidationError("Release SHA must be a full lowercase commit SHA")
 
+        self._get_platforms()
+
         if IS_MACOS():
             if not context.env.macos_certificate_name:
                 raise ValidationError("MACOS_CERTIFICATE_NAME required for signing")
@@ -138,11 +143,26 @@ class ServerOTAModule(Step):
             )
 
     def _get_platforms(self) -> List[dict]:
-        """Get platforms to process based on filter (supports comma-separated)"""
-        if self.platform_filter:
-            requested = [p.strip() for p in self.platform_filter.split(",")]
-            return [p for p in SERVER_PLATFORMS if p["name"] in requested]
-        return SERVER_PLATFORMS
+        """Released platforms, narrowed by the comma-separated filter.
+
+        A held platform is refused rather than skipped: its feed enclosure
+        must stay absent so its installs keep their held server version.
+        """
+        released = released_server_platforms(self.bundle)
+        if not self.platform_filter:
+            return released
+        requested = [p.strip() for p in self.platform_filter.split(",")]
+        held = [
+            f"{p['name']} (held on {self.bundle.held_targets[p['target']]})"
+            for p in SERVER_PLATFORMS
+            if p["name"] in requested and p["target"] in self.bundle.held_targets
+        ]
+        if held:
+            raise ValidationError(
+                f"{self.bundle.id} gets no OTA payload for held platforms: "
+                + ", ".join(held)
+            )
+        return [p for p in released if p["name"] in requested]
 
     def _download_artifacts(
         self,
@@ -259,7 +279,17 @@ class ServerOTAModule(Step):
 
         appcast_path = get_appcast_path(self.channel, self.bundle.id)
         appcast_path.parent.mkdir(parents=True, exist_ok=True)
-        appcast_path.write_text(live)
+        held = held_server_platforms(self.bundle)
+        if held.intersection(existing.artifacts):
+            # Keep every released payload and its pubDate; drop only the held
+            # platform the live item still lists.
+            appcast_path.write_text(
+                render_server_appcast(
+                    spec, self.version, [], existing=without_platforms(existing, held)
+                )
+            )
+        else:
+            appcast_path.write_text(live)
         artifacts = [existing.artifacts[name] for name in sorted(requested)]
         ctx.artifact_registry.add("server_ota_artifacts", artifacts)
         ctx.artifact_registry.add("server_appcast", appcast_path)
@@ -335,7 +365,10 @@ class ServerOTAModule(Step):
         spec = server_feed(self.bundle.id, self.channel)
         appcast_path = get_appcast_path(self.channel, self.bundle.id)
         existing_appcast = merge_base_appcast(
-            FeedPublisher(env=ctx.env), spec, appcast_path
+            FeedPublisher(env=ctx.env),
+            spec,
+            appcast_path,
+            held=held_server_platforms(self.bundle),
         )
 
         appcast_content = render_server_appcast(

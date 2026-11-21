@@ -3,6 +3,8 @@
 
 import unittest
 
+from ..products import BROWSERCLAW_SERVER_BUNDLE, BROWSEROS_SERVER_BUNDLE
+from .ota.common import released_server_platforms
 from .resource_pins import (
     RESOURCE_FAMILIES,
     resolve_resource_pins,
@@ -248,6 +250,51 @@ class ResourcePinsTest(unittest.TestCase):
                 "0.0.8",
                 SOURCE_SHA,
             )
+
+
+
+class HeldServerTargetPinsTest(unittest.TestCase):
+    """A held server target is outside its family's pins, so releases resolve."""
+
+    def family(self, name: str):
+        return next(family for family in RESOURCE_FAMILIES if name == family.name)
+
+    def test_server_families_pin_exactly_the_released_platforms(self) -> None:
+        for family_name, bundle in (
+            ("browseros_server", BROWSEROS_SERVER_BUNDLE),
+            ("browserclaw_server", BROWSERCLAW_SERVER_BUNDLE),
+        ):
+            with self.subTest(family=family_name):
+                self.assertEqual(
+                    self.family(family_name).targets,
+                    tuple(p["target"] for p in released_server_platforms(bundle)),
+                )
+
+    def test_browseros_release_without_windows_verifies_and_resolves(self) -> None:
+        client = FakeR2Client()
+        for family in RESOURCE_FAMILIES:
+            client.add_family(family, "0.0.200", metadata=True)
+        # The held target's latest alias stays on the TypeScript server, and
+        # 0.0.200 has no Windows object at all.
+        server = self.family("browseros_server")
+        client.objects[server.latest_key("windows-x64")] = client._values(
+            server, "windows-x64", "0.0.168", "b" * 40, "0.0.168", True
+        )
+        four = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64")
+
+        prepared = verify_prepared_resource_pin(
+            client, "browseros", "browseros_server", "0.0.200", SOURCE_SHA
+        )
+        latest = resolve_resource_pins(
+            client, "browseros", {}, attempts=1, sleep=lambda _: None
+        )["browseros_server"]
+
+        for pin in (prepared, latest):
+            self.assertEqual(pin.version, "0.0.200")
+            self.assertEqual(tuple(item.target for item in pin.objects), four)
+
+    def test_browserclaw_still_pins_windows(self) -> None:
+        self.assertIn("windows-x64", self.family("browserclaw_server").targets)
 
 
 if __name__ == "__main__":

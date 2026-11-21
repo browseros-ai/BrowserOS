@@ -13,7 +13,13 @@ from typing import cast
 from unittest import mock
 
 from ...core.context import Context
-from ..feeds.render import ExistingAppcast, SignedArtifact, render_server_appcast
+from ...core.step import ValidationError
+from ..feeds.render import (
+    ExistingAppcast,
+    SignedArtifact,
+    parse_server_appcast_content,
+    render_server_appcast,
+)
 from ..feeds.spec import server_feed
 from ..resource_pins import ResourceObjectPin, ResourcePin
 from . import server as ota_server
@@ -31,7 +37,10 @@ class _PreconditionFailure(Exception):
     }
 
 
-def _complete_appcast(version: str = "0.0.9") -> str:
+def _complete_appcast(
+    version: str = "0.0.9", held: frozenset[str] = frozenset({"windows_x64"})
+) -> str:
+    """A live alpha feed listing every platform except ``held``."""
     artifacts = [
         SignedArtifact(
             platform=platform["name"],
@@ -42,6 +51,7 @@ def _complete_appcast(version: str = "0.0.9") -> str:
             arch=platform["arch"],
         )
         for platform in SERVER_PLATFORMS
+        if platform["name"] not in held
     ]
     return render_server_appcast(
         server_feed("browseros-server", "alpha"),
@@ -53,6 +63,41 @@ def _complete_appcast(version: str = "0.0.9") -> str:
             artifacts={},
         ),
     )
+
+
+class HeldPlatformSelectionTest(unittest.TestCase):
+    """BrowserOS holds Windows on its last TypeScript server; BrowserClaw holds nothing."""
+
+    FOUR = ["darwin_arm64", "darwin_x64", "linux_arm64", "linux_x64"]
+    CONTEXT = cast(Context, SimpleNamespace(env=SimpleNamespace()))
+
+    def platforms(self, product_id: str, platform_filter=None) -> list[str]:
+        module = ServerOTAModule(
+            version="0.0.9",
+            product_id=product_id,
+            platform_filter=platform_filter,
+            release_sha=SOURCE_SHA,
+        )
+        return [platform["name"] for platform in module._get_platforms()]
+
+    def test_browseros_publishes_only_its_released_platforms(self):
+        self.assertEqual(self.platforms("browseros"), self.FOUR)
+
+    def test_browseros_refuses_an_explicit_windows_payload(self):
+        for platform_filter in ("windows_x64", "linux_x64,windows_x64"):
+            module = ServerOTAModule(
+                version="0.0.9",
+                product_id="browseros",
+                platform_filter=platform_filter,
+                release_sha=SOURCE_SHA,
+            )
+            with self.subTest(platform_filter=platform_filter):
+                with self.assertRaisesRegex(ValidationError, "windows_x64"):
+                    module.validate(self.CONTEXT)
+
+    def test_browserclaw_still_publishes_all_five(self):
+        self.assertEqual(self.platforms("browserclaw"), [*self.FOUR, "windows_x64"])
+        self.assertEqual(self.platforms("browserclaw", "windows_x64"), ["windows_x64"])
 
 
 class LiveReleaseReuseTest(unittest.TestCase):
@@ -89,6 +134,27 @@ class LiveReleaseReuseTest(unittest.TestCase):
         self.assertEqual(self.output.read_text(), live)
         payloads = self.registry.add.call_args_list[0].args[1]
         self.assertEqual([item.platform for item in payloads], ["darwin_arm64"])
+
+    def test_reuse_drops_a_held_platform_the_live_feed_still_lists(self):
+        live = _complete_appcast(held=frozenset())
+        module = ServerOTAModule(
+            version="0.0.9",
+            channel="alpha",
+            platform_filter="darwin_arm64",
+            release_sha=SOURCE_SHA,
+        )
+        publisher = SimpleNamespace(fetch_live=lambda _: live)
+
+        with (
+            mock.patch.object(ota_server, "FeedPublisher", return_value=publisher),
+            mock.patch.object(ota_server, "get_appcast_path", return_value=self.output),
+        ):
+            self.assertTrue(module._reuse_live_release(self.ctx))
+
+        staged = parse_server_appcast_content(self.output.read_text())
+        assert staged is not None
+        self.assertEqual(staged.artifacts.keys(), {"darwin_arm64", "darwin_x64", "linux_arm64", "linux_x64"})
+        self.assertEqual(staged.pub_date, "Wed, 05 Aug 2026 12:00:00 +0000")
 
     def test_refuses_to_replace_incomplete_same_version_live_payloads(self):
         live = render_server_appcast(

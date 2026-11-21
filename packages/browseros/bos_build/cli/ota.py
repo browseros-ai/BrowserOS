@@ -16,8 +16,10 @@ from ..lib.utils import log_info, log_error, log_success
 from ..release.ota import ServerOTAModule
 from ..release.ota.common import (
     get_appcast_path,
+    held_server_platforms,
     merge_base_appcast,
     promote_appcast_content,
+    released_server_platforms,
     SERVER_PLATFORMS,
 )
 from ..release.feeds.publisher import FeedPublisher
@@ -29,7 +31,7 @@ from ..release.feeds.render import (
 )
 from ..release.feeds.spec import server_feed
 from ..products import SERVER_BUNDLES
-from ..products.server_binaries import server_ota_bundles_for_product
+from ..products.server_binaries import ServerBundle, server_ota_bundles_for_product
 
 app = typer.Typer(
     help="OTA (Over-The-Air) update automation",
@@ -66,12 +68,16 @@ def execute_module(ctx: Context, module) -> None:
         raise typer.Exit(130)
 
 
-def _server_bundle_id(product: str) -> str:
+def _server_bundle(product: str) -> ServerBundle:
     bundles = server_ota_bundles_for_product(product)
     if not bundles:
         log_error(f"Product '{product}' has no server bundle")
         raise typer.Exit(1)
-    return bundles[0].id
+    return bundles[0]
+
+
+def _server_bundle_id(product: str) -> str:
+    return _server_bundle(product).id
 
 
 def _feed_publisher() -> FeedPublisher:
@@ -119,13 +125,20 @@ def _log_alternate_product_appcasts(
 def _assemble_server_appcast(
     *,
     version: str,
-    bundle_id: str,
+    bundle: ServerBundle,
     channel: str,
     fragments: list[str],
     publisher: FeedPublisher,
     output_path: Path,
 ) -> Path:
-    platforms = {platform["name"]: platform for platform in SERVER_PLATFORMS}
+    # The assembled item replaces the live one, so it must carry exactly the
+    # released platforms: a held platform's enclosure would move its installs
+    # off their held server version.
+    platforms = {
+        platform["name"]: platform
+        for platform in released_server_platforms(bundle)
+    }
+    known = {platform["name"] for platform in SERVER_PLATFORMS}
     artifacts = {}
 
     for value in fragments:
@@ -133,6 +146,11 @@ def _assemble_server_appcast(
         if not separator or not platform_name or not raw_path:
             raise ValueError(f"Invalid fragment assignment: {value!r}")
         platform = platforms.get(platform_name)
+        if platform is None and platform_name in known:
+            raise ValueError(
+                f"{bundle.id} does not release {platform_name}; "
+                "its OTA feed carries no enclosure for it"
+            )
         if platform is None:
             raise ValueError(f"Unknown server platform: {platform_name}")
         if platform_name in artifacts:
@@ -164,8 +182,10 @@ def _assemble_server_appcast(
     if missing:
         raise ValueError(f"Missing appcast fragments: {', '.join(missing)}")
 
-    spec = server_feed(bundle_id, channel)
-    existing = merge_base_appcast(publisher, spec, output_path)
+    spec = server_feed(bundle.id, channel)
+    existing = merge_base_appcast(
+        publisher, spec, output_path, held=held_server_platforms(bundle)
+    )
     content = render_server_appcast(
         spec,
         version,
@@ -230,12 +250,12 @@ def server_assemble_appcast(
     output: Optional[Path] = typer.Option(None, "--output"),
 ):
     """Assemble a complete appcast from native platform fragments."""
-    bundle_id = _server_bundle_id(product)
-    output_path = (output or get_appcast_path(channel, bundle_id)).resolve()
+    bundle = _server_bundle(product)
+    output_path = (output or get_appcast_path(channel, bundle.id)).resolve()
     try:
         _assemble_server_appcast(
             version=version,
-            bundle_id=bundle_id,
+            bundle=bundle,
             channel=channel,
             fragments=fragment,
             publisher=_feed_publisher(),

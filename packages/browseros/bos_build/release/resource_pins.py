@@ -6,6 +6,9 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Iterable
 
+from ..products import BROWSERCLAW_SERVER_BUNDLE, BROWSEROS_SERVER_BUNDLE
+from ..products.server_binaries import ServerBundle
+
 
 _VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+){2}")
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -60,30 +63,30 @@ class ResourcePin:
         }
 
 
+_SERVER_TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+
+
+def _released_targets(bundle: ServerBundle) -> tuple[str, ...]:
+    # A held target gets no object at a new version, and its latest alias stays
+    # on the held version, so pinning it would fail every exact or latest pin.
+    # Must equal ota.common.released_server_platforms (resource_pins_test.py
+    # checks). The ota package imports this module, so calling it here would
+    # be an import cycle.
+    return tuple(t for t in _SERVER_TARGETS if t not in bundle.held_targets)
+
+
 RESOURCE_FAMILIES = (
     ResourceFamily(
         name="browseros_server",
         component="artifacts/server",
         archive_base="browseros-server-resources",
-        targets=(
-            "darwin-arm64",
-            "darwin-x64",
-            "linux-arm64",
-            "linux-x64",
-            "windows-x64",
-        ),
+        targets=_released_targets(BROWSEROS_SERVER_BUNDLE),
     ),
     ResourceFamily(
         name="browserclaw_server",
         component="claw-server-rust/prod-resources",
         archive_base="browseros-claw-server-rust-resources",
-        targets=(
-            "darwin-arm64",
-            "darwin-x64",
-            "linux-arm64",
-            "linux-x64",
-            "windows-x64",
-        ),
+        targets=_released_targets(BROWSERCLAW_SERVER_BUNDLE),
     ),
     ResourceFamily(
         name="browserclaw_onboard",

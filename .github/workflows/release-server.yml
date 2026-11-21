@@ -88,6 +88,10 @@ permissions:
 env:
   # The toolchain test.yml lints and tests with, so a release compiles what CI checked.
   RUST_TOOLCHAIN: "1.98.0"
+  # The targets a release builds, packages, verifies and moves to latest. It
+  # must equal the build matrix below and BrowserOS's released server
+  # platforms (ServerBundle.held_targets); ci_workflow_test.py checks both.
+  SERVER_TARGETS: "darwin-arm64 darwin-x64 linux-arm64 linux-x64"
 
 concurrency:
   group: release-server
@@ -242,7 +246,7 @@ jobs:
 
   # Each target compiles on a runner of its own OS: the local packager's
   # cross-compilers need a macOS host, and a native runner can also execute
-  # the binary to check its version. build-publish then packages all five at
+  # the binary to check its version. build-publish then packages them all at
   # once, through the same packager a local build uses.
   build:
     needs: prepare
@@ -286,19 +290,16 @@ jobs:
             cargo_target: x86_64-unknown-linux-gnu.2.17
             runner: ubuntu-latest
             binary_ext: ""
-          # Windows ships with the other four. Dropping this entry also means
-          # changing finalize (it verifies five assets), the OTA feed
-          # (bos_build/release/ota/common.py publishes five platforms) and
-          # release-browseros.yml (it hands this version to the Windows lane).
-          - target: windows-x64
-            rust_target: x86_64-pc-windows-msvc
-            cargo_command: build
-            cargo_target: x86_64-pc-windows-msvc
-            runner: windows-latest
-            binary_ext: ".exe"
+          # No windows-x64: BrowserOS holds Windows on server 0.0.168
+          # (held_targets in bos_build/products/browseros/product.py) until the
+          # browser engine builds there. Restoring it takes this entry back
+          # (target x86_64-pc-windows-msvc, cargo build, windows-latest, .exe),
+          # windows-x64 in SERVER_TARGETS, the held_targets entry removed, and
+          # the Windows lane in release-browseros.yml back on this version.
     env:
       # The Windows server links the C runtime statically, so it needs no Visual
-      # C++ redistributable. Target-scoped: the other four builds ignore it.
+      # C++ redistributable. Target-scoped: non-Windows builds ignore it, and
+      # it stays while Windows is held so restoring the matrix entry suffices.
       # Must equal browserosServerCargoEnv in scripts/build/server/descriptor.ts;
       # release-server-workflow.test.ts holds them together.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
@@ -465,12 +466,13 @@ jobs:
 
       # The packager stages these binaries with Bun from the R2 manifest, writes
       # the artifact metadata finalize checks, and uploads immutably. It skips
-      # Cargo entirely in prebuilt mode.
+      # Cargo entirely in prebuilt mode, and fails on any requested target the
+      # matrix did not build, so it names SERVER_TARGETS rather than all.
       - name: Build and upload immutable server resources
         working-directory: packages/browseros-agent
         env:
           BROWSEROS_SERVER_PREBUILT_DIR: ${{ github.workspace }}/packages/browseros-agent/dist/prebuilt
-        run: bun scripts/build/server.ts --target=all --upload --versioned-only
+        run: bun scripts/build/server.ts --target="${SERVER_TARGETS// /,}" --upload --versioned-only
 
       - name: Attach zips to private draft
         working-directory: packages/browseros-agent
@@ -478,9 +480,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          read -ra targets <<< "$SERVER_TARGETS"
           mapfile -t assets < <(find dist/prod/server -maxdepth 1 -name 'browseros-server-resources-*.zip' | sort)
-          if [ "${#assets[@]}" -ne 5 ]; then
-            echo "::error::Expected 5 server resource zips, found ${#assets[@]}"
+          if [ "${#assets[@]}" -ne "${#targets[@]}" ]; then
+            echo "::error::Expected ${#targets[@]} server resource zips, found ${#assets[@]}"
             exit 1
           fi
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -523,10 +526,11 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
+          read -ra targets <<< "$SERVER_TARGETS"
           release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
-          asset_count="$(jq '[.assets[] | select(.name | test("^browseros-server-resources-(darwin-arm64|darwin-x64|linux-arm64|linux-x64|windows-x64)\\.zip$"))] | length' <<< "$release")"
-          if [ "$asset_count" -ne 5 ]; then
-            echo "::error::Expected 5 draft assets, found $asset_count"
+          asset_count="$(jq --arg targets "$SERVER_TARGETS" '($targets | split(" ") | map("browseros-server-resources-\(.).zip")) as $names | [.assets[] | select(.name | IN($names[]))] | length' <<< "$release")"
+          if [ "$asset_count" -ne "${#targets[@]}" ]; then
+            echo "::error::Expected ${#targets[@]} draft assets, found $asset_count"
             exit 1
           fi
           if [ "$RESERVATION" != "tag" ]; then
@@ -539,7 +543,6 @@ jobs:
           fi
           artifact_dir="$(mktemp -d)"
           mkdir -p "$artifact_dir/draft"
-          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
           for target in "${targets[@]}"; do
             name="browseros-server-resources-${target}.zip"
             key="artifacts/server/${VERSION}/${name}"
@@ -594,7 +597,10 @@ jobs:
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
-          targets=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64)
+          # A held target is not in SERVER_TARGETS, so its latest alias keeps
+          # the held version: artifacts/server/latest/...-windows-x64.zip stays
+          # the 0.0.168 server that unpinned Windows builds download.
+          read -ra targets <<< "$SERVER_TARGETS"
           for target in "${targets[@]}"; do
             name="browseros-server-resources-${target}.zip"
             source="artifacts/server/${VERSION}/${name}"

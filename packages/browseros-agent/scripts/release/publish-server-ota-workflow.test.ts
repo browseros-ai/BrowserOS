@@ -18,20 +18,16 @@ function section(start: string, end?: string): string {
 }
 
 describe('publish-server-ota workflow', () => {
-  it('signs every platform on its native runner', () => {
+  it('signs every released platform on its native runner', () => {
     const build = section('  build-payloads:', '  publish:')
-    for (const platform of [
-      'darwin_arm64',
-      'darwin_x64',
-      'linux_arm64',
-      'linux_x64',
-      'windows_x64',
-    ]) {
-      expect(build).toContain(`platform: ${platform}`)
-    }
-    expect(build).toContain('runner: macos-26')
-    expect(build).toContain('runner: windows-latest')
-    expect(build).toContain('runner: ubuntu-latest')
+    // bos_build lists the product's released platforms; ci_workflow_test.py
+    // runs that step and checks the jobs it yields for each product.
+    expect(build).toContain(
+      `include: ${dollar}{{ fromJSON(needs.validate.outputs.payloads) }}`,
+    )
+    expect(build).toContain(
+      `runs-on: ${dollar}{{ matrix.os == 'macos' && 'macos-26' || matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}`,
+    )
     expect(build).toContain('Import macOS signing certificate')
     expect(build).toContain('Install SSL.com CodeSignTool')
     expect(build).toContain('MACOS_CERTIFICATE_NAME:')
