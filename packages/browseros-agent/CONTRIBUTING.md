@@ -172,6 +172,7 @@ bun run test:claw-api-contract
 | Command | What it does |
 |---|---|
 | `bun run dev:claw-onboard` | The onboarding flow on its own |
+| `bun run firefox-sync` | Copy Firefox passwords and sessions into the running neo. Add `-- --dry-run` to preview. See [its README](apps/firefox-sync/README.md) |
 | `bun run dev:reset` | Wipe the dev profile and start clean |
 | `bun run dev:cleanup` | Stop dev processes and free the ports |
 
@@ -189,6 +190,10 @@ apps/
     src/
     tests/
   claw-onboard/          first-run onboarding (Vite)
+  firefox-sync/          Firefox passwords and sessions into neo (Bun CLI)
+    src/firefox/         reads Firefox profiles, cookies, logins
+    src/neo/             writes into neo over CDP
+    tests/
 crates/                  shared Rust crates
 packages/                shared TypeScript packages
 tools/dev/               the Go dev supervisor

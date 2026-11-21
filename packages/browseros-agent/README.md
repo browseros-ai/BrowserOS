@@ -105,6 +105,7 @@ cargo test -p claw-server          # the Rust backend only
 bun run test:claw-api-contract     # the API contract fixtures and schema
 bun run test:claw-mcp-contract     # the MCP tool surface against a real browser
 bun run test:claw-mcp-smoke        # a quick pass of the same
+bun run --filter @browseros/firefox-sync test   # the Firefox import CLI, synthetic profiles only
 ```
 
 Both MCP suites skip unless `BROWSEROS_BINARY` points at a browser executable.
