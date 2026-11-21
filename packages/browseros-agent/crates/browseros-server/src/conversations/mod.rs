@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use tokio::sync::watch;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::browser::Browser;
@@ -56,8 +56,15 @@ struct Inner {
     /// Tab id → the run its side panel shows. A finished run stays assigned until the tab is
     /// forgotten, the conversation is released, or its next turn takes the tab over.
     panels: Mutex<BTreeMap<i64, PanelEntry>>,
-    panel_table: watch::Sender<Arc<PanelTable>>,
-    /// Set by `shutdown`: no turn starts after it.
+    /// Every table published, in order, to every `/chat/panels` stream. A broadcast, not a
+    /// watch: the extension opens a panel only when it sees a tab `running` with a new
+    /// `autoOpenId`, and a watch keeps only the latest value, so a run that opens a tab and
+    /// ends at once would replace that table with its terminal one before any reader saw it.
+    panel_table: broadcast::Sender<Arc<PanelTable>>,
+    /// The last table sent: the first event of a new stream, and its repair after a lag.
+    current_table: Mutex<Arc<PanelTable>>,
+    /// Set by `shutdown`, under the slot map's lock: no turn is installed after it, so the runs
+    /// `shutdown` collected are all the runs there will be.
     closed: AtomicBool,
     /// Fired by `shutdown` one second before its deadline: every backend still running is
     /// dropped, so its run can seal and write its row in time.
@@ -77,6 +84,8 @@ enum Slot {
         ticket: u64,
         /// Fired when the slot is given up, for a `release` or `delete` that waits its turn.
         done: CancellationToken,
+        /// The run being stopped, so `busy` and `shutdown` still see it until it has ended.
+        run: Option<Arc<Run>>,
     },
 }
 
@@ -178,7 +187,8 @@ impl Conversations {
             slots: Mutex::new(HashMap::new()),
             tickets: AtomicU64::new(0),
             panels: Mutex::new(BTreeMap::new()),
-            panel_table: watch::channel(Arc::new(PanelTable::default())).0,
+            panel_table: broadcast::channel(PANEL_BACKLOG).0,
+            current_table: Mutex::new(Arc::new(PanelTable::default())),
             closed: AtomicBool::new(false),
             abandon: CancellationToken::new(),
         });
@@ -193,9 +203,6 @@ impl Conversations {
     /// and returns a subscription at frame 0. Nothing is written yet.
     pub async fn send(&self, turn: NewTurn) -> Result<Subscription, Busy> {
         let inner = &self.inner;
-        if inner.closed.load(Ordering::SeqCst) {
-            return Err(Busy);
-        }
         let reservation = Reservation::take(inner, turn.conversation)?;
 
         let ephemeral = matches!(turn.history, History::Ephemeral(_));
@@ -297,7 +304,7 @@ impl Conversations {
             let Some(claim) = inner.claim(id).await else {
                 return;
             };
-            inner.end_run(&claim).await;
+            inner.end_run(id, &claim).await;
             inner.give_up(id, &claim);
         });
         if let Err(error) = closing.await {
@@ -330,7 +337,7 @@ impl Conversations {
         let deleting = tokio::spawn(async move {
             let claim = inner.claim(id).await;
             if let Some(claim) = &claim {
-                inner.end_run(claim).await;
+                inner.end_run(id, claim).await;
             }
             let deleted = inner.store.conversations().delete(id).await;
             inner.runner.end_session(id).await;
@@ -346,8 +353,17 @@ impl Conversations {
         })
     }
 
-    pub fn panels(&self) -> watch::Receiver<Arc<PanelTable>> {
+    /// Every panel table published from now on, in order. Subscribe first, then read
+    /// `current_panels` for the first event: a table published in between then arrives twice,
+    /// which is harmless because each event is the whole table.
+    pub fn panels(&self) -> broadcast::Receiver<Arc<PanelTable>> {
+        let _ordered = lock(&self.inner.panels);
         self.inner.panel_table.subscribe()
+    }
+
+    /// The table as last published.
+    pub fn current_panels(&self) -> Arc<PanelTable> {
+        lock(&self.inner.current_table).clone()
     }
 
     /// `DELETE /chat/panels/{tabId}`: a tab closed. A finished run that loses its last panel
@@ -378,7 +394,7 @@ impl Conversations {
         lock(&self.inner.slots).values().any(|slot| match slot {
             Slot::Starting(_) => true,
             Slot::Run(run) => run.is_running(),
-            Slot::Closing { .. } => false,
+            Slot::Closing { run, .. } => run.as_ref().is_some_and(|run| run.is_running()),
         })
     }
 
@@ -388,14 +404,19 @@ impl Conversations {
     pub async fn shutdown(&self, deadline: Duration) {
         let started = tokio::time::Instant::now();
         let inner = &self.inner;
-        inner.closed.store(true, Ordering::SeqCst);
-        let runs: Vec<Arc<Run>> = lock(&inner.slots)
-            .values()
-            .filter_map(|slot| match slot {
-                Slot::Run(run) => Some(run.clone()),
-                Slot::Starting(_) | Slot::Closing { .. } => None,
-            })
-            .collect();
+        let runs: Vec<Arc<Run>> = {
+            let slots = lock(&inner.slots);
+            inner.closed.store(true, Ordering::SeqCst);
+            // A `send` still loading history (`Starting`) is refused at `install`.
+            slots
+                .values()
+                .filter_map(|slot| match slot {
+                    Slot::Run(run) => Some(run.clone()),
+                    Slot::Closing { run, .. } => run.clone(),
+                    Slot::Starting(_) => None,
+                })
+                .collect()
+        };
         for run in &runs {
             run.cancel.cancel();
         }
@@ -410,11 +431,14 @@ impl Conversations {
 }
 
 /// `send`'s hold on a conversation while it loads history. Dropping it before `install` (the
-/// POST went away mid-load) gives the slot back, so the conversation is never stuck `Busy`.
+/// POST went away mid-load, or shutdown began) puts back what the slot held, so the
+/// conversation is never stuck `Busy` and a finished run a panel shows is not lost.
 struct Reservation<'a> {
     inner: &'a Inner,
     conversation: ConversationId,
     ticket: u64,
+    /// The finished run this turn replaces, restored if the turn never starts.
+    previous: Option<Arc<Run>>,
     installed: bool,
 }
 
@@ -422,27 +446,32 @@ impl<'a> Reservation<'a> {
     fn take(inner: &'a Inner, conversation: ConversationId) -> Result<Self, Busy> {
         let ticket = inner.tickets.fetch_add(1, Ordering::SeqCst);
         let mut slots = lock(&inner.slots);
-        match slots.get(&conversation) {
+        if inner.closed.load(Ordering::SeqCst) {
+            return Err(Busy);
+        }
+        let previous = match slots.get(&conversation) {
             Some(Slot::Starting(_) | Slot::Closing { .. }) => return Err(Busy),
             Some(Slot::Run(run)) if run.is_running() => return Err(Busy),
             // A finished run is replaced: its panels move to the new run in `attach_panels`.
-            Some(Slot::Run(_)) | None => {}
-        }
+            Some(Slot::Run(run)) => Some(run.clone()),
+            None => None,
+        };
         slots.insert(conversation, Slot::Starting(ticket));
         Ok(Self {
             inner,
             conversation,
             ticket,
+            previous,
             installed: false,
         })
     }
 
     /// Makes `run` the conversation's current run, unless a `release` or `delete` took the
-    /// slot while history was loading.
+    /// slot while history was loading, or shutdown began.
     fn install(mut self, run: Arc<Run>) -> Result<(), Busy> {
         let mut slots = lock(&self.inner.slots);
-        if !matches!(slots.get(&self.conversation), Some(Slot::Starting(ticket)) if *ticket == self.ticket)
-        {
+        let ours = matches!(slots.get(&self.conversation), Some(Slot::Starting(ticket)) if *ticket == self.ticket);
+        if !ours || self.inner.closed.load(Ordering::SeqCst) {
             return Err(Busy);
         }
         slots.insert(self.conversation, Slot::Run(run));
@@ -459,7 +488,10 @@ impl Drop for Reservation<'_> {
         let mut slots = lock(&self.inner.slots);
         if matches!(slots.get(&self.conversation), Some(Slot::Starting(ticket)) if *ticket == self.ticket)
         {
-            slots.remove(&self.conversation);
+            match self.previous.take() {
+                Some(previous) => slots.insert(self.conversation, Slot::Run(previous)),
+                None => slots.remove(&self.conversation),
+            };
         }
     }
 }
@@ -506,6 +538,7 @@ impl Inner {
                             Slot::Closing {
                                 ticket: claim.ticket,
                                 done: claim.done.clone(),
+                                run: claim.run.clone(),
                             },
                         );
                         return Some(claim);
@@ -517,19 +550,17 @@ impl Inner {
     }
 
     /// Stops the claimed run, waits until its task has written its last row, and drops every
-    /// panel of the conversation.
-    async fn end_run(&self, claim: &Claim) {
+    /// panel of the conversation. Panels go even with no run claimed: a finished run that a
+    /// `send` still loading history had taken out of the slot may still be assigned.
+    async fn end_run(&self, id: ConversationId, claim: &Claim) {
         if let Some(run) = &claim.run {
             run.cancel.cancel();
             run.ended.cancelled().await;
         }
-        let Some(run) = &claim.run else {
-            return;
-        };
         let removed = {
             let mut panels = lock(&self.panels);
             let before = panels.len();
-            panels.retain(|_, entry| entry.run.conversation != run.conversation);
+            panels.retain(|_, entry| entry.run.conversation != id);
             panels.len() != before
         };
         if removed {
@@ -626,25 +657,26 @@ impl Inner {
             .any(|entry| Arc::ptr_eq(&entry.run, run))
     }
 
-    /// Sends the whole table to every `/chat/panels` stream. `send_replace` marks the value
-    /// changed even when it is equal, which is what the heartbeat relies on.
+    /// Sends the whole table to every `/chat/panels` stream. Built and sent under the panel
+    /// lock, so two publishers cannot send their tables in the opposite order to the one they
+    /// built them in.
     fn publish_panels(&self) {
-        let table = {
-            let panels = lock(&self.panels);
-            PanelTable {
-                assignments: panels
-                    .iter()
-                    .map(|(tab, entry)| PanelAssignment {
-                        tab_id: *tab,
-                        conversation: entry.run.conversation,
-                        run: entry.run.id,
-                        status: entry.run.status(),
-                        auto_open_id: entry.auto_open_id.clone(),
-                    })
-                    .collect(),
-            }
-        };
-        self.panel_table.send_replace(Arc::new(table));
+        let panels = lock(&self.panels);
+        let table = Arc::new(PanelTable {
+            assignments: panels
+                .iter()
+                .map(|(tab, entry)| PanelAssignment {
+                    tab_id: *tab,
+                    conversation: entry.run.conversation,
+                    run: entry.run.id,
+                    status: entry.run.status(),
+                    auto_open_id: entry.auto_open_id.clone(),
+                })
+                .collect(),
+        });
+        *lock(&self.current_table) = table.clone();
+        // No stream connected is not an error: the next one starts from `current_table`.
+        let _ = self.panel_table.send(table);
     }
 
     /// Retention: a finished run's frame log goes `KEEP_FINISHED` after it ended. The run
@@ -773,6 +805,9 @@ const TURN_BUDGET: Duration = Duration::from_secs(60 * 60);
 const KEEP_FINISHED: Duration = Duration::from_secs(600);
 /// How often `/chat/panels` re-sends the whole table, so the extension repairs a missed update.
 const HEARTBEAT: Duration = Duration::from_secs(5);
+/// Tables a slow `/chat/panels` stream may fall behind by before it lags; a lagging stream is
+/// sent the current table and goes on.
+const PANEL_BACKLOG: usize = 64;
 
 #[cfg(test)]
 mod tests {
@@ -892,7 +927,53 @@ mod tests {
 
         conversations.forget_panel(3);
         assert!(conversations.state(id).is_none());
-        assert_eq!(conversations.panels().borrow().assignments, []);
+        assert_eq!(conversations.current_panels().assignments, []);
+        Ok(())
+    }
+
+    /// A `send` that went away while loading history puts the finished run back, so `/state`
+    /// keeps answering for the panel that shows it.
+    #[tokio::test]
+    async fn a_send_that_never_starts_restores_the_finished_run()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (conversations, id, _state) = finished(Some(3)).await?;
+        let before = conversations.state(id).map(|state| state.run);
+        let reservation = Reservation::take(&conversations.inner, id).map_err(|_| "busy")?;
+        assert!(
+            conversations.state(id).is_none(),
+            "`Starting` while history loads"
+        );
+        drop(reservation);
+        assert_eq!(conversations.state(id).map(|state| state.run), before);
+        Ok(())
+    }
+
+    /// Shutdown collects the runs it stops under the slot lock; a `send` still loading history
+    /// then cannot start a run it would never stop.
+    #[tokio::test]
+    async fn a_send_loading_history_does_not_start_after_shutdown()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (conversations, id, _state) = finished(None).await?;
+        let reservation = Reservation::take(&conversations.inner, id).map_err(|_| "busy")?;
+        conversations.shutdown(Duration::from_millis(100)).await;
+        let run = Arc::new(Run::new(id, Arc::from(Vec::new())));
+        assert_eq!(reservation.install(run), Err(Busy));
+        assert!(!conversations.busy());
+        Ok(())
+    }
+
+    /// A delete while a `send` loads history: the finished run that `send` took out of the slot
+    /// still had a panel, and the delete must drop it with the conversation.
+    #[tokio::test]
+    async fn a_delete_while_a_send_loads_drops_the_conversations_panels()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (conversations, id, _state) = finished(Some(3)).await?;
+        let reservation = Reservation::take(&conversations.inner, id).map_err(|_| "busy")?;
+        assert!(conversations.delete(id).await?, "the row existed");
+        assert_eq!(conversations.current_panels().assignments, []);
+        let run = Arc::new(Run::new(id, Arc::from(Vec::new())));
+        assert_eq!(reservation.install(run), Err(Busy), "the send is refused");
+        assert!(conversations.state(id).is_none());
         Ok(())
     }
 }

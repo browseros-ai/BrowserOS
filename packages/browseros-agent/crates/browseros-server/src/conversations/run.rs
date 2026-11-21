@@ -188,6 +188,11 @@ pub(super) enum Persist {
 impl Persist {
     /// Writes the prefix plus `answer` as the whole row. No answer (no display content yet)
     /// writes nothing, so a turn that fails before it says anything leaves no dangling question.
+    ///
+    /// A failed write is logged and the turn goes on. The checkpoint is a crash record, not a
+    /// gate: every write is the whole row, so the next checkpoint or the end heals a missed one,
+    /// and a storage hiccup (another process holding the lock past the 5 s busy timeout) should
+    /// not stop the answer the user is watching.
     async fn write(&self, store: &Store, run: &Run, answer: Option<UiMessage>) {
         let (
             Persist::Row {
@@ -213,7 +218,7 @@ impl Persist {
     }
 }
 
-/// The `EventSink` a backend writes into. A checkpoint returns only after its row is on disk,
+/// The `EventSink` a backend writes into. A checkpoint returns only after its write finished,
 /// which is what makes "persisted before the tool runs" true without a backend knowing about
 /// storage.
 struct RunSink {

@@ -10,6 +10,7 @@ use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::{Stream, StreamExt as _, stream};
+use tokio::sync::broadcast;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -108,17 +109,30 @@ fn busy() -> ChatError {
     )
 )]
 async fn watch_panels(State(app): State<App>) -> Result<Response, ApiError> {
-    // The first event is the table as it is now; then one per change (the heartbeat is a
-    // change too, see `Conversations::new`).
+    // Subscribe before reading the first table, so nothing published in between is missed.
     let receiver = app.conversations.panels();
-    let tables = stream::unfold((receiver, true), |(mut receiver, first)| async move {
-        if !first && receiver.changed().await.is_err() {
-            return None;
+    let first = app.conversations.current_panels();
+    let conversations = app.conversations.clone();
+    let tables = stream::unfold((receiver, Some(first)), move |(mut receiver, first)| {
+        let conversations = conversations.clone();
+        async move {
+            if let Some(first) = first {
+                return Some((first, (receiver, None)));
+            }
+            let table = match receiver.recv().await {
+                Ok(table) => table,
+                // This stream fell more than the backlog behind. The extension needs every
+                // intermediate table (a tab `running` with a new `autoOpenId` is what opens a
+                // panel), so it is not dropped silently: the current table goes out, and the
+                // next heartbeat or change follows.
+                Err(broadcast::error::RecvError::Lagged(_)) => conversations.current_panels(),
+                Err(broadcast::error::RecvError::Closed) => return None,
+            };
+            Some((table, (receiver, None)))
         }
-        let table = dto::PanelAssignments::from(receiver.borrow_and_update().as_ref());
-        Some((table, (receiver, false)))
     });
-    let events = tables.map(|table| Event::default().json_data(table));
+    let events =
+        tables.map(|table| Event::default().json_data(dto::PanelAssignments::from(table.as_ref())));
     Ok(Sse::new(events).into_response())
 }
 

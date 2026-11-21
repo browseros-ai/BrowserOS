@@ -665,10 +665,51 @@ async fn release_stops_the_run_and_forgets_it_but_keeps_the_row() -> TestResult 
         .send(server.get(&format!("/chat/{CONVERSATION}/state")))
         .await;
     assert_eq!(state.status(), StatusCode::NOT_FOUND);
-    assert_eq!(server.app.conversations.panels().borrow().assignments, []);
+    assert_eq!(server.app.conversations.current_panels().assignments, []);
     assert!(
         stored(&server).await.is_some(),
         "the row is history's to delete"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_also_stops_a_run_a_release_is_waiting_for() -> TestResult {
+    let runner = Runner::new([answer(vec![
+        step_start(),
+        started("call_1"),
+        input("call_1"),
+        Step::Hang,
+    ])]);
+    let server = server_with(runner).await?;
+    let mut stream = Events::of(post(&server, &ask("long tool")).await);
+    stream.until("tool-input-available").await;
+
+    let release = server.app.conversations.clone();
+    let releasing = tokio::spawn(async move { release.release(conversation()).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        server.app.conversations.busy(),
+        "a run still unwinding is busy"
+    );
+
+    let started = Instant::now();
+    server
+        .app
+        .conversations
+        .shutdown(Duration::from_millis(2_500))
+        .await;
+    let took = started.elapsed();
+    assert!(
+        took >= Duration::from_millis(1_400) && took < Duration::from_millis(2_500),
+        "shutdown waited for the released run, then dropped it: {took:?}"
+    );
+    let row = stored(&server).await.unwrap_or_default();
+    assert_eq!(row[1]["parts"][1]["errorText"], json!("Stopped"));
+    tokio::time::timeout(Duration::from_secs(1), releasing).await??;
+    assert_eq!(
+        chunk_types(&stream.rest().await),
+        ["tool-output-error", "abort", "[DONE]"]
     );
     Ok(())
 }
@@ -738,6 +779,59 @@ async fn a_tab_the_agent_opens_is_in_the_panel_table_while_the_run_is_running() 
     assert_eq!(body_json(forget).await, json!({ "success": true }));
     let table = chunk(&panels.next().await.unwrap_or_default());
     assert_eq!(table["assignments"].as_array().map(Vec::len), Some(1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_run_that_opens_tabs_and_ends_at_once_still_shows_them_running() -> TestResult {
+    // Tab 42 is found after the tool returns, tab 43 only by the take before the end. With no
+    // database writes (incognito) the end follows at once, before the panel reader polls.
+    let runner = Runner::new([answer(vec![
+        step_start(),
+        started("call_1"),
+        input("call_1"),
+        Step::OpenTab(42),
+        done("call_1"),
+        Step::OpenTab(43),
+        step_end(),
+    ])]);
+    let server = server_with(runner).await?;
+    let mut panels = Events::of(server.send(server.get("/chat/panels")).await);
+    assert_eq!(
+        panels.next().await.map(|data| chunk(&data)),
+        Some(json!({ "assignments": [] }))
+    );
+
+    let mut body = ask("open two tabs");
+    body["persist"] = json!(false);
+    Events::of(post(&server, &body).await).rest().await;
+
+    // Only now does the reader poll: every table the run published is still there, in order.
+    let mut opened = std::collections::BTreeMap::new();
+    loop {
+        let table = chunk(&panels.next().await.unwrap_or_default());
+        let assignments = table["assignments"].as_array().cloned().unwrap_or_default();
+        for assignment in &assignments {
+            if assignment["status"] == json!("running")
+                && assignment["autoOpenId"].is_string()
+                && let Some(tab) = assignment["tabId"].as_i64()
+            {
+                opened.insert(tab, assignment["autoOpenId"].clone());
+            }
+        }
+        if !assignments.is_empty()
+            && assignments
+                .iter()
+                .all(|a| a["status"] == json!("completed"))
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        opened.keys().copied().collect::<Vec<_>>(),
+        [42, 43],
+        "each opened tab was seen running with its autoOpenId before the terminal table"
+    );
     Ok(())
 }
 
