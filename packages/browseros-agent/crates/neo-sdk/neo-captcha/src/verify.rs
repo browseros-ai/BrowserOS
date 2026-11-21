@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     detect,
     evidence::{self, FramePart, MIN_EVIDENCE_CHARS, PageBrief},
-    judge::{Judge, JudgeOption, JudgeQuestion, JudgeReply, JudgeRequest},
+    judge::{Judge, JudgeFault, JudgeOption, JudgeQuestion, JudgeReply, JudgeRequest},
     page::CaptchaPage,
     policy,
     turnstile_state::{TurnstileWidgetState, turnstile_widget_state},
@@ -245,9 +245,14 @@ pub(crate) enum Standing {
 pub(crate) enum Unsure {
     /// Too little page text to ask a judge about.
     NoEvidence,
-    /// No judge is configured. Hints alone then never overturn a claim: the answer stands, with
-    /// the check's report beside it.
+    /// No usable judge (none configured, or it refused Neo's credential), and only soft hints
+    /// fired: tier 1 could not see everything, but nothing on the page warns. The answer stands,
+    /// with the check's report beside it.
     NoJudge,
+    /// No usable judge, and the page itself warns ([`Hint::is_warning`]): a bot-check phrase in a
+    /// title, heading or live line, a new message, an HTTP error, another open challenge, an
+    /// unreadable widget on top. Only a judge could clear that, so the page is unknown.
+    NoJudgeWarning,
     /// A judge is configured but gave no answer: it failed, timed out or refused, or the call
     /// budget or the time ran out.
     JudgeUnavailable,
@@ -408,12 +413,39 @@ pub(crate) enum Hint {
     SubmitBlocked,
     /// An alert or status line appeared since the solve began (row 12).
     NewMessage,
-    /// Bot-check words in the page's salient lines (row 13).
+    /// Bot-check phrases in the page's salient lines (title, headings, alerts, statuses, what
+    /// covers the view, frame text), or bot-check words in its live lines (row 13).
     Marker,
+    /// Bot-check phrases only in the page's body copy, or a title or heading that merely names a
+    /// CAPTCHA ("reCAPTCHA demo"): copy is written beside widgets that pass (row 13).
+    CopyMarker,
     /// The document answered 4xx or 5xx (row 14).
     HttpError,
     /// The Cloudflare wall is gone, but not to a new document with clearance (row 7).
     WallUnconfirmed,
+}
+
+impl Hint {
+    /// Whether the page itself warns that something may be wrong, rather than tier 1 merely
+    /// seeing too little. A host with no usable judge cannot let a warning pass (its page stays
+    /// unknown), but keeps the claim on the rest.
+    pub(crate) fn is_warning(self) -> bool {
+        match self {
+            Self::Marker
+            | Self::NewMessage
+            | Self::HttpError
+            | Self::OpenChallenge
+            | Self::WidgetOnTopUnread => true,
+            Self::ScanPartial
+            | Self::WidgetUnreadable
+            | Self::WidgetFaceDisagrees
+            | Self::PassedWidgetOnTop
+            | Self::Covered
+            | Self::SubmitBlocked
+            | Self::CopyMarker
+            | Self::WallUnconfirmed => false,
+        }
+    }
 }
 
 /// Tier 1's facts. Filled by [`signals`]; read only by [`decide`].
@@ -604,19 +636,25 @@ pub(crate) async fn conclude(
         }),
         TierOne::AskJudge => {
             let fact = widget_fact(&look, claim);
+            let warns = signals(&look, claim)
+                .hints
+                .into_iter()
+                .any(Hint::is_warning);
             let mut brief = look.brief.unwrap_or_default();
             if let Some(fact) = fact {
                 brief.note_widget(fact);
             }
-            ask_judge(brief, judge, budget, cancel).await
+            ask_judge(brief, warns, judge, budget, cancel).await
         }
     }
 }
 
 /// Tier 2: the brief's evidence to the judge, read against the pinned thresholds. Evidence under
-/// [`MIN_EVIDENCE_CHARS`] is not sent; a missing, failing, slow or spent judge is `Unsure`.
+/// [`MIN_EVIDENCE_CHARS`] is not sent; a missing, failing, slow or spent judge is `Unsure`. With
+/// no usable judge (none, or a refused credential), `warns` says whether the page warns.
 pub(crate) async fn ask_judge(
     brief: PageBrief,
+    warns: bool,
     judge: Option<&dyn Judge>,
     budget: &mut VerifyBudget,
     cancel: &CancellationToken,
@@ -627,8 +665,13 @@ pub(crate) async fn ask_judge(
             ..Verification::deterministic(Standing::Unsure(why))
         })
     };
+    let no_judge = if warns {
+        Unsure::NoJudgeWarning
+    } else {
+        Unsure::NoJudge
+    };
     let Some(judge) = judge else {
-        return unsure(brief, Unsure::NoJudge);
+        return unsure(brief, no_judge);
     };
     let text = brief.to_evidence();
     if text.chars().count() < MIN_EVIDENCE_CHARS {
@@ -664,11 +707,23 @@ pub(crate) async fn ask_judge(
                 judged: Some(judge_use(&reply, ms)),
             })
         }
+        Ok(Err(fault)) if credential_rejected(&fault) => unsure(brief, no_judge),
         Ok(Err(fault)) => {
             tracing::info!(target: "captcha", fault = %fault, "Jev gave no answer; the verify check is unsure");
             unsure(brief, Unsure::JudgeUnavailable)
         }
         Err(_) => unsure(brief, Unsure::JudgeUnavailable),
+    }
+}
+
+/// The judge refused Neo's credential, on this call (401/403) or on an earlier one that turned it
+/// off (`judge.rs` then answers "credential rejected"). Such a host has no usable judge, so it
+/// is treated as one with none: a revoked key is no stricter than a missing one.
+fn credential_rejected(fault: &JudgeFault) -> bool {
+    match fault {
+        JudgeFault::Refused { status } => matches!(status, 401 | 403),
+        JudgeFault::Unavailable(reason) => *reason == "credential rejected",
+        JudgeFault::Malformed => false,
     }
 }
 
@@ -1176,8 +1231,10 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
         && !signals.puzzle_open
         && !signals.pending
         && !signals.hints.contains(&Hint::OpenChallenge);
-    if words.salient || ((words.naming || words.body) && !passed_alone) {
+    if words.salient {
         signals.note(Hint::Marker);
+    } else if (words.naming || words.body) && !passed_alone {
+        signals.note(Hint::CopyMarker);
     }
     if claim.basis == Basis::WallCleared && signals.wall != WallReading::Showing {
         let moved = look
@@ -1445,11 +1502,16 @@ pub(crate) fn next_step(
             SolveReason::ChallengePending,
             "The site's own check is still running. Wait a few seconds and call solve_captcha again; do not reload.",
         ),
-        // Without a judge, hints are all a keyless host can ever have: they ride along in
-        // `verify` and the claim stands. Tier-1 proof is handled above and below as ever.
+        // Without a usable judge, soft hints are all a keyless host can ever have: they ride
+        // along in `verify` and the claim stands. A page that warns stays unknown, and tier-1
+        // proof is handled above and below as ever.
         Standing::Unsure(Unsure::NoJudge) => Next::Return(flow.clone()),
         Standing::Unsure(
-            Unsure::NoEvidence | Unsure::JudgeUnavailable | Unsure::JudgeSplit | Unsure::Navigated,
+            Unsure::NoEvidence
+            | Unsure::NoJudgeWarning
+            | Unsure::JudgeUnavailable
+            | Unsure::JudgeSplit
+            | Unsure::Navigated,
         ) => answer(
             SolveStatus::Failed,
             SolveReason::AcceptanceUnconfirmed,
@@ -1541,7 +1603,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        judge::{JudgeAnswer, JudgeFault},
+        judge::JudgeAnswer,
         types::{Attempts, Rect, ScanOutcome, SolveMethod},
     };
 
@@ -2161,14 +2223,15 @@ mod tests {
                 json!({"complete": true, "headings": ["Complete the CAPTCHA to continue"]}),
                 &nothing
             )?,
-            [Hint::Marker]
+            [Hint::CopyMarker],
+            "a heading that names a CAPTCHA is copy, not a warning"
         );
         assert_eq!(
             hints(
                 json!({"complete": true, "text": ["Please wait while we verify your browser..."]}),
                 &nothing
             )?,
-            [Hint::Marker]
+            [Hint::CopyMarker]
         );
         let disabled = json!({"complete": true, "submit": {"label": "Search", "disabled": true}});
         assert_eq!(
@@ -2576,8 +2639,8 @@ mod tests {
             "alerts": [["There was an issue verifying your browser. Please try again."]]}))])?;
         assert_eq!(
             check(&failure, &claim, None).await?.standing,
-            Standing::Unsure(Unsure::NoJudge),
-            "the new document's hints go to tier 2 like any page's"
+            Standing::Unsure(Unsure::NoJudgeWarning),
+            "the new document's hints go to tier 2 like any page's; its alert warns"
         );
         let wall = moved(vec![Ok(widget_on_top("datadome", "puzzle"))])?;
         assert_eq!(
@@ -2670,7 +2733,8 @@ mod tests {
         let refused = FixedJudge(Err(JudgeFault::Refused { status: 401 }), Duration::ZERO);
         assert_eq!(
             check(&page, &claim, Some(&refused)).await?.standing,
-            Standing::Unsure(Unsure::JudgeUnavailable)
+            Standing::Unsure(Unsure::NoJudge),
+            "a refused credential leaves the host with no judge, as if none were configured"
         );
         let mut spent = budget();
         spent.judge_calls_left = 0;
@@ -3121,7 +3185,7 @@ mod tests {
             "the widget's own success outweighs the copy written beside it"
         );
         look.face = Some(TurnstileWidgetState::Unreadable);
-        assert!(signals(&look, &claim).hints.contains(&Hint::Marker));
+        assert!(signals(&look, &claim).hints.contains(&Hint::CopyMarker));
         let mut salient = look_at(json!({"complete": true, "headings": ["Verify you are human"]}))?;
         salient.face = Some(TurnstileWidgetState::Success);
         assert_eq!(signals(&salient, &claim).hints, [Hint::Marker]);
@@ -3268,7 +3332,7 @@ mod tests {
         other.sitekey = Some("other".into());
         look.rescan = Some(rescan(vec![ticked, other]));
         assert!(
-            signals(&look, &pass).hints.contains(&Hint::Marker),
+            signals(&look, &pass).hints.contains(&Hint::CopyMarker),
             "with another challenge open, the title's word counts again"
         );
         assert_eq!(widget_fact(&look, &pass), Some("its checkbox is ticked"));
@@ -3304,5 +3368,104 @@ mod tests {
             "{}",
             answer.message
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_host_without_a_usable_judge_keeps_claims_only_on_soft_hints()
+    -> anyhow::Result<()> {
+        let document = page_document();
+        let nothing = claim_on(Basis::NothingFound, None, &document);
+        let cookie = json!({"complete": true, "site": "site.test",
+            "layer": {"dialog": true, "share": 1.0, "text": ["We use cookies to make this site work for you."]},
+            "buttons": ["Accept", "Reject"]});
+        let alert = json!({"complete": true, "site": "site.test",
+            "alerts": [["There was an issue verifying your browser. Please try again."]],
+            "buttons": ["Search"]});
+        let soft = || ScriptedPage::probing(vec![Ok(cookie.clone())]);
+        let warning = || ScriptedPage::probing(vec![Ok(alert.clone())]);
+        assert_eq!(
+            check(&soft(), &nothing, None).await?.standing,
+            Standing::Unsure(Unsure::NoJudge),
+            "a cookie dialog only hides part of the page"
+        );
+        assert_eq!(
+            check(&warning(), &nothing, None).await?.standing,
+            Standing::Unsure(Unsure::NoJudgeWarning),
+            "a failure alert is the page warning: no judge, no pass"
+        );
+        for (fault, page, expected) in [
+            (JudgeFault::Refused { status: 401 }, soft(), Unsure::NoJudge),
+            (
+                JudgeFault::Unavailable("credential rejected"),
+                soft(),
+                Unsure::NoJudge,
+            ),
+            (
+                JudgeFault::Refused { status: 403 },
+                warning(),
+                Unsure::NoJudgeWarning,
+            ),
+            (
+                JudgeFault::Unavailable("request timed out"),
+                soft(),
+                Unsure::JudgeUnavailable,
+            ),
+            (
+                JudgeFault::Refused { status: 422 },
+                soft(),
+                Unsure::JudgeUnavailable,
+            ),
+        ] {
+            let judge = FixedJudge(Err(fault.clone()), Duration::ZERO);
+            assert_eq!(
+                check(&page, &nothing, Some(&judge)).await?.standing,
+                Standing::Unsure(expected),
+                "{fault:?}: a refused credential is no judge; any other fault is unknown"
+            );
+        }
+        let clear = flow(SolveStatus::AlreadyClear, SolveReason::NoCaptcha);
+        let answer = |why: Unsure| {
+            next_step(
+                &clear,
+                &verification(Standing::Unsure(why), VerifyTier::Deterministic),
+                &nothing,
+                0,
+                Duration::from_secs(100),
+            )
+        };
+        assert_eq!(answer(Unsure::NoJudge), Next::Return(clear.clone()));
+        let Next::Return(warned) = answer(Unsure::NoJudgeWarning) else {
+            panic!("an unsure check never retries");
+        };
+        assert_eq!(
+            (warned.status, warned.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_only_the_page_s_own_warnings_are_hard_hints() {
+        for hint in [
+            Hint::Marker,
+            Hint::NewMessage,
+            Hint::HttpError,
+            Hint::OpenChallenge,
+            Hint::WidgetOnTopUnread,
+        ] {
+            assert!(hint.is_warning(), "{hint:?}");
+        }
+        for hint in [
+            Hint::ScanPartial,
+            Hint::WidgetUnreadable,
+            Hint::WidgetFaceDisagrees,
+            Hint::PassedWidgetOnTop,
+            Hint::Covered,
+            Hint::SubmitBlocked,
+            Hint::CopyMarker,
+            Hint::WallUnconfirmed,
+        ] {
+            assert!(!hint.is_warning(), "{hint:?}");
+        }
     }
 }

@@ -15,8 +15,8 @@ use std::{
 use futures_util::future::BoxFuture;
 use neo_captcha::{
     judge::{HttpJudge, Judge, JudgeAnswer, JudgeConfig, JudgeFault, JudgeReply, JudgeRequest},
-    testing::{Replay, replay_brief},
-    types::{BlockCause, VerifyResult, VerifyTier},
+    testing::{Answer, Replay, replay_brief},
+    types::{BlockCause, SolveReason, SolveStatus, VerifyResult, VerifyTier},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -356,6 +356,46 @@ fn tests_that_the_set_covers_both_sides_and_says_where_readings_come_from() -> T
                 recording.brief.case
             );
         }
+    }
+    Ok(())
+}
+
+/// A host with no judge keeps a claim only when the page merely hid part of itself: a page that
+/// warns (an alert saying verification failed, a heading saying access is restricted) stays
+/// unknown, while an ordinary dialog over a clear page keeps `already_clear`.
+#[tokio::test]
+async fn tests_that_without_a_judge_warnings_stay_unknown_and_soft_hints_keep_the_claim()
+-> TestResult {
+    let recordings = briefs()?;
+    let answer = |case: &str| {
+        let recording = recordings
+            .iter()
+            .find(|recording| recording.brief.case == case)
+            .ok_or_else(|| format!("{case} is missing"));
+        async move { Ok::<_, String>(replay(recording?, None).await?.answer) }
+    };
+    for case in [
+        "06-amazon-wall-reworded-for-jev",
+        "12-mm-failure-alert-without-dialog",
+    ] {
+        assert_eq!(
+            answer(case).await?,
+            Some(Answer {
+                status: SolveStatus::Failed,
+                reason: SolveReason::AcceptanceUnconfirmed,
+            }),
+            "{case}: the page warns, and no judge can clear it"
+        );
+    }
+    for case in ["20-airfrance-cookie-dialog", "22-amazon-choose-location"] {
+        assert_eq!(
+            answer(case).await?,
+            Some(Answer {
+                status: SolveStatus::AlreadyClear,
+                reason: SolveReason::NoCaptcha,
+            }),
+            "{case}: an ordinary dialog is no reason to doubt a clear page"
+        );
     }
     Ok(())
 }
