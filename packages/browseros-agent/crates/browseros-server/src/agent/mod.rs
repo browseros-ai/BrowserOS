@@ -19,6 +19,7 @@ mod prompt;
 pub use probe::{AgentProbe, ProbeError, ProbeModel, ProbeReasoning, ProbedAgentInfo};
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::browser::Browser;
 use crate::model::Models;
@@ -28,27 +29,24 @@ use crate::turn::{
 };
 
 /// Today's limit on model calls in one turn of the own loop.
-#[expect(dead_code, reason = "read once chunk `loop` writes the step loop")]
 const MAX_STEPS: usize = 100;
+/// The longest one turn of the own loop may run; it then ends as if its steps were spent.
+const MAX_TURN_TIME: Duration = Duration::from_secs(60 * 60);
 
 /// The one production `TurnRunner`. Cheap to clone.
 #[derive(Clone)]
 pub struct Agent {
-    #[expect(
-        dead_code,
-        reason = "read once chunks `loop` and `acp` write the backends"
-    )]
     inner: Arc<Inner>,
 }
 
-#[expect(
-    dead_code,
-    reason = "read once chunks `loop` and `acp` write the backends"
-)]
 struct Inner {
     models: Models,
     browser: Browser,
     store: Store,
+    #[expect(
+        dead_code,
+        reason = "read once chunk `acp` writes the coding-agent runner"
+    )]
     runtime: AgentRuntime,
 }
 
@@ -90,12 +88,29 @@ impl Agent {
 impl TurnRunner for Agent {
     async fn run_turn(
         &self,
-        _target: &Target,
-        _input: &TurnInput,
-        _sink: &mut dyn EventSink,
-        _cancel: &tokio_util::sync::CancellationToken,
+        target: &Target,
+        input: &TurnInput,
+        sink: &mut dyn EventSink,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> TurnEnd {
-        TurnEnd::Failed(ChatError::not_implemented("Running a turn"))
+        let inner = &self.inner;
+        match target {
+            Target::Provider(id) => {
+                own_loop::run(
+                    &inner.models,
+                    &inner.browser,
+                    &inner.store,
+                    id.as_deref(),
+                    input,
+                    sink,
+                    cancel,
+                )
+                .await
+            }
+            Target::Coding { .. } => {
+                TurnEnd::Failed(ChatError::not_implemented("Running a coding agent"))
+            }
+        }
     }
 
     async fn end_session(&self, _conversation: ConversationId) {}

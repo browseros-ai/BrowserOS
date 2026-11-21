@@ -20,7 +20,8 @@ Safety: no independent goals (no self-preservation, replication, or resource acq
 
 const ROLE_WITH_BROWSER: &str = "You are BrowserOS, a browser agent working in the user's own Chromium browser. You act through one tool, `run`, which runs a script against the browser; its description explains how to look at a page, act on it, and look again.";
 
-const ROLE_CHAT_MODE: &str = "You are in read-only chat mode: you may read pages; you may not click, type, or change them.";
+const ROLE_CHAT_MODE: &str =
+    "You are in read-only chat mode: you may read pages; you may not click, type, or change them.";
 
 const ROLE_WITHOUT_BROWSER: &str =
     "You are BrowserOS, an assistant built into the user's Chromium browser.";

@@ -190,6 +190,8 @@ impl Context {
     ) {
         let ordinal = self.calls;
         self.calls += 1;
+        // The loop pushes a result only after the response that asked for it, so the newest
+        // group is that response's: the result joins it and compaction cannot separate them.
         let group = self.groups.saturating_sub(1);
         let pictures = output.pictures.len();
         let mut text = if output.is_error {
@@ -462,9 +464,10 @@ fn assistant_text(message: &UiMessage) -> String {
         .filter_map(|part| match part {
             UiPart::Text { text, .. } if !text.is_empty() => Some(text.clone()),
             UiPart::Tool(tool) => Some(tool_line(tool)),
-            UiPart::Text { .. } | UiPart::Reasoning { .. } | UiPart::StepStart | UiPart::Other(_) => {
-                None
-            }
+            UiPart::Text { .. }
+            | UiPart::Reasoning { .. }
+            | UiPart::StepStart
+            | UiPart::Other(_) => None,
         })
         .collect();
     lines.join("\n")
@@ -721,8 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_first_stage_replaces_results_older_than_the_last_three_calls() -> TestResult {
-        let mut context =
-            Context::from_history(&[message(Role::User, "go")], &turn_context(), 0);
+        let mut context = Context::from_history(&[message(Role::User, "go")], &turn_context(), 0);
         let big = "p".repeat(3_000);
         for id in ["c0", "c1", "c2", "c3", "c4"] {
             push_step(&mut context, id, 0, output(&big), None).await?;
@@ -742,8 +744,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_second_stage_replaces_every_result() -> TestResult {
-        let mut context =
-            Context::from_history(&[message(Role::User, "go")], &turn_context(), 0);
+        let mut context = Context::from_history(&[message(Role::User, "go")], &turn_context(), 0);
         for id in ["c0", "c1", "c2", "c3", "c4"] {
             push_step(&mut context, id, 0, output(&"p".repeat(3_000)), None).await?;
         }
@@ -849,7 +850,10 @@ mod tests {
                 _,
                 _,
                 ModelMessage::ToolResult { text, .. },
-                ModelMessage::User { text: label, images },
+                ModelMessage::User {
+                    text: label,
+                    images,
+                },
             ] => {
                 assert_eq!(text, "took a screenshot");
                 assert_eq!(label, "Attached images from the tool result:");
@@ -857,7 +861,10 @@ mod tests {
                 let bytes: Vec<Vec<u8>> = images.iter().map(|image| image.bytes.clone()).collect();
                 assert_eq!(bytes, expected);
             }
-            _ => panic!("expected a result then a picture message: {:?}", shape(&seeing)),
+            _ => panic!(
+                "expected a result then a picture message: {:?}",
+                shape(&seeing)
+            ),
         }
 
         let blind_turn = response(&["c1"], None).await?;
