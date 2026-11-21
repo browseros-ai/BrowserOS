@@ -2,10 +2,11 @@
 //! writes into, and the task that drives the backend and writes the row.
 //!
 //! ```text
-//!   run_task ──run_turn(sink)──▶ backend
-//!      │                           │ emit(event)
-//!      │                    RunSink: log.transcript.apply ─▶ notify subscribers
-//!      │                           └─ a checkpoint: write prefix + sealed answer, then return
+//!   run_task
+//!      ├─ admission: write prefix
+//!      ├─ run_turn(sink) ─▶ backend
+//!      │                       └─ emit(event) ─▶ RunSink: apply event ─▶ notify subscribers
+//!      │                                           └─ checkpoint: write prefix + sealed answer
 //!      └─ the end: finish ─▶ notify ─▶ write the row ─▶ status = terminal ─▶ notify ─▶ ended
 //! ```
 //!
@@ -186,26 +187,20 @@ pub(super) enum Persist {
 }
 
 impl Persist {
-    /// Writes the prefix plus `answer` as the whole row. No answer (no display content yet)
-    /// writes nothing, so a turn that fails before it says anything leaves no dangling question.
+    /// Writes the whole row: the admitted transcript plus the sealed answer, if it has content.
     ///
-    /// A failed write is logged and the turn goes on. The checkpoint is a crash record, not a
-    /// gate: every write is the whole row, so the next checkpoint or the end heals a missed one,
-    /// and a storage hiccup (another process holding the lock past the 5 s busy timeout) should
-    /// not stop the answer the user is watching.
+    /// A failed write is logged and the turn goes on. A later checkpoint or the end can recover
+    /// the missed write because each write includes the whole row.
     async fn write(&self, store: &Store, run: &Run, answer: Option<UiMessage>) {
-        let (
-            Persist::Row {
-                target_type,
-                agent_id,
-            },
-            Some(answer),
-        ) = (self, answer)
+        let Persist::Row {
+            target_type,
+            agent_id,
+        } = self
         else {
             return;
         };
         let mut messages = run.history.to_vec();
-        messages.push(answer);
+        messages.extend(answer);
         let row = ConversationRow {
             id: run.conversation,
             messages,
@@ -265,11 +260,12 @@ pub(super) struct TurnJob {
 /// The run's task, the only writer of its log and of its row.
 ///
 /// What is written, and when (a `Persist::Row` run only):
+///   admission   prefix alone               before the backend starts
 ///   ToolInput   prefix + sealed answer      before the tool runs (own loop); as first seen (coding agent)
 ///   ToolDone    prefix + sealed answer      after it returns
-///   the end     prefix + sealed answer      finish, stop or failure; skipped while the answer has no
-///                                           display content
+///   the end     prefix + sealed answer      finish, stop or failure
 pub(super) async fn run_task(inner: Arc<Inner>, run: Arc<Run>, job: TurnJob) {
+    job.persist.write(&inner.store, &run, None).await;
     let TurnJob {
         target,
         input,

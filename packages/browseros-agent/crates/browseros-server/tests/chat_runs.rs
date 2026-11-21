@@ -16,10 +16,11 @@ use browseros_server::turn::{
     TurnEvent,
 };
 use chat_support::{Events, Runner, Script, Step, chunk, chunk_types};
+use sea_orm::sqlx::{SqlitePool, query, query_scalar, sqlite::SqliteConnectOptions};
 use serde_json::{Value, json};
 use support::{TestOptions, TestServer, body_json};
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const CONVERSATION: &str = "0b1d2c3e-4f50-4617-8899-aabbccddeeff";
 
@@ -63,6 +64,34 @@ async fn stored(server: &TestServer) -> Option<Value> {
         .ok()
         .flatten()
         .and_then(|row| serde_json::to_value(row.messages).ok())
+}
+
+async fn wait_for_backend(runner: &Runner) -> TestResult {
+    // The backend records its input before taking any scripted step. A test can observe
+    // admission without having the backend emit a stream event or checkpoint first.
+    tokio::time::timeout(chat_support::PATIENCE, async {
+        while runner.inputs().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+async fn seed_unreadable_transcript(server: &TestServer, payload: &str) -> TestResult<SqlitePool> {
+    let db = SqlitePool::connect_with(
+        SqliteConnectOptions::new().filename(server.state_dir().join("db/browseros.sqlite")),
+    )
+    .await?;
+    query(
+        "INSERT INTO conversations (id, messages, target_type, last_messaged_at, created_at, updated_at)
+         VALUES (?, ?, 'browseros', 110, 90, 110)",
+    )
+    .bind(CONVERSATION)
+    .bind(payload)
+    .execute(&db)
+    .await?;
+    Ok(db)
 }
 
 fn step_start() -> Step {
@@ -410,7 +439,30 @@ async fn checkpoints_write_the_row_before_and_after_each_tool() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_turn_that_fails_before_saying_anything_writes_nothing() -> TestResult {
+async fn the_question_is_stored_while_the_backend_is_waiting_to_answer() -> TestResult {
+    let runner = Runner::new([answer(vec![Step::Gate])]);
+    let server = server_with(runner.clone()).await?;
+    let mut body = ask("Will this survive a restart?");
+    body["userMessageId"] = json!("question-1");
+    let mut stream = Events::of(post(&server, &body).await);
+
+    wait_for_backend(&runner).await?;
+    let admitted = stored(&server).await;
+    runner.open_gate();
+    stream.rest().await;
+
+    assert_eq!(
+        admitted,
+        Some(json!([{
+            "id": "question-1", "role": "user",
+            "parts": [{ "type": "text", "text": "Will this survive a restart?" }]
+        }]))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_turn_that_fails_before_saying_anything_writes_the_question_alone() -> TestResult {
     let runner = Runner::new([Script {
         steps: vec![step_start()],
         end: TurnEnd::Failed(ChatError::new(
@@ -428,7 +480,10 @@ async fn a_turn_that_fails_before_saying_anything_writes_nothing() -> TestResult
     let envelope: Value =
         serde_json::from_str(chunk(&events[2])["errorText"].as_str().unwrap_or_default())?;
     assert_eq!(envelope["error"]["code"], json!("provider_config"));
-    assert_eq!(stored(&server).await, None, "no dangling question");
+    let row = stored(&server).await.unwrap_or_default();
+    assert_eq!(row.as_array().map(Vec::len), Some(1));
+    assert_eq!(row[0]["role"], "user");
+    assert_eq!(row[0]["parts"][0]["text"], "hello");
     let state = body_json(
         server
             .send(server.get(&format!("/chat/{CONVERSATION}/state")))
@@ -441,7 +496,12 @@ async fn a_turn_that_fails_before_saying_anything_writes_nothing() -> TestResult
 
 #[tokio::test]
 async fn an_incognito_turn_writes_nothing_and_answers_from_the_request() -> TestResult {
-    let runner = Runner::new([says("Sure.")]);
+    let runner = Runner::new([answer(vec![
+        step_start(),
+        Step::Gate,
+        text("Sure."),
+        step_end(),
+    ])]);
     let server = server_with(runner.clone()).await?;
     let body = json!({
         "conversationId": CONVERSATION,
@@ -453,7 +513,17 @@ async fn an_incognito_turn_writes_nothing_and_answers_from_the_request() -> Test
             { "role": "assistant", "content": "an answer" }
         ]
     });
-    Events::of(post(&server, &body).await).rest().await;
+    let mut stream = Events::of(post(&server, &body).await);
+    assert_eq!(
+        chunk_types(&stream.until("start-step").await),
+        ["start", "start-step"]
+    );
+    assert_eq!(stored(&server).await, None, "at admission");
+    runner.open_gate();
+    assert_eq!(
+        stream.rest().await.last().map(String::as_str),
+        Some("[DONE]")
+    );
     assert_eq!(stored(&server).await, None);
     let inputs = runner.inputs();
     let (_, input) = &inputs[0];
@@ -462,6 +532,26 @@ async fn an_incognito_turn_writes_nothing_and_answers_from_the_request() -> Test
     assert_eq!(history.as_array().map(Vec::len), Some(3));
     assert_eq!(history[0]["parts"][0]["text"], json!("earlier"));
     assert_eq!(history[2]["parts"][0]["text"], json!("and now?"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unreadable_conversation_is_left_untouched() -> TestResult {
+    let runner = Runner::new([says("A backend should never see this.")]);
+    let server = server_with(runner.clone()).await?;
+    let unreadable = "not a transcript";
+    let db = seed_unreadable_transcript(&server, unreadable).await?;
+
+    let events = Events::of(post(&server, &ask("Could this replace the row?")).await)
+        .rest()
+        .await;
+    assert_eq!(chunk_types(&events), ["start", "error", "[DONE]"]);
+    assert!(runner.inputs().is_empty());
+    let messages: String = query_scalar("SELECT messages FROM conversations WHERE id = ?")
+        .bind(CONVERSATION)
+        .fetch_one(&db)
+        .await?;
+    assert_eq!(messages, unreadable);
     Ok(())
 }
 
