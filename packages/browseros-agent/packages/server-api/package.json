@@ -1,0 +1,23 @@
+{
+  "name": "@browseros/server-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Contract-typed client for the BrowserOS server, generated from its OpenAPI document.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.17.0"
+  },
+  "exports": {
+    "./client": {
+      "types": "./src/client.ts",
+      "default": "./src/client.ts"
+    },
+    "./openapi": {
+      "types": "./src/generated/openapi.ts",
+      "default": "./src/generated/openapi.ts"
+    }
+  }
+}
