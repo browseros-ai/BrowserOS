@@ -78,6 +78,9 @@ test('tests that the catalog contains every required page with unique ids and ex
     'turnstile-pass',
     'turnstile-block',
     'turnstile-interactive',
+    'turnstile-stale-token',
+    'turnstile-hidden-verifying',
+    'turnstile-frame-never-loads',
     'turnstile-cf-marker',
     'cloudflare-wall',
     'no-captcha',
@@ -395,10 +398,13 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
     expect(html.match(/<form\b/g)).toHaveLength(1)
     expect(html).toContain('id="captcha-form"')
     expect(html).toContain('id="submit" type="submit"')
-    // The bound and PerimeterX fixtures have their own lifecycle tests.
+    // The bound, PerimeterX, stale-token and hidden Turnstile fixtures have their own
+    // lifecycle tests.
     if (
       page.id === 'recaptcha-v2-invisible-bind' ||
-      page.id.startsWith('perimeterx-')
+      page.id.startsWith('perimeterx-') ||
+      page.id === 'turnstile-stale-token' ||
+      page.id === 'turnstile-hidden-verifying'
     )
       continue
     let visible = false
@@ -481,6 +487,127 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
       'test-error',
     )
   }
+})
+
+/** Runs a Turnstile fixture's inline scripts against a small fake page, capturing its render. */
+async function runTurnstileFixture(id: string) {
+  const page = FIXTURE_PAGES.find((p) => p.id === id)
+  if (!page) throw new Error(`missing ${id}`)
+  const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
+  const dataset: Record<string, string> = {}
+  const fields = [{ value: '' }]
+  let rendered: { target: string; options: Record<string, unknown> } | null =
+    null
+  let visible = false
+  let resize = () => {}
+  const status = { textContent: 'Please wait…' }
+  const context = {
+    window: {} as Record<string, unknown>,
+    document: {
+      documentElement: { dataset },
+      querySelector: () =>
+        visible
+          ? { getBoundingClientRect: () => ({ width: 300, height: 65 }) }
+          : null,
+      querySelectorAll: (selector: string) =>
+        selector === '#widget [name="cf-turnstile-response"]' ? fields : [],
+      getElementById: (id: string) => (id === 'status' ? status : null),
+    },
+    turnstile: {
+      render: (target: string, options: Record<string, unknown>) => {
+        rendered = { target, options }
+      },
+    },
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+    },
+    ResizeObserver: class {
+      constructor(callback: () => void) {
+        resize = callback
+      }
+      observe() {}
+      disconnect() {}
+    },
+  }
+  for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g))
+    runInNewContext(match[1] ?? '', context)
+  const show = () => {
+    visible = true
+    resize()
+  }
+  const state = () => JSON.parse(dataset.captchaFixture ?? '{}')
+  const ready = () => runInNewContext(page.ready, context)
+  const render = () => {
+    ;(context.window.fixtureLoaded as () => void)()
+    if (!rendered) throw new Error(`${id} rendered no widget`)
+    return rendered as { target: string; options: Record<string, unknown> }
+  }
+  return { page, html, fields, status, show, state, ready, render }
+}
+
+test('tests that the stale-token page is ready only once its failed widget holds an old token', async () => {
+  const fixture = await runTurnstileFixture('turnstile-stale-token')
+  expect(fixture.page).toMatchObject({
+    sitekey: '2x00000000000000000000AB',
+    expect: ['unsolved', 'unknown'],
+  })
+  expect(fixture.ready()).toBe(false)
+  const { target, options } = fixture.render()
+  expect(target).toBe('#widget')
+  expect(options).toMatchObject({
+    sitekey: fixture.page.sitekey,
+    retry: 'never',
+  })
+  // A shown widget is not enough: it must have failed with the old token in its field.
+  fixture.show()
+  expect(fixture.state().rendered).toBe(true)
+  expect(fixture.ready()).toBe(false)
+  ;(options['error-callback'] as (code: string) => void)('600010')
+  expect(fixture.fields[0]?.value).toBe('stale-token-from-an-earlier-pass')
+  expect(fixture.state()).toMatchObject({
+    stale: true,
+    tokenLength: 'stale-token-from-an-earlier-pass'.length,
+    errors: ['600010'],
+  })
+  expect(fixture.ready()).toBe(true)
+})
+
+test('tests that the hidden page starts its widget out of sight and never shows it', async () => {
+  const fixture = await runTurnstileFixture('turnstile-hidden-verifying')
+  expect(fixture.page).toMatchObject({
+    sitekey: '2x00000000000000000000BB',
+    expect: ['unsolved', 'unknown'],
+  })
+  expect(fixture.html).toMatch(
+    /<div id="widget" class="cf-turnstile" data-sitekey="2x00000000000000000000BB" style="display: none"><\/div>/,
+  )
+  expect(fixture.ready()).toBe(false)
+  const { options } = fixture.render()
+  expect(options.sitekey).toBe(fixture.page.sitekey)
+  expect(fixture.ready()).toBe(true)
+  expect(fixture.status.textContent).toBe('Please wait…')
+  ;(options.callback as (token: string) => void)('late-token')
+  expect(fixture.status.textContent).toBe('Ready')
+  expect(fixture.state()).toMatchObject({
+    callbackFired: true,
+    tokenLength: 10,
+  })
+})
+
+test('tests that the never-loading frame comes after the page load and points at the hanging address', async () => {
+  const page = FIXTURE_PAGES.find((p) => p.id === 'turnstile-frame-never-loads')
+  if (!page) throw new Error('missing never-loads page')
+  expect(page).toMatchObject({
+    sitekey: '1x00000000000000000000AA',
+    expect: ['solved', 'already_clear'],
+  })
+  const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
+  expect(html).toContain("frame.src = '{{FRAME_ORIGIN}}/never-loads';")
+  expect(html).toContain(
+    "globalThis.addEventListener?.('load', () => { replaceStuckFrame(); setInterval(replaceStuckFrame, 2000); });",
+  )
+  expect(html).not.toMatch(/<iframe\b/)
 })
 
 test('tests that the PerimeterX pages mimic its frame and load nothing from anyone', async () => {

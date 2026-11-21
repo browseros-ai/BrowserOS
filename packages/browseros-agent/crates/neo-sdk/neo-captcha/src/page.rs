@@ -12,13 +12,17 @@ use browseros_core::{
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport},
 };
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, time::Instant};
 
 use super::types::{DocumentId, FrameRef, PageError, Rect};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// Chromium-side limit on one widget evaluation, inside the request timeout above.
 const EVAL_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a tolerant frame walk spends on one frame before it skips it. An out-of-process
+/// frame whose target never attaches would otherwise hold the walk until detection's deadline
+/// and cost it every frame after that one.
+const FRAME_READ: Duration = Duration::from_secs(1);
 // Turnstile overlays a transparent input on its visible checkbox.
 const VISIBLE_RECT: &str = r"function(selector) {
     for (const element of this.querySelectorAll(selector)) {
@@ -46,10 +50,48 @@ fn scan_nonce() -> String {
     ulid::Ulid::new().to_string()
 }
 
+/// One walk of a page's frame tree that went past the frames it could not read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameScan {
+    /// Every frame read, the main frame first. Hidden and zero-size frames keep their measured
+    /// rect, as in [`CaptchaPage::frames`].
+    pub frames: Vec<FrameRef>,
+    /// Frames the walk found in a parent's DOM and could not read, and child documents whose
+    /// own frames it could not list. The caller decides which of them could hold a CAPTCHA.
+    pub skipped: Vec<SkippedFrame>,
+}
+
+/// A frame a tolerant walk could not read (see [`FrameScan`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFrame {
+    /// The owner element's `src` as its parent's DOM held it; `None` when it had none, or when
+    /// this stands for the unlisted frames of a document the walk could not read.
+    pub url: Option<String>,
+    /// Its owner element had left the parent as well: the frame detached during the walk.
+    pub detached: bool,
+}
+
 pub trait CaptchaPage: Send + Sync {
     fn eval_main(&self, expression: &str) -> impl Future<Output = Result<Value, PageError>> + Send;
     /// Hidden and zero-size frames retain their measured rect; callers must not click or capture them.
+    /// One frame that cannot be read fails the whole call: flows act on what it lists, and a
+    /// frame left out could read as a challenge that went away.
     fn frames(&self) -> impl Future<Output = Result<Vec<FrameRef>, PageError>> + Send;
+    /// The frames for detection, which must go on past one unreadable frame: a frame it cannot
+    /// read (unready, detached mid-walk, too slow) is reported in `skipped` and the walk goes on,
+    /// and at `deadline` it stops with what it has. Closing, navigation and cancellation still
+    /// fail it. Adapters without a tolerant walk answer with [`CaptchaPage::frames`].
+    fn scan_frames(
+        &self,
+        _deadline: Instant,
+    ) -> impl Future<Output = Result<FrameScan, PageError>> + Send {
+        async {
+            Ok(FrameScan {
+                frames: self.frames().await?,
+                skipped: Vec::new(),
+            })
+        }
+    }
     fn frame_parent_ids(
         &self,
     ) -> impl Future<Output = Result<HashMap<String, String>, PageError>> + Send {
@@ -98,6 +140,71 @@ pub trait CaptchaPage: Send + Sync {
         frame: &FrameRef,
         selector: &str,
     ) -> impl Future<Output = Result<Option<Rect>, PageError>> + Send;
+}
+
+/// How a frame walk treats a frame it cannot read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// The first failure fails the walk, as [`CaptchaPage::frames`] promises its callers.
+    Strict,
+    /// The frame is skipped and reported (see [`CaptchaPage::scan_frames`]); after the deadline
+    /// no further frame is read.
+    Tolerant(Instant),
+}
+
+impl Walk {
+    /// A tolerant walk past its deadline reads no more frames.
+    fn expired(self) -> bool {
+        matches!(self, Self::Tolerant(deadline) if Instant::now() >= deadline)
+    }
+    /// Bounds one frame's reads in a tolerant walk by [`FRAME_READ`] and the deadline. A strict
+    /// walk keeps each call's own request timeout, as before it went on past failures.
+    async fn bounded<T>(
+        self,
+        future: impl Future<Output = Result<T, PageError>>,
+    ) -> Result<T, PageError> {
+        match self {
+            Self::Strict => future.await,
+            Self::Tolerant(deadline) => {
+                match tokio::time::timeout_at(deadline.min(Instant::now() + FRAME_READ), future)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(PageError::Timeout),
+                }
+            }
+        }
+    }
+    /// Passes on one frame's failure: a strict walk fails with it, and a tolerant one goes on
+    /// unless it ends the walk (see [`LivePage::frame_failure`]).
+    async fn skip(self, page: &LivePage, error: PageError) -> Result<(), PageError> {
+        match self {
+            Self::Strict => Err(error),
+            Self::Tolerant(_) => {
+                let error = page.frame_failure(error).await?;
+                tracing::debug!(target: "captcha", %error, "frame scan skipped a frame it could not read");
+                Ok(())
+            }
+        }
+    }
+}
+
+/// A child frame's owner element, as its parent's pierced DOM lists it.
+struct Owner {
+    frame_id: String,
+    /// Its `src` attribute, when it has one: where the parent last pointed the frame.
+    src: Option<String>,
+}
+
+/// One child frame as [`LivePage::child`] read it.
+enum Child {
+    /// Read, with the session its document lives on (its parent's, when same-process).
+    Read {
+        frame: FrameRef,
+        session: ProtocolSession,
+    },
+    /// Not readable; a tolerant walk goes on without it.
+    Skipped(SkippedFrame),
 }
 
 /// Where detection's DOM scripts run. Captured once per [`LivePage`].
@@ -152,12 +259,205 @@ impl LivePage {
     ) -> Result<T, PageError> {
         match future.await {
             Err(PageError::Closed) => {
-                browser(self.view.page(self.page.clone())).await?;
-                send(&self.top().await?, "Page.getFrameTree", json!({})).await?;
+                self.page_alive().await?;
                 Err(bad("Frame is no longer available"))
             }
             result => result,
         }
+    }
+    /// Asks the page itself after a frame call failed `Closed`: a child frame's session goes
+    /// away with its frame while the page stays open, so only this tells the two apart.
+    async fn page_alive(&self) -> Result<(), PageError> {
+        browser(self.view.page(self.page.clone())).await?;
+        send(&self.top().await?, "Page.getFrameTree", json!({})).await?;
+        Ok(())
+    }
+    /// Whether a tolerant walk can keep going after one frame's call failed with `error`:
+    /// `Ok` when the failure is that frame's alone. Closing, navigation and cancellation end
+    /// the walk; `Closed` ends it only when the page itself is gone.
+    async fn frame_failure(&self, error: PageError) -> Result<PageError, PageError> {
+        match error {
+            PageError::Navigated | PageError::Cancelled => Err(error),
+            PageError::Closed => {
+                self.page_alive().await?;
+                Ok(bad("Frame is no longer available"))
+            }
+            PageError::Timeout | PageError::Browser(_) => Ok(error),
+        }
+    }
+    /// The frame walk behind [`CaptchaPage::frames`] and [`CaptchaPage::scan_frames`]. Each
+    /// document's pierced DOM lists the owners of its child frames, closed shadow roots
+    /// included; an out-of-process child is then walked on its own session.
+    ///
+    /// ```text
+    /// top session ─DOM.getDocument─▶ owners ─▶ per child: frame session ─Page.getFrameTree─▶ url
+    ///      ▲                                              └─ parent: getFrameOwner + getBoxModel ─▶ rect
+    ///      └──── an out-of-process child's session joins `pending` and is walked the same way
+    /// ```
+    async fn walk(&self, mode: Walk) -> Result<FrameScan, PageError> {
+        let top = self.top().await?;
+        let tree = send(&top, "Page.getFrameTree", json!({})).await?;
+        let main = &tree["frameTree"]["frame"];
+        let viewport = self
+            .eval_main("({width:innerWidth,height:innerHeight})")
+            .await?;
+        let origin = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: number(&viewport, "width")?,
+            height: number(&viewport, "height")?,
+        };
+        let top_id = text(main, "id")?;
+        let mut scan = FrameScan {
+            frames: vec![FrameRef {
+                frame_id: top_id.clone(),
+                url: text(main, "url")?,
+                rect: Some(origin),
+            }],
+            skipped: Vec::new(),
+        };
+        let mut seen_frames = HashSet::from([top_id.clone()]);
+        let mut seen_sessions = HashSet::new();
+        let mut parents = HashMap::new();
+        let mut pending = vec![(top, Some(origin), top_id.clone())];
+        while let Some((parent, origin, parent_id)) = pending.pop() {
+            if !seen_sessions.insert(parent.session_id().cloned()) {
+                continue;
+            }
+            let dom = send(
+                &parent,
+                "DOM.getDocument",
+                json!({"depth":-1,"pierce":true}),
+            );
+            // The top document's DOM is the walk itself. A child document that cannot be read
+            // hides only its own frames, which count as one skipped entry.
+            let dom = if parent_id == top_id {
+                Some(dom.await?)
+            } else if mode.expired() {
+                None
+            } else {
+                match mode.bounded(dom).await {
+                    Ok(dom) => Some(dom),
+                    Err(error) => {
+                        mode.skip(self, error).await?;
+                        None
+                    }
+                }
+            };
+            let Some(dom) = dom else {
+                scan.skipped.push(SkippedFrame {
+                    url: None,
+                    detached: false,
+                });
+                continue;
+            };
+            collect_frame_parents(&dom["root"], &parent_id, &mut parents);
+            let mut owners = Vec::new();
+            collect_owners(&dom["root"], &mut owners);
+            for owner in owners {
+                if !seen_frames.insert(owner.frame_id.clone()) {
+                    continue;
+                }
+                let url = owner.src.clone();
+                let child = if mode.expired() {
+                    None
+                } else {
+                    // Inside `child`, a tolerant walk already turned the frame's own failures
+                    // into a skip, so only its time running out is left to skip here.
+                    match mode
+                        .bounded(Box::pin(self.child(&parent, origin, owner, mode)))
+                        .await
+                    {
+                        Ok(child) => Some(child),
+                        Err(PageError::Timeout) if mode != Walk::Strict => None,
+                        Err(error) => return Err(error),
+                    }
+                };
+                match child {
+                    Some(Child::Read { frame, session }) => {
+                        if !session.same_session(&parent) {
+                            pending.push((session, frame.rect, frame.frame_id.clone()));
+                        }
+                        scan.frames.push(frame);
+                    }
+                    Some(Child::Skipped(skipped)) => scan.skipped.push(skipped),
+                    None => scan.skipped.push(SkippedFrame {
+                        url,
+                        detached: false,
+                    }),
+                }
+            }
+        }
+        *self.frame_parents.lock().await = parents;
+        Ok(scan)
+    }
+    /// Reads the child frame `owner` names, whose owner element sits in `parent`'s document.
+    /// `Err` ends the walk; a tolerant walk reports a frame it cannot read as skipped instead.
+    async fn child(
+        &self,
+        parent: &ProtocolSession,
+        origin: Option<Rect>,
+        owner: Owner,
+        mode: Walk,
+    ) -> Result<Child, PageError> {
+        let read = async {
+            let session = self.frame(&owner.frame_id).await?;
+            let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+            let frame = find_frame(&tree["frameTree"], &owner.frame_id)
+                .ok_or_else(|| bad("Frame missing from its session tree"))?;
+            Ok::<_, PageError>((session, text(frame, "url")?))
+        }
+        .await;
+        let (session, url) = match read {
+            Ok(read) => read,
+            Err(error) => {
+                mode.skip(self, error).await?;
+                // The parent no longer has the frame either: it detached during the walk.
+                let owned = send(
+                    parent,
+                    "DOM.getFrameOwner",
+                    json!({"frameId":owner.frame_id}),
+                )
+                .await;
+                return Ok(Child::Skipped(SkippedFrame {
+                    url: owner.src,
+                    detached: matches!(owned, Err(PageError::Browser(_))),
+                }));
+            }
+        };
+        let measured = async {
+            let found = send(
+                parent,
+                "DOM.getFrameOwner",
+                json!({"frameId":owner.frame_id}),
+            )
+            .await?;
+            let model = send(
+                parent,
+                "DOM.getBoxModel",
+                json!({"backendNodeId":found["backendNodeId"]}),
+            )
+            .await?;
+            quad_rect(&model["model"]["content"])
+        }
+        .await;
+        let rect = match measured {
+            // CDP quads are relative to the session root, including same-process nesting.
+            Ok(local) => origin.map(|origin| translate(local, origin)),
+            Err(PageError::Browser(_)) => None,
+            Err(error) => {
+                mode.skip(self, error).await?;
+                None
+            }
+        };
+        Ok(Child::Read {
+            frame: FrameRef {
+                frame_id: owner.frame_id,
+                url,
+                rect,
+            },
+            session,
+        })
     }
     async fn frame(&self, id: &str) -> Result<ProtocolSession, PageError> {
         browser(
@@ -180,81 +480,16 @@ impl CaptchaPage for LivePage {
         .await
     }
     async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
-        self.frame_operation(async {
-            let top = self.top().await?;
-            let tree = send(&top, "Page.getFrameTree", json!({})).await?;
-            let main = &tree["frameTree"]["frame"];
-            let viewport = self
-                .eval_main("({width:innerWidth,height:innerHeight})")
-                .await?;
-            let origin = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: number(&viewport, "width")?,
-                height: number(&viewport, "height")?,
-            };
-            let mut result = vec![FrameRef {
-                frame_id: text(main, "id")?,
-                url: text(main, "url")?,
-                rect: Some(origin),
-            }];
-            let mut seen_frames = HashSet::from([result[0].frame_id.clone()]);
-            let mut seen_sessions = HashSet::new();
-            let mut parents = HashMap::new();
-            let mut pending = vec![(top, Some(origin), result[0].frame_id.clone())];
-            while let Some((parent, origin, parent_id)) = pending.pop() {
-                if !seen_sessions.insert(parent.session_id().cloned()) {
-                    continue;
-                }
-                let dom = send(
-                    &parent,
-                    "DOM.getDocument",
-                    json!({"depth":-1,"pierce":true}),
-                )
-                .await?;
-                collect_frame_parents(&dom["root"], &parent_id, &mut parents);
-                let mut owners = Vec::new();
-                collect_owners(&dom["root"], &mut owners);
-                for id in owners {
-                    if !seen_frames.insert(id.clone()) {
-                        continue;
-                    }
-                    let session = self.frame(&id).await?;
-                    let tree = send(&session, "Page.getFrameTree", json!({})).await?;
-                    let frame = find_frame(&tree["frameTree"], &id)
-                        .ok_or_else(|| bad("Frame missing from its session tree"))?;
-                    let measured = async {
-                        let owner =
-                            send(&parent, "DOM.getFrameOwner", json!({"frameId":id})).await?;
-                        let model = send(
-                            &parent,
-                            "DOM.getBoxModel",
-                            json!({"backendNodeId":owner["backendNodeId"]}),
-                        )
-                        .await?;
-                        quad_rect(&model["model"]["content"])
-                    }
-                    .await;
-                    let rect = match measured {
-                        // CDP quads are relative to the session root, including same-process nesting.
-                        Ok(local) => origin.map(|origin| translate(local, origin)),
-                        Err(PageError::Browser(_)) => None,
-                        Err(error) => return Err(error),
-                    };
-                    result.push(FrameRef {
-                        frame_id: id.clone(),
-                        url: text(frame, "url")?,
-                        rect,
-                    });
-                    if !session.same_session(&parent) {
-                        pending.push((session, rect, id));
-                    }
-                }
-            }
-            *self.frame_parents.lock().await = parents;
-            Ok(result)
-        })
-        .await
+        // Boxed, as `browser` boxes core futures: the solve flows embed this one, and the walk
+        // inlined overflowed the small-stack solve test in debug builds.
+        let scan = self
+            .frame_operation(Box::pin(self.walk(Walk::Strict)))
+            .await?;
+        Ok(scan.frames)
+    }
+    async fn scan_frames(&self, deadline: Instant) -> Result<FrameScan, PageError> {
+        self.frame_operation(Box::pin(self.walk(Walk::Tolerant(deadline))))
+            .await
     }
     async fn frame_parent_ids(&self) -> Result<HashMap<String, String>, PageError> {
         Ok(self.frame_parents.lock().await.clone())
@@ -632,13 +867,16 @@ fn collect_frame_parents(node: &Value, document: &str, parents: &mut HashMap<Str
     }
 }
 
-fn collect_owners(node: &Value, frames: &mut Vec<String>) {
+fn collect_owners(node: &Value, frames: &mut Vec<Owner>) {
     if matches!(
         node["nodeName"].as_str(),
         Some("IFRAME" | "FRAME" | "OBJECT" | "EMBED" | "FENCEDFRAME")
     ) && let Some(id) = node["frameId"].as_str()
     {
-        frames.push(id.to_owned());
+        frames.push(Owner {
+            frame_id: id.to_owned(),
+            src: attribute(node, "src"),
+        });
     }
     for key in ["children", "shadowRoots"] {
         for child in node[key].as_array().into_iter().flatten() {
@@ -648,6 +886,16 @@ fn collect_owners(node: &Value, frames: &mut Vec<String>) {
     if let Some(document) = node.get("contentDocument") {
         collect_owners(document, frames);
     }
+}
+/// An element attribute from a CDP DOM node, whose `attributes` alternate names and values.
+fn attribute(node: &Value, name: &str) -> Option<String> {
+    node["attributes"]
+        .as_array()?
+        .chunks(2)
+        .find(|pair| pair.first().and_then(Value::as_str) == Some(name))?
+        .get(1)?
+        .as_str()
+        .map(str::to_owned)
 }
 fn find_frame<'a>(tree: &'a Value, id: &str) -> Option<&'a Value> {
     if tree["frame"]["id"] == id {
@@ -712,6 +960,10 @@ mod tests {
         isolated_refused: AtomicBool,
         mark_failures: Mutex<Vec<i64>>,
         page_open: AtomicBool,
+        /// The widget's owner element has left the top document: `DOM.getFrameOwner` fails.
+        owner_gone: AtomicBool,
+        /// The widget's own session never answers `Page.getFrameTree`.
+        child_stalled: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
         targeted: TargetedEvents,
     }
@@ -729,6 +981,8 @@ mod tests {
                 isolated_refused: AtomicBool::new(false),
                 mark_failures: Mutex::new(Vec::new()),
                 page_open: AtomicBool::new(true),
+                owner_gone: AtomicBool::new(false),
+                child_stalled: AtomicBool::new(false),
                 events: broadcast::channel(32).0,
                 targeted: TargetedEvents::default(),
             })
@@ -836,6 +1090,12 @@ mod tests {
                     }
                     dom
                 }
+                "DOM.getFrameOwner" if self.owner_gone.load(Ordering::SeqCst) => {
+                    return Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "Frame with the given id was not found.".into(),
+                    });
+                }
                 "DOM.getFrameOwner" if params["frameId"] == "root" => {
                     return Err(CdpError::Protocol {
                         code: -32000,
@@ -919,7 +1179,15 @@ mod tests {
             params: Value,
             session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
-            Box::pin(async move { self.reply(method, params, session) })
+            Box::pin(async move {
+                if method == "Page.getFrameTree"
+                    && session.is_some_and(|id| id.as_str() == "s-widget")
+                    && self.child_stalled.load(Ordering::SeqCst)
+                {
+                    std::future::pending::<()>().await;
+                }
+                self.reply(method, params, session)
+            })
         }
         fn send_raw_json<'a>(
             &'a self,
@@ -1496,6 +1764,139 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn far() -> Instant {
+        Instant::now() + Duration::from_secs(30)
+    }
+
+    /// The widget's owner as the top document lists it, with its address.
+    fn top_with_widget_src() -> Value {
+        json!({"nodeType":9,"backendNodeId":1,"children":[{"shadowRoots":[{"shadowRootType":"closed",
+            "children":[{"nodeName":"IFRAME","frameId":"widget","backendNodeId":5,
+                "attributes":["title","widget","src","https://widget.test/frame?k=1"]}]}]}]})
+    }
+
+    /// The Texas walk: one child frame that cannot be read failed every frame. The tolerant walk
+    /// keeps the page and reports the frame; only a closed page still fails it.
+    #[tokio::test]
+    async fn tests_that_a_tolerant_walk_skips_an_unreadable_child() -> TestResult {
+        for close_page in [false, true] {
+            let (native, page) = fixture();
+            *native.top_document.lock().map_err(|_| "poisoned")? = Some(top_with_widget_src());
+            *native.child_failure.lock().map_err(|_| "poisoned")? =
+                Some(("Page.getFrameTree", close_page, CdpError::SessionGone));
+            let scan = page.scan_frames(far()).await;
+            if close_page {
+                assert_eq!(scan, Err(PageError::Closed));
+                continue;
+            }
+            let scan = scan?;
+            assert_eq!(scan.frames.len(), 1, "only the top document was read");
+            assert_eq!(
+                scan.skipped,
+                [SkippedFrame {
+                    url: Some("https://widget.test/frame?k=1".into()),
+                    detached: false,
+                }],
+                "its owner is still there, so it could hold a CAPTCHA"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_frame_gone_from_its_parent_is_reported_detached() -> TestResult {
+        let (native, page) = fixture();
+        *native.top_document.lock().map_err(|_| "poisoned")? = Some(top_with_widget_src());
+        native.owner_gone.store(true, Ordering::SeqCst);
+        let scan = page.scan_frames(far()).await?;
+        assert_eq!(scan.frames.len(), 1);
+        assert_eq!(
+            scan.skipped,
+            [SkippedFrame {
+                url: Some("https://widget.test/frame?k=1".into()),
+                detached: true,
+            }]
+        );
+        // The strict walk still fails on it, as the solve flows expect.
+        assert!(matches!(page.frames().await, Err(PageError::Browser(_))));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_unreadable_child_document_skips_only_its_own_frames() -> TestResult {
+        let (native, page) = fixture();
+        *native.child_failure.lock().map_err(|_| "poisoned")? = Some((
+            "DOM.getDocument",
+            false,
+            CdpError::Protocol {
+                code: -32000,
+                message: "Document is not available".into(),
+            },
+        ));
+        let scan = page.scan_frames(far()).await?;
+        assert_eq!(scan.frames.len(), 2, "the child itself was read");
+        assert!(scan.frames.contains(&widget()));
+        assert_eq!(
+            scan.skipped,
+            [SkippedFrame {
+                url: None,
+                detached: false,
+            }]
+        );
+        Ok(())
+    }
+
+    /// A child whose session never answers costs the walk one frame's budget, not the scan.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_stalled_child_is_skipped_after_its_own_budget() -> TestResult {
+        let (native, page) = fixture();
+        native.child_stalled.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        let scan = page.scan_frames(started + Duration::from_secs(10)).await?;
+        assert_eq!(started.elapsed(), FRAME_READ);
+        assert_eq!(scan.frames.len(), 1);
+        assert_eq!(scan.skipped.len(), 1);
+        assert!(!scan.skipped[0].detached);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_walk_past_its_deadline_reads_no_more_frames() -> TestResult {
+        let (native, page) = fixture();
+        *native.top_document.lock().map_err(|_| "poisoned")? = Some(top_with_widget_src());
+        let scan = page.scan_frames(Instant::now()).await?;
+        assert_eq!(
+            scan.frames.len(),
+            1,
+            "the top document is read whatever the deadline"
+        );
+        assert_eq!(
+            scan.skipped,
+            [SkippedFrame {
+                url: Some("https://widget.test/frame?k=1".into()),
+                detached: false,
+            }]
+        );
+        assert!(
+            native.calls("Page.getFrameTree")?.iter().all(|call| call
+                .2
+                .as_ref()
+                .map(SessionId::as_str)
+                != Some("s-widget")),
+            "no child frame was asked"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_both_walks_agree_on_a_readable_page() -> TestResult {
+        let (_, page) = fixture();
+        let scan = page.scan_frames(far()).await?;
+        assert!(scan.skipped.is_empty());
+        assert_eq!(scan.frames, page.frames().await?);
         Ok(())
     }
 

@@ -51,6 +51,8 @@ impl CaptchaKind {
     }
 }
 
+/// Where one detected challenge stands, as detection read it. The solver acts only on `Active`,
+/// and calls the page clear only when every challenge is `Passed` or `WidgetOnly`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChallengeState {
@@ -58,6 +60,10 @@ pub enum ChallengeState {
     Passed,
     WidgetOnly,
     Unknown,
+    /// The widget is running its own check and has no answer yet: Turnstile's "Verifying…"
+    /// spinner, shown or hidden. Neither clear nor ready to solve; it settles by itself, so the
+    /// solver waits and scans again.
+    Pending,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -866,6 +872,19 @@ mod tests {
         assert_eq!(to_value(SolveMethod::AutoPass)?, "auto_pass");
         assert_eq!(to_value(ChallengeState::WidgetOnly)?, "widget_only");
         assert_eq!(to_value(ScanOutcome::Unknown)?, "unknown");
+        for (state, wire) in [
+            (ChallengeState::Active, "active"),
+            (ChallengeState::Passed, "passed"),
+            (ChallengeState::WidgetOnly, "widget_only"),
+            (ChallengeState::Unknown, "unknown"),
+            (ChallengeState::Pending, "pending"),
+        ] {
+            assert_eq!(to_value(state)?, wire);
+            assert_eq!(
+                serde_json::from_value::<ChallengeState>(json!(wire))?,
+                state
+            );
+        }
         assert_eq!(to_value(ProviderName::Capsolver)?, "capsolver");
         assert_eq!(to_value(SolveStep::AutoPass)?, "auto_pass");
         Ok(())

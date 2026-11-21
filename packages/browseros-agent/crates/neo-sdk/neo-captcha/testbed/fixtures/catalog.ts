@@ -215,6 +215,45 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     '/turnstile-interactive.html',
     '3x00000000000000000000FF',
   ),
+  {
+    ...fixture(
+      'turnstile-stale-token',
+      'Turnstile failed beside a stale token',
+      'turnstile',
+      '/turnstile-stale-token.html',
+      '2x00000000000000000000AB',
+      ['unsolved', 'unknown'],
+    ),
+    // Solved only once the real widget has failed and the page has written the stale token.
+    ready:
+      "(s => s.rendered === true && s.stale === true)(JSON.parse(document.documentElement.dataset.captchaFixture || '{}'))",
+    notes:
+      "The NY page: the widget's frame shows it failed while cf-turnstile-response holds an old token. Never already_clear or solved.",
+  },
+  {
+    ...fixture(
+      'turnstile-hidden-verifying',
+      'Turnstile checking out of sight',
+      'turnstile',
+      '/turnstile-hidden-verifying.html',
+      '2x00000000000000000000BB',
+      ['unsolved', 'unknown'],
+    ),
+    notes:
+      'MissingMoney and NY: a hidden widget still checking ("Please wait…") that never passes. Never already_clear.',
+  },
+  {
+    ...fixture(
+      'turnstile-frame-never-loads',
+      'Turnstile beside a frame that never loads',
+      'turnstile',
+      '/turnstile-frame-never-loads.html',
+      '1x00000000000000000000AA',
+      ['solved', 'already_clear'],
+    ),
+    notes:
+      'A cross-site frame that never loads and is replaced every 2 s: the scan reads the widget past it.',
+  },
   fixture(
     'turnstile-cf-marker',
     'Turnstile beside Cloudflare bot management',
