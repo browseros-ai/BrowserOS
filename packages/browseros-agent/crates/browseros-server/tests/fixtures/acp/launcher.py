@@ -61,13 +61,13 @@ if operation == "sessions":
         if (home / "stubborn-owner").exists():
             (home / "close-attempted").touch()
             time.sleep(60)
-        owner = home / "owner.pid"
-        if owner.exists():
-            os.kill(int(owner.read_text()), signal.SIGTERM)
         if (home / "fail-close").exists():
             (home / "fail-close").unlink()
             send({"jsonrpc":"2.0","id":None,"error":{"code":-32603}})
             sys.exit(1)
+        owner = home / "owner.pid"
+        if owner.exists():
+            os.kill(int(owner.read_text()), signal.SIGTERM)
         marker.unlink(missing_ok=True)
         send({"action":"session_closed"})
 elif operation in ("set-mode", "set"):
@@ -89,6 +89,9 @@ elif operation == "prompt":
         (home / "owner.pid").write_text(str(owner.pid))
         if "stubborn" in prompt:
             (home / "stubborn-owner").touch()
+        if "fail incognito close" in prompt:
+            (fixtures / "incognito-owner.pid").write_text(str(owner.pid))
+            (home / "fail-close").touch()
     fixture = "auth" if "claude-agent-acp@" in command else (
         "cancel" if "cancel this turn" in prompt else "success"
     )

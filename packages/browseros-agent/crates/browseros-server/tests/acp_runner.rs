@@ -673,6 +673,42 @@ async fn retry_seeds_history_if_model_setup_failed_before_the_first_prompt() -> 
 }
 
 #[tokio::test]
+async fn a_failed_incognito_close_retries_and_removes_the_temporary_home() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let agent = fixture.agent();
+    let target = fixture.target(AgentKind::Codex).await?;
+    let mut input = input("spawn a fixture owner and fail incognito close")?;
+    input.ephemeral = true;
+    let owner = FixtureOwner(
+        fixture
+            .server
+            .state_dir()
+            .join("fake adapter/incognito-owner.pid"),
+    );
+    let end = agent
+        .run_turn(&target, &input, &mut Vec::new(), &CancellationToken::new())
+        .await;
+    assert_eq!(end, TurnEnd::Done(FinishReason::Stop));
+    wait_for_owner_exit(&owner.pid()?).await?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while std::fs::read_dir(fixture.session_dir())?.next().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await??;
+    assert_eq!(
+        fixture
+            .calls()?
+            .iter()
+            .filter(|call| call["args"][1] == "close")
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn incognito_seeds_history_and_cleans_its_session_and_attachments() -> Result<()> {
     let fixture = Fixture::new().await?;
     let agent = fixture.agent();

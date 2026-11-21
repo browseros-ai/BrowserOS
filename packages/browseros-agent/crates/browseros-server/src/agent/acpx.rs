@@ -201,6 +201,7 @@ pub(super) struct Sessions {
     routes: Mutex<HashMap<String, TrackedSession>>,
 }
 
+#[derive(Clone)]
 struct TrackedSession {
     dir: PathBuf,
     locator: Locator,
@@ -217,6 +218,12 @@ impl Sessions {
         let mut routes: Vec<_> = std::mem::take(&mut *self.routes()).into_iter().collect();
         routes.sort_by_key(|(_, route)| std::cmp::Reverse(route.used));
         routes
+    }
+
+    fn forget(&self, name: &str) {
+        let route = self.routes().remove(name);
+        // The last incognito route deletes its temporary directory outside the lock.
+        drop(route);
     }
 
     pub(super) async fn shutdown(&self, runtime: &AgentRuntime, within: Duration) {
@@ -258,12 +265,43 @@ impl Sessions {
         match timeout(within, session.stop_owner()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                tracing::warn!(?error, session = %session.name, "could not close acpx owner on shutdown")
+                tracing::warn!(?error, session = %session.name, "could not close acpx owner")
             }
             Err(_) => {
-                tracing::warn!(session = %session.name, "acpx session close timed out on shutdown")
+                tracing::warn!(session = %session.name, "acpx session close timed out")
             }
         }
+    }
+}
+
+/// Cleans up a failed or interrupted incognito close after its turn future is gone.
+struct IncognitoCleanup<'a> {
+    inner: &'a Arc<super::Inner>,
+    name: &'a str,
+}
+
+impl Drop for IncognitoCleanup<'_> {
+    fn drop(&mut self) {
+        let Some(route) = self.inner.acpx_sessions.routes().get(self.name).cloned() else {
+            return;
+        };
+        let Ok(runtime_handle) = tokio::runtime::Handle::try_current() else {
+            self.inner.acpx_sessions.forget(self.name);
+            return;
+        };
+        let inner = self.inner.clone();
+        let name = self.name.to_owned();
+        runtime_handle.spawn(async move {
+            let sessions = &inner.acpx_sessions;
+            if let Ok(runtime) = absolute_runtime(&inner.runtime) {
+                // The route stays visible to shutdown during the retry. acpx can
+                // safely repeat closure of the same named record.
+                sessions
+                    .close_route(&runtime, name.clone(), route, STOP_GRACE)
+                    .await;
+            }
+            sessions.forget(&name);
+        });
     }
 }
 
@@ -412,7 +450,7 @@ impl Session<'_> {
             .await
             .or_else(ignore_missing)
             .map_err(Failure::io)?;
-        self.sessions.routes().remove(&self.name);
+        self.sessions.forget(&self.name);
         Ok(())
     }
 
@@ -700,7 +738,7 @@ pub(super) async fn end_session(inner: &super::Inner, conversation: Conversation
 }
 
 pub(super) async fn run(
-    inner: &super::Inner,
+    inner: &Arc<super::Inner>,
     kind: AgentKind,
     agent_id: &str,
     input: &TurnInput,
@@ -732,7 +770,7 @@ pub(super) async fn run(
 }
 
 async fn run_session(
-    inner: &super::Inner,
+    inner: &Arc<super::Inner>,
     row: &AgentRow,
     input: &TurnInput,
     sink: &mut dyn EventSink,
@@ -835,6 +873,10 @@ async fn run_session(
         locator,
         scratch,
     };
+    let _incognito_cleanup = input.ephemeral.then_some(IncognitoCleanup {
+        inner,
+        name: &session.name,
+    });
 
     let prepare = async {
         if !input.ephemeral {
