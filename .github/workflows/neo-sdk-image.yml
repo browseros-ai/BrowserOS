@@ -19,13 +19,12 @@ name: "Neo SDK image"
 #   gh workflow run neo-sdk-image.yml --ref main -f publish=true -f confirm=neo-sdk
 # tags :<version> (build.sh's: <browser>-<9-char commit>), plus :<version>-amd64/-arm64.
 #
-# A published image carries both CAPTCHA provider keys and the Jev verification key. The image job
-# of a publishing run, and only of such a run, enters the environment neo-captcha, which holds
-# CAPSOLVER_API_KEY, TWOCAPTCHA_API_KEY, and JEV_API_KEY and admits protected branches only. Preflight
-# refuses publish=true on any other ref. Publishing checks for all three keys before the build and
-# again before the push. There is no tag path
-# (an environment that admits protected branches only admits no tag). Keys are extractable by
-# anyone who pulls the image; the README says how a host uses its own or turns solving off.
+# A published image carries both CAPTCHA provider keys. It carries a Jev verification key when
+# JEV_API_KEY is configured. The publishing image job enters the neo-captcha environment, which
+# admits protected branches only. Preflight refuses publish=true on any other ref. The workflow
+# checks for the provider keys before building and verifies the requested keys before pushing.
+# That environment accepts branch refs only. Anyone who pulls the image can extract its keys.
+# The README covers host-supplied keys and disabling providers.
 on:
   pull_request:
     # crates/** covers both the server workspace and the standalone viewer with its page assets.
@@ -238,16 +237,27 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          if [ -z "$CAPSOLVER_API_KEY" ] || [ -z "$TWOCAPTCHA_API_KEY" ] || [ -z "$JEV_API_KEY" ]; then
-            echo "::error::the neo-captcha environment must provide CAPSOLVER_API_KEY, TWOCAPTCHA_API_KEY, and JEV_API_KEY for publishing. Nothing was built."
+          if [ -z "$CAPSOLVER_API_KEY" ] || [ -z "$TWOCAPTCHA_API_KEY" ]; then
+            echo "::error::the neo-captcha environment must provide CAPSOLVER_API_KEY and TWOCAPTCHA_API_KEY for publishing. Nothing was built."
             exit 1
           fi
           keys="$RUNNER_TEMP/neo-sdk-keys"
           mkdir -p "$keys"
           printf '%s' "$CAPSOLVER_API_KEY" > "$keys/capsolver"
           printf '%s' "$TWOCAPTCHA_API_KEY" > "$keys/twocaptcha"
-          printf '%s' "$JEV_API_KEY" > "$keys/jev"
-          echo "args=--capsolver-key-file $keys/capsolver --twocaptcha-key-file $keys/twocaptcha --jev-key-file $keys/jev" >> "$GITHUB_OUTPUT"
+          key_args="--capsolver-key-file $keys/capsolver --twocaptcha-key-file $keys/twocaptcha"
+          expect_jev_key=false
+          if [ -n "${JEV_API_KEY:-}" ]; then
+            printf '%s' "$JEV_API_KEY" > "$keys/jev"
+            key_args+=" --jev-key-file $keys/jev"
+            expect_jev_key=true
+          else
+            echo "::warning::JEV_API_KEY is empty. Publishing with deterministic CAPTCHA verification."
+          fi
+          {
+            echo "args=$key_args"
+            echo "expect_jev_key=$expect_jev_key"
+          } >> "$GITHUB_OUTPUT"
 
       # build.sh names the image after the checked-out commit and tags it only once its server is
       # proven to be this commit's; logs go outside the checkout so they cannot mark it dirty.
@@ -287,17 +297,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # The image accept.sh just passed, by id: nothing is rebuilt between the test and the push.
-      # Publishing requires the two provider keys and the Jev key.
+      # Require both provider keys and check the Jev key when the build received one.
       - name: Push the accepted image
         if: needs.preflight.outputs.publish == 'true'
         env:
           TAG: ${{ steps.build.outputs.tag }}
           VERSION: ${{ steps.build.outputs.version }}
           ARCH: ${{ matrix.arch }}
+          EXPECT_JEV_KEY: ${{ steps.keys.outputs.expect_jev_key }}
         run: |
           set -euo pipefail
-          if ! jq -e '.captchaKeys == ["capsolver", "2captcha"] and .jevKey == true' "$RUNNER_TEMP/neo-sdk/provenance.json" >/dev/null; then
-            echo "::error::provenance.json must record both CAPTCHA provider keys and the Jev key. Nothing was pushed."
+          if ! jq -e --argjson expect_jev_key "$EXPECT_JEV_KEY" \
+            '.captchaKeys == ["capsolver", "2captcha"] and (if $expect_jev_key then .jevKey == true else true end)' \
+            "$RUNNER_TEMP/neo-sdk/provenance.json" >/dev/null; then
+            echo "::error::provenance.json must record both CAPTCHA provider keys and any Jev key supplied to the build. Nothing was pushed."
             exit 1
           fi
           docker tag "$TAG" "$IMAGE:$VERSION-$ARCH"

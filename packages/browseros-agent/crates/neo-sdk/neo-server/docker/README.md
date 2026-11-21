@@ -290,8 +290,8 @@ Safe Browsing, network time) are a separate matter: this switch does not touch t
 
 ## CAPTCHA keys
 
-The published image carries CapSolver, 2Captcha, and Jev keys at the default paths above (mode
-0400, Neo's uid; under other `PUID`/`PGID` the entrypoint re-owns them with
+The published image carries CapSolver and 2Captcha keys, plus the optional Jev key, at the default
+paths above (mode 0400, Neo's uid; under other `PUID`/`PGID` the entrypoint re-owns them with
 Neo's home). **They are extractable by anyone who pulls the image.** With them, `neo.solveCaptcha`
 detects the page's CAPTCHA, tries its free paths first, and then has a paid provider solve it
 (CapSolver, then 2Captcha), at most `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` paid tasks (100) per server
@@ -331,8 +331,8 @@ cached layer, and a keyless build never mounts a key at all.
 
 Add `--jev-key-file ./jev.key` to include the Jev verification key. `provenance.json` records its
 presence as `jevKey`. To supply it at runtime, mount a read-only key file outside `/home/neo` and
-point `NEO_JEV_KEY_FILE` to it. The release workflow reads `JEV_API_KEY` from the `neo-captcha`
-environment.
+point `NEO_JEV_KEY_FILE` to it. The release workflow includes Jev when `JEV_API_KEY` is set in the
+`neo-captcha` environment. Images without that key use deterministic verification.
 
 ## Use it from a host
 

@@ -14,7 +14,8 @@
 #                The arch keeps an amd64 build (cells) and an arm64 one (a Mac) apart.
 #   --*-key-file bake a CAPTCHA provider or Jev key into the neo-sdk-keyed target. Hosts can
 #                supply key files at runtime as described in README.md. Anyone with a keyed
-#                image can read its keys. The release workflow bakes all three into published images.
+#                image can read its keys. The release workflow includes both provider keys and
+#                adds the Jev key when configured.
 #
 # The image is tagged only once its server is proven to be this checkout's: the binary in the
 # image must carry the digest of the sources this build copied (provenance.json source_digest),
