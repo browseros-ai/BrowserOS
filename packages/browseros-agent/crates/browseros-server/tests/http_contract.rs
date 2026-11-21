@@ -195,6 +195,34 @@ async fn refusals_answer_in_the_shapes_the_contract_promises() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_negative_tab_id_is_refused_and_a_large_attachment_is_not() -> TestResult {
+    let server = TestServer::start().await?;
+    let negative = server
+        .send(
+            server
+                .request(Method::DELETE, "/chat/panels/-1")
+                .body(Body::empty())?,
+        )
+        .await;
+    assert_eq!(negative.status(), StatusCode::BAD_REQUEST, "W5");
+    assert!(body_json(negative).await["error"].is_string());
+
+    let image = format!("data:image/png;base64,{}", "A".repeat(3 * 1024 * 1024));
+    let chat = json!({
+        "conversationId": CONVERSATION,
+        "target": { "type": "codex", "agentId": CONVERSATION },
+        "attachments": [{ "mediaType": "image/png", "data": image }]
+    });
+    let response = server.send(server.json(Method::POST, "/chat", &chat)).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "a 3 MiB attachment parses"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_private_mcp_endpoint_is_outside_the_trust_rule() -> TestResult {
     let server = TestServer::start().await?;
     let request = Request::post(format!("/mcp/{CONVERSATION}"))
@@ -302,5 +330,20 @@ fn the_document_has_every_route_and_lists_the_trust_refusal() -> Result<(), serd
         document["paths"]["/health"].is_null(),
         "the alias is served, not documented"
     );
+    for (schema, key) in [
+        ("Diagnostics", "osVersion"),
+        ("DefaultProvider", "provider"),
+        ("AgentProbe", "reasoning"),
+        ("AgentProbe", "agentInfo"),
+        ("Provider", "baseUrl"),
+    ] {
+        let required = &document["components"]["schemas"][schema]["required"];
+        assert!(
+            required
+                .as_array()
+                .is_some_and(|keys| keys.contains(&json!(key))),
+            "{schema}.{key} is always sent, so it is required (it may be null)"
+        );
+    }
     Ok(())
 }

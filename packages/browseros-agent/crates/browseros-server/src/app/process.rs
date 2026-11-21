@@ -131,13 +131,24 @@ pub(super) fn serve(config: &Path) -> ExitCode {
 async fn run(launch: Launch, started: Instant) -> Result<ExitCode, StartError> {
     let shutdown = Shutdown::new();
     let engine_stop = tokio_util::sync::CancellationToken::new();
+    // Installed before start-up: SIGTERM while the store waits on a lock must still end in
+    // exit 3 with the logs flushed, not in the default "killed by signal 15".
+    let signals = tokio::spawn(forward_signals(shutdown.clone()));
     let remaining = STARTUP_BUDGET.saturating_sub(started.elapsed());
-    let (app, listener) = tokio::time::timeout(
+    let starting = tokio::time::timeout(
         remaining,
         start(launch, shutdown.clone(), engine_stop.clone()),
-    )
-    .await
-    .map_err(|_| StartError::TooSlow)??;
+    );
+    let (app, listener) = tokio::select! {
+        started = starting => started.map_err(|_| StartError::TooSlow)??,
+        () = shutdown.token().cancelled() => {
+            // Dropping the start future rolls back any migration in flight; the engine never
+            // started, and nothing was bound.
+            tracing::info!("stopped before start-up finished");
+            signals.abort();
+            return Ok(ExitCode::from(EXIT_SIGNALLED));
+        }
+    };
     tracing::info!(
         port = app.launch.server_port,
         state_dir = %app.launch.state_dir.display(),
@@ -145,7 +156,6 @@ async fn run(launch: Launch, started: Instant) -> Result<ExitCode, StartError> {
         "listening"
     );
 
-    let signals = tokio::spawn(forward_signals(shutdown.clone()));
     let router = crate::http::router(app.clone());
     let stopping = shutdown.token().clone();
     let server = tokio::spawn(async move {

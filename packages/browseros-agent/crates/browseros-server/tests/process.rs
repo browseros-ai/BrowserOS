@@ -252,3 +252,24 @@ async fn a_lock_held_past_the_start_budget_is_exit_1() -> TestResult {
     holder.await??;
     Ok(())
 }
+
+#[tokio::test]
+async fn sigterm_during_start_up_is_still_exit_3() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let state = dir.path().join("state");
+    let holder = tokio::spawn({
+        let state = state.clone();
+        async move { hold_lock(&state, Duration::from_secs(4)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut child = serve(&launch_file(dir.path(), free_port()?)?, &state)?;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    sigterm(&child)?;
+    assert_eq!(
+        wait_exit(&mut child, Duration::from_secs(5))?,
+        Some(3),
+        "a server stopped while waiting on the database exits 3, not by the signal"
+    );
+    holder.await??;
+    Ok(())
+}

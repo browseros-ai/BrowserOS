@@ -314,9 +314,21 @@ async fn a_corrupt_file_is_moved_aside_with_its_wal_and_a_fresh_one_made() -> Te
         count(store.db(), "SELECT count(*) FROM __drizzle_migrations").await?,
         15
     );
+    store.close().await;
     assert_eq!(
-        std::fs::read(db_dir.join(format!("{DATABASE_FILE}.bak")))?,
+        std::fs::read(db_dir.join(format!("{DATABASE_FILE}.1.bak")))?,
         b"this is not a database, it is a sentence"
+    );
+    // A second corruption keeps the first backup and takes the next number.
+    std::fs::write(db_dir.join(DATABASE_FILE), b"broken again")?;
+    drop(Store::open(dir.path()).await?);
+    assert_eq!(
+        std::fs::read(db_dir.join(format!("{DATABASE_FILE}.1.bak")))?,
+        b"this is not a database, it is a sentence"
+    );
+    assert_eq!(
+        std::fs::read(db_dir.join(format!("{DATABASE_FILE}.2.bak")))?,
+        b"broken again"
     );
     Ok(())
 }
@@ -340,7 +352,7 @@ async fn a_file_that_needs_writing_while_locked_is_reported_busy_and_left_in_pla
     assert!(
         !dir.path()
             .join("db")
-            .join(format!("{DATABASE_FILE}.bak"))
+            .join(format!("{DATABASE_FILE}.1.bak"))
             .exists()
     );
     Ok(())

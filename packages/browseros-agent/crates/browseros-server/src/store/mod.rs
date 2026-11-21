@@ -121,7 +121,8 @@ impl Store {
     /// server's missing Drizzle migrations are replayed (`migration.rs` says why), the result is
     /// checked to be the 0014 schema, and this server's own migrator runs. A file that is
     /// confirmed corrupt (`SQLITE_CORRUPT`, `SQLITE_NOTADB`) is renamed aside with its `-wal`
-    /// and `-shm` and a fresh one is made; a lock or a newer schema never moves the file.
+    /// and `-shm` (`browseros.sqlite.<n>.bak`, never over an earlier backup) and a fresh one is
+    /// made; a lock or a newer schema never moves the file.
     pub async fn open(state_dir: &Path) -> Result<Self, StoreError> {
         let directory = state_dir.join("db");
         tokio::fs::create_dir_all(&directory)
@@ -297,11 +298,19 @@ fn is_corrupt(error: &DbErr) -> bool {
     })
 }
 
-/// Renames the file and its `-wal` and `-shm` to `.bak`, `.bak-wal`, `.bak-shm`.
+/// Renames the file and its `-wal` and `-shm` aside as `<file>.<n>.bak`, `.<n>.bak-wal` and
+/// `.<n>.bak-shm`, with `n` the first number no earlier backup uses: a second recovery must
+/// never replace the copy the first one kept.
 async fn back_up(path: &Path) -> Result<(), StoreError> {
-    for (from, to) in [("", ".bak"), ("-wal", ".bak-wal"), ("-shm", ".bak-shm")] {
-        let source = with_suffix(path, from);
-        match tokio::fs::rename(&source, with_suffix(path, to)).await {
+    let taken = |n: u32| {
+        ["", "-wal", "-shm"]
+            .iter()
+            .any(|suffix| with_suffix(path, &format!(".{n}.bak{suffix}")).exists())
+    };
+    let n = (1..).find(|n| !taken(*n)).unwrap_or(u32::MAX);
+    for suffix in ["", "-wal", "-shm"] {
+        let source = with_suffix(path, suffix);
+        match tokio::fs::rename(&source, with_suffix(path, &format!(".{n}.bak{suffix}"))).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source_error) => {

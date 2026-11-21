@@ -3,7 +3,7 @@
 //! server's, so dropping a response detaches one subscriber and stops nothing. Chunk `runs`
 //! fills the bodies.
 
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::response::Response;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -14,6 +14,10 @@ use super::extract::{ChatBody, PathParams, QueryParams};
 use crate::app::App;
 use crate::conversations::NewTurn;
 
+/// The largest `POST /chat` body: attachments travel inline as base64 data URLs (a 5 MiB image
+/// is about 6.7 MiB on the wire, and a message may carry several). axum's default is 2 MiB.
+const CHAT_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
 pub(super) fn routes() -> OpenApiRouter<App> {
     OpenApiRouter::new()
         .routes(routes!(start_turn))
@@ -23,6 +27,8 @@ pub(super) fn routes() -> OpenApiRouter<App> {
         .routes(routes!(resume_stream))
         .routes(routes!(stop_turn))
         .routes(routes!(release_conversation))
+        // Only `POST /chat` carries a body; the limit reaches no other route.
+        .layer(DefaultBodyLimit::max(CHAT_BODY_LIMIT))
 }
 
 /// Start one turn and stream it.

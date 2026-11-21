@@ -264,8 +264,7 @@ impl ToolPart {
             }
             ToolOutcome::InputStreaming | ToolOutcome::InputAvailable => {}
         }
-        // `extra` may carry an explicit `providerExecuted` read from an old row; it wins.
-        if self.owner == ToolOwner::Agent && !self.extra.contains_key("providerExecuted") {
+        if self.owner == ToolOwner::Agent {
             object.insert("providerExecuted".into(), true.into());
         }
         append(object, &self.extra);
@@ -342,11 +341,12 @@ fn tool_part(object: &Map<String, Value>, owner: ToolOwner) -> Option<UiPart> {
     let mut modeled = vec!["type", "toolCallId", "title", "state", "input"];
     modeled.extend(outcome_key);
     if owner == ToolOwner::Agent {
-        modeled.push("toolName");
-        // Modeled by the owner only when it says what the owner implies.
-        if object.get("providerExecuted") == Some(&Value::Bool(true)) {
-            modeled.push("providerExecuted");
+        // `owner: Agent` writes `providerExecuted: true`, so only a part that says exactly that
+        // is typed; any other (an old row without the flag) stays `Other`, as it was.
+        if object.get("providerExecuted") != Some(&Value::Bool(true)) {
+            return None;
         }
+        modeled.extend(["toolName", "providerExecuted"]);
     }
     Some(UiPart::Tool(ToolPart {
         id: ToolCallId(object.get("toolCallId")?.as_str()?.to_owned()),
@@ -389,6 +389,16 @@ mod tests {
         assert!(matches!(&message.parts[4], UiPart::Tool(tool) if tool.input.is_none()));
         assert!(matches!(message.parts[6], UiPart::Other(_)));
         assert_eq!(serde_json::to_value(&message)?, stored);
+        Ok(())
+    }
+
+    #[test]
+    fn an_agent_tool_part_without_the_flag_is_kept_as_it_was() -> Result<(), serde_json::Error> {
+        let part = json!({ "type": "dynamic-tool", "toolName": "Read", "toolCallId": "t",
+                           "state": "input-available", "input": {} });
+        let parsed: UiPart = serde_json::from_value(part.clone())?;
+        assert_eq!(parsed, UiPart::Other(part.clone()));
+        assert_eq!(serde_json::to_value(&parsed)?, part);
         Ok(())
     }
 

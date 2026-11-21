@@ -444,7 +444,19 @@ pub struct StreamQuery {
 pub struct TabPath {
     /// The browser's tab id; a negative one is `400`.
     #[param(minimum = 0)]
+    #[serde(deserialize_with = "non_negative")]
     pub tab_id: i64,
+}
+
+/// Browser tab ids are never negative; the old server refused one with `400` too.
+fn non_negative<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    let value = i64::deserialize(deserializer)?;
+    if value < 0 {
+        return Err(serde::de::Error::custom(
+            "tabId must be a non-negative integer",
+        ));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -795,6 +807,7 @@ pub struct ProviderList {
 /// The selected row, or `null` when none is selected.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct DefaultProvider {
+    #[schema(required = true)]
     pub provider: Option<ProviderBody>,
 }
 
@@ -1248,8 +1261,10 @@ pub struct ProbeRequest {
 #[schema(as = AgentProbe)]
 pub struct AgentProbeBody {
     pub models: Vec<ProbeModelBody>,
+    #[schema(required = true)]
     pub reasoning: Option<ProbeReasoningBody>,
     pub supports_config_option: bool,
+    #[schema(required = true)]
     pub agent_info: Option<AgentInfoBody>,
     pub protocol_version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1409,6 +1424,7 @@ pub struct Status {
 pub struct Diagnostics {
     pub version: String,
     pub os: String,
+    #[schema(required = true)]
     pub os_version: Option<String>,
 }
 
