@@ -2,9 +2,11 @@
 //! `solve_captcha` tool) and claw-sdk (`neo.solveCaptcha`).
 //!
 //! The crate has no notion of a server mode. It detects the challenge, runs the per-type flow
-//! (free paths first, then a paid provider) and returns a [`types::SolveOutcome`]. Hosts branch
-//! on [`types::SolveOutcome::verdict`], whose `Unsolved` is never a guess. Outcome and busy
-//! messages are still worded for claw-server's MCP tools (`solve_captcha`, `request_human_help`).
+//! (free paths first, then a paid provider) and returns a [`types::SolveOutcome`] describing what
+//! it did; hosts map that outcome to their own wire format (claw-server serializes it directly,
+//! while neo-server reports only what Neo attempted and tells the caller to inspect the page).
+//! Outcome and busy messages are still worded for claw-server's MCP tools (`solve_captcha`,
+//! `request_human_help`).
 //! The host keeps three jobs:
 //! - deciding whether to offer solving at all (claw-server gates it to hosted mode);
 //! - refusing its own page writes while [`CaptchaSolver::reservations`] holds the page, because
