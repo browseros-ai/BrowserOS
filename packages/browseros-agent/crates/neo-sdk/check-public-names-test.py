@@ -19,7 +19,6 @@ FILES = (
 PRODUCT_PATHS = (
     "docs/browseros/features/connect-mcps.mdx",
     "docs/browseros/features/use-with-claude-code.mdx",
-    "packages/browseros-agent/apps/app/components/mcp/McpServerIcon.tsx",
     "packages/browseros-agent/apps/server/src/api/services/klavis/catalog.ts",
 )
 

@@ -190,6 +190,8 @@ target/
 browseros-server
 browseros-server.exe
 browseros-server-*
+# The Rust server's crate shares the binaries' name; its sources are not build output.
+!/crates/browseros-server/
 tools/dogfood/browseros-dogfood
 tools/dev/browseros-dev
 

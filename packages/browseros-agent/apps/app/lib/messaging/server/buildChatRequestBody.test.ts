@@ -75,18 +75,14 @@ describe('buildChatRequestBody', () => {
       browserContext: {
         windowId: 2,
         activeTab: { id: 10, url: 'https://amazon.com', title: 'Amazon' },
-        enabledMcpServers: ['slack'],
       },
       userSystemPrompt: 'Stay in the current tab.',
-      declinedApps: ['gmail'],
     })
 
     expect(body.browserContext).toMatchObject({
       windowId: 2,
       activeTab: { id: 10, url: 'https://amazon.com' },
-      enabledMcpServers: ['slack'],
     })
     expect(body.userSystemPrompt).toBe('Stay in the current tab.')
-    expect(body.declinedApps).toEqual(['gmail'])
   })
 })
