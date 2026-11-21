@@ -1,6 +1,6 @@
 {
   "case": "02-nc-failure-dialog-after-token",
-  "source": "11-state-db-2.browseros.txt tab 835399556: 2:10 turnstile/token_applied (paid 1), 2:13 snapshot (F2).",
+  "source": "11-state-db-2.browseros.txt tab 835399556: 2:10 turnstile/token_applied (paid 1), 2:13 snapshot (F2). The dialog's widget is the one Neo applied its token to, so its failure face is a hint for a token claim (review R2-2) and Jev decides.",
   "truth": "blocked",
   "claim": {
     "basis": "token_injected",
@@ -87,9 +87,23 @@
       "cloudflareWall": false
     }
   },
+  "jev": {
+    "source": "measured by claudef with jev-1.14.0 on 2026-11-20 (design-claudef §5): NY failure dialog (the same Kelmar dialog and alert)",
+    "standing": {
+      "challenge": 0.14,
+      "failed": 0.85,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.0,
+      "clear": 0.01,
+      "insufficient": 0.0
+    },
+    "blocked": 0.99
+  },
   "expect": {
     "result": "blocked",
-    "tier": "deterministic",
-    "cause": "challenge_open"
+    "tier": "jev",
+    "cause": "site_rejected"
   }
 }

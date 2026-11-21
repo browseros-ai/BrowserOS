@@ -116,40 +116,73 @@ pub(crate) fn token_mark(token: &str) -> String {
     format!("{length}:{hash:x}")
 }
 
-/// Lists the fingerprints of the CAPTCHA response fields' values, in the DOM world. Only the
-/// fingerprints leave the page.
+/// Counts one family's response fields and lists the fingerprints of their values, in the DOM
+/// world of the document that holds the widget. `names` is filled in by [`token_marks_script`]; a
+/// Turnstile may rename its field with `data-response-field-name`. Only fingerprints leave the
+/// page.
 const TOKEN_MARKS: &str = r#"
 const mark = text => {
     let hash = 0x811c9dc5;
     for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
     return text.length + ':' + hash.toString(16);
 };
-return all('input[name="cf-turnstile-response"], textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"]')
-    .map(e => e.value.trim()).filter(Boolean).map(mark);
+if (names.includes('cf-turnstile-response'))
+    for (const e of all('[data-response-field-name]')) names.push(e.getAttribute('data-response-field-name'));
+const fields = all('input, textarea').filter(e => names.includes(e.name));
+return {fields: fields.length, marks: fields.map(e => e.value.trim()).filter(Boolean).map(mark)};
 "#;
 
-fn token_marks_script() -> String {
+/// The response field a family's token goes into. Other families (Arkose, GeeTest, AWS WAF)
+/// hand their token to the site in other ways, so whether it is still there cannot be read.
+fn token_field(kind: Option<CaptchaKind>) -> Option<&'static str> {
+    match kind? {
+        CaptchaKind::Turnstile => Some("cf-turnstile-response"),
+        CaptchaKind::RecaptchaV2 | CaptchaKind::RecaptchaV3 => Some("g-recaptcha-response"),
+        CaptchaKind::Hcaptcha => Some("h-captcha-response"),
+        CaptchaKind::CloudflareChallenge
+        | CaptchaKind::Geetest
+        | CaptchaKind::AwsWaf
+        | CaptchaKind::Arkose
+        | CaptchaKind::PerimeterX
+        | CaptchaKind::Unknown => None,
+    }
+}
+
+fn token_marks_script(field: &str) -> String {
     format!(
-        "function(closedRoots, truncated) {{ /* captcha:verify-token */ {} {TOKEN_MARKS} }}",
-        detect::DOM_QUERIES
+        "function(closedRoots, truncated) {{ /* captcha:verify-token */ {} const names = [{}]; {TOKEN_MARKS} }}",
+        detect::DOM_QUERIES,
+        Value::String(field.to_owned())
     )
 }
 
-/// Neo's applied token as the page holds it now. Past the vendor's token life it is stale. A
-/// field that no longer holds it is stale too, unless the site's callback ran: a site may take
-/// its token and clear the field on success, which proves nothing either way.
-fn token_reading(applied: &AppliedToken, marks: &[String], claim: &Claim<'_>) -> TokenReading {
+/// A family's response fields in the widget's document, and their values' fingerprints.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+struct FieldMarks {
+    fields: usize,
+    marks: Vec<String>,
+}
+
+/// Neo's applied token as the page holds it now. With no field of its family in the widget's
+/// document, nothing can be told. Past the vendor's token life it is stale. A field that holds
+/// another value, or none, is stale too, unless the page may have taken the token: its callback
+/// ran, or it already accepted the token (`token_accepted`), and a site may clear the field then.
+fn token_reading(applied: &AppliedToken, found: &FieldMarks, claim: &Claim<'_>) -> TokenReading {
+    if found.fields == 0 || claim.basis == Basis::TokenAccepted {
+        return TokenReading::Unknown;
+    }
     let life = match claim.kind {
         Some(CaptchaKind::Turnstile) => TURNSTILE_TOKEN_LIFE,
         _ => RECAPTCHA_TOKEN_LIFE,
     };
-    let held = marks.contains(&applied.mark);
-    if applied.at.elapsed() >= life || (!held && !claim.callback_ran) {
+    if applied.at.elapsed() >= life {
         TokenReading::Stale
-    } else if held {
+    } else if found.marks.contains(&applied.mark) {
         TokenReading::Fresh
-    } else {
+    } else if claim.callback_ran {
         TokenReading::Unknown
+    } else {
+        TokenReading::Stale
     }
 }
 
@@ -157,8 +190,11 @@ fn token_reading(applied: &AppliedToken, marks: &[String], claim: &Claim<'_>) ->
 pub(crate) enum Basis {
     /// The vendor's widget says it passed: auto-pass, checkbox, tiles, or `already_passed`.
     WidgetPassed,
-    /// Neo wrote a provider's token into the page: `token_applied`, `token_accepted`.
+    /// Neo wrote a provider's token into the page and it waits for the visitor's submit:
+    /// `token_applied`.
     TokenInjected,
+    /// Neo wrote a provider's token and the page has already taken it: `token_accepted`.
+    TokenAccepted,
     /// A Cloudflare interstitial went away.
     WallCleared,
     /// The scan found nothing blocking: `no_captcha`, `not_blocking`.
@@ -169,10 +205,20 @@ impl Basis {
     /// The grounds of a success answer, read from the flow's own reason.
     pub(crate) fn of(flow: &FlowResult, kind: Option<CaptchaKind>) -> Self {
         match flow.reason {
-            SolveReason::AwaitingSubmit | SolveReason::TokenAccepted => Self::TokenInjected,
+            SolveReason::AwaitingSubmit => Self::TokenInjected,
+            SolveReason::TokenAccepted => Self::TokenAccepted,
             SolveReason::NoCaptcha | SolveReason::NotBlocking => Self::NothingFound,
             _ if kind == Some(CaptchaKind::CloudflareChallenge) => Self::WallCleared,
             _ => Self::WidgetPassed,
+        }
+    }
+
+    /// The claim rests on a provider's token Neo applied, which the site checks itself, not on
+    /// the widget's own pass.
+    pub(crate) fn rests_on_token(self) -> bool {
+        match self {
+            Self::TokenInjected | Self::TokenAccepted => true,
+            Self::WidgetPassed | Self::WallCleared | Self::NothingFound => false,
         }
     }
 }
@@ -193,7 +239,11 @@ pub(crate) enum Standing {
 pub(crate) enum Unsure {
     /// Too little page text to ask a judge about.
     NoEvidence,
-    /// No judge, or it failed, timed out, refused, or the budget of calls was spent.
+    /// No judge is configured. Hints alone then never overturn a claim: the answer stands, with
+    /// the check's report beside it.
+    NoJudge,
+    /// A judge is configured but gave no answer: it failed, timed out or refused, or the call
+    /// budget or the time ran out.
     JudgeUnavailable,
     /// The judge's answer fell between the thresholds, or had the wrong shape.
     JudgeSplit,
@@ -420,17 +470,22 @@ pub(crate) fn decide(signals: &Signals, basis: Basis) -> TierOne {
     if basis == Basis::TokenInjected && signals.token == TokenReading::Stale {
         return Settled(Standing::Blocked(BlockCause::TokenStale));
     }
-    // The claim rests on a token Neo applied: this round's, or an earlier call's that the
-    // field still holds unexpired. The site checks that token, so the widget's face is a hint.
-    let token_claim = basis == Basis::TokenInjected || signals.token == TokenReading::Fresh;
+    // The claim rests on a token Neo applied: this round's, one the page took, or an earlier
+    // call's that the field still holds unexpired. The site checks that token, so the widget's
+    // own face (failed, open or still verifying) is a hint, not proof.
+    let token_claim = basis.rests_on_token() || signals.token == TokenReading::Fresh;
+    let mut hints = signals.hints.clone();
     let face_block = match signals.widget {
         WidgetReading::Failed => Some(BlockCause::WidgetFailed),
         WidgetReading::Expired => Some(BlockCause::WidgetExpired),
         WidgetReading::Interactive => Some(BlockCause::ChallengeOpen),
+        WidgetReading::Verifying if token_claim => {
+            hints.push(Hint::WidgetFaceDisagrees);
+            None
+        }
         WidgetReading::Verifying => return Settled(Standing::Pending),
         WidgetReading::Unread | WidgetReading::Passed => None,
     };
-    let mut hints = signals.hints.clone();
     if let Some(cause) = face_block {
         if token_claim {
             hints.push(Hint::WidgetFaceDisagrees);
@@ -559,22 +614,25 @@ pub(crate) async fn ask_judge(
     budget: &mut VerifyBudget,
     cancel: &CancellationToken,
 ) -> Result<Verification, PageError> {
+    let unsure = |brief: PageBrief, why: Unsure| {
+        Ok(Verification {
+            brief: Some(brief),
+            ..Verification::deterministic(Standing::Unsure(why))
+        })
+    };
+    let Some(judge) = judge else {
+        return unsure(brief, Unsure::NoJudge);
+    };
     let text = brief.to_evidence();
     if text.chars().count() < MIN_EVIDENCE_CHARS {
-        return Ok(Verification {
-            brief: Some(brief),
-            ..Verification::deterministic(Standing::Unsure(Unsure::NoEvidence))
-        });
+        return unsure(brief, Unsure::NoEvidence);
     }
     let left = finish_by(budget.until)
         .saturating_duration_since(Instant::now())
         .min(JUDGE_BUDGET);
-    let Some(judge) = judge.filter(|_| budget.judge_calls_left > 0 && !left.is_zero()) else {
-        return Ok(Verification {
-            brief: Some(brief),
-            ..Verification::deterministic(Standing::Unsure(Unsure::JudgeUnavailable))
-        });
-    };
+    if budget.judge_calls_left == 0 || left.is_zero() {
+        return unsure(brief, Unsure::JudgeUnavailable);
+    }
     budget.judge_calls_left -= 1;
     let request = JudgeRequest {
         evidence: text,
@@ -601,15 +659,9 @@ pub(crate) async fn ask_judge(
         }
         Ok(Err(fault)) => {
             tracing::info!(target: "captcha", fault = %fault, "Jev gave no answer; the verify check is unsure");
-            Ok(Verification {
-                brief: Some(brief),
-                ..Verification::deterministic(Standing::Unsure(Unsure::JudgeUnavailable))
-            })
+            unsure(brief, Unsure::JudgeUnavailable)
         }
-        Err(_) => Ok(Verification {
-            brief: Some(brief),
-            ..Verification::deterministic(Standing::Unsure(Unsure::JudgeUnavailable))
-        }),
+        Err(_) => unsure(brief, Unsure::JudgeUnavailable),
     }
 }
 
@@ -644,9 +696,9 @@ async fn settle<P: CaptchaPage>(
     cancel: &CancellationToken,
 ) -> Result<Option<PageBrief>, PageError> {
     let stop = (Instant::now() + SETTLE_MAX).min(until);
-    let mut last = probe(page, cancel).await?;
+    let mut last = probe(page, until, cancel).await?;
     while pause(POLL, stop, cancel).await? {
-        let next = probe(page, cancel).await?;
+        let next = probe(page, until, cancel).await?;
         if next == last {
             return Ok(next);
         }
@@ -655,15 +707,16 @@ async fn settle<P: CaptchaPage>(
     Ok(last)
 }
 
-/// The probe alone; `None` when it could not run.
+/// The probe alone, cut off at `until`; `None` when it could not run or did not finish.
 async fn probe<P: CaptchaPage>(
     page: &P,
+    until: Instant,
     cancel: &CancellationToken,
 ) -> Result<Option<PageBrief>, PageError> {
     let read = tokio::select! {
         biased;
         () = cancel.cancelled() => return Err(PageError::Cancelled),
-        read = evidence::brief(page) => read,
+        read = timeout_at(until, evidence::brief(page)) => read.unwrap_or(Err(PageError::Timeout)),
     };
     kept(read, &mut false)
 }
@@ -748,17 +801,26 @@ async fn gather<P: CaptchaPage>(
         )?;
     }
     if let Some(applied) = claim.applied
+        && let Some(field) = token_field(claim.kind)
         && !look.navigated
+        && claim.basis != Basis::TokenAccepted
     {
-        let marks = page
-            .scan_dom(None, &token_marks_script())
+        // The fields live in the document that holds the widget, which can be a child frame.
+        let host = look
+            .rescan
+            .as_ref()
+            .and_then(|scan| claimed(scan, claim))
+            .or(claim.challenge)
+            .and_then(|challenge| challenge.host_frame.clone());
+        let found = page
+            .scan_dom(host.as_ref(), &token_marks_script(field))
             .await
             .and_then(|value| {
-                serde_json::from_value::<Vec<String>>(value)
+                serde_json::from_value::<FieldMarks>(value)
                     .map_err(|_| PageError::Browser("invalid token marks".into()))
             });
-        look.token = kept(marks, &mut look.partial)?.map_or(TokenReading::Unknown, |marks| {
-            token_reading(applied, &marks, claim)
+        look.token = kept(found, &mut look.partial)?.map_or(TokenReading::Unknown, |found| {
+            token_reading(applied, &found, claim)
         });
     }
     if claim.basis == Basis::WallCleared
@@ -829,38 +891,77 @@ fn frame_id(challenge: &Challenge) -> Option<&str> {
         .map(|frame| frame.frame_id.as_str())
 }
 
-/// Whether the vendor widget of `kind` on top of the page has passed. `None`: nothing could
-/// tell. A Turnstile face that is not success outranks every other reading of it.
-fn passed_on_top(kind: CaptchaKind, look: &Look, claim: &Claim<'_>) -> Option<bool> {
-    if kind == CaptchaKind::Turnstile
-        && look.face.is_some_and(|face| {
-            !matches!(
-                face,
-                TurnstileWidgetState::Success | TurnstileWidgetState::Unreadable
-            )
-        })
-    {
-        return Some(false);
-    }
-    match &look.rescan {
-        Some(scan) => {
-            let mut same = scan
-                .challenges
-                .iter()
-                .filter(|challenge| challenge.kind == kind)
-                .peekable();
-            same.peek()?;
-            Some(same.all(|challenge| challenge.state == ChallengeState::Passed))
+/// What the vendor widget sitting on top of the page is doing, and whether it is the widget the
+/// claim is about. Another widget open over the page is proof whatever the claim rests on; the
+/// claimed widget's own face is proof only for a claim that rests on that widget's pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnTopWidget {
+    Passed,
+    Unread,
+    Checking { claimed: bool },
+    Open { claimed: bool },
+}
+
+impl OnTopWidget {
+    /// The worst of several widgets of one family: another widget open, then another checking,
+    /// then the claimed one open or checking, then an unread one, then a pass.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Passed => 0,
+            Self::Unread => 1,
+            Self::Checking { claimed: true } => 2,
+            Self::Open { claimed: true } => 3,
+            Self::Checking { claimed: false } => 4,
+            Self::Open { claimed: false } => 5,
         }
-        // The rescan failed. A terminal answer's own scan, moments old, named the widget
-        // passed; a flow's routing record says nothing about the widget now.
-        None => claim
-            .challenge
-            .is_some_and(|challenge| {
-                challenge.kind == kind && challenge.state == ChallengeState::Passed
-            })
-            .then_some(true),
     }
+}
+
+/// Reads the vendor widget of `kind` that the probe found on top. The claimed Turnstile's own
+/// face outranks the rescan's reading of it. With no rescan (it failed), a terminal answer's own
+/// scan, moments old, may have named the widget passed; a flow's routing record says nothing
+/// about the widget now.
+fn widget_on_top(kind: CaptchaKind, look: &Look, claim: &Claim<'_>) -> OnTopWidget {
+    let claimed_kind = claim
+        .challenge
+        .is_some_and(|challenge| challenge.kind == kind);
+    if kind == CaptchaKind::Turnstile && claimed_kind {
+        match look.face {
+            Some(TurnstileWidgetState::Verifying) => {
+                return OnTopWidget::Checking { claimed: true };
+            }
+            Some(
+                TurnstileWidgetState::Failed
+                | TurnstileWidgetState::Expired
+                | TurnstileWidgetState::Interactive,
+            ) => return OnTopWidget::Open { claimed: true },
+            Some(TurnstileWidgetState::Success | TurnstileWidgetState::Unreadable) | None => {}
+        }
+    }
+    let Some(scan) = &look.rescan else {
+        return if claim.challenge.is_some_and(|challenge| {
+            challenge.kind == kind && challenge.state == ChallengeState::Passed
+        }) {
+            OnTopWidget::Passed
+        } else {
+            OnTopWidget::Unread
+        };
+    };
+    let mine = claimed(scan, claim);
+    scan.challenges
+        .iter()
+        .filter(|challenge| challenge.kind == kind)
+        .map(|challenge| {
+            let claimed = mine.is_some_and(|mine| ptr::eq(mine, challenge));
+            match challenge.state {
+                ChallengeState::Passed => OnTopWidget::Passed,
+                ChallengeState::Active => OnTopWidget::Open { claimed },
+                ChallengeState::Pending => OnTopWidget::Checking { claimed },
+                ChallengeState::Unknown | ChallengeState::WidgetOnly => OnTopWidget::Unread,
+            }
+        })
+        .max_by_key(|widget| widget.rank())
+        .unwrap_or(OnTopWidget::Unread)
 }
 
 /// Phrases a bot check, a failed check or an access wall shows, matched anywhere the probe read,
@@ -906,7 +1007,15 @@ const SALIENT_MARKERS: [&str; 9] = [
     "you have been blocked",
 ];
 
-fn has_marker(brief: &PageBrief) -> bool {
+/// Where the page shows bot-check words: in its salient lines (title, what covers the view,
+/// alerts, statuses, headings, frame text), and in its body copy.
+#[derive(Debug, Clone, Copy, Default)]
+struct Markers {
+    salient: bool,
+    body: bool,
+}
+
+fn markers(brief: &PageBrief) -> Markers {
     let normal = |text: &str| text.to_lowercase().replace(['\u{2019}', '\u{2018}'], "'");
     let holds = |text: &str, markers: &[&str]| {
         let text = normal(text);
@@ -919,11 +1028,12 @@ fn has_marker(brief: &PageBrief) -> bool {
         .chain(brief.alerts.iter().map(|line| &line.text))
         .chain(brief.statuses.iter().map(|line| &line.text))
         .chain(&brief.headings)
-        .chain(brief.frames.iter().map(|frame| &frame.text));
-    salient
-        .into_iter()
-        .any(|text| holds(text, &MARKERS) || holds(text, &SALIENT_MARKERS))
-        || brief.text.iter().any(|text| holds(text, &MARKERS))
+        .chain(brief.frames.iter().map(|frame| &frame.text))
+        .any(|text| holds(text, &MARKERS) || holds(text, &SALIENT_MARKERS));
+    Markers {
+        salient,
+        body: brief.text.iter().any(|text| holds(text, &MARKERS)),
+    }
 }
 
 /// Folds one look into tier 1's facts. Pure: the replay set feeds it recorded looks.
@@ -934,6 +1044,9 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
         token: look.token,
         ..Signals::default()
     };
+    // The claim rests on Neo's token rather than the widget's own pass (see `decide`).
+    let token_claim = claim.basis.rests_on_token() || look.token == TokenReading::Fresh;
+    let mut words = Markers::default();
     if look.partial {
         signals.note(Hint::ScanPartial);
     }
@@ -955,10 +1068,17 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
                 match on_top.part {
                     FramePart::Puzzle => signals.vendor_on_top = Some(on_top.kind),
                     FramePart::Checking => signals.pending = true,
-                    FramePart::Checkbox => match passed_on_top(on_top.kind, look, claim) {
-                        Some(true) => signals.note(Hint::PassedWidgetOnTop),
-                        Some(false) => signals.vendor_on_top = Some(on_top.kind),
-                        None => signals.note(Hint::WidgetOnTopUnread),
+                    FramePart::Checkbox => match widget_on_top(on_top.kind, look, claim) {
+                        OnTopWidget::Passed => signals.note(Hint::PassedWidgetOnTop),
+                        OnTopWidget::Unread => signals.note(Hint::WidgetOnTopUnread),
+                        OnTopWidget::Open { claimed: true }
+                        | OnTopWidget::Checking { claimed: true }
+                            if token_claim =>
+                        {
+                            signals.note(Hint::WidgetFaceDisagrees);
+                        }
+                        OnTopWidget::Checking { .. } => signals.pending = true,
+                        OnTopWidget::Open { .. } => signals.vendor_on_top = Some(on_top.kind),
                     },
                 }
             }
@@ -978,9 +1098,7 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
             {
                 signals.note(Hint::NewMessage);
             }
-            if has_marker(brief) {
-                signals.note(Hint::Marker);
-            }
+            words = markers(brief);
             if brief.http_status.is_some() {
                 signals.note(Hint::HttpError);
             }
@@ -997,6 +1115,9 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
         for challenge in &scan.challenges {
             let own = mine.is_some_and(|mine| ptr::eq(mine, challenge));
             match challenge.state {
+                ChallengeState::Pending if own && token_claim => {
+                    signals.note(Hint::WidgetFaceDisagrees);
+                }
                 ChallengeState::Pending => signals.pending = true,
                 ChallengeState::Active if challenge.challenge_frame.is_some() => {
                     if challenge.kind.is_supported() {
@@ -1026,6 +1147,11 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
         if signals.widget == WidgetReading::Unread {
             signals.note(Hint::WidgetUnreadable);
         }
+    }
+    // A page whose own widget reads passed often still says "verify you are human" in its
+    // copy beside the widget: body words then prove nothing. Salient lines still count.
+    if words.salient || (words.body && signals.widget != WidgetReading::Passed) {
+        signals.note(Hint::Marker);
     }
     if claim.basis == Basis::WallCleared && signals.wall != WallReading::Showing {
         let moved = look
@@ -1234,9 +1360,7 @@ pub(crate) fn remedy_for(
     basis: Basis,
 ) -> Option<Remedy> {
     match cause {
-        BlockCause::ChallengeOpen if basis == Basis::TokenInjected => {
-            Some(Remedy::DismissChallenge)
-        }
+        BlockCause::ChallengeOpen if basis.rests_on_token() => Some(Remedy::DismissChallenge),
         BlockCause::ChallengeOpen | BlockCause::WidgetFailed => Some(Remedy::ResetWidget),
         BlockCause::WidgetExpired if kind == Some(CaptchaKind::RecaptchaV2) => Some(Remedy::Rerun),
         BlockCause::WidgetExpired => Some(Remedy::ResetWidget),
@@ -1286,7 +1410,12 @@ pub(crate) fn next_step(
             SolveReason::ChallengePending,
             "The site's own check is still running. Wait a few seconds and call solve_captcha again; do not reload.",
         ),
-        Standing::Unsure(_) => answer(
+        // Without a judge, hints are all a keyless host can ever have: they ride along in
+        // `verify` and the claim stands. Tier-1 proof is handled above and below as ever.
+        Standing::Unsure(Unsure::NoJudge) => Next::Return(flow.clone()),
+        Standing::Unsure(
+            Unsure::NoEvidence | Unsure::JudgeUnavailable | Unsure::JudgeSplit | Unsure::Navigated,
+        ) => answer(
             SolveStatus::Failed,
             SolveReason::AcceptanceUnconfirmed,
             "Neo could not confirm the page is past the CAPTCHA. Take a fresh snapshot before acting.",
@@ -2189,6 +2318,8 @@ mod tests {
         views: Mutex<VecDeque<Value>>,
         marks: Mutex<VecDeque<Value>>,
         probe_reads: AtomicU32,
+        /// How long each verify probe takes to answer.
+        stall: Duration,
     }
 
     impl ScriptedPage {
@@ -2236,6 +2367,7 @@ mod tests {
             function: &str,
         ) -> Result<Value, PageError> {
             if function.contains("captcha:verify-probe") {
+                tokio::time::sleep(self.stall).await;
                 self.probe_reads.fetch_add(1, Ordering::Relaxed);
                 return next(&self.probes).unwrap_or(Ok(Value::Null));
             }
@@ -2386,7 +2518,7 @@ mod tests {
             "alerts": [["There was an issue verifying your browser. Please try again."]]}))])?;
         assert_eq!(
             check(&failure, &claim, None).await?.standing,
-            Standing::Unsure(Unsure::JudgeUnavailable),
+            Standing::Unsure(Unsure::NoJudge),
             "the new document's hints go to tier 2 like any page's"
         );
         let wall = moved(vec![Ok(widget_on_top("datadome", "puzzle"))])?;
@@ -2449,7 +2581,8 @@ mod tests {
         let page = ScriptedPage::probing(vec![Ok(cookie)]);
         assert_eq!(
             check(&page, &claim, None).await?.standing,
-            Standing::Unsure(Unsure::JudgeUnavailable)
+            Standing::Unsure(Unsure::NoJudge),
+            "no judge is configured: the hint stays a hint"
         );
         let clear = FixedJudge(
             Ok(reply(
@@ -2504,8 +2637,17 @@ mod tests {
         let document = page_document();
         let page =
             ScriptedPage::probing(vec![Err(PageError::Browser("DOM scan unavailable".into()))]);
-        let verified = check(&page, &claim_on(Basis::NothingFound, None, &document), None).await?;
-        assert_eq!(verified.standing, Standing::Unsure(Unsure::NoEvidence));
+        let claim = claim_on(Basis::NothingFound, None, &document);
+        assert_eq!(
+            check(&page, &claim, None).await?.standing,
+            Standing::Unsure(Unsure::NoJudge)
+        );
+        let judge = FixedJudge(Ok(reply(&[("clear", 1.0)], 0.0)), Duration::ZERO);
+        assert_eq!(
+            check(&page, &claim, Some(&judge)).await?.standing,
+            Standing::Unsure(Unsure::NoEvidence),
+            "a judge is never asked about nothing"
+        );
         Ok(())
     }
 
@@ -2571,7 +2713,8 @@ mod tests {
         assert_eq!(token_mark("a"), "1:e40c292c");
         assert_eq!(token_mark("foobar"), "6:bf9cf968");
         assert!(
-            token_marks_script().contains("0x811c9dc5") && TOKEN_MARKS.contains("0x01000193"),
+            token_marks_script("cf-turnstile-response").contains("0x811c9dc5")
+                && TOKEN_MARKS.contains("0x01000193"),
             "the page computes the same FNV-1a"
         );
     }
@@ -2586,38 +2729,98 @@ mod tests {
         };
         let mut claim = claim_on(Basis::TokenInjected, Some(&routed), &document);
         claim.applied = Some(&applied);
-        let reading = |marks: &[&str], claim: &Claim<'_>| {
-            let marks: Vec<String> = marks.iter().map(|mark| (*mark).to_owned()).collect();
-            token_reading(&applied, &marks, claim)
+        let reading = |fields: usize, marks: &[&str], claim: &Claim<'_>| {
+            let found = FieldMarks {
+                fields,
+                marks: marks.iter().map(|mark| (*mark).to_owned()).collect(),
+            };
+            token_reading(&applied, &found, claim)
         };
-        assert_eq!(reading(&[&applied.mark], &claim), TokenReading::Fresh);
+        assert_eq!(reading(1, &[&applied.mark], &claim), TokenReading::Fresh);
         assert_eq!(
-            reading(&["9:0"], &claim),
+            reading(1, &["9:0"], &claim),
             TokenReading::Stale,
-            "gone from its field with no callback to take it"
+            "its field holds another value and no callback took it"
+        );
+        assert_eq!(
+            reading(0, &[], &claim),
+            TokenReading::Unknown,
+            "no field of its family: nothing can be told"
         );
         claim.callback_ran = true;
         assert_eq!(
-            reading(&[], &claim),
+            reading(1, &[], &claim),
             TokenReading::Unknown,
             "the site's callback may have taken it on success"
         );
         claim.callback_ran = false;
+        let accepted = Claim {
+            basis: Basis::TokenAccepted,
+            ..claim
+        };
+        assert_eq!(
+            reading(1, &[], &accepted),
+            TokenReading::Unknown,
+            "the page already took a token it accepted"
+        );
         let page = ScriptedPage::probing(vec![Ok(clean_probe())]);
         *page
             .marks
             .lock()
-            .map_err(|error| anyhow::anyhow!("{error}"))? = [json!([])].into();
+            .map_err(|error| anyhow::anyhow!("{error}"))? =
+            [json!({"fields": 1, "marks": []})].into();
         assert_eq!(
             check(&page, &claim, None).await?.standing,
             Standing::Blocked(BlockCause::TokenStale),
             "row 9: Neo's token is gone from its field"
         );
+        let missing = ScriptedPage::probing(vec![Ok(clean_probe())]);
+        *missing
+            .marks
+            .lock()
+            .map_err(|error| anyhow::anyhow!("{error}"))? =
+            [json!({"fields": 0, "marks": []})].into();
+        assert_eq!(
+            check(&missing, &claim, None).await?.standing,
+            Standing::Clear,
+            "a field the widget renamed or keeps in a child frame is no proof"
+        );
         tokio::time::advance(RECAPTCHA_TOKEN_LIFE).await;
         assert_eq!(
-            reading(&[&applied.mark], &claim),
+            reading(1, &[&applied.mark], &claim),
             TokenReading::Stale,
             "row 9: older than the vendor's token life"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_arkose_token_applied_keeps_its_answer() -> anyhow::Result<()> {
+        let document = page_document();
+        let routed = widget(CaptchaKind::Arkose, ChallengeState::Active);
+        let applied = AppliedToken {
+            mark: token_mark("arkose-session-token"),
+            at: Instant::now(),
+        };
+        let mut claim = claim_on(Basis::TokenInjected, Some(&routed), &document);
+        claim.applied = Some(&applied);
+        let page = ScriptedPage::probing(vec![Ok(clean_probe())]);
+        let verified = check(&page, &claim, None).await?;
+        assert_eq!(
+            verified.standing,
+            Standing::Clear,
+            "Arkose keeps its token out of any field the check could read"
+        );
+        let applied_flow = flow(SolveStatus::TokenApplied, SolveReason::AwaitingSubmit);
+        assert_eq!(
+            next_step(
+                &applied_flow,
+                &verified,
+                &claim,
+                0,
+                Duration::from_secs(100)
+            ),
+            Next::Return(applied_flow.clone())
         );
         Ok(())
     }
@@ -2708,5 +2911,158 @@ mod tests {
         let mut odd = reply(&[("clear", 1.0)], 0.0);
         odd.model = Some("jev\n\u{1b}[31m".into());
         assert_eq!(judge_use(&odd, 1).model, None);
+    }
+
+    #[test]
+    fn tests_that_a_token_claims_own_widget_face_is_a_hint_but_other_proof_stands()
+    -> Result<(), PageError> {
+        let document = page_document();
+        let routed = widget(CaptchaKind::Turnstile, ChallengeState::Active);
+        let token = claim_on(Basis::TokenInjected, Some(&routed), &document);
+        let pass = claim_on(Basis::WidgetPassed, Some(&routed), &document);
+        let mut look = look_at(widget_on_top("turnstile", "checkbox"))?;
+        look.rescan = Some(rescan(vec![routed.clone()]));
+        look.face = Some(TurnstileWidgetState::Interactive);
+        let hinted = signals(&look, &token);
+        assert_eq!(hinted.vendor_on_top, None);
+        assert!(hinted.hints.contains(&Hint::WidgetFaceDisagrees));
+        assert_eq!(
+            decide(&hinted, token.basis),
+            TierOne::AskJudge,
+            "a bypassed widget still showing its checkbox over Neo's token is a question"
+        );
+        assert_eq!(
+            decide(&signals(&look, &pass), pass.basis),
+            TierOne::Settled(Standing::Blocked(BlockCause::ChallengeOpen)),
+            "a widget pass is proven wrong by the widget's own face"
+        );
+        look.face = Some(TurnstileWidgetState::Verifying);
+        assert_eq!(
+            decide(&signals(&look, &token), token.basis),
+            TierOne::AskJudge,
+            "Neo's token does not wait for the widget's own check"
+        );
+        assert_eq!(
+            decide(&signals(&look, &pass), pass.basis),
+            TierOne::Settled(Standing::Pending)
+        );
+        let mut mine = routed.clone();
+        mine.state = ChallengeState::Passed;
+        let mut other = widget(CaptchaKind::Turnstile, ChallengeState::Active);
+        other.frame = Some(FrameRef {
+            frame_id: "w9".into(),
+            url: "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile/if/b"
+                .into(),
+            rect: None,
+        });
+        other.sitekey = Some("other".into());
+        look.face = Some(TurnstileWidgetState::Success);
+        look.rescan = Some(rescan(vec![mine, other]));
+        assert_eq!(
+            decide(&signals(&look, &token), token.basis),
+            TierOne::Settled(Standing::Blocked(BlockCause::ChallengeOpen)),
+            "another widget open over the page is proof whatever the claim rests on"
+        );
+        let puzzle = look_at(json!({"complete": true, "puzzle": "recaptcha",
+            "layer": {"share": 0.23, "overSubmit": true, "vendor": "recaptcha", "part": "puzzle", "text": []}}))?;
+        assert_eq!(
+            decide(&signals(&puzzle, &token), token.basis),
+            TierOne::Settled(Standing::Blocked(BlockCause::ChallengeOpen)),
+            "a puzzle over the page is proof for a token claim too"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_stalled_probe_cannot_hold_the_check_past_its_deadline()
+    -> anyhow::Result<()> {
+        let document = page_document();
+        let mut claim = claim_on(Basis::NothingFound, None, &document);
+        claim.callback_ran = true;
+        let page = ScriptedPage {
+            stall: Duration::from_secs(10),
+            ..ScriptedPage::probing(vec![Ok(clean_probe())])
+        };
+        let started = Instant::now();
+        let mut near = budget();
+        near.until = started + Duration::from_secs(3);
+        let verified = standing(&page, &claim, None, &mut near, &CancellationToken::new()).await?;
+        assert!(
+            started.elapsed() <= Duration::from_secs(3) - DEADLINE_MARGIN,
+            "the settle's probe is cut off at the check's own deadline"
+        );
+        assert_eq!(verified.standing, Standing::Unsure(Unsure::NoJudge));
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_keyless_host_keeps_the_claim_and_a_failed_judge_does_not() {
+        let document = page_document();
+        let claim = claim_on(Basis::WidgetPassed, None, &document);
+        let passed = flow(SolveStatus::Solved, SolveReason::CheckboxPassed);
+        let plenty = Duration::from_secs(100);
+        assert_eq!(
+            next_step(
+                &passed,
+                &verification(Standing::Unsure(Unsure::NoJudge), VerifyTier::Deterministic),
+                &claim,
+                0,
+                plenty
+            ),
+            Next::Return(passed.clone()),
+            "with no judge configured, hints ride along in verify and the answer stands"
+        );
+        let Next::Return(failed_judge) = next_step(
+            &passed,
+            &verification(
+                Standing::Unsure(Unsure::JudgeUnavailable),
+                VerifyTier::Deterministic,
+            ),
+            &claim,
+            0,
+            plenty,
+        ) else {
+            panic!("an unsure check never retries");
+        };
+        assert_eq!(
+            (failed_judge.status, failed_judge.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed),
+            "a configured judge that gave no answer leaves the page unknown"
+        );
+        assert_ne!(
+            next_step(
+                &passed,
+                &verification(
+                    Standing::Blocked(BlockCause::ChallengeOpen),
+                    VerifyTier::Deterministic
+                ),
+                &claim,
+                0,
+                plenty
+            ),
+            Next::Return(passed.clone()),
+            "tier-1 proof overrides with or without a judge"
+        );
+    }
+
+    #[test]
+    fn tests_that_body_words_beside_a_passed_widget_are_no_hint() -> Result<(), PageError> {
+        let document = page_document();
+        let passed = widget(CaptchaKind::Turnstile, ChallengeState::Passed);
+        let claim = claim_on(Basis::WidgetPassed, Some(&passed), &document);
+        let mut look = look_at(json!({"complete": true,
+            "text": ["Verify you are human by completing the action below."]}))?;
+        look.face = Some(TurnstileWidgetState::Success);
+        assert_eq!(
+            decide(&signals(&look, &claim), claim.basis),
+            TierOne::Settled(Standing::Clear),
+            "the widget's own success outweighs the copy written beside it"
+        );
+        look.face = Some(TurnstileWidgetState::Unreadable);
+        assert!(signals(&look, &claim).hints.contains(&Hint::Marker));
+        let mut salient = look_at(json!({"complete": true, "headings": ["Verify you are human"]}))?;
+        salient.face = Some(TurnstileWidgetState::Success);
+        assert_eq!(signals(&salient, &claim).hints, [Hint::Marker]);
+        Ok(())
     }
 }

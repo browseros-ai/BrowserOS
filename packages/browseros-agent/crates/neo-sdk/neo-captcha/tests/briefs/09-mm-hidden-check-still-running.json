@@ -1,6 +1,6 @@
 {
   "case": "09-mm-hidden-check-still-running",
-  "source": "12-texas-2.browseros.txt 0:59-1:26 (S3): 'Please wait while we verify your browser...', SEARCH disabled, old results on the page. The token claim is synthetic; the rescan reads the hidden widget still verifying, as cv-scan's reader does.",
+  "source": "12-texas-2.browseros.txt 0:59-1:26 (S3): 'Please wait while we verify your browser...', SEARCH disabled, old results on the page. The token claim is synthetic; the rescan reads the hidden widget still verifying, as cv-scan's reader does. Neo's token does not wait on that widget's own check (review R2-2), so the page's words go to Jev.",
   "truth": "checking",
   "claim": {
     "basis": "token_injected",
@@ -79,8 +79,22 @@
       "cloudflareWall": false
     }
   },
+  "jev": {
+    "source": "measured by cv-verify with jev-1.14.0 on 2026-11-20 through HttpJudge (1028 input tokens), on this brief's own evidence",
+    "standing": {
+      "agent_policy": 0.0,
+      "challenge": 0.01,
+      "checking": 0.99,
+      "clear": 0.0,
+      "denied": 0.0,
+      "failed": 0.0,
+      "insufficient": 0.0,
+      "other_overlay": 0.0
+    },
+    "blocked": 0.98
+  },
   "expect": {
     "result": "pending",
-    "tier": "deterministic"
+    "tier": "jev"
   }
 }
