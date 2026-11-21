@@ -55,6 +55,7 @@ if operation == "sessions":
     action = after_globals[1]
     marker = home / "record"
     if action == "ensure":
+        assert args[args.index("--ttl") + 1] == "120", "expected a 120-second owner idle timeout"
         send({"action":"session_ensured", "created":not marker.exists()})
         marker.touch()
     elif action == "close":
