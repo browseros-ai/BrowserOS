@@ -1948,13 +1948,8 @@ mod orchestration_tests {
         });
         let service =
             CaptchaSolver::new(config).ok_or_else(|| anyhow::anyhow!("missing service"))?;
-        // The check is on by default; this test is about the flow, so the check finds it clear.
         let driver = FakeDriver {
             expected_forced_method: Some(config::ForcedMethod::Token),
-            findings: Mutex::new(VecDeque::from([FakeDriver::finding(
-                verify::Standing::Clear,
-                types::VerifyTier::Deterministic,
-            )])),
             ..FakeDriver::new(scan(
                 &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
                 true,
