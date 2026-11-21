@@ -277,9 +277,11 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
       '2x00000000000000000000BB',
       ['unsolved', 'unknown'],
     ),
-    // Ready once the widget has failed out of sight, left an old token and lost its frame.
+    // Ready 3 s after the widget failed out of sight, left an old token and lost its frame
+    // (the page's frameGoneLong). Started sooner, Neo can still read the widget as active and
+    // buy a token instead of reaching the verify check.
     ready:
-      "(s => s.rendered === true && s.stale === true && s.frameGone === true)(JSON.parse(document.documentElement.dataset.captchaFixture || '{}'))",
+      "(s => s.rendered === true && s.stale === true && s.frameGone === true && s.frameGoneLong === true)(JSON.parse(document.documentElement.dataset.captchaFixture || '{}'))",
     notes:
       'NY once its dialog closed: an alert, an old token in a hidden widget with no frame, nothing on top. Only words show the block, so the check asks Jev: unsolved when Jev reads a block, unknown without Jev. Never already_clear.',
   },
