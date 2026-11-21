@@ -107,6 +107,7 @@ pub async fn replay_brief(case: &str, judge: Option<&dyn Judge>) -> Result<Repla
     let verification = verify::conclude(
         decision,
         look,
+        &claim,
         judge,
         &mut budget,
         &CancellationToken::new(),

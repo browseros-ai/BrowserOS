@@ -33,18 +33,18 @@
     }
   },
   "jev": {
-    "source": "assumed, not measured: a plausible reading that pins the code path; re-measure with the live test",
+    "source": "measured by cv-verify with jev-1.14.0 on 2026-11-20 through HttpJudge (989 input tokens), on this brief's own evidence",
     "standing": {
-      "challenge": 0.0,
-      "failed": 0.0,
-      "checking": 0.0,
-      "denied": 0.0,
       "agent_policy": 0.0,
-      "other_overlay": 0.84,
-      "clear": 0.14,
-      "insufficient": 0.02
+      "challenge": 0.0,
+      "checking": 0.0,
+      "clear": 0.02,
+      "denied": 0.0,
+      "failed": 0.0,
+      "insufficient": 0.0,
+      "other_overlay": 0.98
     },
-    "blocked": 0.05
+    "blocked": 0.08
   },
   "expect": {
     "result": "clear",

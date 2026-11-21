@@ -318,6 +318,12 @@ async fn tests_that_the_evidence_stays_capped_and_private() -> TestResult {
         assert!(!evidence.contains("://"), "{case}: a link with its path");
         assert!(
             !evidence
+                .split_whitespace()
+                .any(|word| word.contains("www.") && word.contains('/')),
+            "{case}: a scheme-less link with its path"
+        );
+        assert!(
+            !evidence
                 .split(|c: char| !c.is_ascii_digit())
                 .any(|run| run.len() >= 7),
             "{case}: a long digit run"
@@ -395,6 +401,27 @@ async fn tests_that_the_measured_pages_render_claudefs_shapes() -> TestResult {
         let evidence = replay(recording, Some(&Fixed::liar())).await?.evidence;
         let first: Vec<&str> = evidence.lines().take(lines.len()).collect();
         assert_eq!(first, lines, "{case}: facts lead, in claudef's order");
+    }
+    Ok(())
+}
+
+/// Links quoted in page copy (behind brackets or quotes, or with no scheme) reach Jev as their
+/// host only: a reset link's token or a claim reference never does.
+#[tokio::test]
+async fn tests_that_links_in_page_text_reach_jev_as_hosts_only() -> TestResult {
+    let recordings = briefs()?;
+    let recording = recordings
+        .iter()
+        .find(|recording| recording.brief.case == "27-synthetic-links-in-page-text")
+        .ok_or("27-synthetic-links-in-page-text is missing")?;
+    let evidence = replay(recording, Some(&Fixed::liar())).await?.evidence;
+    for host in ["acct.example.gov", "help.example.gov", "www.example.gov"] {
+        assert!(evidence.contains(host), "{host} missing from:\n{evidence}");
+    }
+    for leak in [
+        "token=", "abc123", "/reset", "faq", "topic=", "privacy", ".pdf", "/claims", "ref=", "XYZ",
+    ] {
+        assert!(!evidence.contains(leak), "{leak} leaked into:\n{evidence}");
     }
     Ok(())
 }

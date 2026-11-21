@@ -842,26 +842,55 @@ fn one_line(value: &str) -> String {
         .replace(']', ")")
 }
 
-/// Every `http(s)://…` word reduced to its host: page text can quote links with paths and
-/// queries, and only hosts may leave the page.
+/// Every link in the text reduced to its host: page text can quote links with paths and queries
+/// (a password-reset link's token, say), and only hosts may leave the page. A link is found
+/// anywhere in a word, behind an opening bracket or quote, with or without its scheme (`www.`).
 fn scrub_links(text: &str) -> String {
-    if !text.contains("://") {
-        return text.to_owned();
-    }
     text.split(' ')
-        .map(|word| {
-            let lower = word.to_ascii_lowercase();
-            if lower.starts_with("http://") || lower.starts_with("https://") {
-                Url::parse(word)
-                    .ok()
-                    .and_then(|url| url.host_str().map(str::to_owned))
-                    .unwrap_or_else(|| "[link]".to_owned())
-            } else {
-                word.to_owned()
-            }
-        })
+        .map(scrub_word)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn scrub_word(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    let Some(start) = ["https://", "http://", "www."]
+        .iter()
+        .filter_map(|prefix| lower.find(prefix))
+        .min()
+    else {
+        return word.to_owned();
+    };
+    let (head, rest) = word.split_at(start);
+    let link = rest.trim_end_matches(|c: char| {
+        matches!(
+            c,
+            ')' | ']'
+                | '}'
+                | '>'
+                | '"'
+                | '\''
+                | ','
+                | '.'
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '\u{201d}'
+                | '\u{2019}'
+        )
+    });
+    let tail = &rest[link.len()..];
+    let address = if link.to_ascii_lowercase().starts_with("www.") {
+        format!("https://{link}")
+    } else {
+        link.to_owned()
+    };
+    let host = Url::parse(&address)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "link".to_owned());
+    format!("{head}{host}{tail}")
 }
 
 #[cfg(test)]
@@ -1055,6 +1084,33 @@ mod tests {
             "rendering re-checks hand-built briefs"
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_links_anywhere_in_a_word_keep_only_their_host() {
+        for (text, kept) in [
+            (
+                "Reset it (https://acct.site.com/reset?token=abc) today",
+                "Reset it (acct.site.com) today",
+            ),
+            ("<https://help.site.com/a?b=1>", "<help.site.com>"),
+            ("\"https://y.io/p?q=1\",", "\"y.io\","),
+            ("See www.site.com/reset?token=xyz.", "See www.site.com."),
+            ("HTTPS://Z.IO/Q?x=1", "z.io"),
+            ("go to:https://a.io/x", "go to:a.io"),
+            ("awww.cute", "awww.cute"),
+            ("no links here", "no links here"),
+        ] {
+            assert_eq!(scrub_links(text), kept, "{text}");
+        }
+        let brief = PageBrief {
+            text: Some("Use <https://acct.site.com/reset?token=abc> or www.site.com/r?t=1".into()),
+            ..PageBrief::default()
+        };
+        assert_eq!(
+            brief.to_evidence(),
+            "[TEXT] Use <acct.site.com> or www.site.com"
+        );
     }
 
     #[test]

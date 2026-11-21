@@ -2119,7 +2119,6 @@ mod orchestration_tests {
     /// Arkose keeps its token outside the fields the check reads. A field that is not there
     /// proves nothing, so the claim keeps telling the agent to submit, and no money moves.
     #[tokio::test]
-    #[ignore = "needs verify::token_reading to read a missing response field as Unknown (review R2-1)"]
     async fn tests_that_an_arkose_token_applied_keeps_its_answer() -> anyhow::Result<()> {
         let page = FakePage {
             token_marks: Some(json!([])),
