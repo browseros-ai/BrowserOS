@@ -55,14 +55,16 @@ class AllocationRecord:
 
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
+    # The one place bos_build names the Rust server crate's directory.
     "server": ComponentSpec(
         id="server",
         display_name="BrowserOS server",
         version_scheme="semver",
-        manifest_path=Path("packages/browseros-agent/apps/server/package.json"),
-        lockfile_path=Path("packages/browseros-agent/bun.lock"),
-        package_name="@browseros/server",
-        workspace_path="apps/server",
+        manifest_path=Path(
+            "packages/browseros-agent/crates/browseros-server/Cargo.toml"
+        ),
+        lockfile_path=Path("packages/browseros-agent/Cargo.lock"),
+        package_name="browseros-server",
         tag_prefix="agent-server/v",
         legacy_tag_prefixes=("browseros-server-v",),
     ),
@@ -118,6 +120,32 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
     ),
 }
 
+# Release IDs outlive source moves. Suite reservations, candidates, and
+# component releases replay commits made before a move, and must read and stamp
+# the manifest and lockfile that existed at that ref to keep exact-tree proofs.
+# Each entry is an older layout of the component, newest first.
+_LEGACY_SOURCES: Mapping[str, tuple[ComponentSpec, ...]] = {
+    "server": (
+        # The TypeScript server, versioned through Bun's workspace lockfile.
+        replace(
+            COMPONENTS["server"],
+            manifest_path=Path("packages/browseros-agent/apps/server/package.json"),
+            lockfile_path=Path("packages/browseros-agent/bun.lock"),
+            package_name="@browseros/server",
+            workspace_path="apps/server",
+        ),
+    ),
+    "claw-server-rust": (
+        replace(
+            COMPONENTS["claw-server-rust"],
+            manifest_path=Path(
+                "packages/browseros-agent/apps/claw-server-rust/Cargo.toml"
+            ),
+            package_name="claw-server-rust",
+        ),
+    ),
+}
+
 _CANDIDATE_COMPONENTS = {
     "browseros": ("server", "agent"),
     "browserclaw": ("claw-server-rust", "browserclaw"),
@@ -138,18 +166,14 @@ def component_for_source(
 ) -> ComponentSpec:
     """Resolve source paths and package identity in a checkout or immutable ref.
 
-    Release IDs outlive source renames. Reservation recovery must read and
-    replay the old manifest and lockfile together to retain exact-tree proofs.
+    Picks the current layout when its manifest exists, else the first legacy
+    layout in ``_LEGACY_SOURCES`` whose manifest exists at ``ref``.
     """
     spec = component_by_id(component_id)
-    if component_id != "claw-server-rust":
+    legacy = _LEGACY_SOURCES.get(component_id, ())
+    if not legacy:
         return spec
-    legacy = replace(
-        spec,
-        manifest_path=Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml"),
-        package_name="claw-server-rust",
-    )
-    sources = (spec, legacy)
+    sources = (spec, *legacy)
     if ref is None:
         available = {
             source.manifest_path.as_posix()

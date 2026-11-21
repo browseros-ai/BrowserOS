@@ -30,6 +30,7 @@ from bos_build.core.checkout_lock import ChromiumCheckoutLock
 from bos_build.core.planner import Switches, plan
 from bos_build.core.resume import ResumeState
 from bos_build.lib.testing import MockBrowserOSRoot, MockChromium
+from bos_build.release.components import COMPONENTS
 from bos_build.lib.utils import get_platform, get_platform_arch
 
 runner = CliRunner()
@@ -856,13 +857,11 @@ class SourceProvenanceTest(unittest.TestCase):
         self.offset = (
             self.root / "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"
         )
-        self.component = (
-            self.root / "packages/browseros-agent/apps/server/package.json"
-        )
+        self.component = self.root / COMPONENTS["server"].manifest_path
         for path, content in (
             (self.version, "BROWSEROS_MAJOR=0\n"),
             (self.offset, "1\n"),
-            (self.component, "{}\n"),
+            (self.component, "[package]\n"),
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
@@ -908,8 +907,8 @@ class SourceProvenanceTest(unittest.TestCase):
             _resolve_source_sha(self.root)
         self.assertEqual(_resolve_source_sha(self.root, self.sha), self.sha)
 
-        self.component.write_text('{"version":"2"}\n')
-        with self.assertRaisesRegex(ValueError, "package.json"):
+        self.component.write_text('[package]\nversion = "2"\n')
+        with self.assertRaisesRegex(ValueError, "Cargo.toml"):
             _resolve_source_sha(self.root, self.sha)
 
     def test_override_must_match_head(self) -> None:

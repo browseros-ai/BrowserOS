@@ -60,10 +60,12 @@ class MacosServerBinariesTest(unittest.TestCase):
         )
         self.assertTrue(BROWSEROS_SERVER_BUNDLE.required_in_chromium_output)
         self.assertFalse(BROWSERCLAW_SERVER_BUNDLE.required_in_chromium_output)
-        self.assertEqual(BROWSEROS_SERVER_BUNDLE.source_builder, "bun")
         self.assertEqual(BROWSEROS_SERVER_BUNDLE.source_component, "server")
+        self.assertEqual(BROWSEROS_SERVER_BUNDLE.cargo_binary_name, "browseros_server")
         self.assertEqual(BROWSEROS_SERVER_BUNDLE.runtime_binary_name, "browseros_server")
-        self.assertEqual(BROWSERCLAW_SERVER_BUNDLE.source_builder, "cargo")
+        self.assertEqual(
+            BROWSERCLAW_SERVER_BUNDLE.cargo_binary_name, "browseros-claw-server-rs"
+        )
         self.assertEqual(
             BROWSERCLAW_SERVER_BUNDLE.source_component, "claw-server-rust"
         )

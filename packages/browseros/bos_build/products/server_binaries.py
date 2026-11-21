@@ -9,7 +9,7 @@ cycle (product files import these types).
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -35,9 +35,15 @@ class ServerBundle:
     windows_bundle_resources_root: Path
     macos_binaries: Dict[str, SignSpec]
     windows_binaries: Tuple[str, ...]
-    source_builder: Literal["bun", "cargo"]
+    # Source builds compile ``cargo build -p <source component package>
+    # --bin <cargo_binary_name>`` and stage it as ``runtime_binary_name``.
     source_component: str
+    cargo_binary_name: str
     runtime_binary_name: str
+    # Files staged beside the binary, relative to packages/browseros-agent.
+    # The release packager stages the same manifest, so a source-built browser
+    # carries the same server folder as the published resource zip.
+    resource_manifest: Path
     required_in_chromium_output: bool = True
     unsigned_artifact_prefix: str = "artifacts/server"
     unsigned_artifact_base_name: Optional[str] = None

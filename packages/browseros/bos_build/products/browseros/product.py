@@ -41,7 +41,8 @@ BROWSEROS_SERVER_BUNDLE = ServerBundle(
         "rg": SignSpec("rg", "runtime"),
     },
     windows_binaries=("browseros_server.exe",),
-    source_builder="bun",
     source_component="server",
+    cargo_binary_name="browseros_server",
     runtime_binary_name="browseros_server",
+    resource_manifest=Path("scripts/build/config/server-prod-resources.json"),
 )

@@ -720,7 +720,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
         paths = {
             "packages/browseros/resources/BROWSEROS_VERSION",
             "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
-            "packages/browseros-agent/apps/server/package.json",
+            COMPONENTS["server"].manifest_path.as_posix(),
             "packages/browseros-agent/apps/app/package.json",
             "packages/browseros-agent/apps/claw-server/Cargo.toml",
             "packages/browseros-agent/apps/claw-app/package.json",
@@ -847,6 +847,88 @@ class GitHubSuiteBackendTest(unittest.TestCase):
                 self._git(repo, "push", "origin", "main")
                 merged = self._git(repo, "rev-parse", "HEAD")
                 self.assertTrue(backend.merge_commit_matches_transaction(state, merged))
+
+    def test_discover_reservations_made_before_server_moved_to_cargo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo, _, cargo_sha = self._repository(Path(temp_dir))
+            current = COMPONENTS["server"]
+            legacy = replace(
+                current,
+                manifest_path=Path("packages/browseros-agent/apps/server/package.json"),
+                lockfile_path=Path("packages/browseros-agent/bun.lock"),
+                package_name="@browseros/server",
+                workspace_path="apps/server",
+            )
+            self._git(repo, "rm", "-q", str(current.manifest_path))
+            (repo / legacy.manifest_path).parent.mkdir(parents=True)
+            (repo / legacy.manifest_path).write_text(
+                '{\n  "name": "@browseros/server",\n  "version": "0.0.168"\n}\n'
+            )
+            lock = repo / legacy.lockfile_path
+            lock.write_text(
+                lock.read_text().replace(
+                    '  "workspaces": {\n',
+                    '  "workspaces": {\n'
+                    '    "apps/server": {\n'
+                    '      "name": "@browseros/server",\n'
+                    '      "version": "0.0.168",\n'
+                    "    },\n",
+                    1,
+                )
+            )
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "TypeScript server layout")
+            self._git(repo, "push", "origin", "main")
+            source_sha = self._git(repo, "rev-parse", "HEAD")
+            backend = GitHubSuiteBackend(repo, "owner/repo", "main")
+
+            # Reserve with the descriptor shipped before the move; discovery
+            # below runs today's code and descriptor.
+            with mock.patch.dict(COMPONENTS, {legacy.id: legacy}):
+                committed = backend.read_committed_versions()
+                self.assertEqual(committed["server"], "0.0.168")
+                versions = {
+                    component: (
+                        increment_component_version(component, version)
+                        if component in SUITE_RELEASE_COMPONENTS
+                        else version
+                    )
+                    for component, version in committed.items()
+                }
+                major, minor, build = backend.read_browser_version().split(".")[:3]
+                with (
+                    mock.patch(
+                        "bos_build.release.suite.create_pull_request",
+                        side_effect=RuntimeError("stopped before PR creation"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "before PR creation"),
+                ):
+                    backend.create_transaction(
+                        SuiteRequest("nightly", source_sha, "main", "main"),
+                        transaction_branch("nightly", source_sha),
+                        versions,
+                        f"{major}.{minor}.{int(build) + 1}",
+                        backend.read_build_offset() + 1,
+                    )
+
+            self._git(
+                repo,
+                "checkout",
+                cargo_sha,
+                "--",
+                str(current.manifest_path),
+                str(legacy.lockfile_path),
+            )
+            self._git(repo, "rm", "-q", str(legacy.manifest_path))
+            self._git(repo, "commit", "-m", "move server to Cargo")
+            self._git(repo, "push", "origin", "main")
+
+            records = backend.discover_branch_reservations()
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].source_sha, source_sha)
+            self.assertEqual(records[0].component_versions, versions)
+            self.assertEqual(versions["server"], "0.0.169")
 
     def test_branch_push_before_pr_creation_burns_every_reserved_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
