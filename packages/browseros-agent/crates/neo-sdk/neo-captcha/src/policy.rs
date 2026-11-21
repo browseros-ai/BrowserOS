@@ -6,20 +6,23 @@ use crate::{page::CaptchaPage, types::PageError};
 
 /// The site has explicitly refused automated access. Page text stays out of the outcome.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PolicyWall;
+pub(crate) struct PolicyWall {
+    /// The host from the same document read as the notice, for the handoff log.
+    pub(crate) host: Option<String>,
+}
 
 const READ_NOTICE: &str = r#"(() => {
     /* captcha:policy-wall */
     const footer = 'footer, [role="contentinfo"]';
     const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]'))
-        .filter(node => !node.closest(footer) && node.getClientRects().length)
+        .filter(node => !node.closest(footer) && node.checkVisibility({checkVisibilityCSS:true, checkOpacity:true}))
         .map(node => node.innerText);
     let text = document.body?.getClientRects().length ? document.body.innerText : '';
     // A site's standing terms can use the same wording on pages that are open.
     for (const node of document.querySelectorAll(footer)) {
         if (node.getClientRects().length) text = text.replace(node.innerText, '\n');
     }
-    return {title: document.title, headings, text};
+    return {title: document.title, headings, text, host: location.hostname};
 })()"#;
 
 pub(crate) async fn policy_wall<P: CaptchaPage>(page: &P) -> Result<Option<PolicyWall>, PageError> {
@@ -28,20 +31,55 @@ pub(crate) async fn policy_wall<P: CaptchaPage>(page: &P) -> Result<Option<Polic
         .get("headings")
         .and_then(Value::as_array)
         .into_iter()
-        .flatten();
-    let text = [notice.get("title"), notice.get("text")]
-        .into_iter()
-        .flatten();
-    Ok(text
-        .chain(headings)
+        .flatten()
         .filter_map(Value::as_str)
-        .any(|text| text.lines().any(is_denial))
-        .then_some(PolicyWall))
+        .flat_map(str::lines);
+    let restriction_heading = headings.clone().any(|line| {
+        matches!(
+            normalize(line).trim_end_matches([':', '.', '!']),
+            "access restricted" | "access denied"
+        )
+    });
+    let title = notice
+        .get("title")
+        .and_then(Value::as_str)
+        .into_iter()
+        .flat_map(str::lines);
+    let denied = title
+        .chain(headings)
+        .any(|line| is_denial(&normalize(line)))
+        || notice
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| {
+                text.lines().any(|line| {
+                    let line = normalize(line);
+                    is_denial(&line) || is_unauthorized_agent_notice(&line, restriction_heading)
+                })
+            });
+    Ok(denied.then(|| PolicyWall {
+        host: notice
+            .get("host")
+            .and_then(Value::as_str)
+            .filter(|host| !host.is_empty())
+            .map(str::to_owned),
+    }))
+}
+
+fn normalize(line: &str) -> String {
+    let words: Vec<_> = line.split_whitespace().collect();
+    words.join(" ").to_ascii_lowercase()
+}
+
+fn is_unauthorized_agent_notice(line: &str, restriction_heading: bool) -> bool {
+    line.contains("unauthorized ai agent")
+        && (restriction_heading
+            || ["violates", "not permitted", "not allowed"]
+                .into_iter()
+                .any(|denial| line.contains(denial)))
 }
 
 fn is_denial(line: &str) -> bool {
-    let words: Vec<_> = line.split_whitespace().collect();
-    let line = words.join(" ").to_ascii_lowercase();
     let line = line.trim_end_matches(['.', '!']);
     let notice = [
         " on this site",
@@ -85,6 +123,17 @@ mod tests {
     };
 
     struct Page(Value);
+
+    const AMAZON_NOTICE: &str = "Continued access by an unauthorized AI agent violates Amazon's Conditions of Use, to which our customers have agreed.";
+
+    fn amazon_wall() -> Page {
+        Page(json!({
+            "title": "Amazon.com",
+            "headings": ["Access restricted"],
+            "text": AMAZON_NOTICE,
+            "host": "www.amazon.com"
+        }))
+    }
 
     impl CaptchaPage for Page {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
@@ -132,7 +181,35 @@ mod tests {
             json!({"headings": ["Access restricted", "No AI agents allowed"]}),
             json!({"text": "Access denied\nAutomated agents are not permitted to access this site."}),
         ] {
-            assert_eq!(policy_wall(&Page(notice)).await?, Some(PolicyWall));
+            assert!(policy_wall(&Page(notice)).await?.is_some());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_recorded_amazon_notice_is_a_policy_wall() -> anyhow::Result<()> {
+        assert_eq!(
+            policy_wall(&amazon_wall()).await?,
+            Some(PolicyWall {
+                host: Some("www.amazon.com".into()),
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_agent_notice_needs_a_restriction_heading_or_words_of_denial()
+    -> anyhow::Result<()> {
+        for notice in [
+            json!({
+                "headings": ["ACCESS   DENIED"],
+                "text": "We identified an UNAUTHORIZED  AI\tagent on this page."
+            }),
+            json!({"text": AMAZON_NOTICE}),
+            json!({"text": "An unauthorized AI agent is not permitted here."}),
+            json!({"text": "An unauthorized AI agent is not allowed here."}),
+        ] {
+            assert!(policy_wall(&Page(notice)).await?.is_some());
         }
         Ok(())
     }
@@ -143,6 +220,13 @@ mod tests {
             "title": "Store",
             "headings": ["Products", "Terms of service"],
             "text": "Browse our products.\nOur terms prohibit bots and automated agents.\nSee how unauthorized AI agent detection works."
+        }));
+        assert_eq!(policy_wall(&page).await?, None);
+
+        let page = Page(json!({
+            "title": "Access restricted",
+            "headings": ["How detection works"],
+            "text": "See how unauthorized AI agent detection works.\nEditing this article is not allowed."
         }));
         assert_eq!(policy_wall(&page).await?, None);
         Ok(())
@@ -167,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_a_policy_wall_hands_off_before_detecting_or_solving() -> anyhow::Result<()>
     {
-        let page = Page(json!({"headings": ["Access restricted: unauthorized AI agent"]}));
+        let page = amazon_wall();
         for (human_help, guidance) in [
             (true, "Call request_human_help with kind \"captcha\"."),
             (false, "Ask the user to take over this page."),

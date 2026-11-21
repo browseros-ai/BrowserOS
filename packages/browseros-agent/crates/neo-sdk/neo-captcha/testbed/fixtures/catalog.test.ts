@@ -85,6 +85,7 @@ test('tests that the catalog contains every required page with unique ids and ex
     'cloudflare-wall',
     'no-captcha',
     'policy-wall-ai-agent',
+    'policy-wall-amazon-nov19',
     'policy-wall-terms-footer',
     'hcaptcha-test',
     'perimeterx-modal',
