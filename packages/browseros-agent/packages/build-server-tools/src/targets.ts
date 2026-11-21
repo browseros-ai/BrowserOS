@@ -6,35 +6,30 @@ const TARGETS: Record<TargetId, BuildTarget> = {
     name: 'Linux x64',
     os: 'linux',
     arch: 'x64',
-    bunTarget: 'bun-linux-x64-baseline',
   },
   'linux-arm64': {
     id: 'linux-arm64',
     name: 'Linux ARM64',
     os: 'linux',
     arch: 'arm64',
-    bunTarget: 'bun-linux-arm64',
   },
   'windows-x64': {
     id: 'windows-x64',
     name: 'Windows x64',
     os: 'windows',
     arch: 'x64',
-    bunTarget: 'bun-windows-x64-baseline',
   },
   'darwin-arm64': {
     id: 'darwin-arm64',
     name: 'macOS ARM64',
     os: 'macos',
     arch: 'arm64',
-    bunTarget: 'bun-darwin-arm64',
   },
   'darwin-x64': {
     id: 'darwin-x64',
     name: 'macOS x64',
     os: 'macos',
     arch: 'x64',
-    bunTarget: 'bun-darwin-x64',
   },
 }
 

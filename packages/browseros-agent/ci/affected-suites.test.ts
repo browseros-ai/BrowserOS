@@ -33,16 +33,10 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['app-onboard'])
   })
 
-  it('maps the server package to all seven server suites', () => {
-    expect(suiteNames([pkg('@browseros/server', 'apps/server')])).toEqual([
-      'server-agent',
-      'server-api',
-      'server-tools',
-      'server-browser',
-      'server-integration',
-      'server-lib',
-      'server-root',
-    ])
+  it('maps the BrowserOS Rust server to the Rust workspace suites', () => {
+    expect(
+      suiteNames([pkg('browseros-server', 'crates/browseros-server')]),
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('maps the app package to the agent suite', () => {
@@ -303,13 +297,12 @@ describe('computeAffectedSuites', () => {
     // A change to @browseros/shared marks all packages affected (Turbo global
     // hash); the mapping should then request every suite.
     const allPackages: AffectedPackage[] = [
-      pkg('@browseros/server', 'apps/server'),
       pkg('@browseros/app', 'apps/app'),
       pkg('@browseros/claw-app', 'apps/claw-app'),
       pkg('@browseros/claw-onboard', 'apps/claw-onboard'),
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
-      pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('browseros-server', 'crates/browseros-server'),
       pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
       pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),

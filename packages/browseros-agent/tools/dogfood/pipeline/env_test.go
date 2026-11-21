@@ -14,10 +14,10 @@ func TestWriteProductionEnvFile(t *testing.T) {
 	cfg := config.Config{
 		ProductionEnv: config.ProductionEnv{
 			Server: map[string]string{
-				"NODE_ENV":   "production",
-				"LOG_LEVEL":  "debug",
-				"R2_BUCKET":  "server-bucket",
-				"SHARED_KEY": "server",
+				"NODE_ENV":      "production",
+				"BROWSEROS_LOG": "debug",
+				"R2_BUCKET":     "server-bucket",
+				"SHARED_KEY":    "server",
 			},
 			CLI: map[string]string{
 				"R2_BUCKET":  "cli-bucket",
@@ -30,12 +30,10 @@ func TestWriteProductionEnvFile(t *testing.T) {
 	}
 	path := filepath.Join(root, ".env.production")
 	assertMode(t, path, 0600)
-	assertMissing(t, filepath.Join(root, "apps", "server", ".env.production"))
+	assertMissing(t, filepath.Join(root, "crates", "browseros-server", ".env.production"))
 	assertMissing(t, filepath.Join(root, "apps", "cli", ".env.production"))
-	assertContains(t, path, "BROWSEROS_CONFIG_URL=https://llm.browseros.com/api/browseros-server/config\n")
-	assertContains(t, path, "LOG_LEVEL=debug\n")
+	assertContains(t, path, "BROWSEROS_LOG=debug\n")
 	assertContains(t, path, "NODE_ENV=production\n")
-	assertContains(t, path, "POSTHOG_API_KEY=\n")
 	assertContains(t, path, "R2_BUCKET=server-bucket\n")
 	assertContains(t, path, "SHARED_KEY=server\n")
 	assertNotContains(t, path, "R2_UPLOAD_PREFIX")
@@ -57,7 +55,7 @@ func TestWriteProductionEnvFileWritesServerOnlyEmptyValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertContains(t, filepath.Join(root, ".env.production"), "SENTRY_DSN=\n")
+	assertContains(t, filepath.Join(root, ".env.production"), "BROWSEROS_SENTRY_DSN=\n")
 }
 
 func TestWriteEnvFileQuotesUnsafeValues(t *testing.T) {

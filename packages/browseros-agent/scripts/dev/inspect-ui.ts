@@ -1086,7 +1086,7 @@ Examples:
   bun scripts/dev/inspect-ui.ts scroll app.html down 5
   bun scripts/dev/inspect-ui.ts hover sidepanel 69
   bun scripts/dev/inspect-ui.ts select_option app.html 150 "OpenAI"
-  bun scripts/dev/inspect-ui.ts wait_for app.html text "Scheduled Tasks"
+  bun scripts/dev/inspect-ui.ts wait_for app.html text "Settings"
   bun scripts/dev/inspect-ui.ts wait_for sidepanel selector ".chat-message"
   bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/settings'"
   bun scripts/dev/inspect-ui.ts open-sidepanel`)

@@ -111,23 +111,24 @@ describe('resolveEnv', () => {
     expect(loadRootEnvFile(tempRoot, 'production')).toEqual({})
     expect(
       resolveEnv({ rootDir: tempRoot, mode: 'production' }).values,
-    ).not.toHaveProperty('POSTHOG_API_KEY')
+    ).not.toHaveProperty('BROWSEROS_SENTRY_DSN')
   })
 
   test('uses overrides before process env before the root env file', async () => {
-    tempRoot = await writeRootEnv('development', { LOG_LEVEL: 'file' })
-    process.env.LOG_LEVEL = 'process'
+    tempRoot = await writeRootEnv('development', { BROWSEROS_LOG: 'file' })
+    process.env.BROWSEROS_LOG = 'process'
 
     expect(
       resolveEnv({
         rootDir: tempRoot,
         mode: 'development',
-        overrides: { LOG_LEVEL: 'override' },
-      }).values.LOG_LEVEL,
+        overrides: { BROWSEROS_LOG: 'override' },
+      }).values.BROWSEROS_LOG,
     ).toBe('override')
 
     expect(
-      resolveEnv({ rootDir: tempRoot, mode: 'development' }).values.LOG_LEVEL,
+      resolveEnv({ rootDir: tempRoot, mode: 'development' }).values
+        .BROWSEROS_LOG,
     ).toBe('process')
   })
 
@@ -149,47 +150,50 @@ describe('resolveEnv', () => {
   test('demotes wrong-source values when the target file lacks the key', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'root-env-load-'))
     await writeEnvFile(tempRoot, '.env.development', {
-      POSTHOG_API_KEY: 'phc_dev',
+      BROWSEROS_SENTRY_DSN: 'phc_dev',
     })
     await writeEnvFile(tempRoot, '.env.production', { NODE_ENV: 'production' })
-    process.env.POSTHOG_API_KEY = 'phc_dev'
+    process.env.BROWSEROS_SENTRY_DSN = 'phc_dev'
 
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
-    expect(resolved.values).not.toHaveProperty('POSTHOG_API_KEY')
-    expect(resolved.sources).not.toHaveProperty('POSTHOG_API_KEY')
-    expect(resolved.demotedKeys).toEqual(['POSTHOG_API_KEY'])
+    expect(resolved.values).not.toHaveProperty('BROWSEROS_SENTRY_DSN')
+    expect(resolved.sources).not.toHaveProperty('BROWSEROS_SENTRY_DSN')
+    expect(resolved.demotedKeys).toEqual(['BROWSEROS_SENTRY_DSN'])
   })
 
   test('keeps explicit process env when it does not match a wrong-source file', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'root-env-load-'))
-    await writeEnvFile(tempRoot, '.env.development', { LOG_LEVEL: 'debug' })
-    await writeEnvFile(tempRoot, '.env.production', { LOG_LEVEL: 'info' })
-    process.env.LOG_LEVEL = 'warn'
+    await writeEnvFile(tempRoot, '.env.development', { BROWSEROS_LOG: 'debug' })
+    await writeEnvFile(tempRoot, '.env.production', { BROWSEROS_LOG: 'info' })
+    process.env.BROWSEROS_LOG = 'warn'
 
     expect(
-      resolveEnv({ rootDir: tempRoot, mode: 'production' }).values.LOG_LEVEL,
+      resolveEnv({ rootDir: tempRoot, mode: 'production' }).values
+        .BROWSEROS_LOG,
     ).toBe('warn')
   })
 
   test('throws one missing-key error with section and file guidance', async () => {
     tempRoot = await writeRootEnv('production', {
-      POSTHOG_API_KEY: '   ',
+      BROWSEROS_SENTRY_DSN: '   ',
     })
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
-    expect(() => requireEnv(resolved, ['POSTHOG_API_KEY'])).toThrow(
-      /POSTHOG_API_KEY \(section: server\).*\.env\.production/,
+    expect(() => requireEnv(resolved, ['BROWSEROS_SENTRY_DSN'])).toThrow(
+      /BROWSEROS_SENTRY_DSN \(section: server\).*\.env\.production/,
     )
   })
 
   test('trims returned required values and reports unknown missing keys', async () => {
     tempRoot = await writeRootEnv('development', {
-      LOG_LEVEL: ' debug ',
+      BROWSEROS_LOG: ' debug ',
     })
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'development' })
 
-    expect(requireEnv(resolved, ['LOG_LEVEL'])).toEqual({ LOG_LEVEL: 'debug' })
+    expect(requireEnv(resolved, ['BROWSEROS_LOG'])).toEqual({
+      BROWSEROS_LOG: 'debug',
+    })
     expect(() => requireEnv(resolved, ['UNKNOWN_REQUIRED_KEY'])).toThrow(
       /UNKNOWN_REQUIRED_KEY\. Set it in \.env\.development/,
     )
@@ -197,12 +201,14 @@ describe('resolveEnv', () => {
 
   test('does not validate unrelated ambient registry values', async () => {
     tempRoot = await writeRootEnv('production', {
-      LOG_LEVEL: 'info',
+      BROWSEROS_LOG: 'info',
     })
     process.env.BROWSEROS_SERVER_PORT = 'not a port'
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
-    expect(requireEnv(resolved, ['LOG_LEVEL'])).toEqual({ LOG_LEVEL: 'info' })
+    expect(requireEnv(resolved, ['BROWSEROS_LOG'])).toEqual({
+      BROWSEROS_LOG: 'info',
+    })
   })
 
   test('validates requested non-empty values only', async () => {

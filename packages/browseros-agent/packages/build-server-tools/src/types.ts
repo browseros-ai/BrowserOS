@@ -1,5 +1,3 @@
-import type { BunPlugin } from 'bun'
-
 export type TargetId =
   | 'linux-x64'
   | 'linux-arm64'
@@ -15,7 +13,6 @@ export interface BuildTarget {
   name: string
   os: TargetOs
   arch: TargetArch
-  bunTarget: string
 }
 
 export interface BuildArgs {
@@ -45,11 +42,6 @@ export interface BuildEnvSpec {
   defaultR2DownloadPrefix?: string
 }
 
-export interface BundleOptions {
-  external?: readonly string[]
-  plugins?: BunPlugin[]
-}
-
 export interface ProductBuildSpec {
   label: string
   packageDir: string
@@ -70,12 +62,6 @@ export interface ResourceBuildProductDescriptor extends ProductBuildSpec {
   includeArtifactIdentity?: boolean
   archiveFilesOnly?: boolean
   expectedArtifactFiles?: (target: BuildTarget) => readonly string[]
-}
-
-export interface BuildProductDescriptor extends ResourceBuildProductDescriptor {
-  entrypoint: string
-  rawBinaryBaseName: string
-  bundle?: BundleOptions
 }
 
 export interface AssetBuildProductDescriptor extends ProductBuildSpec {

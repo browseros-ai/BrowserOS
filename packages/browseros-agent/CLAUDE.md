@@ -1,6 +1,6 @@
 # BrowserOS Agent contributor ground rules
 
-A monorepo for the BrowserOS MCP server, agent extension UI, Neo SDK, and shared packages: Bun
+A monorepo for the BrowserOS and BrowserOS neo servers, extensions, Neo SDK, and shared packages. Use Bun
 workspaces for TypeScript (`apps/`, `packages/`) and a Cargo workspace for Rust (`crates/`,
 `apps/claw-server`).
 
@@ -29,9 +29,8 @@ test commands their own runs: suites can clear shared tabs and cookies. The laun
 the bundled server and isolates the browser home to protect real MCP configuration and
 shared skills. It requires Node 22+.
 
-`bun run test:neo-spec`, the server's browser tests (`apps/server/tests/__helpers__`), and the
-claw-mcp contract suite (`bun run test:claw-mcp-contract`) keep their own launchers; run them
-directly, not under `test:browser`. Use `bun run dev:claw:watch` for interactive app work.
+Run `bun run test:neo-spec` and `bun run test:claw-mcp-contract` directly so each uses its
+own launcher. Use `bun run dev:watch` for BrowserOS and `bun run dev:claw:watch` for BrowserOS neo.
 
 For browser overrides or run artifacts, read [the live-test guide](CONTRIBUTING.md#run-live-browser-tests).
 
@@ -104,7 +103,7 @@ For client setup, `viewer-image`, `recover`, and what the machines retain, read
 
 ## Where to look
 
-- Server work: `apps/server/CLAUDE.md`.
+- BrowserOS server entry point and module map are in `crates/browseros-server/src/lib.rs`.
 - Extension and app UI work: `apps/app/CLAUDE.md`.
 - Neo SDK crates: `crates/neo-sdk/STYLE.md` holds the rules review checks, and
   `crates/neo-sdk/check.sh` runs them.

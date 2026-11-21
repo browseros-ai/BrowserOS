@@ -16,7 +16,7 @@ The built-in browser extension that powers BrowserOS's AI interface — new tab 
 
 ## How It Connects
 
-The extension communicates with the [BrowserOS Server](../../apps/server/) running locally. The server handles the AI agent loop, MCP tools, and CDP connections — the extension provides the UI layer.
+The extension uses the [Server API](../../contracts/server-api/) to chat with the local [BrowserOS server](../../crates/browseros-server/). The Rust server runs the agent loop and connects to the browser.
 
 ## Project Structure
 

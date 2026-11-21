@@ -1,5 +1,5 @@
 import { useChat } from '@ai-sdk/react'
-import { ServerApiClient, ServerApiError } from '@browseros/server-api/client'
+import { ServerApiClient } from '@browseros/server-api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -939,8 +939,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     void new ServerApiClient(serverUrl)
       .releaseConversation({ conversationId })
       .catch((error) => {
-        // The old server returned 404 if there was no in-memory session.
-        if (error instanceof ServerApiError && error.status === 404) return
         sentry.captureException(error, {
           extra: { conversationId },
         })

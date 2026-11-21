@@ -59,9 +59,6 @@ PRODUCT_LINES = {
     "docs/browseros/features/use-with-claude-code.mdx": {
         "7f128c3fd2e5dbdf1f16ca6255f8831337aeef66bf6314db4944f03f3bc0a0a5",
     },
-    "packages/browseros-agent/apps/server/src/api/services/klavis/catalog.ts": {
-        "cdff02cdd86eecc7ecd10292d57267e3e69099579f2c38b7827ac7f14bacc831",
-    },
 }
 
 
