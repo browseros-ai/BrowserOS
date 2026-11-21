@@ -121,6 +121,9 @@ pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub document: DocumentId,
     pub user_agent: Option<String>,
     pub forced_method: Option<config::ForcedMethod>,
+    /// The fix a second round applies before its flow runs again (`verify::next_step` chose
+    /// it from the block the check found). `None` in the first round.
+    pub remedy: Option<verify::Remedy>,
 }
 
 impl<P: CaptchaPage, B: CaptchaBackend> SolveCtx<'_, P, B> {
@@ -405,6 +408,7 @@ impl CaptchaSolver {
                             document: detection.document.clone(),
                             user_agent,
                             forced_method: self.forced_method,
+                            remedy: None,
                         };
                         route(Some(challenge.kind), Some(challenge), &detection.document);
                         return driver.solve(&ctx, challenge).await;

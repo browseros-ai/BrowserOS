@@ -940,6 +940,7 @@ mod tests {
                 document: document(),
                 user_agent: Some("BrowserOS test agent".into()),
                 forced_method: None,
+                remedy: None,
             },
             &Challenge {
                 kind: CaptchaKind::Arkose,
