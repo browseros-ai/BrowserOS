@@ -311,3 +311,44 @@ pub(super) async fn missing_column<C: ConnectionTrait>(
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_embedded_table_is_the_journal_in_order() -> Result<(), serde_json::Error> {
+        let journal: serde_json::Value =
+            serde_json::from_str(include_str!("legacy/meta/_journal.json"))?;
+        let entries: Vec<(String, i64)> = journal["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                (
+                    entry["tag"].as_str().unwrap_or_default().to_owned(),
+                    entry["when"].as_i64().unwrap_or_default(),
+                )
+            })
+            .collect();
+        let embedded: Vec<(String, i64)> = DRIZZLE_MIGRATIONS
+            .iter()
+            .map(|migration| (migration.tag.to_owned(), migration.created_at))
+            .collect();
+        assert_eq!(embedded, entries);
+        Ok(())
+    }
+
+    #[test]
+    fn the_files_are_byte_for_byte_the_ones_the_old_server_recorded() {
+        // From the old server's own migration history (apps/server/src/lib/db/client.ts).
+        assert_eq!(
+            DRIZZLE_MIGRATIONS[0].hash(),
+            "aadfc2e86410febb11a974d25d99d5f7196aa797d9635ced9a18cd4eeb503b61"
+        );
+        assert_eq!(
+            DRIZZLE_MIGRATIONS[14].hash(),
+            "bc71831be007936b7d04aa24c4496a06517e204a78d35af93935f3fc97eb49f9"
+        );
+    }
+}
