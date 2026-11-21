@@ -189,7 +189,7 @@ func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, a
 	if err := resolveStartBrowserApp(&cfg); err != nil {
 		return nil, err
 	}
-	reportProgress(opts, "building agent")
+	reportProgress(opts, "building the BrowserOS extension and server")
 	if err := pipeline.Build(ctx, agentRoot, opts.Runner); err != nil {
 		return nil, err
 	}
@@ -412,13 +412,7 @@ func (e *environment) ForceKill() {
 }
 
 func serverCommand(configPath string) []string {
-	// Bun loads the root dotenv file before Cargo passes the environment to
-	// the server. Inherited values, including the dogfood state dir, take priority.
-	return []string{
-		"bun", "--env-file=.env.development", "run", "--",
-		"rustup", "run", "1.98.0", "cargo", "run", "--locked", "-p", "browseros-server",
-		"--", "--config", configPath,
-	}
+	return pipeline.BrowserOSServerCargoCommand("run", "--", "--config", configPath)
 }
 
 func clawAppCommand() []string {
@@ -430,17 +424,14 @@ func clawServerCommand(configPath string) []string {
 }
 
 func serverRuntimeEnv(base []string, cfg config.Config) []string {
-	env := make([]string, 0, len(base)+2)
+	env := make([]string, 0, len(base)+1)
 	for _, entry := range base {
 		if strings.HasPrefix(entry, "BROWSEROS_DIR=") {
 			continue
 		}
 		env = append(env, entry)
 	}
-	return append(env,
-		"NODE_ENV=development",
-		fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir),
-	)
+	return append(env, fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir))
 }
 
 // clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserClaw state.
