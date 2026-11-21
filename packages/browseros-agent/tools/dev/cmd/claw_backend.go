@@ -13,11 +13,12 @@ import (
 	"browseros-dev/proc"
 )
 
-// clawBackend holds the differences between the two Rust servers supervised
-// by Claw watch. Both use the same browser, launch JSON writer and process lifecycle.
-type clawBackend struct {
+// rustServerBackend describes a Cargo server for the shared watch supervisor.
+// The product launcher owns the browser and the supervisor owns each server launch.
+type rustServerBackend struct {
 	Label           string
 	Package         string
+	Toolchain       string
 	Bin             string
 	Features        []string
 	SidecarName     string
@@ -27,9 +28,19 @@ type clawBackend struct {
 	ReadyPath       string
 }
 
+var browserOSServerBackend = rustServerBackend{
+	Label:           "browseros-server",
+	Package:         "browseros-server",
+	Toolchain:       "1.98.0",
+	SidecarName:     "browseros-server",
+	ResourcesDir:    "resources",
+	ExecutionDir:    func(profile string) string { return profile },
+	RustWatchInputs: rustWatchInputsWithSDK,
+}
+
 // billing-staging points the dev claw-server at the staging billing gateway, so neo sells and
 // verifies ultrafast against the staging Stripe sandbox.
-var clawServerBackend = clawBackend{
+var clawServerBackend = rustServerBackend{
 	Label:           "claw-server",
 	Package:         "claw-server",
 	Features:        []string{"billing-staging"},
@@ -39,7 +50,7 @@ var clawServerBackend = clawBackend{
 	RustWatchInputs: rustClawWatchInputs,
 }
 
-var sdkServerBackend = clawBackend{
+var sdkServerBackend = rustServerBackend{
 	Label:        "neo-server (browseros-claw-sdk)",
 	Package:      "neo-server",
 	Bin:          "browseros-claw-sdk",
@@ -48,23 +59,31 @@ var sdkServerBackend = clawBackend{
 	// Neo derives the upload deny root from the execution directory's parent.
 	// Passing the profile itself would put the entire temp directory off limits.
 	ExecutionDir:    func(profile string) string { return filepath.Join(profile, ".browseros") },
-	RustWatchInputs: rustSdkWatchInputs,
+	RustWatchInputs: rustWatchInputsWithSDK,
 	ReadyPath:       "/system/ready",
 }
 
-func selectClawBackend(value string) (clawBackend, error) {
+func selectClawBackend(value string) (rustServerBackend, error) {
 	switch {
 	case strings.TrimSpace(value) == "":
 		return clawServerBackend, nil
 	case value == "1":
 		return sdkServerBackend, nil
 	default:
-		return clawBackend{}, fmt.Errorf("BROWSERCLAW_USE_SDK must be %q or unset, got %q", "1", value)
+		return rustServerBackend{}, fmt.Errorf("BROWSERCLAW_USE_SDK must be %q or unset, got %q", "1", value)
 	}
 }
 
-func clawBackendProcConfig(backend clawBackend, root string, env []string, p proc.Ports, userDataDir string, sidecarPath string, killPort func(int, time.Duration) error) proc.ProcConfig {
-	command := []string{"cargo", "run", "-p", backend.Package}
+func (backend rustServerBackend) cargoCommand(args ...string) []string {
+	if backend.Toolchain != "" {
+		// rustup selects Cargo before PATH lookup can pick a system Cargo.
+		return append([]string{"rustup", "run", backend.Toolchain, "cargo"}, args...)
+	}
+	return append([]string{"cargo"}, args...)
+}
+
+func rustServerProcConfig(backend rustServerBackend, root string, env []string, p proc.Ports, userDataDir string, sidecarPath string, killPort func(int, time.Duration) error) proc.ProcConfig {
+	command := backend.cargoCommand("run", "-p", backend.Package)
 	if backend.Bin != "" {
 		command = append(command, "--bin", backend.Bin)
 	}
@@ -74,7 +93,7 @@ func clawBackendProcConfig(backend clawBackend, root string, env []string, p pro
 	return proc.ProcConfig{
 		Tag:     proc.TagServer,
 		Dir:     root,
-		Env:     clawServerCargoEnv(root, env),
+		Env:     rustServerCargoEnv(root, env),
 		Restart: true,
 		Cmd:     append(command, "--", "--config", sidecarPath),
 		// ManagedProc invokes this before every launch, including restarts.
@@ -102,7 +121,7 @@ func rustClawWatchInputs(root string) []string {
 	return append(inputs, sharedRustWatchInputs(root)...)
 }
 
-func rustSdkWatchInputs(root string) []string {
+func rustWatchInputsWithSDK(root string) []string {
 	// The nested SDK crates are outside the shared crate glob. Their embedded
 	// JavaScript is compiled into the Rust binary, so asset changes restart it too.
 	inputs := rustWatchGlobs(filepath.Join(root, "crates", "neo-sdk", "*"), "src", "Cargo.toml", "assets")
@@ -126,7 +145,7 @@ func rustWatchGlobs(cratePattern string, entries ...string) []string {
 	return inputs
 }
 
-func startClawReadinessWatcher(ctx context.Context, wg *sync.WaitGroup, backend clawBackend, port int) {
+func startClawReadinessWatcher(ctx context.Context, wg *sync.WaitGroup, backend rustServerBackend, port int) {
 	if backend.ReadyPath == "" {
 		return
 	}

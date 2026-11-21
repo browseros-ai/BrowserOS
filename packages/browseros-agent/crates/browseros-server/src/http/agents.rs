@@ -1,9 +1,8 @@
 //! `/agents`: the coding-agent rows (Claude Code, Codex). `GET /agents` must answer `200` even
-//! when empty, because the extension's composer waits on it before every send. Chunk
-//! `settings` fills the bodies.
+//! when empty, because the extension's composer waits on it before every send.
 
+use axum::Json;
 use axum::extract::State;
-use axum::response::Response;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -28,8 +27,11 @@ pub(super) fn routes() -> OpenApiRouter<App> {
         (status = 200, description = "Agents of a type this server runs.", body = dto::AgentList),
     )
 )]
-async fn list_agents(State(_app): State<App>) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+async fn list_agents(State(app): State<App>) -> Result<Json<dto::AgentList>, ApiError> {
+    let agents = app.store.agents().list().await?;
+    Ok(Json(dto::AgentList {
+        agents: agents.into_iter().map(dto::AgentBody::from).collect(),
+    }))
 }
 
 /// Create a coding agent; the server makes the id.
@@ -45,11 +47,17 @@ async fn list_agents(State(_app): State<App>) -> Result<Response, ApiError> {
     )
 )]
 async fn create_agent(
-    State(_app): State<App>,
+    State(app): State<App>,
     Body(body): Body<dto::AgentInput>,
-) -> Result<Response, ApiError> {
-    let _new = crate::store::NewAgent::try_from(body).map_err(ApiError::bad_request)?;
-    Err(ApiError::not_implemented())
+) -> Result<(axum::http::StatusCode, Json<dto::AgentResponse>), ApiError> {
+    let new = crate::store::NewAgent::try_from(body).map_err(ApiError::bad_request)?;
+    let agent = app.store.agents().create(new).await?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(dto::AgentResponse {
+            agent: agent.into(),
+        }),
+    ))
 }
 
 /// Edit a coding agent.
@@ -67,12 +75,20 @@ async fn create_agent(
     )
 )]
 async fn update_agent(
-    State(_app): State<App>,
-    PathParams(_path): PathParams<dto::AgentPath>,
+    State(app): State<App>,
+    PathParams(path): PathParams<dto::AgentPath>,
     Body(body): Body<dto::AgentPatchBody>,
-) -> Result<Response, ApiError> {
-    let _patch = crate::store::AgentPatch::try_from(body).map_err(ApiError::bad_request)?;
-    Err(ApiError::not_implemented())
+) -> Result<Json<dto::AgentResponse>, ApiError> {
+    let patch = crate::store::AgentPatch::try_from(body).map_err(ApiError::bad_request)?;
+    let agent = app
+        .store
+        .agents()
+        .update(&path.agent_id, patch)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Unknown agent"))?;
+    Ok(Json(dto::AgentResponse {
+        agent: agent.into(),
+    }))
 }
 
 /// Delete a coding agent.
@@ -88,8 +104,11 @@ async fn update_agent(
     )
 )]
 async fn delete_agent(
-    State(_app): State<App>,
-    PathParams(_path): PathParams<dto::AgentPath>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    State(app): State<App>,
+    PathParams(path): PathParams<dto::AgentPath>,
+) -> Result<Json<dto::Success>, ApiError> {
+    if !app.store.agents().delete(&path.agent_id).await? {
+        return Err(ApiError::not_found("Unknown agent"));
+    }
+    Ok(Json(dto::Success { success: true }))
 }
