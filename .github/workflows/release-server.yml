@@ -74,18 +74,20 @@ on:
         required: true
       RELEASE_REFLECT_TOKEN:
         required: false
-      BROWSEROS_CONFIG_URL:
-        required: true
-      POSTHOG_API_KEY:
-        required: true
+      # Compiled into the server as BROWSEROS_SENTRY_DSN. Without it the
+      # server still ships and simply reports nothing to Sentry.
       SENTRY_DSN:
-        required: true
+        required: false
       SPARKLE_PRIVATE_KEY:
         required: false
 
 permissions:
   contents: write
   pull-requests: write
+
+env:
+  # The toolchain test.yml lints and tests with, so a release compiles what CI checked.
+  RUST_TOOLCHAIN: "1.98.0"
 
 concurrency:
   group: release-server
@@ -238,23 +240,180 @@ jobs:
               --notes-file "$notes"
           fi
 
-  build-publish:
+  # Each target compiles on a runner of its own OS: the local packager's
+  # cross-compilers need a macOS host, and a native runner can also execute
+  # the binary to check its version. build-publish then packages all five at
+  # once, through the same packager a local build uses.
+  build:
     needs: prepare
+    if: needs.prepare.outputs.mode == 'build'
+    name: Build / ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both macOS targets build on the arm64 image. darwin-x64 cross-compiles,
+          # and its version check runs the x86_64 binary under Rosetta 2, which
+          # GitHub installs on its arm64 macOS images.
+          - target: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            cargo_command: build
+            cargo_target: aarch64-apple-darwin
+            runner: macos-26
+            binary_ext: ""
+          - target: darwin-x64
+            rust_target: x86_64-apple-darwin
+            cargo_command: build
+            cargo_target: x86_64-apple-darwin
+            runner: macos-26
+            binary_ext: ""
+          # Linux links against glibc 2.17 through zig, the floor the local
+          # packager uses (rust-compiler.ts LINUX_GLIBC_VERSION). A native link
+          # on ubuntu-24.04 would require glibc 2.39, and the server would not
+          # start on Ubuntu 22.04 or Debian 12. Zigbuild drops the .2.17
+          # suffix from the output path: target/<rust_target>/release/.
+          - target: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
+            cargo_command: zigbuild
+            cargo_target: aarch64-unknown-linux-gnu.2.17
+            runner: ubuntu-24.04-arm
+            binary_ext: ""
+          - target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            cargo_command: zigbuild
+            cargo_target: x86_64-unknown-linux-gnu.2.17
+            runner: ubuntu-latest
+            binary_ext: ""
+          # Windows ships with the other four. Dropping this entry also means
+          # changing finalize (it verifies five assets), the OTA feed
+          # (bos_build/release/ota/common.py publishes five platforms) and
+          # release-browseros.yml (it hands this version to the Windows lane).
+          - target: windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            cargo_command: build
+            cargo_target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            binary_ext: ".exe"
+    env:
+      BINARY_EXT: ${{ matrix.binary_ext }}
+      BROWSEROS_TARGET: ${{ matrix.target }}
+      CARGO_COMMAND: ${{ matrix.cargo_command }}
+      CARGO_TARGET: ${{ matrix.cargo_target }}
+      RUST_TARGET: ${{ matrix.rust_target }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Setup Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustup target add "$RUST_TARGET"
+          rustc --version
+          cargo --version
+
+      # A Python of the job's own: the runner image's system Python refuses
+      # pip installs (PEP 668).
+      - uses: actions/setup-python@v6
+        if: matrix.cargo_command == 'zigbuild'
+        with:
+          python-version: "3.13"
+
+      - name: Install zig linker
+        if: matrix.cargo_command == 'zigbuild'
+        run: |
+          set -euo pipefail
+          # cargo-zigbuild finds this zig through `python3 -m ziglang`.
+          python3 -m pip install ziglang==0.14.1
+          python3 -m ziglang version
+          cargo install --locked cargo-zigbuild --version 0.23.0
+          cargo zigbuild --version
+
+      - name: Stamp release version
+        shell: bash
+        working-directory: packages/browseros
+        run: uv run browseros release component stamp --component server --version "$VERSION"
+
+      - name: Build BrowserOS server
+        shell: bash
+        working-directory: packages/browseros-agent
+        env:
+          # Read at compile time by option_env! in crates/browseros-server/src/app/report.rs.
+          BROWSEROS_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BROWSEROS_SENTRY_DSN:-}" ]; then
+            echo "::warning::SENTRY_DSN is not set; this server build will not report to Sentry"
+          fi
+          # The requested source ref can predate a package rename. Resolve the
+          # package from that checkout's release descriptor.
+          server_package="$(uv run --directory ../browseros python -c 'from bos_build.release.components import component_by_id; print(component_by_id("server").package_name)')"
+          # rustc links macOS binaries for its per-arch default minimum, but the
+          # cc crate compiles the C dependencies for the runner's Xcode SDK
+          # version when this is unset. Pin it to rustc's defaults so the
+          # shipped minimum macOS stays fixed across runner images.
+          case "$RUST_TARGET" in
+            aarch64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=11.0 ;;
+            x86_64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=10.12 ;;
+          esac
+          cargo "$CARGO_COMMAND" --release --locked --target "$CARGO_TARGET" \
+            -p "$server_package" \
+            --bin browseros_server
+
+      - name: Verify stamped binary version
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          binary="target/$RUST_TARGET/release/browseros_server$BINARY_EXT"
+          actual="$("$binary" --version)"
+          if [ "$actual" != "$VERSION" ]; then
+            echo "::error::Expected $VERSION from $binary, got: $actual" >&2
+            exit 1
+          fi
+
+      - name: Stage binary for packaging
+        shell: bash
+        working-directory: packages/browseros-agent
+        run: |
+          set -euo pipefail
+          # build-publish reads <target>/browseros_server[.exe] through
+          # BROWSEROS_SERVER_PREBUILT_DIR (scripts/build/server/prebuilt.ts).
+          mkdir -p "dist/prebuilt/$BROWSEROS_TARGET"
+          cp "target/$RUST_TARGET/release/browseros_server$BINARY_EXT" "dist/prebuilt/$BROWSEROS_TARGET/"
+
+      - name: Upload target binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: browseros-server-binary-${{ matrix.target }}
+          path: packages/browseros-agent/dist/prebuilt
+          if-no-files-found: error
+
+  build-publish:
+    needs:
+      - prepare
+      - build
     if: needs.prepare.outputs.mode == 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
       LOG_LEVEL: info
       NODE_ENV: production
-      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v7
@@ -269,7 +428,7 @@ jobs:
       - name: Preflight required secrets
         run: |
           set -euo pipefail
-          required=(R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET BROWSEROS_CONFIG_URL POSTHOG_API_KEY SENTRY_DSN)
+          required=(R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET)
           missing=()
           for name in "${required[@]}"; do
             if [ -z "${!name:-}" ]; then missing+=("$name"); fi
@@ -284,16 +443,6 @@ jobs:
         with:
           bun-version-file: packages/browseros-agent/package.json
 
-      - name: Install Wine
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends wine
-          if ! command -v wine >/dev/null; then
-            sudo ln -s /usr/lib/wine/wine64 /usr/local/bin/wine
-          fi
-          wine --version
-
       - name: Install browseros-agent dependencies
         working-directory: packages/browseros-agent
         run: bun ci
@@ -302,8 +451,20 @@ jobs:
         working-directory: packages/browseros
         run: uv run browseros release component stamp --component server --version "$VERSION"
 
+      - name: Download target binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: browseros-server-binary-*
+          merge-multiple: true
+          path: packages/browseros-agent/dist/prebuilt
+
+      # The packager stages these binaries with Bun from the R2 manifest, writes
+      # the artifact metadata finalize checks, and uploads immutably. It skips
+      # Cargo entirely in prebuilt mode.
       - name: Build and upload immutable server resources
         working-directory: packages/browseros-agent
+        env:
+          BROWSEROS_SERVER_PREBUILT_DIR: ${{ github.workspace }}/packages/browseros-agent/dist/prebuilt
         run: bun scripts/build/server.ts --target=all --upload --versioned-only
 
       - name: Attach zips to private draft
@@ -589,12 +750,14 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          package_json="packages/browseros-agent/apps/server/package.json"
-          lock="packages/browseros-agent/bun.lock"
           branch="chore-bump-server-v${VERSION}"
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-          current="$(jq -er '.version' "$package_json")"
+          # The release component descriptor is the one place the server's
+          # crate path lives; the stamp below writes these same two files.
+          spec_paths="$(uv run --directory packages/browseros python -c 'from bos_build.release.components import component_by_id; spec = component_by_id("server"); print(spec.manifest_path.as_posix()); print(spec.lockfile_path.as_posix())')"
+          { read -r cargo_toml && read -r lock; } <<< "$spec_paths"
+          current="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$cargo_toml")"
           if [ "$current" != "$VERSION" ]; then
             newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
             if [ "$newest" = "$current" ]; then
@@ -605,7 +768,7 @@ jobs:
           uv run --directory packages/browseros browseros release component stamp \
             --component server \
             --version "$VERSION"
-          if git diff --quiet -- "$package_json" "$lock"; then exit 0; fi
+          if git diff --quiet -- "$cargo_toml" "$lock"; then exit 0; fi
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
             pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
             if [ -z "$pr_url" ]; then
@@ -618,7 +781,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add "$package_json" "$lock"
+          git add "$cargo_toml" "$lock"
           git commit -m "chore: bump server version to ${VERSION}"
           head_sha="$(git rev-parse HEAD)"
           git push origin "$branch"
