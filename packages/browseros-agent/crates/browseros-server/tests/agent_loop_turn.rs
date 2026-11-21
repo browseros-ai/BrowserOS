@@ -212,3 +212,20 @@ async fn an_unknown_provider_fails_as_a_settings_problem_before_any_event() -> a
     assert_eq!(events, Vec::new());
     Ok(())
 }
+
+#[tokio::test]
+async fn a_stopped_turn_ends_before_it_reads_its_provider() -> anyhow::Result<()> {
+    let state = tempfile::tempdir()?;
+    let (agent, _) = agent(&state, None, Script::default_answer(), vec![]).await?;
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let mut events = Vec::new();
+
+    let end = agent
+        .run_turn(&Target::Provider(None), &input(), &mut events, &cancel)
+        .await;
+
+    assert_eq!(end, TurnEnd::Stopped);
+    assert_eq!(events, Vec::new());
+    Ok(())
+}

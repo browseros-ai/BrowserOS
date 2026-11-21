@@ -27,6 +27,9 @@ use crate::turn::{
 
 /// Runs one turn on a provider row (`None` = the selected row). A row that cannot be found or
 /// read fails the turn before any event, so the panel shows only the error card.
+///
+/// One clock covers the whole turn: the hour starts before the row is read, and the read and
+/// `resolve` (which can refresh a sign-in token over the network) are raced like every step.
 pub(super) async fn run(
     models: &Models,
     browser: &Browser,
@@ -36,7 +39,11 @@ pub(super) async fn run(
     sink: &mut dyn EventSink,
     cancel: &CancellationToken,
 ) -> TurnEnd {
-    let found = store.providers().config(provider).await;
+    let budget = Budget::from_now();
+    let found = match race(store.providers().config(provider), cancel, budget.deadline).await {
+        Ok(found) => found,
+        Err(interrupted) => return interrupted.into(),
+    };
     let config = match provider_config(provider, found) {
         Ok(config) => config,
         Err(error) => return TurnEnd::Failed(error),
@@ -46,9 +53,6 @@ pub(super) async fn run(
         config.reasoning_effort.as_deref(),
         input.context.supports_reasoning,
     );
-    // One clock for the whole turn: the hour starts before the model is resolved, because
-    // resolving can refresh a sign-in token over the network.
-    let budget = Budget::from_now();
     let model = match race(
         models.resolve(config, input.conversation),
         cancel,
@@ -112,6 +116,18 @@ async fn race<T>(
     }
 }
 
+/// Whether Stop or the hour has already passed: checked before anything new starts, so no step
+/// begins and no call is marked as about to run once either has.
+fn interruption(cancel: &CancellationToken, deadline: Instant) -> Option<Interrupted> {
+    if cancel.is_cancelled() {
+        Some(Interrupted::Stopped)
+    } else if Instant::now() >= deadline {
+        Some(Interrupted::OutOfTime)
+    } else {
+        None
+    }
+}
+
 /// The step loop on a resolved model.
 async fn turn(
     model: &Model,
@@ -150,11 +166,8 @@ async fn turn(
     let mut context = Context::from_history(&input.history, &input.context, overhead_chars);
 
     for _ in 0..budget.steps {
-        if cancel.is_cancelled() {
-            return TurnEnd::Stopped;
-        }
-        if Instant::now() >= deadline {
-            return TurnEnd::Done(FinishReason::Length);
+        if let Some(interrupted) = interruption(cancel, deadline) {
+            return interrupted.into();
         }
         sink.emit(TurnEvent::StepStart).await;
         context.fit(model.window());
@@ -182,9 +195,15 @@ async fn turn(
         // In order, one at a time: browser calls have side effects, and the next often depends
         // on the last.
         for call in &calls {
+            // The previous call's `ToolDone` write may have outlived the hour: a call that will
+            // not run must not be marked as about to run.
+            if let Some(interrupted) = interruption(cancel, deadline) {
+                return interrupted.into();
+            }
             // The checkpoint: the run's sink returns only once this row is on disk, so the intent
             // is recorded before the browser moves. Emitted for the call about to run, never for
-            // one still queued behind it.
+            // one still queued behind it. The sink's writes are not raced: dropping one would
+            // cancel the run's own checkpoint, and a hung write is the run task's to drop.
             sink.emit(TurnEvent::ToolInput {
                 id: call.id.clone(),
                 name: call.name.clone(),
@@ -665,6 +684,55 @@ mod tests {
         .await;
 
         assert_eq!(end, TurnEnd::Done(FinishReason::Length));
+    }
+
+    /// Spends the turn's hour inside the first `ToolDone` write, as a slow checkpoint would.
+    struct SlowFirstDone {
+        events: Vec<TurnEvent>,
+        slowed: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl EventSink for SlowFirstDone {
+        async fn emit(&mut self, event: TurnEvent) {
+            let done = matches!(event, TurnEvent::ToolDone { .. });
+            self.events.push(event);
+            if done && !self.slowed {
+                self.slowed = true;
+                tokio::time::sleep(Duration::from_secs(2 * 60 * 60)).await;
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_hour_spent_in_a_checkpoint_never_marks_the_next_call() {
+        let model = model(vec![calls(2)]);
+        let (browser, handle) =
+            Browser::scripted([ScriptedReply::text("0"), ScriptedReply::text("1")]);
+        let mut sink = SlowFirstDone {
+            events: Vec::new(),
+            slowed: false,
+        };
+
+        let end = turn(
+            &model,
+            &browser,
+            &input(Mode::Agent),
+            None,
+            Budget::from_now(),
+            &mut sink,
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(end, TurnEnd::Done(FinishReason::Length));
+        let marked = sink
+            .events
+            .iter()
+            .filter(|event| matches!(event, TurnEvent::ToolInput { .. }))
+            .count();
+        assert_eq!(marked, 1, "{:?}", sink.events);
+        assert_eq!(handle.calls().len(), 1);
     }
 
     #[tokio::test]
