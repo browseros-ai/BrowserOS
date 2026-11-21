@@ -4092,12 +4092,18 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
             {
                 "CAPSOLVER_API_KEY": "${{ secrets.CAPSOLVER_API_KEY }}",
                 "TWOCAPTCHA_API_KEY": "${{ secrets.TWOCAPTCHA_API_KEY }}",
+                "JEV_API_KEY": "${{ secrets.JEV_API_KEY }}",
             },
         )
         # No other step reads the keys; their files stay out of the uploaded log folder and are
-        # removed whatever happens; an image without both keys is never pushed.
+        # removed whatever happens; an image without both provider keys is never pushed. The Jev
+        # key is optional: a run without it warns and builds keyless, and only a run that had it
+        # requires the image to record it.
         self.assertEqual(self.text.count("secrets.CAPSOLVER_API_KEY"), 1)
         self.assertEqual(self.text.count("secrets.TWOCAPTCHA_API_KEY"), 1)
+        self.assertEqual(self.text.count("secrets.JEV_API_KEY"), 1)
+        self.assertIn('if [ -n "${JEV_API_KEY:-}" ]; then', keys["run"])
+        self.assertIn("::warning::", keys["run"])
         self.assertIn("umask 077", keys["run"])
         self.assertIn('keys="$RUNNER_TEMP/neo-sdk-keys"', keys["run"])
         cleanup = next(step for step in image["steps"] if step.get("name") == "Remove the CAPTCHA key files")
@@ -4105,6 +4111,7 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
         self.assertIn('rm -rf "$RUNNER_TEMP/neo-sdk-keys"', cleanup["run"])
         push = next(step for step in image["steps"] if step.get("name") == "Push the accepted image")
         self.assertIn('.captchaKeys == ["capsolver", "2captcha"]', push["run"])
+        self.assertIn("if $expect_jev_key then .jevKey == true else true end", push["run"])
 
     def test_publishing_runs_have_their_own_concurrency_group(self):
         self.assertEqual(
