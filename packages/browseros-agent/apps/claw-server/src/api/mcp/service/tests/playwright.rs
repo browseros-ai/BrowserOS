@@ -472,6 +472,96 @@ async fn human_help_reaches_a_tab_in_another_profile() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn human_help_accepts_a_tab_opened_by_the_same_sessions_run() -> anyhow::Result<()> {
+    use crate::api::mcp::test_support::{ProfileConnection, current_session};
+    use crate::services::neo::TaskKey;
+    use axum::http::StatusCode;
+
+    const CODE: &str = "return (await context.newPage()).tabId";
+    let mut call = desktop_playwright_call("run", json!({})).await?;
+    let session = call
+        .state
+        .sessions
+        .lookup(&call.session_id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("fixture session missing"))?;
+    let task = TaskKey::for_session(session.convo_id());
+    let browser = current_session(ProfileConnection::new().with_default_profile());
+    let sdk_browser = browser.clone();
+    let (inventory, inventory_reads) = tokio::sync::watch::channel(json!([]));
+    let host = tab_inventory_router(inventory_reads).route(
+        "/mcp",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+            let request = &body["params"];
+            let request_task = &request["_meta"]["com.browseros.neo/run"]["taskId"];
+            let value = if request["arguments"]["code"] == CODE && request_task == task.as_str() {
+                // The SDK has its own CDP connection. The host discovers the new tab by
+                // native ID after run returns, just as it does for a real context.newPage().
+                let opened = sdk_browser
+                    .cdp(
+                        "Browser.createTab",
+                        json!({"windowId": 4, "url": "about:blank"}),
+                        None,
+                    )
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let tab = &opened["tab"];
+                inventory.send_replace(json!([{
+                    "tabId": tab["tabId"], "targetId": tab["targetId"], "taskId": task,
+                    "url": tab["url"], "title": tab["title"], "taskIds": [task],
+                }]));
+                tab["tabId"].clone()
+            } else if request_task.is_null() {
+                // The host's follow-up census has no task and reads the holder.
+                inventory.borrow().clone()
+            } else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            Ok(axum::Json(json!({
+                "jsonrpc": "2.0", "id": body["id"], "result": {
+                    "content": [], "structuredContent": {"value": value}, "isError": false,
+                    "_meta": {"com.browseros.neo/run": {
+                        "id": "fake-run", "status": "ok", "effects": "none", "tasks": []
+                    }}
+                }
+            })))
+        }),
+    );
+    let (engine, _host) = start_test_sdk(host).await?;
+    call.state.neo = engine;
+    call.state.browser.set_session_for_testing(browser).await;
+    let service = ClawMcpService::new(call.state);
+    let started = service.ensure_session_started(call.session_id).await?;
+    let run = crate::api::mcp::service::playwright::run::call(
+        &service.state,
+        &started,
+        serde_json::from_value(json!({"code": CODE}))?,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_ne!(run.is_error, Some(true), "{}", text_of(&run));
+    let tab = run
+        .structured_content
+        .and_then(|body| body["value"].as_i64())
+        .ok_or_else(|| anyhow::anyhow!("run did not return a tab ID"))?;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let help = service
+        .call_request_human_help(
+            &started,
+            &json!({"page": tab, "reason": "Enter the code"}),
+            cancelled,
+        )
+        .await;
+    assert_ne!(help.is_error, Some(true), "{}", text_of(&help));
+    let returned_page = help
+        .structured_content
+        .and_then(|body| body["page"].as_i64());
+    assert_eq!(returned_page, Some(tab));
+    Ok(())
+}
+
+#[tokio::test]
 async fn human_help_refuses_reserved_and_unreachable_tabs() -> anyhow::Result<()> {
     use crate::api::mcp::test_support::{ProfileConnection, current_session};
     let mut call = desktop_playwright_call("run", json!({})).await?;
@@ -600,11 +690,13 @@ async fn playwright_pursue_view_refuses_a_reused_tab_after_reconnect() -> anyhow
 async fn tab_inventory(
     items: Value,
 ) -> anyhow::Result<(crate::services::neo::NeoEngine, tokio::task::JoinSet<()>)> {
+    let (_inventory, reads) = tokio::sync::watch::channel(items);
+    start_test_sdk(tab_inventory_router(reads)).await
+}
+
+fn tab_inventory_router(inventory: tokio::sync::watch::Receiver<Value>) -> axum::Router {
     use axum::http::{HeaderMap, StatusCode, header};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let engine =
-        crate::services::neo::NeoEngine::for_test_host_endpoint(listener.local_addr()?.port())?;
-    let host = axum::Router::new().route(
+    axum::Router::new().route(
         "/v1/tabs",
         axum::routing::get(move |headers: HeaderMap| async move {
             if headers
@@ -613,9 +705,17 @@ async fn tab_inventory(
             {
                 return Err(StatusCode::UNAUTHORIZED);
             }
-            Ok(axum::Json(json!({"items": items})))
+            Ok(axum::Json(json!({"items": inventory.borrow().clone()})))
         }),
-    );
+    )
+}
+
+async fn start_test_sdk(
+    host: axum::Router,
+) -> anyhow::Result<(crate::services::neo::NeoEngine, tokio::task::JoinSet<()>)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let engine =
+        crate::services::neo::NeoEngine::for_test_host_endpoint(listener.local_addr()?.port())?;
     let mut tasks = tokio::task::JoinSet::new();
     tasks.spawn(async move {
         let _ = axum::serve(listener, host).await;

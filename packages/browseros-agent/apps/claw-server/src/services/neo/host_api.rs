@@ -218,6 +218,8 @@ impl HostApi {
     }
 
     async fn run_tab_target(&self, tab: TabId) -> Result<Option<TargetId>, EngineUnavailable> {
+        // The SDK's TabList requires both native IDs. Its owner field marks the
+        // reserved blank tab. A task that opened a tab is reported separately as taskId.
         let bytes = self.read(&["v1", "tabs"], None, 8 * 1024 * 1024).await?;
         let inventory: TabInventory = serde_json::from_slice(&bytes)
             .map_err(|_| EngineUnavailable::new("SDK tab inventory had an invalid shape"))?;
@@ -291,14 +293,13 @@ impl NeoEngine {
 
     #[cfg(test)]
     pub(crate) fn for_test_host_endpoint(port: u16) -> Result<Self, EngineUnavailable> {
-        let engine = Self::disabled("test engine");
+        let engine = Self::for_test_endpoint(port)?;
         engine
             .inner
             .connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .host = Some(HostApi::new(port, "test-host-token".to_owned())?);
-        engine.inner.state.send_replace(super::EngineState::Ready);
         Ok(engine)
     }
 
