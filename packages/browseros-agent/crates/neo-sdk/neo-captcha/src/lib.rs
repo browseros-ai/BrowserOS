@@ -76,8 +76,13 @@ pub const SOLVE_DEADLINE: Duration = Duration::from_secs(120);
 /// Kept back from each flow's deadline while the verify check is on, so the check (rescan,
 /// probe, settle, one judge call) always has time after the flow.
 const VERIFY_RESERVE: Duration = Duration::from_secs(8);
-/// Paid tasks a second round may start: one token for a remedy, never another tile solve.
+/// Paid tasks a second round may buy: one token for a remedy, never another tile solve. The
+/// chain checks it against the solve's charged tasks before every vendor attempt.
 const RETRY_MAX_PAID: u32 = 1;
+
+/// How `page_failure` words a failed page read. Hosts that pass a browser error through to
+/// their own users match on it rather than on flow messages, which name claw-server's tools.
+pub const PAGE_CHECK_FAILED: &str = "Checking the CAPTCHA page";
 
 /// Confirmed charges belong to the request. The flow can be dropped while it verifies a paid answer.
 #[derive(Default)]
@@ -166,70 +171,25 @@ impl RoundCtx<'_> {
 enum Checked {
     /// Return this answer (and the latest check, if one ran).
     Done(FlowResult, Option<VerifyReport>),
-    /// Run another round with this remedy. Carries the round's answer in case the bound is hit.
-    Again(verify::Remedy, FlowResult, VerifyReport),
+    /// Run another round with this remedy, meant for this family's flow. Carries the round's
+    /// answer in case the bound is hit.
+    Again(
+        verify::Remedy,
+        Option<CaptchaKind>,
+        FlowResult,
+        VerifyReport,
+    ),
 }
 
-/// A round's view of the provider chain. The first round is unlimited (the chain's own caps
-/// still apply); a second round may start at most `RETRY_MAX_PAID` paid tasks, then gets a
-/// free `SpendLimit` refusal that the flows already turn into a hand-off.
-struct RoundBackend<'a, B: CaptchaBackend> {
-    inner: &'a B,
-    paid_left: Option<std::sync::atomic::AtomicU32>,
-}
-
-impl<'a, B: CaptchaBackend> RoundBackend<'a, B> {
-    fn new(inner: &'a B, paid_limit: Option<u32>) -> Self {
-        Self {
-            inner,
-            paid_left: paid_limit.map(std::sync::atomic::AtomicU32::new),
-        }
-    }
-
-    fn take_slot(&self) -> Result<(), ProviderError> {
-        use std::sync::atomic::Ordering;
-        let Some(left) = &self.paid_left else {
-            return Ok(());
-        };
-        left.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
-            .map(|_| ())
-            .map_err(|_| ProviderError {
-                provider: None,
-                kind: types::ProviderErrorKind::SpendLimit,
-                message: "a second round may start only one paid task".into(),
-                charged: false,
-            })
-    }
-}
-
-impl<B: CaptchaBackend> CaptchaBackend for RoundBackend<'_, B> {
-    fn is_configured(&self) -> bool {
-        self.inner.is_configured()
-    }
-
-    async fn solve_fresh<'a, F, Fut>(
-        &'a self,
-        fresh: F,
-        deadline: Instant,
-        cancel: &'a CancellationToken,
-    ) -> Result<ProviderAnswer, ProviderError>
-    where
-        F: FnMut() -> Fut + Send + 'a,
-        Fut: Future<Output = Option<types::SolveTask>> + Send + 'a,
-    {
-        self.take_slot()?;
-        self.inner.solve_fresh(fresh, deadline, cancel).await
-    }
-
-    async fn solve(
-        &self,
-        task: &types::SolveTask,
-        deadline: Instant,
-        cancel: &CancellationToken,
-    ) -> Result<ProviderAnswer, ProviderError> {
-        self.take_slot()?;
-        self.inner.solve(task, deadline, cancel).await
-    }
+/// What changes from one round to the next.
+#[derive(Debug, Clone, Copy, Default)]
+struct RoundPlan {
+    round: u32,
+    /// The check's fix, and the family it was chosen for. A fresh scan may route another
+    /// family; that flow then runs plainly, since another family's fix could misfire on it.
+    remedy: Option<(verify::Remedy, CaptchaKind)>,
+    /// The most paid tasks the solve may have after this round (`None`: the chain's own caps).
+    paid_ceiling: Option<u32>,
 }
 
 impl<P: CaptchaPage, B: CaptchaBackend> SolveCtx<'_, P, B> {
@@ -390,33 +350,45 @@ impl CaptchaSolver {
                 until: deadline,
                 judge_calls_left: verify::MAX_JUDGE_CALLS,
             };
-            let mut remedy = None;
-            let mut report = None;
-            let mut round = 0;
+            let mut plan = RoundPlan::default();
+            let mut report: Option<VerifyReport> = None;
             loop {
                 rounds_started
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .push(events.events().len());
-                let flow = self
-                    .run_round(page, driver, &rc, round, remedy, &mut host)
-                    .await;
+                let mut flow = self.run_round(page, driver, &rc, plan, &mut host).await;
+                // The round's own paid-task ceiling stopped the flow, not a real budget: the
+                // page is still blocked after the re-solve it was allowed.
+                if plan
+                    .paid_ceiling
+                    .is_some_and(|ceiling| paid_so_far(&payments) >= ceiling)
+                    && flow.reason == SolveReason::SpendLimitReached
+                {
+                    flow = verify::still_blocked(&flow);
+                }
                 let routed = rc.routed.lock().unwrap_or_else(|e| e.into_inner()).take();
                 match self
-                    .check_claim(page, driver, &rc, routed, flow, round, &mut budget)
+                    .check_claim(page, driver, &rc, routed, flow, plan.round, &mut budget)
                     .await
                 {
-                    Checked::Done(flow, now) => break (flow, now.or(report)),
-                    Checked::Again(next, _, now) if round < verify::MAX_RESOLVES => {
-                        remedy = Some(next);
-                        report = Some(now);
-                        round += 1;
+                    Checked::Done(flow, Some(now)) => break (flow, Some(now)),
+                    // This round ran no check; the last report still describes the page, and
+                    // it counts every round that ran.
+                    Checked::Done(flow, None) => {
+                        let rounds = plan.round + 1;
+                        break (flow, report.map(|last| VerifyReport { rounds, ..last }));
                     }
-                    Checked::Again(_, flow, now) => {
-                        let verify::Next::Return(answer) = verify::still_blocked(&flow) else {
-                            break (flow, Some(now));
+                    Checked::Again(remedy, kind, _, now) if plan.round < verify::MAX_RESOLVES => {
+                        plan = RoundPlan {
+                            round: plan.round + 1,
+                            remedy: kind.map(|kind| (remedy, kind)),
+                            paid_ceiling: Some(paid_so_far(&payments) + RETRY_MAX_PAID),
                         };
-                        break (answer, Some(now));
+                        report = Some(now);
+                    }
+                    Checked::Again(_, _, flow, now) => {
+                        break (verify::still_blocked(&flow), Some(now));
                     }
                 }
             }
@@ -575,8 +547,7 @@ impl CaptchaSolver {
         page: &P,
         driver: &impl SolveDriver,
         rc: &RoundCtx<'_>,
-        round: u32,
-        remedy: Option<verify::Remedy>,
+        plan: RoundPlan,
         host: &mut Option<String>,
     ) -> FlowResult {
         let mut user_agent = None;
@@ -594,6 +565,11 @@ impl CaptchaSolver {
                 }
                 Ok(None) => {}
                 Err(PageError::Navigated) if rescan == 0 => continue,
+                // A page still loading can throw or stall this read; detection tolerates the
+                // same errors, so a failed read is "no wall seen", not a failed solve.
+                Err(PageError::Browser(_) | PageError::Timeout) => {
+                    tracing::debug!(target: "captcha", "policy-wall read failed; treated as no wall");
+                }
                 Err(error) => return page_failure(error),
             }
             let detection = match driver.detect(page).await {
@@ -701,9 +677,7 @@ impl CaptchaSolver {
                     let providers = self
                         .providers
                         .for_solve(Arc::clone(rc.payments), host.as_deref());
-                    // Round two may buy one token at most: a remedy, never a second full solve.
-                    let backend =
-                        RoundBackend::new(&providers, (round > 0).then_some(RETRY_MAX_PAID));
+                    let backend = providers.with_paid_ceiling(plan.paid_ceiling);
                     // The page before the flow, so the check can tell new alerts from old ones.
                     let before = if self.verify == config::VerifyMode::Off {
                         None
@@ -722,7 +696,10 @@ impl CaptchaSolver {
                         document: detection.document.clone(),
                         user_agent,
                         forced_method: self.forced_method,
-                        remedy,
+                        remedy: plan
+                            .remedy
+                            .filter(|(_, kind)| *kind == challenge.kind)
+                            .map(|(remedy, _)| remedy),
                     };
                     rc.route(
                         Some(challenge.kind),
@@ -840,8 +817,12 @@ impl CaptchaSolver {
         if self.verify == config::VerifyMode::Off || !flow.status.claims_success() {
             return Checked::Done(flow, None);
         }
+        // Every success path routes; one that did not is not checked, so it is not confirmed.
         let Some(routed) = routed else {
-            return Checked::Done(flow, None);
+            if self.verify == config::VerifyMode::Shadow {
+                return Checked::Done(flow, None);
+            }
+            return Checked::Done(unconfirmed(&flow), None);
         };
         let claim = verify::Claim {
             basis: verify::Basis::of(&flow, routed.kind),
@@ -858,6 +839,12 @@ impl CaptchaSolver {
             .await
         {
             Ok(verification) => verification,
+            // Shadow never changes an answer, so a check cut short (the claim's own callback
+            // navigated, say) leaves the flow's answer as it was.
+            Err(error) if self.verify == config::VerifyMode::Shadow => {
+                tracing::info!(target: "captcha", error = %error, "verify check stopped early in shadow mode");
+                return Checked::Done(flow, None);
+            }
             Err(error) => return Checked::Done(page_failure(error), None),
         };
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -882,7 +869,7 @@ impl CaptchaSolver {
         let left = rc.deadline.saturating_duration_since(Instant::now());
         match verify::next_step(&flow, &verification, &claim, round, left) {
             verify::Next::Return(answer) => Checked::Done(answer, Some(report)),
-            verify::Next::Retry(remedy) => Checked::Again(remedy, flow, report),
+            verify::Next::Retry(remedy) => Checked::Again(remedy, routed.kind, flow, report),
         }
     }
 }
@@ -1033,6 +1020,22 @@ fn token_applied_message(callback_ran: bool) -> String {
         "The CAPTCHA token is in the page; {callback}. Submit the form or continue the action and check the result. If the site rejects it, call solve_captcha again."
     )
 }
+/// Paid tasks this solve has bought, counting a vendor charged inside a call still running.
+fn paid_so_far(payments: &Mutex<Payments>) -> u32 {
+    let paid = payments.lock().unwrap_or_else(|e| e.into_inner());
+    paid.count + u32::from(paid.pending.is_some())
+}
+
+/// A success claim the gate could not check, as the truthful `unknown` answer.
+fn unconfirmed(flow: &FlowResult) -> FlowResult {
+    FlowResult {
+        status: SolveStatus::Failed,
+        reason: SolveReason::AcceptanceUnconfirmed,
+        message: "Neo could not confirm the page is past the CAPTCHA. Take a fresh snapshot before acting.".into(),
+        ..flow.clone()
+    }
+}
+
 fn page_failure(error: PageError) -> FlowResult {
     let (status, reason, message) = match error {
         PageError::Closed => (
@@ -1060,7 +1063,7 @@ fn page_failure(error: PageError) -> FlowResult {
             return terminal(
                 SolveStatus::Failed,
                 SolveReason::BrowserError,
-                &format!("Checking the CAPTCHA page failed ({detail})."),
+                &format!("{PAGE_CHECK_FAILED} failed ({detail})."),
             );
         }
     };
@@ -1122,6 +1125,8 @@ mod orchestration_tests {
         clicks: AtomicU32,
         /// What the policy-wall read sees; `None` reads as an ordinary page.
         notice: Option<Value>,
+        /// The policy-wall read throws, as on a page still loading.
+        notice_fails: bool,
     }
     impl FakePage {
         fn new(document: Result<DocumentId, PageError>) -> Self {
@@ -1129,15 +1134,19 @@ mod orchestration_tests {
                 document,
                 clicks: AtomicU32::new(0),
                 notice: None,
+                notice_fails: false,
             }
         }
     }
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
-            if expression.contains("captcha:policy-wall")
-                && let Some(notice) = &self.notice
-            {
-                return Ok(notice.clone());
+            if expression.contains("captcha:policy-wall") {
+                if self.notice_fails {
+                    return Err(PageError::Browser("Execution context was destroyed".into()));
+                }
+                if let Some(notice) = &self.notice {
+                    return Ok(notice.clone());
+                }
             }
             Ok(json!("fake-agent"))
         }
@@ -1179,6 +1188,10 @@ mod orchestration_tests {
         remedies: Mutex<Vec<Option<verify::Remedy>>>,
         /// Whether each check was handed a judge.
         judged: Mutex<Vec<bool>>,
+        /// The answer of every flow run after the first, when it differs from `result`.
+        second: Option<FlowResult>,
+        /// The check stops with this error instead of finding anything.
+        check_error: Option<PageError>,
     }
     impl FakeDriver {
         fn new(detection: Detection) -> Self {
@@ -1191,6 +1204,8 @@ mod orchestration_tests {
                 findings: Mutex::new(VecDeque::new()),
                 remedies: Mutex::new(Vec::new()),
                 judged: Mutex::new(Vec::new()),
+                second: None,
+                check_error: None,
             }
         }
         fn finding(standing: verify::Standing, tier: types::VerifyTier) -> verify::Verification {
@@ -1232,20 +1247,28 @@ mod orchestration_tests {
                 CaptchaEventName::Solving,
                 json!({"type":challenge.kind,"method":method,"attempt":1}),
             );
-            let mut flow = self.result.clone().unwrap_or_else(|| FlowResult {
-                status: SolveStatus::Solved,
-                method,
-                reason,
-                attempts: Attempts {
-                    checkbox: u32::from(method == SolveMethod::Checkbox),
-                    ..Default::default()
-                },
-                paid_tasks: 0,
-                provider: None,
-                cost_usd: 0.0,
-                callback_ran: false,
-                message: ctx.user_agent.clone().unwrap_or_default(),
-            });
+            let earlier_runs = self
+                .remedies
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len();
+            let later = self.second.clone().filter(|_| earlier_runs > 0);
+            let mut flow = later
+                .or_else(|| self.result.clone())
+                .unwrap_or_else(|| FlowResult {
+                    status: SolveStatus::Solved,
+                    method,
+                    reason,
+                    attempts: Attempts {
+                        checkbox: u32::from(method == SolveMethod::Checkbox),
+                        ..Default::default()
+                    },
+                    paid_tasks: 0,
+                    provider: None,
+                    cost_usd: 0.0,
+                    callback_ran: false,
+                    message: ctx.user_agent.clone().unwrap_or_default(),
+                });
             if let Some(answer) = &self.stall_after {
                 ctx.record_payment(&mut flow, &Ok(answer.clone()));
                 std::future::pending::<()>().await;
@@ -1284,6 +1307,9 @@ mod orchestration_tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(judge.is_some());
+            if let Some(error) = &self.check_error {
+                return Err(error.clone());
+            }
             let scripted = self
                 .findings
                 .lock()
@@ -1776,40 +1802,166 @@ mod orchestration_tests {
         Ok(())
     }
 
+    /// The re-solve's one paid task is counted on what was charged. When the round's own ceiling
+    /// stops the flow, the answer is the truth about the page (`still_blocked`), not "budget used
+    /// up"; and the report counts both rounds.
     #[tokio::test]
-    async fn tests_that_a_second_round_may_buy_one_task_only() -> anyhow::Result<()> {
-        let page = FakePage::new(Ok(document("current")));
-        let driver = token_flow_driver(Vec::new());
-        let chain = ProviderChain::new(&config::CaptchaConfig::default());
-        let task = types::SolveTask::TurnstileToken(types::TurnstileParams {
-            website_url: "https://fixture.test".into(),
-            website_key: "k".into(),
-            action: None,
-            cdata: None,
-        });
-        let cancel = CancellationToken::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let retry = RoundBackend::new(&chain, Some(RETRY_MAX_PAID));
-        let first = retry.solve(&task, deadline, &cancel).await;
-        let second = retry.solve(&task, deadline, &cancel).await;
-        assert!(
-            first.is_err_and(|error| error.kind != types::ProviderErrorKind::SpendLimit),
-            "the one allowed task reaches the chain (unconfigured here)"
+    async fn tests_that_the_retry_ceiling_reads_still_blocked_with_both_rounds_counted()
+    -> anyhow::Result<()> {
+        use types::{BlockCause, VerifyTier};
+        let driver = FakeDriver {
+            second: Some(FlowResult {
+                status: SolveStatus::NeedsHuman,
+                method: SolveMethod::Token,
+                reason: SolveReason::SpendLimitReached,
+                attempts: Attempts::default(),
+                paid_tasks: 0,
+                provider: None,
+                cost_usd: 0.0,
+                callback_ran: false,
+                message: "the verify re-solve's paid task is used".into(),
+            }),
+            ..token_flow_driver(vec![FakeDriver::finding(
+                verify::Standing::Blocked(BlockCause::ChallengeOpen),
+                VerifyTier::Deterministic,
+            )])
+        };
+        let outcome = run_checked(
+            &checking(config::VerifyMode::On),
+            &FakePage::new(Ok(document("current"))),
+            &driver,
+        )
+        .await?;
+        assert_eq!(
+            (outcome.status, outcome.reason, outcome.paid_tasks),
+            (SolveStatus::NeedsHuman, SolveReason::StillBlocked, 2)
         );
-        assert!(second.is_err_and(
-            |error| error.kind == types::ProviderErrorKind::SpendLimit && !error.charged
-        ));
-        let first_round = RoundBackend::new(&chain, None);
-        for _ in 0..3 {
+        assert_eq!(
+            outcome.verify.map(|report| report.rounds),
+            Some(2),
+            "round two ran, though only round one was checked"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_remedy_reaches_only_the_family_it_was_chosen_for() -> anyhow::Result<()> {
+        use types::{BlockCause, VerifyTier};
+        let mut driver = token_flow_driver(vec![
+            FakeDriver::finding(
+                verify::Standing::Blocked(BlockCause::ChallengeOpen),
+                VerifyTier::Deterministic,
+            ),
+            FakeDriver::finding(verify::Standing::Clear, VerifyTier::Deterministic),
+        ]);
+        driver.scans = Mutex::new(VecDeque::from([
+            Ok(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                true,
+            )),
+            Ok(scan(
+                &[(CaptchaKind::Turnstile, ChallengeState::Active)],
+                true,
+            )),
+        ]));
+        run_checked(
+            &checking(config::VerifyMode::On),
+            &FakePage::new(Ok(document("current"))),
+            &driver,
+        )
+        .await?;
+        assert_eq!(
+            *driver.remedies.lock().unwrap_or_else(|e| e.into_inner()),
+            [None, None],
+            "a reCAPTCHA fix is not handed to the Turnstile flow the rescan found"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_check_cut_short_keeps_the_claim_only_in_shadow() -> anyhow::Result<()> {
+        for (mode, status) in [
+            (config::VerifyMode::Shadow, SolveStatus::TokenApplied),
+            (config::VerifyMode::On, SolveStatus::Cancelled),
+        ] {
+            let driver = FakeDriver {
+                check_error: Some(PageError::Navigated),
+                ..token_flow_driver(Vec::new())
+            };
+            let outcome = run_checked(
+                &checking(mode),
+                &FakePage::new(Ok(document("current"))),
+                &driver,
+            )
+            .await?;
+            assert_eq!(outcome.status, status, "{mode:?}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_unrouted_success_claim_is_never_passed_unchecked() -> anyhow::Result<()>
+    {
+        let solver = checking(config::VerifyMode::On);
+        let reservations = Arc::<TabReservations>::default();
+        let lease = reservations
+            .try_reserve(42, "cap_unrouted")
+            .map_err(|_| anyhow::anyhow!("busy"))?;
+        let events = EventLog::new(CaptchaEventBus::new(), "cap_unrouted".into(), 42);
+        let payments = Arc::new(Mutex::new(Payments::default()));
+        let cancel = CancellationToken::new();
+        let rc = RoundCtx {
+            lease: &lease,
+            events: &events,
+            payments: &payments,
+            cancel: &cancel,
+            deadline: Instant::now() + Duration::from_secs(60),
+            routed: Mutex::new(None),
+        };
+        let claim = terminal(SolveStatus::AlreadyClear, SolveReason::NoCaptcha, "clear");
+        let mut budget = verify::VerifyBudget {
+            until: Instant::now() + Duration::from_secs(60),
+            judge_calls_left: 0,
+        };
+        let driver = FakeDriver::new(scan(&[], true));
+        let page = FakePage::new(Ok(document("current")));
+        let Checked::Done(answer, _) = solver
+            .check_claim(&page, &driver, &rc, None, claim, 0, &mut budget)
+            .await
+        else {
+            anyhow::bail!("an unrouted claim never asks for another round");
+        };
+        assert_eq!(
+            (answer.status, answer.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_failed_policy_read_is_no_wall_and_the_solve_goes_on() -> anyhow::Result<()>
+    {
+        let page = FakePage {
+            notice_fails: true,
+            ..FakePage::new(Ok(document("current")))
+        };
+        let driver = token_flow_driver(Vec::new());
+        let outcome = run_checked(&checking(config::VerifyMode::Off), &page, &driver).await?;
+        assert_eq!(outcome.status, SolveStatus::TokenApplied);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_page_read_failures_start_with_the_shared_wording() {
+        for error in [
+            PageError::Timeout,
+            PageError::Browser("Frame was detached".into()),
+        ] {
             assert!(
-                first_round
-                    .solve(&task, deadline, &cancel)
-                    .await
-                    .is_err_and(|error| error.kind != types::ProviderErrorKind::SpendLimit)
+                page_failure(error).message.starts_with(PAGE_CHECK_FAILED),
+                "neo-server passes on exactly these lines"
             );
         }
-        let _ = (page, driver);
-        Ok(())
     }
 
     #[test]
@@ -1881,7 +2033,7 @@ mod orchestration_tests {
                 outcome.paid_tasks,
             ));
         }
-        // The skeleton reads too little to confirm anything, so `on` must say "unconfirmed",
+        // The fake page has nothing the check can read, so `on` must say "unconfirmed",
         // never "token_applied"; `shadow` keeps the claim and reports the check beside it.
         assert_eq!(
             seen,

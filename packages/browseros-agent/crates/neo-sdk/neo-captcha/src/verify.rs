@@ -1196,20 +1196,20 @@ pub(crate) fn next_step(
             };
             match remedy {
                 Some(remedy) if round < MAX_RESOLVES && left >= needed => Next::Retry(remedy),
-                _ => still_blocked(flow),
+                _ => Next::Return(still_blocked(flow)),
             }
         }
     }
 }
 
 /// The hand-off answer when the page stays blocked after the bounded re-solve.
-pub(crate) fn still_blocked(flow: &FlowResult) -> Next {
+pub(crate) fn still_blocked(flow: &FlowResult) -> FlowResult {
     let mut changed = flow.clone();
     changed.status = SolveStatus::NeedsHuman;
     changed.reason = SolveReason::StillBlocked;
     "Neo checked the page after the solve and the CAPTCHA still blocks it."
         .clone_into(&mut changed.message);
-    Next::Return(changed)
+    changed
 }
 
 /// The wire summary for `SolveOutcome::verify`.

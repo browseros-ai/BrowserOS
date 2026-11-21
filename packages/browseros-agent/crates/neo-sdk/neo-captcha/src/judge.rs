@@ -148,8 +148,10 @@ impl JudgeConfig {
             .map(str::trim)
             .filter(|url| !url.is_empty());
         let url = match url::Url::parse(configured.unwrap_or(DEFAULT_JUDGE_URL)) {
+            // Plain http would send the bearer in the clear, so it is for a local relay or test
+            // stub only.
             Ok(url)
-                if matches!(url.scheme(), "http" | "https")
+                if (url.scheme() == "https" || (url.scheme() == "http" && is_loopback(&url)))
                     && url.host_str().is_some()
                     && url.username().is_empty()
                     && url.password().is_none()
@@ -173,6 +175,16 @@ impl JudgeConfig {
             key_file: PathBuf::from(path),
             key: ApiKey::new(key.to_owned()),
         })
+    }
+}
+
+/// Whether `url` names this machine: a loopback address or `localhost`.
+fn is_loopback(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        None => false,
     }
 }
 
@@ -639,6 +651,24 @@ mod tests {
             .is_none(),
             "a URL with credentials could leak the key to a third party"
         );
+        for (url, allowed) in [
+            ("http://example.test/v1/systemone", false),
+            ("http://10.0.0.5/v1/systemone", false),
+            ("http://127.0.0.1:8080/v1/systemone", true),
+            ("http://[::1]:8080/v1/systemone", true),
+            ("http://localhost:8080/v1/systemone", true),
+            ("https://relay.example.test/v1/systemone", true),
+        ] {
+            assert_eq!(
+                JudgeConfig::from_lookup(&lookup(&[
+                    (JUDGE_KEY_FILE_ENV, file.to_string_lossy().into_owned()),
+                    (JUDGE_URL_ENV, url.into()),
+                ]))
+                .is_some(),
+                allowed,
+                "{url}: the bearer travels in the clear over plain http"
+            );
+        }
         Ok(())
     }
 
