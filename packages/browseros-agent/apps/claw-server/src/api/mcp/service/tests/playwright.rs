@@ -434,6 +434,39 @@ async fn desktop_host_descriptions_do_not_teach_removed_tools() -> anyhow::Resul
 }
 
 #[tokio::test]
+async fn human_help_reaches_a_tab_in_another_profile() -> anyhow::Result<()> {
+    use crate::api::mcp::test_support::{ProfileConnection, current_session};
+    let call = desktop_playwright_call("run", json!({})).await?;
+    // Tab 102 is in the ops profile while Default is loaded in a separate window.
+    let browser = current_session(ProfileConnection::new().with_default_profile());
+    call.state.browser.set_session_for_testing(browser).await;
+    let service = ClawMcpService::new(call.state.clone());
+    let started = service
+        .ensure_session_started(SessionId::new("help-another-profile"))
+        .await?;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+
+    let result = service
+        .call_request_human_help(
+            &started,
+            &json!({"page": 102, "reason": "Enter the code"}),
+            cancelled,
+        )
+        .await;
+
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let entry = call
+        .state
+        .help
+        .get(started.session.id())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("help entry missing"))?;
+    assert_eq!(entry.browser_tab_id(), Some(102));
+    Ok(())
+}
+
+#[tokio::test]
 async fn human_help_translates_native_tab_ids_and_returns_them_after_resolution()
 -> anyhow::Result<()> {
     use crate::api::mcp::test_support::{ProfileConnection, current_session};
@@ -638,6 +671,13 @@ async fn help_tools_are_listed_with_their_descriptions_and_are_safe() -> anyhow:
 async fn tests_that_turning_human_help_off_hides_both_help_tools() -> anyhow::Result<()> {
     let call = desktop_playwright_call("tabs", json!({})).await?;
     let service = ClawMcpService::new(call.state.clone());
+    for declare_agent_name in [false, true] {
+        assert_eq!(
+            tool_names(&service, declare_agent_name),
+            ["run", REQUEST_HELP_TOOL_NAME, AWAIT_HELP_TOOL_NAME]
+        );
+    }
+
     call.state
         .agent_settings
         .set_human_help(HumanHelp::Off)
@@ -743,24 +783,23 @@ async fn internal_mark_skill_run_keeps_its_annotations() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn run_skill_and_flow_fields_follow_the_ultrafast_switch() -> anyhow::Result<()> {
+async fn playwright_keeps_skill_tools_private_when_ultrafast_changes() -> anyhow::Result<()> {
     let call = desktop_playwright_call("tabs", json!({})).await?;
     let service = ClawMcpService::new(call.state.clone());
-    let offered = |service: &ClawMcpService| {
-        let names = tool_names(service, false);
-        let save = service
-            .get_tool(SAVE_SKILL_TOOL_NAME)
-            .map(|tool| tool.input_schema["properties"].get("flow").is_some());
-        (
-            names.contains(&RUN_SKILL_TOOL_NAME.to_string()),
-            service.get_tool(RUN_SKILL_TOOL_NAME).is_some(),
-            save,
-        )
-    };
-
-    assert_eq!(offered(&service), (false, false, None));
-    call.state.ultrafast.set(true);
-    assert_eq!(offered(&service), (false, false, None));
+    for ultrafast in [false, true] {
+        call.state.ultrafast.set(ultrafast);
+        let names = tool_names(&service, false);
+        for name in [SAVE_SKILL_TOOL_NAME, RUN_SKILL_TOOL_NAME] {
+            assert!(!names.iter().any(|listed| listed == name));
+            assert!(service.get_tool(name).is_none());
+        }
+        // The shared catalog offer gains flow even though Playwright never exposes it.
+        let save = service.save_skill_offer();
+        assert_eq!(
+            save.input_schema["properties"].get("flow").is_some(),
+            ultrafast
+        );
+    }
     Ok(())
 }
 

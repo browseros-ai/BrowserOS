@@ -593,6 +593,11 @@ mod tests {
             })
             .await;
         });
+        *engine
+            .inner
+            .supervisor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
         states.changed().await?;
         let reason = engine.not_ready().to_string();
         assert!(reason.contains("permission denied at claw-sdk"));
@@ -605,13 +610,15 @@ mod tests {
             }
         ));
         engine.shutdown().await;
-        task.await?;
+        engine.shutdown().await;
         tokio::time::advance(Duration::from_secs(60)).await;
         assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert!(matches!(
             engine.state(),
-            EngineState::Unavailable { retry_at: None, .. }
+            EngineState::Unavailable { reason, retry_at: None }
+                if reason == "permission denied at claw-sdk"
         ));
+        assert_eq!(engine.not_ready().reason, "permission denied at claw-sdk");
         Ok(())
     }
 
