@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_the_notice_read_caps_what_crosses_cdp() {
+    fn tests_that_the_notice_read_caps_what_crosses_cdp() -> anyhow::Result<()> {
         for cap in [
             "text.slice(0, 20000)",
             ".slice(0, 50)",
@@ -202,6 +202,7 @@ mod tests {
                  send its whole text: {cap}"
             );
         }
+        Ok(())
     }
 
     #[tokio::test]
