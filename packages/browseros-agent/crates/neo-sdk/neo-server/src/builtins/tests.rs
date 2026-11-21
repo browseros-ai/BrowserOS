@@ -1403,15 +1403,27 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
     assert!(harness.fake.close_tab(owners.tab), "the fake had the tab");
     tabs_until(&telemetry, |(_, found, _)| found == 0).await?;
 
+    let expected = [
+        r#"neo_tabs_closed_total{close_reason="janitor",origin="agent"} 1"#,
+        r#"neo_tabs_closed_total{close_reason="script",origin="agent"} 1"#,
+        r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#,
+        r#"neo_tabs_opened_total{origin="agent"} 2"#,
+        r#"neo_tabs_opened_total{origin="found"} 1"#,
+    ];
+    let counts = || {
+        Scrape::of(&telemetry)
+            .map(|scrape| scrape.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]))
+    };
+    // The owner's close counts once its two-second wait is over (decision D13).
+    within(async {
+        while !counts().is_ok_and(|lines| lines == expected) {
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
     assert_eq!(
-        Scrape::of(&telemetry)?.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]),
-        [
-            r#"neo_tabs_closed_total{close_reason="janitor",origin="agent"} 1"#,
-            r#"neo_tabs_closed_total{close_reason="script",origin="agent"} 1"#,
-            r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#,
-            r#"neo_tabs_opened_total{origin="agent"} 2"#,
-            r#"neo_tabs_opened_total{origin="found"} 1"#,
-        ],
+        counts()?,
+        expected,
         "each tab opened and closed once, with who opened it and why it closed"
     );
     Ok(())

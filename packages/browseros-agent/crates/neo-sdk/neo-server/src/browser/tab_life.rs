@@ -19,10 +19,12 @@
 //! browser did; Neo's own code only says what it is about to do (an intent).
 //!
 //! Counting holds by construction: a tab enters `open` only where `TabFact::Opened` is produced
-//! and leaves only where `TabFact::Closed` is, in the same locked step, and its origin never
-//! changes once it is born. So per origin `opened − closed == open` for this process, the gauge
-//! is a map count that cannot go negative, and a tab closes at most once: a second close finds
-//! no entry. Facts are sent after the lock is released, so two threads' facts may reach the
+//! and leaves only where its one close is decided, in the same locked step, and its origin never
+//! changes once it is born. A close is `TabFact::Closed` at once, except one nobody asked for,
+//! which waits up to [`PENDING_CLOSE`] to be told apart from a browser exit (decision D13); its
+//! tab leaves the gauge at once all the same. So per origin `opened − closed == open + pending`
+//! for this process, `opened − closed == open` once pending closes settle, the gauge is a map
+//! count that cannot go negative, and a tab closes at most once: a second close finds no entry. Facts are sent after the lock is released, so two threads' facts may reach the
 //! counters in either order for a moment; the ledger itself never disagrees with them.
 
 use std::collections::hash_map::Entry;
@@ -49,6 +51,12 @@ const OPENER_HOPS: usize = 16;
 /// dialog nobody listens to within a second, accepting it, so a tab that closes later than this
 /// stayed, and closed for another reason.
 const ASKED_CLOSE_LAPSE: Duration = Duration::from_secs(10);
+
+/// How long a close nobody asked for waits before it counts as `user` (decision D13). `docker stop`
+/// quits the browser before Neo's server hears of it, so a browser exit first shows as tabs
+/// closing on their own: if the socket drops or Neo begins its own shutdown within this wait, the
+/// close counts as `shutdown`.
+const PENDING_CLOSE: Duration = Duration::from_secs(2);
 
 /// Tab telemetry's shell: the ledger behind its own lock, and the facade it reports to.
 ///
@@ -106,9 +114,30 @@ impl TabLife {
     }
 
     /// Neo began its own shutdown (SIGTERM): from now on a tab that closes with no intent of
-    /// Neo's counts as `shutdown`, not `user` (decision D12).
+    /// Neo's counts as `shutdown`, not `user` (decision D12), and so does every close still
+    /// pending (D13). Called again right before the final telemetry flush, so none is lost.
     pub(crate) fn shutting_down(&self) {
-        self.lock().shutting_down = true;
+        let facts = self.lock().shutting_down();
+        self.emit(facts);
+    }
+
+    /// The tab watch found the browser socket dropped or replaced: the closes still pending were
+    /// the browser exiting, and count as `shutdown` (decision D13).
+    pub(crate) fn socket_dropped(&self) {
+        let facts = self.lock().socket_dropped();
+        self.emit(facts);
+    }
+
+    /// The tab watch's timer: pending closes whose wait is over at `now` count as `user`.
+    pub(crate) fn settle(&self, now: Instant) {
+        let facts = self.lock().settle(now);
+        self.emit(facts);
+    }
+
+    /// When the next pending close is due, for the tab watch's timer; `None` with none pending.
+    #[must_use]
+    pub(crate) fn next_settle(&self) -> Option<Instant> {
+        self.lock().next_settle()
     }
 
     /// Before Neo asks the browser to close `tab` (see [`CloseIntent`]).
@@ -355,6 +384,16 @@ struct TabLedger {
     step: u64,
     /// Neo began its own shutdown: from then on a close nobody asked for is the shutdown's.
     shutting_down: bool,
+    /// Closes nobody asked for, waiting to be told apart from a browser exit (decision D13).
+    pending: Vec<PendingClose>,
+}
+
+/// A decided close waiting for its reason: `user` once `due` passes, `shutdown` if the socket
+/// drops or Neo shuts down first. Its tab already left `open`.
+struct PendingClose {
+    origin: TabOrigin,
+    lifetime: Duration,
+    due: Instant,
 }
 
 /// A born tab.
@@ -433,7 +472,7 @@ enum Gone {
 #[derive(Clone, Copy, Debug)]
 enum Ended {
     /// At the listing that confirmed the close.
-    At(Instant),
+    Now,
     /// At the last listing that saw it: it went unseen, during a gap.
     LastSeen,
 }
@@ -444,7 +483,7 @@ impl TabLedger {
     fn listed(&mut self, listing: Listing<'_>) -> Vec<TabFact> {
         let mut facts = Vec::new();
         if listing.gap == Gap::Socket && self.browser_changed(listing) {
-            self.lose_browser(&mut facts);
+            self.lose_browser(listing.now, &mut facts);
         }
         self.births(listing, &mut facts);
         self.closes(listing, &mut facts);
@@ -479,17 +518,19 @@ impl TabLedger {
         known.peek().is_some() && !known.any(|(tab, target)| shown(tab, target))
     }
 
-    /// The browser went: every born tab closes at the last listing that saw it, and the held
+    /// The browser went: closes still pending were its exit, every born tab closes at the last
+    /// listing that saw it, and the held
     /// tabs, close intents and crashes keyed by its tab ids go, since the new browser numbers its
     /// tabs anew and a reused id must not inherit them. Claims stay: `NeoTab` opens its tab on the
     /// new socket's first news, so its claim on the new browser's tab can land before the listing
     /// that shows the browser changed. A claim left from the old browser matches only a tab id
     /// the new one reuses, and is evicted in time.
-    fn lose_browser(&mut self, facts: &mut Vec<TabFact>) {
+    fn lose_browser(&mut self, now: Instant, facts: &mut Vec<TabFact>) {
+        self.pending_were_shutdown(facts);
         let mut gone: Vec<TabId> = self.open.keys().copied().collect();
         gone.sort_unstable();
         for tab in gone {
-            self.close(tab, Ended::LastSeen, Gone::Shutdown, facts);
+            self.close(tab, now, Ended::LastSeen, Gone::Shutdown, facts);
         }
         self.unclaimed.clear();
         self.closes.clear();
@@ -627,13 +668,13 @@ impl TabLedger {
             }
         }
         let ended = match listing.gap {
-            Gap::None => Ended::At(listing.now),
+            Gap::None => Ended::Now,
             Gap::Socket | Gap::Lagged => Ended::LastSeen,
         };
         let mut closing: Vec<TabId> = self.open.keys().copied().filter(|tab| gone(tab)).collect();
         closing.sort_unstable();
         for tab in closing {
-            self.close(tab, ended, Gone::Tab, facts);
+            self.close(tab, listing.now, ended, Gone::Tab, facts);
         }
         // Never born, so never closed: a held tab that went leaves no fact.
         self.unclaimed.retain(|tab, _| !gone(tab));
@@ -645,8 +686,16 @@ impl TabLedger {
         }
     }
 
-    /// The only way out of `open`, and it produces the tab's one `Closed`, with its one reason.
-    fn close(&mut self, tab: TabId, ended: Ended, gone: Gone, facts: &mut Vec<TabFact>) {
+    /// The only way out of `open`, and it decides the tab's one close, at `now`: a `Closed` with
+    /// its one reason, or, for a close nobody asked for, a pending one (decision D13).
+    fn close(
+        &mut self,
+        tab: TabId,
+        now: Instant,
+        ended: Ended,
+        gone: Gone,
+        facts: &mut Vec<TabFact>,
+    ) {
         let Some(life) = self.open.remove(&tab) else {
             return;
         };
@@ -657,18 +706,69 @@ impl TabLedger {
         };
         let crashed = self.crashes.remove(&tab).map(|crash| crash.at);
         let end = match ended {
-            Ended::At(now) => now,
+            Ended::Now => now,
             Ended::LastSeen => life.last_seen,
         };
         let mut intents = self.closes.remove(&tab).unwrap_or_default();
         // A close the page could refuse names this one only if the tab went in time: one that
         // came later is the page having stayed, then closing for another reason.
         intents.retain(|intent| intent.lapses.is_none_or(|lapses| end <= lapses));
-        facts.push(TabFact::Closed {
-            origin: life.origin,
-            reason: close_reason(crashed, &intents, gone),
-            lifetime: end.saturating_duration_since(life.opened_at),
-        });
+        let reason = close_reason(crashed, &intents, gone);
+        let lifetime = end.saturating_duration_since(life.opened_at);
+        if reason == CloseReason::User {
+            self.pending.push(PendingClose {
+                origin: life.origin,
+                lifetime,
+                due: now.checked_add(PENDING_CLOSE).unwrap_or(now),
+            });
+        } else {
+            facts.push(TabFact::Closed {
+                origin: life.origin,
+                reason,
+                lifetime,
+            });
+        }
+    }
+
+    /// Neo began its own shutdown: closes from now on and those pending are the shutdown's.
+    fn shutting_down(&mut self) -> Vec<TabFact> {
+        self.shutting_down = true;
+        let mut facts = Vec::new();
+        self.pending_were_shutdown(&mut facts);
+        facts
+    }
+
+    /// The browser socket dropped or was replaced while closes were pending: the browser exited.
+    fn socket_dropped(&mut self) -> Vec<TabFact> {
+        let mut facts = Vec::new();
+        self.pending_were_shutdown(&mut facts);
+        facts
+    }
+
+    /// Pending closes whose wait is over at `now` were the user's.
+    fn settle(&mut self, now: Instant) -> Vec<TabFact> {
+        let (due, waiting): (Vec<PendingClose>, Vec<PendingClose>) =
+            self.pending.drain(..).partition(|close| close.due <= now);
+        self.pending = waiting;
+        due.into_iter()
+            .map(|close| TabFact::Closed {
+                origin: close.origin,
+                reason: CloseReason::User,
+                lifetime: close.lifetime,
+            })
+            .collect()
+    }
+
+    fn next_settle(&self) -> Option<Instant> {
+        self.pending.iter().map(|close| close.due).min()
+    }
+
+    fn pending_were_shutdown(&mut self, facts: &mut Vec<TabFact>) {
+        facts.extend(self.pending.drain(..).map(|close| TabFact::Closed {
+            origin: close.origin,
+            reason: CloseReason::Shutdown,
+            lifetime: close.lifetime,
+        }));
     }
 
     /// Births every held tab that no longer waits: a popup whose opener was born (or went), and,
@@ -986,8 +1086,8 @@ mod tests {
     }
 
     /// A ledger under test that tallies every fact it produces and, after every input, checks
-    /// the counting rules: per origin `opened − closed == open`, never below zero, and no tab
-    /// both born and held.
+    /// the counting rules: per origin `opened − closed == open + pending` (so `opened − closed ==
+    /// open` once pending closes settle), never below zero, and no tab both born and held.
     struct Book {
         ledger: TabLedger,
         start: Instant,
@@ -1046,30 +1146,57 @@ mod tests {
                     "every listed tab is born or held after its listing"
                 );
             }
-            self.settle(facts)
+            self.tally(facts)
         }
 
         fn crashed(&mut self, tab: i64) -> Vec<TabFact> {
             let facts = self.ledger.crashed(TabId(tab), &target(tab));
-            self.settle(facts)
+            self.tally(facts)
         }
 
         fn claim(&mut self, intent: IntentId, tab: i64, seconds: u64) -> Vec<TabFact> {
             let now = self.at(seconds);
             let facts = self.ledger.claim(intent, TabId(tab), now);
-            self.settle(facts)
+            self.tally(facts)
         }
 
         fn cancel(&mut self, intent: IntentId) -> Vec<TabFact> {
             let facts = self.ledger.cancel_open(intent);
-            self.settle(facts)
+            self.tally(facts)
         }
 
         fn counts(&self) -> OpenTabCounts {
             self.ledger.open_counts()
         }
 
-        fn settle(&mut self, facts: Vec<TabFact>) -> Vec<TabFact> {
+        /// The watch's timer at `seconds`: pending closes due by then count as `user`.
+        fn settle(&mut self, seconds: u64) -> Vec<TabFact> {
+            let now = self.at(seconds);
+            let facts = self.ledger.settle(now);
+            self.tally(facts)
+        }
+
+        fn socket_dropped(&mut self) -> Vec<TabFact> {
+            let facts = self.ledger.socket_dropped();
+            self.tally(facts)
+        }
+
+        fn shutting_down(&mut self) -> Vec<TabFact> {
+            let facts = self.ledger.shutting_down();
+            self.tally(facts)
+        }
+
+        fn pending(&self, origin: TabOrigin) -> u64 {
+            let pending = self
+                .ledger
+                .pending
+                .iter()
+                .filter(|close| close.origin == origin)
+                .count();
+            u64::try_from(pending).unwrap_or(u64::MAX)
+        }
+
+        fn tally(&mut self, facts: Vec<TabFact>) -> Vec<TabFact> {
             for fact in &facts {
                 match fact {
                     TabFact::Opened { origin } => *self.opened.entry(*origin).or_default() += 1,
@@ -1087,8 +1214,9 @@ mod tests {
                 );
                 assert_eq!(
                     opened - closed,
-                    counts.of(origin),
-                    "the gauge counts the same map the counters come from ({origin:?})"
+                    counts.of(origin) + self.pending(origin),
+                    "the gauge counts the same map the counters come from; a pending close left \
+                     the map already ({origin:?})"
                 );
             }
             assert!(
@@ -1133,11 +1261,13 @@ mod tests {
         // Tab 3 closed while the socket was down; tab 4 opened meanwhile.
         assert_eq!(
             book.listed(60, Gap::Socket, &[tab(1), tab(2), tab(4)], &[]),
-            [
-                opened(TabOrigin::Found),
-                closed(TabOrigin::Found, CloseReason::User, 10)
-            ],
-            "only the new tab is born; the one that went closes as of its last listing"
+            [opened(TabOrigin::Found)],
+            "only the new tab is born; the one that went waits for its reason"
+        );
+        assert_eq!(
+            book.settle(62),
+            [closed(TabOrigin::Found, CloseReason::User, 10)],
+            "then closes as the user's, as of its last listing"
         );
         assert_eq!(
             book.counts(),
@@ -1228,6 +1358,11 @@ mod tests {
         );
         assert_eq!(
             book.listed(40, Gap::None, &[swapped(1)], &[2]),
+            [],
+            "pending"
+        );
+        assert_eq!(
+            book.settle(42),
             [closed(TabOrigin::Found, CloseReason::User, 10)],
             "the new tab 2 closes as nobody asked: the old intent went with its browser"
         );
@@ -1344,6 +1479,11 @@ mod tests {
         );
         assert_eq!(
             book.listed(9, Gap::None, &[tab(1), tab(2)], &[3]),
+            [],
+            "pending"
+        );
+        assert_eq!(
+            book.settle(11),
             [closed(TabOrigin::Found, CloseReason::User, 5)],
             "a held tab's lifetime runs from its first listing"
         );
@@ -1384,9 +1524,13 @@ mod tests {
             [
                 closed(TabOrigin::Found, CloseReason::Script, 30),
                 closed(TabOrigin::Found, CloseReason::Janitor, 30),
-                closed(TabOrigin::Found, CloseReason::User, 30),
             ],
-            "one close each, with the reason Neo intended, else the user's"
+            "one close each, with the reason Neo intended, at once"
+        );
+        assert_eq!(
+            book.settle(32),
+            [closed(TabOrigin::Found, CloseReason::User, 30)],
+            "the close nobody asked for is the user's once its wait is over"
         );
         assert_eq!(
             book.listed(31, Gap::None, &[], &[1, 2, 3]),
@@ -1407,8 +1551,9 @@ mod tests {
             .ledger
             .intend_close(TabId(1), IntentReason::Janitor, None);
         book.ledger.withdraw(TabId(1), refused);
+        assert_eq!(book.listed(7, Gap::None, &[], &[1]), [], "pending");
         assert_eq!(
-            book.listed(7, Gap::None, &[], &[1]),
+            book.settle(9),
             [closed(TabOrigin::Found, CloseReason::User, 7)],
             "a close Neo never sent is not Neo's"
         );
@@ -1432,8 +1577,9 @@ mod tests {
             [closed(TabOrigin::Found, CloseReason::Script, 1)],
             "a page that leaves in time closes for the script"
         );
+        assert_eq!(book.listed(60, Gap::None, &[], &[1]), [], "pending");
         assert_eq!(
-            book.listed(60, Gap::None, &[], &[1]),
+            book.settle(62),
             [closed(TabOrigin::Found, CloseReason::User, 60)],
             "a page that stayed closes later for whoever closed it"
         );
@@ -1511,7 +1657,7 @@ mod tests {
             .intend_close(TabId(2), IntentReason::Script, None);
         book.crashed(3);
         // SIGTERM: Neo begins its own shutdown (decision D12).
-        book.ledger.shutting_down = true;
+        assert_eq!(book.shutting_down(), [], "nothing pending yet");
         assert_eq!(
             book.listed(9, Gap::None, &[], &[1, 2, 3]),
             [
@@ -1552,6 +1698,102 @@ mod tests {
                 neo: 1
             },
             "each counted once, under its birth origin"
+        );
+    }
+
+    #[test]
+    fn a_browser_exit_burst_then_a_socket_drop_counts_as_shutdown() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2), tab(3)], &[]);
+        // `docker stop` quits the browser first: every tab closes, then the socket drops.
+        assert_eq!(
+            book.listed(10, Gap::None, &[], &[1, 2, 3]),
+            [],
+            "closes nobody asked for wait (decision D13)"
+        );
+        assert_eq!(
+            book.counts(),
+            OpenTabCounts::default(),
+            "the gauge does not wait: the tabs left it at once"
+        );
+        assert_eq!(
+            book.socket_dropped(),
+            [
+                closed(TabOrigin::Found, CloseReason::Shutdown, 10),
+                closed(TabOrigin::Found, CloseReason::Shutdown, 10),
+                closed(TabOrigin::Found, CloseReason::Shutdown, 10),
+            ],
+            "the socket dropped within the wait: the browser exited"
+        );
+        assert_eq!(book.settle(20), [], "nothing left to settle");
+    }
+
+    #[test]
+    fn an_ordinary_user_close_counts_as_user_once_its_wait_is_over() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]);
+        assert_eq!(book.listed(10, Gap::None, &[tab(2)], &[1]), [], "pending");
+        assert_eq!(book.settle(11), [], "still within the wait");
+        assert_eq!(
+            book.settle(12),
+            [closed(TabOrigin::Found, CloseReason::User, 10)],
+            "two seconds on, the socket still up: the user's"
+        );
+        assert_eq!(
+            book.socket_dropped(),
+            [],
+            "a later drop reaches back to nothing"
+        );
+    }
+
+    #[test]
+    fn a_close_then_neos_sigterm_within_the_wait_counts_as_shutdown() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]);
+        assert_eq!(book.listed(10, Gap::None, &[tab(2)], &[1]), [], "pending");
+        assert_eq!(
+            book.shutting_down(),
+            [closed(TabOrigin::Found, CloseReason::Shutdown, 10)],
+            "Neo began its own shutdown within the wait"
+        );
+        assert_eq!(book.settle(13), [], "nothing left to settle");
+        assert_eq!(
+            book.listed(14, Gap::None, &[], &[2]),
+            [closed(TabOrigin::Found, CloseReason::Shutdown, 14)],
+            "a close during the shutdown is the shutdown's at once"
+        );
+    }
+
+    #[test]
+    fn once_pending_closes_settle_opened_minus_closed_is_open() {
+        let mut book = Book::new();
+        book.listed(0, Gap::Socket, &[tab(1), tab(2), tab(3), tab(4)], &[]);
+        let _script = book
+            .ledger
+            .intend_close(TabId(2), IntentReason::Script, None);
+        book.listed(5, Gap::None, &[tab(3), tab(4)], &[1, 2]);
+        book.listed(6, Gap::None, &[tab(4)], &[3]);
+        assert_eq!(
+            book.pending(TabOrigin::Found),
+            2,
+            "two closes nobody asked for wait; the script's counted at once"
+        );
+        book.settle(8);
+        assert_eq!(book.pending(TabOrigin::Found), 0, "all settled");
+        let opened = book
+            .opened
+            .get(&TabOrigin::Found)
+            .copied()
+            .unwrap_or_default();
+        let closed = book
+            .closed
+            .get(&TabOrigin::Found)
+            .copied()
+            .unwrap_or_default();
+        assert_eq!(
+            (opened, closed, book.counts().found),
+            (4, 3, 1),
+            "opened − closed == open once nothing is pending"
         );
     }
 
@@ -1617,8 +1859,9 @@ mod tests {
         book.crashed(2);
         // Chromium gave tab 2 a new renderer under a new target.
         book.listed(2, Gap::None, &[tab(1), swapped(2)], &[2]);
+        assert_eq!(book.listed(3, Gap::None, &[], &[1, 2]), [], "pending");
         assert_eq!(
-            book.listed(3, Gap::None, &[], &[1, 2]),
+            book.settle(5),
             [
                 closed(TabOrigin::Found, CloseReason::User, 3),
                 closed(TabOrigin::Found, CloseReason::User, 3),
@@ -1649,8 +1892,9 @@ mod tests {
             [],
             "destroyed and unlisted, but another target of it is alive"
         );
+        assert_eq!(book.listed(9, Gap::None, &[tab(1)], &[2]), [], "pending");
         assert_eq!(
-            book.listed(9, Gap::None, &[tab(1)], &[2]),
+            book.settle(11),
             [closed(TabOrigin::Found, CloseReason::User, 9)],
             "it closes once no target of it is left"
         );
@@ -1661,8 +1905,9 @@ mod tests {
         let mut book = Book::new();
         book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]);
         book.listed(4, Gap::None, &[tab(1), tab(2)], &[]);
+        assert_eq!(book.listed(10, Gap::Lagged, &[tab(1)], &[]), [], "pending");
         assert_eq!(
-            book.listed(10, Gap::Lagged, &[tab(1)], &[]),
+            book.settle(12),
             [closed(TabOrigin::Found, CloseReason::User, 4)],
             "its destroy may be among the dropped events; it ends at its last listing"
         );
@@ -1769,8 +2014,32 @@ mod tests {
         }
     }
 
-    /// Any order of any inputs keeps the counting rules (checked by `Book::settle` after every
-    /// step): births, closes, gaps, browser changes, crashes, recoveries, intents, claims.
+    impl Dice {
+        /// A random listing at `step`: up to five tabs under either target, some popups, some
+        /// destroys, some live targets, and any gap.
+        fn listing(&mut self, book: &mut Book, step: u64) {
+            let shown: HashSet<i64> = (0..self.roll(6)).map(|_| self.tab()).collect();
+            let mut tabs: Vec<ListedTab> = shown.iter().map(|tab| self.listed(*tab)).collect();
+            tabs.sort_by_key(|listed| listed.tab);
+            let destroyed: Vec<i64> = (0..self.roll(4)).map(|_| self.tab()).collect();
+            let targeted: Vec<TabTarget> = (0..self.roll(3))
+                .map(|_| {
+                    let n = self.tab();
+                    alive(&self.listed(n))
+                })
+                .collect();
+            let gap = match self.roll(6) {
+                0 => Gap::Socket,
+                1 => Gap::Lagged,
+                _ => Gap::None,
+            };
+            book.listed_with(step, gap, &tabs, &destroyed, &targeted);
+        }
+    }
+
+    /// Any order of any inputs keeps the counting rules (checked by `Book::tally` after every
+    /// step): births, closes, gaps, browser changes, crashes, recoveries, intents, claims, and
+    /// pending closes settled by time, a socket drop or Neo's shutdown.
     #[test]
     fn the_counting_rules_hold_after_every_input_in_any_order() {
         for seed in 1..=300_u64 {
@@ -1779,26 +2048,8 @@ mod tests {
             let mut opens: Vec<IntentId> = Vec::new();
             let mut closes: Vec<(TabId, IntentId)> = Vec::new();
             for step in 0..200_u64 {
-                match dice.roll(8) {
-                    0..=2 => {
-                        let shown: HashSet<i64> = (0..dice.roll(6)).map(|_| dice.tab()).collect();
-                        let mut tabs: Vec<ListedTab> =
-                            shown.iter().map(|tab| dice.listed(*tab)).collect();
-                        tabs.sort_by_key(|listed| listed.tab);
-                        let destroyed: Vec<i64> = (0..dice.roll(4)).map(|_| dice.tab()).collect();
-                        let targeted: Vec<TabTarget> = (0..dice.roll(3))
-                            .map(|_| {
-                                let n = dice.tab();
-                                alive(&dice.listed(n))
-                            })
-                            .collect();
-                        let gap = match dice.roll(6) {
-                            0 => Gap::Socket,
-                            1 => Gap::Lagged,
-                            _ => Gap::None,
-                        };
-                        book.listed_with(step, gap, &tabs, &destroyed, &targeted);
-                    }
+                match dice.roll(10) {
+                    0..=2 => dice.listing(&mut book, step),
                     3 => {
                         let tab = dice.tab();
                         let facts = book.crashed(tab);
@@ -1830,6 +2081,16 @@ mod tests {
                             "a tab keeps at most one intent per reason and kind"
                         );
                     }
+                    8 => {
+                        book.settle(step);
+                    }
+                    9 => {
+                        if dice.roll(8) == 0 {
+                            book.shutting_down();
+                        } else {
+                            book.socket_dropped();
+                        }
+                    }
                     6 => {
                         let open = if dice.roll(2) == 0 {
                             OpenFor::Agent
@@ -1853,6 +2114,11 @@ mod tests {
             for intent in opens {
                 book.cancel(intent);
             }
+            book.settle(1000);
+            assert!(
+                book.ledger.pending.is_empty(),
+                "every pending close settles (seed {seed})"
+            );
             assert!(
                 book.ledger
                     .unclaimed

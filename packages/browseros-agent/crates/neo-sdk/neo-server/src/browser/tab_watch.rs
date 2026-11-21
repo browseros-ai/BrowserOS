@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use browseros_cdp::CdpEvent;
 use browseros_core::pages::PageInfo;
-use browseros_core::{BrowserSession, TabId, TargetId};
+use browseros_core::{BrowserSession, CdpConnection, TabId, TargetId};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -102,7 +102,8 @@ pub(crate) struct TabListing {
 /// after a crash means a page loaded in it again. They ride the listing and the discovery stream
 /// the watch already has; only after core's channel dropped events does one `Target.getTargets`
 /// rebuild the watch's map of live page targets, which the ledger needs to keep a tab on an
-/// excluded page open.
+/// excluded page open. A timer settles the closes the ledger holds pending (decision D13): as
+/// the user's two seconds on, or as the shutdown's if the socket dropped meanwhile.
 ///
 /// Runs for the process's life: the session's event channel outlives every reconnect.
 pub(crate) async fn tab_watch(
@@ -118,6 +119,9 @@ pub(crate) async fn tab_watch(
     checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut watch = Watch::new(events, watched, tabs);
     loop {
+        // A close nobody asked for waits in the tab ledger to be told apart from a browser exit
+        // (decision D13); this wakes the watch when the next one is due.
+        let settle_at = watch.tabs.life().next_settle();
         tokio::select! {
             _ = checks.tick() => {
                 let epoch = connection.connection_epoch();
@@ -162,6 +166,9 @@ pub(crate) async fn tab_watch(
                 }
                 Err(RecvError::Closed) => return,
             },
+            () = time::sleep_until(settle_at.unwrap_or_else(Instant::now)), if settle_at.is_some() => {
+                watch.settle(&*connection);
+            }
         }
     }
 }
@@ -497,6 +504,21 @@ impl Watch {
             }
         }
         self.open = Some(open);
+    }
+
+    /// Settles the tab ledger's pending closes (decision D13): if the socket the watch follows
+    /// dropped or was replaced since, they were the browser exiting and count as `shutdown`;
+    /// otherwise those whose wait is over count as the user's. Asked of the connection now, so a
+    /// drop after a close's wait ended does not reach back to it.
+    fn settle(&self, connection: &dyn CdpConnection) {
+        let life = self.tabs.life();
+        let followed = self
+            .current
+            .is_some_and(|current| current.epoch == connection.connection_epoch());
+        if !followed || !connection.is_connected() {
+            life.socket_dropped();
+        }
+        life.settle(Instant::now());
     }
 
     /// After core's channel dropped events, rebuilds the map of live page targets from one

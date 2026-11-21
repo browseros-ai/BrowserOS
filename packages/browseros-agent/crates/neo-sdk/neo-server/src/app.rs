@@ -137,6 +137,9 @@ pub struct App {
     holders: Arc<HolderFeed>,
     /// The process's telemetry, whose pending spans and metrics are flushed at shutdown.
     telemetry: Telemetry,
+    /// Told when Neo's own shutdown begins and again before the final flush, so a tab that closes
+    /// with no intent then, or one whose close still waits, counts as `shutdown` (D12, D13).
+    tabs: Arc<TabRegistry>,
     #[cfg(feature = "test-support")]
     store: TraceStore,
 }
@@ -334,16 +337,6 @@ impl App {
             Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
-        // From Neo's own shutdown on, a tab that closes with no intent counts as `shutdown`
-        // (decision D12): the tab ledger hears of it as the token is cancelled.
-        tokio::spawn({
-            let tabs = Arc::clone(&tabs);
-            let shutdown = shutdown.clone();
-            async move {
-                shutdown.cancelled().await;
-                tabs.life().shutting_down();
-            }
-        });
         let blank_tab = keep_blank_tab(
             &browser,
             &tabs,
@@ -395,7 +388,7 @@ impl App {
             TabJanitor::new(
                 dispatcher,
                 Arc::clone(&browser),
-                tabs,
+                Arc::clone(&tabs),
                 holds,
                 settings.clone(),
             ),
@@ -411,6 +404,7 @@ impl App {
             trace,
             holders: holder_feed,
             telemetry,
+            tabs,
             #[cfg(feature = "test-support")]
             store,
         })
@@ -430,17 +424,22 @@ impl App {
             trace,
             holders,
             telemetry,
+            tabs,
             ..
         } = self;
         let mut terminate = signal::unix::signal(SignalKind::terminate())?;
         let interrupt = signal::ctrl_c();
         let stop = {
             let shutdown = shutdown.clone();
+            let tabs = Arc::clone(&tabs);
             async move {
                 tokio::select! {
                     _ = terminate.recv() => info!("SIGTERM: stopping"),
                     _ = interrupt => info!("SIGINT: stopping"),
                 }
+                // Before the runs stop: from here a tab that closes with no intent, or one whose
+                // close still waits, closed for Neo's shutdown (decisions D12, D13).
+                tabs.life().shutting_down();
                 shutdown.cancel();
             }
         };
@@ -451,6 +450,8 @@ impl App {
                 warn!("requests still open after the shutdown budget; exiting anyway");
             }
         }
+        // Closes still waiting count as `shutdown` before the flush takes the last metrics (D13).
+        tabs.life().shutting_down();
         // All three in one budget, at once: the tab holders' last changes need no sync, only a
         // write, and telemetry gives up on a collector that does not answer.
         let (flushed, holders_written, ()) = tokio::join!(
