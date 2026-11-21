@@ -30,6 +30,10 @@ replayed after dispatch becomes uncertain.
 Each case asserts Rust behavior directly. The retired TypeScript server and its
 historical behavior are not test dependencies.
 
+Numeric field values in the retained TypeScript snapshot renderer are covered by
+`packages/browser-core/src/core/snapshot/render.test.ts`, including zero,
+negative and fractional values, and rejection of non-finite numbers.
+
 ## Running it
 
 The browser suite is gated on `BROWSEROS_BINARY`; without it, the suite skips
