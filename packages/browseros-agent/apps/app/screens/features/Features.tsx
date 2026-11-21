@@ -144,7 +144,7 @@ export const FeaturesPage: FC = () => {
               <video
                 className="h-full w-full"
                 src={BROWSER_OS_INTRO_VIDEO_URL}
-                title="BrowserOS MCP Server Demonstration"
+                title="BrowserOS introduction"
                 autoPlay
                 muted
                 loop
