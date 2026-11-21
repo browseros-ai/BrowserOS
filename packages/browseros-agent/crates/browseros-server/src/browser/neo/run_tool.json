@@ -1,0 +1,13 @@
+{
+  "name": "run",
+  "description": "Runs JavaScript in the user's browser.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "code": { "type": "string" },
+      "timeout": { "type": "integer", "minimum": 1, "maximum": 900000 }
+    },
+    "required": ["code"],
+    "additionalProperties": false
+  }
+}
