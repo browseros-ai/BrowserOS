@@ -4,8 +4,8 @@
 //! `delete` and `shutdown` cancel.
 //!
 //! ```text
-//!   send ──▶ Run { log: Transcript + status } ◀── one task: runner.run_turn(sink) ── writes the row
-//!              │                                   at ToolInput, ToolDone and the end
+//!   send ──▶ Run { log: Transcript + status } ◀── one task writes the row
+//!              │                                   at admission, ToolInput, ToolDone and the end
 //!              ├──▶ Subscription (cursor 0..)  the POST /chat response
 //!              └──▶ Subscription (cursor 0..)  a second panel, replaying then live
 //! ```
@@ -200,7 +200,7 @@ impl Conversations {
 
     /// Starts a turn: refuses if one is running, loads the stored transcript (only when the
     /// row's target matches), places the user message, registers the run, spawns its task,
-    /// and returns a subscription at frame 0. Nothing is written yet.
+    /// and returns a subscription at frame 0. The spawned task owns every write for the run.
     pub async fn send(&self, turn: NewTurn) -> Result<Subscription, Busy> {
         let inner = &self.inner;
         let reservation = Reservation::take(inner, turn.conversation)?;
