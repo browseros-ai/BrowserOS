@@ -1,0 +1,51 @@
+{
+  "case": "14-mm-results-clear",
+  "source": "05-florida-tennessee.browseros.txt 7:59 (7:56 turnstile/not_blocking); the site accepted.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "missingmoney.com",
+      "widgets": [
+        {
+          "vendor": "turnstile",
+          "part": "checkbox",
+          "shown": false,
+          "inLayer": false
+        }
+      ],
+      "submit": {
+        "label": "SEARCH"
+      },
+      "headings": ["CLAIM unclaimed property", "Search for Unclaimed Property"],
+      "buttons": [
+        "arrow_left HOME",
+        "SEARCH",
+        "View Claimed Properties(0)",
+        "CLAIM",
+        "Cookies Settings"
+      ],
+      "text": [
+        "SEARCH",
+        "PropertyOwnerNameFields.LEGEND_ARIA",
+        "Property Owner Name",
+        "Last or Business Name",
+        "First Name",
+        "City",
+        "State/Province",
+        "To begin your search, enter your last name, or the name of your business.",
+        "To better refine your results, you may also enter your first name.",
+        "Exact name matches will be shown first.",
+        "RESULTS: Your search returned 1000 unclaimed properties.",
+        "You have 0 properties currently claimed!"
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}

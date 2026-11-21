@@ -1,0 +1,55 @@
+{
+  "case": "16-fl-results-clear",
+  "source": "04-ohio-florida.browserbase.txt 2:57 (1:09 recaptcha_v2/already_passed); the site accepted.",
+  "truth": "clear",
+  "claim": {
+    "basis": "widget_passed",
+    "challenge": {
+      "kind": "recaptcha_v2",
+      "state": "passed",
+      "frame": {
+        "frameId": "fl-anchor",
+        "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "fl-site-key",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "portal.claimyourcashfl.gov",
+      "buttons": [
+        "Go to first page",
+        "Go to previous page",
+        "Go to page 1",
+        "Go to page 2",
+        "page 3",
+        "SEARCH FOR ADDITIONAL NAMES",
+        "CLAIM"
+      ],
+      "text": [
+        "Search Results",
+        "To select a property or properties to claim, click the \"CLAIM\" button next to property.",
+        "Once you have selected all the properties you are going to claim, click on \"CLAIMED PROPERTY CART\" button.",
+        "Account Number",
+        "Reported Owner",
+        "Reported Additional Owner",
+        "Reported Owner Address",
+        "Reporting Entity",
+        "Property Type",
+        "Contact Us",
+        "Legislative Statute",
+        "Administrative Rules",
+        "Copyright © Florida Department of Financial Services 2019"
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}
