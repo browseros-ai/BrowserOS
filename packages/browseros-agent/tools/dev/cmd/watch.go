@@ -40,8 +40,8 @@ const (
 	clawWatchTempStatePrefix   = "browserclaw-dev-"
 	// Three managed child groups can each take up to eight seconds to stop.
 	// Leave room for that cleanup before a replacement watcher gives up.
-	watchShutdownTimeout      = 30 * time.Second
-	rustClawWatchPollInterval = time.Second
+	watchShutdownTimeout  = 30 * time.Second
+	rustWatchPollInterval = time.Second
 )
 
 func init() {
@@ -60,6 +60,9 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if sdkMode && !watchClaw {
 		return fmt.Errorf("BROWSERCLAW_USE_SDK=1 needs --claw (bun run dev:claw:watch)")
 	}
+	if !watchClaw {
+		backend = browserOSServerBackend
+	}
 	mode, err := watchMode(sdkMode)
 	if err != nil {
 		return err
@@ -69,10 +72,8 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if watchClaw {
-		if err := ensureCargoPresent(); err != nil {
-			return err
-		}
+	if err := ensureWatchCargo(cmd.Context(), backend); err != nil {
+		return err
 	}
 
 	defaultPorts, err := resolveWatchDefaultPorts(root, watchClaw)
@@ -223,7 +224,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if watchClaw {
 		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir, backend)
 	} else {
-		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual)
+		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual, backend)
 		if err != nil {
 			return err
 		}
@@ -408,7 +409,7 @@ func logClawBrowserBinary(resolution browser.BinaryResolution) {
 }
 
 // startBrowserOSWatch supervises the BrowserOS agent extension plus server dev pair.
-func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, manual bool) ([]*proc.ManagedProc, error) {
+func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, manual bool, backend rustServerBackend) ([]*proc.ManagedProc, error) {
 	var procs []*proc.ManagedProc
 	agentDir := filepath.Join(root, "apps/app")
 
@@ -450,22 +451,7 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 
 	waitForCDP(ctx, p.CDP)
 
-	sidecarPath := watchSidecarConfigPath(userDataDir, "browseros-server")
-	reservations.ReleaseServer()
-	reservations.ReleaseExtension()
-	procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
-		Tag:     proc.TagServer,
-		Dir:     filepath.Join(root, "apps/server"),
-		Env:     env,
-		Restart: true,
-		Cmd:     []string{"bun", "--watch", "--env-file=../../.env.development", "src/index.ts", "--config", sidecarPath},
-		BeforeStart: func() error {
-			if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "resources"), userDataDir, p, ""); err != nil {
-				return err
-			}
-			return proc.KillPortAndWait(p.Server, 3*time.Second)
-		},
-	}))
+	procs = append(procs, startRustServerWatch(ctx, wg, root, env, p, reservations, userDataDir, backend))
 	return procs, nil
 }
 
@@ -488,7 +474,7 @@ func browserOSManualProcConfig(root string, env []string, p proc.Ports, userData
 }
 
 // startClawWatch supervises the BrowserClaw UI plus standalone server.
-func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, backend clawBackend) []*proc.ManagedProc {
+func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, backend rustServerBackend) []*proc.ManagedProc {
 	var procs []*proc.ManagedProc
 
 	reservations.ReleaseCDP()
@@ -517,19 +503,25 @@ func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []
 
 	waitForCDP(ctx, p.CDP)
 
-	sidecarPath := watchSidecarConfigPath(userDataDir, backend.SidecarName)
-	reservations.ReleaseServer()
-	reservations.ReleaseExtension()
-	serverCfg := clawBackendProcConfig(backend, root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait)
-	proc.LogMsgf(proc.TagBuild, "Cargo build dir: %s", envValue(serverCfg.Env, "CARGO_BUILD_BUILD_DIR"))
-	serverProc := proc.StartManaged(ctx, wg, serverCfg)
-	procs = append(procs, serverProc)
-	startRustClawSourceWatcher(ctx, wg, root, serverProc, backend)
+	procs = append(procs, startRustServerWatch(ctx, wg, root, env, p, reservations, userDataDir, backend))
 	startClawReadinessWatcher(ctx, wg, backend, p.Server)
 	return procs
 }
 
-// clawServerCargoEnv gives the watch's cargo a build directory no other cargo
+// startRustServerWatch releases the reserved ports after the browser startup
+// wait. The caller uses the returned process to stop its group during shutdown.
+func startRustServerWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, backend rustServerBackend) *proc.ManagedProc {
+	sidecarPath := watchSidecarConfigPath(userDataDir, backend.SidecarName)
+	reservations.ReleaseServer()
+	reservations.ReleaseExtension()
+	serverCfg := rustServerProcConfig(backend, root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait)
+	proc.LogMsgf(proc.TagBuild, "Cargo build dir: %s", envValue(serverCfg.Env, "CARGO_BUILD_BUILD_DIR"))
+	serverProc := proc.StartManaged(ctx, wg, serverCfg)
+	startRustSourceWatcher(ctx, wg, root, serverProc, backend)
+	return serverProc
+}
+
+// rustServerCargoEnv gives the watch's cargo a build directory no other cargo
 // command uses. Cargo locks a build directory for a whole build, so an editor's
 // check on save or a `cargo test` in the same checkout would leave the server
 // (and each rebuild after a save) at "Blocking waiting for file lock on build
@@ -537,7 +529,7 @@ func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []
 // per checkout. Build-dir is pinned to the same place so a build-dir from the
 // developer's own Cargo config cannot move the intermediates somewhere shared.
 // A CARGO_TARGET_DIR or CARGO_BUILD_BUILD_DIR the caller set wins.
-func clawServerCargoEnv(root string, env []string) []string {
+func rustServerCargoEnv(root string, env []string) []string {
 	targetDir := envValue(env, "CARGO_TARGET_DIR")
 	if targetDir == "" {
 		targetDir = filepath.Join(root, "target", "dev-watch")
@@ -549,24 +541,24 @@ func clawServerCargoEnv(root string, env []string) []string {
 	return env
 }
 
-func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc, backend clawBackend) {
+func startRustSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc, backend rustServerBackend) {
 	inputs := backend.RustWatchInputs(root)
 	proc.LogMsgf(proc.TagBuild, "Watching Rust %s sources (%d inputs)", backend.Label, len(inputs))
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		watchRustClawSources(ctx, root, inputs, serverProc, backend.Label)
+		watchRustSources(ctx, root, inputs, serverProc, backend.Label)
 	}()
 }
 
-func watchRustClawSources(ctx context.Context, root string, inputs []string, serverProc *proc.ManagedProc, label string) {
+func watchRustSources(ctx context.Context, root string, inputs []string, serverProc *proc.ManagedProc, label string) {
 	snapshot, err := snapshotRustWatchInputs(inputs)
 	if err != nil {
 		proc.LogMsgf(proc.TagBuild, "Warning: initial Rust watch scan failed: %v", err)
 	}
 
-	ticker := time.NewTicker(rustClawWatchPollInterval)
+	ticker := time.NewTicker(rustWatchPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -679,6 +671,19 @@ func waitForCDP(ctx context.Context, port int) {
 	} else {
 		proc.LogMsg(proc.TagServer, proc.WarnColor.Sprint("CDP not available, starting server anyway"))
 	}
+}
+
+func ensureWatchCargo(ctx context.Context, backend rustServerBackend) error {
+	if backend.Toolchain == "" {
+		return ensureCargoPresent()
+	}
+	command := backend.cargoCommand("--version")
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("BrowserOS watch requires Rust %s via rustup. Install rustup from https://rustup.rs and run `rustup toolchain install %s`: %w", backend.Toolchain, backend.Toolchain, err)
+	}
+	return nil
 }
 
 func ensureCargoPresent() error {
