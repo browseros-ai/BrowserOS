@@ -1,9 +1,9 @@
-//! `/oauth/{provider}`: "Sign in with ChatGPT". The handlers see only `model::SignIn`'s three
-//! calls; ports, client ids and tokens stay inside `model::chatgpt`. Chunk `chatgpt` fills the
-//! bodies.
+//! Extension-facing routes for ChatGPT sign-in. The model owns the callback and token storage.
 
+use axum::Json;
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -11,6 +11,7 @@ use super::ApiError;
 use super::dto;
 use super::extract::PathParams;
 use crate::app::App;
+use crate::model::SignInError;
 
 pub(super) fn routes() -> OpenApiRouter<App> {
     OpenApiRouter::new()
@@ -39,10 +40,11 @@ pub(super) fn routes() -> OpenApiRouter<App> {
     )
 )]
 async fn start_sign_in(
-    State(_app): State<App>,
+    State(app): State<App>,
     PathParams(_path): PathParams<dto::SignInPath>,
 ) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    let authorize = app.models.sign_in().start().await?;
+    Ok((StatusCode::FOUND, [(header::LOCATION, authorize.as_str())]).into_response())
 }
 
 /// Whether tokens are stored for this install.
@@ -55,14 +57,16 @@ async fn start_sign_in(
     responses(
         (status = 200, description = "Whether tokens are stored for this install.", body = dto::SignInStatusBody),
         (status = 400, description = "Not a sign-in provider.", body = dto::ApiErrorBody),
+        (status = 500, description = "The sign-in store could not be read.", body = dto::ApiErrorBody),
         (status = 503, description = "The install id is unreadable, so no sign-in can be stored.", body = dto::ApiErrorBody),
     )
 )]
 async fn get_sign_in_status(
-    State(_app): State<App>,
-    PathParams(_path): PathParams<dto::SignInPath>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    State(app): State<App>,
+    PathParams(path): PathParams<dto::SignInPath>,
+) -> Result<Json<dto::SignInStatusBody>, ApiError> {
+    let status = app.models.sign_in().status().await?;
+    Ok(Json(dto::SignInStatusBody::new(path.provider, status)))
 }
 
 /// Remove the stored tokens.
@@ -75,12 +79,28 @@ async fn get_sign_in_status(
     responses(
         (status = 200, description = "Tokens removed.", body = dto::Success),
         (status = 400, description = "Not a sign-in provider.", body = dto::ApiErrorBody),
+        (status = 500, description = "The sign-in could not be removed from the store.", body = dto::ApiErrorBody),
         (status = 503, description = "The install id is unreadable, so no sign-in can be stored.", body = dto::ApiErrorBody),
     )
 )]
 async fn sign_out(
-    State(_app): State<App>,
+    State(app): State<App>,
     PathParams(_path): PathParams<dto::SignInPath>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+) -> Result<Json<dto::Success>, ApiError> {
+    app.models.sign_in().sign_out().await?;
+    Ok(Json(dto::Success { success: true }))
+}
+
+impl From<SignInError> for ApiError {
+    fn from(error: SignInError) -> Self {
+        match error {
+            SignInError::NoInstallId => {
+                Self::unavailable("Could not read the BrowserOS installation id.")
+            }
+            SignInError::PortBusy => Self::unavailable(
+                "The ChatGPT callback port is in use. Close the other sign-in and try again.",
+            ),
+            SignInError::Failed(message) => Self::new(StatusCode::INTERNAL_SERVER_ERROR, message),
+        }
+    }
 }
