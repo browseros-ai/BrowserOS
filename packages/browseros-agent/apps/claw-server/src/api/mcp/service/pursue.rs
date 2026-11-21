@@ -2,7 +2,7 @@
 //! through the decisions worker. Every move goes down the same dispatch path an agent's own call
 //! takes, and the run is recorded as one local dispatch beside the actions it made.
 
-use super::{ClawMcpService, PageNaming, StartedSession, finish_local_dispatch, hosted};
+use super::{ClawMcpService, NamedPage, PageNaming, StartedSession, finish_local_dispatch, hosted};
 use crate::{
     api::mcp::{
         dispatch::{ToolIdentity, linked_cancel_token},
@@ -256,19 +256,37 @@ impl ClawMcpService {
                 "that tab is no longer open; find it with context.pages() in run",
             );
         };
-        let binding = match self
-            .state
-            .targets
-            .binding_for_execution(started.session.id())
-            .await
-        {
-            Ok(binding) => binding,
-            Err(error) => return not_started(page, &error.to_string()),
+        let view = if let Some(playwright) = &self.playwright {
+            let named = NamedPage {
+                said: page,
+                page: host_page.clone(),
+            };
+            match playwright
+                .resolve_page(&self.state, browser_session.clone(), &named)
+                .await
+            {
+                Ok(Some((_, view))) => view,
+                Ok(None) => {
+                    return not_started(
+                        page,
+                        "that tab is not available to run; find it with context.pages()",
+                    );
+                }
+                Err(error) => return not_started(page, &error.to_string()),
+            }
+        } else {
+            let binding = match self
+                .state
+                .targets
+                .binding_for_execution(started.session.id())
+                .await
+            {
+                Ok(binding) => binding,
+                Err(error) => return not_started(page, &error.to_string()),
+            };
+            BrowserView::capture(browser_session.clone(), binding, None).await
         };
-        let view = hosted::with_viewports(
-            BrowserView::capture(browser_session.clone(), binding, None).await,
-            self.state.viewports.as_ref(),
-        );
+        let view = hosted::with_viewports(view, self.state.viewports.as_ref());
         let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
             bindings: self.state.targets.clone(),
             session: started.session.id().clone(),
