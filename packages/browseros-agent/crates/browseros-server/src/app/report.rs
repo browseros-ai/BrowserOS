@@ -19,6 +19,9 @@ use axum::response::Response;
 /// The DSN a release build may bake in; absent in development.
 const BUILD_DSN: Option<&str> = option_env!("BROWSEROS_SENTRY_DSN");
 
+/// How long a panic waits for its report before the process may die.
+const PANIC_FLUSH: Duration = Duration::from_secs(1);
+
 /// The process's reporter. Cheap to clone; a no-op without a DSN.
 #[derive(Clone, Default)]
 pub(super) struct Reporter {
@@ -45,19 +48,35 @@ impl Reporter {
         }
     }
 
+    /// Reports a panic and waits briefly for it to leave: a panic on the main thread ends the
+    /// process right after the hook, before any other flush could run.
     pub(super) fn panic(&self, location: Option<&std::panic::Location<'_>>) {
         self.send(&panic_event(location));
+        self.flush(PANIC_FLUSH);
     }
 
     pub(super) fn failed_start(&self, kind: &'static str) {
         self.send(&format!("start failed: {kind}"));
     }
 
-    /// Waits for queued reports to leave, bounded: called at the end of shutdown and after a
-    /// failed start, inside the time the launcher allows.
+    /// Waits at most `within` for queued reports to leave: called at the end of shutdown, after
+    /// a failed start and in the panic hook, inside the time the launcher allows. The flush runs
+    /// on its own thread and is abandoned at the deadline, because sentry's own `flush` first
+    /// makes a blocking send into its 30-entry queue and only then starts its timeout, so a
+    /// stalled upload could hold the caller past the launcher's kill.
     pub(super) fn flush(&self, within: Duration) {
-        if let Some(client) = &self.client {
-            client.flush(Some(within));
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let (done, finished) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("sentry-flush".into())
+            .spawn(move || {
+                client.flush(Some(within));
+                let _ = done.send(());
+            });
+        if spawned.is_ok() {
+            let _ = finished.recv_timeout(within);
         }
     }
 
@@ -122,6 +141,25 @@ mod tests {
         assert_eq!(panic_event(None), "panic");
         let location = std::panic::Location::caller();
         assert!(panic_event(Some(location)).starts_with("panic at "));
+    }
+
+    #[test]
+    fn a_flush_returns_by_its_deadline_even_when_nothing_can_be_delivered() {
+        // A DSN that parses, pointing at a port nothing listens on: the upload cannot finish.
+        let reporter = Reporter {
+            client: client("http://public@127.0.0.1:9/1").map(Arc::new),
+        };
+        assert!(reporter.client.is_some());
+        for _ in 0..40 {
+            reporter.send("test event");
+        }
+        let started = std::time::Instant::now();
+        reporter.flush(Duration::from_millis(300));
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

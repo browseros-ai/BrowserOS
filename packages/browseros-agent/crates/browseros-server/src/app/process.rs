@@ -106,16 +106,19 @@ pub(super) fn print_openapi() -> ExitCode {
 /// `--config <file>`: serve until SIGTERM, Ctrl-C or `POST /system/shutdown`.
 pub(super) fn serve(config: &Path) -> ExitCode {
     let started = Instant::now();
+    // First, so that even a launch file that cannot be read is a reported failed start.
+    let reporter = Reporter::from_env();
     let launch = match Launch::read(config, &LaunchEnv::from_process()) {
         Ok(launch) => launch,
         Err(error) => {
             report_before_logging(&error.to_string());
+            reporter.failed_start("launch file");
+            reporter.flush(Duration::from_millis(500));
             return ExitCode::FAILURE;
         }
     };
     // Declared before the runtime, so it drops after it: the last lines of shutdown still reach
     // the file.
-    let reporter = Reporter::from_env();
     let _logging = install_logging(&launch.execution, reporter.clone());
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -124,6 +127,8 @@ pub(super) fn serve(config: &Path) -> ExitCode {
         Ok(runtime) => runtime,
         Err(error) => {
             tracing::error!(%error, "building the tokio runtime");
+            reporter.failed_start("runtime");
+            reporter.flush(Duration::from_millis(500));
             return ExitCode::FAILURE;
         }
     };
