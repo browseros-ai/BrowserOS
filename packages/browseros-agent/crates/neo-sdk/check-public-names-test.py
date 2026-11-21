@@ -19,7 +19,6 @@ FILES = (
 PRODUCT_PATHS = (
     "docs/browseros/features/connect-mcps.mdx",
     "docs/browseros/features/use-with-claude-code.mdx",
-    "packages/browseros-agent/apps/server/src/api/services/klavis/catalog.ts",
 )
 
 
@@ -83,8 +82,8 @@ class PublicNamesTest(unittest.TestCase):
         self.check(0)
         for name in NAMES + FILES:
             with self.subTest(name=name):
-                path = self.root / PRODUCT_PATHS[2]
-                original = (REPO / PRODUCT_PATHS[2]).read_bytes()
+                path = self.root / PRODUCT_PATHS[1]
+                original = (REPO / PRODUCT_PATHS[1]).read_bytes()
                 path.write_bytes(original + b"\n" + name)
                 self.check(1)
                 path.write_bytes(original)
