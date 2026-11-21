@@ -39,7 +39,9 @@ on:
           - alpha
           - draft-only
       playwright_run:
-        description: "Build the server with the Playwright MCP run enabled (draft-only)"
+        description: >-
+          Build the server with the Playwright MCP run enabled (draft-only).
+          This uses up the server version. Production must build the next one.
         type: boolean
         default: false
 

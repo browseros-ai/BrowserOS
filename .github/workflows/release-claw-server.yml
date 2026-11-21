@@ -22,7 +22,9 @@ on:
         type: boolean
         default: true
       playwright_run:
-        description: "Build a private draft with the Playwright MCP run enabled (requires publish_ota=false)"
+        description: >-
+          Build a private draft with the Playwright MCP run enabled (requires publish_ota=false).
+          This uses up the server version. Production must build the next one.
         type: boolean
         default: false
   workflow_call:
@@ -58,7 +60,9 @@ on:
         type: boolean
         default: false
       playwright_run:
-        description: "Build a private draft with the Playwright MCP run enabled (requires publish_ota=false)"
+        description: >-
+          Build a private draft with the Playwright MCP run enabled (requires publish_ota=false).
+          This uses up the server version. Production must build the next one.
         type: boolean
         default: false
     outputs:
@@ -505,11 +509,10 @@ jobs:
           if project_key not in binary:
               raise SystemExit("Compiled BrowserClaw server does not contain CLAW_POSTHOG_KEY")
           playwright_run = os.environ["CLAW_PLAYWRIGHT_RUN"]
-          markers = {
-              value for value in ("0", "1")
-              if f"browseros-claw-playwright-run={value};".encode() in binary
-          }
-          if markers != {playwright_run}:
+          enabled = b"browseros-claw-playwright-run=1;" in binary
+          disabled = b"browseros-claw-playwright-run=0;" in binary
+          # Older source refs have no marker and cannot serve Playwright.
+          if enabled != (playwright_run == "1") or (enabled and disabled):
               raise SystemExit(
                   f"Compiled BrowserClaw server does not match CLAW_PLAYWRIGHT_RUN={playwright_run}"
               )
