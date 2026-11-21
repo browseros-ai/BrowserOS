@@ -68,7 +68,10 @@ async fn test_app(setup: Setup) -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode: setup.mode,
-        behavior: Behavior::defaults(setup.mode),
+        behavior: Behavior {
+            playwright_run: true,
+            ..Behavior::defaults(setup.mode)
+        },
         behavior_ignored: Vec::new(),
     });
     let mut state = AppState::new_with_home(config, dir.path().join("home")).await?;

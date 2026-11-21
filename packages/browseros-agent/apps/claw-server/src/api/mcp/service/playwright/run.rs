@@ -1,7 +1,9 @@
 //! Desktop Playwright runs bypass the old script dispatcher. The SDK owns execution;
 //! this boundary owns session correlation, cancellation and a redacted host audit row.
 
-use super::{after_run, before_run, dispatch::linked_cancel_token, service::StartedSession};
+use super::super::StartedSession;
+use super::{after_run, before_run};
+use crate::api::mcp::dispatch::linked_cancel_token;
 use crate::{
     AppState,
     db::audit_log::{RecordToolDispatchInput, SDK_RUN_ID_KEY},
@@ -22,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 /// Prepare the window, forward, reconcile tabs/naming and prepare reply notes.
 /// Persist the parent before publishing children so every visible child has its run.
 /// Dropping the engine future closes its HTTP connection so the SDK cancels the run.
-pub(super) async fn call(
+pub(in crate::api::mcp::service) async fn call(
     state: &AppState,
     started: &StartedSession,
     args: JsonObject,

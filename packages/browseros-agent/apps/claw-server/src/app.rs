@@ -15,7 +15,7 @@ use crate::{
         capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
-        harness_skills::{load_browserclaw_skill, with_ultrafast},
+        harness_skills::{ManagedSkills, managed_skills},
         neo::NeoEngine,
         page_hold::PageHoldService,
         profiles::ProfileService,
@@ -186,8 +186,10 @@ impl AppState {
         let ultrafast_ledger = Arc::new(crate::db::ultrafast_ledger::UltrafastLedger::new(
             database.clone(),
         ));
-        let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
-        let ultrafast_skill = with_ultrafast(&skill)?;
+        let ManagedSkills {
+            plain: skill,
+            ultrafast: ultrafast_skill,
+        } = managed_skills(&config.resources_dir, &config)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
@@ -292,10 +294,10 @@ impl AppState {
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
         let help = Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT));
-        // SDK input cannot yield the legacy overlay's shield. Desktop must not
-        // leave a pursue hold in front of the SDK run it hands the page back to.
+        // SDK input cannot yield the catalog's overlay shield. A pursue handback must
+        // leave the tab ready for the next Playwright run.
         let page_hold = PageHoldService::new(
-            config.behavior.working_overlay && config.mode.is_hosted(),
+            config.behavior.working_overlay && !config.serves_playwright_run(),
             agent_settings.clone(),
             sessions.clone(),
             browser.clone(),

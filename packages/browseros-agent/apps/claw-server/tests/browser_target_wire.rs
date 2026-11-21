@@ -208,7 +208,10 @@ impl HttpPeer {
                 asserted: false,
             },
             mode,
-            behavior: Default::default(),
+            behavior: claw_server::config::Behavior {
+                playwright_run: true,
+                ..Default::default()
+            },
             behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;

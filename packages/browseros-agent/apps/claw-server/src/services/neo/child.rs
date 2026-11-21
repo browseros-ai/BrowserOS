@@ -524,7 +524,6 @@ mod tests {
             config_path: PathBuf::new(),
             cdp_port: 49337,
             browseros_version: None,
-            hosted: false,
         }
     }
 
