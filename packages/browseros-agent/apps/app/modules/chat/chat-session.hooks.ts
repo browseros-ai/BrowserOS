@@ -677,6 +677,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           conversation.id,
           conversation.messages,
           run,
+          () => cancelled,
         )
         if (cancelled) return
         if (options?.origin === 'newtab' && !target)

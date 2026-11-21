@@ -82,19 +82,28 @@ export class PanelConversationAttachment {
    * Shows a conversation the user opened from History. The caller reads `run` after `stored`, so
    * a run that ends in between still answers with its whole transcript: a live run is followed to
    * its end, a finished one shows its whole transcript, and with no run the stored one stands.
+   *
+   * `isCancelled` is the restore's own guard. A newer History selection cancels this one before
+   * its requests reach `open`, so the install checks it too, after attach has detached the view.
    */
   async open(
     conversationId: string,
     stored: UIMessage[],
     run: ConversationRunState | undefined,
+    isCancelled: () => boolean,
   ): Promise<void> {
-    if (this.disposed) return
+    if (this.disposed || isCancelled()) return
     // An explicit history selection may resume a previously retired conversation.
     this.retired.delete(conversationId)
     const subject: Subject = { kind: 'opened', conversationId, stored }
     this.follow(subject)
     const isCurrent = this.nextEpoch()
-    await this.deps.attach(snapshotOf(subject, run), isCurrent)
+    await this.deps.attach(
+      snapshotOf(subject, run),
+      () => isCurrent() && !isCancelled(),
+    )
+    // A selection cancelled before it landed must not come back on a retry.
+    if (isCancelled() && this.subject === subject) this.follow(undefined)
   }
 
   retire(conversationId: string): void {

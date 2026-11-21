@@ -168,6 +168,7 @@ describe('opening a conversation from History', () => {
     id === other.conversationId
       ? { conversationId: id, runId: 'r0', status: 'completed', messages: [] }
       : run('running', [question])
+  const neverCancelled = () => false
   /** Installs the way the hook does: after detaching, and only while still current. */
   function installs(f: ReturnType<typeof fixture>, gate = Promise.resolve()) {
     const installed: PanelSnapshot[] = []
@@ -184,6 +185,7 @@ describe('opening a conversation from History', () => {
       'chat',
       [question, checkpoint],
       run('running', [question]),
+      neverCancelled,
     )
     expect(f.attach.mock.calls.map(([snapshot]) => snapshot)).toEqual([
       {
@@ -202,6 +204,7 @@ describe('opening a conversation from History', () => {
       'chat',
       [question, checkpoint],
       run('completed', [question, answer]),
+      neverCancelled,
     )
     await tick()
     expect(f.attach).toHaveBeenCalledTimes(1)
@@ -213,7 +216,12 @@ describe('opening a conversation from History', () => {
 
   it('shows the stored transcript when the server knows no run', async () => {
     const f = fixture()
-    await f.controller.open('chat', [question, answer], undefined)
+    await f.controller.open(
+      'chat',
+      [question, answer],
+      undefined,
+      neverCancelled,
+    )
     const [snapshot] = f.attach.mock.calls[0] ?? []
     expect(snapshot?.messages).toEqual([question, answer])
     expect(snapshot?.liveRunId).toBeUndefined()
@@ -229,17 +237,48 @@ describe('opening a conversation from History', () => {
         release = resolve
       }),
     )
-    const older = f.controller.open('older', [question], undefined)
+    const older = f.controller.open(
+      'older',
+      [question],
+      undefined,
+      neverCancelled,
+    )
     const newer = f.controller.open(
       'chat',
       [question],
       run('running', [question]),
+      neverCancelled,
     )
     release()
     await Promise.all([older, newer])
     expect(installed.map((snapshot) => snapshot.conversationId)).toEqual([
       'chat',
     ])
+    f.controller.dispose()
+  })
+
+  it('installs nothing when its restore is cancelled while the view detaches', async () => {
+    const f = fixture(serverRuns)
+    let release!: () => void
+    const installed = installs(
+      f,
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    let cancelled = false
+    const opening = f.controller.open(
+      'chat',
+      [question],
+      run('running', [question]),
+      () => cancelled,
+    )
+    cancelled = true // a newer History selection is still reading its row
+    release()
+    await opening
+    f.controller.retry()
+    await tick()
+    expect(installed).toEqual([])
     f.controller.dispose()
   })
 
@@ -252,7 +291,12 @@ describe('opening a conversation from History', () => {
         release = resolve
       }),
     )
-    const opening = f.controller.open('older', [question], undefined)
+    const opening = f.controller.open(
+      'older',
+      [question],
+      undefined,
+      neverCancelled,
+    )
     f.controller.update(view())
     release()
     await opening
@@ -265,7 +309,12 @@ describe('opening a conversation from History', () => {
     const f = fixture(serverRuns)
     f.controller.update(other)
     await tick()
-    await f.controller.open('chat', [question], run('running', [question]))
+    await f.controller.open(
+      'chat',
+      [question],
+      run('running', [question]),
+      neverCancelled,
+    )
     f.controller.retry() // the SDK reports a resumed-stream error through onError
     await tick()
     const last = f.attach.mock.calls.at(-1)?.[0]
@@ -278,7 +327,12 @@ describe('opening a conversation from History', () => {
     const f = fixture(serverRuns)
     f.controller.update(other)
     await tick()
-    await f.controller.open('chat', [question], run('running', [question]))
+    await f.controller.open(
+      'chat',
+      [question],
+      run('running', [question]),
+      neverCancelled,
+    )
     f.controller.retry()
     f.controller.update(undefined)
     await tick()
@@ -290,7 +344,12 @@ describe('opening a conversation from History', () => {
 
   it('stops following a History selection once New conversation retires it', async () => {
     const f = fixture(async () => run('running', [question]))
-    await f.controller.open('chat', [question], run('running', [question]))
+    await f.controller.open(
+      'chat',
+      [question],
+      run('running', [question]),
+      neverCancelled,
+    )
     f.controller.retire('chat')
     f.controller.retry()
     await tick()

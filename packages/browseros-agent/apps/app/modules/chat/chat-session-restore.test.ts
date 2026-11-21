@@ -218,7 +218,12 @@ describe('restoring a conversation the server is still running', () => {
       },
       isCancelled: () => false,
       onRestore: (conversation, run) =>
-        attachment.open(conversation.id, conversation.messages, run),
+        attachment.open(
+          conversation.id,
+          conversation.messages,
+          run,
+          () => false,
+        ),
       onError: (error) => {
         throw error
       },
