@@ -343,6 +343,41 @@ async fn agents_share_one_default_and_legacy_targets_remain_in_sqlite() -> TestR
 }
 
 #[tokio::test]
+async fn reopening_a_conversation_ignores_an_unreadable_transcript_in_another_row() -> TestResult {
+    let server = TestServer::start().await?;
+    let db = database(&server).await?;
+    let id = uuid::Uuid::new_v4();
+    let other = uuid::Uuid::new_v4();
+    // SQLite accepts a BLOB in a text column. An unfiltered load fails when SQLx reads it
+    // as text, even if the caller never attempts to decode the JSON.
+    sea_orm::sqlx::query(
+        "INSERT INTO conversations
+         (id, messages, last_user_message, target_type, last_messaged_at, created_at, updated_at)
+         VALUES (?, ?, 'Question', 'browseros', 110, 90, 110),
+                (?, X'80', NULL, 'browseros', 120, 100, 120)",
+    )
+    .bind(id.to_string())
+    .bind(r#"[{"id":"user","role":"user","parts":[{"type":"text","text":"Question"}]}]"#)
+    .bind(other.to_string())
+    .execute(&db)
+    .await?;
+
+    let response = reply(
+        &server,
+        server.get(&format!("/conversations/{id}")),
+        StatusCode::OK,
+    )
+    .await?;
+    assert_eq!(response["conversation"]["id"], id.to_string());
+    assert_eq!(response["conversation"]["createdAt"], 90);
+    assert_eq!(
+        response["conversation"]["messages"][0]["parts"][0]["text"],
+        "Question"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn history_routes_follow_the_trust_and_error_contract() -> TestResult {
     let server = TestServer::start().await?;
     let id = uuid::Uuid::new_v4();
