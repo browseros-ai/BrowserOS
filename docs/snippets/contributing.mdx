@@ -58,7 +58,7 @@ cp .env.development.example .env.development
 bun run dev:watch
 ```
 
-The first run compiles the server with Cargo, which takes a few minutes; later runs rebuild only what changed.
+`dev:watch` also needs [Go](https://go.dev/dl/), which builds the dev launcher, and BrowserOS installed at `/Applications/BrowserOS.app`, the app it launches, so this loop runs on macOS. The first run compiles the server with Cargo, which takes a few minutes; later runs rebuild only what changed.
 
 ### Commands
 
