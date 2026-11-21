@@ -23,7 +23,13 @@ pub(super) async fn post(
         .json(body)
         .send()
         .await
-        .map_err(|_| errors::disconnected())?;
+        .map_err(|error| {
+            if error.is_connect() {
+                errors::connect(url)
+            } else {
+                errors::disconnected()
+            }
+        })?;
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -70,7 +76,12 @@ fn decode<E>(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use futures_util::stream;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
 
     use super::*;
 
@@ -86,5 +97,58 @@ mod tests {
         assert_eq!(received.len(), 2);
         assert_eq!(received[0].as_deref().ok(), Some("first\ncafé"));
         assert_eq!(received[1].as_deref().ok(), Some("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn reports_a_disconnect_after_the_stream_starts() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
+        let (read_first_event, first_event_read) = oneshot::channel();
+        let provider = async {
+            let (socket, _) = listener.accept().await?;
+            let mut socket = BufReader::new(socket);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if socket.read_line(&mut line).await? == 0 {
+                    anyhow::bail!("the request ended before the headers");
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            // Drain the empty JSON object so closing the socket truncates only the response.
+            socket.read_exact(&mut [0; 2]).await?;
+            let mut socket = socket.into_inner();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\ndata: first\n\n")
+                .await?;
+            first_event_read.await?;
+            socket.shutdown().await?;
+            Ok(())
+        };
+        let request = async {
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()?;
+            let response = post(&client, &url, &HeaderMap::new(), &serde_json::json!({})).await?;
+            let mut stream = std::pin::pin!(events(response));
+            assert_eq!(stream.next().await.transpose()?.as_deref(), Some("first"));
+            read_first_event
+                .send(())
+                .map_err(|_| anyhow::anyhow!("the provider closed before the first event"))?;
+            let Some(Err(error)) = stream.next().await else {
+                anyhow::bail!("the interrupted stream did not return an error");
+            };
+            assert_eq!(error.code, crate::turn::ChatErrorCode::ConnectionFailed);
+            assert_eq!(
+                error.message,
+                "The connection to the provider closed before the response finished."
+            );
+            Ok(())
+        };
+        tokio::try_join!(provider, request)?;
+        Ok(())
     }
 }

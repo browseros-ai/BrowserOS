@@ -7,7 +7,9 @@
 //! `serde_json` their own tests never ran, and it already broke the workspace lint once:
 //! genai 0.7.5 enables `preserve_order`, which made neo-playwright and claw-server fail clippy
 //! (`large_enum_variant`, `result_large_err`) in any build containing this crate. So no
-//! dependency of this crate may enable either feature, on any target.
+//! dependency of this crate may enable either feature. This test checks the host graph;
+//! dependencies exclusive to other targets are outside its coverage. A host-only Cargo
+//! cache has the data needed to run the check offline.
 
 use std::process::Command;
 
@@ -28,7 +30,8 @@ fn no_dependency_changes_serde_json_for_the_workspace() -> Result<(), Box<dyn st
             "--invert",
             "serde_json",
             "--target",
-            "all",
+            "host-tuple",
+            "--locked",
             "--offline",
         ])
         .output()?;

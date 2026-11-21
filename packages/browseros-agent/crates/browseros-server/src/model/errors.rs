@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use http::HeaderMap;
 use regex::Regex;
 use serde_json::Value;
+use url::Url;
 
 use crate::turn::{ChatError, ChatErrorCode};
 
@@ -18,11 +19,24 @@ pub(super) fn config(message: impl Into<String>) -> ChatError {
     )
 }
 
+pub(super) fn connect(url: &Url) -> ChatError {
+    // A custom provider URL can carry credentials outside its host.
+    let message = match url.host_str() {
+        Some(host) => format!("Could not connect to the provider at {host}."),
+        None => "Could not connect to the provider.".into(),
+    };
+    connection_error(message)
+}
+
 pub(super) fn disconnected() -> ChatError {
+    connection_error("The connection to the provider closed before the response finished.")
+}
+
+fn connection_error(message: impl Into<String>) -> ChatError {
     let mut error = ChatError::new(
         ChatErrorCode::ConnectionFailed,
         "Could not connect",
-        "The connection to the provider closed before the response finished.",
+        message,
     );
     error.docs_url = Some("https://docs.browseros.com/troubleshooting/connection-issues".into());
     error

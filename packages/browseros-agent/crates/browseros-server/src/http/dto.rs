@@ -486,8 +486,9 @@ impl From<RunStatus> for RunStatusName {
     }
 }
 
-/// `messages` is the history up to and including this turn's user message, without the
-/// assistant message in flight; the stream supplies that.
+/// While `status` is `running`, `messages` ends with this turn's user message and the stream
+/// supplies the answer. Once the run ends, `messages` contains the whole transcript, including
+/// any sealed answer.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 #[schema(as = RunState)]
