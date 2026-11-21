@@ -1235,7 +1235,7 @@ mod tests {
         for checked in [false, true] {
             for value in [
                 json!({"width":800,"height":600}),
-                json!({"response":checked,"present":true,"hidden":false,"frameReady":false}),
+                json!({"tokens": if checked { &["fresh-token"][..] } else { &[] }, "present": true, "hidden": false, "frameReady": false}),
                 json!({"checked":checked,"error":false,"rect":{"x":9,"y":20,"width":24,"height":24}}),
             ] {
                 native
