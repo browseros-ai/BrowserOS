@@ -8,9 +8,13 @@ import (
 	"browseros-dogfood/config"
 )
 
-func TestServerCommandRunsRustServer(t *testing.T) {
+func TestServerCommandLoadsDevelopmentEnvBeforeRunningRust(t *testing.T) {
 	got := serverCommand("/tmp/server-config.json")
-	want := []string{"rustup", "run", "1.98.0", "cargo", "run", "--locked", "-p", "browseros-server", "--", "--config", "/tmp/server-config.json"}
+	want := []string{
+		"bun", "--env-file=.env.development", "run", "--",
+		"rustup", "run", "1.98.0", "cargo", "run", "--locked", "-p", "browseros-server",
+		"--", "--config", "/tmp/server-config.json",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("server command got %#v want %#v", got, want)
 	}

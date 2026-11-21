@@ -412,7 +412,13 @@ func (e *environment) ForceKill() {
 }
 
 func serverCommand(configPath string) []string {
-	return []string{"rustup", "run", "1.98.0", "cargo", "run", "--locked", "-p", "browseros-server", "--", "--config", configPath}
+	// Bun loads the root dotenv file before Cargo passes the environment to
+	// the server. Inherited values, including the dogfood state dir, take priority.
+	return []string{
+		"bun", "--env-file=.env.development", "run", "--",
+		"rustup", "run", "1.98.0", "cargo", "run", "--locked", "-p", "browseros-server",
+		"--", "--config", configPath,
+	}
 }
 
 func clawAppCommand() []string {
