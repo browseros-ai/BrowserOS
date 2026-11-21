@@ -52,6 +52,10 @@ export interface ChatRequestBodyParams
   browserContext?: ChatRequestBrowserContext
 }
 
+type ProviderChatRequestBody = components['schemas']['ChatRequest'] & {
+  historyMode: 'local' | 'cloud'
+}
+
 export const buildChatRequestBody = ({
   conversationId,
   userMessageId,
@@ -65,7 +69,7 @@ export const buildChatRequestBody = ({
   persist,
   selectedText,
   selectedTextSource,
-}: ChatRequestBodyParams): components['schemas']['ChatRequest'] => ({
+}: ChatRequestBodyParams): ProviderChatRequestBody => ({
   // The provider is named, not described. The server holds the list and which
   // one is selected, so it resolves the model, endpoint and credentials from
   // the id. Those used to travel on every message, which meant the api key and
@@ -86,6 +90,10 @@ export const buildChatRequestBody = ({
   supportsReasoning: provider ? resolvesSupportsReasoning(provider) : undefined,
   previousConversation,
   persist,
+  // Bundled TypeScript servers through 0.0.166 read historyMode. TypeScript
+  // 0.0.167 and later and Rust read persist. Drop historyMode when fallback
+  // to bundles older than 0.0.167 is no longer supported.
+  historyMode: persist === false ? 'cloud' : 'local',
   selectedText,
   selectedTextSource,
 })

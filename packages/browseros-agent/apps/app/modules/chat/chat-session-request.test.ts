@@ -86,25 +86,30 @@ describe('chat request preparation', () => {
     })
   })
 
-  it('resolves the server URL for every send', async () => {
+  it('keeps local history when retrying a turn on a different server', async () => {
     let port = 9200
     const resolveAgentServerUrl = async () => `http://127.0.0.1:${port++}`
-
-    const first = await prepareSidepanelSendMessagesRequest({
+    const input = {
       resolveAgentServerUrl,
       target: llmTarget,
       fallbackProvider,
       ...commonRequestInput(),
-    })
-    const second = await prepareSidepanelSendMessagesRequest({
-      resolveAgentServerUrl,
-      target: llmTarget,
-      fallbackProvider,
-      ...commonRequestInput(),
-    })
+      message: 'Summarize this page',
+      persist: true,
+      previousConversation: undefined,
+    }
 
+    const first = await prepareSidepanelSendMessagesRequest(input)
+    const retry = await prepareSidepanelSendMessagesRequest(input)
     expect(first.api).toBe('http://127.0.0.1:9200/chat')
-    expect(second.api).toBe('http://127.0.0.1:9201/chat')
+    expect(retry.api).toBe('http://127.0.0.1:9201/chat')
+    expect(retry.body).toEqual(first.body)
+    expect(retry.body).toMatchObject({
+      conversationId,
+      userMessageId: 'user-1',
+      persist: true,
+      historyMode: 'local',
+    })
   })
 })
 
