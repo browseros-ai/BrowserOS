@@ -66,14 +66,14 @@ pub(super) fn offer(mut tool: Tool) -> Tool {
 }
 
 /// Uses the same wire handle with the active tool family's continuity instructions.
-pub(super) fn offer_described(mut tool: Tool, description: &str) -> Tool {
-    tool.input_schema = Arc::new(with_property(
-        tool.input_schema.as_ref().clone(),
-        description,
-    ));
-    tool.output_schema = tool
-        .output_schema
-        .map(|output| Arc::new(with_property(output.as_ref().clone(), OUTPUT_DESCRIPTION)));
+pub(super) fn offer_described(tool: Tool, description: &str) -> Tool {
+    let mut tool = offer(tool);
+    if let Some(session) = Arc::make_mut(&mut tool.input_schema)
+        .get_mut("properties")
+        .and_then(|properties| properties.get_mut(FIELD))
+    {
+        session["description"] = json!(description);
+    }
     tool
 }
 
