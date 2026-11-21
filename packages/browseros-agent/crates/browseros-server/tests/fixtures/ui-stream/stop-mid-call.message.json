@@ -1,0 +1,18 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "tool-run",
+      "toolCallId": "call_1",
+      "state": "output-error",
+      "input": {
+        "code": "click('a')"
+      },
+      "errorText": "Stopped"
+    }
+  ]
+}

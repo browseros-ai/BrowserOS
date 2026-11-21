@@ -50,7 +50,7 @@ export const ChatModeToggle: FC<ChatModeToggleProps> = ({
         <TooltipContent side="top" className="max-w-[220px]">
           {isAgentMode
             ? 'AI can browse, click, and navigate'
-            : 'AI can only read, cannot click or navigate'}
+            : 'AI can open and read pages, but cannot click or type'}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

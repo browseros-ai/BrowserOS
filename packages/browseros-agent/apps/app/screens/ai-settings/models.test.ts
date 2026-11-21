@@ -21,13 +21,6 @@ describe('ChatGPT subscription models', () => {
     expect(Math.max(...generations)).toBeGreaterThanOrEqual(6)
   })
 
-  it('keeps the codex variants the platform catalogue does not carry', () => {
-    const ids = models.map((model) => model.modelId)
-
-    expect(ids).toContain('gpt-5.1-codex-max')
-    expect(ids).toContain('gpt-5.1-codex-mini')
-  })
-
   it('omits the pro tier until the chat path supports non-streaming responses', () => {
     expect(models.some((model) => model.modelId.endsWith('-pro'))).toBe(false)
     expect(getModelContextLength('chatgpt-pro', 'gpt-5.5-pro')).toBeUndefined()
@@ -39,11 +32,13 @@ describe('ChatGPT subscription models', () => {
     expect(ids).not.toContain('gpt-4o')
     expect(ids).not.toContain('gpt-4.1')
     expect(ids).not.toContain('o3')
+    expect(ids).not.toContain('gpt-5.1-codex-max')
+    expect(ids).not.toContain('gpt-5.2')
   })
 
   it('carries context windows so a saved provider sizes its conversation', () => {
     expect(getModelContextLength('chatgpt-pro', 'gpt-6.1-sol')).toBe(500000)
-    expect(getModelContextLength('chatgpt-pro', 'gpt-5.1')).toBe(400000)
+    expect(getModelContextLength('chatgpt-pro', 'gpt-5.6-sol')).toBe(1050000)
   })
 })
 
