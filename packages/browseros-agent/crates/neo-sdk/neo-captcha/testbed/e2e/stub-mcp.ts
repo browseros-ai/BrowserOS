@@ -20,6 +20,7 @@ const STATUS: Record<Verdict, string> = {
   token_applied: 'token_applied',
   already_clear: 'already_clear',
   unsolved: 'needs_human',
+  policy_wall: 'policy_wall',
   cancelled: 'cancelled',
   unknown: 'failed',
 }

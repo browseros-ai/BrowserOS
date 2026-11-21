@@ -70,6 +70,7 @@ test('tests that claw-server statuses map as neo-captcha maps them and stay reco
     already_clear: 'already_clear',
     unsupported: 'unsolved',
     needs_human: 'unsolved',
+    policy_wall: 'policy_wall',
     cancelled: 'cancelled',
     failed: 'unknown',
   })
@@ -82,6 +83,16 @@ test('tests that claw-server statuses map as neo-captcha maps them and stay reco
     reason: 'unsupported_type',
     paidTasks: 0,
     costUsd: 0,
+    error: null,
+  })
+  expect(
+    parseClawServerSolve(stubClawServerSolve('policy_wall', null)),
+  ).toMatchObject({
+    verdict: 'policy_wall',
+    status: 'policy_wall',
+    type: null,
+    reason: 'policy_wall',
+    paidTasks: 0,
     error: null,
   })
 })

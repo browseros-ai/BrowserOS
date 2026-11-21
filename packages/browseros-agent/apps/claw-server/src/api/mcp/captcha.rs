@@ -140,10 +140,10 @@ pub fn solve_captcha_tool() -> Tool {
         "type":"object",
         "required":["status","type","method","reason","requestId","page","durationMs","attempts","paidTasks","provider","costUsd","message","events"],
         "properties": {
-            "status":{"type":"string","enum":["solved","token_applied","already_clear","unsupported","failed","cancelled","needs_human"]},
+            "status":{"type":"string","enum":["solved","token_applied","already_clear","unsupported","failed","cancelled","needs_human","policy_wall"]},
             "type":{"type":["string","null"],"enum":["recaptcha_v2","recaptcha_v3","turnstile","cloudflare_challenge","hcaptcha","geetest","aws_waf","arkose","unknown",null]},
             "method":{"type":"string","enum":["none","auto_pass","checkbox","tiles","token"]},
-            "reason":{"type":"string","enum":["auto_passed","checkbox_passed","tiles_accepted","token_accepted","awaiting_submit","no_captcha","already_passed","not_blocking","unsupported_type","scan_incomplete","acceptance_unconfirmed","provider_error","browser_error","deadline_exceeded","caller_cancelled","tab_closed","navigated","no_provider","provider_unavailable","tiles_exhausted","challenge_not_passed","spend_limit_reached"]},
+            "reason":{"type":"string","enum":["auto_passed","checkbox_passed","tiles_accepted","token_accepted","awaiting_submit","no_captcha","already_passed","not_blocking","unsupported_type","scan_incomplete","acceptance_unconfirmed","provider_error","browser_error","deadline_exceeded","caller_cancelled","tab_closed","navigated","no_provider","provider_unavailable","tiles_exhausted","challenge_not_passed","spend_limit_reached","policy_wall"]},
             "requestId":{"type":"string","pattern":"^cap_[0-9A-HJKMNP-TV-Z]{26}$"},
             "page":{"type":"integer","minimum":1},
             "durationMs":{"type":"integer","minimum":0},
@@ -163,7 +163,7 @@ pub fn solve_captcha_tool() -> Tool {
     };
     Tool::new(
         "solve_captcha",
-        "Call when a snapshot shows a CAPTCHA or an action appears blocked. Detects, solves, and verifies the CAPTCHA on the page. token_applied: the token is in the page; submit and check. Do not act on the page while this runs. Never click CAPTCHAs yourself.",
+        "Call when a snapshot shows a CAPTCHA or an action appears blocked. Detects, solves, and verifies the CAPTCHA on the page. token_applied: the token is in the page; submit and check. On policy_wall, stop and hand the page to the user. Do not act on the page while this runs. Never click CAPTCHAs yourself.",
         schema,
     ).with_raw_output_schema(std::sync::Arc::new(output))
         .with_annotations(ToolAnnotations::with_title("Solve a CAPTCHA").read_only(false).destructive(false).idempotent(false).open_world(true))
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_output_schema_accepts_token_applied() -> anyhow::Result<()> {
+    fn tests_that_output_schema_accepts_token_applied_and_policy_wall() -> anyhow::Result<()> {
         let tool = solve_captcha_tool();
         let output = serde_json::to_value(tool.output_schema)?;
         assert_eq!(
@@ -241,6 +241,8 @@ mod tests {
         for (pointer, value) in [
             ("/properties/status/enum", "token_applied"),
             ("/properties/reason/enum", "awaiting_submit"),
+            ("/properties/status/enum", "policy_wall"),
+            ("/properties/reason/enum", "policy_wall"),
             (
                 "/properties/events/items/properties/event/enum",
                 "captcha.token_applied",
@@ -254,11 +256,13 @@ mod tests {
                 "{value}"
             );
         }
-        assert!(
-            tool.description
-                .as_deref()
-                .is_some_and(|text| text.contains("token_applied"))
-        );
+        for value in ["token_applied", "policy_wall"] {
+            assert!(
+                tool.description
+                    .as_deref()
+                    .is_some_and(|text| text.contains(value))
+            );
+        }
         Ok(())
     }
 }

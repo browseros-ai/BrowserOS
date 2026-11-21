@@ -70,6 +70,7 @@ export const STATUS_VERDICT: Record<string, Verdict> = {
   already_clear: 'already_clear',
   unsupported: 'unsolved',
   needs_human: 'unsolved',
+  policy_wall: 'policy_wall',
   cancelled: 'cancelled',
   failed: 'unknown',
 }
@@ -107,6 +108,7 @@ export function stubSdkSolve(verdict: Verdict, type: string | null) {
     token_applied: 'awaiting_submit',
     already_clear: 'no_captcha',
     unsolved: 'provider_error',
+    policy_wall: 'policy_wall',
     cancelled: 'navigated',
     unknown: 'browser_error',
   }
@@ -136,6 +138,7 @@ export function stubClawServerSolve(
     failed: 'browser_error',
     cancelled: 'caller_cancelled',
     needs_human: 'provider_error',
+    policy_wall: 'policy_wall',
   }
   const value = {
     status,

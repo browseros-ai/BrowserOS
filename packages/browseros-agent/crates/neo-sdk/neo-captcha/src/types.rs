@@ -365,6 +365,7 @@ pub enum SolveStatus {
     Failed,
     Cancelled,
     NeedsHuman,
+    PolicyWall,
 }
 
 impl SolveStatus {
@@ -377,6 +378,7 @@ impl SolveStatus {
             Self::TokenApplied => Verdict::TokenApplied,
             Self::AlreadyClear => Verdict::AlreadyClear,
             Self::NeedsHuman | Self::Unsupported => Verdict::Unsolved,
+            Self::PolicyWall => Verdict::PolicyWall,
             Self::Cancelled => Verdict::Cancelled,
             Self::Failed => Verdict::Unknown,
         }
@@ -384,7 +386,7 @@ impl SolveStatus {
 }
 
 /// What a host can branch on after a solve, coarser than [`SolveStatus`]. claw-sdk returns it as
-/// `neo.solveCaptcha`'s `status`; claw-server's MCP output does not carry it. The fine-grained
+/// `neo.solveCaptcha`'s `verdict`; claw-server's MCP output does not carry it. The fine-grained
 /// [`SolveReason`] still says why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -398,6 +400,8 @@ pub enum Verdict {
     /// The solver ran to its end and the challenge definitely still blocks the page. Never a
     /// guess: timeouts, browser errors and navigations land in `Unknown` or `Cancelled`.
     Unsolved,
+    /// The site explicitly refuses automated access. Stop acting on the page and hand it off.
+    PolicyWall,
     /// Stopped early: the caller cancelled, the tab closed, or the page navigated. Navigation can
     /// mean the site moved past the challenge, so this is not `Unsolved`.
     Cancelled,
@@ -441,6 +445,7 @@ pub enum SolveReason {
     TilesExhausted,
     ChallengeNotPassed,
     SpendLimitReached, // needs_human
+    PolicyWall,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -596,6 +601,7 @@ mod tests {
             (SolveStatus::AlreadyClear, Verdict::AlreadyClear),
             (SolveStatus::NeedsHuman, Verdict::Unsolved),
             (SolveStatus::Unsupported, Verdict::Unsolved),
+            (SolveStatus::PolicyWall, Verdict::PolicyWall),
             (SolveStatus::Cancelled, Verdict::Cancelled),
             (SolveStatus::Failed, Verdict::Unknown),
         ] {
@@ -611,6 +617,7 @@ mod tests {
                 Verdict::TokenApplied,
                 Verdict::AlreadyClear,
                 Verdict::Unsolved,
+                Verdict::PolicyWall,
                 Verdict::Cancelled,
                 Verdict::Unknown,
             ])?,
@@ -619,6 +626,7 @@ mod tests {
                 "token_applied",
                 "already_clear",
                 "unsolved",
+                "policy_wall",
                 "cancelled",
                 "unknown"
             ])
@@ -748,6 +756,15 @@ mod tests {
                 Some(CaptchaKind::RecaptchaV2),
                 SolveMethod::Tiles,
                 "tiles",
+            ),
+            (
+                SolveStatus::PolicyWall,
+                "policy_wall",
+                SolveReason::PolicyWall,
+                "policy_wall",
+                None,
+                SolveMethod::None,
+                "none",
             ),
         ] {
             let outcome = SolveOutcome {
