@@ -27,6 +27,34 @@ describe('buildChatRequestBody', () => {
     })
   })
 
+  it.each([true, undefined])(
+    'uses local history with persist=%s',
+    (persist) => {
+      const body = buildChatRequestBody({
+        conversationId: '6ff46e3b-e45a-40a4-9157-ca520e800f43',
+        persist,
+      })
+
+      expect(body.persist).toBe(persist)
+      expect(body.historyMode).toBe('local')
+      expect(body.previousConversation).toBeUndefined()
+    },
+  )
+
+  it('sends client history for an incognito turn', () => {
+    const body = buildChatRequestBody({
+      conversationId: '6ff46e3b-e45a-40a4-9157-ca520e800f43',
+      persist: false,
+      previousConversation: [{ role: 'assistant', content: 'Prior answer' }],
+    })
+
+    expect(body).toMatchObject({
+      persist: false,
+      historyMode: 'cloud',
+      previousConversation: [{ role: 'assistant', content: 'Prior answer' }],
+    })
+  })
+
   // The provider is named and nothing more. Its model, endpoint and
   // credentials are resolved from the id server side, so an api key and an aws
   // secret no longer cross the wire on every message.
