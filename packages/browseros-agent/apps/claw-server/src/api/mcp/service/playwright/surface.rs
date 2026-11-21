@@ -1,11 +1,13 @@
 //! Owns desktop MCP discovery and admission. The internal catalog stays intact for
 //! pursue and host effects, but cached MCP callers must pass this same policy.
 
-use super::{
-    hosted,
-    service::{AWAIT_HELP_TOOL_NAME, PURSUE_TOOL_NAME, REQUEST_HELP_TOOL_NAME},
+use super::super::{
+    AWAIT_HELP_TOOL_NAME, ClawMcpService, PURSUE_TOOL_NAME, PageNaming, REQUEST_HELP_TOOL_NAME,
+    pursue,
 };
-use crate::{config::ServerMode, services::agent_settings::HumanHelp};
+use crate::services::agent_settings::HumanHelp;
+use browseros_mcp::ToolResult;
+use serde_json::Value;
 
 /// Set false to expose only the SDK's run, including to cached exception callers.
 pub(super) const LIST_EXCEPTIONS: bool = true;
@@ -69,7 +71,7 @@ fn exposure(name: &str) -> Exposure {
 
 /// Cached exception calls need terminal answers even when the tool is no longer listed.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Admission {
+pub(in crate::api::mcp::service) enum Admission {
     Call,
     Refuse(&'static str),
     PursueHandback,
@@ -78,7 +80,7 @@ pub(super) enum Admission {
 /// One matcher for host-authored desktop prose. Ordinary English and SDK method
 /// names remain valid; only references to the retired MCP tools are forbidden.
 #[cfg(test)]
-pub(super) fn removed_tool_reference(text: &str) -> Option<&'static str> {
+pub(in crate::api::mcp) fn removed_tool_reference(text: &str) -> Option<&'static str> {
     for &(name, _) in REMOVED_TOOLS {
         if name.contains('_') || name == "setViewport" {
             if text.contains(name) {
@@ -109,18 +111,22 @@ const HELP_OFF_MESSAGE: &str = "Human help is turned off in BrowserOS neo settin
 
 /// One policy snapshot per request. Listing gates can change while cached callers
 /// still need a terminal response from an exception they already started.
-pub(super) struct Surface {
-    pub(super) mode: ServerMode,
-    pub(super) list_exceptions: bool,
-    pub(super) human_help: HumanHelp,
-    pub(super) pursue_offered: bool,
+pub(in crate::api::mcp::service) struct Surface {
+    pub(in crate::api::mcp::service) list_exceptions: bool,
+    pub(in crate::api::mcp::service) human_help: HumanHelp,
+    pub(in crate::api::mcp::service) pursue_offered: bool,
 }
 
 impl Surface {
-    pub(super) fn listed(&self, name: &str) -> bool {
-        if self.mode.is_hosted() {
-            return hosted::refusal(self.mode, name).is_none();
+    pub(in crate::api::mcp::service) fn for_host(host: &ClawMcpService) -> Self {
+        Self {
+            list_exceptions: LIST_EXCEPTIONS,
+            human_help: host.human_help(),
+            pursue_offered: host.pursue_offered(),
         }
+    }
+
+    pub(in crate::api::mcp::service) fn listed(&self, name: &str) -> bool {
         match exposure(name) {
             Exposure::Run => true,
             Exposure::Exception if self.list_exceptions => match name {
@@ -132,16 +138,7 @@ impl Surface {
         }
     }
 
-    /// Hosted keeps its catalog-wide schema lookup. Desktop never leaks internal
-    /// schemas through get_tool, even when the caller remembers an old tool name.
-    pub(super) fn lookup(&self, name: &str) -> bool {
-        self.mode.is_hosted() || self.listed(name)
-    }
-
-    pub(super) fn admission(&self, name: &str) -> Admission {
-        if self.mode.is_hosted() {
-            return hosted::refusal(self.mode, name).map_or(Admission::Call, Admission::Refuse);
-        }
+    pub(in crate::api::mcp::service) fn admission(&self, name: &str) -> Admission {
         match exposure(name) {
             Exposure::Run => Admission::Call,
             Exposure::Exception => match name {
@@ -160,9 +157,37 @@ impl Surface {
     }
 }
 
+/// Answer a cached pursue caller without opening a session or contacting the worker.
+pub(super) fn gate_off(raw_args: &Value) -> ToolResult {
+    let Some(page) = PageNaming::NativeTab.pursue_page(raw_args) else {
+        return ToolResult::error("pursue needs page.tabId from a run script");
+    };
+    pursue::not_started(page, "fast browsing is turned off")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_off_returns_a_native_tab_handback_without_work() {
+        let result = gate_off(&serde_json::json!({"page": 5000000000i64}));
+        assert!(!result.is_error);
+        let body = result.structured_content.unwrap_or_default();
+        assert_eq!(body["page"], 5000000000i64);
+        assert_eq!(body["continueWith"], "run");
+        assert_eq!(body["decisions"], 0);
+        for reply in [
+            pursue::not_started(7, "the worker is unavailable"),
+            pursue::already_handed_back(7, PageNaming::NativeTab),
+        ] {
+            for block in reply.content {
+                if let Some(text) = block.as_text() {
+                    assert_eq!(removed_tool_reference(&text.text), None);
+                }
+            }
+        }
+    }
 
     #[test]
     fn wording_matcher_distinguishes_tool_references_from_ordinary_words() {
@@ -211,7 +236,6 @@ mod tests {
         for exceptions in [false, true] {
             for pursue in [false, true] {
                 let surface = Surface {
-                    mode: ServerMode::Desktop,
                     list_exceptions: exceptions,
                     human_help: HumanHelp::On,
                     pursue_offered: pursue,

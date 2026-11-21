@@ -3,7 +3,8 @@
 //! source of step timing and outcomes, including failed and cancelled operations.
 //! The same bounded read supplies advisory labels for sent writes to foreign tabs.
 
-use super::super::{service::StartedSession, tab_ref};
+use super::super::super::StartedSession;
+use crate::api::mcp::page_naming::page_for_tab;
 use crate::{
     AppState,
     db::audit_log::RecordToolDispatchInput,
@@ -20,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// A run's reply notes and deferred child rows share one deadline. The caller
 /// records the parent first, then publishes these children through the audit actor.
-pub(in crate::api::mcp) struct PendingSteps {
+pub(in crate::api::mcp::service::playwright) struct PendingSteps {
     pub notes: Vec<String>,
     events: Vec<AuditEvent>,
     began: std::time::Instant,
@@ -30,7 +31,11 @@ pub(in crate::api::mcp) struct PendingSteps {
 impl PendingSteps {
     /// The flush acknowledges the parent's database write, including failures.
     /// FIFO admission alone would allow orphan children after a failed parent insert.
-    pub(in crate::api::mcp) async fn record(self, state: &AppState, session_id: &str) {
+    pub(in crate::api::mcp::service::playwright) async fn record(
+        self,
+        state: &AppState,
+        session_id: &str,
+    ) {
         let publish = async {
             state.audit_worker.flush_session(session_id).await?;
             for event in self.events {
@@ -50,7 +55,7 @@ impl PendingSteps {
     }
 }
 
-pub(in crate::api::mcp) async fn prepare(
+pub(in crate::api::mcp::service::playwright) async fn prepare(
     state: &AppState,
     started: &StartedSession,
     outcome: &RunOutcome,
@@ -185,14 +190,14 @@ async fn foreign_write_notice(
         if foreign.contains_key(&tab) {
             continue;
         }
-        let mut page = tab_ref::page_for_tab(state, tab).await;
+        let mut page = page_for_tab(state, tab).await;
         // SDK and host receive native events independently. Reconcile once for
         // a missing foreign tab too, rather than relying on own-tab claim refresh.
         if page.is_none() && !refreshed {
             refreshed = true;
             if let Some(browser) = state.browser.session().await {
                 let _ = browser.pages.list().await;
-                page = tab_ref::page_for_tab(state, tab).await;
+                page = page_for_tab(state, tab).await;
             }
         }
         // This is a post-run projection. A tab already closed has no live host

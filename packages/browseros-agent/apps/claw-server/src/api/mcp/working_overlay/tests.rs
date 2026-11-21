@@ -27,7 +27,7 @@ async fn state_with_overlay() -> anyhow::Result<AppState> {
     let call = tool_call_with_behavior(
         "act",
         json!({ "page": 1, "kind": "click", "ref": "e1" }),
-        ServerMode::Hosted,
+        ServerMode::Desktop,
         behavior_with_overlay(),
     )
     .await?;
@@ -63,15 +63,6 @@ async fn the_rollout_switch_and_the_setting_both_gate_the_overlay() -> anyhow::R
     )
     .await?;
     assert!(!hosted.state.page_hold.enabled());
-
-    let sdk = tool_call_with_behavior(
-        "act",
-        json!({ "page": 1, "kind": "click", "ref": "e1" }),
-        ServerMode::Desktop,
-        behavior_with_overlay(),
-    )
-    .await?;
-    assert!(!sdk.state.page_hold.enabled());
 
     let state = state_with_overlay().await?;
     assert!(page_hold(&state).enabled());
@@ -375,5 +366,22 @@ async fn a_finishing_agent_leaves_a_page_another_agent_is_acting_on() -> anyhow:
         page_hold(&state).phase(&page).await,
         Some(HoldPhase::Working)
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sdk_input_leaves_the_overlay_and_hold_off() -> anyhow::Result<()> {
+    let call = tool_call_with_behavior(
+        "act",
+        json!({ "page": 1, "kind": "click", "ref": "e1" }),
+        ServerMode::Desktop,
+        Behavior {
+            playwright_run: true,
+            ..behavior_with_overlay()
+        },
+    )
+    .await?;
+    assert!(!call.state.page_hold.enabled());
     Ok(())
 }
