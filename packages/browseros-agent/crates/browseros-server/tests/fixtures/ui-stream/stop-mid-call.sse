@@ -1,0 +1,14 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"run"}
+
+data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"run","input":{"code":"click('a')"}}
+
+data: {"type":"tool-output-error","toolCallId":"call_1","errorText":"Stopped"}
+
+data: {"type":"abort"}
+
+data: [DONE]
+

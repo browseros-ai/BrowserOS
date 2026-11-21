@@ -148,6 +148,15 @@ fn cases() -> Vec<Case> {
             end: TurnEnd::Stopped,
         },
         Case {
+            name: "stop-mid-call",
+            events: vec![
+                StepStart,
+                started("call_1", "run", server),
+                input("call_1", "run", server, json!({ "code": "click('a')" })),
+            ],
+            end: TurnEnd::Stopped,
+        },
+        Case {
             name: "coding-agent-tool",
             events: vec![
                 StepStart,
