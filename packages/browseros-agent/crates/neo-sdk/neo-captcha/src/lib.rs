@@ -229,7 +229,8 @@ impl CaptchaSolver {
             for rescan in 0..=1 {
                 // An explicit access restriction takes precedence over any widget on the page.
                 match policy::policy_wall(page).await {
-                    Ok(Some(_)) => {
+                    Ok(Some(wall)) => {
+                        host = wall.host;
                         return terminal(
                             SolveStatus::PolicyWall,
                             SolveReason::PolicyWall,

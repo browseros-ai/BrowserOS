@@ -303,10 +303,10 @@ for (const server of ['sdk', 'claw-server'] as const) {
     expect(records.filter((r) => r.outcome !== 'PASS')).toEqual([])
     expect(exitCode(records)).toBe(0)
     expect(summarize(records)).toMatchObject({
-      pass: 27,
+      pass: 28,
       siteAccepted: 8,
       deliveredOnly: 0,
-      detected: 19,
+      detected: 20,
       paidTasks: 0,
     })
     // PerimeterX's check is a detection refused by name (type `unknown` on purpose); its frame
@@ -325,13 +325,16 @@ for (const server of ['sdk', 'claw-server'] as const) {
       site: 'accepted',
       outcome: 'PASS',
     })
-    expect(records.find((r) => r.id === 'policy-wall-ai-agent')).toMatchObject({
-      verdict: 'policy_wall',
-      reason: 'policy_wall',
-      type: null,
-      check: 'detect',
-      outcome: 'PASS',
-    })
+    for (const id of ['policy-wall-ai-agent', 'policy-wall-amazon-nov19']) {
+      expect(records.find((r) => r.id === id)).toMatchObject({
+        verdict: 'policy_wall',
+        reason: 'policy_wall',
+        type: null,
+        check: 'detect',
+        paidTasks: 0,
+        outcome: 'PASS',
+      })
+    }
     expect(
       records.find((r) => r.id === 'policy-wall-terms-footer'),
     ).toMatchObject({
@@ -451,14 +454,14 @@ test('tests that an absent SDK solver passes every page only when absence is exp
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
   expect(summarize(expected.records)).toMatchObject({
-    pass: 27,
+    pass: 28,
     siteAccepted: 0,
     deliveredOnly: 0,
     detected: 0,
-    absent: 27,
+    absent: 28,
   })
   expect(renderSummary(expected.records)).toContain(
-    'solver absent as expected: 27',
+    'solver absent as expected: 28',
   )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),
