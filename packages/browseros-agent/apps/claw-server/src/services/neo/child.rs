@@ -347,6 +347,7 @@ async fn launch_config(launch: &EngineLaunch, port: u16) -> io::Result<Value> {
 
 /// Desktop owns these settings even when an earlier SDK launch saved overrides.
 /// Every desktop run carries a task. Browser scope keeps user and other agents' tabs accessible.
+/// The cursor lets a person watching the browser see where a Playwright click will land.
 /// Merge atomically so a crash cannot restore hosted defaults or drop unrelated settings.
 async fn configure_settings(path: &Path) -> io::Result<()> {
     let mut settings: serde_json::Map<String, Value> = match fs::read(path).await {
@@ -361,6 +362,7 @@ async fn configure_settings(path: &Path) -> io::Result<()> {
         ("tabs", "scope", json!("browser")),
         ("tabs", "idleCloseSeconds", json!(86400)),
         ("trace", "screenshots", json!("off")),
+        ("input", "cursor", json!("on")),
     ] {
         let section = settings.entry(section).or_insert_with(|| json!({}));
         if !section.is_object() {
@@ -758,8 +760,12 @@ mod tests {
         let path = dir.path().join("settings.json");
         for existing in [
             json!({}),
-            json!({"tabs":null,"trace":[]}),
-            json!({"tabs":{"scope":"task","idleCloseSeconds":1800},"trace":{"screenshots":"operations","valueBytes":42}}),
+            json!({"tabs":null,"trace":[],"input":null}),
+            json!({
+                "tabs":{"scope":"task","idleCloseSeconds":1800},
+                "trace":{"screenshots":"operations","valueBytes":42},
+                "input":{"cursor":"off"}
+            }),
         ] {
             tokio::fs::write(&path, serde_json::to_vec(&existing)?).await?;
             configure_settings(&path).await?;
@@ -767,6 +773,7 @@ mod tests {
             assert_eq!(saved["tabs"]["scope"], "browser");
             assert_eq!(saved["tabs"]["idleCloseSeconds"], 86400);
             assert_eq!(saved["trace"]["screenshots"], "off");
+            assert_eq!(saved["input"]["cursor"], "on");
             assert_eq!(
                 saved["trace"]["valueBytes"],
                 existing["trace"]["valueBytes"]
@@ -777,7 +784,11 @@ mod tests {
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
-            json!({"tabs":{"scope":"browser","idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+            json!({
+                "tabs":{"scope":"browser","idleCloseSeconds":86400},
+                "trace":{"screenshots":"off"},
+                "input":{"cursor":"on"}
+            })
         );
         Ok(())
     }
@@ -808,7 +819,11 @@ mod tests {
         let saved: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
         assert_eq!(
             saved,
-            json!({"tabs":{"scope":"browser","idleCloseSeconds":86400},"trace":{"screenshots":"off"}})
+            json!({
+                "tabs":{"scope":"browser","idleCloseSeconds":86400},
+                "trace":{"screenshots":"off"},
+                "input":{"cursor":"on"}
+            })
         );
         Ok(())
     }
