@@ -1,6 +1,7 @@
 //! The engine child's supervision without a browser: an engine that cannot start keeps chat
-//! working, a call fails with the reason once the next restart is far off, and the server's
-//! stop ends the supervisor. The engine here is `false`, which exits 1 at every start.
+//! working, a call fails with the reason once the next restart is far off, the browser then
+//! behaves as `Off`, and the server's stop ends the supervisor. The engine here is `false`,
+//! which exits 1 at every start.
 
 #![cfg(unix)]
 
@@ -64,6 +65,17 @@ async fn an_engine_that_cannot_start_fails_calls_with_its_reason_and_stops_with_
         "{:?}",
         started.elapsed()
     );
+    // Three failed starts in a row: the browser now behaves as Off until a start succeeds.
+    assert!(browser.tools().is_empty());
+    assert!(browser.arm(scope.clone()).is_none());
+    assert!(
+        browser
+            .guidance()
+            .starts_with("The browser cannot be reached right now"),
+        "{}",
+        browser.guidance()
+    );
+    drop(armed);
 
     stop.cancel();
     let deadline = Instant::now() + Duration::from_secs(3);

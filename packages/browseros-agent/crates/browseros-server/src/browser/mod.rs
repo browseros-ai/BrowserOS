@@ -305,7 +305,7 @@ impl Browser {
         match &self.inner.engine {
             Engine::Off { .. } => Vec::new(),
             #[cfg(unix)]
-            Engine::Neo(engine) => vec![engine.tool()],
+            Engine::Neo(engine) => engine.tools(),
             #[cfg(feature = "test-support")]
             Engine::Scripted(scripted) => scripted.tools(),
         }
@@ -317,7 +317,7 @@ impl Browser {
         match &self.inner.engine {
             Engine::Off { .. } => NO_BROWSER_GUIDANCE,
             #[cfg(unix)]
-            Engine::Neo(_) => neo::GUIDANCE,
+            Engine::Neo(engine) => engine.guidance(),
             #[cfg(feature = "test-support")]
             Engine::Scripted(_) => scripted::GUIDANCE,
         }
@@ -346,8 +346,11 @@ impl Browser {
 
     /// `None` when there is no engine: the coding agent then runs with no browser tools.
     pub fn arm(&self, scope: Scope) -> Option<Armed> {
-        if matches!(self.inner.engine, Engine::Off { .. }) {
-            return None;
+        match &self.inner.engine {
+            Engine::Off { .. } => return None,
+            #[cfg(unix)]
+            Engine::Neo(engine) if engine.failing() => return None,
+            _ => {}
         }
         let url = format!(
             "http://127.0.0.1:{}/mcp/{}",

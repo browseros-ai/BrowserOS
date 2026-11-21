@@ -94,13 +94,19 @@ impl Wire {
             .json(&body)
             .send()
             .await
-            // The engine's stateless MCP answers with headers as soon as it takes a call, before
-            // the script runs; a send that fails before any answer means it never took it.
             .map_err(|error| {
-                WireError::NotDelivered(format!("the engine did not answer: {}", chain(&error)))
+                let reason = format!("the engine did not answer: {}", chain(&error));
+                // Only a refused connect proves the engine never read the call: rmcp starts the
+                // handler before it writes the response headers, so a connection that broke
+                // later may have started the script.
+                if error.is_connect() {
+                    WireError::NotDelivered(reason)
+                } else {
+                    WireError::Lost(reason)
+                }
             })?
             .error_for_status()
-            .map_err(|error| WireError::Failed(format!("the engine refused the call: {error}")))?;
+            .map_err(|error| WireError::Refused(format!("the engine refused the call: {error}")))?;
         let sse = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -112,16 +118,16 @@ impl Wire {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|error| WireError::Failed(format!("the engine's reply broke off: {error}")))?
+            .map_err(|error| WireError::Lost(format!("the engine's reply broke off: {error}")))?
         {
             read += chunk.len();
             if read > MAX_REPLY_BYTES {
-                return Err(WireError::Failed(
+                return Err(WireError::Refused(
                     "the engine's reply exceeded its wire limit".to_owned(),
                 ));
             }
             if sse {
-                if let Some(result) = events.push(&chunk, &id).map_err(WireError::Failed)? {
+                if let Some(result) = events.push(&chunk, &id).map_err(WireError::Refused)? {
                     return Ok(result);
                 }
             } else {
@@ -132,35 +138,39 @@ impl Wire {
             // The last event may end at EOF without its blank line.
             events
                 .push(b"\n\n", &id)
-                .map_err(WireError::Failed)?
+                .map_err(WireError::Refused)?
                 .ok_or_else(|| {
-                    WireError::Failed("the engine's stream ended without a reply".to_owned())
+                    WireError::Lost("the engine's stream ended without a reply".to_owned())
                 })
         } else {
             let message: Value = serde_json::from_slice(&body).map_err(|error| {
-                WireError::Failed(format!("the engine's reply is not JSON: {error}"))
+                WireError::Refused(format!("the engine's reply is not JSON: {error}"))
             })?;
             response_result(&message, &id)
-                .map_err(WireError::Failed)?
+                .map_err(WireError::Refused)?
                 .ok_or_else(|| {
-                    WireError::Failed("the engine replied to another request".to_owned())
+                    WireError::Refused("the engine replied to another request".to_owned())
                 })
         }
     }
 }
 
-/// Why a request to the engine failed. `NotDelivered`: no answer came at all, which together
-/// with the child's death means the engine never took the call. `Failed`: the engine answered,
-/// so a script may have acted and the call is never repeated.
+/// Why a request to the engine failed, by what it says about the script.
 pub(super) enum WireError {
+    /// The connection was refused: the engine never read the call, which is safe to send again.
     NotDelivered(String),
-    Failed(String),
+    /// The connection broke before the reply was whole: the script may have acted.
+    Lost(String),
+    /// The engine answered, but not with a result. Nothing ran beyond what it reports.
+    Refused(String),
 }
 
 impl std::fmt::Display for WireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotDelivered(reason) | Self::Failed(reason) => f.write_str(reason),
+            Self::NotDelivered(reason) | Self::Lost(reason) | Self::Refused(reason) => {
+                f.write_str(reason)
+            }
         }
     }
 }

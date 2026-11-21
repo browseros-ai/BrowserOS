@@ -67,6 +67,7 @@ pub(super) async fn supervise(engine: NeoEngine, launch: EngineLaunch, stop: Can
         engine.set_link(Link::Down {
             reason,
             retry_at: Instant::now() + delay,
+            failing: backoff.failing(),
         });
         tokio::select! {
             biased;
@@ -117,9 +118,14 @@ async fn attempt(engine: &NeoEngine, launch: &EngineLaunch, stop: &CancellationT
             },
         };
         engine.set_tool(tool);
-        match host.tabs().await {
-            Ok(census) => engine.seed_tabs(&census),
-            Err(reason) => tracing::warn!(%reason, "the first tab census failed"),
+        // Every await from here on races the stop, so a SIGTERM closes the lifeline at once.
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => return Exit::Stopped,
+            census = host.tabs() => match census {
+                Ok(census) => engine.seed_tabs(&census),
+                Err(reason) => tracing::warn!(%reason, "the first tab census failed"),
+            },
         }
         engine.set_linked(true);
         engine.set_link(Link::Up(Arc::new(Connection {
@@ -135,7 +141,11 @@ async fn attempt(engine: &NeoEngine, launch: &EngineLaunch, stop: &CancellationT
                 biased;
                 () = stop.cancelled() => return Exit::Stopped,
                 status = child.wait() => return exited(status, true),
-                () = tokio::time::sleep(LINK_POLL) => engine.set_linked(wire.ready().await),
+                () = tokio::time::sleep(LINK_POLL) => tokio::select! {
+                    biased;
+                    () = stop.cancelled() => return Exit::Stopped,
+                    linked = wire.ready() => engine.set_linked(linked),
+                },
             }
         }
     }
@@ -228,6 +238,12 @@ impl Backoff {
         let delay = DELAYS[self.step.min(DELAYS.len() - 1)];
         self.step += 1;
         delay
+    }
+
+    /// Every delay used up: the starts keep failing, and the browser behaves as `Off` while
+    /// the supervisor keeps trying every 30 s.
+    fn failing(&self) -> bool {
+        self.step >= 3
     }
 }
 
@@ -423,7 +439,9 @@ mod tests {
             .map(|_| backoff.after_failure(Duration::ZERO).as_secs())
             .collect();
         assert_eq!(delays, vec![1, 5, 30, 30]);
+        assert!(backoff.failing());
         assert_eq!(backoff.after_failure(Duration::from_secs(61)).as_secs(), 1);
+        assert!(!backoff.failing());
     }
 
     #[test]

@@ -261,16 +261,21 @@ async fn the_engine_drives_a_real_browser() -> TestResult {
         .status()?;
     assert!(killed.success());
     let killed_at = Instant::now();
-    let revived = run(&browser, &task, "return 1 + 1").await;
-    assert_eq!(inner(&revived), "2", "{}", revived.text);
+    // A call sent in the moment the child dies may have reached it, and is never repeated; so
+    // the next call goes out once the supervisor has the new child up.
+    wait_until(Duration::from_secs(20), || {
+        browser.engine_pid().is_some_and(|new| new != pid)
+    })
+    .await?;
+    let restarted_ms = killed_at.elapsed().as_millis();
     let new_pid = browser
         .engine_pid()
         .ok_or("no engine pid after the restart")?;
-    assert_ne!(new_pid, pid);
+    let revived = run(&browser, &task, "return 1 + 1").await;
+    assert_eq!(inner(&revived), "2", "{}", revived.text);
     note(format!(
-        "killed engine pid {pid}: restarted as pid {new_pid}, next call returned {} after {} ms",
-        inner(&revived),
-        killed_at.elapsed().as_millis()
+        "killed engine pid {pid}: restarted as pid {new_pid} after {restarted_ms} ms, next call returned {}",
+        inner(&revived)
     ));
 
     endpoint(&browser, listener, &never).await?;

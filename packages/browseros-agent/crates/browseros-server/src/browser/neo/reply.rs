@@ -141,15 +141,20 @@ fn replace_markers(
     blobs: &HashMap<String, Vec<u8>>,
     pictures: &mut Vec<Picture>,
 ) -> bool {
+    let mut presenter = Presenter {
+        pictures,
+        blob_pictures: HashMap::new(),
+        text_left: TEXT_BUDGET,
+    };
     let mut replaced = false;
     // Iterative, like the engine's own result fitter: a deep value cannot overflow the stack.
     let mut pending = vec![value];
     while let Some(node) = pending.pop() {
         let replacement = if let Some(bytes) = bytes_marker(node) {
-            Some(present_bytes(&bytes, pictures))
+            Some(presenter.bytes(&bytes))
         } else if let Some((id, size)) = blob_marker(node) {
             Some(match blobs.get(id) {
-                Some(bytes) => present_bytes(bytes, pictures),
+                Some(bytes) => presenter.blob(id, bytes),
                 None => format!("[{size} returned bytes that could not be read]"),
             })
         } else {
@@ -169,20 +174,54 @@ fn replace_markers(
     replaced
 }
 
-fn present_bytes(bytes: &[u8], pictures: &mut Vec<Picture>) -> String {
-    if let Some(media_type) = picture_type(bytes) {
-        pictures.push(Picture {
-            media_type: media_type.to_owned(),
-            bytes: bytes.to_vec(),
-        });
-        return format!("[picture {}]", pictures.len());
+/// The most returned text one result inlines. A script can repeat one blob's marker many
+/// times inside its 256 KiB value; without a bound, each copy would inline the blob again.
+const TEXT_BUDGET: usize = 16 * 1024 * 1024;
+
+/// Turns returned bytes into placeholders and text, within the result's budgets.
+struct Presenter<'a> {
+    pictures: &'a mut Vec<Picture>,
+    /// A blob id met again names the same picture rather than a second copy of its bytes.
+    blob_pictures: HashMap<String, usize>,
+    text_left: usize,
+}
+
+impl Presenter<'_> {
+    fn blob(&mut self, id: &str, bytes: &[u8]) -> String {
+        if let Some(number) = self.blob_pictures.get(id) {
+            return format!("[picture {number}]");
+        }
+        let presented = self.bytes(bytes);
+        if picture_type(bytes).is_some() {
+            self.blob_pictures
+                .insert(id.to_owned(), self.pictures.len());
+        }
+        presented
     }
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text.to_owned(),
-        Err(_) => format!(
-            "[{} returned bytes that are neither a picture nor text]",
-            bytes.len()
-        ),
+
+    fn bytes(&mut self, bytes: &[u8]) -> String {
+        if let Some(media_type) = picture_type(bytes) {
+            self.pictures.push(Picture {
+                media_type: media_type.to_owned(),
+                bytes: bytes.to_vec(),
+            });
+            return format!("[picture {}]", self.pictures.len());
+        }
+        match std::str::from_utf8(bytes) {
+            Ok(text) if text.len() <= self.text_left => {
+                self.text_left -= text.len();
+                text.to_owned()
+            }
+            Ok(text) => format!(
+                "[{} bytes of returned text not shown: this result already holds {} MiB of it]",
+                text.len(),
+                TEXT_BUDGET / (1024 * 1024)
+            ),
+            Err(_) => format!(
+                "[{} returned bytes that are neither a picture nor text]",
+                bytes.len()
+            ),
+        }
     }
 }
 
@@ -305,6 +344,31 @@ kept"#
         assert_eq!(
             inner(&output),
             r#"["long text","[10 returned bytes that are neither a picture nor text]","[9 returned bytes that could not be read]"]"#
+        );
+    }
+
+    #[test]
+    fn a_repeated_blob_is_one_picture_and_repeated_text_stops_at_its_budget() {
+        let text = "t".repeat(TEXT_BUDGET / 2 + 1);
+        let blobs = HashMap::from([
+            ("b0".to_owned(), PNG.to_vec()),
+            ("b1".to_owned(), text.clone().into_bytes()),
+        ]);
+        let picture = json!({ "$neo": "blob", "id": "b0", "size": PNG.len() });
+        let words = json!({ "$neo": "blob", "id": "b1", "size": text.len() });
+        let value = json!([picture.clone(), picture, words.clone(), words]);
+        let output = engine_reply(value, "", false).present(&blobs);
+        assert_eq!(output.pictures.len(), 1, "one copy of the picture's bytes");
+        let shown: Value = serde_json::from_str(inner(&output)).unwrap_or(Value::Null);
+        assert_eq!(shown[0], "[picture 1]");
+        assert_eq!(shown[1], "[picture 1]");
+        assert_eq!(shown[2], Value::String(text.clone()));
+        assert_eq!(
+            shown[3],
+            format!(
+                "[{} bytes of returned text not shown: this result already holds 16 MiB of it]",
+                text.len()
+            )
         );
     }
 
