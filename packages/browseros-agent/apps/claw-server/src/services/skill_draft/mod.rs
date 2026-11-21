@@ -28,9 +28,6 @@ use crate::{
 };
 use digest::DraftRequest;
 
-/// The licence feature that unlocks skill drafts, issued alongside ultrafast.
-pub const SKILL_DRAFTS_FEATURE: &str = "claw.skill_drafts";
-
 /// How long a draft that was not saved is kept: reopening it within this costs nothing.
 pub const DRAFT_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
