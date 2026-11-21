@@ -354,6 +354,51 @@ fn tests_that_the_set_covers_both_sides_and_says_where_readings_come_from() -> T
     Ok(())
 }
 
+/// The three pages claudef measured Jev on (design-claudef §5) render the same tagged shape it
+/// sent: facts first, the page's own words after, host only.
+#[tokio::test]
+async fn tests_that_the_measured_pages_render_claudefs_shapes() -> TestResult {
+    let shapes: [(&str, &[&str]); 3] = [
+        (
+            "01-ny-failure-dialog-already-passed",
+            &[
+                "[SITE] ouf.osc.ny.gov",
+                "[ON_TOP] dialog covering the whole view: Please check the box below to continue. Close",
+                "[WIDGET] Cloudflare Turnstile widget is visible inside the dialog",
+                "[SUBMIT] the Search button is covered by the dialog",
+                "[ALERT] There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.",
+            ],
+        ),
+        (
+            "15-mm-results-hidden-widget-for-jev",
+            &[
+                "[SITE] missingmoney.com",
+                "[WIDGET] Cloudflare Turnstile widget is on the page but hidden; its own frame could not be read",
+                "[SUBMIT] the SEARCH button is visible and enabled",
+            ],
+        ),
+        (
+            "06-amazon-wall-reworded-for-jev",
+            &[
+                "[SITE] www.amazon.com",
+                "[HEADING] Access restricted",
+                "[TEXT] Access restricted Continued access by an unauthorized AI agent violates Amazon's Conditions of Use, to which our customers have agreed. Continue Conditions of Use Privacy Notice",
+            ],
+        ),
+    ];
+    let recordings = briefs()?;
+    for (case, lines) in shapes {
+        let recording = recordings
+            .iter()
+            .find(|recording| recording.brief.case == case)
+            .ok_or_else(|| format!("{case} is missing"))?;
+        let evidence = replay(recording, Some(&Fixed::liar())).await?.evidence;
+        let first: Vec<&str> = evidence.lines().take(lines.len()).collect();
+        assert_eq!(first, lines, "{case}: facts lead, in claudef's order");
+    }
+    Ok(())
+}
+
 /// Records Jev's live reading for the briefs named in `VERIFY_REPLAY_LIVE` (comma-separated
 /// case names) into the JSON file `VERIFY_REPLAY_LIVE_OUT`, through the crate's own HTTP judge.
 /// Needs `NEO_JEV_KEY_FILE` (and `NEO_JEV_MODEL` to pin a model). Each brief is one paid call.

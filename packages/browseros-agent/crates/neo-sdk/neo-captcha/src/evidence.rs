@@ -277,7 +277,7 @@ async fn frame_texts<P: CaptchaPage>(
 /// slots. Form fields, editable regions, frames and scripts are skipped, so no value a visitor
 /// typed is ever read. `visits` bounds the work on a huge page.
 const TEXT_JS: &str = r#"
-const SKIP = 'script, style, noscript, template, input, textarea, select, option, datalist, iframe, object, embed, svg, canvas, [contenteditable]:not([contenteditable="false"])';
+const SKIP = 'script, style, noscript, template, input, textarea, select, option, datalist, iframe, object, embed, svg, canvas, [contenteditable]:not([contenteditable="false"]), browseros-agent-overlay, browseros-agent-pointer';
 const seen = e => typeof e.checkVisibility !== 'function' || e.checkVisibility({checkVisibilityCSS: true, checkOpacity: true});
 let visits = 12000;
 const chunks = (root, limit) => {
@@ -321,6 +321,13 @@ pub(crate) const PROBE_JS: &str = r#"
 const W = innerWidth, H = innerHeight, VIEW = Math.max(1, W * H);
 const up = e => e.parentElement || e.getRootNode().host || null;
 const lineage = e => { const list = []; for (let p = e; p; p = up(p)) list.push(p); return list; };
+// Neo's own layers sit over every page Neo acts on: the working overlay, whose shield holds a
+// person's input while Neo works, and the drawn pointer. They are not the page's, so no hit test,
+// cover or query counts them.
+const ours = e => e.localName === 'browseros-agent-overlay' || e.localName === 'browseros-agent-pointer';
+const theirs = e => !lineage(e).some(ours);
+const page = selector => all(selector).filter(theirs);
+const stackAt = (x, y) => document.elementsFromPoint(x, y).filter(theirs);
 const share = e => {
     const r = e.getBoundingClientRect();
     return Math.max(0, Math.min(r.right, W) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, H) - Math.max(r.top, 0)) / VIEW;
@@ -358,15 +365,20 @@ const vendorIn = layer => {
 };
 const dialogish = e => e.matches('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]');
 const position = e => getComputedStyle(e).position;
+// Something painted beneath `layer` at this point is neither inside it nor one of its ancestors:
+// the layer covers it. `stack` is the document's hit list, topmost first, where a layer inside a
+// shadow tree shows as its host.
 const covers = (layer, stack) => {
     const mine = new Set(lineage(layer));
-    return stack.some(e => !mine.has(e) && !lineage(e).includes(layer));
+    const anchor = lineage(layer).find(e => e.getRootNode() === document) || layer;
+    const at = stack.findIndex(e => e === anchor || lineage(e).includes(anchor));
+    return at >= 0 && stack.slice(at).some(e => !mine.has(e) && !lineage(e).includes(anchor));
 };
 const deepAt = (x, y) => {
-    let e = document.elementFromPoint(x, y);
+    let e = stackAt(x, y)[0] || null;
     for (let i = 0; e && i < 16; i++) {
         const root = e.shadowRoot || closed.get(e);
-        const inner = root && root.elementFromPoint(x, y);
+        const inner = root && root.elementsFromPoint(x, y).find(n => n.getRootNode() === root && theirs(n));
         if (!inner || inner === e) break;
         e = inner;
     }
@@ -379,7 +391,7 @@ const firstSubmit = form => inside(form, SUBMIT).find(shown)
     || (form.id ? [...document.querySelectorAll(SUBMIT)].find(b => b.getAttribute('form') === form.id && shown(b)) : null)
     || null;
 const submit = (() => {
-    const forms = [...new Set(all(FIELDS).map(e => lineage(e).find(p => p.localName === 'form')).filter(Boolean)), ...all('form')];
+    const forms = [...new Set(page(FIELDS).map(e => lineage(e).find(p => p.localName === 'form')).filter(Boolean)), ...page('form')];
     for (const form of forms) { const b = firstSubmit(form); if (b) return b; }
     return null;
 })();
@@ -392,7 +404,7 @@ if (submit) {
         for (const p of lineage(top)) { if (below.has(p)) break; layer = p; }
         overSubmit = !!layer;
     } else {
-        const stack = document.elementsFromPoint(x, y);
+        const stack = stackAt(x, y);
         layer = lineage(submit).slice(1).find(p => !base(p) && (dialogish(p) || position(p) === 'fixed')
             && share(p) >= 0.3 && covers(p, stack)) || null;
     }
@@ -401,7 +413,7 @@ if (submit) {
     for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) {
         const x = W * fx, y = H * fy, top = deepAt(x, y);
         if (!top) continue;
-        const stack = document.elementsFromPoint(x, y);
+        const stack = stackAt(x, y);
         let found = null;
         for (const p of lineage(top)) {
             if (base(p)) break;
@@ -418,10 +430,10 @@ if (submit) {
 }
 const onTop = layer ? vendorIn(layer) : null;
 const within = e => !!layer && lineage(e).includes(layer);
-const puzzle = all('iframe').map(f => shown(f) && share(f) >= 0.01 ? vendorOf(f.src) : null)
+const puzzle = page('iframe').map(f => shown(f) && share(f) >= 0.01 ? vendorOf(f.src) : null)
     .find(v => v && v.part === 'puzzle' && ['recaptcha', 'hcaptcha', 'datadome'].includes(v.vendor)) || null;
 const widgets = [];
-for (const f of all('iframe')) {
+for (const f of page('iframe')) {
     if (widgets.length >= 3) break;
     const v = vendorOf(f.src);
     const visible = shown(f);
@@ -432,7 +444,7 @@ const label = (e, limit) => (chunks(e, limit).join(' ') || e.getAttribute('aria-
     || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 const lines = (selector, max, short) => {
     const out = [];
-    for (const e of all(selector)) {
+    for (const e of page(selector)) {
         if (out.length >= max) break;
         if (!seen(e)) continue;
         const parts = chunks(e, 400), text = parts.join(' ');
@@ -442,13 +454,13 @@ const lines = (selector, max, short) => {
     return out;
 };
 const FOOTER = 'footer, [role="contentinfo"]';
-const headings = all('h1, h2, h3, h4, h5, h6, [role="heading"]')
+const headings = page('h1, h2, h3, h4, h5, h6, [role="heading"]')
     .filter(e => seen(e) && !lineage(e).some(p => p.matches && p.matches(FOOTER)))
     .map(e => label(e, 120)).filter(Boolean).slice(0, 8);
-const buttons = all('button, [role="button"], input[type="submit"], input[type="button"]')
+const buttons = page('button, [role="button"], input[type="submit"], input[type="button"]')
     .filter(shown).map(e => label(e, 60)).filter(Boolean).slice(0, 10);
 const frames = [];
-for (const f of all('iframe')) {
+for (const f of page('iframe')) {
     if (frames.length >= 6) break;
     if (!shown(f)) continue;
     let host = '';
@@ -1152,5 +1164,170 @@ mod tests {
                 "Cloudflare Turnstile widget is visible inside the dialog; its frame shows a failure message"
             )
         );
+    }
+
+    const LIVE_FORM: &str = r#"<form><label>Last Name <input name="last" value="typed by a visitor"></label> <button type="submit">Search</button></form>"#;
+    const LIVE_TURNSTILE: &str = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/live/0x4AAAAAAA/light/normal";
+
+    /// Serves `body` from localhost with every frame blocked (`frame-src 'none'`): a vendor's
+    /// frame keeps its address and its box, and the vendor is never asked for anything. Reads
+    /// the brief through the real `LivePage`, in the isolated DOM world Neo uses.
+    async fn live_brief(body: String) -> anyhow::Result<PageBrief> {
+        use std::sync::Arc;
+
+        use axum::{
+            Router,
+            http::header,
+            response::{Html, IntoResponse},
+            routing::get,
+        };
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+
+        use crate::page::{DomWorld, LivePage};
+
+        let html = format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Probe fixture</title></head><body>{body}</body></html>"
+        );
+        let app = Router::new().route(
+            "/",
+            get(move || async move {
+                (
+                    [(header::CONTENT_SECURITY_POLICY, "frame-src 'none'")],
+                    Html(html),
+                )
+                    .into_response()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://localhost:{}/", listener.local_addr()?.port());
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let port: u16 = std::env::var("BROWSEROS_CDP_PORT")
+            .or_else(|_| std::env::var("CAPTCHA_LIVE_CDP_PORT"))?
+            .parse()?;
+        assert!(
+            ![9010, 9011, 9121, 9200, 9211, 9212, 9213, 9214, 9215, 9916].contains(&port),
+            "a private test browser, never the person's own"
+        );
+        let connection = Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let id = browser.new_page(&url, NewPageOptions::default()).await?;
+        let page = LivePage::with_dom_world(browser.view().await, id.clone(), DomWorld::Isolated);
+        let read = async {
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while page.eval_main("document.readyState").await.ok() != Some(json!("complete")) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await?;
+            anyhow::Ok(brief(&page).await?)
+        }
+        .await;
+        browser.close_page(id).await?;
+        connection.disconnect().await;
+        server.abort();
+        read
+    }
+
+    #[tokio::test]
+    #[ignore = "live: needs a browser's CDP port in BROWSEROS_CDP_PORT (bun run test:browser)"]
+    async fn tests_that_the_live_probe_measures_covers_and_vendor_frames() -> anyhow::Result<()> {
+        let clean = live_brief(format!(
+            "<h1>Search for Unclaimed Property</h1>{LIVE_FORM}<p>Your search returned 1000 unclaimed properties.</p><p>Call (555) 123-4567 or write help@example.gov.</p>"
+        ))
+        .await?;
+        assert_eq!(
+            clean.measured,
+            Measured {
+                complete: true,
+                ..Measured::default()
+            },
+            "{clean:?}"
+        );
+        assert_eq!(clean.title.as_deref(), Some("Probe fixture"));
+        assert_eq!(
+            clean.submit.as_deref(),
+            Some("the Search button is visible and enabled")
+        );
+        assert_eq!(clean.headings, ["Search for Unclaimed Property"]);
+        let evidence = clean.to_evidence();
+        assert!(evidence.contains("Your search returned 1000 unclaimed properties."));
+        for leak in ["555", "@", "typed by a visitor"] {
+            assert!(!evidence.contains(leak), "{leak} leaked:\n{evidence}");
+        }
+
+        let cookie = live_brief(format!(
+            r#"{LIVE_FORM}<div role="dialog" style="position:fixed;inset:0;background:rgba(0,0,0,.4)"><div style="background:#fff;margin:20vh auto;width:60%"><h2>Air France uses cookies</h2><button>Accept</button></div></div>"#
+        ))
+        .await?;
+        assert!(
+            cookie.measured.covered && cookie.measured.on_top.is_none(),
+            "{cookie:?}"
+        );
+        assert_eq!(
+            cookie.on_top.as_deref(),
+            Some("dialog covering the whole view: Air France uses cookies Accept")
+        );
+        assert_eq!(
+            cookie.submit.as_deref(),
+            Some("the Search button is covered by the dialog")
+        );
+
+        let turnstile = live_brief(format!(
+            r#"{LIVE_FORM}<div role="dialog" style="position:fixed;inset:0;background:rgba(0,0,0,.4)"><p>Please check the box below to continue.</p><iframe src="{LIVE_TURNSTILE}" style="width:300px;height:65px;border:0"></iframe></div>"#
+        ))
+        .await?;
+        assert_eq!(
+            turnstile.measured.on_top,
+            Some(OnTop {
+                kind: CaptchaKind::Turnstile,
+                part: FramePart::Checkbox
+            }),
+            "{turnstile:?}"
+        );
+        assert!(!turnstile.measured.covered);
+        assert_eq!(
+            turnstile.widget.as_deref(),
+            Some("Cloudflare Turnstile widget is visible inside the dialog")
+        );
+
+        let puzzle = live_brief(format!(
+            r#"{LIVE_FORM}<div style="position:absolute;top:0;left:0;z-index:2000000000"><div style="position:fixed;inset:0;background:#fff;opacity:.05"></div><div style="position:relative"><iframe src="https://www.google.com/recaptcha/api2/bframe?hl=en&amp;k=live" style="width:400px;height:580px;border:0"></iframe></div></div>"#
+        ))
+        .await?;
+        assert_eq!(
+            (puzzle.measured.puzzle, puzzle.measured.on_top),
+            (
+                Some(CaptchaKind::RecaptchaV2),
+                Some(OnTop {
+                    kind: CaptchaKind::RecaptchaV2,
+                    part: FramePart::Puzzle
+                })
+            ),
+            "{puzzle:?}"
+        );
+
+        // A fixed app shell holding the page's own inline widget covers nothing beneath it, and
+        // Neo's own overlay (its shield takes input while Neo works) is not the page's.
+        let shell = live_brief(format!(
+            r#"<div style="position:fixed;inset:0;overflow:auto"><h1>App</h1><form><iframe src="{LIVE_TURNSTILE}" style="width:300px;height:65px;border:0"></iframe> <button type="submit">Go</button></form></div><script>const h = document.createElement('browseros-agent-overlay'); h.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;display:block'; const r = h.attachShadow({{mode: 'closed'}}); r.innerHTML = '<div style="position:fixed;inset:0;pointer-events:auto"></div><button style="position:fixed;bottom:0;left:40%">Take over</button>'; document.documentElement.append(h);</script>"#
+        ))
+        .await?;
+        assert_eq!(
+            shell.measured,
+            Measured {
+                complete: true,
+                ..Measured::default()
+            },
+            "{shell:?}"
+        );
+        assert_eq!(
+            shell.submit.as_deref(),
+            Some("the Go button is visible and enabled")
+        );
+        assert!(!shell.buttons.iter().any(|button| button == "Take over"));
+        Ok(())
     }
 }
