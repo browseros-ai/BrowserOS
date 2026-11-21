@@ -66,7 +66,6 @@ export function buildSidepanelPreparedSendMessagesRequest({
         userWorkingDir: common.userWorkingDir,
         supportsImages: common.supportsImages,
         previousConversation: common.previousConversation,
-        declinedApps: common.declinedApps,
         selectedText: common.selectedText,
         selectedTextSource: common.selectedTextSource,
         attachments: common.attachments?.length

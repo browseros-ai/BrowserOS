@@ -54,7 +54,6 @@ describe('chat request preparation', () => {
       userWorkingDir: '/tmp/work',
       supportsImages: undefined,
       previousConversation: commonRequestInput().previousConversation,
-      declinedApps: ['gmail'],
       selectedText: 'selected text',
       selectedTextSource: commonRequestInput().selectedTextSource,
       attachments: [
@@ -65,6 +64,7 @@ describe('chat request preparation', () => {
       ],
     })
     expect('provider' in request.body).toBe(false)
+    expect('declinedApps' in request.body).toBe(false)
   })
 
   it('names no provider when nothing is connected', () => {
@@ -112,14 +112,12 @@ function commonRequestInput() {
     mode: 'agent' as const,
     browserContext: {
       activeTab: { id: 10, url: 'https://example.com', title: 'Example' },
-      enabledMcpServers: ['slack'],
     },
     userSystemPrompt: 'Be concise',
     userWorkingDir: '/tmp/work',
     previousConversation: [
       { role: 'assistant' as const, content: 'Prior answer' },
     ],
-    declinedApps: ['gmail'],
     selectedText: 'selected text',
     selectedTextSource: {
       url: 'https://example.com',

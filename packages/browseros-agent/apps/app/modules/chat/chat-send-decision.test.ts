@@ -13,7 +13,6 @@ function input(
     hasRestoreError: false,
     isSettled: true,
     hasAnyTarget: true,
-    isIntegrationsSynced: true,
     hasAgentUrl: true,
     ...overrides,
   }
@@ -39,10 +38,6 @@ describe('decideChatSend', () => {
 
   it('queues while the agent server is still starting', () => {
     expect(decideChatSend(input({ hasAgentUrl: false }))).toBe('queue')
-  })
-
-  it('queues until integrations have synced', () => {
-    expect(decideChatSend(input({ isIntegrationsSynced: false }))).toBe('queue')
   })
 
   it('drops a send made during conversation restore', () => {

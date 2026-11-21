@@ -31,11 +31,6 @@ export interface ChatRequestBrowserContext {
     url?: string
     title?: string
   }[]
-  enabledMcpServers?: string[]
-  customMcpServers?: {
-    name: string
-    url?: string
-  }[]
 }
 
 export interface ChatRequestBodyParams {
@@ -55,7 +50,6 @@ export interface ChatRequestBodyParams {
   previousConversation?: ChatHistoryEntry[] | string
   /** Whether the conversation is written to the local database. */
   persist?: boolean
-  declinedApps?: string[]
   selectedText?: string
   selectedTextSource?: {
     url: string
@@ -74,7 +68,6 @@ export const buildChatRequestBody = ({
   supportsImages,
   previousConversation,
   persist,
-  declinedApps,
   selectedText,
   selectedTextSource,
 }: ChatRequestBodyParams) => ({
@@ -100,7 +93,6 @@ export const buildChatRequestBody = ({
   supportsReasoning: provider ? resolvesSupportsReasoning(provider) : undefined,
   previousConversation,
   persist,
-  declinedApps: declinedApps?.length ? declinedApps : undefined,
   selectedText,
   selectedTextSource,
 })

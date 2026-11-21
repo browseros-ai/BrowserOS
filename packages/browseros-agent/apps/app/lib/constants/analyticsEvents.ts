@@ -149,12 +149,6 @@ export const SIDEPANEL_TAB_REMOVED_EVENT = 'sidepanel.tab.removed'
 export const SETTINGS_PAGE_VIEWED_EVENT = 'settings.page.viewed'
 
 /** @public */
-export const MANAGED_MCP_ADDED_EVENT = 'settings.managed_mcp.added'
-
-/** @public */
-export const CUSTOM_MCP_ADDED_EVENT = 'settings.custom_mcp.added'
-
-/** @public */
 export const JTBD_POPUP_SHOWN_EVENT = 'ui.jtbd_popup.shown'
 
 /** @public */
@@ -165,15 +159,6 @@ export const JTBD_POPUP_DISMISSED_EVENT = 'ui.jtbd_popup.dismissed'
 
 /** @public */
 export const ONBOARDING_FEATURE_CLICKED_EVENT = 'onboarding.feature.clicked'
-
-/** @public */
-export const BREADCRUMB_CONNECT_CLICKED_EVENT = 'breadcrumb.connect.clicked'
-
-/** @public */
-export const BREADCRUMB_CONNECT_MANUAL_EVENT = 'breadcrumb.connect.manual'
-
-/** @public */
-export const BREADCRUMB_CONNECT_COMPLETED_EVENT = 'breadcrumb.connect.completed'
 
 /** @public */
 export const KIMI_API_KEY_CONFIGURED_EVENT = 'settings.kimi.api_key_configured'

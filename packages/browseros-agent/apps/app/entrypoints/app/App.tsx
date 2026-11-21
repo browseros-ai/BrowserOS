@@ -5,7 +5,6 @@ import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout
 import { SidebarLayout } from '@/components/layout/SidebarLayout'
 import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
 import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
-import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
 import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
@@ -31,7 +30,6 @@ const OptionsRedirect: FC = () => {
   const routeMap: Record<string, string> = {
     ai: '/settings/ai',
     chat: '/settings/chat',
-    'connect-mcp': '/connect-apps',
     mcp: '/settings/mcp',
     customization: '/settings/customization',
     search: '/settings/ai',
@@ -54,8 +52,6 @@ export const App: FC = () => {
             <Route path="chat" element={<NewTabChat />} />
             <Route path="personalize" element={<Personalize />} />
           </Route>
-
-          <Route path="connect-apps" element={<ConnectMCP />} />
         </Route>
 
         <Route element={<SettingsSidebarLayout />}>
@@ -88,10 +84,6 @@ export const App: FC = () => {
         <Route
           path="/personalize"
           element={<Navigate to="/home/personalize" replace />}
-        />
-        <Route
-          path="/settings/connect-mcp"
-          element={<Navigate to="/connect-apps" replace />}
         />
         <Route path="/audit" element={<Navigate to="/home" replace />} />
         <Route

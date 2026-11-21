@@ -1,4 +1,4 @@
-import { Home, PlugZap, Settings } from 'lucide-react'
+import { Home, Settings } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -23,11 +23,6 @@ type NavItem = {
 
 const primaryNavItems: NavItem[] = [
   { name: 'Home', to: '/home', icon: Home },
-  {
-    name: 'Connect Apps',
-    to: '/connect-apps',
-    icon: PlugZap,
-  },
   {
     name: 'Settings',
     to: '/settings/ai',

@@ -21,44 +21,14 @@ export interface ToolInvocationInfo {
   approval?: { id: string; approved?: boolean; reason?: string }
 }
 
-export type NudgeType = 'app_connection'
-
-export interface NudgeData {
-  type: NudgeType
-  [key: string]: unknown
-}
-
 export type MessageSegment =
   | { type: 'text'; key: string; text: string }
   | { type: 'reasoning'; key: string; text: string; isStreaming: boolean }
   | { type: 'tool-batch'; key: string; tools: ToolInvocationInfo[] }
-  | { type: 'nudge'; key: string; nudgeType: NudgeType; data: NudgeData }
 
-// `suggest_schedule` no longer has a card, but the old server still emits it
-// and stored conversations hold it, so it stays here to keep it out of the
-// tool rows; its output parses to no nudge.
-const NUDGE_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
-
-function parseNudgeOutput(output: unknown): NudgeData | null {
-  try {
-    const result = output as {
-      content?: Array<{ type: string; text?: string }>
-      isError?: boolean
-    }
-    if (result?.isError) return null
-
-    const text = result?.content?.find((c) => c.type === 'text')?.text
-    if (!text) return null
-
-    const parsed = JSON.parse(text)
-    if (parsed?.type === 'app_connection') {
-      return parsed as NudgeData
-    }
-  } catch {
-    return null
-  }
-  return null
-}
+// Nudge tools the old server still emits and stored conversations still hold.
+// Their cards are gone, so they are skipped rather than shown as tool rows.
+const HIDDEN_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
 
 export const getMessageSegments = (
   message: UIMessage,
@@ -117,27 +87,16 @@ export const getMessageSegments = (
           ? (toolPart.toolName ?? 'tool')
           : toolPart.type.replace('tool-', '')
 
-      if (NUDGE_TOOLS.has(toolName) && toolPart.state === 'output-available') {
-        flushToolBatch()
-        const nudgeData = parseNudgeOutput(toolPart.output)
-        if (nudgeData) {
-          segments.push({
-            type: 'nudge',
-            key: `${message.id}-nudge-${toolPart.toolCallId}`,
-            nudgeType: nudgeData.type,
-            data: nudgeData,
-          })
-        }
-      } else if (!NUDGE_TOOLS.has(toolName)) {
-        currentToolBatch.push({
-          state: toolPart.state,
-          toolCallId: toolPart.toolCallId,
-          toolName,
-          input: toolPart?.input ?? {},
-          output: toolPart?.output,
-          approval: toolPart?.approval,
-        })
-      }
+      if (HIDDEN_TOOLS.has(toolName)) continue
+
+      currentToolBatch.push({
+        state: toolPart.state,
+        toolCallId: toolPart.toolCallId,
+        toolName,
+        input: toolPart?.input ?? {},
+        output: toolPart?.output,
+        approval: toolPart?.approval,
+      })
     }
   }
 

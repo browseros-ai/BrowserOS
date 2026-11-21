@@ -18,7 +18,6 @@ import {
 } from '@/components/ai-elements/reasoning'
 import type { ChatAction } from '@/lib/chat-actions/types'
 import { ChatMessageActions } from './ChatMessageActions'
-import { ConnectAppCard } from './ConnectAppCard'
 import { getMessageSegments } from './getMessageSegments'
 import { JtbdPopup } from './JtbdPopup'
 import { ToolBatch } from './ToolBatch'
@@ -113,14 +112,6 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
                                 isLastBatch={segment.key === lastToolBatchKey}
                                 isLastMessage={isLastMessage}
                                 isStreaming={isStreaming}
-                              />
-                            )
-                          case 'nudge':
-                            return (
-                              <ConnectAppCard
-                                key={segment.key}
-                                data={segment.data}
-                                isLastMessage={isLastMessage}
                               />
                             )
                           default:
