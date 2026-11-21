@@ -2559,4 +2559,7 @@ mod tests {
         assert_eq!(CLIENT_OBSERVER_CALLS.load(Ordering::SeqCst), 0);
         Ok(())
     }
+
+    #[cfg(unix)]
+    mod playwright;
 }

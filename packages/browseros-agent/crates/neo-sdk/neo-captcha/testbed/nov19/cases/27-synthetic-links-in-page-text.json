@@ -1,0 +1,27 @@
+{
+  "case": "27-synthetic-links-in-page-text",
+  "source": "synthetic (review R2-5): a clear results page whose copy quotes links with paths and queries, behind brackets, angle brackets and quotes, and without a scheme. Only hosts may reach the evidence.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "www.example.gov",
+      "headings": ["Search results"],
+      "buttons": ["Search"],
+      "text": [
+        "Your search returned 12 results.",
+        "Forgot your password? Reset it (https://acct.example.gov/reset?token=abc123) today.",
+        "Questions: <https://help.example.gov/faq?topic=claims&id=9>",
+        "Read \"https://www.example.gov/privacy/policy.pdf\" first.",
+        "Or visit www.example.gov/claims/status?ref=XYZ."
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}

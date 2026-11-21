@@ -22,7 +22,7 @@ import {
   type AuditRetention,
   type AuditStorageState,
   type Dispatch,
-  type LiveSessionActivityState,
+  type LiveSessionState,
   type SessionDetail,
   type SessionList,
   type SessionScreenshotList,
@@ -95,19 +95,19 @@ export const useLiveSessions = createQuery<SessionList>({
 const LIVE_STATE_POLL_MS = 5000
 
 /**
- * Whether a live task is active or idle. Only the live-session snapshot carries activity; the
- * history and detail responses do not, so task rows and pages read it here by session id. On
- * Home this shares the cockpit's faster-polled query; `undefined` turns the lookup off.
+ * Activity and pending help come from the live-session snapshot. History and detail
+ * responses omit them, so preserve the full state here for both badges and help controls.
+ * Home shares this query with its faster poll; `undefined` turns the lookup off.
  */
 export function useLiveSessionState(
   sessionId: string | undefined,
-): LiveSessionActivityState | undefined {
+): LiveSessionState | undefined {
   const live = useLiveSessions({
     enabled: sessionId !== undefined,
     refetchInterval: LIVE_STATE_POLL_MS,
   })
   return live.data?.items.find((session) => session.sessionId === sessionId)
-    ?.live?.state
+    ?.live
 }
 
 export const useSessionDetail = createQuery<

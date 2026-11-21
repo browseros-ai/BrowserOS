@@ -6,6 +6,28 @@ use serde::Deserialize;
 use crate::config::TabGrouping;
 use crate::error::{AppError, AppResult};
 
+mod playwright;
+
+/// The guide and its ultrafast variant. Each mode rewrites exact phrases in its own guide.
+pub(crate) struct ManagedSkills {
+    pub plain: SkillSpec,
+    pub ultrafast: SkillSpec,
+}
+
+/// Selects both variants when the app constructs the harness service.
+pub(crate) fn managed_skills(
+    resources_dir: &Path,
+    config: &crate::config::Config,
+) -> AppResult<ManagedSkills> {
+    let tab_grouping = config.behavior.tab_grouping;
+    if config.serves_playwright_run() {
+        return playwright::skills(tab_grouping);
+    }
+    let plain = load_browserclaw_skill(resources_dir, tab_grouping)?;
+    let ultrafast = with_ultrafast(&plain)?;
+    Ok(ManagedSkills { plain, ultrafast })
+}
+
 // This skill ships twice. This copy is installed automatically for the harnesses on
 // the connect board; `skills/browseros-neo/SKILL.md` at the repo root is the copy every
 // other agent installs by hand through the skills CLI. Editing one means editing both.

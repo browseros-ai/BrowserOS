@@ -15,7 +15,8 @@ use crate::{
         capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
-        harness_skills::{load_browserclaw_skill, with_ultrafast},
+        harness_skills::{ManagedSkills, managed_skills},
+        neo::NeoEngine,
         page_hold::PageHoldService,
         profiles::ProfileService,
         recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
@@ -68,6 +69,8 @@ pub struct AppState {
     pub targets: Arc<TargetBindings>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
+    /// The production entrypoint owns startup. Tests construct a disabled engine.
+    pub neo: NeoEngine,
     pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
     /// Per-tab viewport modes; hosted only, so desktop page geometry is never touched.
     pub viewports: Option<Arc<browseros_core::viewport::Viewports>>,
@@ -160,8 +163,11 @@ impl AppState {
             config.browserclaw_dir.join("screenshots"),
             audit_log.clone(),
         ));
-        let analytics =
-            Arc::new(AnalyticsService::new(&config.browserclaw_dir, config.mode).await?);
+        let analytics = Arc::new(
+            AnalyticsService::new(&config.browserclaw_dir, config.mode)
+                .await?
+                .with_playwright_run(config.serves_playwright_run()),
+        );
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
         // Shares the analytics install id, so a failure report and a product event are
         // the same anonymous install and neither adds a new identifier.
@@ -180,8 +186,10 @@ impl AppState {
         let ultrafast_ledger = Arc::new(crate::db::ultrafast_ledger::UltrafastLedger::new(
             database.clone(),
         ));
-        let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
-        let ultrafast_skill = with_ultrafast(&skill)?;
+        let ManagedSkills {
+            plain: skill,
+            ultrafast: ultrafast_skill,
+        } = managed_skills(&config.resources_dir, &config)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
@@ -286,8 +294,10 @@ impl AppState {
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
         let help = Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT));
+        // SDK input cannot yield the catalog's overlay shield. A pursue handback must
+        // leave the tab ready for the next Playwright run.
         let page_hold = PageHoldService::new(
-            config.behavior.working_overlay,
+            config.behavior.working_overlay && !config.serves_playwright_run(),
             agent_settings.clone(),
             sessions.clone(),
             browser.clone(),
@@ -348,6 +358,7 @@ impl AppState {
             targets,
             session_efficiency,
             browser,
+            neo: NeoEngine::disabled("the Playwright engine has not been started"),
             captcha,
             viewports,
             visuals,

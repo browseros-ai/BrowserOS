@@ -2430,6 +2430,13 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
 }
 
 async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
+    initialize_mcp_with(app, assert_catalog_instructions).await
+}
+
+async fn initialize_mcp_with(
+    app: &TestApp,
+    check_instructions: impl FnOnce(&Value),
+) -> anyhow::Result<String> {
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -2445,11 +2452,19 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
     assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
     assert_eq!(body["result"]["serverInfo"]["title"], "BrowserOS neo");
+    check_instructions(&body);
+    register_mcp_session(app, &headers).await
+}
+
+fn assert_catalog_instructions(body: &Value) {
     assert!(
         body["result"]["instructions"].as_str().is_some_and(
             |instructions| instructions.starts_with("BrowserOS neo — the browser for agents")
         )
     );
+}
+
+async fn register_mcp_session(app: &TestApp, headers: &HeaderMap) -> anyhow::Result<String> {
     let session_id = headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
@@ -3075,3 +3090,7 @@ async fn claude_desktop_extension_reports_what_claude_has_installed() -> anyhow:
     assert_eq!(extension.available_version, "0.5.0");
     Ok(())
 }
+
+#[cfg(unix)]
+#[path = "playwright/routes.rs"]
+mod playwright;

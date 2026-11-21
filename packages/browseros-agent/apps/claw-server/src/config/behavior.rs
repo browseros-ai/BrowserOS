@@ -11,12 +11,10 @@ use super::ServerMode;
 use serde::Deserialize;
 use std::{fmt, num::NonZeroU32, time::Duration};
 
-/// What a deployment can tune about how this server behaves, fixed for the process.
+/// The server's behavior settings, fixed for the process.
 ///
-/// [`ServerMode`] supplies every default and the behaviour file may override any of them. Code
-/// asks these fields, not the mode, so a new knob is one field here, one entry in [`KNOBS`] and
-/// one commented line in the Docker image's `neo.toml`, rather than another environment variable
-/// for every deployment to carry.
+/// [`ServerMode`] supplies the defaults. Deployments can override the settings registered in
+/// [`KNOBS`] through `neo.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Behavior {
     pub tab_grouping: TabGrouping,
@@ -34,6 +32,10 @@ pub struct Behavior {
     pub working_overlay: bool,
     /// Hard/default script budget, shared by MCP discovery, execution and saved flows.
     pub run_policy: browseros_mcp::RunPolicy,
+    /// Desktop rollout request set by `CLAW_PLAYWRIGHT_RUN`. It stays out of [`KNOBS`] so
+    /// deployment TOML cannot enable it. Use [`super::Config::serves_playwright_run`] to
+    /// account for the deployment mode and whether the target builds the engine.
+    pub playwright_run: bool,
 }
 
 impl Behavior {
@@ -55,6 +57,7 @@ impl Behavior {
                 ServerMode::Hosted => false,
             },
             run_policy: browseros_mcp::RunPolicy::default(),
+            playwright_run: false,
         }
     }
 }

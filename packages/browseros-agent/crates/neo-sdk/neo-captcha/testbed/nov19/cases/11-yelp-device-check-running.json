@@ -1,0 +1,33 @@
+{
+  "case": "11-yelp-device-check-running",
+  "source": "01-dintaifung-yelp.browserbase.txt 0:44: a full-page frame 'Verifying the device...' / 'The requested content will be available after verification.'; 0:47 no_captcha. The frame's address was not recorded: DataDome's device check is assumed to load from geo.captcha-delivery.com/interstitial/.",
+  "truth": "checking",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "www.yelp.com",
+      "layer": {
+        "dialog": false,
+        "share": 1.0,
+        "vendor": "datadome",
+        "part": "checking",
+        "text": []
+      },
+      "widgets": [
+        {
+          "vendor": "datadome",
+          "part": "checking",
+          "shown": true,
+          "inLayer": true
+        }
+      ]
+    }
+  },
+  "expect": {
+    "result": "pending",
+    "tier": "deterministic"
+  }
+}

@@ -21,6 +21,12 @@ on:
         required: false
         type: boolean
         default: true
+      playwright_run:
+        description: >-
+          Build a private draft with the Playwright MCP run enabled (requires publish_ota=false).
+          This uses up the server version. Production must build the next one.
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       mode:
@@ -51,6 +57,12 @@ on:
       publish_ota:
         description: "Publish the live alpha-channel BrowserClaw server OTA release after finalization"
         required: false
+        type: boolean
+        default: false
+      playwright_run:
+        description: >-
+          Build a private draft with the Playwright MCP run enabled (requires publish_ota=false).
+          This uses up the server version. Production must build the next one.
         type: boolean
         default: false
     outputs:
@@ -120,11 +132,17 @@ jobs:
         id: validate
         env:
           MODE: ${{ inputs.mode || 'build' }}
+          PLAYWRIGHT_RUN: ${{ inputs.playwright_run }}
+          PUBLISH_OTA: ${{ inputs.publish_ota }}
           REF: ${{ inputs.ref || '' }}
           STATE_OWNER: ${{ inputs.state_owner || 'component' }}
           VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
+          if [ "$PLAYWRIGHT_RUN" = true ] && [ "$PUBLISH_OTA" = true ]; then
+            echo "::error::playwright_run cannot be combined with publish_ota"
+            exit 1
+          fi
           if [ "$MODE" != "build" ] && [ "$MODE" != "finalize" ]; then
             echo "::error::mode must be build or finalize"
             exit 1
@@ -175,10 +193,16 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODE: ${{ steps.validate.outputs.mode }}
+          PLAYWRIGHT_RUN: ${{ inputs.playwright_run }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RESERVATION: ${{ steps.release.outputs.reservation }}
         run: |
           set -euo pipefail
+          # Even if a tagged version has no ZIPs yet, it cannot hold a test build.
+          if [ "$MODE" = build ] && [ "$PLAYWRIGHT_RUN" = true ] && [ "$RESERVATION" = tag ]; then
+            echo "::error::playwright_run requires an untagged draft version"
+            exit 1
+          fi
           if [ "$EVENT_NAME" = "push" ] && [ "$RESERVATION" = "tag" ] && \
             [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = "false" ]; then
             MODE="finalize"
@@ -445,6 +469,7 @@ jobs:
         shell: bash
         working-directory: packages/browseros-agent
         env:
+          CLAW_PLAYWRIGHT_RUN: ${{ inputs.playwright_run && '1' || '0' }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
           # Optional. Without it the server writes its redacted run-failure reports to a
           # local log file instead of sending them, so a build without it still ships.
@@ -480,8 +505,17 @@ jobs:
           binary_name = f"browseros-claw-server-rs{os.environ['BINARY_EXT']}"
           binary_path = Path("target") / os.environ["RUST_TARGET"] / "release" / binary_name
           project_key = os.environ["CLAW_POSTHOG_KEY"].encode()
-          if project_key not in binary_path.read_bytes():
+          binary = binary_path.read_bytes()
+          if project_key not in binary:
               raise SystemExit("Compiled BrowserClaw server does not contain CLAW_POSTHOG_KEY")
+          playwright_run = os.environ["CLAW_PLAYWRIGHT_RUN"]
+          enabled = b"browseros-claw-playwright-run=1;" in binary
+          disabled = b"browseros-claw-playwright-run=0;" in binary
+          # Older source refs have no marker and cannot serve Playwright.
+          if enabled != (playwright_run == "1") or (enabled and disabled):
+              raise SystemExit(
+                  f"Compiled BrowserClaw server does not match CLAW_PLAYWRIGHT_RUN={playwright_run}"
+              )
           PY
 
       - name: Verify stamped binary version
@@ -650,12 +684,15 @@ jobs:
 
       - name: Upload immutable BrowserClaw server resources
         env:
+          CLAW_PLAYWRIGHT_RUN: ${{ inputs.playwright_run && '1' || '0' }}
           R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
           set -euo pipefail
           python <<'PY'
           import hashlib
+          import io
           import os
+          import zipfile
           from pathlib import Path
 
           import boto3
@@ -672,6 +709,19 @@ jobs:
           version = os.environ["VERSION"]
           release_sha = os.environ["RELEASE_SHA"]
           targets = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+          playwright_run = os.environ["CLAW_PLAYWRIGHT_RUN"]
+
+          def verify_playwright_run(data: bytes, target: str) -> None:
+              extension = ".exe" if target == "windows-x64" else ""
+              with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                  binary = archive.read(f"resources/bin/browseros-claw-server{extension}")
+              enabled = b"browseros-claw-playwright-run=1;" in binary
+              disabled = b"browseros-claw-playwright-run=0;" in binary
+              # Versioned releases can predate the marker. Only opt-in requires it here.
+              if enabled != (playwright_run == "1") or (enabled and disabled):
+                  raise SystemExit(
+                      f"{target}: BrowserClaw server ZIP does not match CLAW_PLAYWRIGHT_RUN={playwright_run}"
+                  )
 
           def existing_object(key: str):
               try:
@@ -709,14 +759,22 @@ jobs:
                       )
               return data
 
-          for target in targets:
-              path = Path(f"dist/claw-server/browseros-claw-server-rust-resources-{target}.zip")
+          paths = {
+              target: Path(f"dist/claw-server/browseros-claw-server-rust-resources-{target}.zip")
+              for target in targets
+          }
+          for target, path in paths.items():
               if not path.is_file():
                   raise SystemExit(f"Missing BrowserClaw server resource zip: {path}")
+              verify_playwright_run(path.read_bytes(), target)
+
+          for target, path in paths.items():
               data = path.read_bytes()
               key = f"claw-server-rust/prod-resources/{version}/{path.name}"
               existing = canonical_bytes(key, target)
               if existing is not None:
+                  if existing != data:
+                      verify_playwright_run(existing, target)
                   path.write_bytes(existing)
                   print(f"{'Reused' if existing == data else 'Recovered'} {key}")
                   continue
@@ -743,6 +801,8 @@ jobs:
                   existing = canonical_bytes(key, target)
                   if existing is None:
                       raise
+                  if existing != data:
+                      verify_playwright_run(existing, target)
                   path.write_bytes(existing)
                   print(f"Recovered {key} after concurrent upload")
                   continue
@@ -754,6 +814,7 @@ jobs:
           DEFER_FINALIZE: ${{ inputs.defer_finalize }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PLAYWRIGHT_RUN: ${{ inputs.playwright_run }}
           RESERVATION: ${{ needs.prepare.outputs.reservation }}
         run: |
           set -euo pipefail
@@ -776,7 +837,7 @@ jobs:
           # The metadata read is a plain assignment so any gh failure aborts
           # under set -e instead of skipping the guard before --clobber.
           # Without deferral, finalize verifies and publishes as before.
-          if [ "$DEFER_FINALIZE" = "true" ]; then
+          if [ "$DEFER_FINALIZE" = "true" ] || [ "$PLAYWRIGHT_RUN" = "true" ]; then
             release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
             is_draft="$(jq -r '.isDraft' <<< "$release")"
             case "$is_draft" in
@@ -787,6 +848,10 @@ jobs:
                 ;;
             esac
             if [ "$is_draft" = "false" ]; then
+              if [ "$PLAYWRIGHT_RUN" = true ]; then
+                echo "::error::Cannot attach Playwright builds to a public release"
+                exit 1
+              fi
               published_dir="$(mktemp -d)"
               for asset in "${assets[@]}"; do
                 name="$(basename "$asset")"
@@ -816,7 +881,8 @@ jobs:
     needs:
       - prepare
       - publish-versioned
-    if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && needs.publish-versioned.result == 'success')) }}
+    # Opt-in builds stay private, including direct dispatches with publish_ota=false.
+    if: ${{ always() && needs.prepare.result == 'success' && (needs.prepare.outputs.mode == 'finalize' || (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true && inputs.playwright_run != true && needs.publish-versioned.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -893,6 +959,19 @@ jobs:
               echo "::error::Draft asset does not match canonical R2 object: $name"
               exit 1
             fi
+            # Explicit finalize and tag runs can skip the build. Check the canonical
+            # artifact before it can become a public release or the latest server.
+            python - "$canonical" "$target" <<'PY'
+          import sys
+          import zipfile
+
+          path, target = sys.argv[1:]
+          extension = ".exe" if target == "windows-x64" else ""
+          with zipfile.ZipFile(path) as archive:
+              binary = archive.read(f"resources/bin/browseros-claw-server{extension}")
+          if b"browseros-claw-playwright-run=1;" in binary:
+              raise SystemExit(f"{target}: cannot finalize a Playwright-enabled BrowserClaw server")
+          PY
           done
 
       - name: Create annotated release tag

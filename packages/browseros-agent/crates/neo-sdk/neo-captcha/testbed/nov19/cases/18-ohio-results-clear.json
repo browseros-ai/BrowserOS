@@ -1,0 +1,35 @@
+{
+  "case": "18-ohio-results-clear",
+  "source": "04-ohio-florida.browseros.txt 0:29 (0:26 turnstile/not_blocking); the site accepted.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "unclaimedfunds.ohio.gov",
+      "submit": {
+        "label": "Search"
+      },
+      "headings": [
+        "Claim Unclaimed Property",
+        "Search for Unclaimed Funds",
+        "SEARCH",
+        "RESULTS"
+      ],
+      "buttons": ["Search", "Continue To File Claim (0) properties"],
+      "text": [
+        "Claim Unclaimed Property",
+        "Search for Unclaimed Funds",
+        "SEARCH",
+        "RESULTS",
+        "Your search returned 1000 unclaimed properties."
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "case": "20-airfrance-cookie-dialog",
+  "source": "02-sfo-paris-seatsaero.browseros.txt 4:02: dialog 'Air France uses cookies' over the whole view.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "wwws.airfrance.us",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "text": [
+          "Air France uses cookies",
+          "Air France uses functional and analytical cookies to make sure our website works properly and to offer you the best possible user experience.",
+          "Change cookie settings",
+          "Reject",
+          "Accept"
+        ]
+      },
+      "alerts": [["Situation in the Near and Middle East"]],
+      "headings": [
+        "Air France uses cookies",
+        "Air France home page",
+        "Give your Miles a boost",
+        "Destinations and deals"
+      ],
+      "buttons": ["Change cookie settings", "Reject", "Accept", "Close banner"],
+      "text": [
+        "Air France uses cookies",
+        "Air France uses functional and analytical cookies to make sure our website works properly and to offer you the best possible user experience.",
+        "Air France home page"
+      ]
+    }
+  },
+  "jev": {
+    "source": "measured by cv-verify with jev-1.14.0 on 2026-11-20 through HttpJudge (1040 input tokens), on this brief's own evidence",
+    "standing": {
+      "agent_policy": 0.0,
+      "challenge": 0.0,
+      "checking": 0.0,
+      "clear": 0.0,
+      "denied": 0.0,
+      "failed": 0.0,
+      "insufficient": 0.0,
+      "other_overlay": 1.0
+    },
+    "blocked": 0.1
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "jev"
+  }
+}
