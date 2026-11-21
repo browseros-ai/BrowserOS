@@ -164,7 +164,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		if err := acquireRunLock(p); err != nil {
 			return err
 		}
-		proc.LogMsg(proc.TagInfo, "Killing processes on preferred ports...")
+		proc.LogMsg(proc.TagInfo, "Clearing TCP listeners on preferred ports...")
 		if err := proc.KillPortsAndWait(defaultPorts, 3*time.Second); err != nil {
 			return err
 		}
@@ -514,7 +514,7 @@ func startRustServerWatch(ctx context.Context, wg *sync.WaitGroup, root string, 
 	sidecarPath := watchSidecarConfigPath(userDataDir, backend.SidecarName)
 	reservations.ReleaseServer()
 	reservations.ReleaseExtension()
-	serverCfg := rustServerProcConfig(backend, root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait)
+	serverCfg := rustServerProcConfig(backend, root, env, p, userDataDir, sidecarPath)
 	proc.LogMsgf(proc.TagBuild, "Cargo build dir: %s", envValue(serverCfg.Env, "CARGO_BUILD_BUILD_DIR"))
 	serverProc := proc.StartManaged(ctx, wg, serverCfg)
 	startRustSourceWatcher(ctx, wg, root, serverProc, backend)

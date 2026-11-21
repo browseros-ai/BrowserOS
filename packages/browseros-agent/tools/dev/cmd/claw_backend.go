@@ -34,7 +34,7 @@ var browserOSServerBackend = rustServerBackend{
 	Toolchain:       "1.98.0",
 	SidecarName:     "browseros-server",
 	ResourcesDir:    "resources",
-	ExecutionDir:    func(profile string) string { return profile },
+	ExecutionDir:    neoExecutionDir,
 	RustWatchInputs: rustWatchInputsWithSDK,
 }
 
@@ -51,16 +51,19 @@ var clawServerBackend = rustServerBackend{
 }
 
 var sdkServerBackend = rustServerBackend{
-	Label:        "neo-server (browseros-claw-sdk)",
-	Package:      "neo-server",
-	Bin:          "browseros-claw-sdk",
-	SidecarName:  "claw-sdk",
-	ResourcesDir: "crates/neo-sdk/neo-server",
-	// Neo derives the upload deny root from the execution directory's parent.
-	// Passing the profile itself would put the entire temp directory off limits.
-	ExecutionDir:    func(profile string) string { return filepath.Join(profile, ".browseros") },
+	Label:           "neo-server (browseros-claw-sdk)",
+	Package:         "neo-server",
+	Bin:             "browseros-claw-sdk",
+	SidecarName:     "claw-sdk",
+	ResourcesDir:    "crates/neo-sdk/neo-server",
+	ExecutionDir:    neoExecutionDir,
 	RustWatchInputs: rustWatchInputsWithSDK,
 	ReadyPath:       "/system/ready",
+}
+
+// Neo uses the parent of a .browseros execution directory as its fallback protected profile.
+func neoExecutionDir(profile string) string {
+	return filepath.Join(profile, ".browseros")
 }
 
 func selectClawBackend(value string) (rustServerBackend, error) {
@@ -82,7 +85,7 @@ func (backend rustServerBackend) cargoCommand(args ...string) []string {
 	return append([]string{"cargo"}, args...)
 }
 
-func rustServerProcConfig(backend rustServerBackend, root string, env []string, p proc.Ports, userDataDir string, sidecarPath string, killPort func(int, time.Duration) error) proc.ProcConfig {
+func rustServerProcConfig(backend rustServerBackend, root string, env []string, p proc.Ports, userDataDir string, sidecarPath string) proc.ProcConfig {
 	command := backend.cargoCommand("run", "-p", backend.Package)
 	if backend.Bin != "" {
 		command = append(command, "--bin", backend.Bin)
@@ -96,18 +99,18 @@ func rustServerProcConfig(backend rustServerBackend, root string, env []string, 
 		Env:     rustServerCargoEnv(root, env),
 		Restart: true,
 		Cmd:     append(command, "--", "--config", sidecarPath),
-		// ManagedProc invokes this before every launch, including restarts.
-		// The sidecar and the released server port must match the running browser.
 		BeforeStart: func() error {
-			if err := proc.WriteSidecarConfig(sidecarPath, proc.SidecarConfigOptions{
+			// ManagedProc waits for its recorded child to exit before relaunching.
+			// The browser keeps using this port, so leave other listeners alone and retry it.
+			if !proc.IsPortAvailable(p.Server) {
+				return fmt.Errorf("server port %d is already in use", p.Server)
+			}
+			return proc.WriteSidecarConfig(sidecarPath, proc.SidecarConfigOptions{
 				Ports:         p,
 				ResourcesDir:  filepath.Join(root, backend.ResourcesDir),
 				ExecutionDir:  backend.ExecutionDir(userDataDir),
 				BrowserBinary: envValue(env, "BROWSEROS_BINARY"),
-			}); err != nil {
-				return err
-			}
-			return killPort(p.Server, 3*time.Second)
+			})
 		},
 	}
 }

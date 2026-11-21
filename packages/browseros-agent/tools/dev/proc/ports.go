@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -134,7 +137,24 @@ func (r *PortReservations) ReleaseAll() {
 }
 
 func KillPort(port int) {
-	exec.Command("sh", "-c", fmt.Sprintf("lsof -ti:%d | xargs kill -9 2>/dev/null || true", port)).Run()
+	for _, pid := range tcpListenerPIDs(port) {
+		_ = signalProcess(pid, syscall.SIGKILL)
+	}
+}
+
+func tcpListenerPIDs(port int) []int {
+	if !isValidTCPPort(port) {
+		return nil
+	}
+	// lsof's port filter alone also matches the peers of established connections.
+	output, _ := exec.Command("lsof", "-nP", "-t", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN").Output()
+	var pids []int
+	for _, field := range strings.Fields(string(output)) {
+		if pid, err := strconv.Atoi(field); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
 
 func KillPortAndWait(port int, timeout time.Duration) error {
