@@ -121,6 +121,24 @@ declare global {
       paidTasks: number
       /** The last provider that charged for this solve, including a failed task. Free solves return null. */
       provider: 'capsolver' | '2captcha' | null
+      /** What Neo's check after the solve found, when it ran. `tier: 'jev'` is a model's
+       * reading, not proof. */
+      verify?: {
+        result: 'clear' | 'blocked' | 'pending' | 'policy_wall' | 'unsure'
+        tier: 'deterministic' | 'jev'
+        cause:
+          | 'challenge_open'
+          | 'widget_failed'
+          | 'widget_expired'
+          | 'token_stale'
+          | 'wall_showing'
+          | 'unsupported_wall'
+          | 'site_rejected'
+          | 'denied'
+          | null
+        rounds: number
+        judgeCalls: number
+      }
     }>
   }
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use browseros_core::CoreError;
 use neo_captcha::types::{
     CaptchaEvent, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, Verdict,
+    VerifyReport,
 };
 use neo_captcha::{CaptchaSolver, HumanHelp, SolveRefusal};
 use neo_trace::Effect;
@@ -72,6 +73,10 @@ struct SolveOutput {
     duration_ms: u64,
     paid_tasks: u32,
     provider: Option<ProviderName>,
+    /// What the crate's verify check found after the solve, when it ran. Left out otherwise,
+    /// so a value without a check is the same as before the check existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verify: Option<VerifyReport>,
 }
 
 impl Method for SolveCaptcha {
@@ -156,6 +161,7 @@ fn verdict_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
         provider: outcome.provider,
+        verify: outcome.verify,
     })
 }
 
@@ -277,7 +283,9 @@ fn cause(reason: SolveReason) -> &'static str {
         SolveReason::NotBlocking => "its widget does not block the page",
         SolveReason::UnsupportedType => "Neo cannot solve this CAPTCHA type",
         SolveReason::ScanIncomplete => "the page could not be fully scanned",
-        SolveReason::AcceptanceUnconfirmed => "the site's acceptance could not be confirmed",
+        SolveReason::AcceptanceUnconfirmed => {
+            "neither the site nor Neo's check after the solve confirmed it passed"
+        }
         SolveReason::ProviderError => "the CAPTCHA provider failed",
         SolveReason::BrowserError => "a browser call failed",
         SolveReason::DeadlineExceeded => "it ran past its 120 s limit",
@@ -290,11 +298,9 @@ fn cause(reason: SolveReason) -> &'static str {
         SolveReason::ChallengeNotPassed => "the challenge was attempted and not passed",
         SolveReason::SpendLimitReached => "this Neo's CAPTCHA budget is used up",
         SolveReason::PolicyWall => "automated agents are prohibited",
-        SolveReason::StillBlocked => {
-            "Neo checked the page after the solve and the CAPTCHA still blocks it"
-        }
+        SolveReason::StillBlocked => "Neo's check after the solve found it still in the way",
         SolveReason::ChallengePending => {
-            "the site's own check is still running; wait a few seconds and ask again, do not reload"
+            "the site's own check is still running; wait a few seconds, and do not reload"
         }
     }
 }
@@ -511,6 +517,33 @@ mod tests {
         solve.kind = Some(CaptchaKind::AwsWaf);
         solve.method = SolveMethod::AutoPass;
         assert!(verdict_value(&solve).is_some_and(|value| value.message.contains(attempted)));
+    }
+
+    #[test]
+    fn the_verify_check_reaches_the_script_only_when_it_ran() -> Result<(), Box<dyn Error>> {
+        use neo_captcha::types::{BlockCause, VerifyReport, VerifyResult, VerifyTier};
+        let mut solve = outcome(SolveStatus::NeedsHuman, SolveReason::StillBlocked);
+        let plain = serde_json::to_value(verdict_value(&solve))?;
+        assert!(
+            plain.get("verify").is_none(),
+            "a value without a check is the same as before the check existed"
+        );
+        solve.verify = Some(VerifyReport {
+            result: VerifyResult::Blocked,
+            tier: VerifyTier::Deterministic,
+            cause: Some(BlockCause::ChallengeOpen),
+            rounds: 2,
+            judge_calls: 0,
+        });
+        let checked = serde_json::to_value(verdict_value(&solve))?;
+        assert_eq!(
+            checked.get("verify"),
+            Some(
+                &serde_json::json!({"result":"blocked","tier":"deterministic",
+                "cause":"challenge_open","rounds":2,"judgeCalls":0})
+            )
+        );
+        Ok(())
     }
 
     #[test]
