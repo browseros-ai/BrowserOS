@@ -26,6 +26,11 @@ const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 pub const NATIVE_VERSION_ENV: &str = "CLAW_NATIVE_BROWSEROS_VERSION";
 /// Selects the [`ServerMode`]: `1` enables hosted; `0`, unset or empty means desktop.
 pub const HOSTED_MODE_ENV: &str = "BROWSERCLAW_HOSTED_MODE";
+/// Requests the desktop Playwright MCP run. The process value overrides the build default.
+pub const PLAYWRIGHT_RUN_ENV: &str = "CLAW_PLAYWRIGHT_RUN";
+const BAKED_PLAYWRIGHT_RUN: Option<&str> = option_env!("CLAW_PLAYWRIGHT_RUN");
+/// Mirrors the Cargo.toml target dependency on `neo-server`.
+const PLAYWRIGHT_ENGINE_BUILT: bool = cfg!(unix);
 /// Names the optional TOML file that tunes this server's [`Behavior`]. Unset or blank keeps the
 /// mode's defaults. Once set, the file must exist: a mistyped mount path would otherwise fall
 /// back to the defaults without a word.
@@ -95,7 +100,7 @@ pub struct Config {
     pub native: NativeIdentity,
     /// Read once per process from [`HOSTED_MODE_ENV`]; the MCP surface follows it.
     pub mode: ServerMode,
-    /// Read once per process: `mode`'s defaults, overridden by [`BEHAVIOR_FILE_ENV`].
+    /// The mode's defaults, deployment TOML settings, and the Playwright rollout request.
     pub behavior: Behavior,
     /// What the behaviour file said that this build could not apply. Config is read before
     /// logging starts, so startup logs these once it can.
@@ -149,6 +154,9 @@ pub struct NativeIdentity {
 pub struct ConfigEnv {
     vars: BTreeMap<String, String>,
     home_dir: Option<PathBuf>,
+    /// Only the process constructor inherits the build default. Test fixtures can supply
+    /// their own value independently of the shell that built them.
+    baked_playwright_run: Option<&'static str>,
 }
 
 impl ConfigEnv {
@@ -157,6 +165,7 @@ impl ConfigEnv {
         Self {
             vars: env::vars().collect(),
             home_dir: env::var_os("HOME").map(PathBuf::from),
+            baked_playwright_run: BAKED_PLAYWRIGHT_RUN,
         }
     }
 
@@ -165,6 +174,7 @@ impl ConfigEnv {
         Self {
             vars,
             home_dir: Some(home_dir),
+            baked_playwright_run: None,
         }
     }
 
@@ -293,6 +303,26 @@ impl Config {
         })
     }
 
+    /// Whether this deployment can honor the Playwright rollout request.
+    #[must_use]
+    pub fn serves_playwright_run(&self) -> bool {
+        self.behavior.playwright_run && self.playwright_run_unavailable_reason().is_none()
+    }
+
+    /// Explains at startup why a requested rollout is unavailable.
+    #[must_use]
+    pub fn playwright_run_unavailable_reason(&self) -> Option<&'static str> {
+        match (
+            self.behavior.playwright_run,
+            self.mode,
+            PLAYWRIGHT_ENGINE_BUILT,
+        ) {
+            (true, ServerMode::Hosted, _) => Some("hosted mode"),
+            (true, ServerMode::Desktop, false) => Some("this platform has no Playwright engine"),
+            _ => None,
+        }
+    }
+
     /// Base URL external tools should reach BrowserClaw at: the Chrome-assigned
     /// proxy port when present (the source of truth), else the direct server
     /// port (dev, where the proxy is unavailable).
@@ -351,11 +381,27 @@ fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
     }
 }
 
+/// Blank values fall through so a copied environment example cannot override a baked opt-in.
+fn resolve_playwright_run(env: &ConfigEnv) -> anyhow::Result<bool> {
+    let value = env
+        .get(PLAYWRIGHT_RUN_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .or(env.baked_playwright_run)
+        .unwrap_or_default();
+    match value {
+        "1" => Ok(true),
+        "0" => Ok(false),
+        raw if raw.trim().is_empty() => Ok(false),
+        raw => anyhow::bail!("{PLAYWRIGHT_RUN_ENV} must be \"0\" or \"1\", got {raw:?}"),
+    }
+}
+
 /// The mode's defaults with the behaviour file applied. A file that cannot be read or is not
 /// TOML fails startup, naming the file; toml's error carries the offending line. Anything else
 /// this build cannot apply comes back as ignored rather than failing (see [`behavior`]).
 fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<behavior::Applied> {
     let mut defaults = Behavior::defaults(mode);
+    defaults.playwright_run = resolve_playwright_run(env)?;
     // Preserve the legacy millisecond override as a fallback. The file is applied last so
     // a deployment's tab policy has one effective value for both browser cleanup paths.
     defaults.tab_close_after = Duration::from_millis(read_positive_ms(
@@ -428,7 +474,7 @@ fn clean_string(value: &str) -> Option<String> {
 mod tests {
     use super::{
         BEHAVIOR_FILE_ENV, Behavior, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV,
-        NATIVE_VERSION_ENV, ServerMode, TabGrouping,
+        NATIVE_VERSION_ENV, PLAYWRIGHT_RUN_ENV, ServerMode, TabGrouping,
     };
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
@@ -777,6 +823,65 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn playwright_run_config_resolves_the_request_before_applying_deployment_rules()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("sidecar.json");
+        fs::write(&path, "{}")?;
+        for (runtime, baked, requested) in [
+            (None, None, Some(false)),
+            (None, Some("0"), Some(false)),
+            (None, Some("1"), Some(true)),
+            (None, Some(" "), Some(false)),
+            (Some(""), Some("1"), Some(true)),
+            (Some(" \t"), Some("1"), Some(true)),
+            (Some("0"), Some("1"), Some(false)),
+            (Some("1"), Some("0"), Some(true)),
+            (Some("1"), Some("2"), Some(true)),
+            (Some("2"), Some("1"), None),
+            (Some(" 1 "), None, None),
+            (Some(""), Some("2"), None),
+        ] {
+            for (mode, mode_env) in [(ServerMode::Desktop, "0"), (ServerMode::Hosted, "1")] {
+                let vars = [
+                    (HOSTED_MODE_ENV, Some(mode_env)),
+                    (PLAYWRIGHT_RUN_ENV, runtime),
+                ]
+                .into_iter()
+                .filter_map(|(key, value)| Some((key.to_owned(), value?.to_owned())))
+                .collect();
+                let mut env = ConfigEnv::with_vars(vars, dir.path().to_owned());
+                env.baked_playwright_run = baked;
+                let result = Config::load_with_env(&path, &env);
+                let case = format!("runtime={runtime:?} baked={baked:?} mode={mode:?}");
+                if let Some(requested) = requested {
+                    let config = result?;
+                    assert_eq!(config.behavior.playwright_run, requested, "{case}");
+                    assert_eq!(
+                        config.serves_playwright_run(),
+                        requested && mode == ServerMode::Desktop && cfg!(unix),
+                        "{case}"
+                    );
+                    let reason = match (requested, mode, cfg!(unix)) {
+                        (true, ServerMode::Hosted, _) => Some("hosted mode"),
+                        (true, ServerMode::Desktop, false) => {
+                            Some("this platform has no Playwright engine")
+                        }
+                        _ => None,
+                    };
+                    assert_eq!(config.playwright_run_unavailable_reason(), reason, "{case}");
+                } else {
+                    let Err(error) = result else {
+                        anyhow::bail!("invalid Playwright run flag accepted: {case}");
+                    };
+                    assert!(error.to_string().contains(PLAYWRIGHT_RUN_ENV), "{error}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Writes `contents` as the behaviour file and loads a config that points at it.
     fn load_with_behavior_file(mode: &str, contents: &str) -> anyhow::Result<Config> {
         let dir = tempdir()?;
@@ -787,6 +892,14 @@ mod tests {
             "{}",
             &[(HOSTED_MODE_ENV, mode), (BEHAVIOR_FILE_ENV, file.as_str())],
         )
+    }
+
+    #[test]
+    fn behavior_file_cannot_enable_playwright_run() -> anyhow::Result<()> {
+        let config = load_with_behavior_file("0", "[run]\nplaywright_run = true")?;
+        assert!(!config.behavior.playwright_run);
+        assert_eq!(config.behavior_ignored[0].key, "run.playwright_run");
+        Ok(())
     }
 
     #[test]
