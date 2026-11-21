@@ -304,6 +304,10 @@
       "name": "@browseros/browseros-mcp-rust",
       "version": "0.0.0",
     },
+    "crates/browseros-server": {
+      "name": "@browseros/browseros-server-rust",
+      "version": "0.0.0",
+    },
     "crates/claw-api": {
       "name": "@browseros/claw-api-rust",
       "version": "0.0.0",
@@ -709,6 +713,8 @@
     "@browseros/browseros-core-rust": ["@browseros/browseros-core-rust@workspace:crates/browseros-core"],
 
     "@browseros/browseros-mcp-rust": ["@browseros/browseros-mcp-rust@workspace:crates/browseros-mcp"],
+
+    "@browseros/browseros-server-rust": ["@browseros/browseros-server-rust@workspace:crates/browseros-server"],
 
     "@browseros/build-server-tools": ["@browseros/build-server-tools@workspace:packages/build-server-tools"],
 

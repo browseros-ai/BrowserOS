@@ -1,0 +1,111 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1777750582590,
+      "tag": "0000_zippy_psylocke",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1777752799806,
+      "tag": "0001_lazy_orphan",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777902205667,
+      "tag": "0002_chemical_whirlwind",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781916712443,
+      "tag": "0003_scrub_hermes_credentials",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785893663690,
+      "tag": "0004_sparkling_carnage",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785900211901,
+      "tag": "0005_yellow_riptide",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786538823114,
+      "tag": "0006_add_conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787580067090,
+      "tag": "0007_add_custom_acp_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788319873053,
+      "tag": "0008_add_llm_providers_and_scheduled_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788413695569,
+      "tag": "0009_add_scheduled_job_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788426799725,
+      "tag": "0010_add_unified_providers_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788426855683,
+      "tag": "0011_drop_split_provider_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788724664440,
+      "tag": "0012_add_provider_headers",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1790095966768,
+      "tag": "0013_drop_browseros_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790235209541,
+      "tag": "0014_drop_profile_id",
+      "breakpoints": true
+    }
+  ]
+}
