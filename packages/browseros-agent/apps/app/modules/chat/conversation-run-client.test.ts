@@ -30,8 +30,8 @@ describe('conversation run client', () => {
     expect(request?.cache).toBe('no-store')
     controller.abort()
     expect(request?.signal.aborted).toBe(true)
-    expect(state.status).toBe('running')
-    expect(state.messages[0]?.id).toBe('user-1')
+    expect(state?.status).toBe('running')
+    expect(state?.messages[0]?.id).toBe('user-1')
   })
 
   it('builds the AI SDK reconnect endpoint from the conversation id', () => {
@@ -44,6 +44,28 @@ describe('conversation run client', () => {
     expect(
       conversationReconnectUrl('http://localhost:9000', 'chat', 'run/new'),
     ).toBe('http://localhost:9000/chat/chat/stream?runId=run%2Fnew')
+  })
+
+  it('answers undefined when the server knows no run for the conversation', async () => {
+    const state = await fetchConversationRunState(
+      'http://127.0.0.1:9000',
+      'conversation',
+      undefined,
+      async () =>
+        Response.json({ error: 'Conversation run not found' }, { status: 404 }),
+    )
+    expect(state).toBeUndefined()
+  })
+
+  it('still fails on a server error so the caller can tell it from no run', async () => {
+    await expect(
+      fetchConversationRunState(
+        'http://127.0.0.1:9000',
+        'conversation',
+        undefined,
+        async () => Response.json({ error: 'boom' }, { status: 500 }),
+      ),
+    ).rejects.toThrow('500')
   })
 
   it('rejects malformed state instead of poisoning React chat state', async () => {
