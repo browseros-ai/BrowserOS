@@ -12,16 +12,17 @@
 import createClient, { type Client } from 'openapi-fetch'
 import type { components, operations, paths } from './generated/openapi'
 
-type Schemas = components['schemas']
-type PathOf<Operation extends keyof operations> =
+export type Schemas = components['schemas']
+export type PathOf<Operation extends keyof operations> =
   operations[Operation]['parameters']['path']
-
-type NotInClient = 'startTurn' | 'resumeStream' | 'watchPanels' | 'startSignIn'
 
 // Every other operation must be a method of the same name: an operation added to the contract
 // fails typecheck at `implements JsonOperations` until the client gains its method.
-type JsonOperations = Record<
-  Exclude<keyof operations, NotInClient>,
+export type JsonOperations = Record<
+  Exclude<
+    keyof operations,
+    'startTurn' | 'resumeStream' | 'watchPanels' | 'startSignIn'
+  >,
   (...args: never[]) => Promise<unknown>
 >
 

@@ -11,9 +11,35 @@ mod support;
 use browseros_server::model::Models;
 use http::{HeaderMap, Method, StatusCode};
 use serde_json::json;
+use tokio::net::TcpSocket;
 
 use fake_provider::{FakeProvider, Reply};
 use support::{TestServer, body_json};
+
+#[tokio::test]
+async fn probe_reports_only_the_host_when_connection_is_refused() -> anyhow::Result<()> {
+    // Keep the port reserved without listening so another process cannot claim it.
+    let socket = TcpSocket::new_v4()?;
+    socket.bind("127.0.0.1:0".parse()?)?;
+    let mut server = TestServer::start().await?;
+    server.app.models = Models::new(server.app.store.clone(), None);
+    server.router = browseros_server::http::router(server.app.clone());
+    let body = json!({
+        "provider": "openai-compatible", "model": "fixture",
+        "baseUrl": format!("http://127.0.0.1:{}/fixture-secret-path", socket.local_addr()?.port()),
+        "apiKey": "fixture-secret-key",
+    });
+
+    let response = server
+        .send(server.json(Method::POST, "/test-provider", &body))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await,
+        json!({"success":false,"message":"Could not connect to the provider at 127.0.0.1."})
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn probe_uses_the_saved_destination_and_makes_one_attempt() -> anyhow::Result<()> {

@@ -2613,7 +2613,7 @@
       },
       "RunState": {
         "type": "object",
-        "description": "`messages` is the history up to and including this turn's user message, without the\nassistant message in flight; the stream supplies that.",
+        "description": "While `status` is `running`, `messages` ends with this turn's user message and the stream\nsupplies the answer. Once the run ends, `messages` contains the whole transcript, including\nany sealed answer.",
         "required": [
           "conversationId",
           "runId",
