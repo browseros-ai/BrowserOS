@@ -16,9 +16,10 @@ type Subject = { conversationId: string } & (
  * What the panel installs. `liveRunId` is set only while the server is still running the turn:
  * `messages` then stops at the user's message, and the panel replays that run's stream from its
  * first chunk and follows it live, exactly as the server's `/state` and `/stream` pair promises.
+ * `reloaded` is a re-read after this panel's Stop, which follows nothing new.
  */
 export interface PanelSnapshot {
-  source: Subject['kind']
+  source: Subject['kind'] | 'reloaded'
   conversationId: string
   messages: UIMessage[]
   liveRunId?: string
@@ -30,6 +31,8 @@ export interface PanelConversationAttachmentDeps {
     conversationId: string,
     signal: AbortSignal,
   ): Promise<ConversationRunState | undefined>
+  /** The stored transcript, or `undefined` when none was stored (an incognito turn) or it is gone. */
+  loadStored(conversationId: string): Promise<UIMessage[] | undefined>
   attach(snapshot: PanelSnapshot, isCurrent: () => boolean): Promise<void>
   clear(conversationId: string): void
   ownsLocalStream(conversationId: string, runId: string): boolean
@@ -104,6 +107,51 @@ export class PanelConversationAttachment {
     )
     // A selection cancelled before it landed must not come back on a retry.
     if (isCancelled() && this.subject === subject) this.follow(undefined)
+  }
+
+  /**
+   * Shows what the server recorded for a run this panel stopped. Stop detaches the view before it
+   * asks the server to cancel, so the run's last chunks (each stopped tool part, then `abort`)
+   * never reach this panel. Once `stopping` settles, the run's state carries them: whole once the
+   * run has ended, or replayed to its end while it still unwinds. A run the server no longer
+   * retains leaves the stored transcript as the truth; with neither, the panel keeps what it shows.
+   *
+   * Call it when Stop is pressed. It takes the epoch current then and starts none, because it
+   * follows nothing new: anything that starts afterwards (a local turn, a History selection, New
+   * conversation, a new run for the tab) discards it, and it never discards them. Installing past
+   * a newer local turn would detach that turn's stream. `isShown` is the hook's guard against a
+   * panel that already moved to another conversation through a selection still in flight.
+   */
+  async reload(
+    conversationId: string,
+    stopping: Promise<unknown>,
+    isShown: () => boolean,
+  ): Promise<void> {
+    const epoch = this.epoch
+    const isCurrent = () => !this.disposed && epoch === this.epoch && isShown()
+    try {
+      await stopping
+      if (!isCurrent()) return
+      const run = await this.deps.load(
+        conversationId,
+        new AbortController().signal,
+      )
+      if (!isCurrent()) return
+      const messages =
+        run?.messages ?? (await this.deps.loadStored(conversationId))
+      if (!messages || !isCurrent()) return
+      await this.deps.attach(
+        {
+          source: 'reloaded',
+          conversationId,
+          messages,
+          liveRunId: run?.status === 'running' ? run.runId : undefined,
+        },
+        isCurrent,
+      )
+    } catch (error) {
+      if (isCurrent()) this.deps.reportError(error)
+    }
   }
 
   retire(conversationId: string): void {

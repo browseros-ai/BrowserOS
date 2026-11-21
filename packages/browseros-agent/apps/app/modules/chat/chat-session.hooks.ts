@@ -502,24 +502,35 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const stop = useCallback(async () => {
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
-    // no longer a lifecycle signal.
+    // no longer a lifecycle signal. The detached view never receives the run's
+    // last chunks, so the attachment then shows what the server recorded.
     const stoppedConversationId = conversationIdRef.current
     const detaching = detachView()
-    try {
-      const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
-      await new ServerApiClient(serverUrl).stopTurn({
-        conversationId: stoppedConversationId,
-      })
-    } catch (error) {
-      sentry.captureException(error, {
-        extra: {
-          conversationId: conversationIdRef.current,
-          operation: 'stop-server-conversation',
-        },
-      })
-    } finally {
-      await detaching
-    }
+    const stopping = (async () => {
+      try {
+        const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
+        await new ServerApiClient(serverUrl).stopTurn({
+          conversationId: stoppedConversationId,
+        })
+      } catch (error) {
+        sentry.captureException(error, {
+          extra: {
+            conversationId: conversationIdRef.current,
+            operation: 'stop-server-conversation',
+          },
+        })
+      } finally {
+        await detaching
+      }
+    })()
+    await Promise.all([
+      stopping,
+      attachmentRef.current?.reload(
+        stoppedConversationId,
+        stopping,
+        () => conversationIdRef.current === stoppedConversationId,
+      ),
+    ])
   }, [detachView])
 
   // Both surfaces follow server-owned runs through one attachment: a History
@@ -538,6 +549,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           id,
           AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
         ),
+      loadStored: async (id) => (await fetchServerConversation(id))?.messages,
       ownsLocalStream: (id, runId) => {
         if (localStreamConversationRef.current !== id) return false
         localStreamRunRef.current ??= runId

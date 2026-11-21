@@ -201,6 +201,7 @@ describe('restoring a conversation the server is still running', () => {
     )
     const attachment = new PanelConversationAttachment({
       load: noRun,
+      loadStored: async () => undefined,
       attach,
       clear: () => {},
       ownsLocalStream: () => false,
