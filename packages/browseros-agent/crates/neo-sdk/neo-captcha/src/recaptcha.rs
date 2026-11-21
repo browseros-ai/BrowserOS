@@ -129,6 +129,17 @@ impl View {
     }
 }
 struct Stop(SolveStatus, SolveReason, String);
+/// How a read treats the widget's own frames (the checkbox and the picture puzzle).
+///
+/// The free path clicks inside those frames, so it cannot go on without them. The token path
+/// works from the main frame alone: it only writes the response field and calls the callback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FrameReads {
+    /// A frame that cannot be read stops the flow with a browser error.
+    Required,
+    /// A frame that cannot be read is treated as absent, so a token can still be applied.
+    BestEffort,
+}
 impl From<PageError> for Stop {
     fn from(error: PageError) -> Self {
         Self::from_page_error("reCAPTCHA browser operation", error)
@@ -256,6 +267,7 @@ struct Flow<'a, 'b, P: CaptchaPage, B: CaptchaBackend> {
     ctx: &'a SolveCtx<'b, P, B>,
     challenge: &'a Challenge,
     out: FlowResult,
+    frames: FrameReads,
 }
 impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
     fn accepted(&self) -> (SolveMethod, SolveReason) {
@@ -284,6 +296,16 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         let value = self.bounded(operation, future).await?;
         serde_json::from_value(value)
             .map_err(|_| browser_failure(operation, "unexpected widget state"))
+    }
+    /// Applies `self.frames` to one widget-frame read. Only browser errors are forgiven:
+    /// cancellation, the deadline, navigation and a closed tab still end the solve.
+    fn frame_read<T>(&self, read: Result<Option<T>, Stop>) -> Result<Option<T>, Stop> {
+        match read {
+            Err(Stop(_, SolveReason::BrowserError, _)) if self.frames == FrameReads::BestEffort => {
+                Ok(None)
+            }
+            read => read,
+        }
     }
     async fn current(&self) -> Result<(), Stop> {
         if self
@@ -344,13 +366,14 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             )
             .await?;
         let state = if let Some(a) = &anchor {
-            Some(
-                self.read_state(
+            let state = self
+                .read_state(
                     "Reading the reCAPTCHA anchor frame",
                     self.ctx.page.eval_in_frame(a, ANCHOR),
                 )
-                .await?,
-            )
+                .await
+                .map(Some);
+            self.frame_read(state)?
         } else {
             None
         };
@@ -358,11 +381,13 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             .as_ref()
             .filter(|f| main.frame_ready && f.rect.is_some_and(usable))
         {
-            self.read_state(
-                "Reading the reCAPTCHA challenge frame",
-                self.ctx.page.eval_in_frame(f, GRID),
-            )
-            .await?
+            let grid = self
+                .read_state(
+                    "Reading the reCAPTCHA challenge frame",
+                    self.ctx.page.eval_in_frame(f, GRID),
+                )
+                .await;
+            self.frame_read(grid)?
         } else {
             None
         };
@@ -699,6 +724,14 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         if fresh.passed() {
             return Ok(self.accepted());
         }
+        // A response in the form with an unreadable checkbox may already be a pass. Buying a
+        // token here would pay for a widget that could be solved, so the flow stops instead.
+        if self.frames == FrameReads::BestEffort && fresh.main.response && fresh.state.is_none() {
+            return Err(fail(
+                SolveReason::AcceptanceUnconfirmed,
+                "A response is in the form but the checkbox could not be read",
+            ));
+        }
         let Some(key) = self
             .challenge
             .sitekey
@@ -869,13 +902,58 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             == document
             && accepted)
     }
+    /// The whole solve: checkbox, then picture puzzles, then a provider token.
+    ///
+    /// ```text
+    /// checkbox ─▶ tiles ─▶ passed
+    ///     │         ├────▶ not passed ───────────────▶ token
+    ///     └─────────┴────▶ browser error, page kept ─▶ token (once, main frame only)
+    /// ```
+    ///
+    /// A browser error in the free path means Neo could not read or click the widget, not that
+    /// the site refused it. Navigation and a closed tab are reported under their own reasons and
+    /// never reach the fallback, so the document a token would be written to is still the one
+    /// the challenge was found on. Every token request goes through `CaptchaBackend::solve`,
+    /// which holds the paid-task limits, including the per-host cap.
     async fn run(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
         if self.ctx.forced_method == Some(ForcedMethod::Token) {
             return self.token().await;
         }
+        let failure = match self.free().await {
+            Ok(Some(passed)) => return Ok(passed),
+            Ok(None) => return self.token().await,
+            Err(failure) => failure,
+        };
+        let Stop(_, SolveReason::BrowserError, cause) = &failure else {
+            return Err(failure);
+        };
+        if !self.ctx.backend.is_configured() {
+            return Err(failure);
+        }
+        // The result below may replace this failure, so the log keeps what went wrong first.
+        // `cause` is an operation label plus a recognized diagnostic, never page text.
+        tracing::info!(target: "captcha", event = "captcha.token_fallback", cause = %cause,
+            "reCAPTCHA browser step failed; trying a provider token");
+        self.frames = FrameReads::BestEffort;
+        match self.token().await {
+            // No token was requested, so the first failure is still the only thing that went
+            // wrong. Reporting "widget gone" or "no sitekey" here would hide it.
+            Err(Stop(
+                _,
+                SolveReason::BrowserError
+                | SolveReason::TilesExhausted
+                | SolveReason::AcceptanceUnconfirmed,
+                _,
+            )) if self.out.attempts.token == 0 => Err(failure),
+            outcome => outcome,
+        }
+    }
+    /// The free path: the checkbox click and up to three picture rounds. `None` means the
+    /// widget is still unsolved and nothing failed.
+    async fn free(&mut self) -> Result<Option<(SolveMethod, SolveReason)>, Stop> {
         let mut v = self.read().await?;
         if v.passed() {
-            return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+            return Ok(Some((SolveMethod::Checkbox, SolveReason::CheckboxPassed)));
         }
         for _ in 0..2 {
             if v.state.as_ref().is_none_or(|a| a.checked)
@@ -900,13 +978,10 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 })
                 .await?;
             if v.passed() {
-                return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+                return Ok(Some((SolveMethod::Checkbox, SolveReason::CheckboxPassed)));
             }
         }
-        if self.tiles().await? {
-            return Ok(self.accepted());
-        }
-        self.token().await
+        Ok(self.tiles().await?.then(|| self.accepted()))
     }
 }
 
@@ -928,6 +1003,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
             callback_ran: false,
             message: String::new(),
         },
+        frames: FrameReads::Required,
     };
     match flow.run().await {
         Ok((method, reason)) => {
@@ -990,6 +1066,8 @@ mod tests {
         navigated: bool,
         fail: Option<PageError>,
         anchor_error: Option<PageError>,
+        grid_error: Option<PageError>,
+        tile_click_error: Option<PageError>,
         fetch_fails: bool,
         clear_on_image: bool,
         hide_on_fetch: bool,
@@ -1030,6 +1108,8 @@ mod tests {
                 navigated: false,
                 fail: None,
                 anchor_error: None,
+                grid_error: None,
+                tile_click_error: None,
                 fetch_fails: false,
                 clear_on_image: false,
                 hide_on_fetch: false,
@@ -1180,6 +1260,9 @@ mod tests {
                     "rect": {"x": 10., "y": 20., "width": 28., "height": 28.}})
                 }));
             }
+            if let Some(error) = self.read(|s| s.grid_error.clone()) {
+                return Err(error);
+            }
             self.edit(|s| {
                 if s.replace_whole_grid && s.replacements > 0 {
                     s.replacement_reads += 1;
@@ -1202,6 +1285,9 @@ mod tests {
             }))
         }
         async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
+            if let Some(error) = self.read(|s| s.tile_click_error.clone().filter(|_| y > 200.)) {
+                return Err(error);
+            }
             self.edit(|s| {
                 s.clicks.push((x, y));
                 if x < 100. && !s.tiles {
@@ -1894,12 +1980,217 @@ mod tests {
                     .into(),
             ));
         });
-        let outcome = attempt(&page, &FakeBackend::new(vec![])).await;
+        let backend = FakeBackend {
+            configured: false,
+            ..FakeBackend::new(vec![])
+        };
+        let outcome = attempt(&page, &backend).await;
         assert_eq!(outcome.reason, SolveReason::BrowserError);
         assert_eq!(
             outcome.message,
             "Reading the reCAPTCHA anchor frame failed (Execution context was destroyed)."
         );
+        assert!(
+            backend.tasks().is_empty(),
+            "without a provider there is no token to fall back to"
+        );
+    }
+
+    fn token_reply() -> Result<ProviderAnswer, ProviderError> {
+        Ok(ProviderAnswer {
+            answer: SolveAnswer::Token("test-token".into()),
+            provider: ProviderName::TwoCaptcha,
+            task_id: None,
+            cost_usd: Some(0.002),
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_tile_click_falls_back_to_one_token() {
+        let page = FakePage::new(true);
+        page.edit(|state| {
+            state.tile_click_error = Some(PageError::Browser("Invalid click point".into()));
+        });
+        let mut backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+        backend.push_reply(token_reply());
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Token,
+                SolveReason::TokenAccepted
+            ),
+            "the page is unchanged after a failed click, so a token can still be applied"
+        );
+        assert_eq!(
+            (
+                result.attempts.tile_rounds,
+                result.attempts.token,
+                result.paid_tasks
+            ),
+            (1, 1, 2)
+        );
+        let tasks = backend.tasks();
+        assert!(
+            matches!(
+                tasks.as_slice(),
+                [SolveTask::RecaptchaTiles(_), SolveTask::RecaptchaToken(params)]
+                    if params.user_agent.as_deref() == Some("test-agent")
+            ),
+            "one token request, carrying the page's User-Agent: {tasks:?}"
+        );
+        assert_eq!(
+            page.read(|state| state.clicks.len()),
+            1,
+            "only the checkbox click landed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unreadable_widget_frame_still_gets_a_token() {
+        for anchor in [true, false] {
+            let page = FakePage::new(true);
+            page.edit(|state| {
+                let error = Some(PageError::Browser("Frame was detached".into()));
+                if anchor {
+                    state.anchor_error = error;
+                } else {
+                    state.grid_error = error;
+                }
+            });
+            let mut backend = FakeBackend::new(vec![]);
+            backend.push_reply(token_reply());
+            let result = attempt(&page, &backend).await;
+            assert_eq!(
+                (result.status, result.method, result.reason),
+                (
+                    SolveStatus::Solved,
+                    SolveMethod::Token,
+                    SolveReason::TokenAccepted
+                ),
+                "the token path needs the main frame only (anchor unreadable: {anchor})"
+            );
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::RecaptchaToken(_)]
+            ));
+            assert!(page.read(|state| state.applied));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_fallback_never_pays_when_a_response_is_already_in_the_form() {
+        let page = FakePage::new(false);
+        page.edit(|state| {
+            state.response = true;
+            state.anchor_error = Some(PageError::Browser("Frame was detached".into()));
+        });
+        let mut backend = FakeBackend::new(vec![]);
+        backend.push_reply(token_reply());
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.reason, result.paid_tasks),
+            (SolveStatus::Failed, SolveReason::BrowserError, 0)
+        );
+        assert_eq!(
+            result.message, "Reading the reCAPTCHA anchor frame failed (Frame was detached).",
+            "the first failure stays the result when no token was requested"
+        );
+        assert!(
+            backend.tasks().is_empty(),
+            "the widget may already be solved"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_fallback_keeps_the_browser_error_when_no_token_can_be_requested() {
+        let page = FakePage::new(true);
+        page.edit(|state| {
+            state.tile_click_error = Some(PageError::Timeout);
+        });
+        let mut challenge = challenge();
+        challenge.sitekey = None;
+        let mut backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+        backend.push_reply(token_reply());
+        let result = run(
+            &page,
+            &backend,
+            &challenge,
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::BrowserError),
+            "a missing sitekey must not turn a click failure into tiles_exhausted"
+        );
+        assert_eq!(
+            result.message,
+            "Clicking a tile in the challenge frame failed (browser call timed out)."
+        );
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaTiles(_)]
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_fallback_reports_the_paid_limits_and_asks_only_once() {
+        for (kind, reason) in [
+            (
+                ProviderErrorKind::SpendLimit,
+                SolveReason::SpendLimitReached,
+            ),
+            (ProviderErrorKind::Unsolvable, SolveReason::ProviderError),
+        ] {
+            let page = FakePage::new(true);
+            page.edit(|state| {
+                state.tile_click_error = Some(PageError::Browser("Invalid click point".into()));
+            });
+            let mut backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+            backend.push_reply(Err(ProviderError {
+                provider: Some(ProviderName::Capsolver),
+                kind,
+                message: "refused".into(),
+                charged: false,
+            }));
+            backend.push_reply(token_reply());
+            let result = attempt(&page, &backend).await;
+            assert_eq!(
+                (result.status, result.reason),
+                (SolveStatus::NeedsHuman, reason),
+                "a refused token is the result; the flow does not ask again"
+            );
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::RecaptchaTiles(_), SolveTask::RecaptchaToken(_)]
+            ));
+            assert!(!page.read(|state| state.applied));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn navigation_and_a_closed_tab_never_reach_the_token_fallback() {
+        for (error, reason) in [
+            (PageError::Navigated, SolveReason::Navigated),
+            (PageError::Closed, SolveReason::TabClosed),
+        ] {
+            let page = FakePage::new(true);
+            page.edit(|state| state.tile_click_error = Some(error));
+            let mut backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+            backend.push_reply(token_reply());
+            let result = attempt(&page, &backend).await;
+            assert_eq!(
+                (result.status, result.reason),
+                (SolveStatus::Cancelled, reason)
+            );
+            assert!(
+                matches!(backend.tasks().as_slice(), [SolveTask::RecaptchaTiles(_)]),
+                "a token for a document that is gone would be paid for nothing"
+            );
+        }
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_already_checked_widget_is_never_paid_or_clicked() {
@@ -2041,7 +2332,13 @@ mod tests {
         let backend = FakeBackend::new(vec![]);
         assert_ne!(attempt(&page, &backend).await.status, SolveStatus::Solved);
         assert!(page.read(|s| s.screenshots.is_empty()));
-        assert!(backend.tasks().is_empty());
+        assert!(
+            !backend
+                .tasks()
+                .iter()
+                .any(|task| matches!(task, SolveTask::RecaptchaTiles(_))),
+            "no picture was captured, so no tile task may be sent"
+        );
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_hidden_frames_are_never_clicked_or_captured() {
