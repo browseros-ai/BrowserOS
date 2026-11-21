@@ -11,12 +11,17 @@ use serde_json::Value;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use std::time::Duration;
+
 use crate::{
     evidence::{FrameText, PageBrief},
     judge::Judge,
     turnstile_state::TurnstileWidgetState,
-    types::{CaptchaKind, Challenge, Detection, DocumentId, VerifyReport},
-    verify::{self, Basis, Claim, Look, TokenReading, VerifyBudget},
+    types::{
+        Attempts, CaptchaKind, Challenge, ChallengeState, Detection, DocumentId, FlowResult,
+        SolveMethod, SolveReason, SolveStatus, VerifyReport,
+    },
+    verify::{self, Basis, Claim, Look, Next, TokenReading, VerifyBudget},
 };
 
 /// What the verify check concluded on one recorded page.
@@ -26,6 +31,17 @@ pub struct Replay {
     pub report: VerifyReport,
     /// The evidence text the brief renders: exactly what the judge was sent, when it was asked.
     pub evidence: String,
+    /// What the solve answers after the check, from the claim the brief's basis stands for
+    /// (`no_captcha`, `already_passed`, `checkbox_passed`, `token_applied`, `token_accepted`,
+    /// a cleared wall); `None` when the check asks for a second round with a remedy.
+    pub answer: Option<Answer>,
+}
+
+/// A solve's final status and reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Answer {
+    pub status: SolveStatus,
+    pub reason: SolveReason,
 }
 
 /// Replays one recorded page (`tests/briefs/*.json`) through the verify check's decision path.
@@ -114,7 +130,40 @@ pub async fn replay_brief(case: &str, judge: Option<&dyn Judge>) -> Result<Repla
     )
     .await
     .map_err(|error| error.to_string())?;
+    let passed = case
+        .claim
+        .challenge
+        .as_ref()
+        .is_some_and(|challenge| challenge.state == ChallengeState::Passed);
+    let (status, reason) = match basis {
+        Basis::NothingFound => (SolveStatus::AlreadyClear, SolveReason::NoCaptcha),
+        Basis::WidgetPassed if passed => (SolveStatus::AlreadyClear, SolveReason::AlreadyPassed),
+        Basis::WidgetPassed => (SolveStatus::Solved, SolveReason::CheckboxPassed),
+        Basis::TokenInjected => (SolveStatus::TokenApplied, SolveReason::AwaitingSubmit),
+        Basis::TokenAccepted => (SolveStatus::Solved, SolveReason::TokenAccepted),
+        Basis::WallCleared => (SolveStatus::Solved, SolveReason::AutoPassed),
+    };
+    let flow = FlowResult {
+        status,
+        method: SolveMethod::None,
+        reason,
+        attempts: Attempts::default(),
+        paid_tasks: 0,
+        provider: None,
+        cost_usd: 0.0,
+        callback_ran: case.claim.callback_ran,
+        message: String::new(),
+    };
+    let answer = match verify::next_step(&flow, &verification, &claim, 0, Duration::from_secs(100))
+    {
+        Next::Return(answer) => Some(Answer {
+            status: answer.status,
+            reason: answer.reason,
+        }),
+        Next::Retry(_) => None,
+    };
     Ok(Replay {
+        answer,
         report: verify::report(
             &verification,
             1,
@@ -190,6 +239,7 @@ struct FrameCase {
 enum BasisCase {
     WidgetPassed,
     TokenInjected,
+    TokenAccepted,
     WallCleared,
     NothingFound,
 }
@@ -199,6 +249,7 @@ impl From<BasisCase> for Basis {
         match basis {
             BasisCase::WidgetPassed => Self::WidgetPassed,
             BasisCase::TokenInjected => Self::TokenInjected,
+            BasisCase::TokenAccepted => Self::TokenAccepted,
             BasisCase::WallCleared => Self::WallCleared,
             BasisCase::NothingFound => Self::NothingFound,
         }

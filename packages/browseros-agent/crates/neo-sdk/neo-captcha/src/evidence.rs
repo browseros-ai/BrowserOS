@@ -854,11 +854,12 @@ fn scrub_links(text: &str) -> String {
 
 fn scrub_word(word: &str) -> String {
     let lower = word.to_ascii_lowercase();
-    let Some(start) = ["https://", "http://", "www."]
+    let start = ["https://", "http://", "www."]
         .iter()
         .filter_map(|prefix| lower.find(prefix))
         .min()
-    else {
+        .or_else(|| bare_link(word));
+    let Some(start) = start else {
         return word.to_owned();
     };
     let (head, rest) = word.split_at(start);
@@ -881,16 +882,36 @@ fn scrub_word(word: &str) -> String {
         )
     });
     let tail = &rest[link.len()..];
-    let address = if link.to_ascii_lowercase().starts_with("www.") {
-        format!("https://{link}")
-    } else {
+    let address = if lower[start..].starts_with("http://") || lower[start..].starts_with("https://")
+    {
         link.to_owned()
+    } else {
+        format!("https://{link}")
     };
     let host = Url::parse(&address)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_else(|| "link".to_owned());
     format!("{head}{host}{tail}")
+}
+
+/// Where a link with no scheme and no `www.` starts in `word`: a host name (dotted labels ending
+/// in a letters-only top-level label) right before a path, query or fragment, as in
+/// `acct.site.com/reset?token=…`. A bare host with nothing after it is left alone, and so are
+/// dates (`11/19/2026`), versions (`v1.2/docs`) and abbreviations (`e.g./i.e.`).
+fn bare_link(word: &str) -> Option<usize> {
+    let start = word.find(|c: char| c.is_ascii_alphanumeric())?;
+    let rest = &word[start..];
+    let host = &rest[..rest.find(['/', '?', '#'])?];
+    let labels: Vec<&str> = host.split('.').collect();
+    let tld = labels.last()?;
+    (labels.len() >= 2
+        && tld.len() >= 2
+        && tld.chars().all(|c| c.is_ascii_alphabetic())
+        && labels.iter().all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }))
+    .then_some(start)
 }
 
 #[cfg(test)]
@@ -1100,6 +1121,14 @@ mod tests {
             ("go to:https://a.io/x", "go to:a.io"),
             ("awww.cute", "awww.cute"),
             ("no links here", "no links here"),
+            ("acct.site.com/reset?token=abc", "acct.site.com"),
+            ("(acct.site.com/reset?token=abc).", "(acct.site.com)."),
+            ("Go to site.org?ref=XYZ now", "Go to site.org now"),
+            ("example.com", "example.com"),
+            (
+                "11/19/2026 and/or v1.2/docs e.g./i.e.",
+                "11/19/2026 and/or v1.2/docs e.g./i.e.",
+            ),
         ] {
             assert_eq!(scrub_links(text), kept, "{text}");
         }
