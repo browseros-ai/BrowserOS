@@ -42,6 +42,7 @@ struct Inner {
     browser: Browser,
     store: Store,
     runtime: AgentRuntime,
+    acpx_sessions: acpx::Sessions,
 }
 
 /// Where the bundled Bun is and where agent state goes.
@@ -61,6 +62,7 @@ impl Agent {
                 browser,
                 store,
                 runtime,
+                acpx_sessions: acpx::Sessions::default(),
             }),
         }
     }
@@ -69,6 +71,14 @@ impl Agent {
     /// returns a result with `error` set, never an `Err`: the dialog must still open.
     pub async fn probe(&self, kind: AgentKind, timeout: std::time::Duration) -> AgentProbe {
         probe::probe(&self.inner.runtime, kind, timeout).await
+    }
+
+    /// Retire this server's acpx owners after conversations stop admitting and running turns.
+    pub async fn shutdown_sessions(&self, within: Duration) {
+        self.inner
+            .acpx_sessions
+            .shutdown(&self.inner.runtime, within)
+            .await;
     }
 }
 
@@ -105,6 +115,6 @@ impl TurnRunner for Agent {
     }
 
     async fn end_session(&self, conversation: ConversationId) {
-        acpx::end_session(&self.inner.runtime, conversation).await;
+        acpx::end_session(&self.inner, conversation).await;
     }
 }
