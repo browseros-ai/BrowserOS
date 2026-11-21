@@ -2482,7 +2482,7 @@ async fn solving_without_a_provider_key_is_the_deployments_to_fix() -> Result<()
 }
 
 #[tokio::test]
-async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> {
+async fn a_solve_answers_what_neo_did_as_a_value() -> Result<(), Box<dyn Error>> {
     let harness = Harness::with_solver(Some(placeholder_solver()?)).await?;
     assert!(
         harness
@@ -2500,16 +2500,32 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
         .await;
     let answer = value(reply)?;
     // The fake browser answers the frame-tree read detection starts with `{}`, which the solver
-    // takes for a browser error: it cannot tell whether a CAPTCHA blocks the page.
+    // takes for a browser error before any solve attempt ran.
     assert_eq!(
-        (answer["verdict"].as_str(), answer["reason"].as_str()),
-        (Some("unknown"), Some("browser_error")),
+        answer.get("verdict"),
+        None,
+        "verdict is not part of the wire contract: {answer}"
+    );
+    assert_eq!(
+        (
+            answer["attempted"].as_bool(),
+            answer.get("type"),
+            answer["method"].as_str(),
+            answer["reason"].as_str(),
+        ),
+        (
+            Some(false),
+            Some(&Value::Null),
+            Some("none"),
+            Some("browser_error"),
+        ),
         "{answer}"
     );
     assert_eq!(
         answer["message"],
-        "Neo could not tell whether the CAPTCHA passed (a browser call failed); look at the page \
-         again before acting.",
+        "A browser call failed before Neo could attempt a solve; Neo cannot tell whether the page \
+         is clear — inspect a fresh snapshot and screenshot before continuing, and hand off to \
+         the user if a check still blocks it.",
         "claw-sdk's own line, not the crate's MCP wording"
     );
     assert_eq!(answer["paidTasks"], 0, "no provider was ever asked");
@@ -2518,7 +2534,7 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
     assert_eq!(
         (row.outcome, row.delivery),
         (Some(Outcome::Ok), Some(Delivery::Done)),
-        "every verdict is a value, and the solver may have acted, so it was sent"
+        "every completed solve is a value, and the solver may have acted, so it was sent"
     );
     Ok(())
 }

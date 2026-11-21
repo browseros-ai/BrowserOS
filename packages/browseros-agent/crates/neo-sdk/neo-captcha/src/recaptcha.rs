@@ -1,4 +1,4 @@
-use std::{future::Future, time::Duration};
+use std::{collections::HashSet, future::Future, time::Duration};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -14,7 +14,7 @@ const POLL: Duration = Duration::from_millis(250);
 const ANCHOR: &str = r#"/*recaptcha:anchor*/(() => {
  const a=document.querySelector('#recaptcha-anchor'), e=document.querySelector('.recaptcha-checkbox-border')||a;
  const r=e?.getBoundingClientRect();
- return {checked:a?.getAttribute('aria-checked')==='true',error:!!document.querySelector('.recaptcha-checkbox-expired,.recaptcha-checkbox-error'),rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null};
+ return {checked:a?.getAttribute('aria-checked')==='true',error:!!document.querySelector('.recaptcha-checkbox-expired,.recaptcha-checkbox-error'),loading:!!a?.classList.contains('recaptcha-checkbox-loading'),rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null};
 })()"#;
 const GRID: &str = r#"/*recaptcha:grid*/(() => {
  const t=document.querySelector('table[class*="rc-imageselect-table-"]');if(!t)return null;
@@ -38,13 +38,14 @@ const LOCATE: &str = r#"
  const fields=root?[...root.querySelectorAll('textarea[name="g-recaptcha-response"]')]:[];
 "#;
 const MAIN: &str = r#"
- let response=fields.some(e=>!!e.value.trim());
- if(!response&&a&&anchors.length===1){try{const g=window.grecaptcha;response=!!(g?.enterprise||g)?.getResponse()?.trim()}catch{}}
- return {response,present:matches.length>0,hidden:matches.length===1?hidden(a):false,frameReady:visible(fs.find(f=>f.src===p.bframe))};
+ const tokens=new Set();
+ for(const e of fields){const v=typeof e.value==='string'?e.value.trim():'';if(v)tokens.add(v)}
+ if(a&&anchors.length===1){try{const g=window.grecaptcha,r=(g?.enterprise||g)?.getResponse?.();const v=typeof r==='string'?r.trim():'';if(v)tokens.add(v)}catch{}}
+ return {tokens:[...tokens],present:matches.length>0,hidden:matches.length===1?hidden(a):false,frameReady:visible(fs.find(f=>f.src===p.bframe))};
 "#;
 const APPLY: &str = r#"
  if(!fields.length)return {written:false,callback:false};
- for(const e of fields){e.value=p.token;e.innerHTML=p.token}
+ for(const e of fields){e.value=p.token;e.innerHTML=p.token;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))}
  let fn=null,owner=window;
  if(p.callback&&p.callback!=='<inline>'){const parts=p.callback.split('.');fn=window;for(const k of parts){owner=fn;fn=fn?.[k]}}
  if(p.callback==='<inline>'){
@@ -63,12 +64,19 @@ const TOKEN_PRESENT: &str = "return fields.length > 0 && fields.every(e => e.val
 struct Anchor {
     checked: bool,
     error: bool,
+    #[serde(default)]
+    loading: bool,
     rect: Option<Rect>,
+}
+impl Anchor {
+    fn verifying(&self) -> bool {
+        self.loading || !self.rect.is_some_and(usable)
+    }
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Main {
-    response: bool,
+    tokens: Vec<String>,
     present: bool,
     hidden: bool,
     frame_ready: bool,
@@ -124,8 +132,14 @@ struct View {
     main: Main,
 }
 impl View {
-    fn passed(&self) -> bool {
-        self.main.response && self.state.as_ref().is_some_and(|a| a.checked)
+    fn passed(&self, prior: &HashSet<String>) -> bool {
+        self.state.as_ref().is_some_and(|a| a.checked)
+            && self
+                .main
+                .tokens
+                .iter()
+                .map(|t| t.trim())
+                .any(|t| !t.is_empty() && !prior.contains(t))
     }
 }
 struct Stop(SolveStatus, SolveReason, String);
@@ -247,15 +261,45 @@ fn question_id(label: &str) -> Option<&'static str> {
 struct Flow<'a, 'b, P: CaptchaPage, B: CaptchaBackend> {
     ctx: &'a SolveCtx<'b, P, B>,
     challenge: &'a Challenge,
+    // Existing tokens on entry prove nothing: they may be stale, rejected by
+    // the site, or written by Neo on an earlier call. Kept in Rust memory
+    // (never logged, emitted, formatted, or interpolated into scripts) so only
+    // a strictly different non-empty token can count as a native pass.
+    prior: HashSet<String>,
     out: FlowResult,
 }
 impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
+    fn passed(&self, view: &View) -> bool {
+        view.passed(&self.prior)
+    }
+    fn snapshot_prior(&mut self, view: &View) {
+        self.prior = view
+            .main
+            .tokens
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
     fn accepted(&self) -> (SolveMethod, SolveReason) {
         if self.out.attempts.tile_rounds > 0 {
             (SolveMethod::Tiles, SolveReason::TilesAccepted)
-        } else {
+        } else if self.out.attempts.checkbox > 0 {
             (SolveMethod::Checkbox, SolveReason::CheckboxPassed)
+        } else {
+            (SolveMethod::AutoPass, SolveReason::AutoPassed)
         }
+    }
+    fn checkbox_done(&self, view: &View) -> bool {
+        self.passed(view)
+            || view.grid.as_ref().is_some_and(|g| g.ready)
+            || view.state.as_ref().is_some_and(|a| a.error)
+    }
+    fn box_verifying(view: &View) -> bool {
+        view.state
+            .as_ref()
+            .is_some_and(|a| !a.checked && a.verifying())
     }
     async fn bounded<T>(
         &self,
@@ -466,7 +510,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             "/*recaptcha:paint*/new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))"
         )).await?;
         let fresh = self.read().await?;
-        if fresh.passed() {
+        if self.passed(&fresh) {
             return Ok(None);
         }
         let (Some(current_frame), Some(current_grid)) = (fresh.frame, fresh.grid) else {
@@ -495,7 +539,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         let mut singles: Option<(String, Grid, Vec<usize>)> = None;
         'rounds: for round in 1..=3 {
             let v = self.read().await?;
-            if v.passed() {
+            if self.passed(&v) {
                 return Ok(true);
             }
             let (Some(frame), Some(grid)) = (v.frame, v.grid.filter(|g| g.ready)) else {
@@ -517,7 +561,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                     return Ok(true);
                 };
                 let fresh = self.read().await?;
-                if fresh.passed() {
+                if self.passed(&fresh) {
                     return Ok(true);
                 }
                 if fresh
@@ -557,7 +601,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                     let id = index.unwrap_or(id);
                     let fresh = self
                         .wait(|v| {
-                            v.passed()
+                            self.passed(v)
                                 || v.frame
                                     .as_ref()
                                     .is_none_or(|f| f.frame_id != frame.frame_id)
@@ -567,7 +611,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                                 })
                         })
                         .await?;
-                    if fresh.passed() {
+                    if self.passed(&fresh) {
                         return Ok(true);
                     }
                     let (Some(f), Some(g)) = (fresh.frame, fresh.grid) else {
@@ -587,7 +631,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             if grid.dynamic && layout == TileGrid::ThreeByThree && !clicked.is_empty() {
                 let next = self
                     .wait(|v| {
-                        v.passed()
+                        self.passed(v)
                             || v.grid.as_ref().is_some_and(|g| {
                                 g.ready
                                     && clicked.iter().all(|i| {
@@ -596,7 +640,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                             })
                     })
                     .await?;
-                if next.passed() {
+                if self.passed(&next) {
                     return Ok(true);
                 }
                 if !next.grid.as_ref().is_some_and(|g| {
@@ -618,7 +662,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 }
             }
             let fresh = self.read().await?;
-            if fresh.passed() {
+            if self.passed(&fresh) {
                 return Ok(true);
             }
             let (Some(f), Some(g)) = (fresh.frame, fresh.grid) else {
@@ -636,21 +680,24 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 .set_progress(Some(CaptchaKind::RecaptchaV2), SolveStep::Verifying);
             let after = self
                 .wait(|v| {
-                    v.passed()
+                    self.passed(v)
                         || v.grid
                             .as_ref()
                             .is_some_and(|g| g.ready && (!grid.same(g, &[]) || g.retry))
                 })
                 .await?;
-            if after.passed() {
+            if self.passed(&after) {
                 return Ok(true);
             }
         }
         Ok(false)
     }
-    async fn token(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
-        let fresh = self.read().await?;
-        if fresh.passed() {
+    async fn token(&mut self, initial: Option<View>) -> Result<(SolveMethod, SolveReason), Stop> {
+        let fresh = match initial {
+            Some(view) => view,
+            None => self.read().await?,
+        };
+        if self.passed(&fresh) {
             return Ok(self.accepted());
         }
         let Some(key) = self
@@ -688,7 +735,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             return Err(provider_error("Empty response token"));
         }
         let before = self.read().await?;
-        if before.passed() {
+        if self.passed(&before) {
             return Ok(self.accepted());
         }
         if !before.main.present {
@@ -797,42 +844,60 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         Ok(self.bounded(self.ctx.page.document()).await? == document && accepted)
     }
     async fn run(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
-        if self.ctx.forced_method == Some(ForcedMethod::Token) {
-            return self.token().await;
-        }
         let mut v = self.read().await?;
-        if v.passed() {
-            return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+        self.snapshot_prior(&v);
+        if self.ctx.forced_method == Some(ForcedMethod::Token) {
+            return self.token(Some(v)).await;
+        }
+        // If the page or caller already triggered the checkbox before this
+        // solve started, give Google's check the same bounded grace without
+        // clicking or emitting a checkbox attempt.
+        for _ in 0..3 {
+            if self.checkbox_done(&v) || !Self::box_verifying(&v) {
+                break;
+            }
+            v = self.wait(|view| self.checkbox_done(view)).await?;
+        }
+        if self.passed(&v) {
+            return Ok(self.accepted());
         }
         for _ in 0..2 {
-            if v.state.as_ref().is_none_or(|a| a.checked)
+            if v.state.as_ref().is_none_or(|a| a.checked || a.loading)
                 || v.grid.as_ref().is_some_and(|g| g.ready)
             {
                 break;
             }
             let (Some(frame), Some(rect)) = (
                 v.anchor.as_ref().filter(|f| f.rect.is_some_and(usable)),
-                v.state.as_ref().and_then(|a| a.rect),
+                v.state.as_ref().and_then(|a| a.rect).filter(|r| usable(*r)),
             ) else {
                 break;
             };
             self.mark(SolveMethod::Checkbox, 0);
             self.click(frame, rect).await?;
-            v = self
-                .wait(|v| {
-                    v.passed()
-                        || v.grid.as_ref().is_some_and(|g| g.ready)
-                        || v.state.as_ref().is_some_and(|a| a.error)
-                })
-                .await?;
-            if v.passed() {
-                return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+            v = self.wait(|view| self.checkbox_done(view)).await?;
+            // Google's own check can outlast one wait; while the box shows its
+            // spinner or hides its checkbox border the click landed, so wait
+            // for the answer instead of clicking again.
+            let mut waited_extra = false;
+            for _ in 0..2 {
+                if self.checkbox_done(&v) || !Self::box_verifying(&v) {
+                    break;
+                }
+                waited_extra = true;
+                v = self.wait(|view| self.checkbox_done(view)).await?;
+            }
+            if self.passed(&v) {
+                return Ok(self.accepted());
+            }
+            if waited_extra {
+                break;
             }
         }
         if self.tiles().await? {
             return Ok(self.accepted());
         }
-        self.token().await
+        self.token(None).await
     }
 }
 
@@ -843,6 +908,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
     let mut flow = Flow {
         ctx,
         challenge,
+        prior: HashSet::new(),
         out: FlowResult {
             status: SolveStatus::Failed,
             method: SolveMethod::None,
@@ -891,7 +957,13 @@ mod tests {
         tiles: bool,
         ignored_checkbox_clicks: u32,
         checked: bool,
-        response: bool,
+        loading: bool,
+        anchor_rect: Rect,
+        verifying_for: Option<Duration>,
+        verifying_since: Option<Instant>,
+        tokens: Vec<String>,
+        produced_token: Option<String>,
+        state_reads: u32,
         label: String,
         layout: String,
         dynamic: bool,
@@ -923,6 +995,28 @@ mod tests {
         clicks: Vec<(f64, f64)>,
         scripts: Vec<String>,
     }
+    fn extract_param_token(expression: &str) -> Option<String> {
+        let rest = expression.split_once("const p=")?.1;
+        let params = serde_json::Deserializer::from_str(rest)
+            .into_iter::<Value>()
+            .next()?
+            .ok()?;
+        params.get("token")?.as_str().map(str::to_owned)
+    }
+    impl State {
+        fn advance_verifying(&mut self) {
+            let (Some(since), Some(duration)) = (self.verifying_since, self.verifying_for) else {
+                return;
+            };
+            if self.loading && Instant::now().saturating_duration_since(since) >= duration {
+                self.loading = false;
+                self.checked = true;
+                if let Some(token) = self.produced_token.clone() {
+                    self.tokens = vec![token];
+                }
+            }
+        }
+    }
     struct FakePage(Arc<Mutex<State>>);
     impl FakePage {
         fn new(tiles: bool) -> Self {
@@ -930,7 +1024,18 @@ mod tests {
                 tiles,
                 ignored_checkbox_clicks: 0,
                 checked: false,
-                response: false,
+                loading: false,
+                anchor_rect: Rect {
+                    x: 10.,
+                    y: 20.,
+                    width: 28.,
+                    height: 28.,
+                },
+                verifying_for: None,
+                verifying_since: None,
+                tokens: vec![],
+                produced_token: Some("native-token".into()),
+                state_reads: 0,
                 label: "traffic lights".into(),
                 layout: "rc-imageselect-table-33".into(),
                 dynamic: false,
@@ -1046,8 +1151,14 @@ mod tests {
         }
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
             if expression.starts_with("/*recaptcha:apply*/") {
+                let applied_token = extract_param_token(expression);
                 self.edit(|s| {
                     s.applied = true;
+                    if s.written
+                        && let Some(token) = applied_token
+                    {
+                        s.tokens = vec![token];
+                    }
                     if s.navigation_after_apply {
                         s.navigated = true;
                     }
@@ -1056,7 +1167,13 @@ mod tests {
                 return Ok(self.read(|s| json!({"written": s.written, "callback": s.callback})));
             }
             if expression.starts_with("/*recaptcha:token-present*/") {
-                return Ok(self.read(|s| json!(s.token_retained)));
+                let expected = extract_param_token(expression);
+                return Ok(self.read(|s| {
+                    let matches = expected.as_ref().is_none_or(|token| {
+                        !s.tokens.is_empty() && s.tokens.iter().all(|t| t == token)
+                    });
+                    json!(s.token_retained && matches)
+                }));
             }
             if expression.starts_with("/*recaptcha:clear*/") {
                 if self.read(|s| s.transient_navigation_errors > 0) {
@@ -1068,12 +1185,14 @@ mod tests {
                 return Ok(json!(ready));
             }
             self.edit(|s| {
+                s.advance_verifying();
+                s.state_reads += 1;
                 if s.applied && s.navigate_during_verification {
                     s.navigated = true;
                 }
             });
             Ok(self.read(|s| {
-                json!({"response": s.response, "present": !(s.applied && s.transition),
+                json!({"tokens": s.tokens, "present": !(s.applied && s.transition),
                 "visible": !(s.applied && (s.transition || s.dim_after_apply)),
                 "hidden": s.applied && s.transition, "frameReady": true})
             }))
@@ -1083,7 +1202,9 @@ mod tests {
                 self.edit(|s| {
                     if s.clear_on_image {
                         s.checked = true;
-                        s.response = true;
+                        if let Some(token) = s.produced_token.clone() {
+                            s.tokens = vec![token];
+                        }
                     }
                     if s.hide_on_fetch {
                         s.hidden = true;
@@ -1096,9 +1217,19 @@ mod tests {
                 };
             }
             if f.frame_id == "anchor" {
+                self.edit(State::advance_verifying);
                 return Ok(self.read(|s| {
-                    json!({"checked": s.checked, "error": false,
-                    "rect": {"x": 10., "y": 20., "width": 28., "height": 28.}})
+                    json!({
+                        "checked": s.checked,
+                        "error": false,
+                        "loading": s.loading,
+                        "rect": {
+                            "x": s.anchor_rect.x,
+                            "y": s.anchor_rect.y,
+                            "width": s.anchor_rect.width,
+                            "height": s.anchor_rect.height
+                        }
+                    })
                 }));
             }
             self.edit(|s| {
@@ -1128,9 +1259,20 @@ mod tests {
                 if x < 100. && !s.tiles {
                     if s.ignored_checkbox_clicks > 0 {
                         s.ignored_checkbox_clicks -= 1;
+                    } else if s.verifying_for.is_some() {
+                        s.verifying_since = Some(Instant::now());
+                        s.loading = true;
+                        s.anchor_rect = Rect {
+                            x: 0.,
+                            y: 0.,
+                            width: 0.,
+                            height: 0.,
+                        };
                     } else {
                         s.checked = true;
-                        s.response = true;
+                        if let Some(token) = s.produced_token.clone() {
+                            s.tokens = vec![token];
+                        }
                     }
                 } else if y > 700. {
                     if s.rejected > 0 {
@@ -1138,7 +1280,9 @@ mod tests {
                         s.revision += 1;
                     } else {
                         s.checked = true;
-                        s.response = true;
+                        if let Some(token) = s.produced_token.clone() {
+                            s.tokens = vec![token];
+                        }
                     }
                 } else if s.dynamic && y > 200. {
                     s.replacements += 1;
@@ -1807,18 +1951,6 @@ mod tests {
         }
     }
     #[tokio::test(start_paused = true)]
-    async fn tests_that_already_checked_widget_is_never_paid_or_clicked() {
-        let page = FakePage::new(false);
-        page.edit(|s| {
-            s.checked = true;
-            s.response = true;
-        });
-        let backend = FakeBackend::new(vec![]);
-        assert_eq!(attempt(&page, &backend).await.status, SolveStatus::Solved);
-        assert!(backend.tasks().is_empty());
-        assert!(page.read(|s| s.clicks.is_empty()));
-    }
-    #[tokio::test(start_paused = true)]
     async fn tests_that_malformed_answers_hand_off_before_tile_clicks() {
         for answer in [
             SolveAnswer::Tiles(vec![9]),
@@ -2032,5 +2164,579 @@ mod tests {
             backend.tasks().as_slice(),
             [SolveTask::RecaptchaToken(_)]
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_with_checked_box_mints_fresh_token_without_clicking()
+    -> anyhow::Result<()> {
+        for (transition, expected_status, expected_reason) in [
+            (
+                false,
+                SolveStatus::TokenApplied,
+                SolveReason::AwaitingSubmit,
+            ),
+            (true, SolveStatus::Solved, SolveReason::TokenAccepted),
+        ] {
+            let page = FakePage::new(false);
+            page.edit(|s| {
+                s.checked = true;
+                s.tokens = vec!["stale-secret-token".into()];
+                s.transition = transition;
+            });
+            let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+            let (result, events) = run_with_method(
+                &page,
+                &backend,
+                &challenge(),
+                &CancellationToken::new(),
+                Instant::now() + Duration::from_secs(120),
+                None,
+            )
+            .await;
+            assert_eq!(
+                (result.status, result.method, result.reason),
+                (expected_status, SolveMethod::Token, expected_reason)
+            );
+            assert_ne!(result.reason, SolveReason::CheckboxPassed);
+            assert_ne!(result.reason, SolveReason::AlreadyPassed);
+            assert_eq!(result.paid_tasks, 1);
+            assert!(
+                page.read(|s| s.clicks.is_empty()),
+                "an already-checked anchor box must not be clicked"
+            );
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::RecaptchaToken(_)]
+            ));
+            assert!(page.read(|s| s.applied && s.tokens == vec!["fresh-paid-token"]));
+            let serialized_events = serde_json::to_string(&events)?;
+            assert!(!result.message.contains("stale-secret-token"));
+            assert!(!result.message.contains("fresh-paid-token"));
+            assert!(!serialized_events.contains("stale-secret-token"));
+            assert!(!serialized_events.contains("fresh-paid-token"));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_with_unchecked_box_passes_when_click_yields_different_token()
+    -> anyhow::Result<()> {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.checked = false;
+            s.tokens = vec!["stale-token".into()];
+            s.produced_token = Some("fresh-native-token".into());
+        });
+        let backend = FakeBackend::new(vec![]);
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
+        let serialized_events = serde_json::to_string(&events)?;
+        assert!(!result.message.contains("stale-token"));
+        assert!(!result.message.contains("fresh-native-token"));
+        assert!(!serialized_events.contains("stale-token"));
+        assert!(!serialized_events.contains("fresh-native-token"));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_with_unchecked_box_mints_paid_token_when_token_stays_stale() {
+        for produced in [None, Some("stale-token")] {
+            let page = FakePage::new(false);
+            page.edit(|s| {
+                s.checked = false;
+                s.tokens = vec!["stale-token".into()];
+                s.produced_token = produced.map(str::to_owned);
+                s.transition = false;
+            });
+            let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+            let result = attempt(&page, &backend).await;
+            assert_eq!(
+                (result.status, result.method, result.reason),
+                (
+                    SolveStatus::TokenApplied,
+                    SolveMethod::Token,
+                    SolveReason::AwaitingSubmit
+                )
+            );
+            assert_eq!(result.paid_tasks, 1);
+            assert_eq!(page.read(|s| s.clicks.len()), 1);
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::RecaptchaToken(_)]
+            ));
+            assert!(page.read(|s| s.applied && s.tokens == vec!["fresh-paid-token"]));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_unchanged_stale_token_does_not_short_circuit_token_rereads() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.checked = true;
+            s.tokens = vec!["stale-field-token".into(), "stale-api-token".into()];
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        assert!(
+            page.read(|s| s.state_reads >= 4),
+            "entry, tiles, pre-paid token read, and post-paid token read must all execute without early return"
+        );
+        assert!(page.read(|s| s.clicks.is_empty() && s.applied));
+        assert_eq!(page.read(|s| s.tokens.clone()), vec!["fresh-paid-token"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_retry_on_same_page_treats_first_applied_token_as_prior_and_mints_again() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.checked = true;
+            s.tokens = vec!["initial-stale-token".into()];
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![
+            SolveAnswer::Token("first-paid-token".into()),
+            SolveAnswer::Token("second-paid-token".into()),
+        ]);
+
+        let first = attempt(&page, &backend).await;
+        assert_eq!(
+            (first.status, first.method, first.reason, first.paid_tasks),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+                1
+            )
+        );
+        assert_eq!(page.read(|s| s.tokens.clone()), vec!["first-paid-token"]);
+
+        let second = attempt(&page, &backend).await;
+        assert_eq!(
+            (
+                second.status,
+                second.method,
+                second.reason,
+                second.paid_tasks
+            ),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+                1
+            )
+        );
+        assert_eq!(page.read(|s| s.tokens.clone()), vec!["second-paid-token"]);
+        assert_eq!(backend.tasks().len(), 2);
+        assert!(page.read(|s| s.clicks.is_empty()));
+        assert_eq!(page.read(|s| s.scripts.len()), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_forced_token_method_with_stale_token_still_mints_and_applies() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.checked = true;
+            s.tokens = vec!["stale-token".into()];
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-forced-token".into())]);
+        let (result, _) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            Some(super::super::config::ForcedMethod::Token),
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        assert!(page.read(|s| s.clicks.is_empty() && s.applied));
+        assert_eq!(page.read(|s| s.tokens.clone()), vec!["fresh-forced-token"]);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaToken(_)]
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_apply_script_dispatches_bubbling_input_and_change_events() {
+        let page = FakePage::new(false);
+        page.edit(|s| s.transition = false);
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("minted-token".into())]);
+        let (result, _) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            Some(super::super::config::ForcedMethod::Token),
+        )
+        .await;
+        assert_eq!(result.status, SolveStatus::TokenApplied);
+        let scripts = page.read(|s| s.scripts.clone());
+        assert_eq!(scripts.len(), 1);
+        assert!(
+            scripts[0].contains("dispatchEvent(new Event('input',{bubbles:true}))"),
+            "APPLY must dispatch bubbling input event on response fields"
+        );
+        assert!(
+            scripts[0].contains("dispatchEvent(new Event('change',{bubbles:true}))"),
+            "APPLY must dispatch bubbling change event on response fields"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_with_open_tiles_requires_a_fresh_token() {
+        let page = FakePage::new(true);
+        page.edit(|s| {
+            s.tokens = vec!["stale-token".into()];
+            s.produced_token = Some("fresh-tile-token".into());
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Tiles,
+                SolveReason::TilesAccepted
+            )
+        );
+        assert_eq!(result.attempts.tile_rounds, 1);
+        assert_eq!(result.paid_tasks, 1);
+
+        let stale_page = FakePage::new(true);
+        stale_page.edit(|s| {
+            s.tokens = vec!["stale-token".into()];
+            s.produced_token = None;
+            s.transition = false;
+        });
+        let stale_backend = FakeBackend::new(vec![
+            SolveAnswer::Tiles(vec![0]),
+            SolveAnswer::Tiles(vec![0]),
+            SolveAnswer::Tiles(vec![0]),
+            SolveAnswer::Token("fresh-paid-token".into()),
+        ]);
+        let fallback = attempt(&stale_page, &stale_backend).await;
+        assert_eq!(
+            (fallback.status, fallback.method, fallback.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(fallback.attempts.tile_rounds, 3);
+        assert_eq!(fallback.attempts.token, 1);
+        assert_eq!(fallback.paid_tasks, 4);
+        assert_eq!(
+            stale_page.read(|s| s.tokens.clone()),
+            vec!["fresh-paid-token"]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_waits_for_slow_pass_without_reclicking() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.verifying_for = Some(Duration::from_secs(9));
+            s.produced_token = Some("slow-native-token".into());
+        });
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
+        assert!(
+            start.elapsed() >= Duration::from_secs(9) && start.elapsed() < Duration::from_secs(10),
+            "expected pass around 9 s, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_falls_back_to_paid_token_after_eighteen_seconds() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.verifying_for = Some(Duration::from_secs(30));
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let start = Instant::now();
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.attempts.token, 1);
+        assert_eq!(result.paid_tasks, 1);
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaToken(_)]
+        ));
+        assert!(page.read(|s| s.applied && s.tokens == vec!["fresh-paid-token"]));
+        assert!(
+            start.elapsed() >= Duration::from_secs(18),
+            "expected at least 18 s of verification waits, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_idle_unchecked_box_still_retries_a_second_click() {
+        let page = FakePage::new(false);
+        page.edit(|s| s.ignored_checkbox_clicks = 1);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 2);
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(page.read(|s| s.clicks.len()), 2);
+        assert!(
+            start.elapsed() < Duration::from_secs(12),
+            "idle unchecked box should retry after one 6 s wait, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_unusable_checkbox_rect_falls_back_without_browser_error() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.anchor_rect = Rect {
+                x: 0.,
+                y: 0.,
+                width: 0.,
+                height: 0.,
+            };
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 0);
+        assert_eq!(result.attempts.token, 1);
+        assert_eq!(result.paid_tasks, 1);
+        assert!(page.read(|s| s.clicks.is_empty() && s.applied));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_at_entry_passes_as_auto_pass_without_clicking() {
+        let page = FakePage::new(false);
+        let start = Instant::now();
+        page.edit(|s| {
+            s.loading = true;
+            s.anchor_rect = Rect {
+                x: 0.,
+                y: 0.,
+                width: 0.,
+                height: 0.,
+            };
+            s.verifying_since = Some(start);
+            s.verifying_for = Some(Duration::from_secs(5));
+            s.produced_token = Some("fresh-entry-token".into());
+        });
+        let backend = FakeBackend::new(vec![]);
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::AutoPass,
+                SolveReason::AutoPassed
+            )
+        );
+        assert_eq!(result.attempts, Attempts::default());
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert!(page.read(|s| s.clicks.is_empty()));
+        assert!(
+            events.is_empty(),
+            "entry verification grace must not emit a checkbox solving event"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_secs(5) && start.elapsed() < Duration::from_secs(6),
+            "expected pass around 5 s, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_at_entry_falls_back_to_paid_token_after_eighteen_seconds()
+     {
+        let page = FakePage::new(false);
+        let start = Instant::now();
+        page.edit(|s| {
+            s.loading = true;
+            s.anchor_rect = Rect {
+                x: 0.,
+                y: 0.,
+                width: 0.,
+                height: 0.,
+            };
+            s.verifying_since = Some(start);
+            s.verifying_for = Some(Duration::from_secs(30));
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 0);
+        assert_eq!(result.attempts.token, 1);
+        assert_eq!(result.paid_tasks, 1);
+        assert!(page.read(|s| s.clicks.is_empty() && s.applied));
+        assert_eq!(page.read(|s| s.tokens.clone()), vec!["fresh-paid-token"]);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaToken(_)]
+        ));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data["method"], "token");
+        assert!(
+            start.elapsed() >= Duration::from_secs(18),
+            "expected at least 18 s of entry verification waits, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_at_entry_with_unchanged_stale_token_falls_back_to_paid_token()
+     {
+        let page = FakePage::new(false);
+        let start = Instant::now();
+        page.edit(|s| {
+            s.loading = true;
+            s.anchor_rect = Rect {
+                x: 0.,
+                y: 0.,
+                width: 0.,
+                height: 0.,
+            };
+            s.tokens = vec!["stale-token".into()];
+            s.produced_token = Some("stale-token".into());
+            s.verifying_since = Some(start);
+            s.verifying_for = Some(Duration::from_secs(5));
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &challenge(),
+            &CancellationToken::new(),
+            start + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 0);
+        assert_eq!(result.attempts.token, 1);
+        assert_eq!(result.paid_tasks, 1);
+        assert!(page.read(|s| s.clicks.is_empty() && s.applied));
+        assert_eq!(page.read(|s| s.tokens.clone()), vec!["fresh-paid-token"]);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaToken(_)]
+        ));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data["method"], "token");
     }
 }

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Turnstile failed widget with a stale token</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 32px; }
+    #widget {
+      display: flex;
+      align-items: center;
+      width: 300px;
+      height: 65px;
+      padding: 0 14px;
+      margin-bottom: 12px;
+      box-sizing: border-box;
+      border: 1px solid #d0d7de;
+      border-radius: 4px;
+      background: #f6f8fa;
+      color: #b42318;
+    }
+  </style>
+</head>
+<body>
+<h1>Turnstile failed widget with a stale token</h1>
+<form id="captcha-form" method="post" action="/submit/turnstile-stale">
+  <!-- Static failed-widget box (no vendor script, no checkbox): models a widget that failed and left a stale token in the form. -->
+  <div id="widget" class="cf-turnstile" data-sitekey="3x00000000000000000000FF">
+    <span aria-invalid="true">Verification failed</span>
+    <input type="hidden" name="cf-turnstile-response" value="STALE-TOKEN-turnstile-do-not-accept">
+  </div>
+  <button id="submit" type="submit">Submit</button>
+</form>
+<script>
+const STALE_TOKEN = 'STALE-TOKEN-turnstile-do-not-accept';
+const fixtureState = window.__captchaFixture = { id: 'turnstile-stale', family: 'turnstile', sitekey: '3x00000000000000000000FF', rendered: false, stale: true, replaced: false, callbackFired: false, tokenLength: 0, errors: [] };
+let seeded = false;
+function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
+function responseField() { return document.querySelector('#widget input[name="cf-turnstile-response"]'); }
+function syncReplaced() {
+  if (!seeded) return;
+  const field = responseField();
+  if (!field) return;
+  const changed = field.value !== STALE_TOKEN;
+  if (fixtureState.replaced !== changed || fixtureState.tokenLength !== field.value.length) {
+    fixtureState.replaced = changed;
+    fixtureState.tokenLength = field.value.length;
+    mirror();
+  }
+}
+function markRendered() {
+  if (seeded) { syncReplaced(); return; }
+  const box = document.querySelector('#widget');
+  const field = responseField();
+  if (!box || !field) return;
+  const rect = box.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    field.value = STALE_TOKEN;
+    seeded = true;
+    field.addEventListener('input', syncReplaced);
+    field.addEventListener('change', syncReplaced);
+    fixtureState.rendered = true;
+    fixtureState.replaced = false;
+    fixtureState.tokenLength = STALE_TOKEN.length;
+    mirror();
+    resizeObserver.disconnect();
+  }
+}
+const resizeObserver = new ResizeObserver(markRendered);
+const widget = document.querySelector('#widget');
+if (widget) resizeObserver.observe(widget);
+markRendered();
+mirror();
+</script>
+</body>
+</html>

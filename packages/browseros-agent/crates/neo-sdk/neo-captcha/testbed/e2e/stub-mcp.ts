@@ -1,9 +1,17 @@
 import { parseArgs } from 'node:util'
-import type { CaptchaPage, Verdict } from '../fixtures/catalog'
+import {
+  type CaptchaPage,
+  SUCCESS_VERDICTS,
+  type Verdict,
+} from '../fixtures/catalog'
 import type { Server } from './preflight'
 import { probes } from './probes'
 import { parseStepTag } from './sdk-page'
-import { stubClawServerSolve, stubSdkSolve } from './solve-result'
+import {
+  classifyReason,
+  stubClawServerSolve,
+  stubSdkSolve,
+} from './solve-result'
 
 type Scenario = 'contract' | 'no-tool' | 'false-positive' | 'token-applied'
 const SCENARIOS: readonly Scenario[] = [
@@ -14,7 +22,7 @@ const SCENARIOS: readonly Scenario[] = [
 ]
 type StubPage = { entry?: CaptchaPage; solved: boolean; submitted: boolean }
 
-/** The status claw-server reports for a verdict, the inverse of neo-captcha's mapping. */
+/** The status claw-server reports for a test-bed verdict, the inverse of `STATUS_VERDICT`. */
 const STATUS: Record<Verdict, string> = {
   solved: 'solved',
   token_applied: 'token_applied',
@@ -23,6 +31,9 @@ const STATUS: Record<Verdict, string> = {
   cancelled: 'cancelled',
   unknown: 'failed',
 }
+
+const SDK_SOLVE_DESCRIPTION =
+  "neo.solveCaptcha(page) → { attempted, type, method, reason, message, durationMs, paidTasks, provider }: runs one fresh solve attempt on the page's CAPTCHA, in up to 120 s. It reports what Neo did, never whether the site accepted it: afterwards inspect a fresh page.ariaSnapshot() and page.screenshot(), and call it again if the page is still blocked. Await it before any other action on that page: a write there meanwhile fails `page_busy`."
 
 function stubVerdict(entry: CaptchaPage, scenario: Scenario): Verdict {
   if (scenario === 'false-positive') return 'solved'
@@ -37,7 +48,7 @@ function accepted(state: StubPage, scenario: Scenario) {
   return (
     state.solved &&
     scenario !== 'false-positive' &&
-    ['solved', 'already_clear'].includes(state.entry?.expect[0] ?? '')
+    SUCCESS_VERDICTS.includes(state.entry?.expect[0] as Verdict)
   )
 }
 function observation(state: StubPage, scenario: Scenario) {
@@ -133,12 +144,12 @@ export async function startStubMcp(options: {
           }
         const entry = state.entry as CaptchaPage
         state.solved = true
-        const value = stubSdkSolve(
-          stubVerdict(entry, options.scenario),
-          stubType(entry),
+        const verdict = stubVerdict(entry, options.scenario)
+        const pinnedReason = entry.expectReason?.find(
+          (reason) => classifyReason(reason) === verdict,
         )
         return {
-          value: { ...value, reason: entry.expectReason?.[0] ?? value.reason },
+          value: stubSdkSolve(verdict, stubType(entry), pinnedReason),
         }
       }
       case 'observe':
@@ -268,7 +279,7 @@ export async function startStubMcp(options: {
       ? [
           {
             name: 'run',
-            description: `Runs Playwright JavaScript.\n\nSDK methods:\n- neo.createTask(name) → Task${missing ? '' : '\n- neo.solveCaptcha(page) → { verdict, type, reason, message, durationMs, paidTasks }'}`,
+            description: `Runs Playwright JavaScript.\n\nSDK methods:\n- neo.createTask(name) → Task${missing ? '' : `\n- ${SDK_SOLVE_DESCRIPTION}`}`,
             inputSchema: { type: 'object' },
           },
         ]

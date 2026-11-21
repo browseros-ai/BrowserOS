@@ -54,7 +54,7 @@ const errorCode = (solve: Pick<SolveResult, 'error'>) =>
 
 type Solve = Pick<
   SolveResult,
-  'verdict' | 'type' | 'reason' | 'paidTasks' | 'error'
+  'verdict' | 'attempted' | 'type' | 'reason' | 'paidTasks' | 'error'
 >
 const pass = (note = ''): Classification => ({ outcome: 'PASS', note })
 const fail = (note = ''): Classification => ({ outcome: 'FAIL', note })
@@ -72,17 +72,34 @@ function precondition(page: CaptchaPage, solve: Solve): string | null {
     : null
 }
 
-/** An expected verdict, checked against the expected reason and the site's own answer. */
+/**
+ * Checks the SDK's `attempted` flag when the page pins it. Ignored for claw-server (where
+ * `attempted` is `null`), and checked only on otherwise-passing verdicts so unpaid `mayNeedPaid`
+ * failures stay `UNVERIFIED`.
+ */
+function attemptedMismatch(page: CaptchaPage, solve: Solve): string | null {
+  if (
+    page.expectAttempted !== undefined &&
+    solve.attempted !== null &&
+    solve.attempted !== page.expectAttempted
+  )
+    return `expected attempted ${page.expectAttempted}, received ${solve.attempted}`
+  return null
+}
+
+/** An expected verdict, checked against reason, `attempted`, and the site's own answer. */
 function expected(
   page: CaptchaPage,
+  solve: Solve,
   verdict: Verdict,
-  reason: string,
   site: string,
 ): Classification {
-  if (page.expectReason && !page.expectReason.includes(reason))
+  if (page.expectReason && !page.expectReason.includes(solve.reason))
     return fail(
-      `expected reason ${page.expectReason.join(' or ')}, received ${reason}`,
+      `expected reason ${page.expectReason.join(' or ')}, received ${solve.reason}`,
     )
+  const attemptError = attemptedMismatch(page, solve)
+  if (attemptError) return fail(attemptError)
   const needsSite =
     verdict === 'solved' ||
     (verdict === 'already_clear' && page.family !== 'none')
@@ -94,8 +111,9 @@ function expected(
 }
 
 /**
- * The page's outcome from the solver's own answer and the site's. A verdict passes only if the
- * page expects it, and a success on a CAPTCHA page only if the site accepted it too.
+ * The page's outcome from the solver's classified answer and the site's. A verdict passes only if
+ * the page expects it, `expectAttempted` matches when set, and a success on a CAPTCHA page only
+ * if the site accepted it too.
  */
 export function classifyOutcome(
   page: CaptchaPage,
@@ -114,11 +132,25 @@ export function classifyOutcome(
   const blocked = precondition(page, solve)
   if (blocked !== null) return fail(blocked)
   const verdict = solve.verdict as Verdict
+  // On vendor test keys that paid providers refuse, a widget that auto-passed before the solve
+  // forces a paid mint that fails with `provider_error` and no paid task while the page's own
+  // token still passes the site. That is not a solver contradiction, so the "site accepted an
+  // unsolved page" rule below does not apply, and `--paid` cannot make providers accept the key.
+  if (
+    page.providerRefusesKey &&
+    solve.reason === 'provider_error' &&
+    (solve.paidTasks === 0 || solve.paidTasks === null)
+  )
+    return {
+      outcome: 'UNVERIFIED',
+      note: 'the widget passed before the solve; paid providers refuse this test key',
+    }
   // Unsolved is never a guess, so a site that accepts the page proves it wrong, expected or
   // not: an unpaid demo must not turn that into UNVERIFIED.
   if (verdict === 'unsolved' && site === 'accepted')
     return fail('the site accepted a page the solver called unsolved')
-  // The SDK reports claw-server's `unsupported` as `unsolved`; only the reason tells them apart.
+  // The test bed classifies both `unsupported_type` and other definite failures as `unsolved`;
+  // only the reason keeps claw-server's `unsupported` apart.
   const refusalAllowed =
     page.allowUnsupported || page.expectReason?.includes('unsupported_type')
   if (
@@ -128,14 +160,19 @@ export function classifyOutcome(
   )
     return fail('Neo refused this CAPTCHA type as unsupported')
   if (verdict === 'token_applied' && page.expect.includes('solved')) {
+    if (page.expectReason && !page.expectReason.includes(solve.reason))
+      return fail(
+        `expected reason ${page.expectReason.join(' or ')}, received ${solve.reason}`,
+      )
+    const attemptError = attemptedMismatch(page, solve)
+    if (attemptError) return fail(attemptError)
     if (site === 'accepted')
       return pass('token applied; site accepted on submit')
     return fail(
       site === 'rejected' ? 'false positive' : 'independent check failed',
     )
   }
-  if (page.expect.includes(verdict))
-    return expected(page, verdict, solve.reason, site)
+  if (page.expect.includes(verdict)) return expected(page, solve, verdict, site)
   const unproven = verdict === 'unsolved' || verdict === 'unknown'
   if (page.mayNeedPaid && !options.paid && unproven)
     return {
@@ -289,13 +326,13 @@ export async function runCaptchaE2E(
   }
 }
 
-/** One line per finished page: the solver's exact answer, the site's, and the outcome. */
+/** One line per finished page: the classified verdict, solver fields, site check, and outcome. */
 export function progressLine(r: ResultRecord): string {
   const verdict =
     r.status && r.status !== r.verdict
       ? `${r.verdict} (${r.status})`
       : r.verdict
-  return `[captcha-e2e] ${r.id}: ${verdict} ${r.error ?? r.reason} type=${r.type ?? 'n/a'} paid=${r.paidTasks ?? 'n/a'} site=${r.site} -> ${r.outcome}${r.note ? ` (${r.note})` : ''}`
+  return `[captcha-e2e] ${r.id}: ${verdict} ${r.error ?? r.reason} attempted=${r.attempted ?? 'n/a'} method=${r.method ?? 'n/a'} type=${r.type ?? 'n/a'} paid=${r.paidTasks ?? 'n/a'} site=${r.site} -> ${r.outcome}${r.note ? ` (${r.note})` : ''}`
 }
 
 export const exitCode = (records: readonly ResultRecord[]) =>
@@ -343,8 +380,8 @@ export function renderTable(records: readonly ResultRecord[]): string {
       .replaceAll('|', '\\|')
       .replace(/[\r\n]+/g, ' ')
   return [
-    '| Page | Check | Expected | Verdict | Type | Reason | Paid | Site | Latency | Outcome | Note |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Page | Check | Expected | Verdict | Attempted | Type | Method | Reason | Paid | Site | Latency | Outcome | Note |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...records.map(
       (r) =>
         `| ${[
@@ -354,7 +391,9 @@ export function renderTable(records: readonly ResultRecord[]): string {
           r.status && r.status !== r.verdict
             ? `${r.verdict} (${r.status})`
             : r.verdict,
+          r.attempted ?? 'n/a',
           r.type ?? 'n/a',
+          r.method ?? 'n/a',
           r.error ?? r.reason,
           r.paidTasks ?? 'n/a',
           r.site,

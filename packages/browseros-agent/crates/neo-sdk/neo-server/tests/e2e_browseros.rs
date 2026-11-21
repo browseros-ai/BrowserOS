@@ -16,10 +16,12 @@
 //! browser binary, e.g. `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`, and passes
 //! without doing anything otherwise, so CI without a browser stays green.
 //!
-//! No test here has a CAPTCHA provider key, and none reaches a provider. One Neo runs without a
-//! key, as a deployment without one does. The other gets a placeholder key file, which turns the
-//! solver on, and a provider URL on a closed local port: its page holds no CAPTCHA, so the solve
-//! ends at detection, which is the real crate on the real browser.
+//! No test here has a real CAPTCHA provider key, and none calls a real provider. One Neo runs
+//! without a key, as a deployment without one does. The clear-page test gets a placeholder key
+//! file and a closed local provider port, ending at detection. The CAPTCHA page tests point
+//! `BROWSEROS_CAPSOLVER_API_URL` at the local loopback stub in `support/captcha_pages.rs`, which
+//! either refuses requests or mints sequential `FRESH-n` tokens. The stale-reCAPTCHA test is the
+//! only one that needs network access, to load Google's public test checkbox widget.
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
@@ -33,7 +35,7 @@ use std::{env, fs};
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
-use captcha_pages::CaptchaPages;
+use captcha_pages::{CaptchaPages, ProviderMode};
 use neo_trace::{Delivery, Effect, Outcome, RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
 use tokio::time;
@@ -229,7 +231,8 @@ async fn solve_captcha_detects_a_clear_page_on_a_real_browseros() -> TestResult 
 }
 
 /// One solve on a page with no CAPTCHA: the solver's detection runs through claw-sdk's door on
-/// the real browser and answers `already_clear` as a value, without a provider.
+/// the real browser and reports `no_captcha` with `attempted: false` and no `verdict` key,
+/// without reaching any provider.
 async fn solve_on_a_clear_page(rig: &Rig) -> TestResult {
     rig.until_ready().await?;
     let client = rig.client().await?;
@@ -247,39 +250,137 @@ async fn solve_on_a_clear_page(rig: &Rig) -> TestResult {
         .as_ref()
         .and_then(|content| content.get("value"))
         .ok_or_else(|| format!("the solve answered a value: {result:?}"))?;
+    assert_wire_invariants(solved, "clear page");
     let field = |name: &str| solved.get(name).cloned().unwrap_or(Value::Null);
     assert_eq!(
         (
-            field("verdict"),
-            field("reason"),
+            field("attempted"),
             field("type"),
-            field("paidTasks")
+            field("method"),
+            field("reason"),
+            field("paidTasks"),
+            field("provider"),
         ),
         (
-            json!("already_clear"),
-            json!("no_captcha"),
+            json!(false),
             Value::Null,
-            json!(0)
+            json!("none"),
+            json!("no_captcha"),
+            json!(0),
+            Value::Null,
         ),
-        "nothing blocks the page, and no provider was asked: {solved}"
+        "nothing was detected or attempted, and no provider was asked: {solved}"
     );
     assert_eq!(
         field("message"),
         json!(
-            "Neo found no CAPTCHA it knows on the page; carry on with the task. If a human check \
-             still covers the page, stop and tell the user it needs their help."
-        )
+            "Neo found no CAPTCHA it knows on the page and attempted nothing; Neo cannot tell \
+             whether the page is clear — inspect a fresh snapshot and screenshot before \
+             continuing, and hand off to the user if a check still blocks it."
+        ),
+        "no_captcha message follows the factual contract: {solved}"
     );
     client.cancel().await?;
     Ok(())
 }
+
+/// Checks invariants shared by every `neo.solveCaptcha` wire value: no `verdict` key, a factual
+/// message telling the caller to inspect a fresh snapshot and screenshot, and no claim to carry
+/// on.
+fn assert_wire_invariants(solved: &Value, context: &str) {
+    assert!(
+        solved.get("verdict").is_none(),
+        "{context}: solveCaptcha must not emit a verdict key: {solved}"
+    );
+    let message = solved
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        message.contains("snapshot and screenshot"),
+        "{context}: message must direct the caller to inspect snapshot and screenshot: {solved}"
+    );
+    assert!(
+        !message.contains("carry on"),
+        "{context}: message must not tell the caller to carry on: {solved}"
+    );
+}
+
+/// Stable expectations for one poisoned detection-isolation page. Timings are never pinned.
+struct PoisonedCase {
+    route: &'static str,
+    kind: Option<&'static str>,
+    detected_state: Option<&'static str>,
+    attempted: bool,
+    reason: &'static str,
+}
+
+const POISONED_CASES: [PoisonedCase; 8] = [
+    PoisonedCase {
+        route: "/clear",
+        kind: None,
+        detected_state: None,
+        attempted: false,
+        reason: "no_captcha",
+    },
+    PoisonedCase {
+        route: "/awkward",
+        kind: None,
+        detected_state: None,
+        attempted: false,
+        reason: "no_captcha",
+    },
+    PoisonedCase {
+        route: "/aws-oopif",
+        kind: Some("aws_waf"),
+        detected_state: Some("active"),
+        attempted: true,
+        reason: "challenge_not_passed",
+    },
+    PoisonedCase {
+        route: "/aws-same",
+        kind: Some("aws_waf"),
+        detected_state: Some("active"),
+        attempted: true,
+        reason: "challenge_not_passed",
+    },
+    PoisonedCase {
+        route: "/turnstile",
+        kind: Some("turnstile"),
+        detected_state: Some("active"),
+        attempted: true,
+        reason: "provider_error",
+    },
+    PoisonedCase {
+        route: "/hcaptcha",
+        kind: Some("hcaptcha"),
+        detected_state: Some("active"),
+        attempted: false,
+        reason: "unsupported_type",
+    },
+    // Its `type` stays `unknown`: claw-server's closed schema does not list PerimeterX.
+    PoisonedCase {
+        route: "/perimeterx",
+        kind: Some("unknown"),
+        detected_state: Some("active"),
+        attempted: false,
+        reason: "unsupported_type",
+    },
+    PoisonedCase {
+        route: "/perimeterx-waiting",
+        kind: None,
+        detected_state: None,
+        attempted: false,
+        reason: "no_captcha",
+    },
+];
 
 #[tokio::test(flavor = "multi_thread")]
 async fn solve_captcha_reads_poisoned_pages_through_the_isolated_world() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
-    let pages = CaptchaPages::start().await?;
+    let pages = CaptchaPages::start(ProviderMode::Reject).await?;
     let provider = pages.provider();
     let rig = Rig::start_with(
         &browser,
@@ -300,56 +401,16 @@ async fn solve_captcha_reads_poisoned_pages_through_the_isolated_world() -> Test
     Err(format!("{failure}\n{}", rig.logs()).into())
 }
 
-/// Each page through MCP `run` → `neo.solveCaptcha`, with the solver's `captcha.detected` note
-/// read back from claw-sdk's debug log. `CAPTCHA_ENTRY_OUT` names a file for the observed values.
+/// Each poisoned page through MCP `run` → `neo.solveCaptcha`, with the solver's `captcha.detected`
+/// note read back from claw-sdk's debug log. `CAPTCHA_ENTRY_OUT` names a file for the observed
+/// values.
 async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
     rig.until_ready().await?;
     let client = rig.client().await?;
-    let cases = [
-        ("/clear", Value::Null, "already_clear", "no_captcha"),
-        ("/awkward", Value::Null, "already_clear", "no_captcha"),
-        (
-            "/aws-oopif",
-            json!("aws_waf"),
-            "already_clear",
-            "already_passed",
-        ),
-        (
-            "/aws-same",
-            json!("aws_waf"),
-            "already_clear",
-            "already_passed",
-        ),
-        (
-            "/turnstile",
-            json!("turnstile"),
-            "already_clear",
-            "already_passed",
-        ),
-        (
-            "/hcaptcha",
-            json!("hcaptcha"),
-            "unsolved",
-            "unsupported_type",
-        ),
-        // Its `type` stays `unknown`: claw-server's closed schema does not list PerimeterX.
-        (
-            "/perimeterx",
-            json!("unknown"),
-            "unsolved",
-            "unsupported_type",
-        ),
-        (
-            "/perimeterx-waiting",
-            Value::Null,
-            "already_clear",
-            "no_captcha",
-        ),
-    ];
     let mut observed = Vec::new();
     let mut logged = rig.neo_log()?.len();
-    for (route, ..) in &cases {
-        let url = pages.url(route);
+    for case in &POISONED_CASES {
+        let url = pages.url(case.route);
         let code = format!(
             r"
             const p = await context.newPage();
@@ -377,32 +438,434 @@ async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
             })
             .collect();
         logged = log.len();
-        observed.push(json!({ "route": route, "solved": solved, "detected": notes }));
+        observed.push(json!({ "route": case.route, "solved": solved, "detected": notes }));
     }
     if let Some(path) = env::var_os("CAPTCHA_ENTRY_OUT") {
         fs::write(path, serde_json::to_vec_pretty(&observed)?)?;
     }
-    for ((route, kind, verdict, reason), seen) in cases.iter().zip(&observed) {
+    for (case, seen) in POISONED_CASES.iter().zip(&observed) {
         let solved = &seen["solved"];
+        assert_wire_invariants(solved, case.route);
+        let expected_kind = case.kind.map_or(Value::Null, |kind| json!(kind));
         assert_eq!(
             (
                 &solved["type"],
-                &solved["verdict"],
+                &solved["attempted"],
                 &solved["reason"],
-                &solved["paidTasks"]
+                &solved["paidTasks"],
             ),
-            (kind, &json!(verdict), &json!(reason), &json!(0)),
-            "{route}: {seen}"
+            (
+                &expected_kind,
+                &json!(case.attempted),
+                &json!(case.reason),
+                &json!(0),
+            ),
+            "{}: {seen}",
+            case.route
         );
+        assert_detected_state(case, &expected_kind, seen)?;
     }
     perimeterx_is_named(&observed)?;
+    // Only `/turnstile` reaches the paid provider stub (1 `createTask` call, refused with
+    // `errorId: 1`): detection reads `.cf-turnstile`'s sitekey in the isolated world, then
+    // `turnstile::solve` runs in the poisoned main world where `querySelectorAll` returns `[]`,
+    // treats `prior` as empty, waits out the free auto-pass and checkbox phases (~14 s), and
+    // asks the provider with the detected sitekey. `/aws-oopif` and `/aws-same` are detected as
+    // `active` in the isolated world, but `aws_waf::solve` re-reads `#captcha-container` in the
+    // child frame's poisoned main world, sees no live challenge, and stops with
+    // `challenge_not_passed` before calling the provider. `/hcaptcha` and `/perimeterx` return
+    // `unsupported_type`, and the clear pages detect nothing.
     assert_eq!(
         pages.provider_calls(),
-        0,
-        "no request reached the provider stub"
+        1,
+        "only /turnstile reaches the rejecting provider stub on the poisoned pages"
     );
     client.cancel().await?;
     Ok(())
+}
+
+/// Parses the JSON payload after the `<N> ms: ` timing prefix in each `captcha.detected` note and
+/// pins its `state` and `type` without pinning any duration.
+fn assert_detected_state(case: &PoisonedCase, expected_kind: &Value, seen: &Value) -> TestResult {
+    let notes = seen
+        .get("detected")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{}: detected notes must be an array: {seen}", case.route))?;
+    match case.detected_state {
+        None => {
+            assert!(
+                notes.is_empty(),
+                "{}: expected no captcha.detected note: {seen}",
+                case.route
+            );
+        }
+        Some(expected_state) => {
+            let mut matched = false;
+            for note in notes.iter().filter_map(Value::as_str) {
+                let (_, payload) = note.split_once(": ").ok_or_else(|| {
+                    format!(
+                        "{}: captcha.detected note missing payload separator: {note}",
+                        case.route
+                    )
+                })?;
+                let parsed: Value = serde_json::from_str(payload)?;
+                if parsed.get("state") == Some(&json!(expected_state))
+                    && parsed.get("type") == Some(expected_kind)
+                {
+                    matched = true;
+                }
+            }
+            assert!(
+                matched,
+                "{}: expected captcha.detected note with type={expected_kind} and state={expected_state}: {seen}",
+                case.route
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Proves locally (no network) that `neo.solveCaptcha` mints a fresh Turnstile token even when the
+/// page already holds a stale `cf-turnstile-response` value, and mints a second distinct token on
+/// retry instead of treating its own prior token as already passed.
+#[tokio::test(flavor = "multi_thread")]
+async fn solve_captcha_solves_stale_turnstile_fresh_and_retries() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let pages = CaptchaPages::start(ProviderMode::Mint).await?;
+    let provider = pages.provider();
+    let rig = Rig::start_with(
+        &browser,
+        CaptchaKey::Placeholder,
+        &[("BROWSEROS_CAPSOLVER_API_URL", &provider)],
+    )?;
+    let failure = match time::timeout(TEST_BUDGET, solve_stale_turnstile(&rig, &pages)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn solve_stale_turnstile(rig: &Rig, pages: &CaptchaPages) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let url = pages.url("/turnstile-stale");
+    let code = format!(
+        r#"
+        const p = await context.newPage();
+        await p.goto({url:?});
+        const readState = () => p.evaluate(() => {{
+            const input = document.querySelector('input[name="cf-turnstile-response"]');
+            const value = input ? input.value : '';
+            const callbacks = Array.isArray(window.__callbackTokens) ? window.__callbackTokens : [];
+            const last = callbacks.length > 0 ? callbacks[callbacks.length - 1] : '';
+            return {{
+                inputLength: value.length,
+                inputIsStale: value === 'STALE-TOKEN',
+                inputFreshName: value.startsWith('FRESH-') ? value : null,
+                callbackCount: callbacks.length,
+                callbackFreshNames: callbacks.map((token) =>
+                    typeof token === 'string' && token.startsWith('FRESH-') ? token : '<non-fresh>'
+                ),
+                callbackMatchesInput: callbacks.length > 0 && last === value,
+            }};
+        }});
+        const first = await neo.solveCaptcha(p);
+        const afterFirst = await readState();
+        const second = await neo.solveCaptcha(p);
+        const afterSecond = await readState();
+        await p.close();
+        return {{ first, afterFirst, second, afterSecond }};"#
+    );
+    let result = run(
+        &client,
+        &code,
+        &json!({ "taskId": "e2e-turnstile-stale-retry" }),
+    )
+    .await?;
+    let observed = result
+        .structured_content
+        .as_ref()
+        .and_then(|content| content.get("value"))
+        .ok_or_else(|| format!("the Turnstile stale script returned a value: {result:?}"))?;
+    if let Some(path) = env::var_os("CAPTCHA_STALE_TURNSTILE_OUT") {
+        fs::write(path, serde_json::to_vec_pretty(observed)?)?;
+    }
+    assert_turnstile_token_solve(
+        &observed["first"],
+        &observed["afterFirst"],
+        "FRESH-1",
+        &["FRESH-1"],
+        "turnstile first",
+        observed,
+    );
+    assert_turnstile_token_solve(
+        &observed["second"],
+        &observed["afterSecond"],
+        "FRESH-2",
+        &["FRESH-1", "FRESH-2"],
+        "turnstile second",
+        observed,
+    );
+    assert_eq!(
+        pages.minted_tasks(),
+        2,
+        "the minting provider stub must create exactly two tasks across both solves"
+    );
+    client.cancel().await?;
+    Ok(())
+}
+
+/// Checks one Turnstile fresh-token solve result and the page DOM/callback state right after it.
+fn assert_turnstile_token_solve(
+    solved: &Value,
+    after: &Value,
+    expected_token: &str,
+    expected_callbacks: &[&str],
+    label: &str,
+    observed: &Value,
+) {
+    assert_wire_invariants(solved, label);
+    assert_eq!(
+        (
+            &solved["attempted"],
+            &solved["type"],
+            &solved["method"],
+            &solved["paidTasks"],
+            &solved["provider"],
+        ),
+        (
+            &json!(true),
+            &json!("turnstile"),
+            &json!("token"),
+            &json!(1),
+            &json!("capsolver"),
+        ),
+        "{label} must mint a fresh paid Turnstile token: {observed}"
+    );
+    let reason = solved
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        matches!(reason, "awaiting_submit" | "token_accepted"),
+        "{label} reason must report token application: {observed}"
+    );
+    assert!(
+        !matches!(reason, "already_passed" | "auto_passed" | "checkbox_passed"),
+        "{label} must never claim a free pass on a prior token: {observed}"
+    );
+    assert_eq!(
+        (
+            &after["inputIsStale"],
+            &after["inputFreshName"],
+            &after["inputLength"],
+            &after["callbackCount"],
+            &after["callbackFreshNames"],
+            &after["callbackMatchesInput"],
+        ),
+        (
+            &json!(false),
+            &json!(expected_token),
+            &json!(expected_token.len()),
+            &json!(expected_callbacks.len()),
+            &json!(expected_callbacks),
+            &json!(true),
+        ),
+        "{label} must write {expected_token} into the input and pass it to the callback: {observed}"
+    );
+}
+
+/// Proves that `neo.solveCaptcha` solves a stale-token reCAPTCHA v2 checkbox widget via the free
+/// checkbox click first, and on retry (box already checked with a response token present) mints a
+/// fresh paid token from the provider stub instead of reporting `already_passed` or
+/// `checkbox_passed`.
+///
+/// Needs network access to load Google's public reCAPTCHA v2 test widget
+/// (`6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI`); kept as its own test so network failures isolate
+/// from the local tests.
+#[tokio::test(flavor = "multi_thread")]
+async fn solve_captcha_solves_stale_recaptcha_via_checkbox_then_mints_on_retry() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let pages = CaptchaPages::start(ProviderMode::Mint).await?;
+    let provider = pages.provider();
+    let rig = Rig::start_with(
+        &browser,
+        CaptchaKey::Placeholder,
+        &[("BROWSEROS_CAPSOLVER_API_URL", &provider)],
+    )?;
+    let failure = match time::timeout(TEST_BUDGET, solve_stale_recaptcha(&rig, &pages)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn solve_stale_recaptcha(rig: &Rig, pages: &CaptchaPages) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let url = pages.url("/recaptcha-stale");
+    let code = format!(
+        r#"
+        const p = await context.newPage();
+        await p.goto({url:?});
+        await p.waitForFunction(() => {{
+            const frame = document.querySelector('iframe[src*="/recaptcha/"][src*="/anchor"]');
+            const field = document.querySelector('textarea[name="g-recaptcha-response"]');
+            if (!frame || !field) return false;
+            const rect = frame.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }}, null, {{ timeout: 30000 }});
+        await p.frameLocator('iframe[src*="/recaptcha/"][src*="/anchor"]')
+            .locator('#recaptcha-anchor')
+            .waitFor({{ state: 'visible', timeout: 30000 }});
+        await p.evaluate(() => {{
+            const field = document.querySelector('textarea[name="g-recaptcha-response"]');
+            field.value = 'STALE-TOKEN';
+        }});
+        const readState = () => p.evaluate(() => {{
+            const field = document.querySelector('textarea[name="g-recaptcha-response"]');
+            const value = field ? field.value : '';
+            const callbacks = Array.isArray(window.__callbackTokens) ? window.__callbackTokens : [];
+            const last = callbacks.length > 0 ? callbacks[callbacks.length - 1] : '';
+            return {{
+                tokenLength: value.length,
+                isStale: value === 'STALE-TOKEN',
+                freshName: value.startsWith('FRESH-') ? value : null,
+                callbackCount: callbacks.length,
+                lastCallbackFreshName:
+                    typeof last === 'string' && last.startsWith('FRESH-') ? last : null,
+                lastCallbackMatchesField: callbacks.length > 0 && last === value,
+            }};
+        }});
+        const first = await neo.solveCaptcha(p);
+        const afterFirst = await readState();
+        const second = await neo.solveCaptcha(p);
+        const afterSecond = await readState();
+        await p.close();
+        return {{ first, afterFirst, second, afterSecond }};"#
+    );
+    let result = run(
+        &client,
+        &code,
+        &json!({ "taskId": "e2e-recaptcha-stale-retry" }),
+    )
+    .await?;
+    let observed = result
+        .structured_content
+        .as_ref()
+        .and_then(|content| content.get("value"))
+        .ok_or_else(|| format!("the reCAPTCHA stale script returned a value: {result:?}"))?;
+    if let Some(path) = env::var_os("CAPTCHA_STALE_RECAPTCHA_OUT") {
+        fs::write(path, serde_json::to_vec_pretty(observed)?)?;
+    }
+    assert_recaptcha_first(observed);
+    assert_recaptcha_retry(observed, pages);
+    client.cancel().await?;
+    Ok(())
+}
+
+/// Checks the first reCAPTCHA call: clicks the unchecked box for free (`checkbox_passed`,
+/// `paidTasks: 0`) and replaces `STALE-TOKEN` with Google's widget token.
+fn assert_recaptcha_first(observed: &Value) {
+    let first = &observed["first"];
+    let after_first = &observed["afterFirst"];
+    assert_wire_invariants(first, "recaptcha first");
+    assert_eq!(
+        (
+            &first["attempted"],
+            &first["type"],
+            &first["method"],
+            &first["reason"],
+            &first["paidTasks"],
+            &first["provider"],
+        ),
+        (
+            &json!(true),
+            &json!("recaptcha_v2"),
+            &json!("checkbox"),
+            &json!("checkbox_passed"),
+            &json!(0),
+            &Value::Null,
+        ),
+        "first call must click the unchecked box and pass via checkbox without a paid task: {observed}"
+    );
+    assert_eq!(
+        (&after_first["isStale"], &after_first["freshName"]),
+        (&json!(false), &Value::Null),
+        "after checkbox_passed the textarea must hold Google's token, not the stale or stub token: {observed}"
+    );
+    assert!(
+        after_first
+            .get("tokenLength")
+            .and_then(Value::as_u64)
+            .is_some_and(|length| length > 0),
+        "after checkbox_passed the textarea must hold a non-empty widget token: {observed}"
+    );
+}
+
+/// Checks the retry reCAPTCHA call on an already-checked widget holding a token: must mint a
+/// fresh paid `FRESH-1` token from the stub and never claim `already_passed` or `checkbox_passed`.
+fn assert_recaptcha_retry(observed: &Value, pages: &CaptchaPages) {
+    let second = &observed["second"];
+    let after_second = &observed["afterSecond"];
+    assert_wire_invariants(second, "recaptcha second");
+    assert_eq!(
+        (
+            &second["attempted"],
+            &second["type"],
+            &second["method"],
+            &second["paidTasks"],
+            &second["provider"],
+        ),
+        (
+            &json!(true),
+            &json!("recaptcha_v2"),
+            &json!("token"),
+            &json!(1),
+            &json!("capsolver"),
+        ),
+        "retry call on an already-checked widget must mint a fresh paid token: {observed}"
+    );
+    let second_reason = second
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        matches!(second_reason, "awaiting_submit" | "token_accepted"),
+        "retry call reason must report token application: {observed}"
+    );
+    assert!(
+        !matches!(second_reason, "already_passed" | "checkbox_passed"),
+        "retry call must never report already_passed or checkbox_passed: {observed}"
+    );
+    assert_eq!(
+        (
+            &after_second["isStale"],
+            &after_second["freshName"],
+            &after_second["tokenLength"],
+            &after_second["lastCallbackFreshName"],
+            &after_second["lastCallbackMatchesField"],
+        ),
+        (
+            &json!(false),
+            &json!("FRESH-1"),
+            &json!("FRESH-1".len()),
+            &json!("FRESH-1"),
+            &json!(true),
+        ),
+        "retry call must write FRESH-1 into the textarea and invoke the callback: {observed}"
+    );
+    assert_eq!(
+        pages.minted_tasks(),
+        1,
+        "only the retry call after the checkbox check should mint a paid task"
+    );
 }
 
 /// The `PerimeterX` refusal names the family its `type` cannot (claw-server's closed schema lists
