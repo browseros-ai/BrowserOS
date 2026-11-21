@@ -212,6 +212,14 @@ fn message(verdict: Verdict, reason: SolveReason) -> String {
     worded(verdict, cause(reason))
 }
 
+/// Words of claw-server's MCP tools, which the crate's own messages may use and this SDK's
+/// lines must not.
+const CLAW_SERVER_WORDS: [&str; 3] = ["snapshot", "solve_captcha", "request_human_help"];
+
+fn names_claw_server_tools(line: &str) -> bool {
+    CLAW_SERVER_WORDS.iter().any(|word| line.contains(word))
+}
+
 /// The line for `already_clear` with no CAPTCHA found.
 const NONE_FOUND: &str = "Neo found no CAPTCHA it knows on the page; carry on with the task. If \
     a human check still covers the page, stop and tell the user it needs their help.";
@@ -230,10 +238,16 @@ fn message_for(verdict: Verdict, outcome: &SolveOutcome) -> String {
             verdict,
             "it is PerimeterX's press-and-hold human check, which only a person can pass",
         ),
-        (_, _, SolveReason::BrowserError) if !outcome.message.is_empty() => format!(
-            "Neo could not tell whether the CAPTCHA passed. {} Look at the page again before acting.",
-            outcome.message
-        ),
+        // The browser call that failed reaches the script, but not a line naming claw-server's
+        // tools ("take a fresh snapshot"), which this SDK does not have.
+        (_, _, SolveReason::BrowserError)
+            if !outcome.message.is_empty() && !names_claw_server_tools(&outcome.message) =>
+        {
+            format!(
+                "Neo could not tell whether the CAPTCHA passed. {} Look at the page again before acting.",
+                outcome.message
+            )
+        }
         (_, _, SolveReason::SpendLimitReached) if !outcome.message.is_empty() => {
             outcome.message.clone()
         }
@@ -544,6 +558,34 @@ mod tests {
             )
         );
         Ok(())
+    }
+
+    #[test]
+    fn a_browser_error_never_passes_on_a_line_naming_claw_server_tools() {
+        use super::message_for;
+        for flow_line in [
+            "The Turnstile solve stopped; take a fresh snapshot before continuing.",
+            "AWS WAF stopped; take a fresh snapshot before continuing.",
+            "Arkose stopped; call solve_captcha again.",
+        ] {
+            let mut solve = outcome(SolveStatus::Failed, SolveReason::BrowserError);
+            flow_line.clone_into(&mut solve.message);
+            let line = message_for(Verdict::Unknown, &solve);
+            assert!(
+                !super::names_claw_server_tools(&line),
+                "claw-sdk has none of claw-server's MCP tools: {line}"
+            );
+        }
+        let mut solve = outcome(SolveStatus::Failed, SolveReason::BrowserError);
+        format!(
+            "{} failed (Frame was detached).",
+            neo_captcha::PAGE_CHECK_FAILED
+        )
+        .clone_into(&mut solve.message);
+        assert!(
+            message_for(Verdict::Unknown, &solve).contains("(Frame was detached)"),
+            "the browser call that failed still reaches the script"
+        );
     }
 
     #[test]

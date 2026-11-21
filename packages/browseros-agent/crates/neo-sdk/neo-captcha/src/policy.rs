@@ -16,13 +16,16 @@ const READ_NOTICE: &str = r#"(() => {
     const footer = 'footer, [role="contentinfo"]';
     const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]'))
         .filter(node => !node.closest(footer) && node.checkVisibility({checkVisibilityCSS:true, checkOpacity:true}))
-        .map(node => node.innerText);
+        .slice(0, 50)
+        .map(node => node.innerText.slice(0, 300));
     let text = document.body?.getClientRects().length ? document.body.innerText : '';
     // A site's standing terms can use the same wording on pages that are open.
     for (const node of document.querySelectorAll(footer)) {
         if (node.getClientRects().length) text = text.replace(node.innerText, '\n');
     }
-    return {title: document.title, headings, text, host: location.hostname};
+    // Only the start crosses CDP: a wall states itself at the top, the rules match whole lines,
+    // and a long page's full text would be megabytes on every solve and every round.
+    return {title: document.title.slice(0, 300), headings, text: text.slice(0, 20000), host: location.hostname};
 })()"#;
 
 pub(crate) async fn policy_wall<P: CaptchaPage>(page: &P) -> Result<Option<PolicyWall>, PageError> {
@@ -183,6 +186,22 @@ mod tests {
             assert!(policy_wall(&Page(notice)).await?.is_some());
         }
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_the_notice_read_caps_what_crosses_cdp() {
+        for cap in [
+            "text.slice(0, 20000)",
+            ".slice(0, 50)",
+            "innerText.slice(0, 300)",
+            "title.slice(0, 300)",
+        ] {
+            assert!(
+                READ_NOTICE.contains(cap),
+                "the read runs before every solve and every round, so a long page must not \
+                 send its whole text: {cap}"
+            );
+        }
     }
 
     #[tokio::test]

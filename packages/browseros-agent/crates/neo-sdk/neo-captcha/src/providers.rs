@@ -127,6 +127,9 @@ pub struct ProviderChain {
     vendors: Arc<Vendors>,
     payments: Option<Arc<Mutex<Payments>>>,
     host: Option<String>,
+    /// The most paid tasks this solve's payments may reach, checked before every vendor
+    /// attempt (a charged primary's fallback included). The verify gate's second round sets it.
+    paid_ceiling: Option<u32>,
 }
 
 /// All requests share these clients and the instance's spend limit.
@@ -179,6 +182,7 @@ impl ProviderChain {
                 host_limit,
             }),
             payments: None,
+            paid_ceiling: None,
             host: None,
         }
     }
@@ -188,7 +192,27 @@ impl ProviderChain {
             payments: Some(payments),
             // Hostless documents share a bucket so they still have a spend limit.
             host: Some(host.unwrap_or_default().to_owned()),
+            paid_ceiling: None,
         }
+    }
+
+    /// This chain, refusing any vendor attempt once the solve's payments (charged tasks, plus a
+    /// vendor charged during the current call) reach `ceiling`. Uncharged attempts never count.
+    #[must_use]
+    pub(super) fn with_paid_ceiling(mut self, ceiling: Option<u32>) -> Self {
+        self.paid_ceiling = ceiling;
+        self
+    }
+
+    fn below_paid_ceiling(&self) -> Result<(), CapReached> {
+        let (Some(ceiling), Some(payments)) = (self.paid_ceiling, &self.payments) else {
+            return Ok(());
+        };
+        let paid = payments.lock().unwrap_or_else(|e| e.into_inner());
+        if paid.count + u32::from(paid.pending.is_some()) >= ceiling {
+            return Err(CapReached::Round);
+        }
+        Ok(())
     }
     pub fn paid_tasks(&self) -> u32 {
         self.vendors.paid.load(Ordering::Relaxed)
@@ -326,6 +350,12 @@ impl ProviderChain {
                 });
             }
             let result = async {
+                self.below_paid_ceiling().map_err(|cap| ProviderError {
+                    provider: Some(provider),
+                    kind: ProviderErrorKind::SpendLimit,
+                    message: cap.to_string(),
+                    charged: false,
+                })?;
                 let mut slot = match self.host.as_deref() {
                     Some(host) => self.try_reserve_paid(host),
                     None => self.reserve_instance_paid(),
@@ -392,6 +422,9 @@ impl ProviderChain {
 pub(crate) enum CapReached {
     #[error("paid-task limit reached")]
     Instance,
+    /// The verify gate's second round already started its one paid task.
+    #[error("the verify re-solve's paid task is used")]
+    Round,
     #[error("per-host paid-task limit reached ({limit} tasks per {} minutes)", HOST_PAID_TASK_WINDOW.as_secs() / 60)]
     Host { limit: u32 },
 }
@@ -1650,6 +1683,68 @@ mod tests {
             }),
             calls,
         )
+    }
+
+    /// The verify re-solve may buy one task: a charged primary's fallback is refused, an
+    /// uncharged rejection costs nothing, and a spent ceiling stops before any vendor.
+    #[tokio::test]
+    async fn tests_that_a_paid_ceiling_counts_charges_not_calls() -> anyhow::Result<()> {
+        let paid_once = || {
+            Arc::new(std::sync::Mutex::new(Payments {
+                count: 1,
+                ..Payments::default()
+            }))
+        };
+        let (primary, first) = fake(
+            "UNSOLVABLE",
+            Some(ProviderErrorKind::Unsolvable),
+            true,
+            true,
+        );
+        let (backup, second) = fake("BACKUP", None, true, true);
+        let chain = ProviderChain::with_clients(vec![primary, backup], 10)
+            .for_solve(paid_once(), Some("ceiling-charged.test"))
+            .with_paid_ceiling(Some(2));
+        let Err(error) = solve(&chain, &recaptcha()).await else {
+            anyhow::bail!("the backup was bought after the primary charged");
+        };
+        assert_eq!(error.kind, ProviderErrorKind::SpendLimit);
+        assert!(error.charged, "the primary's charge is still reported");
+        assert_eq!(
+            (
+                first.load(Ordering::Relaxed),
+                second.load(Ordering::Relaxed)
+            ),
+            (1, 0)
+        );
+
+        let (primary, first) = fake("AUTH", Some(ProviderErrorKind::Auth), false, true);
+        let (backup, second) = fake("BACKUP", None, true, true);
+        let chain = ProviderChain::with_clients(vec![primary, backup], 10)
+            .for_solve(paid_once(), Some("ceiling-free.test"))
+            .with_paid_ceiling(Some(2));
+        solve(&chain, &recaptcha()).await?;
+        assert_eq!(
+            (
+                first.load(Ordering::Relaxed),
+                second.load(Ordering::Relaxed)
+            ),
+            (1, 1)
+        );
+
+        let (primary, first) = fake("PRIMARY", None, true, true);
+        let chain = ProviderChain::with_clients(vec![primary], 10)
+            .for_solve(paid_once(), Some("ceiling-spent.test"))
+            .with_paid_ceiling(Some(1));
+        let Err(error) = solve(&chain, &recaptcha()).await else {
+            anyhow::bail!("a spent ceiling still bought a task");
+        };
+        assert_eq!(
+            (error.kind, error.charged),
+            (ProviderErrorKind::SpendLimit, false)
+        );
+        assert_eq!(first.load(Ordering::Relaxed), 0);
+        Ok(())
     }
 
     #[tokio::test]

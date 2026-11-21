@@ -106,13 +106,6 @@ pub(crate) struct AppliedToken {
 /// The page's fingerprint of a response token: its length in UTF-16 units and its FNV-1a hash,
 /// as `length:hash`. The same function runs inside the page ([`TOKEN_MARKS`]), so the check can
 /// tell whether a field still holds Neo's token while the token never leaves the page.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the gate marks the token it applied with this once it keeps the applied-token memory"
-    )
-)]
 pub(crate) fn token_mark(token: &str) -> String {
     let mut hash: u32 = 0x811c_9dc5;
     let mut length = 0_usize;
@@ -1314,20 +1307,20 @@ pub(crate) fn next_step(
             };
             match remedy {
                 Some(remedy) if round < MAX_RESOLVES && left >= needed => Next::Retry(remedy),
-                _ => still_blocked(flow),
+                _ => Next::Return(still_blocked(flow)),
             }
         }
     }
 }
 
 /// The hand-off answer when the page stays blocked after the bounded re-solve.
-pub(crate) fn still_blocked(flow: &FlowResult) -> Next {
+pub(crate) fn still_blocked(flow: &FlowResult) -> FlowResult {
     let mut changed = flow.clone();
     changed.status = SolveStatus::NeedsHuman;
     changed.reason = SolveReason::StillBlocked;
     "Neo checked the page after the solve and the CAPTCHA still blocks it."
         .clone_into(&mut changed.message);
-    Next::Return(changed)
+    changed
 }
 
 /// The wire summary for `SolveOutcome::verify`.

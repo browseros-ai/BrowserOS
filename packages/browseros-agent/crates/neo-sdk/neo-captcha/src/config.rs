@@ -15,13 +15,12 @@ pub const TEST_FORCE_JUDGE_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_JUDGE";
 /// Room for one whole checked solve per site per 30 minutes: up to 4 paid tasks in the first
 /// round (reCAPTCHA: 3 tile rounds + a token) and 1 in the verify re-solve.
 const DEFAULT_HOST_PAID_TASK_LIMIT: u32 = 6;
-/// `Off` until the gate's bodies land (wave 2 piece V4 flips it to `On`), so this skeleton
-/// changes no answer.
+/// Off: the check runs only when `BROWSEROS_CAPTCHA_VERIFY` asks for it.
 const DEFAULT_VERIFY_MODE: VerifyMode = VerifyMode::Off;
 
 /// Whether the verify check runs after a success claim, and whether it may change the answer.
-/// `Shadow` runs it and emits `captcha.verified` but returns the flow's answer unchanged: the
-/// rollout and proof mode. `Off` is the rollback.
+/// `Shadow` runs it and emits `captcha.verified` but returns the flow's answer unchanged, so
+/// the check's findings can be compared with today's answers. `Off` skips it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyMode {
     On,
