@@ -994,6 +994,7 @@ mod tests {
                 document: document(),
                 user_agent: None,
                 forced_method: None,
+                remedy: None,
             },
             &challenge,
         )

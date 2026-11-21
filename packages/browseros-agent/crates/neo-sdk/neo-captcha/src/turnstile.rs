@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, sync::OnceLock};
 
 use serde_json::{Value, json};
 use tokio::time::{Duration, Instant, sleep_until};
@@ -8,11 +8,13 @@ use super::{
     config::ForcedMethod,
     page::CaptchaPage,
     providers::CaptchaBackend,
+    turnstile_state::{TurnstileWidgetState, turnstile_widget_state},
     types::{
-        Attempts, CaptchaEventName, CaptchaKind, Challenge, FlowResult, PageError, ProviderError,
-        ProviderErrorKind, Rect, SolveAnswer, SolveMethod, SolveReason, SolveStatus, SolveStep,
-        SolveTask, TurnstileParams,
+        Attempts, CaptchaEventName, CaptchaKind, Challenge, FlowResult, FrameRef, PageError,
+        ProviderError, ProviderErrorKind, Rect, SolveAnswer, SolveMethod, SolveReason, SolveStatus,
+        SolveStep, SolveTask, TurnstileParams,
     },
+    verify::Remedy,
 };
 
 const POLL: Duration = Duration::from_millis(250);
@@ -27,12 +29,22 @@ const visible = e => !!e && e.isConnected && e.getBoundingClientRect().width > 0
     && e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden';
 "#;
 
+// `tokenMark` is a fingerprint of the response token (length and an FNV-1a hash): enough to
+// tell a new token from the one the flow first saw, while the token itself stays in the page.
 const READ: &str = r#"
 /* turnstile:read */
-let token = [...document.querySelectorAll('input[name="cf-turnstile-response"]')].some(e => !!e.value.trim());
-try { token ||= !!window.turnstile?.getResponse(); } catch {}
+const tokens = [...document.querySelectorAll('input[name="cf-turnstile-response"]')].map(e => e.value.trim()).filter(Boolean);
+try { const live = window.turnstile?.getResponse(); if (live) tokens.push(String(live)); } catch {}
+const token = tokens.length > 0;
+let tokenMark = null;
+if (token) {
+    const text = tokens.join('\n');
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
+    tokenMark = text.length + ':' + hash.toString(16);
+}
 const sitekey = widget?.getAttribute('data-sitekey') ?? args.sitekey;
-return { token, sitekey,
+return { token, tokenMark, sitekey,
     action: widget?.getAttribute('data-action') ?? args.action,
     cdata: widget?.getAttribute('data-cdata') ?? args.cdata,
     callback: widget?.getAttribute('data-callback') ?? args.callback,
@@ -84,6 +96,24 @@ try {
     if (typeof fn === 'function') { await fn.call(owner, args.token); callbackRan = true; }
 } catch { callbackDeclared = true; }
 return { written: inputs.length > 0, callbackRan, callbackDeclared, selector, wasVisible };
+"#;
+
+// Restarts the widget's own check: Turnstile swaps in a new frame and runs it again.
+// `turnstile.reset` takes a widget id, its container, or nothing (the page's latest widget),
+// and throws when it finds no widget; the id is the response field's id without its suffix.
+// The first form that finds the widget is the only call, so no other widget is ever reset.
+const RESET: &str = r#"
+/* turnstile:reset */
+const allFields = [...document.querySelectorAll('input[name="cf-turnstile-response"]')];
+const field = widget?.querySelector('input[name="cf-turnstile-response"]')
+    ?? (allFields.length === 1 ? allFields[0] : null);
+const id = field?.id?.endsWith('_response') ? field.id.slice(0, -'_response'.length) : null;
+const targets = [id, widget].filter(Boolean);
+if (!targets.length) targets.push(undefined);
+for (const target of targets) {
+    try { window.turnstile.reset(target); return { reset: true }; } catch {}
+}
+return { reset: false };
 "#;
 
 const TRANSITION: &str = r#"
@@ -188,11 +218,99 @@ async fn pause<P: CaptchaPage, B: CaptchaBackend>(
     .await
 }
 
+/// The response token the flow found on its first read, as the page's fingerprint of it
+/// (`None`: the field was empty). A token that was already there is not Neo's pass: it can be
+/// left over from an earlier one, while the widget itself reads "Verification failed".
+#[derive(Default)]
+struct Entry(OnceLock<Option<String>>);
+
+impl Entry {
+    /// Whether `state` holds a token that was not there on the first read. The first read
+    /// itself only records what it found.
+    fn is_new(&self, state: &Value) -> bool {
+        let mark = flag(state, "token").then(|| {
+            state
+                .get("tokenMark")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        });
+        let mut first = false;
+        let entry = self.0.get_or_init(|| {
+            first = true;
+            mark.clone()
+        });
+        !first && mark.is_some() && *entry != mark
+    }
+}
+
+/// The widget's own frame: the one detection named, else the page's only Turnstile frame.
+/// Several frames and no hint cannot be told apart, so none is chosen.
+async fn widget_frames<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+) -> Result<Vec<FrameRef>, PageError> {
+    let frames = checked(ctx, ctx.page.frames()).await?;
+    let mut frames: Vec<_> = frames
+        .into_iter()
+        .filter(|frame| {
+            url::Url::parse(&frame.url)
+                .ok()
+                .is_some_and(|url| url.host_str() == Some("challenges.cloudflare.com"))
+        })
+        .collect();
+    if let Some(hint) = &challenge.frame {
+        if frames.iter().any(|frame| frame.frame_id == hint.frame_id) {
+            frames.retain(|frame| frame.frame_id == hint.frame_id);
+        } else if frames.len() != 1 {
+            frames.clear();
+        }
+    }
+    Ok(frames)
+}
+
+/// What the widget shows inside its frame. A frame list or a frame that cannot be read is
+/// `Unreadable`, never an error: the caller then falls back on whether the token is new.
+async fn face<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+) -> Result<TurnstileWidgetState, PageError> {
+    let frames = match widget_frames(ctx, challenge).await {
+        Ok(frames) => frames,
+        Err(PageError::Browser(_)) => return Ok(TurnstileWidgetState::Unreadable),
+        Err(error) => return Err(error),
+    };
+    let [frame] = frames.as_slice() else {
+        return Ok(TurnstileWidgetState::Unreadable);
+    };
+    checked(ctx, turnstile_widget_state(ctx.page, frame)).await
+}
+
+/// One reading of the page's widget. `token` in the result means a token that counts as a pass:
+/// the page's response field alone cannot say that, since a token outlives the pass that made
+/// it. The widget's own face decides, and only an unreadable face leaves it to the field,
+/// where a token counts when it appeared after the flow's first read.
 async fn read<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
+    entry: &Entry,
 ) -> Result<Value, PageError> {
-    checked(ctx, ctx.page.eval_main(&script(READ, &json!(challenge)))).await
+    let mut state = checked(ctx, ctx.page.eval_main(&script(READ, &json!(challenge)))).await?;
+    let new = entry.is_new(&state);
+    if !flag(&state, "token") {
+        return Ok(state);
+    }
+    let (counts, failed) = match face(ctx, challenge).await? {
+        TurnstileWidgetState::Success => (true, false),
+        TurnstileWidgetState::Failed | TurnstileWidgetState::Expired => (false, true),
+        TurnstileWidgetState::Verifying | TurnstileWidgetState::Interactive => (false, false),
+        TurnstileWidgetState::Unreadable => (new, false),
+    };
+    state["token"] = json!(counts);
+    if failed {
+        state["failed"] = json!(true);
+    }
+    Ok(state)
 }
 
 fn flag(value: &Value, key: &str) -> bool {
@@ -231,12 +349,13 @@ fn attempt<P: CaptchaPage, B: CaptchaBackend>(
 async fn wait_token<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
+    entry: &Entry,
     duration: Duration,
 ) -> Result<Value, PageError> {
     let until = Instant::now() + duration;
     let mut state = json!({"token": false});
     loop {
-        match tokio::time::timeout_at(until, read(ctx, challenge)).await {
+        match tokio::time::timeout_at(until, read(ctx, challenge, entry)).await {
             Ok(value) => state = value?,
             Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
             Err(_) => return Ok(state),
@@ -255,23 +374,7 @@ async fn checkbox<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
 ) -> Result<Option<Rect>, PageError> {
-    let frames = checked(ctx, ctx.page.frames()).await?;
-    let mut frames: Vec<_> = frames
-        .into_iter()
-        .filter(|frame| {
-            url::Url::parse(&frame.url)
-                .ok()
-                .is_some_and(|url| url.host_str() == Some("challenges.cloudflare.com"))
-        })
-        .collect();
-    if let Some(hint) = &challenge.frame {
-        if frames.iter().any(|frame| frame.frame_id == hint.frame_id) {
-            frames.retain(|frame| frame.frame_id == hint.frame_id);
-        } else if frames.len() != 1 {
-            return Ok(None);
-        }
-    }
-    for frame in frames {
+    for frame in widget_frames(ctx, challenge).await? {
         if let Some(rect) = checked(
             ctx,
             ctx.page.query_rect_in_frame(&frame, "input[type=checkbox]"),
@@ -302,11 +405,27 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         ));
     }
     guard(ctx).await?;
+    let entry = Entry::default();
     if ctx.forced_method == Some(ForcedMethod::Token) {
-        return token(ctx, challenge, result).await;
+        return token(ctx, challenge, result, &entry).await;
+    }
+    // A second round (design-final §5): the check found the page still blocked after this
+    // flow's first answer and chose one fix. Either way the round buys at most one token.
+    match ctx.remedy {
+        Some(Remedy::Rerun) => return token(ctx, challenge, result, &entry).await,
+        Some(Remedy::ResetWidget) => {
+            // Read first: the token the failed widget left behind must be on record before the
+            // reset, or the page writing it back would look like a new pass.
+            if flag(&read(ctx, challenge, &entry).await?, "token") {
+                return Ok(passed(result));
+            }
+            checked(ctx, ctx.page.eval_main(&script(RESET, &json!(challenge)))).await?;
+        }
+        // A reCAPTCHA puzzle and a Cloudflare wall are other flows' to fix.
+        Some(Remedy::DismissChallenge | Remedy::Rewatch) | None => {}
     }
     attempt(ctx, result, SolveMethod::AutoPass, SolveStep::AutoPass, 1);
-    let state = wait_token(ctx, challenge, Duration::from_secs(8)).await?;
+    let state = wait_token(ctx, challenge, &entry, Duration::from_secs(8)).await?;
     if flag(&state, "token") {
         return Ok(passed(result));
     }
@@ -314,7 +433,7 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
     for _ in 0..2 {
         let until = Instant::now() + VERIFY;
         let rect = loop {
-            let state = match tokio::time::timeout_at(until, read(ctx, challenge)).await {
+            let state = match tokio::time::timeout_at(until, read(ctx, challenge, &entry)).await {
                 Ok(value) => value?,
                 Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
                 Err(_) => break None,
@@ -356,21 +475,22 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
             result.attempts.checkbox,
         );
         checked(ctx, ctx.page.click_at(x, y)).await?;
-        if flag(&wait_token(ctx, challenge, VERIFY).await?, "token") {
+        if flag(&wait_token(ctx, challenge, &entry, VERIFY).await?, "token") {
             return Ok(passed(result));
         }
     }
 
-    token(ctx, challenge, result).await
+    token(ctx, challenge, result, &entry).await
 }
 
 async fn token<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
     result: &mut FlowResult,
+    entry: &Entry,
 ) -> Result<Terminal, PageError> {
     let configured = ctx.backend.is_configured();
-    let state = read(ctx, challenge).await?;
+    let state = read(ctx, challenge, entry).await?;
     if flag(&state, "token") {
         return Ok(passed(result));
     }
@@ -444,7 +564,7 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
             "Provider returned an empty Turnstile token; ask for human help.".into(),
         ));
     }
-    let fresh = read(ctx, challenge).await?;
+    let fresh = read(ctx, challenge, entry).await?;
     if flag(&fresh, "token") {
         return Ok(passed(result));
     }
@@ -542,7 +662,7 @@ fn provider_failure(error: ProviderError) -> Terminal {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{Arc, Mutex, MutexGuard};
 
     use serde_json::{Value, json};
@@ -578,6 +698,12 @@ mod tests {
         failed: bool,
         delay: Duration,
         delay_once: bool,
+        /// The views the widget's frame shows; `None` is a frame that cannot be read.
+        face: Option<Vec<&'static str>>,
+        /// The poll from which the response field holds a different token than before.
+        new_token_at: usize,
+        /// The number of reads done when each `turnstile.reset` ran.
+        resets: Vec<usize>,
     }
 
     impl Default for State {
@@ -601,6 +727,9 @@ mod tests {
                 failed: false,
                 delay: Duration::ZERO,
                 delay_once: false,
+                face: None,
+                new_token_at: usize::MAX,
+                resets: Vec::new(),
             }
         }
     }
@@ -640,13 +769,24 @@ mod tests {
             if expression.contains("turnstile:token-present") {
                 return Ok(json!(state.token_retained));
             }
+            if expression.contains("turnstile:reset") {
+                let polls = state.polls;
+                state.resets.push(polls);
+                return Ok(json!({"reset": true}));
+            }
             if expression.contains("turnstile:verify") {
                 return Ok(json!({"transition": state.transition}));
             }
             state.polls += 1;
+            let token =
+                state.polls >= state.token_at || (state.pass_on_click && !state.clicks.is_empty());
+            let mark = if state.polls >= state.new_token_at {
+                "second"
+            } else {
+                "first"
+            };
             Ok(json!({
-                "token": state.polls >= state.token_at
-                    || (state.pass_on_click && !state.clicks.is_empty()),
+                "token": token, "tokenMark": token.then_some(mark),
                 "sitekey": "fresh-key", "action": "fresh-action", "cdata": "fresh-data",
                 "callback": if state.callback_declared { Some("onAccepted") } else { None }, "failed": state.failed,
             }))
@@ -675,6 +815,15 @@ mod tests {
 
         async fn eval_in_frame(&self, _: &FrameRef, _: &str) -> Result<Value, PageError> {
             Err(PageError::Browser("unexpected frame evaluation".into()))
+        }
+
+        async fn scan_dom(&self, frame: Option<&FrameRef>, _: &str) -> Result<Value, PageError> {
+            assert!(frame.is_some(), "only the widget's frame is scanned");
+            self.state()
+                .face
+                .as_ref()
+                .map(|views| json!(views))
+                .ok_or_else(|| PageError::Browser("DOM scan unavailable".into()))
         }
 
         async fn query_rect_in_frame(
@@ -826,6 +975,17 @@ mod tests {
         budget: Duration,
         forced_method: Option<super::super::config::ForcedMethod>,
     ) -> anyhow::Result<(FlowResult, Vec<super::super::types::CaptchaEvent>)> {
+        run_round(page, backend, cancel, budget, forced_method, None).await
+    }
+
+    async fn run_round(
+        page: &FakePage,
+        backend: &FakeBackend,
+        cancel: &CancellationToken,
+        budget: Duration,
+        forced_method: Option<super::super::config::ForcedMethod>,
+        remedy: Option<Remedy>,
+    ) -> anyhow::Result<(FlowResult, Vec<super::super::types::CaptchaEvent>)> {
         let reservations = Arc::<TabReservations>::default();
         let lease = reservations
             .try_reserve(42, "cap_test")
@@ -852,11 +1012,281 @@ mod tests {
                 document: document(),
                 user_agent: None,
                 forced_method,
+                remedy,
             },
             &challenge,
         )
         .await;
         Ok((result, events.events()))
+    }
+
+    async fn second_round(
+        page: &FakePage,
+        backend: &FakeBackend,
+        remedy: Remedy,
+    ) -> anyhow::Result<FlowResult> {
+        run_round(
+            page,
+            backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            None,
+            Some(remedy),
+        )
+        .await
+        .map(|(result, _)| result)
+    }
+
+    /// A page whose response field holds a token from the flow's first read on.
+    fn page_with_a_leftover_token(face: Option<Vec<&'static str>>) -> FakePage {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.token_at = 0;
+            state.face = face;
+        }
+        page
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_leftover_token_beside_a_failed_widget_is_not_a_pass() -> anyhow::Result<()> {
+        for face in ["failed", "expired"] {
+            let page = page_with_a_leftover_token(Some(vec![face]));
+            let backend = FakeBackend::error(ProviderErrorKind::NotConfigured);
+            let result = finish(&page, &backend).await?;
+            assert_eq!(
+                (result.status, result.reason),
+                (SolveStatus::NeedsHuman, SolveReason::ChallengeNotPassed),
+                "{face}: a token outlives the pass that made it, so the widget's face decides"
+            );
+            assert!(backend.tasks().is_empty());
+
+            let page = page_with_a_leftover_token(Some(vec![face]));
+            page.state().callback = true;
+            let backend = FakeBackend::token();
+            let result = finish(&page, &backend).await?;
+            assert_eq!(
+                (result.status, result.method, result.reason),
+                (
+                    SolveStatus::TokenApplied,
+                    SolveMethod::Token,
+                    SolveReason::AwaitingSubmit
+                ),
+                "{face}: the flow goes on to a real token instead of claiming the old one"
+            );
+            assert_eq!(backend.tasks().len(), 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_token_counts_on_the_success_face_or_when_it_is_new() -> anyhow::Result<()> {
+        let page = page_with_a_leftover_token(Some(vec!["success"]));
+        let started = Instant::now();
+        let result = finish(&page, &FakeBackend::token()).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Solved, SolveReason::AutoPassed),
+            "the widget itself says it passed"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        // No face to read: the token seen first is not trusted, a different one after it is.
+        let page = page_with_a_leftover_token(None);
+        let backend = FakeBackend::error(ProviderErrorKind::NotConfigured);
+        let result = finish(&page, &backend).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::NeedsHuman, SolveReason::NoProvider),
+            "an unreadable widget with the token it started with has not passed"
+        );
+        let page = page_with_a_leftover_token(None);
+        page.state().new_token_at = 5;
+        let backend = FakeBackend::token();
+        let result = finish(&page, &backend).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Solved, SolveReason::AutoPassed)
+        );
+        assert!(backend.tasks().is_empty(), "a new token needs no payment");
+
+        // A widget still checking has not answered, whatever the field holds.
+        let page = page_with_a_leftover_token(Some(vec!["verifying"]));
+        page.state().new_token_at = 2;
+        let backend = FakeBackend::error(ProviderErrorKind::NotConfigured);
+        assert_ne!(finish(&page, &backend).await?.status, SolveStatus::Solved);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reset_round_records_the_old_token_before_it_resets_the_widget() -> anyhow::Result<()>
+    {
+        let page = page_with_a_leftover_token(None);
+        let backend = FakeBackend::error(ProviderErrorKind::NotConfigured);
+        let result = second_round(&page, &backend, Remedy::ResetWidget).await?;
+        assert_eq!(
+            page.state().resets,
+            [1],
+            "one reset, after the read that put the old token on record"
+        );
+        assert_ne!(
+            result.status,
+            SolveStatus::Solved,
+            "the page writing the old token back after the reset is not a pass"
+        );
+
+        let page = page_with_a_leftover_token(None);
+        page.state().new_token_at = 4;
+        let backend = FakeBackend::token();
+        let result = second_round(&page, &backend, Remedy::ResetWidget).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Solved, SolveReason::AutoPassed),
+            "the widget's new answer after the reset counts"
+        );
+        assert_eq!(page.state().resets.len(), 1);
+        assert!(backend.tasks().is_empty());
+
+        let page = page_with_a_leftover_token(Some(vec!["success"]));
+        let result = second_round(&page, &FakeBackend::token(), Remedy::ResetWidget).await?;
+        assert_eq!(result.status, SolveStatus::Solved);
+        assert!(
+            page.state().resets.is_empty(),
+            "a widget that shows success is never reset"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rerun_round_skips_the_free_waits_and_buys_one_token() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.rect = Some(Rect {
+                x: 20.,
+                y: 20.,
+                width: 24.,
+                height: 24.,
+            });
+            state.callback = true;
+            state.transition = true;
+        }
+        let backend = FakeBackend::token();
+        let started = Instant::now();
+        let result = second_round(&page, &backend, Remedy::Rerun).await?;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Token,
+                SolveReason::TokenAccepted
+            )
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(page.state().clicks.is_empty());
+        assert_eq!(backend.tasks().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_read_fingerprints_the_token_without_returning_it() -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
+        let mut marks = Vec::new();
+        for (values, live) in [
+            (vec!["first-token"], None),
+            (vec!["first-token"], None),
+            (vec!["other-token"], None),
+            (vec![""], Some("first-token")),
+            (vec![""], None),
+        ] {
+            let code = format!(
+                "const inputs = {}.map(value=>({{value}})); const live = {}; const document = {{querySelectorAll:s=>s==='.cf-turnstile'?[]:inputs}}; const window = {{turnstile:{{getResponse:()=>live}}}}; return await {};",
+                json!(values),
+                json!(live),
+                script(READ, &json!({"sitekey":"test-key"})),
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code":code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(!result.is_error, "{:?}", result.structured_content);
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true, "{output}");
+            assert!(
+                !output["value"].to_string().contains("-token"),
+                "the token stays in the page: {output}"
+            );
+            marks.push((
+                output["value"]["token"].clone(),
+                output["value"]["tokenMark"].clone(),
+            ));
+        }
+        assert_eq!(marks[0], marks[1], "the same token reads the same");
+        assert_ne!(marks[0].1, marks[2].1, "another token reads differently");
+        assert_eq!(
+            marks[0], marks[3],
+            "the widget's own response counts like the field"
+        );
+        assert_eq!(marks[4], (json!(false), Value::Null));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_reset_reaches_one_widget_by_its_id_then_its_container() -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
+        for (mode, calls, reset) in [
+            ("id", json!(["cf-chl-widget-abc"]), true),
+            (
+                "id-unknown",
+                json!(["cf-chl-widget-abc", "container"]),
+                true,
+            ),
+            ("no-widget", json!(["none"]), true),
+            ("no-api", json!([]), false),
+        ] {
+            let code = format!(
+                r#"
+                const mode = {};
+                const calls = [];
+                const field = {{id:'cf-chl-widget-abc_response', value:'old-token', isConnected:true}};
+                const widget = {{getAttribute:()=>'test-key', querySelector:()=>field}};
+                const known = mode !== 'no-widget';
+                const document = {{querySelectorAll:s=>s==='.cf-turnstile'?(known?[widget]:[]):(known?[field]:[])}};
+                const window = mode === 'no-api' ? {{}} : {{turnstile:{{reset(target){{
+                    calls.push(target === widget ? 'container' : target === undefined ? 'none' : target);
+                    if (mode === 'id-unknown' && typeof target === 'string') throw new Error('Nothing to reset');
+                }}}}}};
+                return [await {}, calls];
+            "#,
+                json!(mode),
+                script(RESET, &json!({"sitekey":"test-key"}))
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code":code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(!result.is_error, "{mode}: {:?}", result.structured_content);
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true, "{mode}: {output}");
+            assert_eq!(output["value"][0]["reset"], reset, "{mode}");
+            assert_eq!(
+                output["value"][1], calls,
+                "{mode}: one widget is reset, never the page's others"
+            );
+        }
+        Ok(())
     }
 
     async fn finish(page: &FakePage, backend: &FakeBackend) -> anyhow::Result<FlowResult> {
@@ -1012,7 +1442,9 @@ mod tests {
         Ok(())
     }
 
-    async fn script_context() -> browseros_mcp::framework::ToolCtx {
+    /// A JavaScript engine with no browser behind it, for running a flow's page scripts
+    /// against hand-made stand-ins for `document` and `window`.
+    pub(crate) async fn script_context() -> browseros_mcp::framework::ToolCtx {
         use browseros_mcp::framework::{BrowserToolOptions, ToolCtx};
         #[derive(Default)]
         struct NoBrowser {
@@ -1718,6 +2150,7 @@ mod tests {
                     document,
                     user_agent: None,
                     forced_method: None,
+                    remedy: None,
                 },
                 &challenge,
             )

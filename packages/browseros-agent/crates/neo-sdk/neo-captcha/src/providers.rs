@@ -1670,8 +1670,9 @@ mod tests {
     -> anyhow::Result<()> {
         let (primary, first_calls) = fake("PRIMARY", None, true, true);
         let (second, second_calls) = fake("SECOND", None, true, true);
-        let first = ProviderChain::with_clients(vec![primary], 10);
-        let second = ProviderChain::with_clients(vec![second], 10);
+        // A cap of 3 here, independent of the default, so the test reads its own numbers.
+        let first = ProviderChain::with_limits(vec![primary], 10, 3);
+        let second = ProviderChain::with_limits(vec![second], 10, 3);
         let task = tiles(TileGrid::ThreeByThree);
 
         for _ in 0..3 {

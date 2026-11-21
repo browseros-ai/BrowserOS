@@ -1542,6 +1542,7 @@ mod tests {
             },
             user_agent: None,
             forced_method: None,
+            remedy: None,
         };
         let challenge = Challenge {
             kind: CaptchaKind::RecaptchaV2,

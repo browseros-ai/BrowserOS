@@ -4,7 +4,7 @@
 # It only ever loads the image into the local Docker engine; it never pushes.
 #
 #   build.sh [--platform linux/amd64|linux/arm64] [--tag NAME]
-#            [--capsolver-key-file FILE] [--twocaptcha-key-file FILE]
+#            [--capsolver-key-file FILE] [--twocaptcha-key-file FILE] [--jev-key-file FILE]
 #
 #   --platform   default: the Docker engine's own architecture. The server is cross-compiled
 #                with zig either way; slimviewer and OpenH264 compile on the target arch.
@@ -12,10 +12,10 @@
 #                arch is also the image's org.opencontainers.image.version label. -dirty means
 #                uncommitted changes in packages/browseros-agent, which holds every input.
 #                The arch keeps an amd64 build (cells) and an arm64 one (a Mac) apart.
-#   --*-key-file bake a CAPTCHA provider key into the image (the neo-sdk-keyed target). Off by
-#                default: the image is keyless and reads key files a host puts at the paths in
-#                README.md. A baked key is readable by anyone who has the image. neo-sdk-image.yml bakes
-#                both into the image it publishes, and only into that one.
+#   --*-key-file bake a CAPTCHA provider or Jev key into the neo-sdk-keyed target. Hosts can
+#                supply key files at runtime as described in README.md. Anyone with a keyed
+#                image can read its keys. The release workflow includes both provider keys and
+#                adds the Jev key when configured.
 #
 # The image is tagged only once its server is proven to be this checkout's: the binary in the
 # image must carry the digest of the sources this build copied (provenance.json source_digest),
@@ -54,13 +54,14 @@ else
   if [ -n "$(git -C "$repo" status --porcelain -- "$agent")" ]; then dirty=true; fi
 fi
 
-platform="" tag="" capsolver="" twocaptcha=""
+platform="" tag="" capsolver="" twocaptcha="" jev=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --platform) platform=${2:?--platform needs a value}; shift 2 ;;
     --tag) tag=${2:?--tag needs a value}; shift 2 ;;
     --capsolver-key-file) capsolver=${2:?--capsolver-key-file needs a file}; shift 2 ;;
     --twocaptcha-key-file) twocaptcha=${2:?--twocaptcha-key-file needs a file}; shift 2 ;;
+    --jev-key-file) jev=${2:?--jev-key-file needs a file}; shift 2 ;;
     -h | --help) usage ;;
     *) echo "build.sh: unknown argument '$1'" >&2; usage ;;
   esac
@@ -87,7 +88,7 @@ version="$NEO_BROWSER_VERSION-${revision:0:9}"
 # keyed one is rebuilt without its cache, so a rotated or removed key never survives either.
 target=neo-sdk
 key_args=()
-for pair in "capsolver_api_key=$capsolver" "twocaptcha_api_key=$twocaptcha"; do
+for pair in "capsolver_api_key=$capsolver" "twocaptcha_api_key=$twocaptcha" "jev_api_key=$jev"; do
   id=${pair%%=*} file=${pair#*=}
   [ -n "$file" ] || continue
   [ -s "$file" ] || { echo "build.sh: key file '$file' is missing or empty" >&2; exit 2; }

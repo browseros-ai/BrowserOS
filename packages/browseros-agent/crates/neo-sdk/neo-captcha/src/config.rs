@@ -12,7 +12,9 @@ pub const VERIFY_ENV: &str = "BROWSEROS_CAPTCHA_VERIFY";
 /// Test-only: ask the judge even when the deterministic tier is definite, and only log its answer.
 pub const TEST_FORCE_JUDGE_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_JUDGE";
 
-const DEFAULT_HOST_PAID_TASK_LIMIT: u32 = 3;
+/// Room for one whole checked solve per site per 30 minutes: up to 4 paid tasks in the first
+/// round (reCAPTCHA: 3 tile rounds + a token) and 1 in the verify re-solve.
+const DEFAULT_HOST_PAID_TASK_LIMIT: u32 = 6;
 /// `Off` until the gate's bodies land (wave 2 piece V4 flips it to `On`), so this skeleton
 /// changes no answer.
 const DEFAULT_VERIFY_MODE: VerifyMode = VerifyMode::Off;
@@ -318,9 +320,11 @@ mod tests {
     }
     #[test]
     fn tests_that_the_host_paid_task_limit_defaults_and_accepts_overrides() {
-        assert_eq!(from_vars(&[]).host_paid_task_limit, 3);
-        assert_eq!(CaptchaConfig::default().host_paid_task_limit, 3);
-        for (value, limit) in [(" 2 ", 2), ("0", 0), ("invalid", 3)] {
+        // One reCAPTCHA solve can spend 4 (3 tile rounds + a token) and its verify re-solve 1
+        // more, so the default leaves room for one whole checked solve per window.
+        assert_eq!(from_vars(&[]).host_paid_task_limit, 6);
+        assert_eq!(CaptchaConfig::default().host_paid_task_limit, 6);
+        for (value, limit) in [(" 2 ", 2), ("0", 0), ("invalid", 6)] {
             let config = from_vars(&[(HOST_PAID_TASK_LIMIT_ENV, value.into())]);
             assert_eq!(config.host_paid_task_limit, limit);
         }

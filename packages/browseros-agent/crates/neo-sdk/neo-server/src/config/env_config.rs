@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::path::{self, PathBuf};
 use std::str::FromStr;
 
+use neo_captcha::judge::JUDGE_KEY_FILE_ENV;
 use neo_takeover::Xvnc;
 
 use super::{ConfigError, Defaults};
@@ -20,8 +21,8 @@ pub(crate) struct EnvConfig {
     pub(crate) profile_dir: Option<PathBuf>,
     /// The home Neo's server and browser run in, and whether it is Neo's own to protect.
     pub(crate) neo_home: NeoHome,
-    /// Both configured CAPTCHA key files, including missing files, protected independently
-    /// of whether a solver could read and enable them at startup.
+    /// Configured CAPTCHA provider and Jev key paths. File doors protect them even when
+    /// the corresponding key file is missing at startup.
     pub(crate) captcha_key_files: Vec<PathBuf>,
     /// `CLAW_LOG`, else `Defaults::LOG_FILTER`.
     pub(crate) log_filter: String,
@@ -161,6 +162,7 @@ impl EnvConfig {
             captcha_key_files: [
                 "BROWSEROS_CAPSOLVER_API_KEY_FILE",
                 "BROWSEROS_2CAPTCHA_API_KEY_FILE",
+                JUDGE_KEY_FILE_ENV,
             ]
             .into_iter()
             .filter_map(|name| read(name).map(PathBuf::from))
@@ -485,6 +487,41 @@ mod tests {
         assert_eq!(
             config.downloads_dir, None,
             "no home must not invent a browser downloads directory"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_jev_key_path_is_protected_before_and_after_creation() -> Result<(), Box<dyn Error>>
+    {
+        use std::fs;
+
+        use neo_http::{Settings, SettingsDefaults};
+        use neo_playwright::FileAccessError;
+
+        use crate::test_support::test_config;
+
+        let directory = tempfile::tempdir()?;
+        let state = directory.path().join("state");
+        let key = directory.path().join("jev-api-key");
+        let mut app = test_config(&state);
+        app.env = env(&[
+            ("BROWSERCLAW_DIR", state.to_str().ok_or("state path")?),
+            ("NEO_JEV_KEY_FILE", key.to_str().ok_or("key path")?),
+        ])?;
+        let files = app.file_access(Settings::defaults(SettingsDefaults::new(vec!["/".into()])?));
+        assert_eq!(
+            files.write(&key).await.err(),
+            Some(FileAccessError::OwnFiles)
+        );
+        fs::write(&key, "fixture-key")?;
+        assert_eq!(
+            files.read(&key).await.err(),
+            Some(FileAccessError::OwnFiles)
+        );
+        assert_eq!(
+            files.write(&key).await.err(),
+            Some(FileAccessError::OwnFiles)
         );
         Ok(())
     }

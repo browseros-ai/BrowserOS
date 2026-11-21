@@ -610,9 +610,12 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
             "claw-sdk reads no config file; BROWSERCLAW_CONFIG_FILE is ignored"
         );
     }
-    // The key files were read before logging started, so this line is the operator's only
-    // word on a key file that could not be read.
+    // Configuration reads the key files before logging starts. Report which keys were usable.
     let captcha = &config.captcha;
+    info!(
+        jev_configured = captcha.judge.is_some(),
+        "Jev judge configuration"
+    );
     if captcha.has_provider() {
         info!(
             capsolver = captcha.capsolver.is_some(),
