@@ -35,6 +35,7 @@ export interface AcpAgentPolicy {
   adapter: string
   cwd: string
   sessionKey: string
+  browserToolLeaseToken: string
   agentRegistryOverrides: Record<string, string | string[]>
   mcpServers: AcpxMcpServerConfig[]
   sessionOptions: SessionAgentOptions
@@ -72,6 +73,7 @@ export async function buildAcpAgentPolicy(
     adapter,
     cwd: input.agent.workingDirectory?.trim() || workspace,
     sessionKey: deriveAcpSessionKey(input.agent.id, input.conversationId),
+    browserToolLeaseToken: input.browserToolLeaseToken,
     agentRegistryOverrides: { [adapter]: launcher.argv },
     mcpServers: buildAcpMcpServers({
       serverPort: input.serverPort,
