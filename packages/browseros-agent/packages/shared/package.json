@@ -46,10 +46,6 @@
       "types": "./src/schemas/agent.ts",
       "default": "./src/schemas/agent.ts"
     },
-    "./schemas/ui-stream": {
-      "types": "./src/schemas/ui-stream.ts",
-      "default": "./src/schemas/ui-stream.ts"
-    },
     "./schemas/chat-error": {
       "types": "./src/schemas/chat-error.ts",
       "default": "./src/schemas/chat-error.ts"
@@ -61,14 +57,6 @@
     "./mcp/claude-code-transport-tag": {
       "types": "./src/mcp/claude-code-transport-tag.ts",
       "default": "./src/mcp/claude-code-transport-tag.ts"
-    },
-    "./schemas/sidecar-config": {
-      "types": "./src/schemas/sidecar-config.ts",
-      "default": "./src/schemas/sidecar-config.ts"
-    },
-    "./sentry/sanitize": {
-      "types": "./src/sentry/sanitize.ts",
-      "default": "./src/sentry/sanitize.ts"
     }
   }
 }
