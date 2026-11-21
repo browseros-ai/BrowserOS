@@ -13,7 +13,8 @@
 //! - `Store::conversations()` and `ConversationRows` only in `conversations` (its one writer);
 //! - `Store::tokens()` and `Tokens` only in `model::chatgpt` (the sign-in's one writer);
 //! - `utoipa` only in `http`; `sea_orm` only in `store`; `genai` and the AWS SDK only in
-//!   `model`; `neo_server` and `rmcp` only in `browser`; `axum` only in `http`, `app`, `browser`;
+//!   `model`; `neo_server` and `rmcp` only in `browser`; `axum` only in `http`, `app`, `browser`
+//!   and the private sign-in callback in `model::chatgpt`;
 //! - `turn` is pure: no `tokio`, `axum`, `reqwest`, `sea_orm`, `std::fs` or `std::net`.
 
 use std::collections::BTreeSet;
@@ -167,6 +168,7 @@ fn violations(relative: &str, source: &str) -> Vec<String> {
     uses.visit_file(&file);
     let mut found = Vec::new();
     let from = rank(&top);
+    let in_chatgpt = relative == "model/chatgpt.rs";
     let local_modules = [
         "turn",
         "store",
@@ -204,8 +206,11 @@ fn violations(relative: &str, source: &str) -> Vec<String> {
             }
         }
         if !crate_relative {
+            // The private callback on 127.0.0.1:1455 stays in chatgpt.rs so its port,
+            // client id, and tokens stay there too (DESIGN.md 3.6).
             if let Some((name, homes)) = CRATE_HOMES.iter().find(|(name, _)| first == name)
                 && !homes.contains(&top.as_str())
+                && !(*name == "axum" && in_chatgpt)
             {
                 found.push(format!(
                     "{relative}: `{name}` belongs in {homes:?}, not `{top}`"
@@ -256,6 +261,15 @@ fn violations(relative: &str, source: &str) -> Vec<String> {
         ));
     }
     found
+}
+
+#[test]
+fn only_chatgpt_can_host_a_private_callback_from_model() {
+    let listener = "use axum::Router;";
+    assert!(violations("model/chatgpt.rs", listener).is_empty());
+    assert!(!violations("model/mod.rs", listener).is_empty());
+    assert!(!violations("model/responses.rs", listener).is_empty());
+    assert!(!violations("model/chatgpt.rs", "use crate::http::router;").is_empty());
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {

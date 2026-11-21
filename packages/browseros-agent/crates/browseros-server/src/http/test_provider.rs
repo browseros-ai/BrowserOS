@@ -1,15 +1,17 @@
 //! `POST /test-provider`: one tiny model call to prove a provider works, through the same model
-//! interface a turn uses. Chunk `models` fills the body.
+//! interface a turn uses.
 
+use axum::Json;
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use super::ApiError;
 use super::dto;
 use super::extract::TestBody;
 use crate::app::App;
+use crate::store::{ProviderDraft, ProviderKind, Secret};
 
 pub(super) fn routes() -> OpenApiRouter<App> {
     OpenApiRouter::new().routes(routes!(test_provider))
@@ -34,8 +36,61 @@ pub(super) fn routes() -> OpenApiRouter<App> {
     )
 )]
 async fn test_provider(
-    State(_app): State<App>,
-    TestBody(_body): TestBody<dto::TestProviderRequest>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    State(app): State<App>,
+    TestBody(body): TestBody<dto::TestProviderRequest>,
+) -> Response {
+    match test(&app, body).await {
+        Ok(elapsed) => (
+            StatusCode::OK,
+            Json(dto::TestProviderResult {
+                success: true,
+                message: "Connection successful.".into(),
+                response_time: u64::try_from(elapsed.as_millis()).ok(),
+            }),
+        ),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(dto::TestProviderResult {
+                success: false,
+                message,
+                response_time: None,
+            }),
+        ),
+    }
+    .into_response()
+}
+
+async fn test(app: &App, body: dto::TestProviderRequest) -> Result<std::time::Duration, String> {
+    if body.model.trim().is_empty() {
+        return Err("Enter a model name.".into());
+    }
+    let kind = ProviderKind::from(body.provider);
+    let saved = match non_blank(body.provider_id) {
+        Some(id) => app
+            .store
+            .providers()
+            .config(Some(&id))
+            .await
+            .map_err(|_| "Could not read the saved provider settings.")?,
+        None => None,
+    };
+    // Keep credential borrowing and destination binding in the store's single merge rule.
+    let draft = ProviderDraft {
+        kind,
+        model: body.model,
+        base_url: non_blank(body.base_url),
+        headers: body.headers.unwrap_or_default().into_iter().collect(),
+        resource_name: non_blank(body.resource_name),
+        region: non_blank(body.region),
+        api_key: non_blank(body.api_key).map(Secret::new),
+        access_key_id: non_blank(body.access_key_id).map(Secret::new),
+        secret_access_key: non_blank(body.secret_access_key).map(Secret::new),
+        session_token: non_blank(body.session_token).map(Secret::new),
+    };
+    let config = draft.resolve(saved).map_err(|error| error.to_string())?;
+    app.models.test(config).await.map_err(|error| error.message)
+}
+
+fn non_blank(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.trim().is_empty())
 }
