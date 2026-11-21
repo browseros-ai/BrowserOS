@@ -66,7 +66,7 @@ def process_places(token_file):
         'home': Path(values['HOME'] if found else pwd.getpwnam('neo').pw_dir),
         'token': Path(token_file),
         'captcha': [Path(values[key]) for key in
-                    ('BROWSEROS_CAPSOLVER_API_KEY_FILE', 'BROWSEROS_2CAPTCHA_API_KEY_FILE')
+                    ('BROWSEROS_CAPSOLVER_API_KEY_FILE', 'BROWSEROS_2CAPTCHA_API_KEY_FILE', 'NEO_JEV_KEY_FILE')
                     if values.get(key)],
     }
 
@@ -641,13 +641,12 @@ def image_keys(proof, places):
     of a key is read, hashed or kept: only its size, time and mode are compared. The host's
     settings are restored."""
     settings = proof.api('GET').get('body', {}).get('settings', {})
-    # The keys the image says it carries (provenance.json captchaKeys): a one-provider image
-    # leaves the other provider's default path empty, so the count comes from the image.
-    recorded = json.loads(Path('/usr/share/neo-sdk/provenance.json').read_text()).get('captchaKeys')
+    provenance = json.loads(Path('/usr/share/neo-sdk/provenance.json').read_text())
+    providers = provenance.get('captchaKeys')
     try:
         proof.patch(['/'])
         keys = [path for path in places['captcha'] if path.is_file()]
-        expected = len(recorded) if isinstance(recorded, list) else len(keys)
+        expected = len(providers) + int(provenance.get('jevKey') is True) if isinstance(providers, list) else len(keys)
         proof.check('the image holds the CAPTCHA key files it records', len(keys) == expected > 0)
         for index, path in enumerate(keys):
             before = path.stat()

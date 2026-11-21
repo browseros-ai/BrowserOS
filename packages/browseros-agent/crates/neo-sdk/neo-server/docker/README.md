@@ -105,6 +105,8 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
 | `NEO_SLIMVIEWER` | `true` | Starts the phone viewer when installed. Set to `0` to disable it. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The published image carries both; a local or pull request build none ([CAPTCHA keys](#captcha-keys)). |
+| `NEO_JEV_KEY_FILE` | `/home/neo/.config/browseros/captcha/jev-api-key` in keyed images | Jev verification key. Set an empty value to disable Jev or a file path to supply your own key. |
+| `NEO_JEV_MODEL` | `jev-1.14.0` in keyed images | Jev model used to verify unclear CAPTCHA results. |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |
 | `NEO_CLEAR_SESSIONS` | `false` | `true`: before every start of the browser, the entrypoint removes the profile's saved sessions, `/data/profile/Default/Sessions`, where values typed into pages rest ([Saved sessions](#saved-sessions)). |
 | `BROWSERCLAW_HOSTED_MODE` | `1` | Must stay `1`. It also starts the browser with `--disable-browseros-metrics` ([Product analytics](#product-analytics)). |
@@ -288,8 +290,8 @@ Safe Browsing, network time) are a separate matter: this switch does not touch t
 
 ## CAPTCHA keys
 
-The published image carries a CapSolver and a 2Captcha key, as production's Neo image does, at the
-default paths above (mode 0400, Neo's uid; under other `PUID`/`PGID` the entrypoint re-owns them with
+The published image carries CapSolver, 2Captcha, and Jev keys at the default paths above (mode
+0400, Neo's uid; under other `PUID`/`PGID` the entrypoint re-owns them with
 Neo's home). **They are extractable by anyone who pulls the image.** With them, `neo.solveCaptcha`
 detects the page's CAPTCHA, tries its free paths first, and then has a paid provider solve it
 (CapSolver, then 2Captcha), at most `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` paid tasks (100) per server
@@ -326,6 +328,11 @@ They become 0400 files owned by neo in the `neo-sdk-keyed` target, `provenance.j
 `captchaKeys` (provider names only), and the image gets the label `com.browseros.neo-sdk.captcha-keys=baked`.
 Anyone who has that image can read them. That stage is rebuilt without its cache every time, so a rotated key never survives in a
 cached layer, and a keyless build never mounts a key at all.
+
+Add `--jev-key-file ./jev.key` to include the Jev verification key. `provenance.json` records its
+presence as `jevKey`. To supply it at runtime, mount a read-only key file outside `/home/neo` and
+point `NEO_JEV_KEY_FILE` to it. The release workflow reads `JEV_API_KEY` from the `neo-captcha`
+environment.
 
 ## Use it from a host
 
