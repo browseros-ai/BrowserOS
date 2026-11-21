@@ -850,7 +850,7 @@ impl CaptchaSolver {
             document: &routed.document,
             before: routed.before.as_ref(),
             callback_ran: flow.callback_ran,
-            token: verify::TokenReading::Unknown,
+            applied: None,
         };
         let started = Instant::now();
         let verification = match driver

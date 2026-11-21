@@ -1,6 +1,6 @@
 {
   "case": "06-amazon-wall-reworded-for-jev",
-  "source": "06-desk-amazon.browseros.txt 15:39 (S7), replayed as if policy.rs's phrase list had missed its wording, to pin Jev's agent_policy path.",
+  "source": "06-desk-amazon.browseros.txt 15:39 (S7), replayed as if policy.rs's phrase list had missed its wording, to pin Jev's agent_policy path: Jev alone never decides a policy wall, so it is a hand-off block.",
   "truth": "policy",
   "claim": {
     "basis": "nothing_found"
@@ -34,7 +34,8 @@
     "blocked": 0.83
   },
   "expect": {
-    "result": "policy_wall",
-    "tier": "jev"
+    "result": "blocked",
+    "tier": "jev",
+    "cause": "denied"
   }
 }
