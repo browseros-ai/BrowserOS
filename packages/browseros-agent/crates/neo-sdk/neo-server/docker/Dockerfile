@@ -11,7 +11,7 @@
 #   context slimviewer    (target arch)          binary, web assets and notices from neo-slimviewer
 #   stage neo-sdk-runtime (target arch)           ubuntu + pinned browser .deb + server
 #                                                 + slimviewer + supervisor/ + provenance
-#   stage neo-sdk-keyed   neo-sdk-runtime + CAPTCHA keys from BuildKit secrets (build.sh --*-key-file)
+#   stage neo-sdk-keyed   neo-sdk-runtime + CAPTCHA provider and Jev keys from BuildKit secrets
 #   stage neo-sdk         neo-sdk-runtime as is: keyless, the default target
 
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
@@ -114,9 +114,9 @@ RUN set -eu; while read -r package; do \
 # What this image is made of, for hosts and for accept.sh: the source commit, the browser, and
 # the server binary as installed (its sha256, the version compiled into it, and the digest of the
 # sources it was compiled from, which must equal the digest of the sources this build copied;
-# build.sh checks the binary against it before it tags the image), and the CAPTCHA keys it carries
-# (`captchaKeys`: provider names only, never a value or a hash of one; empty here, filled in by the
-# keyed target). The commit's ARGs
+# build.sh checks the binary against it before it tags the image), and the keys it carries.
+# `captchaKeys` lists provider names and `jevKey` records whether the judge key is present.
+# The commit's ARGs
 # are declared here, not at the top: every RUN after an ARG misses the cache when its value
 # changes, which would reinstall the packages and download the browser for every commit.
 ARG NEO_SDK_REVISION=unknown
@@ -138,7 +138,7 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); 
         server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, \
                  source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}, \
         slimviewer: {sha256: $slimviewer_sha256, encoders: ["openh264"], \
-                     openh264: {version: $openh264_version, revision: $openh264_revision}}, captchaKeys: []}' \
+                     openh264: {version: $openh264_version, revision: $openh264_revision}}, captchaKeys: [], jevKey: false}' \
       > /usr/share/neo-sdk/provenance.json; \
     [ "$(jq -r '.server.source_digest == .source_digest' /usr/share/neo-sdk/provenance.json)" = true ] \
       || { echo "the installed server was not compiled from this build's sources" >&2; exit 1; }
@@ -177,12 +177,14 @@ ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/neo-entrypoint"]
 # Keys baked in, only when build.sh is given key files: the published image, built by
 # neo-sdk-image.yml from the neo-captcha environment's secrets. They are part of the image and
 # readable by anyone who has it; BuildKit keeps them out of build arguments and logs only.
-# provenance.json's captchaKeys names the keys this stage installed, so accept.sh checks the
-# files against what the image says it carries. build.sh rebuilds this stage without its cache
+# accept.sh checks the installed files against provenance. build.sh rebuilds this stage without its cache
 # every time, so a rotated or removed key never survives in a cached layer.
 FROM neo-sdk-runtime AS neo-sdk-keyed
+ENV NEO_JEV_KEY_FILE=/home/neo/.config/browseros/captcha/jev-api-key \
+    NEO_JEV_MODEL=jev-1.14.0
 RUN --mount=type=secret,id=capsolver_api_key,required=false \
     --mount=type=secret,id=twocaptcha_api_key,required=false \
+    --mount=type=secret,id=jev_api_key,required=false \
     set -eu; \
     destination=/home/neo/.config/browseros/captcha; \
     install -d -m 0700 -o neo -g neo "$destination"; \
@@ -195,7 +197,13 @@ RUN --mount=type=secret,id=capsolver_api_key,required=false \
       install -m 0400 -o neo -g neo /run/secrets/twocaptcha_api_key "$destination/2captcha-api-key"; \
       keys="$keys 2captcha"; \
     fi; \
-    jq --arg keys "$keys" '.captchaKeys = ($keys | split(" ") | map(select(. != "")))' \
+    jev_key=false; \
+    if [ -s /run/secrets/jev_api_key ]; then \
+      install -m 0400 -o neo -g neo /run/secrets/jev_api_key "$NEO_JEV_KEY_FILE"; \
+      jev_key=true; \
+    fi; \
+    jq --arg keys "$keys" --argjson jevKey "$jev_key" \
+      '.captchaKeys = ($keys | split(" ") | map(select(. != ""))) | .jevKey = $jevKey' \
       /usr/share/neo-sdk/provenance.json > /tmp/provenance.json; \
     install -m 0644 /tmp/provenance.json /usr/share/neo-sdk/provenance.json; \
     rm /tmp/provenance.json
