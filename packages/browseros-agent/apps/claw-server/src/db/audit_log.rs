@@ -27,7 +27,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
@@ -59,6 +59,7 @@ const RESULT_STRUCTURED_KEYS_MAX: usize = 16;
 const RESULT_JSON_STRING_MAX: usize = 192;
 const SUSTAINED_ERROR_TAIL: usize = 3;
 const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
+pub(crate) const SDK_RUN_ID_KEY: &str = "sdkRunId";
 
 #[derive(Clone)]
 pub struct AuditLog {
@@ -371,10 +372,13 @@ impl AuditLog {
         });
         let mut cancelled_meta: serde_json::Value =
             serde_json::from_str(&result_meta(true, true, &structured_content, 1))?;
-        // Stop replaces the outcome, but the parent run still declares its task.
-        // Preserve only that host label; previous result payloads remain discarded.
+        // Stop replaces the outcome. Keep the host label and run marker so
+        // readers can still recognize the parent and its recorded operations.
         if let Some(name) = declared_task_name(std::slice::from_ref(&dispatch)) {
             cancelled_meta["taskName"] = json!(name);
+        }
+        if let Some(marker) = sdk_run_marker(&dispatch) {
+            cancelled_meta[SDK_RUN_ID_KEY] = marker;
         }
         let output_token_estimate =
             estimate_tool_output_tokens(&[ContentBlock::text(OPERATOR_CANCELLATION_REASON)]);
@@ -1231,16 +1235,37 @@ async fn query_end<C: ConnectionTrait>(
         .await?)
 }
 
+/// The SDK writer leaves the marker present even if it never received an engine run ID.
+fn sdk_run_marker(row: &ToolDispatchRow) -> Option<serde_json::Value> {
+    if row.tool_name != "run" || row.parent_dispatch_id.is_some() {
+        return None;
+    }
+    let mut meta: serde_json::Value = serde_json::from_str(row.result_meta.as_deref()?).ok()?;
+    meta.as_object_mut()?.remove(SDK_RUN_ID_KEY)
+}
+
 fn derive_status(dispatches: &[ToolDispatchRow], end: Option<&SessionEndEvent>) -> TaskStatus {
     let Some(end) = end else {
         return TaskStatus::Live;
     };
-    // A script's children describe that invocation, not later tool calls. Only
-    // root dispatches determine whether the session ends in sustained failure.
+    // Catalog script children count toward the error tail. The SDK parent
+    // records the outcome of the whole run, so exclude only its correlated
+    // operations.
+    let sdk_parents: HashSet<&str> = dispatches
+        .iter()
+        .filter_map(|row| {
+            sdk_run_marker(row)?;
+            row.dispatch_id.as_deref()
+        })
+        .collect();
     let tail = dispatches
         .iter()
         .rev()
-        .filter(|row| row.parent_dispatch_id.is_none())
+        .filter(|row| {
+            !row.parent_dispatch_id
+                .as_deref()
+                .is_some_and(|parent| sdk_parents.contains(parent))
+        })
         .take(SUSTAINED_ERROR_TAIL)
         .collect::<Vec<_>>();
     match end.kind.as_str() {
@@ -1554,8 +1579,8 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditLog, ListTasksQuery, RecordToolDispatchInput, TaskStatus, bounded_args_json,
-        redacted_args_json, result_meta,
+        AuditLog, ListTasksQuery, RecordToolDispatchInput, SDK_RUN_ID_KEY, TaskStatus,
+        bounded_args_json, redacted_args_json, result_meta,
     };
     use crate::db::{DATABASE_FILENAME, Database};
     use browseros_mcp::AuditHints;
@@ -2228,21 +2253,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_cancellation_preserves_the_declared_sdk_task_name() -> anyhow::Result<()> {
+    async fn operator_cancellation_preserves_the_sdk_marker_and_task_name() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
-        for (session_id, end_kind, expected_status) in [
-            ("named-closed", "closed", TaskStatus::Done),
-            ("named-cancelled", "cancelled", TaskStatus::Cancelled),
+        for (session_id, end_kind, expected_status, marker) in [
+            (
+                "named-closed",
+                "closed",
+                TaskStatus::Done,
+                Some(json!("sdk-1")),
+            ),
+            (
+                "named-cancelled",
+                "cancelled",
+                TaskStatus::Cancelled,
+                Some(json!(null)),
+            ),
+            ("named-catalog", "closed", TaskStatus::Done, None),
         ] {
             let mut run = dispatch(session_id, "https://example.com", false);
             run.tool_name = "run".to_string();
-            run.result_meta = json!({
+            let mut meta = json!({
                 "isError": false,
                 "taskName": "submit-local-request",
                 "unrelatedResult": "must not survive cancellation",
-            })
-            .to_string();
+            });
+            if let Some(marker) = &marker {
+                meta[SDK_RUN_ID_KEY] = marker.clone();
+            }
+            run.result_meta = meta.to_string();
             let dispatch_id = run.dispatch_id.clone();
             audit.record_tool_dispatch(run).await?;
             audit.record_session_end(session_id, end_kind, None).await?;
@@ -2262,6 +2301,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("cancelled dispatch missing"))?;
                 let meta = parse(row.result_meta.as_deref().unwrap_or("null"));
                 assert_eq!(meta["taskName"], "submit-local-request");
+                assert_eq!(meta.get(SDK_RUN_ID_KEY), marker.as_ref());
                 assert_eq!(meta["isError"], true);
                 assert_eq!(meta["cancelled"], true);
                 assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
@@ -2666,7 +2706,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn child_steps_do_not_change_the_run_error_tail() -> anyhow::Result<()> {
+    async fn only_sdk_children_are_excluded_from_the_run_error_tail() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
         for (case, outcomes, expected) in [
@@ -2674,17 +2714,28 @@ mod tests {
             ("three", vec![false, true, true, true], TaskStatus::Failed),
             ("recovered", vec![true, true, true, false], TaskStatus::Done),
         ] {
-            for children in [false, true] {
-                let session_id = format!("{case}-{children}");
+            for (recording, sdk_run, children, expected) in [
+                ("standalone", false, false, expected),
+                ("sdk", true, true, expected),
+                ("catalog", false, true, TaskStatus::Done),
+            ] {
+                let session_id = format!("{case}-{recording}");
                 for (index, is_error) in outcomes.iter().enumerate() {
                     let mut run = dispatch(&session_id, "https://example.com", *is_error);
                     run.tool_name = "run".to_string();
                     run.created_at = Some(1000 + i64::try_from(index)? * 10);
+                    if sdk_run {
+                        run.result_meta = json!({
+                            "isError": is_error,
+                            (SDK_RUN_ID_KEY): format!("sdk-{index}"),
+                        })
+                        .to_string();
+                    }
                     let parent = run.dispatch_id.clone();
                     audit.record_tool_dispatch(run).await?;
                     if children {
-                        // A run may do successful browser work before throwing.
-                        // Its children remain visible without counting as new runs.
+                        // The same successful child breaks a catalog error tail
+                        // and leaves an SDK error tail intact.
                         for (offset, child_error) in [(1, true), (2, false)] {
                             let mut step =
                                 dispatch(&session_id, "https://example.com", child_error);
@@ -2705,6 +2756,41 @@ mod tests {
                 assert_eq!(summary.status, expected, "{session_id}");
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn catalog_child_errors_count_when_sdk_operations_interleave() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let session_id = "mixed-children";
+        let mut catalog = dispatch(session_id, "https://example.com", false);
+        catalog.tool_name = "run".to_string();
+        catalog.created_at = Some(1000);
+        let mut sdk = dispatch(session_id, "https://example.com", false);
+        sdk.tool_name = "run".to_string();
+        sdk.created_at = Some(1001);
+        sdk.result_meta = json!({ "isError": false, (SDK_RUN_ID_KEY): "sdk-1" }).to_string();
+        let catalog_key = catalog.dispatch_id.clone();
+        let sdk_key = sdk.dispatch_id.clone();
+        audit.record_tool_dispatch(catalog).await?;
+        audit.record_tool_dispatch(sdk).await?;
+        for offset in 0..3 {
+            let mut catalog_step = dispatch(session_id, "https://example.com", true);
+            catalog_step.parent_dispatch_id = Some(catalog_key.clone());
+            catalog_step.created_at = Some(1010 + offset * 2);
+            audit.record_tool_dispatch(catalog_step).await?;
+            let mut sdk_step = dispatch(session_id, "https://example.com", false);
+            sdk_step.parent_dispatch_id = Some(sdk_key.clone());
+            sdk_step.created_at = Some(1011 + offset * 2);
+            audit.record_tool_dispatch(sdk_step).await?;
+        }
+        audit.record_session_end(session_id, "closed", None).await?;
+        let summary = audit
+            .get_task_summary(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Failed);
         Ok(())
     }
 

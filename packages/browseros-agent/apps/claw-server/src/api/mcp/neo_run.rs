@@ -4,7 +4,7 @@
 use super::{after_run, before_run, dispatch::linked_cancel_token, service::StartedSession};
 use crate::{
     AppState,
-    db::audit_log::RecordToolDispatchInput,
+    db::audit_log::{RecordToolDispatchInput, SDK_RUN_ID_KEY},
     ids::DispatchId,
     services::{
         audit::AuditEvent,
@@ -126,7 +126,7 @@ pub(super) async fn call(
         result_meta: json!({
             "isError": result.is_error.unwrap_or(false),
             "cancelled": cancelled,
-            "sdkRunId": sdk_run_id,
+            (SDK_RUN_ID_KEY): sdk_run_id,
             "taskName": task_name,
             "contentSummary": format!("{} block(s)", result.content.len()),
         })
