@@ -33,6 +33,25 @@ const cases = [
     'cf-turnstile-response',
     '1x0000000000000000000000000000000AA',
   ],
+  // Cloudflare's always-blocks keys get the always-fail secret: a stale or late token is refused.
+  [
+    'turnstile-stale-token',
+    'turnstile',
+    'cf-turnstile-response',
+    '2x0000000000000000000000000000000AA',
+  ],
+  [
+    'turnstile-hidden-verifying',
+    'turnstile',
+    'cf-turnstile-response',
+    '2x0000000000000000000000000000000AA',
+  ],
+  [
+    'turnstile-frame-never-loads',
+    'turnstile',
+    'cf-turnstile-response',
+    '1x0000000000000000000000000000000AA',
+  ],
   [
     'hcaptcha-test',
     'hcaptcha',
@@ -116,6 +135,20 @@ test.each(cases)(
     })
   },
 )
+
+test('tests that the never-loading address holds its request open on both origins', async () => {
+  for (const origin of [fixture.origin, fixture.frameOrigin]) {
+    const started = Date.now()
+    const outcome = await fetch(`${origin}/never-loads`, {
+      signal: AbortSignal.timeout(300),
+    }).then(
+      () => 'answered',
+      (error: Error) => error.name,
+    )
+    expect(outcome).toBe('TimeoutError')
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250)
+  }
+})
 
 test('tests that no-captcha always accepts without calling a verifier', async () => {
   const count = requests.length

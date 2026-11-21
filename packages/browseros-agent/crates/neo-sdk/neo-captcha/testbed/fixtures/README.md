@@ -28,6 +28,9 @@ Each standalone page loads its vendor's real script. It mirrors widget state int
 | `turnstile-pass.html` | Automatic completion | `1x00000000000000000000AA` |
 | `turnstile-block.html` | Failure without a token | `2x00000000000000000000AB` |
 | `turnstile-interactive.html` | Completion after checkbox interaction | `3x00000000000000000000FF` |
+| `turnstile-stale-token.html` | The widget failed (retry off) and the page put an old token in its `cf-turnstile-response`; the widget's own frame decides, so never `already_clear` or `solved` | `2x00000000000000000000AB` |
+| `turnstile-hidden-verifying.html` | A hidden widget checking out of sight ("Please wait…") that never passes; never `already_clear` | `2x00000000000000000000BB` (invisible) |
+| `turnstile-frame-never-loads.html` | Completion beside a cross-site frame that never loads (`/never-loads` never answers) and is replaced every 2 s | `1x00000000000000000000AA` |
 | `no-captcha.html` | Ordinary form; always accepted | None |
 | `hcaptcha.html` | hCaptcha detection; the SDK refuses it as `unsolved` / `unsupported_type` | `10000000-ffff-ffff-ffff-000000000001` |
 | `perimeterx-modal.html` | PerimeterX's press-and-hold check over a page, mimicked with no vendor script: `iframe#px-captcha-modal` and its `#px-captcha`; refused as `unsolved` / `unsupported_type`, type `unknown`, the message naming PerimeterX | None |
@@ -36,7 +39,7 @@ Each standalone page loads its vendor's real script. It mirrors widget state int
 Public test secrets, verified against vendor documentation:
 
 - [Google FAQ](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha.-what-should-i-do): `6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe`. The original brief's sitekey was invalid; the catalog uses Google's documented key, approved in the shared contract.
-- [Cloudflare testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/): pass/interactive `1x0000000000000000000000000000000AA`; block `2x0000000000000000000000000000000AA`.
+- [Cloudflare testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/): pass/interactive `1x0000000000000000000000000000000AA`; block `2x0000000000000000000000000000000AA`, used for every page on an always-blocks sitekey.
 - [hCaptcha integration testing](https://docs.hcaptcha.com/#integration-testing-test-keys): `0x0000000000000000000000000000000000000000`.
 
 ## Browser checks

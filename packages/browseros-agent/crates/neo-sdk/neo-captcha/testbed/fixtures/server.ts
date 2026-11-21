@@ -1,4 +1,4 @@
-import { FIXTURE_PAGES, SPOTTING_PAGES } from './catalog'
+import { type CaptchaPage, FIXTURE_PAGES, SPOTTING_PAGES } from './catalog'
 
 export interface CaptchaFixtureServer {
   origin: string
@@ -23,6 +23,32 @@ const verification = {
     field: 'h-captcha-response',
     secret: '0x0000000000000000000000000000000000000000',
   },
+}
+
+/** Cloudflare's always-blocks test sitekeys, visible and invisible: their pages check tokens with
+ * the always-fail secret, so no token passes them, as no token passes the widget. */
+const TURNSTILE_BLOCKS = new Set([
+  '2x00000000000000000000AB',
+  '2x00000000000000000000BB',
+])
+
+/** The siteverify secret a page's server holds for its widget. */
+function secretFor(page: CaptchaPage, vendor: Vendor): string {
+  return page.sitekey && TURNSTILE_BLOCKS.has(page.sitekey)
+    ? '2x0000000000000000000000000000000AA'
+    : verification[vendor].secret
+}
+
+/**
+ * A frame's address that never answers (turnstile-frame-never-loads.html). The request stays
+ * open until its client leaves or the server stops, which aborts its signal.
+ */
+function neverAnswer(request: Request): Promise<Response> {
+  return new Promise((resolve) =>
+    request.signal.addEventListener('abort', () =>
+      resolve(new Response(null, { status: 204 })),
+    ),
+  )
 }
 
 function verdict(accepted: boolean, codes: string[] = []): Response {
@@ -54,6 +80,7 @@ export async function startCaptchaFixtureServer(
   let frameOrigin = ''
   async function handle(request: Request): Promise<Response> {
     const { pathname } = new URL(request.url)
+    if (pathname === '/never-loads') return neverAnswer(request)
     if (request.method === 'GET') {
       if (pathname === '/healthz') return new Response('ok')
       if (
@@ -88,10 +115,7 @@ export async function startCaptchaFixtureServer(
       const token = (await request.formData()).get(config.field)
       if (typeof token !== 'string' || !token.trim())
         return verdict(false, ['missing-input-response'])
-      const secret =
-        page.id === 'turnstile-block'
-          ? '2x0000000000000000000000000000000AA'
-          : config.secret
+      const secret = secretFor(page, vendor)
       const response = await fetch(options.verifyUrls?.[vendor] ?? config.url, {
         method: 'POST',
         body: new URLSearchParams({ secret, response: token }),

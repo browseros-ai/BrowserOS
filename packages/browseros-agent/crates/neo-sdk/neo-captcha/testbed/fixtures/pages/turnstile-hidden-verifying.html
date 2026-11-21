@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Turnstile checking out of sight</title></head>
+<body>
+<h1>Turnstile checking out of sight</h1>
+<form id="captcha-form" method="post" action="/submit/turnstile-hidden-verifying">
+  <p id="status" role="status">Please wait…</p>
+  <div id="widget" class="cf-turnstile" data-sitekey="2x00000000000000000000BB" style="display: none"></div>
+  <button id="submit" type="submit">Search</button>
+</form>
+<script>
+// MissingMoney and NY on Nov 19: Turnstile ran its check out of sight while the page said
+// "Please wait…", and Neo read the hidden widget as one that does not block. The container is
+// hidden as those pages hid theirs, and Cloudflare's invisible always-blocks test key checks out
+// of sight and never passes, retrying every second, so the page never stops waiting. The server
+// checks a submitted token with the always-fail secret.
+const fixtureState = window.__captchaFixture = { id: 'turnstile-hidden-verifying', family: 'turnstile', sitekey: '2x00000000000000000000BB', rendered: false, callbackFired: false, tokenLength: 0, errors: [] };
+function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
+window.fixtureLoaded = function() {
+  turnstile.render('#widget', {
+    sitekey: fixtureState.sitekey,
+    'retry-interval': 1000,
+    callback: token => { fixtureState.callbackFired = true; fixtureState.tokenLength = token.length; document.getElementById('status').textContent = 'Ready'; mirror(); },
+    'error-callback': code => { fixtureState.tokenLength = 0; fixtureState.errors.push(String(code || 'widget-error')); mirror(); },
+    'expired-callback': () => { fixtureState.tokenLength = 0; fixtureState.errors.push('expired'); mirror(); }
+  });
+  // The widget never shows, so rendered means started.
+  fixtureState.rendered = true;
+  mirror();
+};
+mirror();
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=fixtureLoaded&amp;render=explicit" async defer onerror="fixtureState.errors.push('script-load-error'); mirror()"></script>
+</body>
+</html>

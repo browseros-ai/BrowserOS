@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Turnstile failed beside a stale token</title></head>
+<body>
+<h1>Turnstile failed beside a stale token</h1>
+<form id="captcha-form" method="post" action="/submit/turnstile-stale-token">
+  <div id="widget" class="cf-turnstile" data-sitekey="2x00000000000000000000AB"></div>
+  <button id="submit" type="submit">Submit</button>
+</form>
+<script>
+// The NY page of Nov 19: its Cloudflare frame read "Verification failed" while the page's
+// cf-turnstile-response field still held a token from an earlier pass. Cloudflare's always-blocks
+// test key gives the real failed widget (retry off, so it stays failed); once it fails, this page
+// writes such a stale token into the widget's own response field. The server checks it with the
+// always-fail secret, so the site refuses it as NY's did.
+const STALE_TOKEN = 'stale-token-from-an-earlier-pass';
+const fixtureState = window.__captchaFixture = { id: 'turnstile-stale-token', family: 'turnstile', sitekey: '2x00000000000000000000AB', rendered: false, stale: false, callbackFired: false, tokenLength: 0, errors: [] };
+function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
+function markRendered() {
+  // Turnstile can keep its iframe in a closed shadow root; observe its visible host.
+  const frame = document.querySelector('#widget iframe, #widget > div');
+  if (!frame) return;
+  const rect = frame.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) { fixtureState.rendered = true; mirror(); observer.disconnect(); resizeObserver.disconnect(); }
+}
+function leaveStaleToken() {
+  const fields = document.querySelectorAll('#widget [name="cf-turnstile-response"]');
+  for (const field of fields) field.value = STALE_TOKEN;
+  fixtureState.stale = fields.length > 0;
+  fixtureState.tokenLength = fixtureState.stale ? STALE_TOKEN.length : 0;
+}
+const observer = new MutationObserver(markRendered);
+const resizeObserver = new ResizeObserver(markRendered);
+resizeObserver.observe(document.querySelector('#widget'));
+observer.observe(document.querySelector('#widget'), { childList: true, subtree: true, attributes: true });
+window.fixtureLoaded = function() {
+  turnstile.render('#widget', {
+    sitekey: fixtureState.sitekey,
+    retry: 'never',
+    callback: token => { fixtureState.callbackFired = true; fixtureState.tokenLength = token.length; mirror(); },
+    'error-callback': code => { fixtureState.errors.push(String(code || 'widget-error')); leaveStaleToken(); mirror(); },
+    'expired-callback': () => { fixtureState.errors.push('expired'); leaveStaleToken(); mirror(); }
+  });
+  markRendered();
+};
+mirror();
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=fixtureLoaded&amp;render=explicit" async defer onerror="fixtureState.errors.push('script-load-error'); mirror()"></script>
+</body>
+</html>
