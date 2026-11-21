@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Turnstile interactive challenge with a stale token</title></head>
+<body>
+<h1>Turnstile interactive challenge with a stale token</h1>
+<form id="captcha-form" method="post" action="/submit/turnstile-stale-interactive">
+  <div id="widget" class="cf-turnstile" data-sitekey="3x00000000000000000000FF"></div>
+  <button id="submit" type="submit">Submit</button>
+</form>
+<script>
+const STALE_TOKEN = 'STALE-TOKEN-turnstile-interactive-do-not-accept';
+const fixtureState = window.__captchaFixture = { id: 'turnstile-stale-interactive', family: 'turnstile', sitekey: '3x00000000000000000000FF', rendered: false, stale: true, replaced: false, callbackFired: false, tokenLength: 0, errors: [] };
+let seeded = false;
+function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
+function responseField() { return document.querySelector('#widget input[name="cf-turnstile-response"]'); }
+function syncReplaced() {
+  if (!seeded) return;
+  const field = responseField();
+  if (!field) return;
+  const changed = field.value !== STALE_TOKEN;
+  if (fixtureState.replaced !== changed) {
+    fixtureState.replaced = changed;
+    if (changed) fixtureState.tokenLength = field.value.length;
+    mirror();
+  }
+}
+function markRendered() {
+  if (seeded) { syncReplaced(); return; }
+  // Turnstile can keep its iframe in a closed shadow root; observe its visible host.
+  const frame = document.querySelector('#widget iframe, #widget > div');
+  const field = responseField();
+  if (!frame || !field) return;
+  const rect = frame.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    field.value = STALE_TOKEN;
+    seeded = true;
+    field.addEventListener('input', syncReplaced);
+    field.addEventListener('change', syncReplaced);
+    fixtureState.rendered = true;
+    fixtureState.replaced = false;
+    mirror();
+    resizeObserver.disconnect();
+  }
+}
+const observer = new MutationObserver(markRendered);
+const resizeObserver = new ResizeObserver(markRendered);
+resizeObserver.observe(document.querySelector('#widget'));
+observer.observe(document.querySelector('#widget'), { childList: true, subtree: true, attributes: true });
+window.fixtureLoaded = function() {
+  turnstile.render('#widget', {
+    sitekey: fixtureState.sitekey,
+    callback: token => {
+      fixtureState.callbackFired = true;
+      fixtureState.tokenLength = token.length;
+      if (seeded) {
+        const field = responseField();
+        fixtureState.replaced = field ? field.value !== STALE_TOKEN : token !== STALE_TOKEN;
+      }
+      mirror();
+    },
+    'error-callback': code => { fixtureState.tokenLength = 0; fixtureState.errors.push(String(code || 'widget-error')); mirror(); },
+    'expired-callback': () => { fixtureState.tokenLength = 0; fixtureState.errors.push('expired'); mirror(); }
+  });
+  markRendered();
+};
+mirror();
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=fixtureLoaded&amp;render=explicit" async defer onerror="fixtureState.errors.push('script-load-error'); mirror()"></script>
+</body>
+</html>

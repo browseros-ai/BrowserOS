@@ -31,9 +31,9 @@ test('tests that spotting remains selectable within fixtures and all', () => {
     ...catalog.FIXTURE_PAGES,
     ...catalog.SPOTTING_PAGES,
   ])
-  expect(selectPages(all, parseOptions(['--pages', 'demo']))).toEqual(
-    catalog.DEMO_PAGES,
-  )
+  expect(selectPages(all, parseOptions(['--pages', 'demo']))).toEqual([
+    ...catalog.DEMO_PAGES,
+  ])
   expect(selectPages(all, parseOptions(['--pages', 'demo']))).toHaveLength(13)
   expect(selectPages(all, parseOptions(['--pages', 'all']))).toEqual(all)
   expect(
@@ -257,6 +257,8 @@ test('tests that an SDK endpoint run writes the preflight, an array of results a
   expect(run.results[0]).toMatchObject({
     id: 'no-captcha',
     verdict: 'already_clear',
+    attempted: false,
+    method: 'none',
     outcome: 'PASS',
   })
   expect(run.markdown).toContain('Server: sdk at ')

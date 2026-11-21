@@ -28,14 +28,14 @@ minutes for a cold build, or set `--startup-timeout`.
 
 ## Pages
 
-`--pages fixtures` (default) runs the ten local fixtures and the eleven fake-key GeeTest, AWS WAF
-and FunCaptcha pages, which include cross-site frames and closed shadow roots; `spotting` runs only
-those eleven; `demo` runs the thirteen public demos; `all` runs all 34; `owner` runs the owner's
-six-site check (`neo-server/docker/CLAUDE.md`) in its order, with invisible reCAPTCHA twice:
-untouched, and after its own submit has shown the image challenge. `--only id,id` narrows any
-group. Fixtures use two listeners on different sites, `127.0.0.1:A` for top pages and `localhost:B`
-for embedded widgets; `--fixture-frame-host` changes the frame host. See
-[`fixtures/README.md`](fixtures/README.md).
+`--pages fixtures` (default) runs the fourteen local fixtures (including three stale-token pages)
+and the eleven fake-key GeeTest, AWS WAF and FunCaptcha pages, which include cross-site frames and
+closed shadow roots; `spotting` runs only those eleven; `demo` runs the thirteen public demos;
+`all` runs all 38; `owner` runs the owner's six-site check (`neo-server/docker/CLAUDE.md`) in its
+order, with invisible reCAPTCHA twice: untouched, and after its own submit has shown the image
+challenge. `--only id,id` narrows any group. Fixtures use two listeners on different sites,
+`127.0.0.1:A` for top pages and `localhost:B` for embedded widgets; `--fixture-frame-host` changes
+the frame host. See [`fixtures/README.md`](fixtures/README.md).
 
 Each page gets its own task (`neo.createTask`) and runs as separate `run` calls: open the tab, go
 to the page, wait for the widget (`page.waitForFunction`), `neo.solveCaptcha(page)`, read the token
@@ -53,23 +53,38 @@ invisible reCAPTCHA callback submits the form itself).
 
 ## Outcomes
 
-A result keeps the SDK's `verdict`, `type`, `reason`, `message`, `durationMs` and `paidTasks` exactly
-as returned, and `site`: what the page's own server said about the submission. Only token lengths
-are kept, never tokens.
+`neo.solveCaptcha(page)` returns `{ attempted, type, method, reason, message, durationMs,
+paidTasks, provider }` — no `verdict`. A value that still carries a `verdict` key is rejected as
+malformed (`neo.solveCaptcha returned a verdict`). The test bed keeps `verdict` as its own local
+classification of the SDK's `reason` (or claw-server's `status`), alongside `attempted`, `method`,
+and `site` (what the page's own server said about the submission). `results.json`, `results.md`
+and the one-line progress output record `attempted` and `method`. Only token lengths are kept,
+never tokens.
 
-- A page lists the verdicts that pass (`expect`), and may pin the type, the reason and a paid-task
-  cap. `unsolved` is the SDK's verdict for every definite failure, and only its reason keeps
-  claw-server's `unsupported` apart: `unsolved` / `unsupported_type` fails, and is never UNVERIFIED,
-  unless the page allows it. hCaptcha and PerimeterX's check pass only that
-  way, with the right type (PerimeterX's is `unknown` on purpose: claw-server's closed `type` enum
-  does not list it); the spotting pages accept it beside any other `unsolved`.
-- Neo waits up to 10 seconds for Cloudflare's full-page check. It reports `solved` when the
-  replacement page has cleared and carries the site's clearance cookie. A persistent wall returns
-  `unsolved` with `challenge_not_passed`, which the static wall fixture expects. The ScrapingCourse
-  demo passes as `solved` or `already_clear` once the page itself says the browser got through.
+- A page lists the test-bed verdicts that pass (`expect`), and may pin the type, the reason,
+  `attempted` (`expectAttempted`, ignored for claw-server where `attempted` is `null`), and a
+  paid-task cap. `unsolved` is the test bed's classification for every definite failure reason, and
+  only `reason` keeps claw-server's `unsupported` apart: `unsolved` / `unsupported_type` fails, and
+  is never UNVERIFIED, unless the page allows it. hCaptcha and PerimeterX's check pass only that
+  way, with the right type and `attempted: false` (PerimeterX's is `unknown` on purpose:
+  claw-server's closed `type` enum does not list it); the spotting pages accept it beside any other
+  `unsolved`.
+- Neo always solves a visible widget fresh instead of answering `already_passed` when a response
+  token is already present. Pages whose widget auto-passes on load (`turnstile-pass`,
+  `cloudflare-turnstile-demo`) or starts with a stale token (`turnstile-stale`) now skip Turnstile's
+  auto-pass wait and mint a fresh paid token (`mayNeedPaid: true`, `expectAttempted: true`). Three
+  stale-token fixtures (`turnstile-stale-interactive`, `turnstile-stale`, `recaptcha-v2-stale`)
+  pre-populate an obvious fake token that the fixture server rejects (`REJECTED: stale-token`), so
+  a pass proves Neo wrote a replacement token the vendor accepted.
+- Neo waits up to 10 seconds for Cloudflare's full-page check. It classifies `auto_passed` as
+  `solved` when the replacement page has cleared and carries the site's clearance cookie. A
+  persistent wall returns `challenge_not_passed` (`unsolved`, `attempted: true`), which the static
+  wall fixture expects. The ScrapingCourse demo passes as `solved` or `already_clear` once the page
+  itself says the browser got through.
 - `solved`, and `already_clear` on a CAPTCHA page, pass only if the site accepted the submission.
-  `token_applied` passes a `solved` page only if the site accepted. A site that accepts a page the
-  solver called `unsolved` fails it.
+  `token_applied` (`awaiting_submit`) passes a `solved` page only if the site accepted (and any
+  pinned `expectReason` / `expectAttempted` hold). A site that accepts a page classified as
+  `unsolved` fails it.
 - The `Check` column says what a pass proves: `solve` (the site accepted), `deliver` (a token with
   no site check, as on the Arkose demo; never counted as solved) or `detect` (the right type, no
   solve claimed). The summary counts site-accepted submissions, deliveries, detections and paid tasks.
@@ -107,8 +122,9 @@ error.
 
 The production Neo image still runs claw-server, whose release check (`release-docker.yml`) passes
 `--server claw-server --mcp-url <url>`. That driver uses claw-server's `tabs`, `evaluate_in_page` and
-`solve_captcha`; the catalog and rules are the same, and its `status` is kept beside the verdict
-neo-captcha maps it to. The runner only ever launches the SDK.
+`solve_captcha`; the catalog and rules are the same, claw-server's `status` is kept beside the test
+bed's local `verdict` classification (`STATUS_VERDICT`), and `attempted` is `null` (so
+`expectAttempted` is ignored). The runner only ever launches the SDK.
 
 For a local proof, `bun crates/neo-sdk/neo-captcha/testbed/e2e/stub-mcp.ts --scenario contract`
 prints a stub URL; pass it with `--mcp-url` and `--fixture-origin http://fixtures.invalid`.
