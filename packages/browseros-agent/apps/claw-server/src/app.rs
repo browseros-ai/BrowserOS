@@ -163,8 +163,11 @@ impl AppState {
             config.browserclaw_dir.join("screenshots"),
             audit_log.clone(),
         ));
-        let analytics =
-            Arc::new(AnalyticsService::new(&config.browserclaw_dir, config.mode).await?);
+        let analytics = Arc::new(
+            AnalyticsService::new(&config.browserclaw_dir, config.mode)
+                .await?
+                .with_playwright_run(config.serves_playwright_run()),
+        );
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
         // Shares the analytics install id, so a failure report and a product event are
         // the same anonymous install and neither adds a new identifier.

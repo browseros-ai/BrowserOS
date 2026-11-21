@@ -29,6 +29,7 @@ const VERSION_MARKER: &str = concat!(
     ";"
 );
 const POSTHOG_KEY_MARKER: Option<&str> = option_env!("CLAW_POSTHOG_KEY_MARKER");
+const PLAYWRIGHT_RUN_MARKER: &str = env!("CLAW_PLAYWRIGHT_RUN_MARKER");
 /// Signals "the port is taken" to the supervising browser, which responds by
 /// relaunching on another port. Any other non-zero exit is read as a failed
 /// launch, so this must not be folded into the generic error path.
@@ -64,6 +65,7 @@ fn main() -> anyhow::Result<()> {
 async fn async_main() -> anyhow::Result<()> {
     std::hint::black_box(VERSION_MARKER);
     std::hint::black_box(POSTHOG_KEY_MARKER);
+    std::hint::black_box(PLAYWRIGHT_RUN_MARKER);
     let (config_path, stdio_mode) = match Cli::parse_action() {
         CliAction::Version => {
             writeln!(io::stdout().lock(), "{VERSION}")?;
@@ -154,8 +156,15 @@ fn log_native_identity(config: &claw_server::config::Config) {
     info!(
         mode = config.mode.as_str(),
         env = claw_server::config::HOSTED_MODE_ENV,
+        playwright_run = config.serves_playwright_run(),
         "server mode"
     );
+    if let Some(reason) = config.playwright_run_unavailable_reason() {
+        warn!(
+            env = claw_server::config::PLAYWRIGHT_RUN_ENV,
+            reason, "Playwright run requested but unavailable"
+        );
+    }
     // The effective values, so a deployment can confirm its behaviour file took hold.
     info!(
         tab_grouping = config.behavior.tab_grouping.as_str(),
