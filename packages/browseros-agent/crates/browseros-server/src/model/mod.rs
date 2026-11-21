@@ -19,6 +19,11 @@
 mod anthropic;
 mod bedrock;
 mod chat;
+// The sign-in's skeleton temporarily expects endpoint() to be unused until dispatch exists.
+#[allow(
+    unfulfilled_lint_expectations,
+    reason = "the sign-in implementation lands separately"
+)]
 mod chatgpt;
 mod errors;
 mod responses;
@@ -30,6 +35,7 @@ use std::sync::atomic::AtomicUsize;
 
 use base64::Engine;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use responses::{ResponsesDialect, ResponsesEndpoint};
 use serde_json::Value;
 use url::Url;
 
@@ -97,7 +103,7 @@ impl Models {
         }
         let kind = provider.kind;
         let http = self.http.clone().map_err(|_| errors::disconnected())?;
-        let endpoint = match kind {
+        let route = match kind {
             ProviderKind::Google
             | ProviderKind::Openrouter
             | ProviderKind::Fireworks
@@ -105,20 +111,60 @@ impl Models {
             | ProviderKind::OpenaiCompatible
             | ProviderKind::Ollama
             | ProviderKind::Lmstudio
-            | ProviderKind::Moonshot => chat::endpoint(&provider)?,
-            ProviderKind::Anthropic
-            | ProviderKind::Openai
-            | ProviderKind::Bedrock
-            | ProviderKind::ChatgptPro => {
+            | ProviderKind::Moonshot => {
+                let endpoint = chat::endpoint(&provider)?;
+                Route::Chat {
+                    http,
+                    endpoint,
+                    model: provider.model,
+                }
+            }
+            ProviderKind::Openai => {
+                let base = provider
+                    .base_url
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("https://api.openai.com/v1/");
+                let url = endpoint(base, "responses")?;
+                let mut headers = provider.headers.clone();
+                // The configured API key owns the Authorization header for this route.
+                headers.push((
+                    "authorization".into(),
+                    format!("Bearer {}", api_key(&provider)?),
+                ));
+                let endpoint = ResponsesEndpoint {
+                    url,
+                    headers,
+                    dialect: ResponsesDialect::OpenAi,
+                };
+                Route::Responses {
+                    http,
+                    endpoint,
+                    model: provider.model,
+                }
+            }
+            ProviderKind::ChatgptPro => {
+                if !matches!(provider.credentials, Credentials::SignIn) {
+                    return Err(errors::config(
+                        "ChatGPT Pro requires signing in to ChatGPT.",
+                    ));
+                }
+                let mut endpoint = self.sign_in.endpoint().await?;
+                let mut headers = provider.headers;
+                headers.extend(endpoint.headers);
+                endpoint.headers = headers;
+                Route::Responses {
+                    http,
+                    endpoint,
+                    model: provider.model,
+                }
+            }
+            ProviderKind::Anthropic | ProviderKind::Bedrock => {
                 return Err(ChatError::not_implemented("Calling this provider"));
             }
         };
         Ok(Model {
-            route: Route::Chat {
-                http,
-                endpoint,
-                model: provider.model,
-            },
+            route,
             window: provider.context_window,
             supports_images: provider.supports_images,
             kind: Some(kind),
@@ -157,6 +203,11 @@ enum Route {
     Chat {
         http: reqwest::Client,
         endpoint: chat::Endpoint,
+        model: String,
+    },
+    Responses {
+        http: reqwest::Client,
+        endpoint: ResponsesEndpoint,
         model: String,
     },
     Scripted {
@@ -217,6 +268,25 @@ impl Model {
                 endpoint,
                 model,
             } => chat::step(http, endpoint, model, request, &self.reasoning, sink).await,
+            Route::Responses {
+                http,
+                endpoint,
+                model,
+            } => {
+                if self.reasoning.effort.is_none() && self.reasoning.summary.is_none() {
+                    responses::step(http, endpoint, model, request, sink).await
+                } else {
+                    responses::step_configured(
+                        http,
+                        endpoint,
+                        model,
+                        request,
+                        &self.reasoning,
+                        sink,
+                    )
+                    .await
+                }
+            }
             Route::Scripted { script, next } => scripted::step(script, next, sink).await,
         };
         result.map_err(|mut error| {
@@ -256,7 +326,6 @@ impl EventSink for ObservedSink<'_> {
 #[derive(Default)]
 struct Reasoning {
     effort: Option<String>,
-    #[expect(dead_code, reason = "used by the Responses adapter")]
     summary: Option<String>,
 }
 
@@ -462,6 +531,7 @@ enum NativeOutput {
     /// The Chat Completions assistant message, the Responses output items, or the Anthropic
     /// content blocks, exactly as received.
     Chat(Value),
+    Responses(Vec<Value>),
     #[expect(
         dead_code,
         reason = "built once chunk `models` writes the Bedrock route"
