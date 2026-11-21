@@ -179,6 +179,18 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     modes: { development: { value: '~/.browserclaw-dev', commented: true } },
   },
   {
+    key: 'CLAW_PLAYWRIGHT_RUN',
+    section: 'claw',
+    description:
+      'Desktop Playwright MCP run (1 enables, 0 disables). The runtime value overrides the build default.',
+    secret: false,
+    schema: z.string().regex(/^(?:[01]|\p{White_Space}*)$/u),
+    modes: {
+      development: { value: '0', commented: true },
+      production: { value: '0', commented: true },
+    },
+  },
+  {
     key: 'CLAW_POSTHOG_KEY',
     section: 'claw',
     description:

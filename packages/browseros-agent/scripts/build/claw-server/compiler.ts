@@ -15,6 +15,7 @@ const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
 const POSTHOG_KEY_MARKER_PREFIX = 'browseros-claw-posthog-key='
+const PLAYWRIGHT_RUN_MARKER_PREFIX = 'browseros-claw-playwright-run='
 const MARKER_SUFFIX = ';'
 
 interface RustBuildSpec {
@@ -215,6 +216,7 @@ export async function validateCompiledBinary(
   binaryPath: string,
   version: string,
   posthogKey: string,
+  playwrightRun?: string,
 ): Promise<void> {
   if (posthogKey.length === 0) {
     throw new Error('CLAW_POSTHOG_KEY is required')
@@ -237,6 +239,24 @@ export async function validateCompiledBinary(
       `Compiled BrowserClaw server does not contain version ${version}: ${binaryPath}`,
     )
   }
+  const value = playwrightRun ?? ''
+  const expectedPlaywrightRun = /^\p{White_Space}*$/u.test(value) ? '0' : value
+  if (expectedPlaywrightRun !== '0' && expectedPlaywrightRun !== '1') {
+    throw new Error('CLAW_PLAYWRIGHT_RUN must be 0, 1, or unset')
+  }
+  const otherPlaywrightRun = expectedPlaywrightRun === '0' ? '1' : '0'
+  if (
+    !binary.includes(
+      `${PLAYWRIGHT_RUN_MARKER_PREFIX}${expectedPlaywrightRun}${MARKER_SUFFIX}`,
+    ) ||
+    binary.includes(
+      `${PLAYWRIGHT_RUN_MARKER_PREFIX}${otherPlaywrightRun}${MARKER_SUFFIX}`,
+    )
+  ) {
+    throw new Error(
+      `Compiled BrowserClaw server does not match CLAW_PLAYWRIGHT_RUN=${expectedPlaywrightRun}: ${binaryPath}`,
+    )
+  }
 }
 
 export const compileClawServerBinaries: ProductCompiler = async (
@@ -251,6 +271,7 @@ export const compileClawServerBinaries: ProductCompiler = async (
   if (!posthogKey) {
     throw new Error(`${product.label}: CLAW_POSTHOG_KEY is required`)
   }
+  // Verify the mode from the same merged environment Cargo receives.
   const env = { ...processEnv, ...envVars }
   const rootDir = process.cwd()
   const cargoTargetDir = resolve(rootDir, env.CARGO_TARGET_DIR ?? 'target')
@@ -265,7 +286,12 @@ export const compileClawServerBinaries: ProductCompiler = async (
       'release',
       invocation.binaryName,
     )
-    await validateCompiledBinary(binaryPath, version, posthogKey)
+    await validateCompiledBinary(
+      binaryPath,
+      version,
+      posthogKey,
+      env.CLAW_PLAYWRIGHT_RUN,
+    )
     compiled.push({ target, binaryPath })
   }
 

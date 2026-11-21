@@ -38,6 +38,12 @@ on:
         options:
           - alpha
           - draft-only
+      playwright_run:
+        description: >-
+          Build the server with the Playwright MCP run enabled (draft-only).
+          This uses up the server version. Production must build the next one.
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -61,6 +67,7 @@ jobs:
       linux_arch: ${{ steps.selection.outputs.linux_arch }}
       onboarding_version: ${{ steps.release.outputs.onboarding_version }}
       platforms: ${{ steps.selection.outputs.platforms }}
+      playwright_run: ${{ steps.selection.outputs.playwright_run }}
       publication: ${{ steps.selection.outputs.publication }}
       source_sha: ${{ steps.release.outputs.source_sha }}
       version: ${{ steps.release.outputs.version }}
@@ -74,6 +81,7 @@ jobs:
           MACOS_ARCH: ${{ inputs.macos_arch }}
           LINUX_ARCH: ${{ inputs.linux_arch }}
           PLATFORMS: ${{ inputs.platforms }}
+          PLAYWRIGHT_RUN: ${{ inputs.playwright_run }}
           PUBLICATION: ${{ inputs.publication }}
         run: |
           set -euo pipefail
@@ -118,6 +126,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "$PLAYWRIGHT_RUN" = true ] && [ "$PUBLICATION" != draft-only ]; then
+            echo "::error::playwright_run requires publication=draft-only"
+            exit 1
+          fi
           {
             echo "build_linux=$build_linux"
             echo "build_macos=$build_macos"
@@ -125,6 +137,7 @@ jobs:
             echo "macos_arch=$MACOS_ARCH"
             echo "linux_arch=$LINUX_ARCH"
             echo "platforms=$PLATFORMS"
+            echo "playwright_run=$PLAYWRIGHT_RUN"
             echo "publication=$PUBLICATION"
           } >> "$GITHUB_OUTPUT"
 
@@ -173,6 +186,7 @@ jobs:
     with:
       ref: ${{ needs.preflight.outputs.source_sha }}
       defer_finalize: ${{ needs.preflight.outputs.publication == 'draft-only' }}
+      playwright_run: ${{ needs.preflight.outputs.playwright_run == 'true' }}
       publish_ota: ${{ needs.preflight.outputs.publication == 'alpha' }}
     secrets: inherit
 

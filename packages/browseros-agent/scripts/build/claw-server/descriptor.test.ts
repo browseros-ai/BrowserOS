@@ -32,6 +32,9 @@ describe('BrowserClaw Rust build descriptor', () => {
         defaultR2UploadPrefix: 'claw-server-rust/prod-resources',
       },
     })
+    expect(clawServerBuildProduct.env.inlineEnvKeys).toContain(
+      'CLAW_PLAYWRIGHT_RUN',
+    )
   })
 
   it('reads the canonical Cargo version and supplies a CI-only telemetry key', () => {
