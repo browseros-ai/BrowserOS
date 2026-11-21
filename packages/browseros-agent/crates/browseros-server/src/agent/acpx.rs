@@ -873,7 +873,7 @@ async fn run_session(
         locator,
         scratch,
     };
-    let _incognito_cleanup = input.ephemeral.then_some(IncognitoCleanup {
+    let _incognito_cleanup = input.ephemeral.then(|| IncognitoCleanup {
         inner,
         name: &session.name,
     });
