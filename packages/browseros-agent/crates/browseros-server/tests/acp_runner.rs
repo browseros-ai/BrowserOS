@@ -785,6 +785,25 @@ async fn the_probe_route_normalizes_codex_choices_and_keeps_failures_on_the_succ
     );
     assert_eq!(body["protocolVersion"], 1);
 
+    std::fs::write(
+        fixture
+            .server
+            .state_dir()
+            .join("fake adapter/probe-auth-required"),
+        "",
+    )?;
+    let result = fixture.server.send(probe(json!({"type":"codex"}))).await;
+    assert_eq!(result.status(), StatusCode::OK);
+    let body = body_json(result).await;
+    assert_eq!(body["models"], json!([]));
+    assert_eq!(
+        body["error"],
+        json!({
+            "code":"auth_failed", "acpErrorCode":-32000,
+            "message":"Sign in using the Codex CLI, then reopen this dialog."
+        })
+    );
+
     let result = fixture.server.send(probe(json!({"type":"claude"}))).await;
     assert_eq!(result.status(), StatusCode::OK);
     assert_eq!(

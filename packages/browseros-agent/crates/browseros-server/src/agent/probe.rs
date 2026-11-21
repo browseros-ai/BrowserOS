@@ -101,6 +101,7 @@ async fn discover(
     )
     .map_err(probe_io)?;
     let mut connection = ProbeConnection {
+        adapter,
         stdin: process
             .0
             .stdin
@@ -133,6 +134,7 @@ async fn discover(
 }
 
 struct ProbeConnection {
+    adapter: Adapter,
     stdin: ChildStdin,
     stdout: Lines<BufReader<ChildStdout>>,
 }
@@ -190,10 +192,27 @@ impl ProbeConnection {
                 continue;
             }
             if let Some(error) = message.get("error") {
+                let acp_error_code = error["code"].as_i64();
+                // The direct adapter's message distinguishes sign-in from
+                // generic JSON-RPC server errors that can also use -32000.
+                if acp_error_code == Some(-32000)
+                    && error["message"].as_str().is_some_and(|message| {
+                        message.eq_ignore_ascii_case("Authentication required")
+                    })
+                {
+                    return Err(ProbeError {
+                        code: "auth_failed".into(),
+                        message: format!(
+                            "Sign in using the {} CLI, then reopen this dialog.",
+                            self.adapter.name()
+                        ),
+                        acp_error_code,
+                    });
+                }
                 return Err(ProbeError {
                     code: "acp_error".into(),
                     message: format!("The coding agent rejected the {method} request."),
-                    acp_error_code: error["code"].as_i64(),
+                    acp_error_code,
                 });
             }
             return message

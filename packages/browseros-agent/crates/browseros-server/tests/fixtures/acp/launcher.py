@@ -26,7 +26,14 @@ if "--agent" not in args:
             send({"jsonrpc":"2.0", "method":"fixture/update", "params":{}})
             result = {"protocolVersion":1, "agentInfo":{"name":"fixture-adapter"}}
         elif "claude-agent-acp@" in " ".join(args):
-            send({"jsonrpc":"2.0", "id":request["id"], "error":{"code":-32000}})
+            send({"jsonrpc":"2.0", "id":request["id"], "error":{
+                "code":-32000, "message":"Session could not be initialized",
+            }})
+            break
+        elif (fixtures / "probe-auth-required").exists():
+            send({"jsonrpc":"2.0", "id":request["id"], "error":{
+                "code":-32000, "message":"Authentication required",
+            }})
             break
         else:
             result = {"sessionId":"probe", "models":{
