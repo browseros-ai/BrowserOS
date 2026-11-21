@@ -19,9 +19,16 @@
 // then leaves an old token in the widget's own response field, removes the widget's frame (the
 // field stays, as the form kept it), and shows NY's alert, word for word. The server checks the
 // token with the always-fail secret, so the site refuses the search as NY's did.
+//
+// NY's widget had been gone for minutes. A solve started the moment the frame goes can still read
+// the widget as active and buy a token instead of checking the page, so the page reports
+// `frameGoneLong` only once the frame has been gone FRAME_GONE_WAIT_MS, and the catalog waits
+// for it.
 const STALE_TOKEN = 'stale-token-from-an-earlier-pass';
 const ALERT = 'There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.';
-const fixtureState = window.__captchaFixture = { id: 'verify-alert-only', family: 'turnstile', sitekey: '2x00000000000000000000BB', rendered: false, stale: false, frameGone: false, callbackFired: false, tokenLength: 0, errors: [] };
+const FRAME_GONE_WAIT_MS = 3000;
+const fixtureState = window.__captchaFixture = { id: 'verify-alert-only', family: 'turnstile', sitekey: '2x00000000000000000000BB', rendered: false, stale: false, frameGone: false, frameGoneLong: false, callbackFired: false, tokenLength: 0, errors: [] };
+let frameGoneTimer = null;
 function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
 function leaveOnlyTheAlert() {
   const widget = document.getElementById('widget');
@@ -33,6 +40,9 @@ function leaveOnlyTheAlert() {
   fixtureState.stale = fields.length > 0;
   fixtureState.tokenLength = fixtureState.stale ? STALE_TOKEN.length : 0;
   fixtureState.frameGone = fields.length > 0 && widget.children.length === fields.length && !widget.querySelector('iframe');
+  if (fixtureState.frameGone && frameGoneTimer === null) {
+    frameGoneTimer = setTimeout(() => { fixtureState.frameGoneLong = true; mirror(); }, FRAME_GONE_WAIT_MS);
+  }
   if (!document.getElementById('alert')) {
     const alert = document.createElement('p');
     alert.id = 'alert';
