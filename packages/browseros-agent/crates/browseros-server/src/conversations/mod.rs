@@ -318,16 +318,13 @@ impl Conversations {
 
     /// The stored row as of its last write; a live run's newer frames are not in it.
     pub async fn get(&self, id: ConversationId) -> Result<Option<Conversation>, StoreError> {
-        let rows = self.inner.store.conversations();
-        let Some(row) = rows.load(id).await? else {
-            return Ok(None);
-        };
-        // `ConversationRows` has no single-row summary, so the list supplies it.
-        let summary = rows.list().await?.into_iter().find(|row| row.id == id);
-        Ok(summary.map(|summary| Conversation {
-            summary,
-            messages: row.messages,
-        }))
+        Ok(self
+            .inner
+            .store
+            .conversations()
+            .load_with_summary(id)
+            .await?
+            .map(|(summary, messages)| Conversation { summary, messages }))
     }
 
     /// `release`, then delete the row, then end the agent's session, in that order, so a
