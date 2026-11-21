@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use neo_http::{
-    HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, SettingsDefaults, TokenError,
+    HostAuth, HostToken, NeoScreen, PeerRule, Service, ServiceInputs, Settings, SettingsDefaults,
+    TokenError,
 };
 use neo_takeover::Xvnc;
 use neo_trace::{ShotJobs, TraceSink, TraceStore};
@@ -50,9 +51,11 @@ pub(crate) struct HostInputs {
     pub(crate) sink: TraceSink,
     /// The camera's end of the writer's screenshot queue (`spawn_writer` has the other).
     pub(crate) screenshots: ShotJobs,
-    /// Neo's screen, from `CLAW_XVNC_ADDR` and `NEO_SCREEN`. The service puts it home as it
-    /// starts, so a fit a Neo restart cut short does not leave Xvnc at the owner's size.
+    /// Neo's screen, from `CLAW_XVNC_ADDR` and `NEO_SCREEN`. On its own screen the service puts it
+    /// home as it starts, so a fit a Neo restart cut short does not leave Xvnc at the owner's size.
     pub(crate) xvnc: Xvnc,
+    /// Whether Xvnc and the browser's windows are Neo's own (hosted mode) or a person's.
+    pub(crate) screen: NeoScreen,
     /// Chromium's CDP port (`ports.cdp`), the one the browser link dials. The service's live tab
     /// views open a connection of their own to it, so their frames never queue behind the
     /// agent's commands.
@@ -162,6 +165,7 @@ impl HostApi {
             sink,
             screenshots,
             xvnc,
+            screen,
             cdp_port,
             settings_file: _,
             settings_defaults: _,
@@ -191,6 +195,7 @@ impl HostApi {
                 let tabs = Arc::clone(&tabs);
                 Arc::new(move |tab| tabs.opener(tab))
             },
+            screen,
         });
         // Each tab the tab watch sees open reaches every active takeover at once, with its
         // opener as the browser announced it, for the release's `openedTabs`. Not through the

@@ -19,6 +19,9 @@ pub struct TabSettings {
     /// Which tabs a run sees. `task`: a run that carries a `taskId` sees and acts on only its task family's tabs (the family starts at the task a host named, and every task its runs create joins it; its tabs are the ones its tasks' runs opened and their popups); any other tab is refused with `page_not_in_task`. A run without a `taskId` sees every tab, but cannot pick, open a tab in or close a task a host named. `browser`: every run sees every tab, whatever task it carries. A run reads this once, at its start, and keeps it to its end. A name this server does not have is skipped and listed in `unknownValues`, as if left out. Where a whole document is read (a `PUT`, the saved settings file, `/etc/neo/settings.json`), it therefore reads as `task`, the default. A `PATCH` changes only what it names, so a skipped value there changes nothing: the setting keeps its value, `browser` included.
     #[serde(rename = "scope", skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// `on`: before Neo sends an agent tab input (a click, a key, a fill, the host's private fill) or takes its picture, it makes the tab its window's active tab, unless the owner holds the screen or a view watches another tab. `off`: the tab stays where it is and the window's active tab never changes for it, for a browser a person is using. The cost of `off`: in cross-site frames `focus()` leaves the frame unfocused (`toBeFocused()` fails, as with real Playwright on a background tab), and on a Linux browser that throttles background tabs each mouse move and capture there takes about 1 s (`neo-playwright/tests/background_tab_live.rs` measures it). A change applies from the next input or capture.
+    #[serde(rename = "bringForward", skip_serializing_if = "Option::is_none")]
+    pub bring_forward: Option<String>,
 }
 
 impl TabSettings {
@@ -26,6 +29,7 @@ impl TabSettings {
         TabSettings {
             idle_close_seconds: None,
             scope: None,
+            bring_forward: None,
         }
     }
 }

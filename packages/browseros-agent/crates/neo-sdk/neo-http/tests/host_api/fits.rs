@@ -8,13 +8,19 @@
 use crate::support::{HOME_SCREEN, TestResult, harness, harness_after_a_crash_mid_fit};
 use axum::http::StatusCode;
 use browseros_core::TabId;
+use neo_http::NeoScreen;
 use neo_takeover::{FitId, OwnerHasScreen, ScreenHolder, ScreenSize};
 use serde_json::json;
+use std::time::Duration;
 
 const PHONE: ScreenSize = ScreenSize {
     width: 390,
     height: 844,
 };
+
+/// How long the start-recovery tests wait for the window, polled `START_POLLS` times.
+const START_POLL: Duration = Duration::from_millis(10);
+const START_POLLS: u32 = 100;
 
 #[tokio::test]
 async fn a_fit_answers_with_the_contracts_fit_and_restores_once() -> TestResult {
@@ -261,16 +267,34 @@ async fn a_tab_that_closes_restores_its_fit() -> TestResult {
 
 #[tokio::test]
 async fn the_service_puts_the_screen_and_the_window_home_at_start() -> TestResult {
-    let harness = harness_after_a_crash_mid_fit(PHONE).await?;
+    let harness = harness_after_a_crash_mid_fit(PHONE, NeoScreen::Own).await?;
     assert_eq!(harness.xvnc.size(), HOME_SCREEN);
     // The window leaves fullscreen right after the resize, under the same start task.
-    for _ in 0..100 {
+    for _ in 0..START_POLLS {
         if harness.browser.window() == "maximized" {
             return Ok(());
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(START_POLL).await;
     }
     Err(format!("the window is still {}", harness.browser.window()).into())
+}
+
+#[tokio::test]
+async fn the_service_leaves_a_screen_that_is_not_neos_as_it_found_it() -> TestResult {
+    let harness = harness_after_a_crash_mid_fit(PHONE, NeoScreen::NotNeos).await?;
+    // The budget in which the start puts Neo's own screen home.
+    tokio::time::sleep(START_POLL * START_POLLS).await;
+    assert_eq!(
+        harness.xvnc.size(),
+        PHONE,
+        "a desktop's screen is the person's, so the start never resizes it"
+    );
+    assert_eq!(
+        harness.browser.window(),
+        "fullscreen",
+        "a fullscreen window on a desktop is the person's choice"
+    );
+    Ok(())
 }
 
 #[tokio::test]

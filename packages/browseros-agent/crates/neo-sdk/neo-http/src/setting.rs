@@ -105,6 +105,18 @@ pub(crate) const TABS_SCOPE: Setting = Setting {
 pub(crate) const TABS_SCOPE_TASK: &str = "task";
 pub(crate) const TABS_SCOPE_BROWSER: &str = "browser";
 
+/// Whether Neo makes an agent tab its window's active tab before it sends the tab input or takes
+/// its picture (`on`), or leaves the window's active tab alone (`off`), for a browser a person is
+/// using. `on` is hosted Neo's rule, which a saved value Neo cannot read keeps.
+pub(crate) const TABS_BRING_FORWARD: Setting = Setting {
+    name: "tabs.bringForward",
+    invalid_saved: None,
+    rule: Rule::Choice {
+        default: "on",
+        values: &["on", "off"],
+    },
+};
+
 /// Runs older than this are deleted from the trace (the retention sweep). The default is
 /// `neo_trace::RetentionPolicy`'s own `max_age`, which a test keeps equal.
 pub(crate) const TRACE_RETENTION: Setting = Setting {
@@ -195,6 +207,7 @@ pub(crate) const INPUT_CURSOR: Setting = Setting {
 pub(crate) const SETTINGS: &[Setting] = &[
     TAB_IDLE_CLOSE,
     TABS_SCOPE,
+    TABS_BRING_FORWARD,
     TRACE_RETENTION,
     TRACE_SCREENSHOTS,
     TRACE_VALUE_BYTES,

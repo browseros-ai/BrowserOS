@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use browseros_core::TabId;
 use browseros_core::viewport::Viewports;
-use neo_http::{Service, ServiceInputs};
+use neo_http::{NeoScreen, Service, ServiceInputs};
 use neo_screencast::testing::ScriptedTransport;
 use neo_takeover::{LockId, LockTarget, TabHold};
 use neo_trace::{Effect, TraceStore, screenshot_queue};
@@ -314,6 +314,7 @@ async fn a_new_service_does_not_restore_keeps_onto_the_same_browser() -> TestRes
             tab_owner: Arc::new(|_| None),
             tab_task: Arc::new(|_| None),
             tab_opener: Arc::new(|_| None),
+            screen: NeoScreen::Own,
         },
         Arc::new(ScriptedTransport(Arc::clone(&h.capture))),
     );

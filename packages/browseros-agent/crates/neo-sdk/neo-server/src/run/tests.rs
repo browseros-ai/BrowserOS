@@ -44,6 +44,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
 
     use crate::builtins::{self, PlaywrightFacade};
     use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
+    use crate::host::AgentFront;
     use crate::test_rig::Gate;
 
     on_neo_runtime(async {
@@ -59,7 +60,7 @@ fn target_crashed_real_page_op_precedes_failed_native_refresh_on_the_wire() -> R
             let facade = PlaywrightFacade::start(
                 Arc::clone(&rig.link),
                 false,
-                Arc::default(),
+                Arc::new(AgentFront::new(rig.settings.clone())),
                 Arc::new(FileAccess::new(Vec::new, Vec::new())),
                 None,
             );

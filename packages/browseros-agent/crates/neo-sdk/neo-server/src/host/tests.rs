@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_http::{Settings, SettingsDefaults, TookPrivateText};
+use neo_http::{NeoScreen, Settings, SettingsDefaults, TookPrivateText};
 use neo_trace::{
     Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
     RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
@@ -22,7 +22,8 @@ use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostInputs, TakeoverLock,
+    AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostInputs,
+    TakeoverLock,
 };
 use crate::browser::{Adopt, BrowserLink, NeoTab, TabRegistry};
 use crate::builtins::{self, EntryParts, PrivateEntry};
@@ -135,6 +136,7 @@ impl Host {
             sink,
             screenshots,
             xvnc: CLOSED_XVNC,
+            screen: NeoScreen::Own,
             // The fake browser has no CDP port, and no test here opens a live view to dial it.
             cdp_port: 0,
             settings_file: dir.path().join("settings.json"),
@@ -160,7 +162,7 @@ impl Host {
             EntryParts {
                 entry: Arc::clone(&entry) as Arc<dyn PrivateEntry>,
                 hosted: false,
-                front: Arc::default(),
+                front: Arc::new(AgentFront::new(settings.clone())),
                 // The fill touches no file; an empty policy reads nothing.
                 file_access: Arc::new(FileAccess::new(Vec::new, Vec::new())),
             },
@@ -187,7 +189,7 @@ impl Host {
         let serving = tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&link),
             Arc::clone(&takeover),
-            Arc::default(),
+            Arc::new(AgentFront::new(settings.clone())),
             Arc::default(),
             Some(Arc::clone(&blank_tab)),
             shutdown.clone(),

@@ -35,7 +35,7 @@ use crate::dispatch::{
     OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
     RunStart,
 };
-use crate::host::{HolderFeed, Note, TabHolders};
+use crate::host::{AgentFront, HolderFeed, Note, TabHolders};
 use crate::run::{RunService, RunServiceParts};
 use crate::test_support::FakeCdp;
 
@@ -138,7 +138,7 @@ impl TestRig {
         let playwright = builtins::PlaywrightFacade::start(
             Arc::clone(&self.link),
             false,
-            Arc::default(),
+            Arc::new(AgentFront::new(self.settings.clone())),
             file_access,
             None,
         );
