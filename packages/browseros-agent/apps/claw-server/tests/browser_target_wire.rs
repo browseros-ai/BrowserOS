@@ -182,6 +182,10 @@ struct HttpPeer {
 
 impl HttpPeer {
     async fn start() -> anyhow::Result<Self> {
+        Self::start_configured(|_| {}).await
+    }
+
+    async fn start_configured(configure: impl FnOnce(&mut Config)) -> anyhow::Result<Self> {
         let dir = tempfile::tempdir()?;
         let config = Arc::new(Config {
             server_port: 9200,
@@ -203,6 +207,8 @@ impl HttpPeer {
             behavior: Default::default(),
             behavior_ignored: Vec::new(),
         });
+        let mut config = config;
+        configure(Arc::make_mut(&mut config));
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();
         state
@@ -229,6 +235,16 @@ impl HttpPeer {
     }
 
     async fn request(&self, method: &str, mut params: Value) -> anyhow::Result<Value> {
+        self.request_with_tool_errors(method, &mut params, false)
+            .await
+    }
+
+    async fn request_with_tool_errors(
+        &self,
+        method: &str,
+        params: &mut Value,
+        allow_tool_errors: bool,
+    ) -> anyhow::Result<Value> {
         // Each modern stateless request supplies protocol metadata, while the
         // returned application handle carries task binding across HTTP requests.
         params["_meta"] = json!({
@@ -259,6 +275,10 @@ impl HttpPeer {
             .unwrap_or(&body);
         let value: Value = serde_json::from_str(encoded.trim())?;
         assert!(value["error"].is_null(), "{value}");
+        // An MCP tool refusal travels inside a successful JSON-RPC response.
+        if allow_tool_errors {
+            return Ok(value["result"].clone());
+        }
         assert_ne!(value["result"]["isError"], true, "{value}");
         Ok(value["result"].clone())
     }
@@ -461,3 +481,7 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[path = "playwright/browser_target_wire.rs"]
+mod playwright;

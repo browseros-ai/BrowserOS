@@ -7,6 +7,7 @@ pub mod helper_runtime;
 pub mod hosted;
 pub mod naming;
 pub mod observers;
+mod page_naming;
 mod prompt;
 pub mod pursue;
 pub mod script_hook;

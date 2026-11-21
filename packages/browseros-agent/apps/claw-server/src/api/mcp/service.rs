@@ -9,6 +9,7 @@ use crate::{
         hosted,
         naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
+        page_naming::{NamedPage, PageNaming},
         prompt::{mcp_instructions, with_pursue_guidance},
         session_handle, tab_grouping,
     },
@@ -22,7 +23,7 @@ use crate::{
         skills::{CreateSkill, SkillOrigin},
     },
 };
-use browseros_core::{PageId, target::BrowserView};
+use browseros_core::target::BrowserView;
 use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult};
 use claw_api::models::HelpRequestKind;
 use rmcp::{
@@ -66,6 +67,7 @@ const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your cli
 /// `taskName` instead of `name_session`.
 const AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in name_session, not here.";
 const HOSTED_AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in taskName, not here.";
+mod playwright;
 mod pursue;
 mod ultrafast;
 
@@ -129,6 +131,8 @@ fn handleless_start_for(tool: &str, raw_args: &Value) -> HandlelessStart {
 pub struct ClawMcpService {
     state: AppState,
     catalog: Arc<Vec<ToolDef>>,
+    /// The connection uses the same tool family for discovery, admission and dispatch.
+    playwright: Option<playwright::Playwright>,
     name_session_tool: Tool,
     save_skill_tool: Tool,
     mark_skill_run_tool: Tool,
@@ -191,6 +195,7 @@ impl ClawMcpService {
     pub fn new(state: AppState) -> Self {
         Self {
             catalog: Arc::new(hosted::catalog(state.config.mode)),
+            playwright: playwright::Playwright::for_state(&state),
             state,
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
@@ -226,6 +231,15 @@ impl ClawMcpService {
         }
     }
 
+    /// Help and pursue share the host's page checks but speak the active tool family's page id.
+    fn page_naming(&self) -> PageNaming {
+        if self.playwright.is_some() {
+            PageNaming::NativeTab
+        } else {
+            PageNaming::HostPage
+        }
+    }
+
     fn find_tool_index(&self, name: &str) -> Option<usize> {
         self.catalog.iter().position(|tool| tool.name == name)
     }
@@ -234,6 +248,9 @@ impl ClawMcpService {
     /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
     /// identity in the handshake, and must keep receiving the schema unchanged.
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
+        if let Some(playwright) = &self.playwright {
+            return playwright.listed_tools(self, declare_agent_name);
+        }
         let mode = self.mode();
         let tab_grouping = self.tab_grouping();
         let decorate = |tool: Tool| {
@@ -576,19 +593,18 @@ impl ClawMcpService {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         };
-        // The page the agent is blocked on. Mandatory: help is always about one page, and the cockpit
-        // brings exactly this tab to the front, so it is the page the agent names, never a guess from
-        // whichever tab was touched most recently.
-        let Some(page) = browseros_mcp::extract_page_id(true, raw_args) else {
-            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
-                "request_human_help: \"page\" is required (the id of the page that needs a person, the same number you pass to snapshot and act).",
-            )]);
+        let naming = self.page_naming();
+        let named = match naming.help_page(&self.state, raw_args).await {
+            Ok(named) => named,
+            Err(message) => {
+                return CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]);
+            }
         };
         // Resolve the named page now and refuse the request if it cannot be: an unresolved page would
         // leave the tab, url and title empty, and the cockpit fills empty fields from the session's
         // most-recently-active tab, which would point the banner and takeover at an unrelated page.
         let (browser_tab_id, url, title) = match self
-            .resolve_help_page(started.session.id(), PageId(page))
+            .resolve_help_page(started.session.id(), &named, naming)
             .await
         {
             Ok((browser_tab_id, url, title)) => (Some(browser_tab_id), Some(url), Some(title)),
@@ -611,7 +627,7 @@ impl ClawMcpService {
         };
         let entry = self.state.help.open(started.session.id(), params).await;
         // The extension's takeover bar owns the page while the person helps.
-        self.state.page_hold.quiet(&PageId(page)).await;
+        self.state.page_hold.quiet(&named.page).await;
         self.run_help_wait(started, &entry, request_ct).await
     }
 
@@ -623,9 +639,10 @@ impl ClawMcpService {
     async fn resolve_help_page(
         &self,
         session_id: &SessionId,
-        page: PageId,
+        named: &NamedPage,
+        naming: PageNaming,
     ) -> Result<(i64, String, String), String> {
-        let page_id = page.0;
+        let page_id = named.said;
         let Some(browser) = self.state.browser.session().await else {
             return Err(format!(
                 "request_human_help: the browser is not connected, so page {page_id} could not be brought to the front. Start BrowserOS neo, then ask again."
@@ -640,11 +657,9 @@ impl ClawMcpService {
                 format!("request_human_help: could not resolve page {page_id}: {error}")
             })?;
         let view = BrowserView::capture(browser, binding, None).await;
-        match view.page(page).await {
+        match view.page(named.page.clone()).await {
             Ok(info) => Ok((info.tab_id.0, info.url, info.title)),
-            Err(_) => Err(format!(
-                "request_human_help: page {page_id} is not one of your open pages. Pass the id of a page that is still open, the same number you use with snapshot and act."
-            )),
+            Err(_) => Err(naming.help_page_not_yours(page_id)),
         }
     }
 
@@ -705,9 +720,16 @@ impl ClawMcpService {
             )
             .await;
         let result = help_wait_result(entry.request_id(), outcome);
-        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+        let mut result = finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
             .await
-            .into_call_tool_result()
+            .into_call_tool_result();
+        // Stop can replace the local result. Attach the original native tab after that handoff.
+        if self.page_naming().help_reply_names_tab()
+            && let Some(tab_id) = entry.browser_tab_id()
+        {
+            result.structured_content.get_or_insert_with(|| json!({}))["page"] = json!(tab_id);
+        }
+        result
     }
 
     async fn start_session_in_store(
@@ -1225,7 +1247,9 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions({
+            .with_instructions(if let Some(playwright) = &self.playwright {
+                playwright.instructions(self)
+            } else {
                 let instructions = mcp_instructions(
                     self.mode(),
                     self.human_help(),
@@ -1253,6 +1277,9 @@ impl ServerHandler for ClawMcpService {
         context.peer.set_peer_info(request.clone());
         self.set_client_info(&request).await;
         self.watch_tool_list(context.peer.clone());
+        if let Some(playwright) = &self.playwright {
+            playwright.watch_run(&self.state, context.peer.clone());
+        }
         let info = self.get_info();
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return Ok(info);
@@ -1280,11 +1307,16 @@ impl ServerHandler for ClawMcpService {
         let is_modern_revision = context
             .protocol_version()
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
-        let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
-        if is_modern_revision {
-            result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+        async move {
+            if let Some(playwright) = &self.playwright {
+                playwright.ready(&self.state).await;
+            }
+            let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
+            if is_modern_revision {
+                result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
+            }
+            Ok(result)
         }
-        std::future::ready(Ok(result))
     }
 
     // Accept the 2026-07-28 `subscriptions/listen` stream instead of returning
@@ -1299,17 +1331,28 @@ impl ServerHandler for ClawMcpService {
         Some(requested.supported_by(&self.get_info().capabilities))
     }
 
-    // Holds the 2026-07-28 stream open, and says so on it whenever ultrafast skills turn on or
-    // off, since that adds or removes `run_skill`.
+    // Ultrafast can change the available tools while a 2026-07-28 stream is open.
+    // Playwright clients also need a notice when the child publishes a different run definition.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         if context.accepted().tools_list_changed != Some(true) {
             context.cancelled().await;
             return Ok(());
         }
         let mut changes = self.state.ultrafast.subscribe();
+        let mut run_definition =
+            playwright::RunDefinition::watch(self.playwright.as_ref(), &self.state);
         loop {
             tokio::select! {
                 () = context.cancelled() => return Ok(()),
+                changed = run_definition.changed() => {
+                    if changed.is_err() {
+                        context.cancelled().await;
+                        return Ok(());
+                    }
+                    if context.sink().notify_tool_list_changed().await.is_err() {
+                        return Ok(());
+                    }
+                },
                 changed = changes.changed() => {
                     if changed.is_err() {
                         context.cancelled().await;
@@ -1324,6 +1367,9 @@ impl ServerHandler for ClawMcpService {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
+        if let Some(playwright) = &self.playwright {
+            return playwright.get_tool(self, name);
+        }
         if name == "solve_captcha" && self.state.captcha.is_some() {
             return Some(session_handle::offer(super::captcha::solve_captcha_tool()));
         }
@@ -1355,6 +1401,14 @@ impl ServerHandler for ClawMcpService {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         // Refused before a session is resolved, so a tool the mode does not offer starts nothing.
+        let playwright_run = match &self.playwright {
+            Some(playwright) => match playwright.admit(self, &request) {
+                playwright::Admitted::Reply(reply) => return Ok(reply.into()),
+                playwright::Admitted::Run => true,
+                playwright::Admitted::Shared => false,
+            },
+            None => false,
+        };
         if let Some(message) = hosted::refusal(self.mode(), &request.name) {
             return Ok(
                 CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]).into(),
@@ -1370,10 +1424,11 @@ impl ServerHandler for ClawMcpService {
         // caller is handed back to run rather than told the tool does not exist.
         let is_pursue = request.name == PURSUE_TOOL_NAME
             && !self.mode().is_hosted()
-            && self.state.decisions.url().is_some();
+            && (self.playwright.is_some() || self.state.decisions.url().is_some());
         let is_solve_captcha = request.name == "solve_captcha" && self.state.captcha.is_some();
         let tool_index = self.find_tool_index(&request.name);
-        if !is_name_session
+        if !playwright_run
+            && !is_name_session
             && !is_save_skill
             && !is_mark_skill_run
             && !is_request_help
@@ -1455,7 +1510,9 @@ impl ServerHandler for ClawMcpService {
                 .await
                 .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
         }
-        if let Some(label) = task_name {
+        if self.playwright.is_none()
+            && let Some(label) = task_name
+        {
             self.apply_task_name(&started, label).await;
         }
         started.session.touch(tokio::time::Instant::now()).await;
@@ -1464,7 +1521,15 @@ impl ServerHandler for ClawMcpService {
         let tool_started_at = tokio::time::Instant::now();
         let tool_name = request.name.to_string();
 
-        let result = if is_name_session {
+        let result = if playwright_run {
+            Ok(playwright::run::call(
+                &self.state,
+                &started,
+                raw_args.as_object().cloned().unwrap_or_default(),
+                context.ct.clone(),
+            )
+            .await)
+        } else if is_name_session {
             Ok(self.call_name_session(&started, &raw_args).await)
         } else if is_save_skill {
             Ok(self
@@ -4614,4 +4679,48 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn catalog_start_and_shutdown_leave_engine_disabled_and_send_no_notice()
+    -> anyhow::Result<()> {
+        use crate::services::neo::{EngineLaunch, EngineState};
+        use tokio::io::AsyncBufReadExt;
+
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state;
+        let (client, transport) = tokio::io::duplex(64 * 1024);
+        let running =
+            rmcp::service::serve_directly(ClawMcpService::new(state.clone()), transport, None);
+        let context =
+            RequestContext::new(rmcp::model::RequestId::Number(1), running.peer().clone());
+        running
+            .service()
+            .initialize(
+                InitializeRequestParams::new(
+                    rmcp::model::ClientCapabilities::default(),
+                    Implementation::new("claude-code", "1.0.0"),
+                ),
+                context,
+            )
+            .await?;
+
+        let engine_states = state.neo.watch();
+        let launch = EngineLaunch::from_config(&state.config, std::path::Path::new("unused.json"));
+        assert!(launch.is_none());
+        state.neo.start(launch);
+        assert!(matches!(state.neo.state(), EngineState::Disabled(_)));
+        state.neo.shutdown().await;
+        assert!(matches!(state.neo.state(), EngineState::Disabled(_)));
+        assert!(!engine_states.has_changed()?);
+
+        let mut lines = tokio::io::BufReader::new(client).lines();
+        let reply =
+            tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await;
+        assert!(reply.is_err(), "unexpected MCP output: {reply:?}");
+        running.cancel().await?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    mod playwright;
 }

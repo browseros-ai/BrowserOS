@@ -1,116 +1,72 @@
-# claw-mcp — Rust real-browser conformance suite
+# Claw MCP contract suite
 
-Tier-3 integration coverage for the BrowserOS neo stack: deterministic fixture
-pages, a spawned BrowserOS, and the production Rust Claw server driven over its
-real `/mcp` endpoint. A live browser is required because lower-level tests cannot
-catch mismatches between CDP payloads and the accessibility/ref pipeline.
+The suite drives the production Rust server over MCP with a private BrowserOS
+profile and deterministic fixtures. The catalog pass runs with
+`CLAW_PLAYWRIGHT_RUN=0` and exercises the desktop tool catalog. The Playwright
+pass runs with `CLAW_PLAYWRIGHT_RUN=1` and exercises the Neo SDK's `run` and
+the shared human-help tools.
 
-## Coverage
+## Run the tests
 
-The suite covers every MCP tool and major failure path: `tabs`, `tab_groups`,
-`windows`, `navigate`, `snapshot`, `diff`, `act`, `grep`, `read`, `evaluate_in_page`,
-`run`, `screenshot`, `pdf`, `wait`, `upload`, `download`, and `name_session`.
-It also checks ownership isolation, untrusted-content fencing, auto-context,
-audit records, cancellation, browser-down guidance, and transport hygiene.
-
-`cases-click-recovery.ts` checks ordinary native clicks through both `act` and
-`run`: partial/transient coverage, sticky headers, hover-triggered coverage, and
-parent overlays above same-site and cross-site frames. Single left clicks fall
-back to one press of the element itself only after native preparation fails,
-and report that delivery path. The press reaches a target under any cover,
-including dialogs, `inert` subtrees and parent-frame modals. BrowserOS builds
-with `DOM.click` send it as a trusted press and report when the target was
-inert; older builds use the page's own untrusted `click()`. The cases probe
-which one the browser has. Disabled and no-longer-visible targets are refused
-untouched, and a click the press cannot reproduce keeps the native blocker's
-usable ref. No public method selector can force DOM activation. The Rust input
-tests inject lost mouse and press acknowledgements to ensure a click is never
-replayed after dispatch becomes uncertain.
-
-Each case asserts Rust behavior directly. The retired TypeScript server and its
-historical behavior are not test dependencies.
-
-## Running it
-
-The browser suite is gated on `BROWSEROS_BINARY`; without it, the suite skips
-cleanly. From `packages/browseros-agent`:
+From `packages/browseros-agent`, set `BROWSEROS_BINARY` to the BrowserOS executable
+and run both passes:
 
 ```bash
-BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' \
-  bun run test:claw-mcp-contract
-
-BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' \
-  bun run test:claw-mcp-smoke
+export BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo'
+bun run test:claw-mcp-contract
+bun run test:claw-mcp-smoke
 ```
 
-`run.ts` builds the Rust server before entering test timeouts. One isolated
-browser profile and server process are shared by the ordered cases, with pages
-cleaned between cases.
+Run just the pass you are working on:
 
-Useful environment variables:
+```bash
+bun run test:claw-mcp-contract --surface=catalog
+bun run test:claw-mcp-contract --surface=playwright
+bun run test:claw-mcp-smoke --surface=playwright
+```
+
+Without `BROWSEROS_BINARY`, the suite skips. The runner builds the Rust server
+once with the flag unset, then starts a new test process with the flag set for
+each pass. Cases within a pass run sequentially. Cases with different browser
+arguments or a different headless setting restart their private browser and
+server. CI receives one JUnit report containing the results from both passes.
 
 | Variable | Effect |
 | --- | --- |
-| `BROWSEROS_BINARY` | BrowserOS or BrowserOS neo executable to test |
-| `CLAW_MCP_SMOKE=1` | Run only smoke cases; set by `--smoke` |
-| `CLAW_MCP_ONLY=<text>` | Run only cases whose name contains the text, e.g. `ultrafast:` |
-| `BROWSEROS_TEST_HEADLESS=false` | Run headed for debugging |
-| `BROWSEROS_TEST_EXTRA_ARGS` | Add browser process arguments |
-| `BROWSEROS_TEST_DEBUG=true` | Stream browser output |
-| `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures |
+| `BROWSEROS_BINARY` | BrowserOS executable to test |
+| `CLAW_MCP_SMOKE=1` | Run only cases marked as smoke. The smoke command sets this through `--smoke`. |
+| `CLAW_MCP_ONLY=<text>` | Run cases whose names contain the text in each selected pass. |
+| `BROWSEROS_JUNIT_PATH` | Write the combined JUnit report to this path. |
+| `BROWSEROS_TEST_HEADLESS=false` | Run headed. |
+| `BROWSEROS_TEST_EXTRA_ARGS` | Add browser process arguments. |
+| `BROWSEROS_TEST_DEBUG=true` | Stream browser output. |
+| `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures. |
 
-The screenshot density cases declare `browserArgs` on their case definition.
-Cases can also override `headless`. The runner restarts only its isolated
-browser/server when either setting changes, so `--force-device-scale-factor=2`
-applies to density cases alone. On Linux, the repeated screenshot batch runs
-headed to match hosted Neo: new-headless Chromium can stall during repeated
-background captures. That case requires an X server; CI's browser wrapper starts
-Xvfb. Ordinary launch settings resume afterward; browser-kill stays last.
+On Linux, the repeated screenshot case runs headed. The CI browser wrapper
+starts Xvfb for it.
 
-The ungated fixture-server and MCP-client unit tests run under the normal Bun
-test suite.
+Run fixture-server and MCP-client tests without a browser:
 
-## Layout
-
-```text
-contracts/claw-mcp/
-  fixtures/                 deterministic pages and a two-origin static server
-  tests/browser.ts          isolated real-BrowserOS runtime
-  tests/mcp-client.ts       raw streamable-HTTP JSON-RPC/SSE client
-  tests/rust-server.ts      production Rust server launcher
-  tests/cases-*.ts          behavioral cases grouped by tool surface
-  tests/cases.ts            ordered registry; browser-kill stays last
-  tests/rust-conformance.test.ts
-  tests/run.ts              gated CLI entrypoint
+```bash
+bun test contracts/claw-mcp/tests/fixture-server.test.ts contracts/claw-mcp/tests/mcp-client.test.ts
 ```
 
-## Adding a case
+## Add a case
 
-Add it to the relevant `cases-<group>.ts`, assert the expected behavior in the
-case, and use `waitUntil` for asynchronous state. Pages opened with
-`ctx.openPage` are cleaned automatically. Keep the browser-kill case last.
+Add catalog cases to the relevant file under `tests/` and register them in
+`tests/cases.ts`. The catalog case order matters. Keep the browser-kill case
+last. The runner closes pages opened with `ctx.openPage` between cases.
 
-The SDK fix contracts live in `cases-sdk-input.ts`, `cases-sdk-navigation.ts`,
-`cases-sdk-read-eval.ts`, and `cases-screenshot-scale.ts`. They share deterministic
-`sdk-*.html` fixtures; existing attachment and missing-path routes supply download
-and HTTP 404 outcomes without adding server behavior. Existing `cases-fill.ts`
-already covers text, email, number, textarea and contenteditable regressions on
-both MCP and SDK paths. `insertText` has no granular MCP kind. SDK screenshots
-return metadata/annotations to the script and forward image blocks to the outer
-MCP result. Output cases verify that the same capture is remotely retrievable.
+Add Playwright cases under `tests/playwright/` and register them in
+`tests/playwright/cases.ts`. Call `run` with Playwright code and assert the
+observable result. The SDK starts fresh JavaScript for each call. To share
+tabs across calls, create a task with `neo.createTask`, return its id, and
+select it with `neo.task` on the next call. The runner enumerates the private
+profile to close tabs, including those left behind by a failed script.
 
-## Capture mode
-
-`CLAW_MCP_CAPTURE_DIR` writes the raw accessibility, frame-tree, and DOM payloads
-used by `browseros-core` serde fixtures:
+## Capture raw CDP fixtures
 
 ```bash
 CLAW_MCP_CAPTURE_DIR="$PWD/crates/browseros-core/tests/data/captured" \
-  BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' \
-  bun contracts/claw-mcp/tests/run.ts --smoke
-
-cargo test -p browseros-core --test captured_cdp_fixture
+  bun run test:claw-mcp-smoke --surface=catalog
 ```
-
-The full suite runs in the nightly BrowserOS neo workflow against the browser built
-by that workflow.

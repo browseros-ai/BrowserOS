@@ -7,7 +7,7 @@ const health = { status: 'ok', browser: { connected: true } }
 const sdk = (listed: boolean) => [
   {
     name: 'run',
-    description: `Runs Playwright JavaScript.\n\nSDK methods:${listed ? '\n- neo.solveCaptcha(page) → { verdict }' : ''}`,
+    description: `Runs Playwright JavaScript.\n\nSDK methods:${listed ? '\n- neo.solveCaptcha(page) → { attempted, type, method, reason, message, durationMs, paidTasks, provider }' : ''}`,
   },
 ]
 const claw = (listed: boolean) =>

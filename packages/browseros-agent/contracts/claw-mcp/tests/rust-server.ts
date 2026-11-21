@@ -175,9 +175,14 @@ export const RUST_BINARY = resolve(
  * Cargo build.
  */
 export function buildRustServer(): void {
+  // The build and runtime use the same flag. Bake the default into the shared
+  // binary even when the caller's shell enabled Playwright.
+  const env = { ...process.env }
+  delete env.CLAW_PLAYWRIGHT_RUN
   const build = Bun.spawnSync({
     cmd: ['cargo', 'build', '--locked', '-p', 'claw-server'],
     cwd: MONOREPO_ROOT,
+    env,
     stdout: 'inherit',
     stderr: 'inherit',
   })

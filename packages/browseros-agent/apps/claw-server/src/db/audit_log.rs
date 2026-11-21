@@ -27,7 +27,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
@@ -59,6 +59,7 @@ const RESULT_STRUCTURED_KEYS_MAX: usize = 16;
 const RESULT_JSON_STRING_MAX: usize = 192;
 const SUSTAINED_ERROR_TAIL: usize = 3;
 const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
+pub(crate) const SDK_RUN_ID_KEY: &str = "sdkRunId";
 
 #[derive(Clone)]
 pub struct AuditLog {
@@ -369,12 +370,22 @@ impl AuditLog {
             "cancellationReason": OPERATOR_CANCELLATION_REASON,
             "cancellationKind": "cockpit.operator-cancelled",
         });
+        let mut cancelled_meta: serde_json::Value =
+            serde_json::from_str(&result_meta(true, true, &structured_content, 1))?;
+        // Stop replaces the outcome. Keep the host label and run marker so
+        // readers can still recognize the parent and its recorded operations.
+        if let Some(name) = declared_task_name(std::slice::from_ref(&dispatch)) {
+            cancelled_meta["taskName"] = json!(name);
+        }
+        if let Some(marker) = sdk_run_marker(&dispatch) {
+            cancelled_meta[SDK_RUN_ID_KEY] = marker;
+        }
         let output_token_estimate =
             estimate_tool_output_tokens(&[ContentBlock::text(OPERATOR_CANCELLATION_REASON)]);
         ToolDispatches::update_many()
             .col_expr(
                 tool_dispatches::Column::ResultMeta,
-                Expr::value(Some(result_meta(true, true, &structured_content, 1))),
+                Expr::value(Some(cancelled_meta.to_string())),
             )
             .col_expr(
                 tool_dispatches::Column::ToolOutputTokenEstimate,
@@ -1070,9 +1081,8 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         .or_else(|| start.as_ref().map(|event| event.agent_label.clone()))
         .unwrap_or_else(|| "agent".to_string());
     let site = first_site_of(&dispatches);
-    let title = site
-        .as_ref()
-        .map(|site| format!("Browsed {site}"))
+    let title = declared_task_name(&dispatches)
+        .or_else(|| site.as_ref().map(|site| format!("Browsed {site}")))
         .unwrap_or_else(|| format!("Session on {agent_label}"));
     let cursor_id = last_dispatch.map(|row| row.id).unwrap_or(0);
     let last_at = last_dispatch
@@ -1225,17 +1235,46 @@ async fn query_end<C: ConnectionTrait>(
         .await?)
 }
 
+/// The SDK writer leaves the marker present even if it never received an engine run ID.
+fn sdk_run_marker(row: &ToolDispatchRow) -> Option<serde_json::Value> {
+    if row.tool_name != "run" || row.parent_dispatch_id.is_some() {
+        return None;
+    }
+    let mut meta: serde_json::Value = serde_json::from_str(row.result_meta.as_deref()?).ok()?;
+    meta.as_object_mut()?.remove(SDK_RUN_ID_KEY)
+}
+
 fn derive_status(dispatches: &[ToolDispatchRow], end: Option<&SessionEndEvent>) -> TaskStatus {
     let Some(end) = end else {
         return TaskStatus::Live;
     };
+    // Catalog script children count toward the error tail. The SDK parent
+    // records the outcome of the whole run, so exclude only its correlated
+    // operations.
+    let sdk_parents: HashSet<&str> = dispatches
+        .iter()
+        .filter_map(|row| {
+            sdk_run_marker(row)?;
+            row.dispatch_id.as_deref()
+        })
+        .collect();
+    let tail = dispatches
+        .iter()
+        .rev()
+        .filter(|row| {
+            !row.parent_dispatch_id
+                .as_deref()
+                .is_some_and(|parent| sdk_parents.contains(parent))
+        })
+        .take(SUSTAINED_ERROR_TAIL)
+        .collect::<Vec<_>>();
     match end.kind.as_str() {
         "cancelled" => TaskStatus::Cancelled,
-        "errored" if dispatches.is_empty() => TaskStatus::Failed,
-        "closed" if dispatches.is_empty() => TaskStatus::Done,
+        "errored" if tail.is_empty() => TaskStatus::Failed,
+        "closed" if tail.is_empty() => TaskStatus::Done,
         "closed" | "errored"
-            if dispatches.len() >= SUSTAINED_ERROR_TAIL
-                && dispatches[dispatches.len() - SUSTAINED_ERROR_TAIL..]
+            if tail.len() == SUSTAINED_ERROR_TAIL
+                && tail
                     .iter()
                     .all(|row| result_is_error(row.result_meta.as_deref())) =>
         {
@@ -1246,10 +1285,44 @@ fn derive_status(dispatches: &[ToolDispatchRow], end: Option<&SessionEndEvent>) 
     }
 }
 
+/// Audit rows sort by run start. Use the recorded completion time for overlapping
+/// declarations; row identity breaks equal-millisecond ties in audit arrival order.
+fn declared_task_name(dispatches: &[ToolDispatchRow]) -> Option<String> {
+    dispatches
+        .iter()
+        .filter(|row| row.tool_name == "run" && row.parent_dispatch_id.is_none())
+        .filter_map(|row| {
+            let meta =
+                serde_json::from_str::<serde_json::Value>(row.result_meta.as_deref()?).ok()?;
+            let name = meta
+                .get("taskName")
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| !name.is_empty())?
+                .to_owned();
+            Some((row, name))
+        })
+        .max_by_key(|(row, _)| {
+            (
+                row.created_at
+                    .saturating_add(row.duration_ms.unwrap_or(0).max(0)),
+                row.id,
+            )
+        })
+        .map(|(_, name)| name)
+}
+
 fn first_site_of(dispatches: &[ToolDispatchRow]) -> Option<String> {
     for row in dispatches {
         if let Some(url) = row.url.as_deref().and_then(hostname_of) {
             return Some(url);
+        }
+        // SDK rows have no URL. Their host-only metadata keeps skill drafts
+        // working without persisting page values or changing first-site order.
+        if let Some(host) = row.result_meta.as_deref().and_then(|raw| {
+            let meta: serde_json::Value = serde_json::from_str(raw).ok()?;
+            meta.get("siteHost")?.as_str().map(str::to_owned)
+        }) {
+            return Some(host);
         }
     }
     for row in dispatches {
@@ -1506,8 +1579,8 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditLog, ListTasksQuery, RecordToolDispatchInput, TaskStatus, bounded_args_json,
-        redacted_args_json, result_meta,
+        AuditLog, ListTasksQuery, RecordToolDispatchInput, SDK_RUN_ID_KEY, TaskStatus,
+        bounded_args_json, redacted_args_json, result_meta,
     };
     use crate::db::{DATABASE_FILENAME, Database};
     use browseros_mcp::AuditHints;
@@ -2180,6 +2253,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operator_cancellation_preserves_the_sdk_marker_and_task_name() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session_id, end_kind, expected_status, marker) in [
+            (
+                "named-closed",
+                "closed",
+                TaskStatus::Done,
+                Some(json!("sdk-1")),
+            ),
+            (
+                "named-cancelled",
+                "cancelled",
+                TaskStatus::Cancelled,
+                Some(json!(null)),
+            ),
+            ("named-catalog", "closed", TaskStatus::Done, None),
+        ] {
+            let mut run = dispatch(session_id, "https://example.com", false);
+            run.tool_name = "run".to_string();
+            let mut meta = json!({
+                "isError": false,
+                "taskName": "submit-local-request",
+                "unrelatedResult": "must not survive cancellation",
+            });
+            if let Some(marker) = &marker {
+                meta[SDK_RUN_ID_KEY] = marker.clone();
+            }
+            run.result_meta = meta.to_string();
+            let dispatch_id = run.dispatch_id.clone();
+            audit.record_tool_dispatch(run).await?;
+            audit.record_session_end(session_id, end_kind, None).await?;
+
+            for _ in 0..2 {
+                assert!(audit.mark_dispatch_operator_cancelled(&dispatch_id).await?);
+                let summary = audit
+                    .get_task_summary(session_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("named task missing"))?;
+                assert_eq!(summary.title, "submit-local-request");
+                assert_eq!(summary.status, expected_status);
+                let rows = audit.list_dispatches(Default::default()).await?.rows;
+                let row = rows
+                    .iter()
+                    .find(|row| row.dispatch_id.as_deref() == Some(dispatch_id.as_str()))
+                    .ok_or_else(|| anyhow::anyhow!("cancelled dispatch missing"))?;
+                let meta = parse(row.result_meta.as_deref().unwrap_or("null"));
+                assert_eq!(meta["taskName"], "submit-local-request");
+                assert_eq!(meta.get(SDK_RUN_ID_KEY), marker.as_ref());
+                assert_eq!(meta["isError"], true);
+                assert_eq!(meta["cancelled"], true);
+                assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
+                assert!(meta.get("unrelatedResult").is_none());
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn migrations_and_dispatch_pagination_work() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
@@ -2415,6 +2547,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sdk_site_metadata_survives_without_page_values() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut run = dispatch("sdk-site", "https://unused.example.com/private", false);
+        run.tool_name = "run".to_string();
+        run.url = None;
+        run.title = None;
+        run.args_json = json!({"code": "[redacted]"}).to_string();
+        run.result_meta = json!({"isError": false}).to_string();
+        let parent = run.dispatch_id.clone();
+        audit.record_tool_dispatch(run.clone()).await?;
+        run.dispatch_id = crate::ids::DispatchId::new();
+        run.parent_dispatch_id = Some(parent);
+        run.tool_name = "nav.goto".to_string();
+        run.result_meta = json!({"isError": false, "siteHost": "shop.example.com"}).to_string();
+        audit.record_tool_dispatch(run).await?;
+        audit.record_session_end("sdk-site", "closed", None).await?;
+        let task = audit
+            .get_task("sdk-site")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(task.summary.site.as_deref(), Some("shop.example.com"));
+        assert!(
+            task.dispatches
+                .iter()
+                .all(|row| row.url.is_none() && row.title.is_none())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_last_declared_sdk_task_name_survives_later_rows_and_closure() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (index, name, is_error) in [
+            (0, Some("first-task"), false),
+            (1, Some("failed-task"), true),
+            (2, None, false),
+        ] {
+            let mut run = dispatch("named-sdk", "https://example.com", is_error);
+            run.tool_name = "run".to_string();
+            run.created_at = Some(1000 + index * 10);
+            run.result_meta = json!({ "taskName": name, "isError": is_error }).to_string();
+            let parent = run.dispatch_id.clone();
+            audit.record_tool_dispatch(run).await?;
+
+            let mut child = dispatch("named-sdk", "https://example.com", false);
+            child.tool_name = "run".to_string();
+            child.created_at = Some(1001 + index * 10);
+            child.parent_dispatch_id = Some(parent);
+            child.result_meta = json!({ "taskName": "child-name" }).to_string();
+            audit.record_tool_dispatch(child).await?;
+        }
+        audit
+            .set_task_summary("named-sdk", "A separate searchable summary")
+            .await?;
+        audit
+            .record_session_end("named-sdk", "closed", None)
+            .await?;
+
+        let summary = audit
+            .get_task_summary("named-sdk")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("named SDK task missing"))?;
+        assert_eq!(summary.title, "failed-task");
+        assert_eq!(
+            summary.task_summary.as_deref(),
+            Some("A separate searchable summary")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_names_follow_run_completion_instead_of_start_order() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (started_at, duration_ms, name) in
+            [(2000, 100, "finishes-first"), (1000, 2000, "finishes-last")]
+        {
+            let mut run = dispatch("overlapping-names", "https://example.com", false);
+            run.tool_name = "run".to_string();
+            run.created_at = Some(started_at);
+            run.duration_ms = duration_ms;
+            run.result_meta = json!({ "taskName": name }).to_string();
+            audit.record_tool_dispatch(run).await?;
+        }
+        audit
+            .record_session_end("overlapping-names", "closed", None)
+            .await?;
+        let summary = audit
+            .get_task_summary("overlapping-names")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("overlapping task missing"))?;
+        assert_eq!(summary.title, "finishes-last");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_names_and_summaries_keep_the_site_client_title_fallback() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session_id, url, expected) in [
+            ("legacy-site", "https://example.com", "Browsed example.com"),
+            ("legacy-client", "about:blank", "Session on Agent"),
+        ] {
+            let mut legacy = dispatch(session_id, url, false);
+            legacy.tool_name = "name_session".to_string();
+            legacy.args_json = json!({ "name": "legacy-name" }).to_string();
+            legacy.result_meta = json!({ "taskName": "non-run-name" }).to_string();
+            audit.record_tool_dispatch(legacy).await?;
+            audit
+                .set_task_summary(session_id, "An existing prose summary")
+                .await?;
+            audit.record_session_end(session_id, "closed", None).await?;
+
+            let summary = audit
+                .get_task_summary(session_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("legacy task missing"))?;
+            assert_eq!(summary.title, expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn completed_session_failure_requires_three_error_tail() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
@@ -2443,6 +2702,95 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("three-error task missing"))?;
         assert_eq!(three_errors.status, TaskStatus::Failed);
         assert_eq!(three_errors.error_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn only_sdk_children_are_excluded_from_the_run_error_tail() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (case, outcomes, expected) in [
+            ("two", vec![false, true, true], TaskStatus::Done),
+            ("three", vec![false, true, true, true], TaskStatus::Failed),
+            ("recovered", vec![true, true, true, false], TaskStatus::Done),
+        ] {
+            for (recording, sdk_run, children, expected) in [
+                ("standalone", false, false, expected),
+                ("sdk", true, true, expected),
+                ("catalog", false, true, TaskStatus::Done),
+            ] {
+                let session_id = format!("{case}-{recording}");
+                for (index, is_error) in outcomes.iter().enumerate() {
+                    let mut run = dispatch(&session_id, "https://example.com", *is_error);
+                    run.tool_name = "run".to_string();
+                    run.created_at = Some(1000 + i64::try_from(index)? * 10);
+                    if sdk_run {
+                        run.result_meta = json!({
+                            "isError": is_error,
+                            (SDK_RUN_ID_KEY): format!("sdk-{index}"),
+                        })
+                        .to_string();
+                    }
+                    let parent = run.dispatch_id.clone();
+                    audit.record_tool_dispatch(run).await?;
+                    if children {
+                        // The same successful child breaks a catalog error tail
+                        // and leaves an SDK error tail intact.
+                        for (offset, child_error) in [(1, true), (2, false)] {
+                            let mut step =
+                                dispatch(&session_id, "https://example.com", child_error);
+                            step.tool_name = "read".to_string();
+                            step.created_at = Some(1000 + i64::try_from(index)? * 10 + offset);
+                            step.parent_dispatch_id = Some(parent.clone());
+                            audit.record_tool_dispatch(step).await?;
+                        }
+                    }
+                }
+                audit
+                    .record_session_end(&session_id, "closed", None)
+                    .await?;
+                let summary = audit
+                    .get_task_summary(&session_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+                assert_eq!(summary.status, expected, "{session_id}");
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn catalog_child_errors_count_when_sdk_operations_interleave() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let session_id = "mixed-children";
+        let mut catalog = dispatch(session_id, "https://example.com", false);
+        catalog.tool_name = "run".to_string();
+        catalog.created_at = Some(1000);
+        let mut sdk = dispatch(session_id, "https://example.com", false);
+        sdk.tool_name = "run".to_string();
+        sdk.created_at = Some(1001);
+        sdk.result_meta = json!({ "isError": false, (SDK_RUN_ID_KEY): "sdk-1" }).to_string();
+        let catalog_key = catalog.dispatch_id.clone();
+        let sdk_key = sdk.dispatch_id.clone();
+        audit.record_tool_dispatch(catalog).await?;
+        audit.record_tool_dispatch(sdk).await?;
+        for offset in 0..3 {
+            let mut catalog_step = dispatch(session_id, "https://example.com", true);
+            catalog_step.parent_dispatch_id = Some(catalog_key.clone());
+            catalog_step.created_at = Some(1010 + offset * 2);
+            audit.record_tool_dispatch(catalog_step).await?;
+            let mut sdk_step = dispatch(session_id, "https://example.com", false);
+            sdk_step.parent_dispatch_id = Some(sdk_key.clone());
+            sdk_step.created_at = Some(1011 + offset * 2);
+            audit.record_tool_dispatch(sdk_step).await?;
+        }
+        audit.record_session_end(session_id, "closed", None).await?;
+        let summary = audit
+            .get_task_summary(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Failed);
         Ok(())
     }
 

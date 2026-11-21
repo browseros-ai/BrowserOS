@@ -1,0 +1,107 @@
+{
+  "case": "01-ny-failure-dialog-already-passed",
+  "source": "03-ny-unclaimed.browseros.txt 2:15 snapshot, 2:18 turnstile/already_passed (S2; F4: old results under the dialog). Frame host by its title; dialog size from Neo's 'over the whole view'.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "widget_passed",
+    "challenge": {
+      "kind": "turnstile",
+      "state": "passed",
+      "frame": {
+        "frameId": "ny-widget",
+        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/ny/0x4AAAAAAA/light/normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "0x4AAAAAAA",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "ouf.osc.ny.gov",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "overSubmit": true,
+        "vendor": "turnstile",
+        "part": "checkbox",
+        "text": ["Please check the box below to continue.", "Close"]
+      },
+      "widgets": [
+        {
+          "vendor": "turnstile",
+          "part": "checkbox",
+          "shown": true,
+          "inLayer": true
+        }
+      ],
+      "submit": {
+        "label": "Search",
+        "covered": true
+      },
+      "alerts": [
+        [
+          "There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again."
+        ]
+      ],
+      "headings": [
+        "Claim Unclaimed Property",
+        "Search for Unclaimed Property",
+        "SEARCH",
+        "RESULTS"
+      ],
+      "buttons": [
+        "Close",
+        "arrow_left HOME",
+        "?",
+        "Search",
+        "Continue To File Claim (0) properties",
+        "add CLAIM",
+        "share SHARE"
+      ],
+      "text": [
+        "Please check the box below to continue.",
+        "Close",
+        "Claim Unclaimed Property",
+        "Search for Unclaimed Property",
+        "There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.",
+        "SEARCH",
+        "RESULTS",
+        "Your search returned 1000 unclaimed properties. Exact name matches will be shown first, followed by properties with similar names to the one entered."
+      ]
+    },
+    "face": "failed",
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "turnstile",
+          "state": "active",
+          "frame": {
+            "frameId": "ny-widget",
+            "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/ny/0x4AAAAAAA/light/normal",
+            "rect": null
+          },
+          "challengeFrame": null,
+          "sitekey": "0x4AAAAAAA",
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": false
+    }
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "deterministic",
+    "cause": "challenge_open"
+  }
+}

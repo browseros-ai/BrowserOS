@@ -19,7 +19,10 @@ export type CaptchaType =
   | 'aws_waf'
   | 'arkose'
   | 'unknown'
-/** `neo.solveCaptcha`'s `verdict`, exactly as the SDK returns it. */
+/**
+ * The test bed's own classification of `neo.solveCaptcha`'s `reason` (or claw-server's `status`),
+ * used for catalog expectations and runner rules. The Neo SDK itself returns no `verdict`.
+ */
 export type Verdict =
   | 'solved'
   | 'token_applied'
@@ -65,10 +68,12 @@ export interface CaptchaPage {
   sitekey?: string
   path?: string
   url?: string
-  /** Verdicts that pass. A success verdict on a CAPTCHA page also needs the site's acceptance. */
+  /** Classified verdicts that pass. A success verdict on a CAPTCHA page also needs the site's acceptance. */
   expect: Verdict[]
   /** When set, a matching verdict also needs one of these reasons. */
   expectReason?: string[]
+  /** When set, the SDK's `attempted` flag must match (ignored for claw-server, where it is `null`). */
+  expectAttempted?: boolean
   /**
    * A type refusal (`unsolved` / `unsupported_type`, claw-server's `unsupported`) passes here
    * too. Elsewhere it fails, unless `expectReason` asks for it.
@@ -77,6 +82,18 @@ export interface CaptchaPage {
   expectType?: CaptchaType
   maxPaidTasks?: number
   mayNeedPaid: boolean
+  /**
+   * Paid providers refuse this page's vendor test key; when the widget already holds its token
+   * Neo asks one, gets `provider_error` with no paid task, and the page's own token still passes
+   * the site.
+   */
+  providerRefusesKey?: boolean
+  /**
+   * Obvious fake token embedded by a stale-token fixture before the solve. The fixture server
+   * rejects submissions carrying this exact value (`REJECTED: stale-token`), so a pass proves
+   * Neo wrote a new token the vendor accepted.
+   */
+  staleToken?: string
   ready: string
   trigger?: PageTrigger
   site?: SiteCheck
@@ -160,11 +177,12 @@ function fixture(
   }
 }
 
-/** Detected, and refused as a type Neo does not solve: never a solve. */
+/** Detected, and refused as a type Neo does not solve: never a solve or attempt. */
 const unsupported = (type: CaptchaType) => ({
   expect: ['unsolved'] as Verdict[],
   expectType: type,
   expectReason: ['unsupported_type'],
+  expectAttempted: false,
 })
 
 export const FIXTURE_PAGES: readonly CaptchaPage[] = [
@@ -177,6 +195,21 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
   ),
   {
     ...fixture(
+      'recaptcha-v2-stale',
+      'reCAPTCHA v2 test checkbox with a stale token',
+      'recaptcha_v2',
+      '/recaptcha-v2-stale.html',
+      '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI',
+    ),
+    staleToken: 'STALE-TOKEN-recaptcha-v2-do-not-accept',
+    expectReason: ['checkbox_passed'],
+    expectAttempted: true,
+    maxPaidTasks: 0,
+    notes:
+      'Writes a stale token into g-recaptcha-response before the solve; clicking the unchecked checkbox must replace it for free.',
+  },
+  {
+    ...fixture(
       'recaptcha-v2-invisible-bind',
       'Invisible reCAPTCHA v2 bound to a button',
       'recaptcha_v2',
@@ -185,16 +218,39 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
       ['already_clear'],
     ),
     expectType: 'recaptcha_v2',
+    expectAttempted: false,
     maxPaidTasks: 0,
   },
-  fixture(
-    'turnstile-pass',
-    'Turnstile always passes',
-    'turnstile',
-    '/turnstile-pass.html',
-    '1x00000000000000000000AA',
-    ['solved', 'already_clear'],
-  ),
+  {
+    ...fixture(
+      'turnstile-pass',
+      'Turnstile always passes',
+      'turnstile',
+      '/turnstile-pass.html',
+      '1x00000000000000000000AA',
+      ['solved', 'token_applied'],
+    ),
+    expectAttempted: true,
+    providerRefusesKey: true,
+    notes:
+      "Always-pass test key: neo.solveCaptcha usually lands before the widget's token and passes free (auto_passed). When the widget wins the race, paid providers refuse this test key (provider_error, 0 paid tasks) while the page's own token still passes the site.",
+  },
+  {
+    ...fixture(
+      'turnstile-stale',
+      'Turnstile failed widget with a stale token',
+      'turnstile',
+      '/turnstile-stale.html',
+      '3x00000000000000000000FF',
+      ['token_applied', 'solved'],
+    ),
+    staleToken: 'STALE-TOKEN-turnstile-do-not-accept',
+    expectAttempted: true,
+    maxPaidTasks: 1,
+    mayNeedPaid: true,
+    notes:
+      'Static failed-widget box with no vendor script and no checkbox to click, so Neo must mint a paid token; 2Captcha mints this test key.',
+  },
   fixture(
     'turnstile-block',
     'Turnstile always blocks',
@@ -210,6 +266,21 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     '/turnstile-interactive.html',
     '3x00000000000000000000FF',
   ),
+  {
+    ...fixture(
+      'turnstile-stale-interactive',
+      'Turnstile interactive challenge with a stale token',
+      'turnstile',
+      '/turnstile-stale-interactive.html',
+      '3x00000000000000000000FF',
+    ),
+    staleToken: 'STALE-TOKEN-turnstile-interactive-do-not-accept',
+    expectReason: ['checkbox_passed'],
+    expectAttempted: true,
+    maxPaidTasks: 0,
+    notes:
+      'Writes a stale token into cf-turnstile-response while the checkbox is unpassed; clicking the checkbox must replace it for free.',
+  },
   fixture(
     'turnstile-cf-marker',
     'Turnstile beside Cloudflare bot management',
@@ -229,17 +300,21 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     expect: ['unsolved'] as Verdict[],
     expectType: 'cloudflare_challenge',
     expectReason: ['challenge_not_passed'],
+    expectAttempted: true,
     notes:
       'Detected as cloudflare_challenge by its challenge script; its Turnstile is the wall checkbox. It never clears, so Neo reports challenge_not_passed.',
   },
-  fixture(
-    'no-captcha',
-    'Ordinary form',
-    'none',
-    '/no-captcha.html',
-    undefined,
-    ['already_clear'],
-  ),
+  {
+    ...fixture(
+      'no-captcha',
+      'Ordinary form',
+      'none',
+      '/no-captcha.html',
+      undefined,
+      ['already_clear'],
+    ),
+    expectAttempted: false,
+  },
   {
     ...fixture(
       'hcaptcha-test',
@@ -262,14 +337,17 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     notes:
       'Detected by its frame over the page and its #px-captcha; the message and events name PerimeterX.',
   },
-  fixture(
-    'perimeterx-waiting',
-    'PerimeterX frame inserted, not shown',
-    'none',
-    '/perimeterx-waiting.html',
-    undefined,
-    ['already_clear'],
-  ),
+  {
+    ...fixture(
+      'perimeterx-waiting',
+      'PerimeterX frame inserted, not shown',
+      'none',
+      '/perimeterx-waiting.html',
+      undefined,
+      ['already_clear'],
+    ),
+    expectAttempted: false,
+  },
 ]
 
 export const DEMO_PAGES: readonly CaptchaPage[] = [
@@ -316,8 +394,10 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     family: 'turnstile',
     url: 'https://demo.turnstile.workers.dev/',
     sitekey: '1x00000000000000000000AA',
-    expect: ['solved', 'already_clear'],
+    expect: ['solved', 'token_applied'],
+    expectAttempted: true,
     mayNeedPaid: false,
+    providerRefusesKey: true,
     ready:
       '(document.querySelector(".cf-turnstile > div")?.getBoundingClientRect().height ?? 0) > 0',
     site: {
@@ -331,6 +411,8 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       expression:
         '(document.body?.innerText.match(/"success"\\s*:\\s*(true|false)[\\s\\S]{0,160}/) ?? [])[0]?.replace(/\\s+/g, " ") ?? null',
     },
+    notes:
+      "Always-pass test key: neo.solveCaptcha usually lands before the widget's token and passes free (auto_passed). When the widget wins the race, paid providers refuse this test key (provider_error, 0 paid tasks) while the page's own token still passes the site.",
   },
   {
     id: 'hcaptcha-demo',
@@ -505,7 +587,7 @@ export const OWNER_PAGE_IDS: readonly string[] = [
 ]
 
 export function tokenLengthExpression(family: CaptchaFamily): string {
-  const fields = {
+  const fields: Record<CaptchaFamily, string> = {
     recaptcha_v2: 'g-recaptcha-response',
     recaptcha_v3: '',
     turnstile: 'cf-turnstile-response',
@@ -513,6 +595,7 @@ export function tokenLengthExpression(family: CaptchaFamily): string {
     geetest: '',
     aws_waf: '',
     arkose: 'fc-token',
+    perimeterx: '',
     none: '',
   }
   return fields[family]

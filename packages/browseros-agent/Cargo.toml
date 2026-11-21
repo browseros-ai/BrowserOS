@@ -34,11 +34,10 @@ neo-http = { path = "crates/neo-sdk/neo-http" }
 neo-takeover = { path = "crates/neo-sdk/neo-takeover" }
 neo-playwright = { path = "crates/neo-sdk/neo-playwright" }
 neo-trace = { path = "crates/neo-sdk/neo-trace" }
+neo-server = { path = "crates/neo-sdk/neo-server" }
 claw-api = { path = "crates/claw-api" }
 neo-sdk-api = { path = "crates/neo-sdk/neo-sdk-api" }
 hosted-api = { path = "crates/hosted-api" }
-# The browser engine, started by crates/browseros-server as its own child process.
-neo-server = { path = "crates/neo-sdk/neo-server" }
 
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }

@@ -53,6 +53,10 @@ const ULTRAFAST_DESKTOP: Setup = Setup {
 };
 
 async fn test_app(setup: Setup) -> anyhow::Result<TestApp> {
+    test_app_with_behavior(setup, Behavior::defaults(setup.mode)).await
+}
+
+async fn test_app_with_behavior(setup: Setup, behavior: Behavior) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let config = Arc::new(Config {
         server_port: 9200,
@@ -68,7 +72,7 @@ async fn test_app(setup: Setup) -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode: setup.mode,
-        behavior: Behavior::defaults(setup.mode),
+        behavior,
         behavior_ignored: Vec::new(),
     });
     let mut state = AppState::new_with_home(config, dir.path().join("home")).await?;
@@ -422,3 +426,7 @@ async fn agents_are_taught_pursue_only_when_it_is_offered() -> anyhow::Result<()
     assert!(instructions.contains("Reach for run first"));
     Ok(())
 }
+
+#[cfg(unix)]
+#[path = "playwright/pursue.rs"]
+mod playwright;

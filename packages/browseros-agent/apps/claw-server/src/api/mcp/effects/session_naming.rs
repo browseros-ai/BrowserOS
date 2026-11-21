@@ -8,9 +8,12 @@ use futures_util::future::BoxFuture;
 use rmcp::model::ContentBlock;
 
 /// Appends a bounded rename reminder while the generated session label remains active.
-/// The reminder names whichever rename channel the server mode offers.
+/// The SDK run owns its reminder. Its internal pursue dispatches must leave that budget alone.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
+        if context.call.state.config.serves_playwright_run() {
+            return Ok(None);
+        }
         if context.result.is_error {
             return Ok(None);
         }
@@ -143,4 +146,7 @@ mod tests {
         assert_eq!(apply_result(&second, &success).await?.content.len(), 2);
         Ok(())
     }
+
+    #[cfg(unix)]
+    mod playwright;
 }

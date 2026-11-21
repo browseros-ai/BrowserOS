@@ -1,7 +1,4 @@
-import type {
-  LiveSessionActivityState,
-  SessionStatus,
-} from '@browseros/claw-api'
+import type { LiveSessionState, SessionStatus } from '@browseros/claw-api'
 import type { AnimatedBadgeStatus } from '@/components/motion/animated-badge'
 
 /** Shared status labels and colors for cockpit and audit surfaces. */
@@ -119,16 +116,22 @@ const IDLE_SESSION_BADGE: SessionStatusBadge = {
   badge: 'neutral',
 }
 
+const WAITING_SESSION_BADGE: SessionStatusBadge = {
+  label: 'Waiting for you',
+  badge: 'warning',
+}
+
 /**
- * A task's badge, reading a live task as Idle once the server marks it inactive (no tool call
- * for a minute). Agents send no "finished" signal, so a session stays live until its MCP
- * connection closes or goes stale, which can be minutes after the agent is done.
+ * The live snapshot carries pending help even when tool activity has gone idle.
+ * Recorded terminal outcomes win over a stale live snapshot after a session ends.
  */
 export function sessionStatusBadge(
   status: SessionStatus,
-  liveState: LiveSessionActivityState | undefined,
+  liveState: LiveSessionState | undefined,
 ): SessionStatusBadge {
-  return status === 'live' && liveState === 'idle'
+  if (status !== 'live') return SESSION_STATUS_BADGE[status]
+  if (liveState?.helpRequest) return WAITING_SESSION_BADGE
+  return liveState?.state === 'idle'
     ? IDLE_SESSION_BADGE
-    : SESSION_STATUS_BADGE[status]
+    : SESSION_STATUS_BADGE.live
 }

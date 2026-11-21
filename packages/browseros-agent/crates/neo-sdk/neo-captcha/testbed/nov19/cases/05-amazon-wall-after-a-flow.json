@@ -1,0 +1,41 @@
+{
+  "case": "05-amazon-wall-after-a-flow",
+  "source": "06-desk-amazon.browseros.txt 15:39 (S7), a new document after 'Buy Now'. The claim is synthetic: a flow's answer on a page that became this wall. policy.rs matches the recorded wording.",
+  "truth": "policy",
+  "claim": {
+    "basis": "widget_passed",
+    "challenge": {
+      "kind": "turnstile",
+      "state": "active",
+      "frame": {
+        "frameId": "amz-widget",
+        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/amz/0x4AAAAAAA/light/normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "0x4AAAAAAA",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "newDocument": true,
+    "probe": {
+      "complete": true,
+      "site": "www.amazon.com",
+      "headings": ["Access restricted"],
+      "text": [
+        "Access restricted",
+        "Continued access by an unauthorized AI agent violates Amazon's Conditions of Use, to which our customers have agreed.",
+        "Continue",
+        "Conditions of Use",
+        "Privacy Notice"
+      ]
+    },
+    "policyWall": true
+  },
+  "expect": {
+    "result": "policy_wall",
+    "tier": "deterministic"
+  }
+}

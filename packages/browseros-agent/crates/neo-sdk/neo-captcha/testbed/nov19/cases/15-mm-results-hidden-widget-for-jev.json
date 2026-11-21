@@ -1,0 +1,79 @@
+{
+  "case": "15-mm-results-hidden-widget-for-jev",
+  "source": "05-florida-tennessee.browseros.txt 7:59 results, replayed as claudef measured it: an already_passed answer on a hidden widget whose own frame cannot be read.",
+  "truth": "clear",
+  "claim": {
+    "basis": "widget_passed",
+    "challenge": {
+      "kind": "turnstile",
+      "state": "passed",
+      "frame": {
+        "frameId": "mm-widget",
+        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/mm/0x4AAAAAAA/light/normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "0x4AAAAAAA",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "missingmoney.com",
+      "widgets": [
+        {
+          "vendor": "turnstile",
+          "part": "checkbox",
+          "shown": false,
+          "inLayer": false
+        }
+      ],
+      "submit": {
+        "label": "SEARCH"
+      },
+      "headings": ["CLAIM unclaimed property", "Search for Unclaimed Property"],
+      "buttons": [
+        "arrow_left HOME",
+        "SEARCH",
+        "View Claimed Properties(0)",
+        "CLAIM",
+        "Cookies Settings"
+      ],
+      "text": [
+        "SEARCH",
+        "PropertyOwnerNameFields.LEGEND_ARIA",
+        "Property Owner Name",
+        "Last or Business Name",
+        "First Name",
+        "City",
+        "State/Province",
+        "To begin your search, enter your last name, or the name of your business.",
+        "To better refine your results, you may also enter your first name.",
+        "Exact name matches will be shown first.",
+        "RESULTS: Your search returned 1000 unclaimed properties.",
+        "You have 0 properties currently claimed!"
+      ]
+    },
+    "face": "unreadable"
+  },
+  "jev": {
+    "source": "measured by claudef with jev-1.14.0 on 2026-11-20 (design-claudef §5): MissingMoney results",
+    "standing": {
+      "challenge": 0.02,
+      "failed": 0.0,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.0,
+      "clear": 0.93,
+      "insufficient": 0.05
+    },
+    "blocked": 0.29
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "jev"
+  }
+}

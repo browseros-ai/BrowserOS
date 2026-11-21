@@ -93,7 +93,7 @@ pub(crate) enum Visibility {
 /// How the `run` description shows a method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Listing {
-    /// Its own line, e.g. `neo.solveCaptcha(page) → { verdict, … }`.
+    /// Its own line, e.g. `neo.solveCaptcha(page) → { attempted, … }`.
     Own(&'static str),
     /// One shared line per text, e.g. the Playwright API (about 120 methods) as one line.
     Grouped(&'static str),

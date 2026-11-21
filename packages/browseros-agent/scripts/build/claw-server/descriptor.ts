@@ -6,6 +6,7 @@ const INLINE_ENV_KEYS = [
   'CLAW_POSTHOG_KEY',
   'CLAW_POSTHOG_HOST',
   'CLAW_SENTRY_DSN',
+  'CLAW_PLAYWRIGHT_RUN',
 ] as const
 
 export const clawServerBuildProduct: ResourceBuildProductDescriptor = {

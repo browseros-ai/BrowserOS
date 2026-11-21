@@ -169,7 +169,7 @@ describe('BrowserClaw Rust compiler', () => {
     const encodedKey = Buffer.from(posthogKey).toString('hex')
     await writeFile(
       binaryPath,
-      `binary:browseros-claw-posthog-key=${encodedKey};browseros-claw-server-version=1.2.3;`,
+      `binary:browseros-claw-posthog-key=${encodedKey};browseros-claw-server-version=1.2.3;browseros-claw-playwright-run=0;`,
     )
 
     await expect(
@@ -201,6 +201,38 @@ describe('BrowserClaw Rust compiler', () => {
     await expect(
       validateCompiledBinary(binaryPath, '1.2.3', posthogKey),
     ).rejects.toThrow('version 1.2.3')
+  })
+
+  it('requires the Playwright marker to match the requested build mode', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'claw-rust-compiler-'))
+    const binaryPath = join(tempDir, 'server')
+    const posthogKey = 'phc_test'
+    const encodedKey = Buffer.from(posthogKey).toString('hex')
+    const binary = `browseros-claw-posthog-key=${encodedKey};browseros-claw-server-version=1.2.3;`
+    const validate = (playwrightRun?: string) =>
+      validateCompiledBinary(binaryPath, '1.2.3', posthogKey, playwrightRun)
+
+    await writeFile(binaryPath, binary)
+    await expect(validate()).rejects.toThrow('CLAW_PLAYWRIGHT_RUN=0')
+
+    await writeFile(binaryPath, `${binary}browseros-claw-playwright-run=0;`)
+    await expect(validate()).resolves.toBeUndefined()
+    await expect(validate('')).resolves.toBeUndefined()
+    await expect(validate(' \t')).resolves.toBeUndefined()
+    await expect(validate('0')).resolves.toBeUndefined()
+    await expect(validate('1')).rejects.toThrow('CLAW_PLAYWRIGHT_RUN=1')
+    await expect(validate('2')).rejects.toThrow('CLAW_PLAYWRIGHT_RUN must be')
+
+    await writeFile(binaryPath, `${binary}browseros-claw-playwright-run=1;`)
+    await expect(validate('1')).resolves.toBeUndefined()
+    await expect(validate()).rejects.toThrow('CLAW_PLAYWRIGHT_RUN=0')
+
+    await writeFile(
+      binaryPath,
+      `${binary}browseros-claw-playwright-run=0;browseros-claw-playwright-run=1;`,
+    )
+    await expect(validate()).rejects.toThrow('CLAW_PLAYWRIGHT_RUN=0')
+    await expect(validate('1')).rejects.toThrow('CLAW_PLAYWRIGHT_RUN=1')
   })
 })
 

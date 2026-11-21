@@ -156,6 +156,7 @@ mod tests {
         AppConfig {
             launch: LaunchConfig {
                 server_port: 9200,
+                script_cdp: false,
                 cdp_port: 49337,
                 resources_dir: PathBuf::from("resources"),
                 execution_dir: None,
