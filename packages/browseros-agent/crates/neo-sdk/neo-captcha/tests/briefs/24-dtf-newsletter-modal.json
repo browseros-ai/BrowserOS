@@ -1,0 +1,61 @@
+{
+  "case": "24-dtf-newsletter-modal",
+  "source": "01-dintaifung-yelp.browseros.txt 0:48: dialog 'Sign up for Bao Bao Insiders' (aria-modal) over the page; its form's Submit sits inside it.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "dtf.com",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "text": [
+          "Sign up for Bao Bao Insiders",
+          "First Name *",
+          "Last Name *",
+          "Email Address *",
+          "Birthday (MM/DD/YYYY)",
+          "Preferred Location",
+          "Submit"
+        ]
+      },
+      "submit": {
+        "label": "Submit",
+        "inLayer": true
+      },
+      "headings": [
+        "Santa Clara",
+        "Cookie consent",
+        "We Take Privacy Seriously"
+      ],
+      "buttons": [
+        "Close Modal",
+        "Submit",
+        "Dismiss cookie consent banner",
+        "Manage",
+        "Okay"
+      ]
+    }
+  },
+  "jev": {
+    "source": "assumed, not measured: a plausible reading that pins the code path; re-measure with the live test",
+    "standing": {
+      "challenge": 0.0,
+      "failed": 0.0,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.85,
+      "clear": 0.12,
+      "insufficient": 0.03
+    },
+    "blocked": 0.07
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "jev"
+  }
+}

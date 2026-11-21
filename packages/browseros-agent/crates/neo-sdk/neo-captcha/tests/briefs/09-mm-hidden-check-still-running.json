@@ -1,0 +1,86 @@
+{
+  "case": "09-mm-hidden-check-still-running",
+  "source": "12-texas-2.browseros.txt 0:59-1:26 (S3): 'Please wait while we verify your browser...', SEARCH disabled, old results on the page. The token claim is synthetic; the rescan reads the hidden widget still verifying, as cv-scan's reader does.",
+  "truth": "checking",
+  "claim": {
+    "basis": "token_injected",
+    "challenge": {
+      "kind": "turnstile",
+      "state": "active",
+      "frame": {
+        "frameId": "mm-widget",
+        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/mm/0x4AAAAAAA/light/normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "0x4AAAAAAA",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "missingmoney.com",
+      "widgets": [
+        {
+          "vendor": "turnstile",
+          "part": "checkbox",
+          "shown": false,
+          "inLayer": false
+        }
+      ],
+      "submit": {
+        "label": "SEARCH",
+        "disabled": true
+      },
+      "headings": ["CLAIM unclaimed property", "Search for Unclaimed Property"],
+      "buttons": [
+        "arrow_left HOME",
+        "SEARCH",
+        "View Claimed Properties(0)",
+        "CLAIM"
+      ],
+      "text": [
+        "Please wait while we verify your browser...",
+        "SEARCH",
+        "PropertyOwnerNameFields.LEGEND_ARIA",
+        "Property Owner Name",
+        "Last or Business Name",
+        "First Name",
+        "City",
+        "State/Province",
+        "RESULTS: Your search returned 1000 unclaimed properties. Display:"
+      ]
+    },
+    "face": "verifying",
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "turnstile",
+          "state": "pending",
+          "frame": {
+            "frameId": "mm-widget",
+            "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/mm/0x4AAAAAAA/light/normal",
+            "rect": null
+          },
+          "challengeFrame": null,
+          "sitekey": "0x4AAAAAAA",
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": false
+    }
+  },
+  "expect": {
+    "result": "pending",
+    "tier": "deterministic"
+  }
+}

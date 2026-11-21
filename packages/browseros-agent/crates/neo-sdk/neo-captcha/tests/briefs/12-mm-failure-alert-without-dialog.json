@@ -1,0 +1,59 @@
+{
+  "case": "12-mm-failure-alert-without-dialog",
+  "source": "12-texas-2.browseros.txt 4:24-4:30: the failure alert, SEARCH enabled again, no results; the site rejected the check. A solve at that moment finds no widget (no_captcha).",
+  "truth": "blocked",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "missingmoney.com",
+      "submit": {
+        "label": "SEARCH"
+      },
+      "alerts": [
+        [
+          "There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again."
+        ]
+      ],
+      "headings": ["CLAIM unclaimed property", "Search for Unclaimed Property"],
+      "buttons": [
+        "arrow_left HOME",
+        "SEARCH",
+        "View Claimed Properties(0)",
+        "CLAIM"
+      ],
+      "text": [
+        "SEARCH",
+        "PropertyOwnerNameFields.LEGEND_ARIA",
+        "Property Owner Name",
+        "Last or Business Name",
+        "First Name",
+        "City",
+        "State/Province",
+        "There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.",
+        "To begin your search, enter your last name, or the name of your business."
+      ]
+    }
+  },
+  "jev": {
+    "source": "measured by cv-verify with jev-1.14.0 on 2026-11-20 through HttpJudge (1049 input tokens), on this brief's own evidence",
+    "standing": {
+      "agent_policy": 0.0,
+      "challenge": 0.0,
+      "checking": 0.0,
+      "clear": 0.0,
+      "denied": 0.0,
+      "failed": 1.0,
+      "insufficient": 0.0,
+      "other_overlay": 0.0
+    },
+    "blocked": 0.9
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "jev",
+    "cause": "site_rejected"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "case": "23-seats-calendar-announcement",
+  "source": "02-sfo-paris-seatsaero.browserbase.txt 3:44: dialog 'New Calendar mode' over the search page.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "seats.aero",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "text": [
+          "New Calendar mode",
+          "See the lowest award price for every day of the month at a glance.",
+          "Two months at a time",
+          "Switch cabins instantly",
+          "Live refresh by day",
+          "Maybe later",
+          "Try Calendar mode"
+        ]
+      },
+      "headings": [
+        "New Calendar mode",
+        "Two months at a time",
+        "Switch cabins instantly",
+        "Live refresh by day",
+        "Search"
+      ],
+      "buttons": ["Close", "Maybe later", "Try Calendar mode"]
+    }
+  },
+  "jev": {
+    "source": "assumed, not measured: a plausible reading that pins the code path; re-measure with the live test",
+    "standing": {
+      "challenge": 0.0,
+      "failed": 0.0,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.84,
+      "clear": 0.14,
+      "insufficient": 0.02
+    },
+    "blocked": 0.05
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "jev"
+  }
+}
