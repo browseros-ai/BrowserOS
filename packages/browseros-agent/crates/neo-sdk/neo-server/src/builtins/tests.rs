@@ -1727,9 +1727,9 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
     );
     assert_eq!(
         answer["message"],
-        "Neo could not tell whether the CAPTCHA passed (a browser call failed); look at the page \
-         again before acting.",
-        "claw-sdk's own line, not the crate's MCP wording"
+        "Neo could not tell whether the CAPTCHA passed. Checking the CAPTCHA page failed \
+         (Missing url). Look at the page again before acting.",
+        "the script receives the cause and what to do next"
     );
     assert_eq!(answer["paidTasks"], 0, "no provider was ever asked");
     assert_eq!(answer.get("provider"), Some(&Value::Null));

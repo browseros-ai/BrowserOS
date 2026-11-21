@@ -121,9 +121,8 @@ impl<P: CaptchaPage, B: CaptchaBackend> SolveCtx<'_, P, B> {
     }
 }
 
-/// The solver a host holds for its whole process. The paid-task limit and the per-page
-/// reservations live here, so a second instance would get its own budget and would not see the
-/// first instance's busy pages.
+/// The solver a host holds for its whole process. Instances have their own total budget and
+/// page reservations. Paid tasks also count against a process-wide budget per site host.
 pub struct CaptchaSolver {
     providers: ProviderChain,
     reservations: Arc<TabReservations>,
@@ -222,7 +221,6 @@ impl CaptchaSolver {
             .map_err(SolveRefusal::Busy)?;
         let events = EventLog::new(self.events().clone(), request_id.clone(), page_id.0);
         let payments = Arc::new(Mutex::new(Payments::default()));
-        let providers = self.providers.for_solve(Arc::clone(&payments));
         let mut host = None;
         let work = async {
             let mut user_agent = None;
@@ -342,6 +340,9 @@ impl CaptchaSolver {
                         ),
                     );
                     if detection.supports(challenge) && challenge.state == ChallengeState::Active {
+                        let providers = self
+                            .providers
+                            .for_solve(Arc::clone(&payments), host.as_deref());
                         let ctx = SolveCtx {
                             page,
                             backend: &providers,
@@ -499,13 +500,13 @@ impl CaptchaSolver {
                 CaptchaEventName::Handoff,
                 json!({"type":kind,"reason":flow.reason,"humanHelp":human_help_available,"provider":flow.provider}),
             ),
-            SolveStatus::Failed | SolveStatus::Cancelled | SolveStatus::Unsupported => events.emit(
-                CaptchaEventName::Failed,
-                with_family(
-                    json!({"type":kind,"status":flow.status,"reason":flow.reason,"provider":flow.provider}),
-                    kind,
-                ),
-            ),
+            SolveStatus::Failed | SolveStatus::Cancelled | SolveStatus::Unsupported => {
+                let mut data = json!({"type":kind,"status":flow.status,"reason":flow.reason,"provider":flow.provider});
+                if flow.reason == SolveReason::BrowserError {
+                    data["cause"] = json!(flow.message);
+                }
+                events.emit(CaptchaEventName::Failed, with_family(data, kind));
+            }
             SolveStatus::AlreadyClear => {}
         }
         let outcome = SolveOutcome {
@@ -670,11 +671,19 @@ fn page_failure(error: PageError) -> FlowResult {
             SolveReason::CallerCancelled,
             "The CAPTCHA solve was cancelled by the caller.",
         ),
-        PageError::Timeout | PageError::Browser(_) => (
+        PageError::Timeout => (
             SolveStatus::Failed,
             SolveReason::BrowserError,
-            "A browser operation failed during the CAPTCHA solve. Take a fresh snapshot and retry.",
+            "Checking the CAPTCHA page timed out.",
         ),
+        PageError::Browser(message) => {
+            let detail = events::browser_error_detail(&message);
+            return terminal(
+                SolveStatus::Failed,
+                SolveReason::BrowserError,
+                &format!("Checking the CAPTCHA page failed ({detail})."),
+            );
+        }
     };
     terminal(status, reason, message)
 }
@@ -886,6 +895,45 @@ mod orchestration_tests {
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))
+    }
+
+    #[tokio::test]
+    async fn tests_that_browser_error_detail_reaches_the_outcome_event_and_trace()
+    -> anyhow::Result<()> {
+        let log = tempfile::NamedTempFile::new()?;
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(log.reopen()?)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let driver = FakeDriver {
+            scans: Mutex::new(VecDeque::from([Err(PageError::Browser(
+                "Frame is no longer available: apiKey=test-secret".into(),
+            ))])),
+            ..FakeDriver::new(scan(&[], true))
+        };
+        let outcome = run(&driver, false).await?;
+        assert_eq!(outcome.reason, SolveReason::BrowserError);
+        assert!(outcome.message.contains("Frame is no longer available"));
+        assert!(!outcome.message.contains("test-secret"));
+        let event = outcome
+            .events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing failure event"))?;
+        assert_eq!(event.event, CaptchaEventName::Failed);
+        assert_eq!(event.data.get("cause"), Some(&json!(outcome.message)));
+        let logs = std::fs::read_to_string(log.path())?;
+        for name in ["captcha.failed", "captcha.outcome"] {
+            assert!(
+                logs.lines().any(|line| {
+                    line.contains(name) && line.contains("Frame is no longer available")
+                }),
+                "missing cause in {name}: {logs}"
+            );
+        }
+        assert!(!logs.contains("test-secret"));
+        Ok(())
     }
 
     #[tokio::test]

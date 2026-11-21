@@ -1,10 +1,11 @@
 use std::{
+    collections::BTreeMap,
     future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant as MonotonicInstant},
 };
 
 use futures_util::future::BoxFuture;
@@ -25,6 +26,23 @@ use super::{
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_SUBMISSION_BUDGET: Duration = Duration::from_secs(5);
+const HOST_PAID_TASK_WINDOW: Duration = Duration::from_secs(30 * 60);
+
+/// All solver instances share this ledger. In-flight tasks occupy a slot until they
+/// finish or the start ages out of the window.
+struct HostCap {
+    starts: Mutex<BTreeMap<String, Vec<MonotonicInstant>>>,
+}
+
+impl HostCap {
+    const fn new() -> Self {
+        Self {
+            starts: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+static HOST_CAP: HostCap = HostCap::new();
 
 pub trait CaptchaBackend: Send + Sync {
     fn is_configured(&self) -> bool;
@@ -108,6 +126,7 @@ pub trait VendorClient: Send + Sync {
 pub struct ProviderChain {
     vendors: Arc<Vendors>,
     payments: Option<Arc<Mutex<Payments>>>,
+    host: Option<String>,
 }
 
 /// All requests share these clients and the instance's spend limit.
@@ -115,6 +134,7 @@ struct Vendors {
     clients: Vec<Box<dyn VendorClient>>,
     paid: AtomicU32,
     limit: u32,
+    host_limit: u32,
 }
 
 impl ProviderChain {
@@ -140,26 +160,81 @@ impl ProviderChain {
                 }
             }
         }
-        Self::with_clients(clients, config.paid_task_limit)
+        Self::with_limits(clients, config.paid_task_limit, config.host_paid_task_limit)
     }
-    pub fn with_clients(clients: Vec<Box<dyn VendorClient>>, limit: u32) -> Self {
+    #[cfg(test)]
+    fn with_clients(clients: Vec<Box<dyn VendorClient>>, limit: u32) -> Self {
+        Self::with_limits(
+            clients,
+            limit,
+            CaptchaConfig::default().host_paid_task_limit,
+        )
+    }
+    fn with_limits(clients: Vec<Box<dyn VendorClient>>, limit: u32, host_limit: u32) -> Self {
         Self {
             vendors: Arc::new(Vendors {
                 clients,
                 paid: AtomicU32::new(0),
                 limit,
+                host_limit,
             }),
             payments: None,
+            host: None,
         }
     }
-    pub(super) fn for_solve(&self, payments: Arc<Mutex<Payments>>) -> Self {
+    pub(super) fn for_solve(&self, payments: Arc<Mutex<Payments>>, host: Option<&str>) -> Self {
         Self {
             vendors: Arc::clone(&self.vendors),
             payments: Some(payments),
+            // Hostless documents share a bucket so they still have a spend limit.
+            host: Some(host.unwrap_or_default().to_owned()),
         }
     }
     pub fn paid_tasks(&self) -> u32 {
         self.vendors.paid.load(Ordering::Relaxed)
+    }
+
+    /// Reserve both budgets just before sending a paid task. The caller records whether
+    /// it was charged, including submissions whose result is unknown.
+    pub(crate) fn try_reserve_paid(&self, host: &str) -> Result<PaidSlot<'_>, CapReached> {
+        self.try_reserve_paid_with(host, &HOST_CAP, MonotonicInstant::now)
+    }
+
+    fn try_reserve_paid_with<'a>(
+        &'a self,
+        host: &str,
+        cap: &'a HostCap,
+        now: impl FnOnce() -> MonotonicInstant,
+    ) -> Result<PaidSlot<'a>, CapReached> {
+        let mut starts = cap.starts.lock().unwrap_or_else(|error| error.into_inner());
+        let now = now();
+        starts.retain(|_, tasks| {
+            tasks.retain(|started| now.saturating_duration_since(*started) < HOST_PAID_TASK_WINDOW);
+            !tasks.is_empty()
+        });
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        let limit = self.vendors.host_limit;
+        if limit == 0
+            || starts
+                .get(&host)
+                .is_some_and(|tasks| tasks.len() >= limit as usize)
+        {
+            return Err(CapReached::Host { limit });
+        }
+
+        // Hold the host lock through both reservations so another solve sees a single decision.
+        let mut slot = self.reserve_instance_paid()?;
+        starts.entry(host.clone()).or_default().push(now);
+        slot.host = Some(HostReservation {
+            cap,
+            host,
+            started: now,
+        });
+        Ok(slot)
+    }
+
+    fn reserve_instance_paid(&self) -> Result<PaidSlot<'_>, CapReached> {
+        PaidSlot::reserve(&self.vendors.paid, self.vendors.limit).ok_or(CapReached::Instance)
     }
 }
 
@@ -251,12 +326,20 @@ impl ProviderChain {
                 });
             }
             let result = async {
-                let mut slot = PaidSlot::reserve(&self.vendors.paid, self.vendors.limit).ok_or_else(|| ProviderError {provider:Some(provider),kind:ProviderErrorKind::SpendLimit,message:"paid-task limit reached".into(),charged:false})?;
+                let mut slot = match self.host.as_deref() {
+                    Some(host) => self.try_reserve_paid(host),
+                    None => self.reserve_instance_paid(),
+                }.map_err(|cap| ProviderError {
+                    provider: Some(provider),
+                    kind: ProviderErrorKind::SpendLimit,
+                    message: cap.to_string(),
+                    charged: false,
+                })?;
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), "provider task started");
                 // Keep the reservation if the caller drops this future after submission.
-                slot.charged = true;
+                slot.set_charged(true);
                 let result = client.solve(task, deadline.min(started + client.attempt_budget(task)), cancel).await;
-                if let Err(error) = &result { slot.charged = error.charged; }
+                if let Err(error) = &result { slot.set_charged(error.charged); }
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), latency_ms = started.elapsed().as_millis() as u64, success = result.is_ok(), "provider task finished");
                 result
             }.await;
@@ -305,8 +388,24 @@ impl ProviderChain {
     }
 }
 
-struct PaidSlot<'a> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CapReached {
+    #[error("paid-task limit reached")]
+    Instance,
+    #[error("per-host paid-task limit reached ({limit} tasks per {} minutes)", HOST_PAID_TASK_WINDOW.as_secs() / 60)]
+    Host { limit: u32 },
+}
+
+struct HostReservation<'a> {
+    cap: &'a HostCap,
+    host: String,
+    started: MonotonicInstant,
+}
+
+/// Rolls back the reserved slots when a submission is known to be free.
+pub(crate) struct PaidSlot<'a> {
     paid: &'a AtomicU32,
+    host: Option<HostReservation<'a>>,
     charged: bool,
 }
 
@@ -318,14 +417,36 @@ impl<'a> PaidSlot<'a> {
         .ok()?;
         Some(Self {
             paid,
+            host: None,
             charged: false,
         })
+    }
+
+    pub(crate) fn set_charged(&mut self, charged: bool) {
+        self.charged = charged;
     }
 }
 
 impl Drop for PaidSlot<'_> {
     fn drop(&mut self) {
         if !self.charged {
+            if let Some(reservation) = &self.host {
+                let mut starts = reservation
+                    .cap
+                    .starts
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if let Some(tasks) = starts.get_mut(&reservation.host)
+                    && let Some(index) = tasks
+                        .iter()
+                        .position(|&started| started == reservation.started)
+                {
+                    tasks.swap_remove(index);
+                    if tasks.is_empty() {
+                        starts.remove(&reservation.host);
+                    }
+                }
+            }
             self.paid.fetch_sub(1, Ordering::Relaxed);
         }
     }
@@ -1538,6 +1659,106 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn tests_that_the_paid_cap_is_shared_by_host_across_solver_instances()
+    -> anyhow::Result<()> {
+        let (primary, first_calls) = fake("PRIMARY", None, true, true);
+        let (second, second_calls) = fake("SECOND", None, true, true);
+        let first = ProviderChain::with_clients(vec![primary], 10);
+        let second = ProviderChain::with_clients(vec![second], 10);
+        let task = tiles(TileGrid::ThreeByThree);
+
+        for _ in 0..3 {
+            let scoped = first.for_solve(Arc::default(), Some("host-cap.test"));
+            solve(&scoped, &task).await?;
+        }
+        let scoped = second.for_solve(Arc::default(), Some("HOST-CAP.TEST."));
+        let Err(error) = solve(&scoped, &task).await else {
+            anyhow::bail!("a fourth task was submitted on the same host");
+        };
+        assert_eq!(error.kind, ProviderErrorKind::SpendLimit);
+        assert!(
+            error
+                .message
+                .contains("per-host paid-task limit reached (3 tasks per 30 minutes)")
+        );
+        assert!(!error.charged);
+        assert_eq!(first_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(second_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(second.paid_tasks(), 0);
+
+        let scoped = second.for_solve(Arc::default(), Some("other-host-cap.test"));
+        solve(&scoped, &task).await?;
+        assert_eq!(second_calls.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_charged_failure_fills_the_host_cap_before_vendor_fallback()
+    -> anyhow::Result<()> {
+        let (primary, first_calls) =
+            fake("PRIMARY", Some(ProviderErrorKind::Unsolvable), true, true);
+        let (backup, second_calls) = fake("BACKUP", None, true, true);
+        let chain = ProviderChain::with_limits(vec![primary, backup], 10, 1);
+        let scoped = chain.for_solve(Arc::default(), Some("charged-host-cap.test"));
+        let task = tiles(TileGrid::ThreeByThree);
+        let Err(error) = solve(&scoped, &task).await else {
+            anyhow::bail!("a fallback task was submitted above the host limit");
+        };
+        assert_eq!(error.kind, ProviderErrorKind::SpendLimit);
+        assert!(error.charged);
+        assert!(error.message.contains("per-host paid-task limit reached"));
+        let scoped = chain.for_solve(Arc::default(), Some("charged-host-cap.test"));
+        let Err(error) = solve(&scoped, &task).await else {
+            anyhow::bail!("a charged failure did not count on the next solve");
+        };
+        assert_eq!(error.kind, ProviderErrorKind::SpendLimit);
+        assert!(!error.charged);
+        assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(second_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(chain.paid_tasks(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_uncharged_vendor_rejection_releases_its_host_slot() -> anyhow::Result<()>
+    {
+        let (primary, first_calls) = fake("UNPAID", Some(ProviderErrorKind::Auth), false, true);
+        let (backup, second_calls) = fake("BACKUP", None, true, true);
+        let chain = ProviderChain::with_limits(vec![primary, backup], 10, 1);
+        let scoped = chain.for_solve(Arc::default(), Some("uncharged-host-cap.test"));
+        solve(&scoped, &tiles(TileGrid::ThreeByThree)).await?;
+        assert_eq!(first_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(second_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(chain.paid_tasks(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_host_slots_block_while_pending_and_expire_at_the_window() -> anyhow::Result<()> {
+        let chain = ProviderChain::with_limits(vec![], 10, 1);
+        let cap = HostCap::new();
+        let start = MonotonicInstant::now();
+        let reserve = |now| chain.try_reserve_paid_with("expiring.test", &cap, || now);
+        let pending = reserve(start)?;
+        assert!(matches!(reserve(start), Err(CapReached::Host { limit: 1 })));
+        drop(pending);
+
+        let mut paid = reserve(start)?;
+        paid.set_charged(true);
+        drop(paid);
+        let expiry = start + HOST_PAID_TASK_WINDOW;
+        assert!(matches!(
+            reserve(expiry - Duration::from_millis(1)),
+            Err(CapReached::Host { limit: 1 })
+        ));
+        let next = reserve(expiry)?;
+        assert_eq!(chain.paid_tasks(), 2, "only the host window resets");
+        drop(next);
+        assert_eq!(chain.paid_tasks(), 1);
+        Ok(())
+    }
+
     #[tokio::test(start_paused = true)]
     async fn tests_that_short_deadlines_skip_paid_attempts_before_reserving() -> anyhow::Result<()>
     {
@@ -1987,7 +2208,10 @@ mod tests {
             let backup = SlowVendor(Duration::from_secs(2));
             let chain = ProviderChain::with_clients(vec![Box::new(first), Box::new(backup)], 2);
             let payments = Arc::default();
-            let scoped = chain.for_solve(Arc::clone(&payments));
+            let scoped = chain.for_solve(
+                Arc::clone(&payments),
+                Some(&format!("pending-charge-{wait}.test")),
+            );
             let reply =
                 tokio::time::timeout(Duration::from_secs(wait), solve(&scoped, &recaptcha())).await;
             assert_eq!(reply.is_ok(), wait > 2);

@@ -39,8 +39,8 @@ pub(crate) fn solve_captcha(
     builder.define(SolveCaptcha { solver, claims })
 }
 
-/// `neo.solveCaptcha`, over the process's one solver: its paid-task budget and its page
-/// reservations are per instance, so a second solver would double the budget.
+/// `neo.solveCaptcha` uses the process's solver. Its total paid-task budget and page
+/// reservations are per instance. The per-host budget is shared across instances.
 ///
 /// The door's rules run before the solve is sent, not during it: an owner who takes the tab
 /// mid-solve stops the agent's next op, while the solver itself runs on to its own end (120 s
@@ -67,7 +67,7 @@ struct SolveOutput {
     #[serde(rename = "type")]
     kind: Option<CaptchaKind>,
     reason: SolveReason,
-    /// claw-sdk's own line; the crate's names claw-server's MCP tools (decision 9).
+    /// The script's explanation and next step.
     message: String,
     duration_ms: u64,
     paid_tasks: u32,
@@ -224,6 +224,13 @@ fn message_for(verdict: Verdict, outcome: &SolveOutcome) -> String {
             verdict,
             "it is PerimeterX's press-and-hold human check, which only a person can pass",
         ),
+        (_, _, SolveReason::BrowserError) if !outcome.message.is_empty() => format!(
+            "Neo could not tell whether the CAPTCHA passed. {} Look at the page again before acting.",
+            outcome.message
+        ),
+        (_, _, SolveReason::SpendLimitReached) if !outcome.message.is_empty() => {
+            outcome.message.clone()
+        }
         (_, _, reason) => message(verdict, reason),
     }
 }
@@ -288,6 +295,8 @@ fn cause(reason: SolveReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use neo_captcha::types::{
         Attempts, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, SolveStatus,
         Verdict,
@@ -404,6 +413,34 @@ mod tests {
         for (verdict, reason, line) in table {
             assert_eq!(message(verdict, reason), line, "{verdict:?} / {reason:?}");
         }
+    }
+
+    #[test]
+    fn browser_causes_and_host_caps_reach_the_script() -> Result<(), Box<dyn Error>> {
+        for (status, reason, verdict, detail, next_step) in [
+            (
+                SolveStatus::Failed,
+                SolveReason::BrowserError,
+                Verdict::Unknown,
+                "Reading the reCAPTCHA anchor frame failed (Frame was detached).",
+                "Look at the page again before acting.",
+            ),
+            (
+                SolveStatus::NeedsHuman,
+                SolveReason::SpendLimitReached,
+                Verdict::Unsolved,
+                "per-host paid-task limit reached (3 tasks per 30 minutes). Stop and tell the user that this CAPTCHA needs their help.",
+                "needs their help.",
+            ),
+        ] {
+            let mut result = outcome(status, reason);
+            result.message = detail.to_owned();
+            let output = verdict_value(&result).ok_or("missing verdict")?;
+            assert_eq!((output.verdict, output.reason), (verdict, reason));
+            assert!(output.message.contains(detail));
+            assert!(output.message.ends_with(next_step));
+        }
+        Ok(())
     }
 
     /// The listed time limit and the deadline reason's words are the solver's own deadline.

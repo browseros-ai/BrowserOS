@@ -116,6 +116,9 @@ fn log_data(event: &CaptchaEvent) -> Value {
             fields["status"] = typed::<SolveStatus>(data, "status");
             fields["reason"] = typed::<SolveReason>(data, "reason");
             fields["provider"] = typed::<ProviderName>(data, "provider");
+            if fields["reason"] == json!(SolveReason::BrowserError) && data.get("cause").is_some() {
+                fields["cause"] = typed::<String>(data, "cause");
+            }
         }
         CaptchaEventName::Handoff => {
             fields["reason"] = typed::<SolveReason>(data, "reason");
@@ -126,6 +129,57 @@ fn log_data(event: &CaptchaEvent) -> Value {
     fields
 }
 
+/// Browser exceptions can embed page text, script arguments, URLs and secrets. Report
+/// only recognized diagnostic phrases, even when the browser appends more detail.
+pub(super) fn browser_error_detail(message: &str) -> &str {
+    const DIAGNOSTICS: &[&str] = &[
+        "Execution context was destroyed",
+        "execution context changed",
+        "Cannot find context with specified id",
+        "Cannot find default execution context",
+        "Frame is no longer available",
+        "Frame missing from its session tree",
+        "Frame document is unavailable",
+        "Frame viewport origin is unavailable",
+        "Frame was detached",
+        "No frame with given id found",
+        "Could not find node with given id",
+        "DOM node has no backend id",
+        "Document changed during the CAPTCHA scan",
+        "main-world frame evaluation unavailable",
+        "DOM scan unavailable",
+        "invalid CAPTCHA scan",
+        "Invalid click point",
+        "Invalid screenshot clip",
+        "Invalid frame content quad",
+        "Invalid width",
+        "Invalid height",
+        "Invalid x",
+        "Invalid y",
+        "Missing id",
+        "Missing url",
+        "Missing loaderId",
+        "fetch failed",
+        "image fetch",
+        "callback failed",
+        "TypeError",
+        "ReferenceError",
+        "SyntaxError",
+    ];
+    let first_line = message.lines().next().unwrap_or_default().trim();
+    let detail = first_line.strip_prefix("CDP error: ").unwrap_or(first_line);
+    let detail = detail.strip_prefix("Uncaught ").unwrap_or(detail);
+    let detail = detail.strip_prefix("Error: ").unwrap_or(detail);
+    DIAGNOSTICS
+        .iter()
+        .find_map(|known| {
+            detail
+                .get(..known.len())
+                .filter(|prefix| prefix.eq_ignore_ascii_case(known))
+        })
+        .unwrap_or("unrecognized browser error")
+}
+
 pub fn log_outcome(outcome: &SolveOutcome, host: Option<&str>, provider: Option<ProviderName>) {
     let host = host.and_then(|host| {
         url::Url::parse(host)
@@ -134,11 +188,19 @@ pub fn log_outcome(outcome: &SolveOutcome, host: Option<&str>, provider: Option<
             .or_else(|| url::Url::parse(&format!("https://{host}")).ok())
             .and_then(|url| url.host_str().map(str::to_owned))
     });
+    let cause = outcome
+        .events
+        .last()
+        .filter(|event| {
+            event.event == CaptchaEventName::Failed && outcome.reason == SolveReason::BrowserError
+        })
+        .and_then(|event| event.data.get("cause"))
+        .and_then(Value::as_str);
     tracing::info!(target: "captcha", event = "captcha.outcome", request_id = %outcome.request_id,
         page = outcome.page, r#type = %json!(outcome.kind), host = host.as_deref(), method = %json!(outcome.method),
         attempts = ?outcome.attempts, latency_ms = outcome.duration_ms, status = %json!(outcome.status),
         reason = %json!(outcome.reason), paid_tasks = outcome.paid_tasks, cost_usd = outcome.cost_usd,
-        provider = %json!(provider), "CAPTCHA solve finished");
+        provider = %json!(provider), cause, "CAPTCHA solve finished");
 }
 
 #[cfg(test)]
@@ -147,6 +209,20 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn tests_that_browser_errors_omit_unrecognized_page_text() {
+        assert_eq!(
+            browser_error_detail(
+                "Uncaught Error: apiKey=test-secret\nExecution context was destroyed"
+            ),
+            "unrecognized browser error"
+        );
+        assert_eq!(
+            browser_error_detail("Uncaught TypeError: token=test-secret"),
+            "TypeError"
+        );
+    }
 
     #[test]
     fn tests_that_token_applied_logs_callback_state_without_secrets() {

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use super::{
-    SolveCtx, config::ForcedMethod, page::CaptchaPage, providers::CaptchaBackend, types::*,
+    SolveCtx, config::ForcedMethod, events, page::CaptchaPage, providers::CaptchaBackend, types::*,
 };
 
 const WAIT: Duration = Duration::from_secs(6);
@@ -131,11 +131,19 @@ impl View {
 struct Stop(SolveStatus, SolveReason, String);
 impl From<PageError> for Stop {
     fn from(error: PageError) -> Self {
+        Self::from_page_error("reCAPTCHA browser operation", error)
+    }
+}
+impl Stop {
+    fn from_page_error(operation: &str, error: PageError) -> Self {
         let (status, reason) = match error {
             PageError::Closed => (SolveStatus::Cancelled, SolveReason::TabClosed),
             PageError::Navigated => (SolveStatus::Cancelled, SolveReason::Navigated),
             PageError::Cancelled => (SolveStatus::Cancelled, SolveReason::CallerCancelled),
-            _ => (SolveStatus::Failed, SolveReason::BrowserError),
+            PageError::Timeout => return browser_failure(operation, "browser call timed out"),
+            PageError::Browser(message) => {
+                return browser_failure(operation, events::browser_error_detail(&message));
+            }
         };
         Self(
             status,
@@ -143,6 +151,13 @@ impl From<PageError> for Stop {
             "Browser operation could not complete".into(),
         )
     }
+}
+fn browser_failure(operation: &str, detail: &str) -> Stop {
+    Stop(
+        SolveStatus::Failed,
+        SolveReason::BrowserError,
+        format!("{operation} failed ({detail})."),
+    )
 }
 fn fail(reason: SolveReason, message: &str) -> Stop {
     Stop(SolveStatus::Failed, reason, message.into())
@@ -153,10 +168,6 @@ fn provider_error(message: &str) -> Stop {
         SolveReason::ProviderError,
         message.into(),
     )
-}
-fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Stop> {
-    serde_json::from_value(value)
-        .map_err(|_| fail(SolveReason::BrowserError, "Unexpected widget state"))
 }
 fn frame_matches(frame: &FrameRef, part: &str) -> bool {
     url::Url::parse(&frame.url)
@@ -198,21 +209,18 @@ fn usable(r: Rect) -> bool {
         && r.x + r.width > 0.
         && r.y + r.height > 0.
 }
-fn viewport(frame: &FrameRef, local: Rect) -> Result<Rect, Stop> {
+fn viewport(operation: &str, frame: &FrameRef, local: Rect) -> Result<Rect, Stop> {
     let r = frame
         .rect
         .filter(|r| usable(*r))
-        .ok_or_else(|| fail(SolveReason::BrowserError, "Widget frame is hidden"))?;
+        .ok_or_else(|| browser_failure(operation, "widget frame is hidden"))?;
     if !usable(local)
         || local.x < 0.
         || local.y < 0.
         || local.x + local.width > r.width + 1.
         || local.y + local.height > r.height + 1.
     {
-        return Err(fail(
-            SolveReason::BrowserError,
-            "Widget geometry is unsupported",
-        ));
+        return Err(browser_failure(operation, "widget geometry is unsupported"));
     }
     Ok(Rect {
         x: r.x + local.x,
@@ -259,22 +267,36 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
     }
     async fn bounded<T>(
         &self,
+        operation: &str,
         future: impl Future<Output = Result<T, PageError>>,
     ) -> Result<T, Stop> {
         tokio::select! {biased;
             _=self.ctx.cancel.cancelled()=>Err(PageError::Cancelled.into()),
             _=tokio::time::sleep_until(self.ctx.deadline)=>Err(fail(SolveReason::DeadlineExceeded,"CAPTCHA deadline exceeded")),
-            r=future=>r.map_err(Into::into),
+            r=future=>r.map_err(|error| Stop::from_page_error(operation, error)),
         }
     }
+    async fn read_state<T: serde::de::DeserializeOwned>(
+        &self,
+        operation: &str,
+        future: impl Future<Output = Result<Value, PageError>>,
+    ) -> Result<T, Stop> {
+        let value = self.bounded(operation, future).await?;
+        serde_json::from_value(value)
+            .map_err(|_| browser_failure(operation, "unexpected widget state"))
+    }
     async fn current(&self) -> Result<(), Stop> {
-        if self.bounded(self.ctx.page.document()).await? != self.ctx.document {
+        if self
+            .bounded("Checking the document", self.ctx.page.document())
+            .await?
+            != self.ctx.document
+        {
             return Err(PageError::Navigated.into());
         }
         Ok(())
     }
     async fn pause(&self, duration: Duration) -> Result<(), Stop> {
-        self.bounded(async {
+        self.bounded("Waiting for the page", async {
             tokio::time::sleep(duration).await;
             Ok(())
         })
@@ -294,7 +316,9 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
     }
     async fn read(&self) -> Result<View, Stop> {
         self.current().await?;
-        let frames = self.bounded(self.ctx.page.frames()).await?;
+        let frames = self
+            .bounded("Listing reCAPTCHA frames", self.ctx.page.frames())
+            .await?;
         let anchor = select_frame(
             &frames,
             self.challenge.frame.as_ref(),
@@ -307,20 +331,26 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             self.challenge.sitekey.as_deref(),
             "bframe",
         );
-        let main: Main = decode(
-            self.bounded(self.ctx.page.eval_main(&self.script(
-                "state",
-                MAIN,
-                anchor.as_ref(),
-                frame.as_ref(),
-                None,
-            )))
-            .await?,
-        )?;
+        let main: Main = self
+            .read_state(
+                "Reading reCAPTCHA state in the main frame",
+                self.ctx.page.eval_main(&self.script(
+                    "state",
+                    MAIN,
+                    anchor.as_ref(),
+                    frame.as_ref(),
+                    None,
+                )),
+            )
+            .await?;
         let state = if let Some(a) = &anchor {
-            Some(decode(
-                self.bounded(self.ctx.page.eval_in_frame(a, ANCHOR)).await?,
-            )?)
+            Some(
+                self.read_state(
+                    "Reading the reCAPTCHA anchor frame",
+                    self.ctx.page.eval_in_frame(a, ANCHOR),
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -328,12 +358,11 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             .as_ref()
             .filter(|f| main.frame_ready && f.rect.is_some_and(usable))
         {
-            let value = self.bounded(self.ctx.page.eval_in_frame(f, GRID)).await?;
-            if value.is_null() {
-                None
-            } else {
-                Some(decode(value)?)
-            }
+            self.read_state(
+                "Reading the reCAPTCHA challenge frame",
+                self.ctx.page.eval_in_frame(f, GRID),
+            )
+            .await?
         } else {
             None
         };
@@ -356,14 +385,17 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             self.pause(POLL).await?;
         }
     }
-    async fn click(&self, frame: &FrameRef, rect: Rect) -> Result<(), Stop> {
-        let r = viewport(frame, rect)?;
+    async fn click(&self, operation: &str, frame: &FrameRef, rect: Rect) -> Result<(), Stop> {
+        let r = viewport(operation, frame, rect)?;
         let (x, y) = r.center();
         self.current().await?;
-        self.bounded(self.ctx.page.click_at(
-            x + rand::random_range(-1.0..1.0) * r.width.min(12.) / 12.,
-            y + rand::random_range(-1.0..1.0) * r.height.min(12.) / 12.,
-        ))
+        self.bounded(
+            operation,
+            self.ctx.page.click_at(
+                x + rand::random_range(-1.0..1.0) * r.width.min(12.) / 12.,
+                y + rand::random_range(-1.0..1.0) * r.height.min(12.) / 12.,
+            ),
+        )
         .await?;
         self.current().await
     }
@@ -448,21 +480,24 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         let tile = index
             .and_then(|i| grid.tiles.get(i))
             .or_else(|| grid.tiles.first())
-            .ok_or_else(|| fail(SolveReason::BrowserError, "Empty image grid"))?;
+            .ok_or_else(|| browser_failure("Reading the challenge frame", "empty image grid"))?;
         let src = serde_json::to_string(&tile.src)
-            .map_err(|_| fail(SolveReason::BrowserError, "Invalid image source"))?;
+            .map_err(|_| browser_failure("Reading the challenge frame", "invalid image source"))?;
         let script = format!(
             r#"/*recaptcha:image*/(async()=>{{const r=await fetch({src});if(!r.ok)throw Error('image fetch');const b=await r.blob();return await new Promise((resolve,reject)=>{{const f=new FileReader();f.onload=()=>resolve(String(f.result).split(',')[1]);f.onerror=reject;f.readAsDataURL(b)}})}})()"#
         );
         match self
-            .bounded(self.ctx.page.eval_in_frame(frame, &script))
+            .bounded(
+                "Fetching the image in the challenge frame",
+                self.ctx.page.eval_in_frame(frame, &script),
+            )
             .await
         {
             Ok(Value::String(image)) if !image.is_empty() => return Ok(Some(image)),
             Err(e) if e.1 != SolveReason::BrowserError => return Err(e),
             _ => {}
         }
-        self.bounded(self.ctx.page.eval_in_frame(frame,
+        self.bounded("Waiting for the challenge frame to paint", self.ctx.page.eval_in_frame(frame,
             "/*recaptcha:paint*/new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))"
         )).await?;
         let fresh = self.read().await?;
@@ -470,24 +505,29 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             return Ok(None);
         }
         let (Some(current_frame), Some(current_grid)) = (fresh.frame, fresh.grid) else {
-            return Err(fail(
-                SolveReason::BrowserError,
-                "Grid disappeared during image capture",
+            return Err(browser_failure(
+                "Capturing the challenge frame",
+                "image grid disappeared",
             ));
         };
         if current_frame.frame_id != frame.frame_id
             || !current_grid.ready
             || !grid.same(&current_grid, replaced)
         {
-            return Err(fail(
-                SolveReason::BrowserError,
-                "Grid changed during image capture",
+            return Err(browser_failure(
+                "Capturing the challenge frame",
+                "image grid changed",
             ));
         }
-        self.bounded(self.ctx.page.screenshot_clip(viewport(
-            &current_frame,
-            index.map_or(current_grid.rect, |i| current_grid.tiles[i].rect),
-        )?))
+        let operation = "Capturing the challenge frame";
+        self.bounded(
+            operation,
+            self.ctx.page.screenshot_clip(viewport(
+                operation,
+                &current_frame,
+                index.map_or(current_grid.rect, |i| current_grid.tiles[i].rect),
+            )?),
+        )
         .await
         .map(Some)
     }
@@ -579,7 +619,12 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                     {
                         continue 'rounds;
                     }
-                    self.click(&f, g.tiles[id].rect).await?;
+                    self.click(
+                        "Clicking a tile in the challenge frame",
+                        &f,
+                        g.tiles[id].rect,
+                    )
+                    .await?;
                     clicked.push(id);
                     self.pause(Duration::from_millis(120)).await?;
                 }
@@ -630,7 +675,8 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             {
                 continue;
             }
-            self.click(&f, g.verify).await?;
+            self.click("Clicking Verify in the challenge frame", &f, g.verify)
+                .await?;
             self.ctx
                 .lease
                 .set_progress(Some(CaptchaKind::RecaptchaV2), SolveStep::Verifying);
@@ -702,16 +748,18 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             written: bool,
             callback: bool,
         }
-        let applied: Applied = decode(
-            self.bounded(self.ctx.page.eval_main(&self.script(
-                "apply",
-                APPLY,
-                before.anchor.as_ref(),
-                before.frame.as_ref(),
-                Some(&token),
-            )))
-            .await?,
-        )?;
+        let applied: Applied = self
+            .read_state(
+                "Applying the token in the main frame",
+                self.ctx.page.eval_main(&self.script(
+                    "apply",
+                    APPLY,
+                    before.anchor.as_ref(),
+                    before.frame.as_ref(),
+                    Some(&token),
+                )),
+            )
+            .await?;
         if !applied.written {
             return Err(fail(
                 SolveReason::AcceptanceUnconfirmed,
@@ -738,17 +786,26 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 }
                 self.pause(POLL).await?;
             }
-            if self.bounded(self.ctx.page.document()).await? == self.ctx.document {
-                let retained: bool = decode(
-                    self.bounded(self.ctx.page.eval_main(&self.script(
-                        "token-present",
-                        TOKEN_PRESENT,
-                        before.anchor.as_ref(),
-                        before.frame.as_ref(),
-                        Some(&token),
-                    )))
-                    .await?,
-                )?;
+            if self
+                .bounded(
+                    "Checking the document after token application",
+                    self.ctx.page.document(),
+                )
+                .await?
+                == self.ctx.document
+            {
+                let retained: bool = self
+                    .read_state(
+                        "Checking the applied token in the main frame",
+                        self.ctx.page.eval_main(&self.script(
+                            "token-present",
+                            TOKEN_PRESENT,
+                            before.anchor.as_ref(),
+                            before.frame.as_ref(),
+                            Some(&token),
+                        )),
+                    )
+                    .await?;
                 self.current().await?;
                 if !retained {
                     return Err(fail(
@@ -769,12 +826,19 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         ))
     }
     async fn accepted_transition(&self, before: &View) -> Result<bool, Stop> {
-        let document = self.bounded(self.ctx.page.document()).await?;
+        let document = self
+            .bounded(
+                "Checking the verification document",
+                self.ctx.page.document(),
+            )
+            .await?;
         let accepted = if document != self.ctx.document {
-            let clear: bool = decode(self.bounded(self.ctx.page.eval_main(
+            let clear: bool = self.read_state("Checking the new main frame", self.ctx.page.eval_main(
                 "/*recaptcha:clear*/document.readyState==='complete'&&!document.querySelector('iframe[src*=\"recaptcha\"],iframe[src*=\"challenges.cloudflare.com\"],iframe[src*=\"hcaptcha\"],.g-recaptcha,.cf-turnstile,.h-captcha')"
-            )).await?)?;
-            let frames = self.bounded(self.ctx.page.frames()).await?;
+            )).await?;
+            let frames = self
+                .bounded("Listing frames after navigation", self.ctx.page.frames())
+                .await?;
             clear
                 && !frames.iter().any(|f| {
                     f.url.contains("recaptcha")
@@ -782,19 +846,28 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                         || f.url.contains("challenges.cloudflare.com")
                 })
         } else {
-            let now: Main = decode(
-                self.bounded(self.ctx.page.eval_main(&self.script(
-                    "state",
-                    MAIN,
-                    before.anchor.as_ref(),
-                    before.frame.as_ref(),
-                    None,
-                )))
-                .await?,
-            )?;
+            let now: Main = self
+                .read_state(
+                    "Checking acceptance in the main frame",
+                    self.ctx.page.eval_main(&self.script(
+                        "state",
+                        MAIN,
+                        before.anchor.as_ref(),
+                        before.frame.as_ref(),
+                        None,
+                    )),
+                )
+                .await?;
             !now.present || (!before.main.hidden && now.hidden)
         };
-        Ok(self.bounded(self.ctx.page.document()).await? == document && accepted)
+        Ok(self
+            .bounded(
+                "Confirming the verification document",
+                self.ctx.page.document(),
+            )
+            .await?
+            == document
+            && accepted)
     }
     async fn run(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
         if self.ctx.forced_method == Some(ForcedMethod::Token) {
@@ -817,7 +890,8 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 break;
             };
             self.mark(SolveMethod::Checkbox, 0);
-            self.click(frame, rect).await?;
+            self.click("Clicking the checkbox in the anchor frame", frame, rect)
+                .await?;
             v = self
                 .wait(|v| {
                     v.passed()
@@ -915,6 +989,7 @@ mod tests {
         applied: bool,
         navigated: bool,
         fail: Option<PageError>,
+        anchor_error: Option<PageError>,
         fetch_fails: bool,
         clear_on_image: bool,
         hide_on_fetch: bool,
@@ -954,6 +1029,7 @@ mod tests {
                 applied: false,
                 navigated: false,
                 fail: None,
+                anchor_error: None,
                 fetch_fails: false,
                 clear_on_image: false,
                 hide_on_fetch: false,
@@ -1096,6 +1172,9 @@ mod tests {
                 };
             }
             if f.frame_id == "anchor" {
+                if let Some(error) = self.read(|s| s.anchor_error.clone()) {
+                    return Err(error);
+                }
                 return Ok(self.read(|s| {
                     json!({"checked": s.checked, "error": false,
                     "rect": {"x": 10., "y": 20., "width": 28., "height": 28.}})
@@ -1805,6 +1884,22 @@ mod tests {
                 reason
             );
         }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_browser_error_names_the_failing_frame_and_safe_detail() {
+        let page = FakePage::new(false);
+        page.edit(|state| {
+            state.anchor_error = Some(PageError::Browser(
+                "CDP error: Execution context was destroyed: https://fixture.test/?token=test-secret"
+                    .into(),
+            ));
+        });
+        let outcome = attempt(&page, &FakeBackend::new(vec![])).await;
+        assert_eq!(outcome.reason, SolveReason::BrowserError);
+        assert_eq!(
+            outcome.message,
+            "Reading the reCAPTCHA anchor frame failed (Execution context was destroyed)."
+        );
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_already_checked_widget_is_never_paid_or_clicked() {

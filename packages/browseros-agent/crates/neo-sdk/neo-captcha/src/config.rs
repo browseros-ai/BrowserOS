@@ -5,7 +5,10 @@ pub const TWOCAPTCHA_KEY_FILE_ENV: &str = "BROWSEROS_2CAPTCHA_API_KEY_FILE";
 pub const TWOCAPTCHA_URL_ENV: &str = "BROWSEROS_2CAPTCHA_API_URL";
 pub const CAPSOLVER_URL_ENV: &str = "BROWSEROS_CAPSOLVER_API_URL";
 pub const PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_PAID_TASK_LIMIT";
+pub const HOST_PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_HOST_PAID_TASK_LIMIT";
 pub const TEST_FORCE_METHOD_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_METHOD";
+
+const DEFAULT_HOST_PAID_TASK_LIMIT: u32 = 3;
 
 /// Test-only: skip free paths. Vendors reject localhost websiteURLs, so use public pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +48,8 @@ pub struct CaptchaConfig {
     pub capsolver: Option<ProviderConfig>,
     pub twocaptcha: Option<ProviderConfig>,
     pub paid_task_limit: u32,
+    /// Paid tasks a host can start in a rolling 30-minute window. Zero disables paid tasks.
+    pub host_paid_task_limit: u32,
     pub force_method: Option<ForcedMethod>,
 }
 
@@ -54,6 +59,7 @@ impl Default for CaptchaConfig {
             capsolver: None,
             twocaptcha: None,
             paid_task_limit: 100,
+            host_paid_task_limit: DEFAULT_HOST_PAID_TASK_LIMIT,
             force_method: None,
         }
     }
@@ -77,6 +83,9 @@ impl CaptchaConfig {
             paid_task_limit: lookup(PAID_TASK_LIMIT_ENV)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(100),
+            host_paid_task_limit: lookup(HOST_PAID_TASK_LIMIT_ENV)
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or(DEFAULT_HOST_PAID_TASK_LIMIT),
             force_method: lookup(TEST_FORCE_METHOD_ENV).and_then(|value| {
                 if value.trim() == "token" {
                     tracing::warn!(target: "captcha", "test-only: CAPTCHA free paths are skipped");
@@ -237,6 +246,15 @@ mod tests {
         assert!(!config.has_provider());
         assert_eq!(config.paid_task_limit, 100);
         assert_eq!(CaptchaConfig::default().paid_task_limit, 100);
+    }
+    #[test]
+    fn tests_that_the_host_paid_task_limit_defaults_and_accepts_overrides() {
+        assert_eq!(from_vars(&[]).host_paid_task_limit, 3);
+        assert_eq!(CaptchaConfig::default().host_paid_task_limit, 3);
+        for (value, limit) in [(" 2 ", 2), ("0", 0), ("invalid", 3)] {
+            let config = from_vars(&[(HOST_PAID_TASK_LIMIT_ENV, value.into())]);
+            assert_eq!(config.host_paid_task_limit, limit);
+        }
     }
     #[test]
     fn tests_that_key_files_are_trimmed_and_formats_are_redacted() -> anyhow::Result<()> {
