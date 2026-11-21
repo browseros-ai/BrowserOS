@@ -419,6 +419,9 @@ pub enum Verdict {
     AlreadyClear,
     /// The solver ran to its end and the challenge definitely still blocks the page. Never a
     /// guess: timeouts, browser errors and navigations land in `Unknown` or `Cancelled`.
+    /// One exception is a strong reading, not proof: `still_blocked` with `verify.tier = "jev"`
+    /// is the decision model's confident "blocked" after a solve. The agent must still stop, but
+    /// a host that pays to retry `Unsolved` (a residential proxy, say) must skip those.
     Unsolved,
     /// The site explicitly refuses automated access. Stop acting on the page and hand it off.
     PolicyWall,

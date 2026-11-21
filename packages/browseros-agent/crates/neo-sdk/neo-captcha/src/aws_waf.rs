@@ -1191,6 +1191,7 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
                 document: document(),
                 user_agent: None,
                 forced_method: None,
+                remedy: None,
             },
             &challenge,
         )

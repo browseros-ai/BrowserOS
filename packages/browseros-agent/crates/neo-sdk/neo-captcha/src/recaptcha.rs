@@ -1439,6 +1439,7 @@ mod tests {
                 document: document(false),
                 user_agent: Some("test-agent".into()),
                 forced_method,
+                remedy: None,
             },
             challenge,
         )

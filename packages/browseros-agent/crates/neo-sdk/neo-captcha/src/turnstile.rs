@@ -852,6 +852,7 @@ mod tests {
                 document: document(),
                 user_agent: None,
                 forced_method,
+                remedy: None,
             },
             &challenge,
         )
@@ -1718,6 +1719,7 @@ mod tests {
                     document,
                     user_agent: None,
                     forced_method: None,
+                    remedy: None,
                 },
                 &challenge,
             )

@@ -277,7 +277,9 @@ fn cause(reason: SolveReason) -> &'static str {
         SolveReason::NotBlocking => "its widget does not block the page",
         SolveReason::UnsupportedType => "Neo cannot solve this CAPTCHA type",
         SolveReason::ScanIncomplete => "the page could not be fully scanned",
-        SolveReason::AcceptanceUnconfirmed => "the site's acceptance could not be confirmed",
+        SolveReason::AcceptanceUnconfirmed => {
+            "neither the site nor Neo's check after the solve confirmed it passed"
+        }
         SolveReason::ProviderError => "the CAPTCHA provider failed",
         SolveReason::BrowserError => "a browser call failed",
         SolveReason::DeadlineExceeded => "it ran past its 120 s limit",
@@ -290,11 +292,9 @@ fn cause(reason: SolveReason) -> &'static str {
         SolveReason::ChallengeNotPassed => "the challenge was attempted and not passed",
         SolveReason::SpendLimitReached => "this Neo's CAPTCHA budget is used up",
         SolveReason::PolicyWall => "automated agents are prohibited",
-        SolveReason::StillBlocked => {
-            "Neo checked the page after the solve and the CAPTCHA still blocks it"
-        }
+        SolveReason::StillBlocked => "Neo's check after the solve found it still in the way",
         SolveReason::ChallengePending => {
-            "the site's own check is still running; wait a few seconds and ask again, do not reload"
+            "the site's own check is still running; wait a few seconds, and do not reload"
         }
     }
 }
