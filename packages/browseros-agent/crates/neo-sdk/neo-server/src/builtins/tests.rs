@@ -8,7 +8,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use browseros_core::{NativeCapabilities, TabId, TargetId};
+use browseros_core::{NativeCapabilities, SessionId, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
@@ -376,6 +376,30 @@ async fn within<T>(work: impl Future<Output = T>) -> Result<T, Box<dyn Error>> {
     time::timeout(limit, work)
         .await
         .map_err(|error| format!("not within {limit:?}: {error}").into())
+}
+
+/// Whether `method` belongs to a page's own domains: what the door keeps off a tab whose page it
+/// refuses. Its tab reads and the browser-level listings are not among them.
+fn is_page_domain(method: &str) -> bool {
+    [
+        "Page.",
+        "Runtime.",
+        "DOM.",
+        "Input.",
+        "Emulation.",
+        "Accessibility.",
+    ]
+    .iter()
+    .any(|domain| method.starts_with(domain))
+}
+
+/// The methods of the fake's calls from the `from`th on that belong to a page's own domains.
+fn page_domain_calls(fake: &FakeCdp, from: usize) -> Vec<String> {
+    fake.calls()[from..]
+        .iter()
+        .map(|call| call.method.clone())
+        .filter(|method| is_page_domain(method))
+        .collect()
 }
 
 #[tokio::test]
@@ -2217,22 +2241,7 @@ async fn an_op_on_a_tab_that_shows_a_file_page_is_refused_with_nothing_sent()
         );
     }
     // The door's tab reads and the browser-level listings go on; no call reached a page domain.
-    let reached: Vec<String> = harness.fake.calls()[before..]
-        .iter()
-        .map(|call| call.method.clone())
-        .filter(|method| {
-            [
-                "Page.",
-                "Runtime.",
-                "DOM.",
-                "Input.",
-                "Emulation.",
-                "Accessibility.",
-            ]
-            .iter()
-            .any(|domain| method.starts_with(domain))
-        })
-        .collect();
+    let reached = page_domain_calls(&harness.fake, before);
     assert!(
         reached.is_empty(),
         "nothing reached the tab's page: {reached:?}"
@@ -2251,6 +2260,89 @@ async fn an_op_on_a_tab_that_shows_a_file_page_is_refused_with_nothing_sent()
     assert!(
         !harness.is_open(owners.tab).await?,
         "the script closed the tab"
+    );
+    Ok(())
+}
+
+/// The same tab on a local file, and a script that listens on the context, as
+/// `context.on('framenavigated')` does. Listener ops pass the door without its page rule (they
+/// read events, and must answer once their page closed), and a context listener names no page at
+/// all: its setup attaches core's page session to every tab the run lists. A tab the door refuses
+/// gets nothing of a page domain from it, so none of its frames' events or URLs reach the script.
+#[tokio::test]
+async fn a_context_listener_sends_nothing_to_a_tab_that_shows_a_file_page()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    assert!(
+        harness
+            .fake
+            .navigate_tab(owners.tab, "file:///etc/hosts", "hosts"),
+        "the fake has the owner's tab"
+    );
+    let before = harness.fake.calls().len();
+    let listen = json!({
+        "call": { "api": "browserContext.on", "timeoutMs": 5000 },
+        "page": null,
+        "event": "framenavigated",
+        "enabled": true,
+        "since": 0,
+    });
+    value(within(harness.submit(&run, "events.listen", listen)).await?)
+        .map_err(|error| format!("a context listener is accepted: {error}"))?;
+    let reached = page_domain_calls(&harness.fake, before);
+    assert!(
+        reached.is_empty(),
+        "nothing reached the tab's page: {reached:?}"
+    );
+    Ok(())
+}
+
+/// The other direction of the row above: beside the tab on a local file, the owner's web tab is
+/// still observed. The context listener's setup turns on the web tab's page, on that tab's own
+/// session, and sends the file tab's nothing of a page domain.
+#[tokio::test]
+async fn a_context_listener_still_observes_a_web_tab_beside_a_file_page()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let web = harness.owner_tab("https://example.com/").await?;
+    let file = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    assert!(
+        harness
+            .fake
+            .navigate_tab(file.tab, "file:///etc/hosts", "hosts"),
+        "the fake has the owner's tab"
+    );
+    let before = harness.fake.calls().len();
+    let listen = json!({
+        "call": { "api": "browserContext.on", "timeoutMs": 5000 },
+        "page": null,
+        "event": "framenavigated",
+        "enabled": true,
+        "since": 0,
+    });
+    value(within(harness.submit(&run, "events.listen", listen)).await?)
+        .map_err(|error| format!("a context listener is accepted: {error}"))?;
+    // The fake answers an attach to a tab with `session-target-<tab>`.
+    let sent_to = |page: &PageRef| -> Vec<String> {
+        let session = SessionId::from(format!("session-target-{}", page.tab.0));
+        harness.fake.calls()[before..]
+            .iter()
+            .filter(|call| call.session.as_ref() == Some(&session) && is_page_domain(&call.method))
+            .map(|call| call.method.clone())
+            .collect()
+    };
+    let observed = sent_to(&web);
+    assert!(
+        observed.iter().any(|method| method == "Page.enable"),
+        "the web tab's page is observed: {observed:?}"
+    );
+    let reached = sent_to(&file);
+    assert!(
+        reached.is_empty(),
+        "nothing reached the file tab's page: {reached:?}"
     );
     Ok(())
 }

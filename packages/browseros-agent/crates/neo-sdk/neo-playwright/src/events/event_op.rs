@@ -34,7 +34,7 @@ use crate::op_scope::{Expired, OpScope, Sent};
 use crate::op_spec::{OpSpec, OpTarget, PAGE};
 use crate::target::PageRef;
 use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
-use crate::{DownloadState, ErrorCode, Playwright, PlaywrightError, file_save};
+use crate::{DownloadState, ErrorCode, Playwright, PlaywrightError, file_save, url_scheme};
 
 listed_enum! {
     /// Listening, the pump, one-shot waits, held dialogs and finished downloads.
@@ -572,6 +572,16 @@ async fn lease_runtime(
 
 /// Context listeners observe existing tabs without requiring a prior page action. These are
 /// core-owned observation sessions; event release still maps each returned tab through the run.
+///
+/// A tab on a page the door refuses (`url_scheme::refuses_page`, on the URL this listing read) is
+/// not attached. Listener ops skip the door's page rule and a context listener names no page, so
+/// this is the only check before core's attach, whose `Page`, `DOM` and `Accessibility` would
+/// carry the tab's frame and load events, with their URLs, to the script. Skipping loses nothing
+/// for good. While a context listener is on, the target watcher attaches an untouched tab on the
+/// first tick that finds its URL allowed (`TargetWatcher::observe_context`, under the same rule).
+/// Page-level listeners on a refused tab are not changed here: they go through `admit`, and the
+/// tab's `close` and `crash` listeners must keep working (`waitForEvent('close')` races
+/// `page.close()`).
 async fn observe_context(pw: &Playwright, scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
     let setup = async {
         let listing = scope
@@ -586,10 +596,15 @@ async fn observe_context(pw: &Playwright, scope: &OpScope<'_>) -> Result<(), Pla
             .into_iter()
             .filter(|page| !scope.hides_tab(page.tab_id))
         {
+            // The run's view admits the tab whatever it shows; only the attach waits for a page
+            // the door allows.
             scope
                 .run_state()
                 .events
                 .remember_page(&page.target_id, page.tab_id);
+            if url_scheme::refuses_page(&page.url) {
+                continue;
+            }
             // A tab can close between listing and attachment. The watcher retries live tabs.
             let observation = scope.observation();
             if let Err(error) = observation.observe_page(pw.browser(), page.tab_id).await {
