@@ -129,7 +129,12 @@ jobs:
       upload_to_r2: true
       resource_mode: published
       ref: ${{ needs.preflight.outputs.source_sha }}
-      server_version: ${{ needs.server.outputs.version }}
+      # The server release builds no Windows target, so Windows bundles the
+      # held TypeScript server: held_targets["windows-x64"] in
+      # bos_build/products/browseros/product.py, which ci_workflow_test.py
+      # holds this to. A literal, because env is not available in the with:
+      # of a reusable workflow call.
+      server_version: "0.0.168"
       extension_version: ${{ needs.extension.outputs.version }}
       onboarding_version: ${{ needs.preflight.outputs.onboarding_version }}
     secrets: inherit

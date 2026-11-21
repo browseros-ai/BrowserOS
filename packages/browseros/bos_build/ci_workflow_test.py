@@ -6,6 +6,7 @@ import os
 import re
 import runpy
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -17,7 +18,9 @@ from unittest import mock
 
 import yaml
 
+from bos_build.products import BROWSERCLAW_SERVER_BUNDLE, BROWSEROS_SERVER_BUNDLE
 from bos_build.release.feeds.spec import all_feeds
+from bos_build.release.ota.common import released_server_platforms
 from bos_build.steps.source import provision
 
 
@@ -1104,10 +1107,12 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                         job["with"]["ref"],
                         "${{ needs.preflight.outputs.source_sha }}",
                     )
-                    self.assertEqual(
-                        job["with"]["server_version"],
-                        "${{ needs.server.outputs.version }}",
-                    )
+                    if workflow_name != "release-browseros.yml":
+                        # BrowserOS's pins: HeldServerTargetsWorkflowTest.
+                        self.assertEqual(
+                            job["with"]["server_version"],
+                            "${{ needs.server.outputs.version }}",
+                        )
                     self.assertEqual(
                         job["with"]["extension_version"],
                         "${{ needs.extension.outputs.version }}",
@@ -1555,17 +1560,21 @@ print(json.dumps({
     },
 }))
 """
+        # "all" is one copy per released target: BrowserOS leaves its held
+        # Windows alias alone.
         cases = (
-            ("missing", "9" * 40, "f" * 64, 5, True),
-            ("0.0.1", "9" * 40, "f" * 64, 5, True),
+            ("missing", "9" * 40, "f" * 64, "all", True),
+            ("0.0.1", "9" * 40, "f" * 64, "all", True),
             ("1.2.3", "1" * 40, "exact", 0, True),
             ("9.0.0", "9" * 40, "f" * 64, 0, True),
             ("1.2.3", "9" * 40, "exact", 0, False),
             ("1.2.3", "1" * 40, "f" * 64, 0, False),
         )
-        for workflow_name in ("release-server.yml", "release-claw-server.yml"):
+        released = {"release-server.yml": 4, "release-claw-server.yml": 5}
+        for workflow_name, released_count in released.items():
+            workflow = self.load_workflow(workflow_name)
             script = self.named_step(
-                self.load_workflow(workflow_name),
+                workflow,
                 "finalize",
                 "Copy versioned objects to latest",
             )["run"]
@@ -1594,6 +1603,7 @@ print(json.dumps({
                     state.mkdir()
                     environment = {
                         **os.environ,
+                        **workflow.get("env", {}),
                         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
                         "FAKE_AWS_STATE": str(state),
                         "FAKE_DEST_VERSION": destination_version,
@@ -1622,7 +1632,14 @@ print(json.dumps({
                         if copies.exists()
                         else []
                     )
-                    self.assertEqual(len(copied), copy_count)
+                    self.assertEqual(
+                        len(copied),
+                        released_count if copy_count == "all" else copy_count,
+                    )
+                    self.assertFalse(
+                        workflow_name == "release-server.yml"
+                        and any("windows-x64" in key for key in copied)
+                    )
 
     def test_server_ota_hands_assembled_snapshot_to_suite_owner(self):
         workflow = self.load_workflow("publish-server-ota.yml")
@@ -3962,6 +3979,135 @@ fi
             log,
         )
         self.assertFalse(stale_keychain.exists())
+
+
+class HeldServerTargetsWorkflowTest(unittest.TestCase):
+    """The workflows hold exactly the server targets ServerBundle.held_targets names.
+
+    BrowserOS holds Windows on its last TypeScript server. Each test ties one
+    workflow literal to the bundle, so the switch flips back in one review.
+    """
+
+    # The OTA payload jobs before any target was held. BrowserClaw holds
+    # nothing, so its run must still be exactly these five.
+    ALL_PAYLOADS = [
+        {"platform": "darwin_arm64", "target": "darwin-arm64", "runner": "macos-26"},
+        {"platform": "darwin_x64", "target": "darwin-x64", "runner": "macos-26"},
+        {"platform": "linux_arm64", "target": "linux-arm64", "runner": "ubuntu-latest"},
+        {"platform": "linux_x64", "target": "linux-x64", "runner": "ubuntu-latest"},
+        {"platform": "windows_x64", "target": "windows-x64", "runner": "windows-latest"},
+    ]
+    # The server targets each BrowserOS browser lane bundles.
+    LANE_TARGETS = {
+        "linux": ("linux-x64",),
+        "windows": ("windows-x64",),
+        "macos": ("darwin-arm64", "darwin-x64"),
+    }
+
+    def load_workflow(self, workflow_name: str) -> dict:
+        return yaml.safe_load((WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8"))
+
+    def released_targets(self, bundle) -> list[str]:
+        return [platform["target"] for platform in released_server_platforms(bundle)]
+
+    def test_browseros_holds_windows_on_the_last_typescript_server(self):
+        self.assertEqual(BROWSEROS_SERVER_BUNDLE.held_targets, {"windows-x64": "0.0.168"})
+        self.assertEqual(BROWSERCLAW_SERVER_BUNDLE.held_targets, {})
+
+    def test_server_release_builds_exactly_the_released_targets(self):
+        workflow = self.load_workflow("release-server.yml")
+        matrix = [entry["target"] for entry in workflow["jobs"]["build"]["strategy"]["matrix"]["include"]]
+        server_targets = workflow["env"]["SERVER_TARGETS"].split()
+
+        self.assertEqual(matrix, server_targets)
+        self.assertEqual(server_targets, self.released_targets(BROWSEROS_SERVER_BUNDLE))
+        for held in BROWSEROS_SERVER_BUNDLE.held_targets:
+            self.assertNotIn(held, matrix)
+        text = (WORKFLOW_DIR / "release-server.yml").read_text(encoding="utf-8")
+        self.assertNotIn("--target=all", text)
+        self.assertNotIn("darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64", text)
+
+    def test_browser_lanes_bundle_the_held_server_for_held_targets(self):
+        jobs = self.load_workflow("release-browseros.yml")["jobs"]
+        held = BROWSEROS_SERVER_BUNDLE.held_targets
+        for lane, targets in self.LANE_TARGETS.items():
+            with self.subTest(lane=lane):
+                versions = {held.get(target) for target in targets}
+                self.assertEqual(len(versions), 1, "a lane holds all or none of its targets")
+                expected = versions.pop() or "${{ needs.server.outputs.version }}"
+                self.assertEqual(jobs[lane]["with"]["server_version"], expected)
+        self.assertEqual(jobs["windows"]["with"]["server_version"], held["windows-x64"])
+
+    def run_validate(self, product: str) -> list[dict]:
+        step = next(
+            step
+            for step in self.load_workflow("publish-server-ota.yml")["jobs"]["validate"]["steps"]
+            if step.get("name") == "Resolve released platforms"
+        )
+        _, opening, rest = step["run"].partition("<<'PY'\n")
+        script, closing, _ = rest.partition("\nPY")
+        self.assertTrue(opening and closing)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT / "packages/browseros",
+            env={**os.environ, "PRODUCT": product},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        name, _, value = result.stdout.strip().partition("=")
+        self.assertEqual(name, "payloads")
+        return json.loads(value)
+
+    def runner_for(self, runs_on: str, entry: dict) -> str:
+        # Evaluates the shipped `os == 'x' && 'runner' || ... || 'fallback'` chain.
+        body = runs_on.removeprefix("${{").removesuffix("}}")
+        *pairs, fallback = (part.strip() for part in body.split("||"))
+        for pair in pairs:
+            match = re.fullmatch(r"matrix\.os == '(\w+)' && '([\w.-]+)'", pair)
+            self.assertIsNotNone(match, pair)
+            assert match is not None
+            if entry["os"] == match.group(1):
+                return match.group(2)
+        return fallback.strip("'")
+
+    def test_ota_payload_jobs_come_from_the_released_platforms(self):
+        workflow = self.load_workflow("publish-server-ota.yml")
+        build = workflow["jobs"]["build-payloads"]
+        self.assertEqual(
+            workflow["jobs"]["validate"]["outputs"]["payloads"],
+            "${{ steps.platforms.outputs.payloads }}",
+        )
+        self.assertEqual(
+            build["strategy"]["matrix"],
+            {"include": "${{ fromJSON(needs.validate.outputs.payloads) }}"},
+        )
+        self.assertEqual(build["env"]["PLATFORM"], "${{ matrix.platform }}")
+
+        for product, expected in (
+            ("browserclaw", self.ALL_PAYLOADS),
+            ("browseros", [p for p in self.ALL_PAYLOADS if p["target"] != "windows-x64"]),
+        ):
+            with self.subTest(product=product):
+                jobs = [
+                    {
+                        "platform": entry["platform"],
+                        "target": entry["target"],
+                        "runner": self.runner_for(build["runs-on"], entry),
+                    }
+                    for entry in self.run_validate(product)
+                ]
+                self.assertEqual(jobs, expected)
+
+    def test_ota_assembly_reads_the_validated_platforms(self):
+        publish = self.load_workflow("publish-server-ota.yml")["jobs"]["publish"]
+        assemble = next(
+            step for step in publish["steps"] if step.get("name") == "Assemble live alpha appcast"
+        )
+        self.assertIn("validate", publish["needs"])
+        self.assertEqual(publish["env"]["PAYLOADS"], "${{ needs.validate.outputs.payloads }}")
+        self.assertIn("jq -r '.[].target' <<< \"$PAYLOADS\"", assemble["run"])
+        self.assertNotIn("windows-x64", assemble["run"])
 
 
 class ReleaseDocumentationTest(unittest.TestCase):

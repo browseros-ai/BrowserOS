@@ -26,6 +26,7 @@ from .common import (
     get_appcast_path,
     find_server_resources_dir,
     merge_base_appcast,
+    released_server_platforms,
 )
 from ..feeds.publisher import FeedPublisher
 from .sign_binary import (
@@ -124,6 +125,8 @@ class ServerOTAModule(Step):
         if self.release_sha and _SOURCE_SHA_RE.fullmatch(self.release_sha) is None:
             raise ValidationError("Release SHA must be a full lowercase commit SHA")
 
+        self._get_platforms()
+
         if IS_MACOS():
             if not context.env.macos_certificate_name:
                 raise ValidationError("MACOS_CERTIFICATE_NAME required for signing")
@@ -138,11 +141,26 @@ class ServerOTAModule(Step):
             )
 
     def _get_platforms(self) -> List[dict]:
-        """Get platforms to process based on filter (supports comma-separated)"""
-        if self.platform_filter:
-            requested = [p.strip() for p in self.platform_filter.split(",")]
-            return [p for p in SERVER_PLATFORMS if p["name"] in requested]
-        return SERVER_PLATFORMS
+        """Released platforms, narrowed by the comma-separated filter.
+
+        A held platform is refused rather than skipped: its feed enclosure
+        must stay absent so its installs keep their held server version.
+        """
+        released = released_server_platforms(self.bundle)
+        if not self.platform_filter:
+            return released
+        requested = [p.strip() for p in self.platform_filter.split(",")]
+        held = [
+            f"{p['name']} (held on {self.bundle.held_targets[p['target']]})"
+            for p in SERVER_PLATFORMS
+            if p["name"] in requested and p["target"] in self.bundle.held_targets
+        ]
+        if held:
+            raise ValidationError(
+                f"{self.bundle.id} gets no OTA payload for held platforms: "
+                + ", ".join(held)
+            )
+        return [p for p in released if p["name"] in requested]
 
     def _download_artifacts(
         self,

@@ -13,6 +13,7 @@ from typing import cast
 from unittest import mock
 
 from ...core.context import Context
+from ...core.step import ValidationError
 from ..feeds.render import ExistingAppcast, SignedArtifact, render_server_appcast
 from ..feeds.spec import server_feed
 from ..resource_pins import ResourceObjectPin, ResourcePin
@@ -53,6 +54,41 @@ def _complete_appcast(version: str = "0.0.9") -> str:
             artifacts={},
         ),
     )
+
+
+class HeldPlatformSelectionTest(unittest.TestCase):
+    """BrowserOS holds Windows on its last TypeScript server; BrowserClaw holds nothing."""
+
+    FOUR = ["darwin_arm64", "darwin_x64", "linux_arm64", "linux_x64"]
+    CONTEXT = cast(Context, SimpleNamespace(env=SimpleNamespace()))
+
+    def platforms(self, product_id: str, platform_filter=None) -> list[str]:
+        module = ServerOTAModule(
+            version="0.0.9",
+            product_id=product_id,
+            platform_filter=platform_filter,
+            release_sha=SOURCE_SHA,
+        )
+        return [platform["name"] for platform in module._get_platforms()]
+
+    def test_browseros_publishes_only_its_released_platforms(self):
+        self.assertEqual(self.platforms("browseros"), self.FOUR)
+
+    def test_browseros_refuses_an_explicit_windows_payload(self):
+        for platform_filter in ("windows_x64", "linux_x64,windows_x64"):
+            module = ServerOTAModule(
+                version="0.0.9",
+                product_id="browseros",
+                platform_filter=platform_filter,
+                release_sha=SOURCE_SHA,
+            )
+            with self.subTest(platform_filter=platform_filter):
+                with self.assertRaisesRegex(ValidationError, "windows_x64"):
+                    module.validate(self.CONTEXT)
+
+    def test_browserclaw_still_publishes_all_five(self):
+        self.assertEqual(self.platforms("browserclaw"), [*self.FOUR, "windows_x64"])
+        self.assertEqual(self.platforms("browserclaw", "windows_x64"), ["windows_x64"])
 
 
 class LiveReleaseReuseTest(unittest.TestCase):

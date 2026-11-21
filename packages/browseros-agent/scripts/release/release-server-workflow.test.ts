@@ -47,6 +47,11 @@ const parsed = Bun.YAML.parse(workflow) as {
   jobs: Record<string, Job>
 }
 
+// The targets a release ships. BrowserOS holds windows-x64 on an earlier
+// server (held_targets in bos_build); ci_workflow_test.py ties the two.
+const serverTargets = parsed.env.SERVER_TARGETS.split(' ')
+const packTargets = `--target="${dollar}{SERVER_TARGETS// /,}"`
+
 function step(jobId: string, name: string): Step {
   const found = parsed.jobs[jobId]?.steps?.find((entry) => entry.name === name)
   expect(found).toBeDefined()
@@ -120,10 +125,13 @@ describe('release-server workflow', () => {
       'artifacts/server',
     )
     expect(build).toContain(
-      'bun scripts/build/server.ts --target=all --upload --versioned-only',
+      `bun scripts/build/server.ts ${packTargets} --upload --versioned-only`,
     )
     expect(build).toContain('RELEASE_SHA:')
-    expect(build).toContain('Expected 5 server resource zips')
+    expect(build).toContain('read -ra targets <<< "$SERVER_TARGETS"')
+    expect(build).toContain(
+      `Expected ${dollar}{#targets[@]} server resource zips, found ${dollar}{#assets[@]}`,
+    )
     expect(build).toContain(
       `gh release upload "$RELEASE_TAG" "${dollar}{assets[@]}" --clobber`,
     )
@@ -157,15 +165,12 @@ describe('release-server workflow', () => {
       'darwin-x64': 'macos-26',
       'linux-arm64': 'ubuntu-24.04-arm',
       'linux-x64': 'ubuntu-latest',
-      'windows-x64': 'windows-latest',
     })
 
     // The matrix must cover exactly the targets the packager zips, with the
     // triples and Linux glibc suffix the local cross-compiler uses.
-    const targets = resolveTargets('all')
-    expect([...entries.keys()].sort()).toEqual(
-      targets.map((target) => target.id).sort(),
-    )
+    const targets = resolveTargets(serverTargets.join(','))
+    expect([...entries.keys()]).toEqual(serverTargets)
     for (const target of targets) {
       const entry = entries.get(target.id) as Record<string, string>
       const local = rustBuildInvocation(target, browserosServerBinary)
@@ -276,7 +281,7 @@ describe('release-server workflow', () => {
       'Build and upload immutable server resources',
     )
     expect(pack.run).toBe(
-      'bun scripts/build/server.ts --target=all --upload --versioned-only',
+      `bun scripts/build/server.ts ${packTargets} --upload --versioned-only`,
     )
     expect(pack.env?.BROWSEROS_SERVER_PREBUILT_DIR).toBe(
       `${dollar}{{ github.workspace }}/${download.with?.path}`,
@@ -315,7 +320,12 @@ describe('release-server workflow', () => {
 
   it('finalizes only after verifying assets and versioned objects', () => {
     const finalize = section('  finalize:', '  publish-ota:')
-    expect(finalize).toContain('Expected 5 draft assets')
+    expect(finalize).toContain(
+      `Expected ${dollar}{#targets[@]} draft assets, found $asset_count`,
+    )
+    expect(step('finalize', 'Copy versioned objects to latest').run).toContain(
+      'read -ra targets <<< "$SERVER_TARGETS"',
+    )
     expect(finalize).toContain(
       `key="artifacts/server/${dollar}{VERSION}/${dollar}{name}"`,
     )

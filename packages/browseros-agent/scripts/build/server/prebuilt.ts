@@ -8,7 +8,7 @@ import { browserosServerBinary } from './descriptor'
 /**
  * A compiler that hands the packager binaries Cargo already built elsewhere.
  * The release workflow compiles each target on its own native runner, because
- * the local cross-compiler runs only on macOS, then packages all five here.
+ * the local cross-compiler runs only on macOS, then packages them all here.
  * Each binary sits at `<dir>/<target id>/browseros_server[.exe]`; a relative
  * `dir` resolves against `packages/browseros-agent`, the packager's working
  * directory.

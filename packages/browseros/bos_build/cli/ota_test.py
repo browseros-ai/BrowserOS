@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from bos_build.browseros import app
 from bos_build.cli import ota as ota_cli
+from bos_build.products import BROWSERCLAW_SERVER_BUNDLE, BROWSEROS_SERVER_BUNDLE
 from bos_build.release.feeds.publisher import FeedPublisher
 from bos_build.release.feeds.render import (
     SignedArtifact,
@@ -185,7 +186,6 @@ class AssembleServerAppcastTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
-        self.output = self.root / "appcast-server.alpha.xml"
         self.publisher = FeedPublisher(
             env=SimpleNamespace(r2_bucket="browseros"),
             r2_client=_MissingR2Client(),
@@ -220,58 +220,68 @@ class AssembleServerAppcastTest(unittest.TestCase):
         )
         return f"{platform_name}={path}"
 
-    def test_assembles_exactly_one_native_fragment_per_platform(self):
-        fragments = [self._fragment(item["name"]) for item in SERVER_PLATFORMS]
+    FOUR = {"darwin_arm64", "darwin_x64", "linux_arm64", "linux_x64"}
 
-        result = ota_cli._assemble_server_appcast(
+    def _output(self, bundle) -> Path:
+        return self.root / f"appcast-{bundle.id}.alpha.xml"
+
+    def _assemble(self, bundle, fragments):
+        return ota_cli._assemble_server_appcast(
             version="0.0.129",
-            bundle_id="browseros-server",
+            bundle=bundle,
             channel="alpha",
             fragments=fragments,
             publisher=self.publisher,
-            output_path=self.output,
+            output_path=self._output(bundle),
         )
 
-        self.assertEqual(result, self.output)
-        parsed = parse_server_appcast_content(self.output.read_text())
-        self.assertIsNotNone(parsed)
-        assert parsed is not None
-        self.assertEqual(parsed.version, "0.0.129")
-        self.assertEqual(
-            set(parsed.artifacts),
-            {item["name"] for item in SERVER_PLATFORMS},
-        )
+    def test_assembles_exactly_one_native_fragment_per_released_platform(self):
+        for bundle, released in (
+            (BROWSEROS_SERVER_BUNDLE, self.FOUR),
+            (BROWSERCLAW_SERVER_BUNDLE, self.FOUR | {"windows_x64"}),
+        ):
+            with self.subTest(bundle=bundle.id):
+                fragments = [
+                    self._fragment(name, bundle_id=bundle.id) for name in sorted(released)
+                ]
+
+                result = self._assemble(bundle, fragments)
+
+                self.assertEqual(result, self._output(bundle))
+                parsed = parse_server_appcast_content(result.read_text())
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                self.assertEqual(parsed.version, "0.0.129")
+                self.assertEqual(set(parsed.artifacts), released)
 
     def test_refuses_incomplete_native_fragment_set(self):
-        fragments = [
-            self._fragment(item["name"])
-            for item in SERVER_PLATFORMS
-            if item["name"] != "windows_x64"
-        ]
+        for bundle, released, missing in (
+            (BROWSEROS_SERVER_BUNDLE, self.FOUR, "darwin_x64"),
+            (BROWSERCLAW_SERVER_BUNDLE, self.FOUR | {"windows_x64"}, "windows_x64"),
+        ):
+            fragments = [
+                self._fragment(name, bundle_id=bundle.id)
+                for name in sorted(released - {missing})
+            ]
+            with self.subTest(bundle=bundle.id):
+                with self.assertRaisesRegex(
+                    ValueError, f"Missing appcast fragments: {missing}$"
+                ):
+                    self._assemble(bundle, fragments)
 
-        with self.assertRaisesRegex(ValueError, "Missing appcast fragments"):
-            ota_cli._assemble_server_appcast(
-                version="0.0.129",
-                bundle_id="browseros-server",
-                channel="alpha",
-                fragments=fragments,
-                publisher=self.publisher,
-                output_path=self.output,
-            )
+    def test_browseros_refuses_a_held_windows_fragment(self):
+        fragments = [self._fragment(item["name"]) for item in SERVER_PLATFORMS]
+
+        with self.assertRaisesRegex(ValueError, "does not release windows_x64"):
+            self._assemble(BROWSEROS_SERVER_BUNDLE, fragments)
+        self.assertFalse(self._output(BROWSEROS_SERVER_BUNDLE).exists())
 
     def test_refuses_fragment_without_its_assigned_platform(self):
         linux = self._fragment("linux_x64")
         path = linux.split("=", 1)[1]
 
         with self.assertRaisesRegex(ValueError, "does not contain darwin_arm64"):
-            ota_cli._assemble_server_appcast(
-                version="0.0.129",
-                bundle_id="browseros-server",
-                channel="alpha",
-                fragments=[f"darwin_arm64={path}"],
-                publisher=self.publisher,
-                output_path=self.output,
-            )
+            self._assemble(BROWSEROS_SERVER_BUNDLE, [f"darwin_arm64={path}"])
 
     def test_refuses_fragment_for_another_version(self):
         fragments = [
@@ -280,17 +290,11 @@ class AssembleServerAppcastTest(unittest.TestCase):
                 version="0.0.128" if item["name"] == "linux_x64" else "0.0.129",
             )
             for item in SERVER_PLATFORMS
+            if item["name"] != "windows_x64"
         ]
 
         with self.assertRaisesRegex(ValueError, "carries version 0.0.128"):
-            ota_cli._assemble_server_appcast(
-                version="0.0.129",
-                bundle_id="browseros-server",
-                channel="alpha",
-                fragments=fragments,
-                publisher=self.publisher,
-                output_path=self.output,
-            )
+            self._assemble(BROWSEROS_SERVER_BUNDLE, fragments)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ...lib.sparkle import sparkle_sign_file as sparkle_sign_file
+from ...products.server_binaries import ServerBundle
 from ...lib.utils import log_error, log_success
 from ..feeds.publisher import FeedPublisher
 from ..feeds.render import (
@@ -24,6 +25,16 @@ SERVER_PLATFORMS = [
     {"name": "linux_x64", "binary": "browseros-server-linux-x64", "target": "linux-x64", "os": "linux", "arch": "x86_64"},
     {"name": "windows_x64", "binary": "browseros-server-windows-x64.exe", "target": "windows-x64", "os": "windows", "arch": "x86_64"},
 ]
+
+
+def released_server_platforms(bundle: ServerBundle) -> List[dict]:
+    """The platforms a bundle's server release builds and its OTA feed carries.
+
+    Every server-release consumer (OTA payloads, appcast assembly, the release
+    workflows through ci_workflow_test.py) reads this, so a held target drops
+    out of all of them together.
+    """
+    return [p for p in SERVER_PLATFORMS if p["target"] not in bundle.held_targets]
 
 
 def find_server_resources_dir(binaries_dir: Path, platform: dict) -> Optional[Path]:
