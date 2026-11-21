@@ -15,7 +15,13 @@
 //! host ──solve(view, page)──▶ reserve page ─▶ detect ─▶ flow (recaptcha | turnstile | …)
 //!                                  │                       ├─ page: LivePage over BrowserView
 //!   host guards ◀── busy_message ──┘                       └─ providers: CapSolver → 2Captcha
+//!                                                          │
+//!            outcome ◀── verify gate (verify.rs; judge.rs) ◀┘ success claims only
 //! ```
+//!
+//! The verify gate checks every answer that tells the agent to carry on (`solved`,
+//! `token_applied`, `already_clear`) before it leaves the crate: deterministic page facts first,
+//! a host-injected or default [`judge::Judge`] (Jev) only when those are unclear.
 
 mod arkose;
 mod aws_waf;
@@ -23,7 +29,9 @@ mod cloudflare;
 pub mod config;
 mod detect;
 pub mod events;
+mod evidence;
 mod geetest;
+pub mod judge;
 mod page;
 mod policy;
 mod providers;
@@ -33,6 +41,7 @@ mod turnstile;
 mod turnstile_state;
 mod twocaptcha;
 pub mod types;
+mod verify;
 
 use std::{
     future::Future,
@@ -54,7 +63,7 @@ use self::{
     types::{
         Attempts, CaptchaEventName, CaptchaKind, Challenge, ChallengeState, Detection, DocumentId,
         FlowResult, PageError, ProviderAnswer, ProviderError, ProviderName, SolveMethod,
-        SolveOutcome, SolveReason, SolveStatus, SolveStep,
+        SolveOutcome, SolveReason, SolveStatus, SolveStep, VerifyReport,
     },
 };
 
@@ -129,6 +138,18 @@ pub struct CaptchaSolver {
     reservations: Arc<TabReservations>,
     events: CaptchaEventBus,
     forced_method: Option<config::ForcedMethod>,
+    /// The verify check's second tier; `None` runs the deterministic tier only, and an unclear
+    /// page then reads `unknown`.
+    judge: Option<Arc<dyn judge::Judge>>,
+    verify: config::VerifyMode,
+}
+
+/// What routing chose, kept for the verify gate: the gate runs after the routed work returns,
+/// so routing records here which widget and document a success claim is about.
+struct Routed {
+    kind: Option<CaptchaKind>,
+    challenge: Option<Challenge>,
+    document: DocumentId,
 }
 
 /// Whether the host gives the agent a way to hand the page to a person. It picks the closing
@@ -152,7 +173,23 @@ pub enum SolveRefusal {
 impl CaptchaSolver {
     /// `None` when no provider key is configured. Hosts treat that as "solving not offered",
     /// even though the free paths (auto-pass, checkbox) would not need a key.
+    ///
+    /// The verify check's judge is the default Jev client when the config names a key file
+    /// (`NEO_JEV_KEY_FILE`), so hosts need no code to turn it on.
     pub fn new(config: config::CaptchaConfig) -> Option<Self> {
+        let judge = config.judge.clone().map(|judge_config| {
+            let judge: Arc<dyn judge::Judge> = Arc::new(judge::HttpJudge::new(judge_config));
+            judge
+        });
+        Self::new_with_judge(config, judge)
+    }
+
+    /// For a host that brings its own decision model (a shared Jev pool, or a licence-bearer
+    /// oracle). `None` runs the deterministic tier only, whatever the config names.
+    pub fn new_with_judge(
+        config: config::CaptchaConfig,
+        judge: Option<Arc<dyn judge::Judge>>,
+    ) -> Option<Self> {
         if !config.has_provider() {
             return None;
         }
@@ -161,6 +198,8 @@ impl CaptchaSolver {
             reservations: Arc::default(),
             events: CaptchaEventBus::new(),
             forced_method: config.force_method,
+            judge,
+            verify: config.verify,
         })
     }
 
@@ -222,6 +261,15 @@ impl CaptchaSolver {
             .map_err(SolveRefusal::Busy)?;
         let events = EventLog::new(self.events().clone(), request_id.clone(), page_id.0);
         let payments = Arc::new(Mutex::new(Payments::default()));
+        let routed: Mutex<Option<Routed>> = Mutex::new(None);
+        let route =
+            |kind: Option<CaptchaKind>, challenge: Option<&Challenge>, document: &DocumentId| {
+                *routed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Routed {
+                    kind,
+                    challenge: challenge.cloned(),
+                    document: document.clone(),
+                });
+            };
         let mut host = None;
         let work = async {
             let mut user_agent = None;
@@ -358,6 +406,7 @@ impl CaptchaSolver {
                             user_agent,
                             forced_method: self.forced_method,
                         };
+                        route(Some(challenge.kind), Some(challenge), &detection.document);
                         return driver.solve(&ctx, challenge).await;
                     }
                     if !detection.supports(challenge)
@@ -395,6 +444,7 @@ impl CaptchaSolver {
                     );
                 }
                 if detection.challenges.is_empty() {
+                    route(None, None, &detection.document);
                     return terminal(
                         SolveStatus::AlreadyClear,
                         SolveReason::NoCaptcha,
@@ -406,6 +456,8 @@ impl CaptchaSolver {
                     .iter()
                     .all(|challenge| challenge.state == ChallengeState::Passed)
                 {
+                    let passed = detection.challenges.first();
+                    route(passed.map(|c| c.kind), passed, &detection.document);
                     return terminal(
                         SolveStatus::AlreadyClear,
                         SolveReason::AlreadyPassed,
@@ -418,6 +470,7 @@ impl CaptchaSolver {
                         ChallengeState::Passed | ChallengeState::WidgetOnly
                     )
                 }) {
+                    route(None, None, &detection.document);
                     return terminal(
                         SolveStatus::AlreadyClear,
                         SolveReason::NotBlocking,
@@ -432,12 +485,20 @@ impl CaptchaSolver {
             }
             page_failure(PageError::Navigated)
         };
-        let mut flow = tokio::select! {
+        // The gate runs inside the same race as the work, so cancel, the deadline and a closed
+        // page stop the check too.
+        let checked = async {
+            let flow = work.await;
+            let routed = routed.lock().unwrap_or_else(|e| e.into_inner()).take();
+            self.check_claim(page, routed, flow, &events, &cancel, deadline)
+                .await
+        };
+        let (mut flow, verify_report) = tokio::select! {
             biased;
-            _ = cancel.cancelled() => page_failure(PageError::Cancelled),
-            _ = tokio::time::sleep_until(deadline) => terminal(SolveStatus::Failed, SolveReason::DeadlineExceeded, "The CAPTCHA solve exceeded its 120-second deadline. Take a fresh snapshot before retrying."),
-            _ = wait_for_page_close(page) => page_failure(PageError::Closed),
-            result = work => result,
+            _ = cancel.cancelled() => (page_failure(PageError::Cancelled), None),
+            _ = tokio::time::sleep_until(deadline) => (terminal(SolveStatus::Failed, SolveReason::DeadlineExceeded, "The CAPTCHA solve exceeded its 120-second deadline. Take a fresh snapshot before retrying."), None),
+            _ = wait_for_page_close(page) => (page_failure(PageError::Closed), None),
+            result = checked => result,
         };
         {
             let paid = payments.lock().unwrap_or_else(|e| e.into_inner());
@@ -538,9 +599,101 @@ impl CaptchaSolver {
             cost_usd: flow.cost_usd,
             message: flow.message,
             events: events.events(),
+            verify: verify_report,
         };
         events::log_outcome(&outcome, host.as_deref(), outcome.provider);
         Ok(outcome)
+    }
+}
+
+impl CaptchaSolver {
+    /// A solver with no provider key and the verify check off, for tests that drive
+    /// `solve_with` directly. One constructor, so a new field does not break every test file.
+    #[cfg(test)]
+    pub(crate) fn unkeyed() -> Self {
+        Self {
+            providers: ProviderChain::new(&config::CaptchaConfig::default()),
+            reservations: Arc::default(),
+            events: CaptchaEventBus::new(),
+            forced_method: None,
+            judge: None,
+            verify: config::VerifyMode::Off,
+        }
+    }
+
+    /// The verify gate: confirms a success claim before it reaches the host, or replaces it with
+    /// the truthful answer (`still_blocked`, `challenge_pending`, `acceptance_unconfirmed`, …).
+    /// `Shadow` mode reports the check but keeps the claim. Any other answer passes untouched.
+    async fn check_claim<P: CaptchaPage>(
+        &self,
+        page: &P,
+        routed: Option<Routed>,
+        flow: FlowResult,
+        events: &EventLog,
+        cancel: &CancellationToken,
+        deadline: Instant,
+    ) -> (FlowResult, Option<VerifyReport>) {
+        if self.verify == config::VerifyMode::Off || !flow.status.claims_success() {
+            return (flow, None);
+        }
+        let Some(routed) = routed else {
+            return (flow, None);
+        };
+        let claim = verify::Claim {
+            basis: verify::Basis::of(&flow, routed.kind),
+            kind: routed.kind,
+            challenge: routed.challenge.as_ref(),
+            document: &routed.document,
+            before: None,
+            callback_ran: flow.callback_ran,
+        };
+        let mut budget = verify::VerifyBudget {
+            until: deadline,
+            judge_calls_left: verify::MAX_JUDGE_CALLS,
+        };
+        let started = Instant::now();
+        let verification = match verify::standing(
+            page,
+            &claim,
+            self.judge.as_deref(),
+            &mut budget,
+            cancel,
+        )
+        .await
+        {
+            Ok(verification) => verification,
+            Err(error) => return (page_failure(error), None),
+        };
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        // A plain clear `already_clear` stays silent, so an empty page's answer has no events.
+        if routed.challenge.is_some()
+            || verification.standing != verify::Standing::Clear
+            || verification.judged.is_some()
+        {
+            events.emit(
+                CaptchaEventName::Verified,
+                verify::event_data(&verification, routed.kind, 0, ms),
+            );
+        }
+        let report = verify::report(
+            &verification,
+            1,
+            verify::MAX_JUDGE_CALLS - budget.judge_calls_left,
+        );
+        if self.verify == config::VerifyMode::Shadow {
+            return (flow, Some(report));
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        let flow = match verify::next_step(&flow, &verification, &claim, 0, left) {
+            verify::Next::Return(answer) => answer,
+            // Wave 2 (V4) turns this into the second round: the flow runs again with the remedy
+            // in `SolveCtx`. Until then a fixable block hands off, which is still the truth.
+            verify::Next::Retry(_) => match verify::still_blocked(&flow) {
+                verify::Next::Return(answer) => answer,
+                verify::Next::Retry(_) => flow,
+            },
+        };
+        (flow, Some(report))
     }
 }
 
@@ -872,12 +1025,7 @@ mod orchestration_tests {
         }
     }
     pub(super) fn service() -> CaptchaSolver {
-        CaptchaSolver {
-            providers: ProviderChain::new(&config::CaptchaConfig::default()),
-            reservations: Arc::default(),
-            events: CaptchaEventBus::new(),
-            forced_method: None,
-        }
+        CaptchaSolver::unkeyed()
     }
     fn scan(challenges: &[(CaptchaKind, ChallengeState)], complete: bool) -> Detection {
         Detection {
@@ -1046,6 +1194,94 @@ mod orchestration_tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_verify_gate_keeps_unconfirmed_claims_truthful() -> anyhow::Result<()> {
+        let applied = FlowResult {
+            status: SolveStatus::TokenApplied,
+            method: SolveMethod::Token,
+            reason: SolveReason::AwaitingSubmit,
+            attempts: Attempts::default(),
+            paid_tasks: 1,
+            provider: Some(ProviderName::TwoCaptcha),
+            cost_usd: 0.001,
+            callback_ran: true,
+            message: token_applied_message(true),
+        };
+        let mut seen = Vec::new();
+        for mode in [
+            config::VerifyMode::Off,
+            config::VerifyMode::Shadow,
+            config::VerifyMode::On,
+        ] {
+            let solver = CaptchaSolver {
+                verify: mode,
+                ..CaptchaSolver::unkeyed()
+            };
+            let driver = FakeDriver {
+                result: Some(applied.clone()),
+                ..FakeDriver::new(scan(
+                    &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                    true,
+                ))
+            };
+            let outcome = solver
+                .solve_with(
+                    &FakePage::new(Ok(document("current"))),
+                    PageId(42),
+                    CancellationToken::new(),
+                    false,
+                    tokio::time::Instant::now() + Duration::from_secs(120),
+                    &driver,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            let verified = outcome
+                .events
+                .iter()
+                .any(|event| event.event == CaptchaEventName::Verified);
+            seen.push((
+                mode,
+                outcome.status,
+                outcome.reason,
+                outcome.verify.map(|v| v.result),
+                verified,
+                outcome.paid_tasks,
+            ));
+        }
+        // The skeleton reads too little to confirm anything, so `on` must say "unconfirmed",
+        // never "token_applied"; `shadow` keeps the claim and reports the check beside it.
+        assert_eq!(
+            seen,
+            [
+                (
+                    config::VerifyMode::Off,
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
+                    None,
+                    false,
+                    1
+                ),
+                (
+                    config::VerifyMode::Shadow,
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
+                    Some(types::VerifyResult::Unsure),
+                    true,
+                    1
+                ),
+                (
+                    config::VerifyMode::On,
+                    SolveStatus::Failed,
+                    SolveReason::AcceptanceUnconfirmed,
+                    Some(types::VerifyResult::Unsure),
+                    true,
+                    1
+                ),
+            ]
+        );
         Ok(())
     }
 

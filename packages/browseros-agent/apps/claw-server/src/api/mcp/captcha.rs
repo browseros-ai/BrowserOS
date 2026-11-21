@@ -143,7 +143,7 @@ pub fn solve_captcha_tool() -> Tool {
             "status":{"type":"string","enum":["solved","token_applied","already_clear","unsupported","failed","cancelled","needs_human","policy_wall"]},
             "type":{"type":["string","null"],"enum":["recaptcha_v2","recaptcha_v3","turnstile","cloudflare_challenge","hcaptcha","geetest","aws_waf","arkose","unknown",null]},
             "method":{"type":"string","enum":["none","auto_pass","checkbox","tiles","token"]},
-            "reason":{"type":"string","enum":["auto_passed","checkbox_passed","tiles_accepted","token_accepted","awaiting_submit","no_captcha","already_passed","not_blocking","unsupported_type","scan_incomplete","acceptance_unconfirmed","provider_error","browser_error","deadline_exceeded","caller_cancelled","tab_closed","navigated","no_provider","provider_unavailable","tiles_exhausted","challenge_not_passed","spend_limit_reached","policy_wall"]},
+            "reason":{"type":"string","enum":["auto_passed","checkbox_passed","tiles_accepted","token_accepted","awaiting_submit","no_captcha","already_passed","not_blocking","unsupported_type","scan_incomplete","acceptance_unconfirmed","provider_error","browser_error","deadline_exceeded","caller_cancelled","tab_closed","navigated","no_provider","provider_unavailable","tiles_exhausted","challenge_not_passed","spend_limit_reached","still_blocked","policy_wall","challenge_pending"]},
             "requestId":{"type":"string","pattern":"^cap_[0-9A-HJKMNP-TV-Z]{26}$"},
             "page":{"type":"integer","minimum":1},
             "durationMs":{"type":"integer","minimum":0},
@@ -153,8 +153,13 @@ pub fn solve_captcha_tool() -> Tool {
             "provider":{"type":["string","null"],"enum":["capsolver","2captcha",null]},
             "costUsd":{"type":"number","minimum":0},
             "message":{"type":"string"},
+            "verify":{"type":"object","required":["result","tier","cause","rounds","judgeCalls"],"properties":{
+                "result":{"type":"string","enum":["clear","blocked","pending","policy_wall","unsure"]},
+                "tier":{"type":"string","enum":["deterministic","jev"]},
+                "cause":{"type":["string","null"],"enum":["challenge_open","widget_failed","widget_expired","token_stale","wall_showing","unsupported_wall","site_rejected","denied",null]},
+                "rounds":{"type":"integer","minimum":1},"judgeCalls":{"type":"integer","minimum":0}}},
             "events":{"type":"array","items":{"type":"object","required":["event","requestId","page","atMs","data"],"properties":{
-                "event":{"type":"string","enum":["captcha.detected","captcha.solving","captcha.solved","captcha.token_applied","captcha.failed","captcha.handoff"]},
+                "event":{"type":"string","enum":["captcha.detected","captcha.solving","captcha.solved","captcha.token_applied","captcha.failed","captcha.handoff","captcha.verified"]},
                 "requestId":{"type":"string"},"page":{"type":"integer","minimum":1},"atMs":{"type":"integer","minimum":0},"data":{"type":"object"}}}}
         }
     });
@@ -228,6 +233,96 @@ mod tests {
             tool.input_schema.get("properties"),
             Some(&json!({"page": {"type": "integer", "minimum": 1}}))
         );
+    }
+
+    #[test]
+    fn tests_that_output_schema_lists_only_crate_values_and_the_verify_check() -> anyhow::Result<()>
+    {
+        use neo_captcha::types::{
+            BlockCause, CaptchaEventName, SolveReason, SolveStatus, VerifyReport, VerifyResult,
+            VerifyTier,
+        };
+        let output = serde_json::to_value(solve_captcha_tool().output_schema)?;
+        let listed = |pointer: &str| -> Vec<Value> {
+            output
+                .pointer(pointer)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        // Schema ⊆ crate: a value the crate cannot produce would be a lie in the contract.
+        for value in listed("/properties/status/enum") {
+            serde_json::from_value::<SolveStatus>(value)?;
+        }
+        for value in listed("/properties/reason/enum") {
+            serde_json::from_value::<SolveReason>(value)?;
+        }
+        for value in listed("/properties/events/items/properties/event/enum") {
+            serde_json::from_value::<CaptchaEventName>(value)?;
+        }
+        // Crate ⊆ schema for the verify check's values: an MCP client rejects a whole answer
+        // holding a value its schema does not list.
+        for (pointer, value) in [
+            (
+                "/properties/reason/enum",
+                serde_json::to_value(SolveReason::StillBlocked)?,
+            ),
+            (
+                "/properties/reason/enum",
+                serde_json::to_value(SolveReason::ChallengePending)?,
+            ),
+            (
+                "/properties/events/items/properties/event/enum",
+                serde_json::to_value(CaptchaEventName::Verified)?,
+            ),
+        ] {
+            assert!(listed(pointer).contains(&value), "{pointer} lacks {value}");
+        }
+        for result in [
+            VerifyResult::Clear,
+            VerifyResult::Blocked,
+            VerifyResult::Pending,
+            VerifyResult::PolicyWall,
+            VerifyResult::Unsure,
+        ] {
+            assert!(
+                listed("/properties/verify/properties/result/enum")
+                    .contains(&serde_json::to_value(result)?)
+            );
+        }
+        for tier in [VerifyTier::Deterministic, VerifyTier::Jev] {
+            assert!(
+                listed("/properties/verify/properties/tier/enum")
+                    .contains(&serde_json::to_value(tier)?)
+            );
+        }
+        for cause in [
+            BlockCause::ChallengeOpen,
+            BlockCause::WidgetFailed,
+            BlockCause::WidgetExpired,
+            BlockCause::TokenStale,
+            BlockCause::WallShowing,
+            BlockCause::UnsupportedWall,
+            BlockCause::SiteRejected,
+            BlockCause::Denied,
+        ] {
+            assert!(
+                listed("/properties/verify/properties/cause/enum")
+                    .contains(&serde_json::to_value(cause)?)
+            );
+        }
+        let report = serde_json::to_value(VerifyReport {
+            result: VerifyResult::Blocked,
+            tier: VerifyTier::Jev,
+            cause: Some(BlockCause::SiteRejected),
+            rounds: 2,
+            judge_calls: 1,
+        })?;
+        for key in listed("/properties/verify/required") {
+            let key = key.as_str().unwrap_or_default();
+            assert!(report.get(key).is_some(), "the report carries {key}");
+        }
+        Ok(())
     }
 
     #[test]
