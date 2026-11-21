@@ -71,12 +71,11 @@ fn normalize(line: &str) -> String {
     words.join(" ").to_ascii_lowercase()
 }
 
+/// A sentence naming an unauthorized AI agent is a wall only under the page's own "Access
+/// restricted"/"Access denied" heading. Without the heading the same words are just as likely a
+/// quotation (a news article about the wall), and a false wall stops the agent on an open page.
 fn is_unauthorized_agent_notice(line: &str, restriction_heading: bool) -> bool {
-    line.contains("unauthorized ai agent")
-        && (restriction_heading
-            || ["violates", "not permitted", "not allowed"]
-                .into_iter()
-                .any(|denial| line.contains(denial)))
+    restriction_heading && line.contains("unauthorized ai agent")
 }
 
 fn is_denial(line: &str) -> bool {
@@ -198,18 +197,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_an_agent_notice_needs_a_restriction_heading_or_words_of_denial()
-    -> anyhow::Result<()> {
+    async fn tests_that_an_agent_notice_needs_a_restriction_heading() -> anyhow::Result<()> {
+        let page = Page(json!({
+            "headings": ["ACCESS   DENIED"],
+            "text": "We identified an UNAUTHORIZED  AI\tagent on this page."
+        }));
+        assert!(policy_wall(&page).await?.is_some());
+        // An open article quoting the wall's sentence is not the wall (found by the live rig).
         for notice in [
             json!({
-                "headings": ["ACCESS   DENIED"],
-                "text": "We identified an UNAUTHORIZED  AI\tagent on this page."
+                "title": "Amazon tells AI shopping agents to stay out",
+                "headings": ["Amazon tells AI shopping agents to stay out"],
+                "text": format!("The page reads: \"{AMAZON_NOTICE}\"\nAnalysts expect others to follow.")
             }),
             json!({"text": AMAZON_NOTICE}),
             json!({"text": "An unauthorized AI agent is not permitted here."}),
-            json!({"text": "An unauthorized AI agent is not allowed here."}),
         ] {
-            assert!(policy_wall(&Page(notice)).await?.is_some());
+            assert_eq!(policy_wall(&Page(notice)).await?, None);
         }
         Ok(())
     }
