@@ -44,12 +44,8 @@ export interface ChatRequestBodyParams {
    * The provider config, when the caller already holds it. Only the id is sent;
    * the rest is used to describe what the chosen model can do, which comes from
    * a catalogue the extension bundles.
-   *
-   * Callers that hold nothing but an id, such as the scheduled runner, pass
-   * `providerId` instead and let the server resolve the rest.
    */
   provider?: LlmProviderConfig
-  providerId?: string
   message?: string
   mode?: ChatMode
   browserContext?: ChatRequestBrowserContext
@@ -65,13 +61,11 @@ export interface ChatRequestBodyParams {
     url: string
     title: string
   }
-  isScheduledTask?: boolean
 }
 
 export const buildChatRequestBody = ({
   conversationId,
   provider,
-  providerId,
   message = '',
   mode,
   browserContext,
@@ -83,7 +77,6 @@ export const buildChatRequestBody = ({
   declinedApps,
   selectedText,
   selectedTextSource,
-  isScheduledTask,
 }: ChatRequestBodyParams) => ({
   // The provider is named, not described. The server holds the list and which
   // one is selected, so it resolves the model, endpoint and credentials from
@@ -91,9 +84,9 @@ export const buildChatRequestBody = ({
   // the aws secret crossed the wire each time the user pressed send.
   target: {
     type: 'browseros' as const,
-    // Absent when the caller has neither, which tells the server to use the
-    // selected provider.
-    providerId: provider?.id ?? providerId,
+    // Absent without a provider, which tells the server to use the selected
+    // one.
+    providerId: provider?.id,
   },
   message,
   conversationId,
@@ -110,5 +103,4 @@ export const buildChatRequestBody = ({
   declinedApps: declinedApps?.length ? declinedApps : undefined,
   selectedText,
   selectedTextSource,
-  isScheduledTask,
 })

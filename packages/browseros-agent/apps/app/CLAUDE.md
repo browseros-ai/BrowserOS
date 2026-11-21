@@ -90,7 +90,7 @@ cd apps/app && bun run codegen
 Every form uses `react-hook-form` for state and submission plus a single `zod` schema for validation, bridged by `@hookform/resolvers/zod` — no `useState`-per-field. The UI is the shadcn `Form` set (`Form`, `FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormMessage`) from `@/components/ui/form`. The schema is the source of truth: derive `FormValues` with `z.infer`, pass `zodResolver(schema)` to `useForm`, and surface per-field errors through `<FormMessage />` instead of rolling your own error state.
 
 - Import `z` from `zod/v3`, not `zod`. The package ships zod 4, which exposes a `zod/v3` compatibility entry; every existing form standardizes on it, so match them.
-- Reference: `entrypoints/app/connect-mcp/AddCustomMCPDialog.tsx` (also `ai-settings/NewProviderDialog.tsx`, `scheduled-tasks/NewScheduledTaskDialog.tsx`).
+- Reference: `entrypoints/app/connect-mcp/AddCustomMCPDialog.tsx` (also `ai-settings/NewProviderDialog.tsx`).
 
 ## Routing
 

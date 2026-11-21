@@ -24,7 +24,6 @@ import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepan
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
-import { scheduledJobRuns } from './scheduledJobRuns'
 
 const RETIRED_STORAGE_KEYS = [
   // The unshipped Tool Approvals feature.
@@ -39,6 +38,23 @@ const RETIRED_STORAGE_KEYS = [
 /** Drops state belonging to features that no longer read it. */
 const cleanupRetiredStorage = async () => {
   await storage.removeItems([...RETIRED_STORAGE_KEYS])
+}
+
+const RETIRED_SCHEDULED_JOB_ALARM_PREFIX = 'scheduled-job-'
+
+/**
+ * Clears the alarms the removed scheduled tasks feature registered, which
+ * would otherwise keep waking the worker for nothing. Runs on every start
+ * because Chrome makes no promise about alarms surviving an extension update
+ * (before Chrome 150), so no one-off lifecycle event can be trusted to see
+ * them; a repeat finds nothing to clear.
+ */
+const clearRetiredScheduledJobAlarms = async () => {
+  for (const alarm of await chrome.alarms.getAll()) {
+    if (alarm.name.startsWith(RETIRED_SCHEDULED_JOB_ALARM_PREFIX)) {
+      await chrome.alarms.clear(alarm.name)
+    }
+  }
 }
 
 export default defineBackground(() => {
@@ -65,8 +81,7 @@ export default defineBackground(() => {
   })
 
   Capabilities.initialize().catch(() => null)
-
-  scheduledJobRuns()
+  clearRetiredScheduledJobAlarms().catch(() => null)
 
   chrome.action.onClicked.addListener(async (tab) => {
     if (typeof tab.id === 'number' && typeof tab.windowId === 'number') {

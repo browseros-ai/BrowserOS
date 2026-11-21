@@ -21,7 +21,6 @@ import { ChatMessageActions } from './ChatMessageActions'
 import { ConnectAppCard } from './ConnectAppCard'
 import { getMessageSegments } from './getMessageSegments'
 import { JtbdPopup } from './JtbdPopup'
-import { ScheduleSuggestionCard } from './ScheduleSuggestionCard'
 import { ToolBatch } from './ToolBatch'
 import { UserActionMessage } from './UserActionMessage'
 
@@ -117,14 +116,7 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
                               />
                             )
                           case 'nudge':
-                            return segment.nudgeType ===
-                              'schedule_suggestion' ? (
-                              <ScheduleSuggestionCard
-                                key={segment.key}
-                                data={segment.data}
-                                isLastMessage={isLastMessage}
-                              />
-                            ) : (
+                            return (
                               <ConnectAppCard
                                 key={segment.key}
                                 data={segment.data}

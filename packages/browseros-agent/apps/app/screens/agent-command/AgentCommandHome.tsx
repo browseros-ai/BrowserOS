@@ -12,7 +12,6 @@ import { useChatTargetSelection } from '@/modules/chat/use-chat-target-selection
 import { ImportDataHint } from '@/screens/newtab/index/ImportDataHint'
 import { useShowImportHint } from '@/screens/newtab/index/import-hint.hooks'
 import { RecentSites } from '@/screens/newtab/index/RecentSites'
-import { ScheduleResults } from '@/screens/newtab/index/ScheduleResults'
 import {
   ConversationInput,
   type ConversationInputSendInput,
@@ -147,7 +146,6 @@ export const AgentCommandHome: FC = () => {
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 pb-12">
           <RecentSites />
           <ProductHuntBanner fallback={<BrowserClawPromoBanner />} />
-          <ScheduleResults />
         </div>
       </div>
 

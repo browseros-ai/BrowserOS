@@ -15,7 +15,6 @@ import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
 import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
-import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -37,7 +36,6 @@ const OptionsRedirect: FC = () => {
     customization: '/settings/customization',
     search: '/settings/ai',
     'jtbd-agent': '/settings/survey',
-    scheduled: '/scheduled',
   }
 
   const newPath = routeMap[path] || '/settings/ai'
@@ -58,7 +56,6 @@ export const App: FC = () => {
           </Route>
 
           <Route path="connect-apps" element={<ConnectMCP />} />
-          <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
         <Route element={<SettingsSidebarLayout />}>

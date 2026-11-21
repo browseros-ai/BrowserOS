@@ -36,4 +36,32 @@ describe('getMessageSegments', () => {
       },
     ])
   })
+
+  test('renders nothing for a suggest_schedule call, in any state', () => {
+    const suggestion = JSON.stringify({
+      type: 'schedule_suggestion',
+      query: 'Summarize my inbox',
+    })
+    const message = {
+      id: 'message-1',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-suggest_schedule',
+          toolCallId: 'call-1',
+          state: 'input-available',
+          input: {},
+        },
+        {
+          type: 'tool-suggest_schedule',
+          toolCallId: 'call-2',
+          state: 'output-available',
+          input: {},
+          output: { content: [{ type: 'text', text: suggestion }] },
+        },
+      ],
+    } as unknown as UIMessage
+
+    expect(getMessageSegments(message, true, false)).toEqual([])
+  })
 })

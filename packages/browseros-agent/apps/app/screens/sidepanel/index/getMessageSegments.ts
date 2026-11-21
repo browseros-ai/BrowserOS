@@ -21,7 +21,7 @@ export interface ToolInvocationInfo {
   approval?: { id: string; approved?: boolean; reason?: string }
 }
 
-export type NudgeType = 'schedule_suggestion' | 'app_connection'
+export type NudgeType = 'app_connection'
 
 export interface NudgeData {
   type: NudgeType
@@ -34,6 +34,9 @@ export type MessageSegment =
   | { type: 'tool-batch'; key: string; tools: ToolInvocationInfo[] }
   | { type: 'nudge'; key: string; nudgeType: NudgeType; data: NudgeData }
 
+// `suggest_schedule` no longer has a card, but the old server still emits it
+// and stored conversations hold it, so it stays here to keep it out of the
+// tool rows; its output parses to no nudge.
 const NUDGE_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
 
 function parseNudgeOutput(output: unknown): NudgeData | null {
@@ -48,10 +51,7 @@ function parseNudgeOutput(output: unknown): NudgeData | null {
     if (!text) return null
 
     const parsed = JSON.parse(text)
-    if (
-      parsed?.type === 'schedule_suggestion' ||
-      parsed?.type === 'app_connection'
-    ) {
+    if (parsed?.type === 'app_connection') {
       return parsed as NudgeData
     }
   } catch {
