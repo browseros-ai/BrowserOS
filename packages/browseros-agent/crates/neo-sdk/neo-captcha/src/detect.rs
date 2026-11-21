@@ -54,8 +54,12 @@ const addresses = [...new Set([
     ...(scope === document ? performance.getEntriesByType('resource').map(e => e.name) : [])
 ])].filter(vendorHost);
 const add = (e, kind, state, list = widgets) => {
+    const field = ({turnstile:'input[name="cf-turnstile-response"]', hcaptcha:'textarea[name="h-captcha-response"]',
+        geetest:'[name="geetest_validate"], [name="geetest_seccode"], [name="captcha_output"]',
+        aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
+    const response = kind === 'arkose' || kind === 'perimeterx' ? null : e && (e.matches(field) ? e : all(field, e)[0]);
     const a = name => e?.getAttribute('data-' + name) || null;
-    const w = {kind, inferred: !e, state, invisible: a('size') === 'invisible', enterprise: false,
+    const w = {kind, inferred: !e, state, hasResponse: Boolean(response?.value.trim()), invisible: a('size') === 'invisible', enterprise: false,
         sitekey: a('sitekey') || a('pkey') || a('captcha-id') || a('gt') || a('api-key') || e?.getAttribute('apiKey') || null,
         recaptchaS: a('s'), action: a('action'), cdata: a('cdata'), callback: a('callback'), frameUrls: []};
     list.push(w);
@@ -72,8 +76,10 @@ for (const [selector, kind] of [['textarea[name="g-recaptcha-response"]', 'recap
         if (kind === 'recaptcha_v2' && e.parentElement?.querySelector('textarea[name="h-captcha-response"]')) continue;
         if (closest(e, '.g-recaptcha, .cf-turnstile, .h-captcha')) continue;
         // Both vendors render the response field beside the wrapper of the widget's iframe.
+        // Hidden explicit-render containers stay passive unless a visible vendor frame promotes them.
         const parent = e.parentElement;
-        add(parent && all(selector, parent).length === 1 ? parent : e, kind, 'unknown');
+        const root = parent && all(selector, parent).length === 1 ? parent : e;
+        add(root, kind, visible(root) ? 'unknown' : 'widget_only');
     }
 }
 const goku = vendor ? vendor.goku : null;
@@ -299,6 +305,10 @@ struct Widget {
     /// pages carry too. It stands for a challenge only when the page shows nothing else.
     #[serde(default)]
     marker: bool,
+    /// Ordering hint only: true when the widget already holds a response value or a checked
+    /// reCAPTCHA anchor. Never changes `state` and is never serialized into `Challenge`.
+    #[serde(default, rename = "hasResponse")]
+    has_response: bool,
 }
 
 impl Widget {
@@ -328,6 +338,7 @@ impl Widget {
             frame_urls: vec![],
             inferred: true,
             marker: false,
+            has_response: false,
         }
     }
 
@@ -374,6 +385,7 @@ impl Widget {
         w.enterprise |= extra.enterprise;
         w.invisible |= extra.invisible;
         self.frame_url = self.frame_url.take().or(other.frame_url);
+        self.has_response |= other.has_response;
     }
 }
 
@@ -710,7 +722,8 @@ async fn scan(
             widgets.push(Widget::new(kind));
             widgets.len() - 1
         });
-        let w = &mut widgets[index].challenge;
+        let widget = &mut widgets[index];
+        let w = &mut widget.challenge;
         w.frame = Some(frame.clone());
         w.host_frame = host;
         w.invisible |= invisible;
@@ -729,6 +742,11 @@ async fn scan(
             if let Some(probe) = probe {
                 // Even a checked anchor stays Active: detection identifies widgets rather than
                 // judging whether a prior token was accepted, so the flow handles fresh solving.
+                if probe.expired {
+                    widget.has_response = false;
+                } else if probe.checked == Some(true) {
+                    widget.has_response = true;
+                }
                 w.state = if probe.expired {
                     ChallengeState::Active
                 } else if w.invisible {
@@ -823,6 +841,29 @@ async fn scan(
         .any(|w| !w.marker && w.challenge.state != ChallengeState::WidgetOnly)
     {
         widgets.retain(|w| !w.marker);
+    }
+    // Ordering hint only, never a verdict or state: an unanswered Active widget must come before
+    // an Active widget that already holds a response so a second, unanswered widget does not hide
+    // behind an answered one. Non-Active entries stay in place, and a lone widget holding a
+    // response remains Active and first.
+    let active_indices: Vec<usize> = widgets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, widget)| {
+            (widget.challenge.state == ChallengeState::Active).then_some(index)
+        })
+        .collect();
+    if active_indices.len() > 1 {
+        let mut active_widgets: Vec<Widget> = active_indices
+            .iter()
+            .rev()
+            .map(|&index| widgets.remove(index))
+            .collect();
+        active_widgets.reverse();
+        active_widgets.sort_by_key(|widget| widget.has_response);
+        for (index, widget) in active_indices.into_iter().zip(active_widgets) {
+            widgets.insert(index, widget);
+        }
     }
     Ok((widgets, complete))
 }
@@ -966,6 +1007,7 @@ fn fold_vendor_widgets(
                     frame_urls: vec![],
                     inferred: true,
                     marker: widget.marker,
+                    has_response: widget.has_response,
                 });
             }
         }
@@ -2260,14 +2302,14 @@ mod tests {
                 .frame
                 .as_ref()
                 .map(|f| f.frame_id.as_str()),
-            Some("anchor")
+            Some("second")
         );
         assert_eq!(
             result.challenges[1]
                 .frame
                 .as_ref()
                 .map(|f| f.frame_id.as_str()),
-            Some("second")
+            Some("anchor")
         );
         Ok(())
     }
@@ -3051,7 +3093,7 @@ const el = (tag, attrs = {{}}, children = [], opts = {{}}) => {{
         classList: {{ contains: c => classes.includes(c) }},
         getAttribute: name => Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null,
         getRootNode: () => document,
-        getBoundingClientRect: () => opts.hidden
+        getBoundingClientRect: () => (opts.hidden || opts.zeroSize)
             ? {{ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }}
             : {{ x: 10, y: 10, top: 10, left: 10, right: 310, bottom: 88, width: 300, height: 78 }},
         matches: sel => sel.split(',').some(part => matchOne(node, part.trim())),
@@ -3544,5 +3586,227 @@ roots.push(el('div', {class: 'grecaptcha-badge'}));
             left.merge(right);
             assert_eq!(left.challenge.state, expected, "{a:?} + {b:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn tests_that_unanswered_active_widget_is_ordered_before_answered_one()
+    -> anyhow::Result<()> {
+        let vendor = Vendor {
+            complete: true,
+            ..Vendor::default()
+        };
+        let assert_no_hint_on_wire = |challenges: &[Challenge]| -> anyhow::Result<()> {
+            for challenge in challenges {
+                let wire = serde_json::to_value(challenge)?;
+                let object = wire
+                    .as_object()
+                    .ok_or_else(|| anyhow::anyhow!("challenge did not serialize as an object"))?;
+                assert!(!object.contains_key("hasResponse"), "{wire}");
+                assert!(!object.contains_key("has_response"), "{wire}");
+            }
+            Ok(())
+        };
+
+        // Two reCAPTCHA v2 widgets: the checked one is first in the DOM, with or without a token
+        // in its response field; the unchecked one must be ordered first while both stay Active.
+        let anchor_a = "https://www.google.com/recaptcha/api2/anchor?k=key-a&cb=first";
+        let anchor_b = "https://www.google.com/recaptcha/api2/anchor?k=key-b&cb=second";
+        let checked_probe = eval_dom_scan(
+            r#"roots.push(el('span', {id: 'recaptcha-anchor', 'aria-checked': 'true'}));"#,
+            None,
+            anchor_a,
+            false,
+        )?;
+        let unchecked_probe = eval_dom_scan(
+            r#"roots.push(el('span', {id: 'recaptcha-anchor', 'aria-checked': 'false'}));"#,
+            None,
+            anchor_b,
+            false,
+        )?;
+        for token_a in ["", "stale-recaptcha-token"] {
+            let dom = format!(
+                r#"
+roots.push(el('div', {{class: 'g-recaptcha', 'data-sitekey': 'key-a'}}, [
+    el('iframe', {{src: '{anchor_a}'}}),
+    el('textarea', {{name: 'g-recaptcha-response', value: '{token_a}'}})
+]));
+roots.push(el('div', {{class: 'g-recaptcha', 'data-sitekey': 'key-b'}}, [
+    el('iframe', {{src: '{anchor_b}'}}),
+    el('textarea', {{name: 'g-recaptcha-response', value: ''}})
+]));
+"#
+            );
+            let main_probe = eval_dom_scan(&dom, Some(&vendor), "https://fixture.test/", true)?;
+            let mut page = FakePage::new(json!([]));
+            page.main = Mutex::new(VecDeque::from([main_probe]));
+            page.frames
+                .extend([frame("anchor-a", anchor_a), frame("anchor-b", anchor_b)]);
+            page.frame_results
+                .insert("anchor-a".into(), checked_probe.clone());
+            page.frame_results
+                .insert("anchor-b".into(), unchecked_probe.clone());
+            let result = scan(&page).await?;
+            assert!(result.complete, "token_a={token_a}");
+            assert_eq!(result.challenges.len(), 2, "token_a={token_a}");
+            assert_eq!(result.challenges[0].state, ChallengeState::Active);
+            assert_eq!(result.challenges[1].state, ChallengeState::Active);
+            assert_eq!(result.challenges[0].sitekey.as_deref(), Some("key-b"));
+            assert_eq!(result.challenges[1].sitekey.as_deref(), Some("key-a"));
+            assert_no_hint_on_wire(&result.challenges)?;
+        }
+
+        // Two Turnstile widgets: the one with a filled response field is first in the DOM; the
+        // empty one must be ordered first while both stay Active.
+        let ts_a = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/a1/1x00000000000000000000AA/light/normal";
+        let ts_b = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/b2/1x00000000000000000000BB/light/normal";
+        let turnstile_dom = format!(
+            r#"
+roots.push(el('div', {{class: 'cf-turnstile', 'data-sitekey': '1x00000000000000000000AA'}}, [
+    el('iframe', {{src: '{ts_a}'}}),
+    el('input', {{name: 'cf-turnstile-response', value: 'stale-turnstile-token'}})
+]));
+roots.push(el('div', {{class: 'cf-turnstile', 'data-sitekey': '1x00000000000000000000BB'}}, [
+    el('iframe', {{src: '{ts_b}'}}),
+    el('input', {{name: 'cf-turnstile-response', value: ''}})
+]));
+"#
+        );
+        let main_probe =
+            eval_dom_scan(&turnstile_dom, Some(&vendor), "https://fixture.test/", true)?;
+        let mut page = FakePage::new(json!([]));
+        page.main = Mutex::new(VecDeque::from([main_probe]));
+        page.frames
+            .extend([frame("cf-a", ts_a), frame("cf-b", ts_b)]);
+        let result = scan(&page).await?;
+        assert!(result.complete);
+        assert_eq!(result.challenges.len(), 2);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[1].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0].sitekey.as_deref(),
+            Some("1x00000000000000000000BB")
+        );
+        assert_eq!(
+            result.challenges[1].sitekey.as_deref(),
+            Some("1x00000000000000000000AA")
+        );
+        assert_no_hint_on_wire(&result.challenges)?;
+
+        // One widget holding a response stays Active and remains first even alongside a passive
+        // WidgetOnly script marker.
+        for with_passive in [false, true] {
+            let mut single_dom = format!(
+                r#"
+roots.push(el('div', {{class: 'cf-turnstile', 'data-sitekey': '1x00000000000000000000AA'}}, [
+    el('iframe', {{src: '{ts_a}'}}),
+    el('input', {{name: 'cf-turnstile-response', value: 'stale-turnstile-token'}})
+]));
+"#
+            );
+            if with_passive {
+                single_dom.push_str(
+                    "roots.push(el('script', {src: 'https://js.hcaptcha.com/1/api.js'}));\n",
+                );
+            }
+            let main_probe =
+                eval_dom_scan(&single_dom, Some(&vendor), "https://fixture.test/", true)?;
+            let mut page = FakePage::new(json!([]));
+            page.main = Mutex::new(VecDeque::from([main_probe]));
+            page.frames.push(frame("cf-a", ts_a));
+            let result = scan(&page).await?;
+            assert!(result.complete, "with_passive={with_passive}");
+            assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+            assert_eq!(result.challenges[0].state, ChallengeState::Active);
+            assert_no_hint_on_wire(&result.challenges)?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_hidden_explicit_turnstile_is_widget_only_and_visible_is_active()
+    -> anyhow::Result<()> {
+        let vendor = Vendor {
+            complete: true,
+            ..Vendor::default()
+        };
+        let ts_url = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/1x00000000000000000000AA/light/normal";
+        let zero_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+
+        for token in ["", "stale-turnstile-token"] {
+            for (label, container_opts, frame_opts, frame_rect, expected_state) in [
+                (
+                    "hidden-display-none",
+                    "{hidden: true}",
+                    "{hidden: true}",
+                    Some(zero_rect),
+                    ChallengeState::WidgetOnly,
+                ),
+                (
+                    "hidden-zero-size",
+                    "{zeroSize: true}",
+                    "{zeroSize: true}",
+                    Some(zero_rect),
+                    ChallengeState::WidgetOnly,
+                ),
+                (
+                    "visible",
+                    "{}",
+                    "{}",
+                    Some(Rect {
+                        x: 20.0,
+                        y: 30.0,
+                        width: 300.0,
+                        height: 65.0,
+                    }),
+                    ChallengeState::Active,
+                ),
+            ] {
+                let dom = format!(
+                    r#"
+roots.push(el('div', {{id: 'box'}}, [
+    el('iframe', {{src: '{ts_url}'}}, [], {frame_opts}),
+    el('input', {{name: 'cf-turnstile-response', value: '{token}'}}, [], {{hidden: true}})
+], {container_opts}));
+"#
+                );
+                let main_probe = eval_dom_scan(&dom, Some(&vendor), "https://fixture.test/", true)?;
+                let mut page = FakePage::new(json!([]));
+                page.main = Mutex::new(VecDeque::from([main_probe]));
+                let mut cf_frame = frame("cf", ts_url);
+                cf_frame.rect = frame_rect;
+                page.frames.push(cf_frame);
+                let result = scan(&page).await?;
+                assert!(result.complete, "{label}, token={token}");
+                assert_eq!(
+                    result.challenges.len(),
+                    1,
+                    "{label}, token={token}: {:?}",
+                    result.challenges
+                );
+                assert_eq!(
+                    result.challenges[0].kind,
+                    CaptchaKind::Turnstile,
+                    "{label}, token={token}"
+                );
+                assert_eq!(
+                    result.challenges[0].state, expected_state,
+                    "{label}, token={token}"
+                );
+                assert!(
+                    result
+                        .challenges
+                        .iter()
+                        .all(|c| c.state != ChallengeState::Unknown),
+                    "{label}, token={token}: {:?}",
+                    result.challenges
+                );
+            }
+        }
+        Ok(())
     }
 }
