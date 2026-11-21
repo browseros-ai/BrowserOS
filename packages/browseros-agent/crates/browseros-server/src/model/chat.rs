@@ -108,27 +108,24 @@ fn body(
     if !request.system.is_empty() {
         messages.push(json!({"role": "system", "content": request.system}));
     }
-    messages.extend(request.messages.iter().map(|message| match message {
-        ModelMessage::User { text, images } if images.is_empty() => {
-            json!({"role": "user", "content": text})
-        }
-        ModelMessage::User { text, images } => {
-            let mut content = vec![json!({"type": "text", "text": text})];
-            content.extend(
-                images.iter().map(
-                    |image| json!({"type": "image_url", "image_url": {"url": data_url(image)}}),
-                ),
-            );
-            json!({"role": "user", "content": content})
-        }
-        ModelMessage::Assistant(turn) => match &turn.native {
-            NativeOutput::Chat(message) => message.clone(),
-            _ => json!({"role": "assistant", "content": turn.text}),
-        },
-        ModelMessage::ToolResult { id, text } => {
-            json!({"role": "tool", "tool_call_id": id.0, "content": text})
-        }
-    }));
+    let ordered = order_tool_pictures(request.messages);
+    for run in ordered.chunk_by(|(left, _), (right, _)| {
+        matches!(
+            (left, right),
+            (ModelMessage::User { .. }, ModelMessage::User { .. })
+        )
+    }) {
+        messages.push(match run {
+            [(ModelMessage::Assistant(turn), _)] => match &turn.native {
+                NativeOutput::Chat(message) => message.clone(),
+                _ => json!({"role": "assistant", "content": turn.text}),
+            },
+            [(ModelMessage::ToolResult { id, text }, _)] => {
+                json!({"role": "tool", "tool_call_id": id.0, "content": text})
+            }
+            users => user_message(users),
+        });
+    }
     let mut body = json!({"model": model, "messages": messages, "stream": true});
     if !request.tools.is_empty() {
         body["tools"] = Value::Array(request.tools.iter().map(|tool| json!({
@@ -169,6 +166,72 @@ fn body(
         body["stream_options"] = json!({"include_usage": true});
     }
     body
+}
+
+/// The loop places each picture message immediately after its tool result. The wire sends
+/// all results from the assistant first, then labels the pictures when several calls shared
+/// that step. Compaction can replace a picture message with a text-only placeholder.
+fn order_tool_pictures(messages: &[ModelMessage]) -> Vec<(&ModelMessage, Option<&str>)> {
+    let mut ordered = Vec::with_capacity(messages.len());
+    let mut pictures = Vec::new();
+    let mut remaining = messages;
+    let mut results = 0;
+    while let Some((message, tail)) = remaining.split_first() {
+        remaining = tail;
+        ordered.push((message, None));
+        let ModelMessage::ToolResult { id, .. } = message else {
+            continue;
+        };
+        results += 1;
+        if let Some((user @ ModelMessage::User { .. }, tail)) = remaining.split_first() {
+            pictures.push((user, id.0.as_str()));
+            remaining = tail;
+        }
+        if !matches!(remaining.first(), Some(ModelMessage::ToolResult { .. })) {
+            ordered.extend(
+                pictures
+                    .drain(..)
+                    .map(|(user, id)| (user, (results > 1).then_some(id))),
+            );
+            results = 0;
+        }
+    }
+    ordered
+}
+
+/// Serialize after compaction so earlier questions can still be dropped independently.
+fn user_message(users: &[(&ModelMessage, Option<&str>)]) -> Value {
+    let mut content = Vec::new();
+    let mut text = String::new();
+    for (index, (message, call)) in users.iter().enumerate() {
+        let ModelMessage::User { text: user, images } = message else {
+            continue;
+        };
+        if index > 0 {
+            text.push_str("\n\n");
+        }
+        if let Some(call) = call {
+            text.push_str("Tool call ");
+            text.push_str(call);
+            text.push_str(": ");
+        }
+        text.push_str(user);
+        if !images.is_empty() {
+            content.push(json!({"type": "text", "text": std::mem::take(&mut text)}));
+            content.extend(
+                images.iter().map(
+                    |image| json!({"type": "image_url", "image_url": {"url": data_url(image)}}),
+                ),
+            );
+        }
+    }
+    if content.is_empty() {
+        return json!({"role": "user", "content": text});
+    }
+    if !text.is_empty() {
+        content.push(json!({"type": "text", "text": text}));
+    }
+    json!({"role": "user", "content": content})
 }
 
 /// A single streamed choice. A tool's transport index orders deltas but is not part of
