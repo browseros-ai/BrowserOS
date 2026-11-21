@@ -1,16 +1,12 @@
 //! Exercise the targeting metadata contract across actual HTTP serialization.
 //! A disposable native peer supplies identity and loading state; all requests go
-//! through the hosted router, task store, tool dispatch, effects, and wire envelope.
-//! Desktop keeps those handlers internal and refuses their MCP names before minting a task.
+//! through the real router, task store, tool dispatch, effects, and wire envelope.
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, CdpConnection, NativeCapabilities, SessionId,
 };
-use claw_server::{
-    AppState, build_router,
-    config::{Config, ServerMode},
-};
+use claw_server::{AppState, build_router, config::Config};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -186,10 +182,10 @@ struct HttpPeer {
 
 impl HttpPeer {
     async fn start() -> anyhow::Result<Self> {
-        Self::start_in_mode(ServerMode::Hosted).await
+        Self::start_configured(|_| {}).await
     }
 
-    async fn start_in_mode(mode: ServerMode) -> anyhow::Result<Self> {
+    async fn start_configured(configure: impl FnOnce(&mut Config)) -> anyhow::Result<Self> {
         let dir = tempfile::tempdir()?;
         let config = Arc::new(Config {
             server_port: 9200,
@@ -207,13 +203,12 @@ impl HttpPeer {
                 capabilities: current_native(),
                 asserted: false,
             },
-            mode,
-            behavior: claw_server::config::Behavior {
-                playwright_run: true,
-                ..Default::default()
-            },
+            mode: Default::default(),
+            behavior: Default::default(),
             behavior_ignored: Vec::new(),
         });
+        let mut config = config;
+        configure(Arc::make_mut(&mut config));
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();
         state
@@ -240,6 +235,16 @@ impl HttpPeer {
     }
 
     async fn request(&self, method: &str, mut params: Value) -> anyhow::Result<Value> {
+        self.request_with_tool_errors(method, &mut params, false)
+            .await
+    }
+
+    async fn request_with_tool_errors(
+        &self,
+        method: &str,
+        params: &mut Value,
+        allow_tool_errors: bool,
+    ) -> anyhow::Result<Value> {
         // Each modern stateless request supplies protocol metadata, while the
         // returned application handle carries task binding across HTTP requests.
         params["_meta"] = json!({
@@ -270,6 +275,11 @@ impl HttpPeer {
             .unwrap_or(&body);
         let value: Value = serde_json::from_str(encoded.trim())?;
         assert!(value["error"].is_null(), "{value}");
+        // An MCP tool refusal travels inside a successful JSON-RPC response.
+        if allow_tool_errors {
+            return Ok(value["result"].clone());
+        }
+        assert_ne!(value["result"]["isError"], true, "{value}");
         Ok(value["result"].clone())
     }
 
@@ -282,11 +292,8 @@ impl HttpPeer {
         if let Some(handle) = handle {
             arguments["session"] = json!(handle);
         }
-        let result = self
-            .request("tools/call", json!({"name":name, "arguments":arguments}))
-            .await?;
-        assert_ne!(result["isError"], true, "{result}");
-        Ok(result)
+        self.request("tools/call", json!({"name":name, "arguments":arguments}))
+            .await
     }
 }
 
@@ -475,36 +482,6 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
     Ok(())
 }
 
-#[tokio::test]
-async fn desktop_targeting_tools_are_unlisted_and_refused_without_starting_a_task()
--> anyhow::Result<()> {
-    let peer = HttpPeer::start_in_mode(ServerMode::Desktop).await?;
-    let tools = peer.request("tools/list", json!({})).await?;
-    let names = tools["tools"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("tools missing: {tools}"))?
-        .iter()
-        .filter_map(|tool| tool["name"].as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["run", "request_human_help", "await_human_help"]);
-    for name in ["browser_profiles", "browser_target"] {
-        let refusal = peer
-            .request(
-                "tools/call",
-                json!({"name":name, "arguments":{"action":"get"}}),
-            )
-            .await?;
-        assert_eq!(refusal["isError"], true, "{refusal}");
-        assert!(
-            refusal["content"][0]["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("run")),
-            "{refusal}"
-        );
-        assert!(
-            refusal["_meta"]["com.browseros.neo/session"].is_null(),
-            "{refusal}"
-        );
-    }
-    Ok(())
-}
+#[cfg(unix)]
+#[path = "playwright/browser_target_wire.rs"]
+mod playwright;
