@@ -31,6 +31,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  'server-api': {
+    suite: 'server-api',
+    command: 'bun run ./scripts/run-bun-test.ts ./contracts/server-api/tests',
+    junit_path: 'test-results/server-api.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   'claw-app': {
     suite: 'claw-app',
     command: '(cd apps/claw-app && bun run test)',
@@ -132,7 +139,8 @@ export const SUITES: Record<string, SuiteConfig> = {
 
 /** Workspace package name -> the suites that cover it. */
 const PACKAGE_SUITES: Record<string, string[]> = {
-  '@browseros/app': ['agent'],
+  '@browseros/app': ['agent', 'server-api'],
+  '@browseros/server-api': ['server-api'],
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
@@ -212,6 +220,20 @@ export function computeAffectedSuites(
     if (SDK_FIXTURE_ROOTS.some((root) => `${pkg.path}/`.startsWith(root)))
       keys.add('sdk-desktop-fixtures')
   }
+
+  // The Bun suite consumes the committed protocol inputs and shares the CLI's generator.
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}contracts/server-api/`) ||
+        f.startsWith(`${AGENT}packages/server-api/`) ||
+        f.startsWith(
+          `${AGENT}crates/browseros-server/tests/fixtures/ui-stream/`,
+        ) ||
+        f === `${AGENT}scripts/codegen/server-api.ts`,
+    )
+  )
+    keys.add('server-api')
 
   // Path signals for things that are not workspace packages.
   if (

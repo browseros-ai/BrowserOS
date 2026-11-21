@@ -14,6 +14,7 @@
  * `BROWSEROS_UPDATE_GOLDENS=1` rewrites the message files from the SDK instead of comparing.
  */
 import { describe, expect, test } from 'bun:test'
+import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -104,7 +105,11 @@ describe(`the golden UI streams under ai@${aiVersion}`, () => {
         return
       }
       const committed = JSON.parse(readFileSync(messagePath, 'utf8'))
-      expect(outcome.message).toEqual(committed)
+      assert.deepStrictEqual(
+        outcome.message,
+        committed,
+        'The AI SDK output differs from the committed golden. To regenerate intentionally, run `BROWSEROS_UPDATE_GOLDENS=1 bun test contracts/server-api/tests/ui-stream.test.ts` from packages/browseros-agent and review the diff.',
+      )
     })
   }
 })
