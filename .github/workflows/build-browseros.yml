@@ -236,16 +236,19 @@ jobs:
       # major tag - `@v8` is unresolvable and kills the job in Set up job.
       - uses: astral-sh/setup-uv@v8.3.2
 
-      - name: Setup Bun
+      # Source mode compiles the BrowserOS server with Cargo through bos_build.
+      # 1.98.0 is the toolchain test.yml checks the server with. The pin is the
+      # job's RUSTUP_TOOLCHAIN so a self-hosted runner's default is untouched.
+      - name: Setup BrowserOS server toolchain
         if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: packages/browseros-agent/package.json
-
-      - name: Install BrowserOS server dependencies
-        if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
-        working-directory: packages/browseros-agent
-        run: bun ci
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          case "${{ inputs.platform }}" in
+            linux) rustup target add --toolchain 1.98.0 x86_64-unknown-linux-gnu ;;
+            windows) rustup target add --toolchain 1.98.0 x86_64-pc-windows-msvc ;;
+          esac
+          echo "RUSTUP_TOOLCHAIN=1.98.0" >> "$GITHUB_ENV"
 
       - name: Setup BrowserOS neo server toolchain
         if: inputs.resource-mode == 'source' && inputs.product == 'browserclaw'
@@ -407,6 +410,7 @@ jobs:
           BROWSEROS_CONFIG_URL: ${{ inputs.product == 'browseros' && secrets.BROWSEROS_CONFIG_URL || '' }}
           POSTHOG_API_KEY: ${{ inputs.product == 'browseros' && secrets.POSTHOG_API_KEY || '' }}
           SENTRY_DSN: ${{ inputs.product == 'browseros' && secrets.SENTRY_DSN || '' }}
+          BROWSEROS_SENTRY_DSN: ${{ inputs.product == 'browseros' && secrets.SENTRY_DSN || '' }}
           CLAW_POSTHOG_KEY: ${{ inputs.product == 'browserclaw' && secrets.CLAW_POSTHOG_KEY || '' }}
           ESIGNER_USERNAME: ${{ inputs.platform == 'windows' && secrets.ESIGNER_USERNAME || '' }}
           ESIGNER_PASSWORD: ${{ inputs.platform == 'windows' && secrets.ESIGNER_PASSWORD || '' }}
