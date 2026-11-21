@@ -37,6 +37,8 @@ mod policy;
 mod providers;
 mod recaptcha;
 pub mod reservation;
+#[doc(hidden)]
+pub mod testing;
 mod turnstile;
 mod turnstile_state;
 mod twocaptcha;
@@ -646,6 +648,7 @@ impl CaptchaSolver {
             document: &routed.document,
             before: None,
             callback_ran: flow.callback_ran,
+            token: verify::TokenReading::Unknown,
         };
         let mut budget = verify::VerifyBudget {
             until: deadline,
