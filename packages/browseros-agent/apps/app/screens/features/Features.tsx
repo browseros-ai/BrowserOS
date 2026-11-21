@@ -5,7 +5,6 @@ import {
   Bot,
   FolderOpen,
   LinkIcon,
-  SplitSquareHorizontal,
 } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
 import DiscordLogo from '@/assets/discord-logo.svg'
@@ -17,7 +16,6 @@ import {
   AGENT_MODE_DEMO_URL,
   BROWSER_OS_INTRO_VIDEO_URL,
   COWORK_DEMO_URL,
-  SPLIT_VIEW_GIF_URL,
 } from '@/lib/constants/mediaUrls'
 import {
   discordUrl,
@@ -67,24 +65,6 @@ const features: Feature[] = [
     ],
     gridClass: 'md:col-span-1',
     videoUrl: COWORK_DEMO_URL || undefined,
-  },
-  {
-    id: 'split-view',
-    Icon: SplitSquareHorizontal,
-    tag: 'CORE',
-    title: 'Split-View Mode',
-    description:
-      'Open ChatGPT, Claude, or Gemini alongside any webpage. Compare responses in the LLM Hub.',
-    detailedDescription:
-      'Access AI chat on any webpage without switching tabs. Click the Chat button or press Alt+K to open a panel with Claude, ChatGPT, or Gemini right next to your current page. Copy page content, attach screenshots, and get answers in context. Open the LLM Hub (Cmd+Shift+U) to query multiple models simultaneously and compare their responses side-by-side.',
-    highlights: [
-      'AI on any page — chat panel stays open as you browse',
-      'LLM Hub — compare responses from Claude, ChatGPT, and Gemini at once',
-      'Quick toggle — Alt+K opens chat, Alt+L switches providers',
-      'Copy & screenshot — grab page content or capture screenshots for context',
-    ],
-    gridClass: 'md:col-span-2',
-    gifUrl: SPLIT_VIEW_GIF_URL,
   },
 ]
 

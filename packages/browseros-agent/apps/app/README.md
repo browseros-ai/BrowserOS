@@ -77,7 +77,6 @@ Multi-step onboarding flow for new users:
 
 Settings dashboard with multiple sections:
 - **AI Settings**: Configure LLM providers (API keys, models, base URLs)
-- **LLM Hub**: Manage chat-specific provider settings
 
 ### Glow Content (`glow.content/`)
 

@@ -58,9 +58,6 @@ export const QWEN_CODE_OAUTH_DISCONNECTED_EVENT =
   'settings.qwen_code.oauth_disconnected'
 
 /** @public */
-export const HUB_PROVIDER_ADDED_EVENT = 'settings.hub_provider.added'
-
-/** @public */
 export const BROWSERCLAW_PROMO_BANNER_CLICKED_EVENT =
   'ui.browserclaw_promo_banner.clicked'
 

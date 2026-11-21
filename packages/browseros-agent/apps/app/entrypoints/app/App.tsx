@@ -8,7 +8,6 @@ import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
 import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
-import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
@@ -28,7 +27,6 @@ const OptionsRedirect: FC = () => {
 
   const routeMap: Record<string, string> = {
     ai: '/settings/ai',
-    chat: '/settings/chat',
     customization: '/settings/customization',
     search: '/settings/ai',
     'jtbd-agent': '/settings/survey',
@@ -56,7 +54,6 @@ export const App: FC = () => {
           <Route path="settings">
             <Route index element={<Navigate to="/settings/ai" replace />} />
             <Route path="ai" element={<AISettingsPage key="ai" />} />
-            <Route path="chat" element={<LlmHubPage />} />
             <Route path="customization" element={<CustomizationPage />} />
             <Route path="diagnostics" element={<DiagnosticsPage />} />
             <Route
