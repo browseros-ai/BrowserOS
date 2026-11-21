@@ -14,7 +14,7 @@ const POLL: Duration = Duration::from_millis(250);
 const ANCHOR: &str = r#"/*recaptcha:anchor*/(() => {
  const a=document.querySelector('#recaptcha-anchor'), e=document.querySelector('.recaptcha-checkbox-border')||a;
  const r=e?.getBoundingClientRect();
- return {checked:a?.getAttribute('aria-checked')==='true',error:!!document.querySelector('.recaptcha-checkbox-expired,.recaptcha-checkbox-error'),rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null};
+ return {checked:a?.getAttribute('aria-checked')==='true',error:!!document.querySelector('.recaptcha-checkbox-expired,.recaptcha-checkbox-error'),loading:!!a?.classList.contains('recaptcha-checkbox-loading'),rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null};
 })()"#;
 const GRID: &str = r#"/*recaptcha:grid*/(() => {
  const t=document.querySelector('table[class*="rc-imageselect-table-"]');if(!t)return null;
@@ -64,7 +64,14 @@ const TOKEN_PRESENT: &str = "return fields.length > 0 && fields.every(e => e.val
 struct Anchor {
     checked: bool,
     error: bool,
+    #[serde(default)]
+    loading: bool,
     rect: Option<Rect>,
+}
+impl Anchor {
+    fn verifying(&self) -> bool {
+        self.loading || !self.rect.is_some_and(usable)
+    }
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -831,28 +838,46 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             return self.token(Some(v)).await;
         }
         for _ in 0..2 {
-            if v.state.as_ref().is_none_or(|a| a.checked)
+            if v.state.as_ref().is_none_or(|a| a.checked || a.loading)
                 || v.grid.as_ref().is_some_and(|g| g.ready)
             {
                 break;
             }
             let (Some(frame), Some(rect)) = (
                 v.anchor.as_ref().filter(|f| f.rect.is_some_and(usable)),
-                v.state.as_ref().and_then(|a| a.rect),
+                v.state.as_ref().and_then(|a| a.rect).filter(|r| usable(*r)),
             ) else {
                 break;
             };
             self.mark(SolveMethod::Checkbox, 0);
             self.click(frame, rect).await?;
-            v = self
-                .wait(|v| {
-                    self.passed(v)
-                        || v.grid.as_ref().is_some_and(|g| g.ready)
-                        || v.state.as_ref().is_some_and(|a| a.error)
-                })
-                .await?;
+            let done = |v: &View| {
+                self.passed(v)
+                    || v.grid.as_ref().is_some_and(|g| g.ready)
+                    || v.state.as_ref().is_some_and(|a| a.error)
+            };
+            v = self.wait(done).await?;
+            // Google's own check can outlast one wait; while the box shows its
+            // spinner or hides its checkbox border the click landed, so wait
+            // for the answer instead of clicking again.
+            let mut waited_extra = false;
+            for _ in 0..2 {
+                if done(&v)
+                    || !v
+                        .state
+                        .as_ref()
+                        .is_some_and(|a| !a.checked && a.verifying())
+                {
+                    break;
+                }
+                waited_extra = true;
+                v = self.wait(done).await?;
+            }
             if self.passed(&v) {
                 return Ok((SolveMethod::Checkbox, SolveReason::CheckboxPassed));
+            }
+            if waited_extra {
+                break;
             }
         }
         if self.tiles().await? {
@@ -918,6 +943,10 @@ mod tests {
         tiles: bool,
         ignored_checkbox_clicks: u32,
         checked: bool,
+        loading: bool,
+        anchor_rect: Rect,
+        verifying_for: Option<Duration>,
+        clicked_at: Option<Instant>,
         tokens: Vec<String>,
         produced_token: Option<String>,
         state_reads: u32,
@@ -960,6 +989,20 @@ mod tests {
             .ok()?;
         params.get("token")?.as_str().map(str::to_owned)
     }
+    impl State {
+        fn advance_verifying(&mut self) {
+            let (Some(since), Some(duration)) = (self.clicked_at, self.verifying_for) else {
+                return;
+            };
+            if self.loading && Instant::now().saturating_duration_since(since) >= duration {
+                self.loading = false;
+                self.checked = true;
+                if let Some(token) = self.produced_token.clone() {
+                    self.tokens = vec![token];
+                }
+            }
+        }
+    }
     struct FakePage(Arc<Mutex<State>>);
     impl FakePage {
         fn new(tiles: bool) -> Self {
@@ -967,6 +1010,15 @@ mod tests {
                 tiles,
                 ignored_checkbox_clicks: 0,
                 checked: false,
+                loading: false,
+                anchor_rect: Rect {
+                    x: 10.,
+                    y: 20.,
+                    width: 28.,
+                    height: 28.,
+                },
+                verifying_for: None,
+                clicked_at: None,
                 tokens: vec![],
                 produced_token: Some("native-token".into()),
                 state_reads: 0,
@@ -1119,6 +1171,7 @@ mod tests {
                 return Ok(json!(ready));
             }
             self.edit(|s| {
+                s.advance_verifying();
                 s.state_reads += 1;
                 if s.applied && s.navigate_during_verification {
                     s.navigated = true;
@@ -1150,9 +1203,19 @@ mod tests {
                 };
             }
             if f.frame_id == "anchor" {
+                self.edit(State::advance_verifying);
                 return Ok(self.read(|s| {
-                    json!({"checked": s.checked, "error": false,
-                    "rect": {"x": 10., "y": 20., "width": 28., "height": 28.}})
+                    json!({
+                        "checked": s.checked,
+                        "error": false,
+                        "loading": s.loading,
+                        "rect": {
+                            "x": s.anchor_rect.x,
+                            "y": s.anchor_rect.y,
+                            "width": s.anchor_rect.width,
+                            "height": s.anchor_rect.height
+                        }
+                    })
                 }));
             }
             self.edit(|s| {
@@ -1182,6 +1245,15 @@ mod tests {
                 if x < 100. && !s.tiles {
                     if s.ignored_checkbox_clicks > 0 {
                         s.ignored_checkbox_clicks -= 1;
+                    } else if s.verifying_for.is_some() {
+                        s.clicked_at = Some(Instant::now());
+                        s.loading = true;
+                        s.anchor_rect = Rect {
+                            x: 0.,
+                            y: 0.,
+                            width: 0.,
+                            height: 0.,
+                        };
                     } else {
                         s.checked = true;
                         if let Some(token) = s.produced_token.clone() {
@@ -2383,5 +2455,122 @@ mod tests {
             stale_page.read(|s| s.tokens.clone()),
             vec!["fresh-paid-token"]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_waits_for_slow_pass_without_reclicking() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.verifying_for = Some(Duration::from_secs(9));
+            s.produced_token = Some("slow-native-token".into());
+        });
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
+        assert!(
+            start.elapsed() >= Duration::from_secs(9) && start.elapsed() < Duration::from_secs(10),
+            "expected pass around 9 s, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_verifying_checkbox_falls_back_to_paid_token_after_eighteen_seconds() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.verifying_for = Some(Duration::from_secs(30));
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let start = Instant::now();
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.attempts.token, 1);
+        assert_eq!(result.paid_tasks, 1);
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaToken(_)]
+        ));
+        assert!(page.read(|s| s.applied && s.tokens == vec!["fresh-paid-token"]));
+        assert!(
+            start.elapsed() >= Duration::from_secs(18),
+            "expected at least 18 s of verification waits, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_idle_unchecked_box_still_retries_a_second_click() {
+        let page = FakePage::new(false);
+        page.edit(|s| s.ignored_checkbox_clicks = 1);
+        let backend = FakeBackend::new(vec![]);
+        let start = Instant::now();
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 2);
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(page.read(|s| s.clicks.len()), 2);
+        assert!(
+            start.elapsed() < Duration::from_secs(12),
+            "idle unchecked box should retry after one 6 s wait, elapsed {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_unusable_checkbox_rect_falls_back_without_browser_error() {
+        let page = FakePage::new(false);
+        page.edit(|s| {
+            s.anchor_rect = Rect {
+                x: 0.,
+                y: 0.,
+                width: 0.,
+                height: 0.,
+            };
+            s.transition = false;
+        });
+        let backend = FakeBackend::new(vec![SolveAnswer::Token("fresh-paid-token".into())]);
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 0);
+        assert_eq!(result.attempts.token, 1);
+        assert_eq!(result.paid_tasks, 1);
+        assert!(page.read(|s| s.clicks.is_empty() && s.applied));
     }
 }
