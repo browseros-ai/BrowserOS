@@ -67,6 +67,8 @@ enum StartError {
     Bind { port: u16, source: std::io::Error },
     #[error("start-up took longer than {}s", STARTUP_BUDGET.as_secs())]
     TooSlow,
+    #[error("the start-up task failed: {0}")]
+    Task(String),
 }
 
 impl StartError {
@@ -79,6 +81,7 @@ impl StartError {
             StartError::PortInUse { .. } => "port in use",
             StartError::Bind { .. } => "bind",
             StartError::TooSlow => "start-up budget",
+            StartError::Task(_) => "start-up task",
         }
     }
 }
@@ -152,16 +155,19 @@ async fn run(launch: Launch, started: Instant, reporter: Reporter) -> Result<Exi
     // Installed before start-up: SIGTERM while the store waits on a lock must still end in
     // exit 3 with the logs flushed, not in the default "killed by signal 15".
     let signals = tokio::spawn(forward_signals(shutdown.clone()));
+    // Start-up runs as its own task, and SIGTERM or the budget returns without awaiting or
+    // dropping it here: a connection dropped while SQLite sits in its busy wait (up to 5 s, on
+    // sqlx's worker thread) may hold up whoever drops it. The runtime's bounded shutdown
+    // abandons the task instead, and an unfinished migration rolls back with its connection.
     let remaining = STARTUP_BUDGET.saturating_sub(started.elapsed());
-    let starting = tokio::time::timeout(
-        remaining,
-        start(launch, shutdown.clone(), engine_stop.clone()),
-    );
+    let mut starting = tokio::spawn(start(launch, shutdown.clone(), engine_stop.clone()));
     let (app, listener) = tokio::select! {
-        started = starting => started.map_err(|_| StartError::TooSlow)??,
+        started = &mut starting => match started {
+            Ok(result) => result?,
+            Err(error) => return Err(StartError::Task(error.to_string())),
+        },
+        () = tokio::time::sleep(remaining) => return Err(StartError::TooSlow),
         () = shutdown.token().cancelled() => {
-            // Dropping the start future rolls back any migration in flight; the engine never
-            // started, and nothing was bound.
             tracing::info!("stopped before start-up finished");
             signals.abort();
             return Ok(ExitCode::from(EXIT_SIGNALLED));
