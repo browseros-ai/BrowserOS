@@ -83,6 +83,12 @@ export interface CaptchaPage {
   maxPaidTasks?: number
   mayNeedPaid: boolean
   /**
+   * Paid providers refuse this page's vendor test key; when the widget already holds its token
+   * Neo asks one, gets `provider_error` with no paid task, and the page's own token still passes
+   * the site.
+   */
+  providerRefusesKey?: boolean
+  /**
    * Obvious fake token embedded by a stale-token fixture before the solve. The fixture server
    * rejects submissions carrying this exact value (`REJECTED: stale-token`), so a pass proves
    * Neo wrote a new token the vendor accepted.
@@ -224,18 +230,18 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
       '1x00000000000000000000AA',
       ['solved', 'token_applied'],
     ),
-    mayNeedPaid: true,
     expectAttempted: true,
+    providerRefusesKey: true,
     notes:
-      'Widget usually passes on load and already holds a token before neo.solveCaptcha runs, so Neo skips auto-pass and mints a fresh paid token.',
+      "Always-pass test key: neo.solveCaptcha usually lands before the widget's token and passes free (auto_passed). When the widget wins the race, paid providers refuse this test key (provider_error, 0 paid tasks) while the page's own token still passes the site.",
   },
   {
     ...fixture(
       'turnstile-stale',
-      'Turnstile always-pass widget overwritten with a stale token',
+      'Turnstile failed widget with a stale token',
       'turnstile',
       '/turnstile-stale.html',
-      '1x00000000000000000000AA',
+      '3x00000000000000000000FF',
       ['token_applied', 'solved'],
     ),
     staleToken: 'STALE-TOKEN-turnstile-do-not-accept',
@@ -243,7 +249,7 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     maxPaidTasks: 1,
     mayNeedPaid: true,
     notes:
-      'Waits for the always-pass widget to finish, then overwrites cf-turnstile-response with a stale token that /submit rejects; with no checkbox to click, Neo must mint a paid token.',
+      'Static failed-widget box with no vendor script and no checkbox to click, so Neo must mint a paid token; 2Captcha mints this test key.',
   },
   fixture(
     'turnstile-block',
@@ -390,7 +396,8 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     sitekey: '1x00000000000000000000AA',
     expect: ['solved', 'token_applied'],
     expectAttempted: true,
-    mayNeedPaid: true,
+    mayNeedPaid: false,
+    providerRefusesKey: true,
     ready:
       '(document.querySelector(".cf-turnstile > div")?.getBoundingClientRect().height ?? 0) > 0',
     site: {
@@ -405,7 +412,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
         '(document.body?.innerText.match(/"success"\\s*:\\s*(true|false)[\\s\\S]{0,160}/) ?? [])[0]?.replace(/\\s+/g, " ") ?? null',
     },
     notes:
-      'Public always-pass test key usually completes before neo.solveCaptcha runs, so Neo skips auto-pass and mints a fresh paid token.',
+      "Always-pass test key: neo.solveCaptcha usually lands before the widget's token and passes free (auto_passed). When the widget wins the race, paid providers refuse this test key (provider_error, 0 paid tasks) while the page's own token still passes the site.",
   },
   {
     id: 'hcaptcha-demo',

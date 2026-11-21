@@ -277,6 +277,55 @@ test('tests that an absent solver passes only when absence is expected', () => {
   })
 })
 
+test('tests that providerRefusesKey marks zero-paid provider_error unverified regardless of site or --paid', () => {
+  const refused: CaptchaPage = {
+    ...solvePage,
+    expect: ['solved', 'token_applied'],
+    expectAttempted: true,
+    mayNeedPaid: false,
+    providerRefusesKey: true,
+  }
+  const expected = {
+    outcome: 'UNVERIFIED' as const,
+    note: 'the widget passed before the solve; paid providers refuse this test key',
+  }
+  for (const paidTasks of [0, null] as const) {
+    for (const siteVerdict of ['accepted', 'rejected', 'error', 'n/a']) {
+      for (const paid of [false, true]) {
+        expect(
+          classifyOutcome(
+            refused,
+            solve('unsolved', { reason: 'provider_error', paidTasks }),
+            siteVerdict,
+            { paid },
+          ),
+        ).toEqual(expected)
+      }
+    }
+  }
+  // A charged provider_error still fails (paidTasks > 0 means a provider accepted the task).
+  expect(
+    classifyOutcome(
+      refused,
+      solve('unsolved', { reason: 'provider_error', paidTasks: 1 }),
+      'accepted',
+      { paid: true },
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'the site accepted a page the solver called unsolved',
+  })
+  // Free auto-pass on the same page still passes when the site accepts.
+  expect(
+    classifyOutcome(
+      refused,
+      solve('solved', { reason: 'auto_passed', paidTasks: 0 }),
+      'accepted',
+      { paid: true },
+    ).outcome,
+  ).toBe('PASS')
+})
+
 test('tests that unpaid provider failures are unverified and paid runs fail them', () => {
   const paid = { ...solvePage, mayNeedPaid: true }
   const failed = solve('unsolved', { reason: 'provider_error' })

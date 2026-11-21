@@ -132,6 +132,19 @@ export function classifyOutcome(
   const blocked = precondition(page, solve)
   if (blocked !== null) return fail(blocked)
   const verdict = solve.verdict as Verdict
+  // On vendor test keys that paid providers refuse, a widget that auto-passed before the solve
+  // forces a paid mint that fails with `provider_error` and no paid task while the page's own
+  // token still passes the site. That is not a solver contradiction, so the "site accepted an
+  // unsolved page" rule below does not apply, and `--paid` cannot make providers accept the key.
+  if (
+    page.providerRefusesKey &&
+    solve.reason === 'provider_error' &&
+    (solve.paidTasks === 0 || solve.paidTasks === null)
+  )
+    return {
+      outcome: 'UNVERIFIED',
+      note: 'the widget passed before the solve; paid providers refuse this test key',
+    }
   // Unsolved is never a guess, so a site that accepts the page proves it wrong, expected or
   // not: an unpaid demo must not turn that into UNVERIFIED.
   if (verdict === 'unsolved' && site === 'accepted')

@@ -70,12 +70,18 @@ never tokens.
   claw-server's closed `type` enum does not list it); the spotting pages accept it beside any other
   `unsolved`.
 - Neo always solves a visible widget fresh instead of answering `already_passed` when a response
-  token is already present. Pages whose widget auto-passes on load (`turnstile-pass`,
-  `cloudflare-turnstile-demo`) or starts with a stale token (`turnstile-stale`) now skip Turnstile's
-  auto-pass wait and mint a fresh paid token (`mayNeedPaid: true`, `expectAttempted: true`). Three
+  token is already present. On Cloudflare's always-pass test key (`turnstile-pass`,
+  `cloudflare-turnstile-demo`), `neo.solveCaptcha` usually lands before the widget's token and
+  passes free (`auto_passed`, `mayNeedPaid: false`, `expectAttempted: true`). When the widget wins
+  the race, Neo asks a paid provider, but both providers refuse that test key (`provider_error`, 0
+  paid tasks) while the page's own token still passes the site; `providerRefusesKey: true` marks
+  that `UNVERIFIED` regardless of `--paid` instead of treating it as a solver contradiction. Three
   stale-token fixtures (`turnstile-stale-interactive`, `turnstile-stale`, `recaptcha-v2-stale`)
   pre-populate an obvious fake token that the fixture server rejects (`REJECTED: stale-token`), so
-  a pass proves Neo wrote a replacement token the vendor accepted.
+  a pass proves Neo wrote a replacement token the vendor accepted: the interactive Turnstile and
+  reCAPTCHA pages replace it for free via checkbox click, while `turnstile-stale` is a static
+  failed-widget box on Turnstile's interactive test key (`3x00000000000000000000FF`, which 2Captcha
+  mints) so Neo must mint a paid token (`mayNeedPaid: true`).
 - Neo waits up to 10 seconds for Cloudflare's full-page check. It classifies `auto_passed` as
   `solved` when the replacement page has cleared and carries the site's clearance cookie. A
   persistent wall returns `challenge_not_passed` (`unsolved`, `attempted: true`), which the static

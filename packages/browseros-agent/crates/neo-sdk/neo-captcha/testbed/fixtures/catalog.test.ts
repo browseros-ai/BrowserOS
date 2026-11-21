@@ -62,16 +62,17 @@ test('tests that only pages with a site check can count as independently solved'
   expect(SPOTTING_PAGES.every((p) => pageCheck(p) === 'detect')).toBe(true)
 })
 
-test('tests that always-pass Turnstile pages expect a fresh attempted solve that may need a paid token', () => {
+test('tests that always-pass Turnstile pages expect a free or applied solve and mark provider-refused test keys', () => {
   const pages = [...FIXTURE_PAGES, ...DEMO_PAGES]
   for (const id of ['turnstile-pass', 'cloudflare-turnstile-demo']) {
     const page = pages.find((entry) => entry.id === id)
     expect(page).toMatchObject({
       expect: ['solved', 'token_applied'],
       expectAttempted: true,
-      mayNeedPaid: true,
+      mayNeedPaid: false,
+      providerRefusesKey: true,
     })
-    expect(page?.notes).toContain('paid')
+    expect(page?.notes).toContain('refuse')
   }
 })
 
@@ -503,7 +504,7 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
 })
 
 test('tests that stale-token fixtures gate readiness on the stale token and track replacement', async () => {
-  const expected = [
+  const liveExpected = [
     {
       id: 'turnstile-stale-interactive',
       family: 'turnstile',
@@ -512,17 +513,6 @@ test('tests that stale-token fixtures gate readiness on the stale token and trac
       expectReason: ['checkbox_passed'],
       maxPaidTasks: 0,
       mayNeedPaid: false,
-      waitsForAutoPass: false,
-    },
-    {
-      id: 'turnstile-stale',
-      family: 'turnstile',
-      field: 'cf-turnstile-response',
-      expect: ['token_applied', 'solved'],
-      expectReason: undefined,
-      maxPaidTasks: 1,
-      mayNeedPaid: true,
-      waitsForAutoPass: true,
     },
     {
       id: 'recaptcha-v2-stale',
@@ -532,10 +522,9 @@ test('tests that stale-token fixtures gate readiness on the stale token and trac
       expectReason: ['checkbox_passed'],
       maxPaidTasks: 0,
       mayNeedPaid: false,
-      waitsForAutoPass: false,
     },
   ] as const
-  for (const spec of expected) {
+  for (const spec of liveExpected) {
     const page = FIXTURE_PAGES.find((p) => p.id === spec.id)
     if (!page?.staleToken) throw new Error(`missing stale fixture ${spec.id}`)
     expect(page).toMatchObject({
@@ -545,9 +534,7 @@ test('tests that stale-token fixtures gate readiness on the stale token and trac
       maxPaidTasks: spec.maxPaidTasks,
       mayNeedPaid: spec.mayNeedPaid,
     })
-    expect(page.expectReason).toEqual(
-      spec.expectReason ? [...spec.expectReason] : undefined,
-    )
+    expect(page.expectReason).toEqual([...spec.expectReason])
     const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
     expect(html).toContain(`action="/submit/${page.id}"`)
     expect(html).toContain(page.staleToken)
@@ -639,15 +626,7 @@ test('tests that stale-token fixtures gate readiness on the stale token and trac
     else observe()
     expect(runInNewContext(page.ready, context)).toBe(false)
     fieldReady = true
-    if (spec.waitsForAutoPass) {
-      // turnstile-stale waits for Turnstile to auto-pass before overwriting with the stale token.
-      observe()
-      expect(runInNewContext(page.ready, context)).toBe(false)
-      field.value = 'AUTO-PASSED-DUMMY'
-      callbacks.callback?.('AUTO-PASSED-DUMMY')
-    } else {
-      observe()
-    }
+    observe()
     expect(field.value).toBe(page.staleToken)
     expect(runInNewContext(page.ready, context)).toBe(true)
     expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
@@ -677,6 +656,93 @@ test('tests that stale-token fixtures gate readiness on the stale token and trac
       'test-error',
     )
   }
+
+  // turnstile-stale is a static failed-widget box with no vendor script and the interactive test key.
+  const staticStale = FIXTURE_PAGES.find((p) => p.id === 'turnstile-stale')
+  if (!staticStale?.staleToken) throw new Error('missing turnstile-stale')
+  expect(staticStale).toMatchObject({
+    family: 'turnstile',
+    sitekey: '3x00000000000000000000FF',
+    expect: ['token_applied', 'solved'],
+    expectAttempted: true,
+    maxPaidTasks: 1,
+    mayNeedPaid: true,
+  })
+  expect(staticStale.expectReason).toBeUndefined()
+  const html = await Bun.file(
+    `${import.meta.dir}/pages${staticStale.path}`,
+  ).text()
+  expect(html).toContain('action="/submit/turnstile-stale"')
+  expect(html).toContain('class="cf-turnstile"')
+  expect(html).toContain('data-sitekey="3x00000000000000000000FF"')
+  expect(html).toContain('Verification failed')
+  expect(html).toContain('name="cf-turnstile-response"')
+  expect(html).toContain(staticStale.staleToken)
+  // Static failed box: loads no vendor script and no external URL.
+  expect(html).not.toMatch(/\bsrc=|https?:\/\//)
+
+  let visible = false
+  let resize = () => {}
+  const listeners = new Map<string, Array<() => void>>()
+  const field = {
+    value: staticStale.staleToken,
+    addEventListener: (event: string, listener: () => void) => {
+      const list = listeners.get(event) ?? []
+      list.push(listener)
+      listeners.set(event, list)
+    },
+  }
+  const dataset: Record<string, string> = {}
+  const document = {
+    documentElement: { dataset },
+    querySelector: (selector: string) => {
+      if (selector.includes('cf-turnstile-response')) return field
+      if (selector === '#widget')
+        return {
+          getBoundingClientRect: () =>
+            visible ? { width: 300, height: 65 } : { width: 0, height: 0 },
+        }
+      return null
+    },
+  }
+  const window: Record<string, unknown> = {}
+  const context = {
+    window,
+    document,
+    ResizeObserver: class {
+      constructor(callback: () => void) {
+        resize = callback
+      }
+      observe() {}
+      disconnect() {}
+    },
+  }
+  for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g))
+    runInNewContext(match[1] ?? '', context)
+  expect(runInNewContext(staticStale.ready, context)).toBe(false)
+  visible = true
+  resize()
+  expect(field.value).toBe(staticStale.staleToken)
+  expect(runInNewContext(staticStale.ready, context)).toBe(true)
+  expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+    id: 'turnstile-stale',
+    family: 'turnstile',
+    sitekey: '3x00000000000000000000FF',
+    rendered: true,
+    stale: true,
+    replaced: false,
+    tokenLength: staticStale.staleToken.length,
+  })
+  expect(window.__captchaFixture).toEqual(
+    JSON.parse(dataset.captchaFixture ?? '{}'),
+  )
+  field.value = 'FRESH-PAID-TOKEN'
+  for (const listener of listeners.get('change') ?? []) listener()
+  expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+    stale: true,
+    replaced: true,
+    tokenLength: 16,
+  })
 })
 
 test('tests that the PerimeterX pages mimic its frame and load nothing from anyone', async () => {

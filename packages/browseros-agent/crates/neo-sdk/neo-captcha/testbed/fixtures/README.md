@@ -22,15 +22,15 @@ Each standalone page loads its vendor's real script. It mirrors widget state int
 
 ## Pages and public test keys
 
-`neo.solveCaptcha(page)` returns `{ attempted, type, method, reason, message, durationMs, paidTasks, provider }` with no `verdict`; the verdicts below (`solved`, `token_applied`, `already_clear`, `unsolved`) are the test bed's own classification of the SDK's `reason`. Because Neo always solves a visible widget fresh instead of short-circuiting on a pre-existing token, a widget that already holds a token (`turnstile-pass.html`, `turnstile-stale.html`, `cloudflare-turnstile-demo`) now needs a paid solve.
+`neo.solveCaptcha(page)` returns `{ attempted, type, method, reason, message, durationMs, paidTasks, provider }` with no `verdict`; the verdicts below (`solved`, `token_applied`, `already_clear`, `unsolved`) are the test bed's own classification of the SDK's `reason`. Because Neo always solves a visible widget fresh instead of short-circuiting on a pre-existing token, a widget that already holds a token and has no checkbox to click requires a paid mint.
 
 | Page | Proves | Sitekey |
 |---|---|---|
 | `recaptcha-v2.html` | Checkbox completion and server acceptance | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` |
 | `recaptcha-v2-stale.html` | Stale token in `g-recaptcha-response` on an unchecked box; clicking the checkbox must replace it for free (`checkbox_passed`, `attempted: true`, `paidTasks: 0`) | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` |
 | `recaptcha-v2-invisible-bind.html` | Button-bound invisible reCAPTCHA v2 (`not_blocking`, classified `already_clear`, `attempted: false`, `paidTasks: 0`) | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` |
-| `turnstile-pass.html` | Auto-passing Turnstile widget; usually holds a token before the solve, so Neo skips auto-pass and mints a fresh paid token (`solved` / `token_applied`, `attempted: true`, `mayNeedPaid: true`) | `1x00000000000000000000AA` |
-| `turnstile-stale.html` | Always-pass Turnstile overwritten with a stale token after it passes; with no checkbox to click, Neo must mint a fresh paid token (`token_applied` / `solved`, `attempted: true`, `maxPaidTasks: 1`, `mayNeedPaid: true`) | `1x00000000000000000000AA` |
+| `turnstile-pass.html` | Always-pass Turnstile widget; solve usually lands before the widget's token and passes free (`auto_passed`, `attempted: true`). If the widget wins the race, paid providers refuse this test key (`provider_error`, 0 paid tasks), which `providerRefusesKey: true` marks `UNVERIFIED` | `1x00000000000000000000AA` |
+| `turnstile-stale.html` | Static failed-widget `.cf-turnstile` box ("Verification failed", no vendor script, no checkbox) holding a stale token on the interactive test key; Neo must mint a fresh paid token (`token_applied` / `solved`, `attempted: true`, `maxPaidTasks: 1`, `mayNeedPaid: true`; 2Captcha mints this key) | `3x00000000000000000000FF` |
 | `turnstile-block.html` | Failure without a token | `2x00000000000000000000AB` |
 | `turnstile-interactive.html` | Completion after checkbox interaction | `3x00000000000000000000FF` |
 | `turnstile-stale-interactive.html` | Stale token in `cf-turnstile-response` while the interactive checkbox is unpassed; clicking the checkbox must replace it for free (`checkbox_passed`, `attempted: true`, `maxPaidTasks: 0`) | `3x00000000000000000000FF` |
@@ -43,7 +43,7 @@ Each standalone page loads its vendor's real script. It mirrors widget state int
 
 ### Stale-token fixtures
 
-`turnstile-stale-interactive.html`, `turnstile-stale.html`, and `recaptcha-v2-stale.html` prove that Neo ignores an existing response token and writes a fresh one. Each page loads the vendor's real script, waits until the widget is drawn (and, on `turnstile-stale.html`, until the always-pass widget has finished), writes an obvious fake constant (`staleToken` in `catalog.ts`, e.g. `STALE-TOKEN-turnstile-do-not-accept`) into the response field, and only then sets `rendered: true` alongside `stale: true` and `replaced: false` (flipping `replaced` to `true` once the field's value differs from the stale token). On `POST /submit/<id>`, the fixture server rejects that exact constant with `REJECTED: stale-token` without consulting the vendor, so a page passes only if Neo replaced it with a fresh token the vendor accepts.
+`turnstile-stale-interactive.html`, `turnstile-stale.html`, and `recaptcha-v2-stale.html` prove that Neo ignores an existing response token and writes a fresh one. `turnstile-stale-interactive.html` and `recaptcha-v2-stale.html` load their vendor's real script, wait until the widget is drawn and its response field exists, write an obvious fake constant (`staleToken` in `catalog.ts`) into the field, and prove a free checkbox click replaces it. `turnstile-stale.html` is the one stale page that loads **no vendor script and no live widget**: both paid providers refuse Cloudflare's always-pass key (`1x00000000000000000000AA`), whereas 2Captcha does mint the interactive test key (`3x00000000000000000000FF`), so `turnstile-stale.html` renders a static `.cf-turnstile` box showing "Verification failed" with `<input type="hidden" name="cf-turnstile-response">` holding `STALE-TOKEN-turnstile-do-not-accept` (modeling a widget that failed and left an old token in the form, with no checkbox to click). All three set `rendered: true` only once drawn with the stale token in the field, mirror `stale: true` and `replaced: false` (flipping `replaced` to `true` once the field's value differs, listening on `input` and `change`), and reject that exact constant on `POST /submit/<id>` with `REJECTED: stale-token` without consulting the vendor.
 
 Public test secrets, verified against vendor documentation:
 
@@ -62,7 +62,7 @@ Checked with a temporary BrowserOS neo profile over CDP, without using the owner
 Fetched with curl and opened in an isolated browser:
 
 - [Google](https://www.google.com/recaptcha/api2/demo): real key; `#recaptcha-demo-submit`; acceptance text `Verification Success`.
-- [Cloudflare](https://demo.turnstile.workers.dev/): public pass key, visible widget host, form posts to `/handler`; submitting its dummy token returned JSON with `"success":true`. Because the widget usually completes on load before `neo.solveCaptcha` runs, Neo now mints a fresh paid token (`mayNeedPaid: true`, `expectAttempted: true`).
+- [Cloudflare](https://demo.turnstile.workers.dev/): public pass key, visible widget host, form posts to `/handler`; submitting its dummy token returned JSON with `"success":true`. `neo.solveCaptcha` usually lands before the widget's token and passes free (`mayNeedPaid: false`, `expectAttempted: true`); if the widget wins the race, paid providers refuse `1x00000000000000000000AA` (`provider_error`, 0 paid tasks), which `providerRefusesKey: true` marks `UNVERIFIED`.
 - [hCaptcha](https://accounts.hcaptcha.com/demo): real key, rendered checkbox; no v1 acceptance check.
 - [2Captcha reCAPTCHA v2](https://2captcha.com/demo/recaptcha-v2): live widget `#g-recaptcha`, real sitekey `6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u`; may need a paid solve.
 - [2Captcha Turnstile](https://2captcha.com/demo/cloudflare-turnstile): live widget `#cf-turnstile`, public interactive **test key** `3x00000000000000000000FF`; no paid solve required. Readiness checks the visible host because its iframe is inside a closed shadow root.
