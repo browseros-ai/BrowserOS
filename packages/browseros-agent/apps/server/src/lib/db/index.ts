@@ -33,7 +33,7 @@ export function getDb(): BrowserOsDatabase {
 
 export function closeDb(): void {
   if (handle) {
-    handle.sqlite.close()
+    handle.sqlite.close(true)
     handle = null
   }
 }
