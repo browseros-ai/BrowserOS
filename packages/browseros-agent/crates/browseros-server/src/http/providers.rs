@@ -1,9 +1,8 @@
 //! `/providers`: the LLM provider rows and the selected chat target. Reads never carry a secret
-//! (`ProviderRow` has only `has_*` flags); a save takes credentials inward only. Chunk
-//! `settings` fills the bodies.
+//! (`ProviderRow` has only `has_*` flags); a save takes credentials inward only.
 
+use axum::Json;
 use axum::extract::State;
-use axum::response::Response;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -11,6 +10,7 @@ use super::ApiError;
 use super::dto;
 use super::extract::{Body, PathParams};
 use crate::app::App;
+use crate::store::{ProviderEdit, Providers};
 
 pub(super) fn routes() -> OpenApiRouter<App> {
     OpenApiRouter::new()
@@ -31,8 +31,11 @@ pub(super) fn routes() -> OpenApiRouter<App> {
         (status = 200, description = "Rows without secrets.", body = dto::ProviderList),
     )
 )]
-async fn list_providers(State(_app): State<App>) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+async fn list_providers(State(app): State<App>) -> Result<Json<dto::ProviderList>, ApiError> {
+    let providers = app.store.providers().list().await?;
+    Ok(Json(dto::ProviderList {
+        providers: providers.into_iter().map(dto::ProviderBody::from).collect(),
+    }))
 }
 
 /// The selected chat target.
@@ -45,8 +48,13 @@ async fn list_providers(State(_app): State<App>) -> Result<Response, ApiError> {
         (status = 200, description = "The selected row, or null when none is selected.", body = dto::DefaultProvider),
     )
 )]
-async fn get_default_provider(State(_app): State<App>) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+async fn get_default_provider(
+    State(app): State<App>,
+) -> Result<Json<dto::DefaultProvider>, ApiError> {
+    let provider = app.store.providers().default().await?;
+    Ok(Json(dto::DefaultProvider {
+        provider: provider.map(dto::ProviderBody::from),
+    }))
 }
 
 /// Select a chat target.
@@ -63,10 +71,21 @@ async fn get_default_provider(State(_app): State<App>) -> Result<Response, ApiEr
     )
 )]
 async fn set_default_provider(
-    State(_app): State<App>,
-    Body(_body): Body<dto::SetDefaultProvider>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    State(app): State<App>,
+    Body(body): Body<dto::SetDefaultProvider>,
+) -> Result<Json<dto::ProviderResponse>, ApiError> {
+    if body.provider_id.is_empty() {
+        return Err(ApiError::bad_request("providerId must not be empty"));
+    }
+    let provider = app
+        .store
+        .providers()
+        .set_default(&body.provider_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Unknown provider"))?;
+    Ok(Json(dto::ProviderResponse {
+        provider: provider.into(),
+    }))
 }
 
 /// Create or update an LLM provider. The id is the client's.
@@ -86,12 +105,26 @@ async fn set_default_provider(
     )
 )]
 async fn save_provider(
-    State(_app): State<App>,
-    PathParams(_path): PathParams<dto::ProviderPath>,
+    State(app): State<App>,
+    PathParams(path): PathParams<dto::ProviderPath>,
     Body(body): Body<dto::ProviderInput>,
-) -> Result<Response, ApiError> {
-    let _edit = crate::store::ProviderEdit::try_from(body).map_err(ApiError::bad_request)?;
-    Err(ApiError::not_implemented())
+) -> Result<Json<dto::ProviderResponse>, ApiError> {
+    let edit = ProviderEdit::try_from(body).map_err(ApiError::bad_request)?;
+    let provider = app
+        .store
+        .providers()
+        .save(&path.provider_id, edit)
+        .await
+        .map_err(|error| {
+            if Providers::is_id_conflict(&error) {
+                ApiError::bad_request("Provider id belongs to another target")
+            } else {
+                error.into()
+            }
+        })?;
+    Ok(Json(dto::ProviderResponse {
+        provider: provider.into(),
+    }))
 }
 
 /// Delete a provider row.
@@ -107,8 +140,11 @@ async fn save_provider(
     )
 )]
 async fn delete_provider(
-    State(_app): State<App>,
-    PathParams(_path): PathParams<dto::ProviderPath>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    State(app): State<App>,
+    PathParams(path): PathParams<dto::ProviderPath>,
+) -> Result<Json<dto::Success>, ApiError> {
+    if !app.store.providers().delete(&path.provider_id).await? {
+        return Err(ApiError::not_found("Unknown provider"));
+    }
+    Ok(Json(dto::Success { success: true }))
 }

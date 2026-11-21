@@ -7,13 +7,23 @@
 //! connection test. Coding-agent rows share the table (`kind = 'acp'`) and the single default
 //! row; `Agents` owns their writes, and the default pointer may point at a row of either kind.
 
+use std::collections::BTreeMap;
+
+use sea_orm::sea_query::{Expr, OnConflict, SimpleExpr};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, DerivePartialModel, EntityTrait,
+    FromQueryResult, QueryFilter, TransactionTrait,
+};
+
+use super::agents::parse_agent_kind;
+use super::entities::providers::{ActiveModel, Column, Entity, Model};
 use super::{Edit, Secret, SecretEdit, Store, StoreError};
 use crate::turn::AgentKind;
 
-pub struct Providers<'a>(
-    #[expect(dead_code, reason = "read once chunk `settings` writes the queries")]
-    pub(super)  &'a Store,
-);
+pub struct Providers<'a>(pub(super) &'a Store);
+
+pub(super) const LLM: &str = "llm";
+pub(super) const ACP: &str = "acp";
 
 /// The one list of provider types. `model` matches on it exhaustively, and the contract's
 /// enum is derived from it.
@@ -167,42 +177,343 @@ pub enum Credentials {
     SignIn,
 }
 
+/// The settings projection asks SQLite for credential presence flags. Only the outbound
+/// config query reads the underlying values from the database.
+#[derive(DerivePartialModel, FromQueryResult)]
+#[sea_orm(entity = "Entity")]
+struct PublicProvider {
+    id: String,
+    kind: String,
+    #[sea_orm(from_col = "type")]
+    provider_type: String,
+    name: String,
+    model_id: Option<String>,
+    reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    is_default: bool,
+    base_url: Option<String>,
+    headers: Option<String>,
+    supports_images: bool,
+    context_window: Option<i64>,
+    temperature: f64,
+    resource_name: Option<String>,
+    region: Option<String>,
+    working_directory: Option<String>,
+    custom_config: Option<String>,
+    #[sea_orm(from_expr = "has_secret(Column::ApiKey)")]
+    has_api_key: bool,
+    #[sea_orm(from_expr = "has_secret(Column::AccessKeyId)")]
+    has_access_key_id: bool,
+    #[sea_orm(from_expr = "has_secret(Column::SecretAccessKey)")]
+    has_secret_access_key: bool,
+    #[sea_orm(from_expr = "has_secret(Column::SessionToken)")]
+    has_session_token: bool,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl PublicProvider {
+    fn into_row(self) -> Result<Option<ProviderRow>, StoreError> {
+        let kind = match self.kind.as_str() {
+            LLM => ProviderKind::parse(&self.provider_type).map(RowKind::Llm),
+            ACP => parse_agent_kind(&self.provider_type).map(RowKind::Acp),
+            _ => None,
+        };
+        let Some(kind) = kind else { return Ok(None) };
+        let headers = decode_headers(self.headers.as_deref())?;
+        Ok(Some(ProviderRow {
+            id: self.id,
+            kind,
+            name: self.name,
+            model_id: self.model_id,
+            reasoning_effort: self.reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            is_default: self.is_default,
+            base_url: self.base_url,
+            headers,
+            supports_images: self.supports_images,
+            context_window: self.context_window,
+            temperature: self.temperature,
+            resource_name: self.resource_name,
+            region: self.region,
+            working_directory: self.working_directory,
+            custom_config: self.custom_config,
+            has_api_key: self.has_api_key,
+            has_access_key_id: self.has_access_key_id,
+            has_secret_access_key: self.has_secret_access_key,
+            has_session_token: self.has_session_token,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }))
+    }
+}
+
 impl Providers<'_> {
-    /// Rows of both kinds (the extension filters), without secrets. Rows of a type this server
-    /// no longer runs are left out.
+    /// Rows of both kinds. Legacy types stay in SQLite for rollback.
     pub async fn list(&self) -> Result<Vec<ProviderRow>, StoreError> {
-        Err(StoreError::NotImplemented("Providers::list"))
+        Entity::find()
+            .into_partial_model::<PublicProvider>()
+            .all(self.0.db())
+            .await?
+            .into_iter()
+            .filter_map(|row| row.into_row().transpose())
+            .collect()
     }
 
-    /// The selected row, of either kind, or `None` when there is none or it is of a type this
-    /// server no longer runs.
+    /// A legacy default is treated as unselected by the extension.
     pub async fn default(&self) -> Result<Option<ProviderRow>, StoreError> {
-        Err(StoreError::NotImplemented("Providers::default"))
+        match Entity::find()
+            .filter(Column::IsDefault.eq(true))
+            .into_partial_model::<PublicProvider>()
+            .one(self.0.db())
+            .await?
+        {
+            Some(row) => row.into_row(),
+            None => Ok(None),
+        }
     }
 
-    /// Either kind. The lookup, the clear and the set are one transaction (the partial unique
-    /// index allows one default row, so the old one is cleared first).
-    pub async fn set_default(&self, _id: &str) -> Result<Option<ProviderRow>, StoreError> {
-        Err(StoreError::NotImplemented("Providers::set_default"))
+    /// The lookup, clear, and set are one transaction across providers and coding agents.
+    pub async fn set_default(&self, id: &str) -> Result<Option<ProviderRow>, StoreError> {
+        let tx = self.0.db().begin().await?;
+        let Some(target) = Entity::find_by_id(id)
+            .into_partial_model::<PublicProvider>()
+            .one(&tx)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(mut target) = target.into_row()? else {
+            return Ok(None);
+        };
+        if !target.is_default {
+            // The partial unique index requires clearing the old selection before setting
+            // the new one. Readers see the change only once both updates commit.
+            Entity::update_many()
+                .col_expr(Column::IsDefault, Expr::value(false))
+                .filter(Column::IsDefault.eq(true))
+                .exec(&tx)
+                .await?;
+            Entity::update_many()
+                .col_expr(Column::IsDefault, Expr::value(true))
+                .filter(Column::Id.eq(id))
+                .exec(&tx)
+                .await?;
+            target.is_default = true;
+        }
+        tx.commit().await?;
+        Ok(Some(target))
     }
 
-    /// LLM rows only: an id that belongs to an `acp` row is refused. Written as INSERT … ON
-    /// CONFLICT DO UPDATE, never REPLACE: a replace deletes the row first, and the retained
-    /// `scheduled_jobs.provider_id` has ON DELETE SET NULL.
-    pub async fn save(&self, _id: &str, _edit: ProviderEdit) -> Result<ProviderRow, StoreError> {
-        Err(StoreError::NotImplemented("Providers::save"))
+    /// Upsert by the extension's id while preserving the row and its foreign key references.
+    pub async fn save(&self, id: &str, edit: ProviderEdit) -> Result<ProviderRow, StoreError> {
+        let now = now_ms();
+        let headers = match edit.headers {
+            Edit::Keep => Edit::Keep,
+            Edit::Clear => Edit::Clear,
+            Edit::Set(pairs) => {
+                let object: BTreeMap<_, _> = pairs.into_iter().collect();
+                let json = serde_json::to_string(&object)
+                    .map_err(|_| StoreError::Unreadable("invalid provider headers".into()))?;
+                Edit::Set(json)
+            }
+        };
+        let model = ActiveModel {
+            id: ActiveValue::Set(id.to_owned()),
+            kind: ActiveValue::Set(LLM.into()),
+            r#type: ActiveValue::Set(edit.kind.as_str().into()),
+            name: ActiveValue::Set(edit.name),
+            model_id: ActiveValue::Set(Some(edit.model_id)),
+            context_window: ActiveValue::Set(Some(edit.context_window)),
+            base_url: nullable_edit(edit.base_url),
+            headers: nullable_edit(headers),
+            supports_images: edit
+                .supports_images
+                .map_or(ActiveValue::NotSet, ActiveValue::Set),
+            temperature: edit
+                .temperature
+                .map_or(ActiveValue::NotSet, ActiveValue::Set),
+            api_key: credential_edit(edit.api_key),
+            access_key_id: credential_edit(edit.access_key_id),
+            secret_access_key: credential_edit(edit.secret_access_key),
+            session_token: credential_edit(edit.session_token),
+            resource_name: nullable_edit(edit.resource_name),
+            region: nullable_edit(edit.region),
+            reasoning_effort: nullable_edit(edit.reasoning_effort),
+            reasoning_summary: nullable_edit(edit.reasoning_summary),
+            created_at: ActiveValue::Set(edit.created_at.unwrap_or(now)),
+            updated_at: ActiveValue::Set(now),
+            ..Default::default()
+        };
+        // NotSet omits a field on insert and leaves it out of the conflict update.
+        // created_at and is_default are intentionally excluded from that update.
+        let updates = [
+            Column::Type,
+            Column::Name,
+            Column::ModelId,
+            Column::ContextWindow,
+            Column::BaseUrl,
+            Column::Headers,
+            Column::SupportsImages,
+            Column::Temperature,
+            Column::ApiKey,
+            Column::AccessKeyId,
+            Column::SecretAccessKey,
+            Column::SessionToken,
+            Column::ResourceName,
+            Column::Region,
+            Column::ReasoningEffort,
+            Column::ReasoningSummary,
+            Column::UpdatedAt,
+        ]
+        .into_iter()
+        .filter(|&column| !model.is_not_set(column));
+        let conflict = OnConflict::column(Column::Id)
+            .update_columns(updates)
+            .action_cond_where(supported_llm())
+            .to_owned();
+
+        // Keep the upsert and the public readback on the same connection. RETURNING the
+        // entire entity would select credentials and a second transaction could race a delete.
+        let tx = self.0.db().begin().await?;
+        let written = Entity::insert(model)
+            .on_conflict(conflict)
+            .exec_without_returning(&tx)
+            .await?;
+        if written == 0 {
+            return Err(DbErr::RecordNotUpdated.into());
+        }
+        let row = Entity::find_by_id(id)
+            .into_partial_model::<PublicProvider>()
+            .one(&tx)
+            .await?
+            .ok_or_else(|| DbErr::RecordNotFound("saved provider".into()))?
+            .into_row()?
+            .ok_or_else(|| {
+                StoreError::Unreadable("saved provider has an unsupported type".into())
+            })?;
+        tx.commit().await?;
+        Ok(row)
     }
 
-    /// LLM rows only. Deleting one sets `provider_id` to NULL in any retained scheduled job
-    /// (the old server's schema does this, and the old server deletes the same way).
-    pub async fn delete(&self, _id: &str) -> Result<bool, StoreError> {
-        Err(StoreError::NotImplemented("Providers::delete"))
+    /// Whether a save was refused because the id is owned by a different target.
+    pub(crate) fn is_id_conflict(error: &StoreError) -> bool {
+        matches!(error, StoreError::Db(DbErr::RecordNotUpdated))
     }
 
-    /// The row with its credentials, for an outbound model call only. `None` id = the default row.
-    pub async fn config(&self, _id: Option<&str>) -> Result<Option<ProviderConfig>, StoreError> {
-        Err(StoreError::NotImplemented("Providers::config"))
+    /// Deleting an LLM provider lets the legacy foreign key clear its scheduled job references.
+    pub async fn delete(&self, id: &str) -> Result<bool, StoreError> {
+        let deleted = Entity::delete_by_id(id)
+            .filter(supported_llm())
+            .exec(self.0.db())
+            .await?;
+        Ok(deleted.rows_affected > 0)
     }
+
+    /// Only outbound calls read the credential columns. An ACP or legacy target is not an LLM.
+    pub async fn config(&self, id: Option<&str>) -> Result<Option<ProviderConfig>, StoreError> {
+        let target = id.map_or_else(|| Column::IsDefault.eq(true), |id| Column::Id.eq(id));
+        let row = Entity::find()
+            .filter(supported_llm())
+            .filter(target)
+            .one(self.0.db())
+            .await?;
+        row.map(config_from_row).transpose()
+    }
+}
+
+fn supported_llm() -> sea_orm::Condition {
+    sea_orm::Condition::all()
+        .add(Column::Kind.eq(LLM))
+        .add(Column::Type.is_in(ProviderKind::ALL.map(ProviderKind::as_str)))
+}
+
+fn has_secret(column: Column) -> SimpleExpr {
+    Expr::col(column)
+        .is_not_null()
+        .and(Expr::col(column).ne(""))
+}
+
+fn decode_headers(stored: Option<&str>) -> Result<Option<Vec<(String, String)>>, StoreError> {
+    stored
+        .map(|json| {
+            serde_json::from_str::<BTreeMap<String, String>>(json)
+                .map(|headers| headers.into_iter().collect())
+                .map_err(|_| StoreError::Unreadable("invalid provider headers".into()))
+        })
+        .transpose()
+}
+
+fn config_from_row(row: Model) -> Result<ProviderConfig, StoreError> {
+    let kind = ProviderKind::parse(&row.r#type)
+        .ok_or_else(|| StoreError::Unreadable("unsupported provider type".into()))?;
+    let credentials = match kind {
+        ProviderKind::ChatgptPro => Credentials::SignIn,
+        ProviderKind::Bedrock => match (
+            read_secret(row.access_key_id),
+            read_secret(row.secret_access_key),
+            row.region.filter(|value| !value.is_empty()),
+        ) {
+            (Some(access_key_id), Some(secret_access_key), Some(region)) => Credentials::Aws {
+                access_key_id,
+                secret_access_key,
+                session_token: read_secret(row.session_token),
+                region,
+            },
+            _ => Credentials::None,
+        },
+        _ => read_secret(row.api_key).map_or(Credentials::None, Credentials::ApiKey),
+    };
+    Ok(ProviderConfig {
+        id: row.id,
+        kind,
+        model: row
+            .model_id
+            .ok_or_else(|| StoreError::Unreadable("missing provider model".into()))?,
+        base_url: row.base_url,
+        headers: decode_headers(row.headers.as_deref())?.unwrap_or_default(),
+        context_window: row
+            .context_window
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| StoreError::Unreadable("invalid provider context window".into()))?,
+        supports_images: row.supports_images,
+        reasoning_effort: row.reasoning_effort,
+        reasoning_summary: row.reasoning_summary,
+        resource_name: row.resource_name,
+        credentials,
+    })
+}
+
+fn read_secret(value: Option<String>) -> Option<Secret> {
+    value.filter(|value| !value.is_empty()).map(Secret::new)
+}
+
+fn credential_edit(edit: SecretEdit) -> ActiveValue<Option<String>> {
+    match edit {
+        Edit::Set(value) if !value.expose().is_empty() => {
+            ActiveValue::Set(Some(value.expose().to_owned()))
+        }
+        Edit::Clear => ActiveValue::Set(None),
+        Edit::Keep | Edit::Set(_) => ActiveValue::NotSet,
+    }
+}
+
+pub(super) fn nullable_edit<T: Into<sea_orm::Value>>(edit: Edit<T>) -> ActiveValue<Option<T>>
+where
+    Option<T>: Into<sea_orm::Value>,
+{
+    match edit {
+        Edit::Keep => ActiveValue::NotSet,
+        Edit::Clear => ActiveValue::Set(None),
+        Edit::Set(value) => ActiveValue::Set(Some(value)),
+    }
+}
+
+pub(super) fn now_ms() -> i64 {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
 }
 
 /// A provider as typed into the settings form, for `POST /test-provider`.

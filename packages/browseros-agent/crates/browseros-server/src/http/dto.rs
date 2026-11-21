@@ -595,6 +595,8 @@ pub enum UiMessageChunk {
         tool_call_id: String,
         tool_name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         dynamic: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
@@ -604,6 +606,8 @@ pub enum UiMessageChunk {
         tool_call_id: String,
         tool_name: String,
         input: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         dynamic: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -684,11 +688,30 @@ pub enum RoleName {
 }
 
 /// One part of a `UIMessage`, in the SDK's shape: an object with a `type` and that type's own
-/// fields.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+/// fields. Its schema is written by hand below: open on purpose, but with `type` required.
+#[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
-#[schema(as = UiPart, value_type = Object)]
 pub struct UiPartBody(pub Value);
+
+impl utoipa::PartialSchema for UiPartBody {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{AdditionalProperties, ObjectBuilder, Type};
+        ObjectBuilder::new()
+            .description(Some(
+                "A part as the AI SDK stores it: its `type`, then that type's own fields.",
+            ))
+            .property("type", ObjectBuilder::new().schema_type(Type::String))
+            .required("type")
+            .additional_properties(Some(AdditionalProperties::FreeForm(true)))
+            .into()
+    }
+}
+
+impl ToSchema for UiPartBody {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UiPart")
+    }
+}
 
 impl From<&UiMessage> for UiMessageBody {
     fn from(message: &UiMessage) -> Self {
@@ -1368,6 +1391,9 @@ impl SignInProvider {
 #[derive(Debug, Clone, Copy, Deserialize, IntoParams)]
 #[into_params(parameter_in = Path)]
 pub struct SignInPath {
+    // Inline: a `ToSchema` type used only as a parameter is not collected into the document's
+    // components, and a `$ref` to it would dangle (openapi-typescript refuses the document).
+    #[param(inline)]
     pub provider: SignInProvider,
 }
 
