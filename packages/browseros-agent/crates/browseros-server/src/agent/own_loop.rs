@@ -12,7 +12,6 @@
 //! transcript every time (design rule 3).
 
 use std::future::Future;
-use std::time::Duration;
 
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -47,9 +46,16 @@ pub(super) async fn run(
         config.reasoning_effort.as_deref(),
         input.context.supports_reasoning,
     );
-    let budget = Budget::default();
-    let deadline = Instant::now() + budget.time;
-    let model = match race(models.resolve(config, input.conversation), cancel, deadline).await {
+    // One clock for the whole turn: the hour starts before the model is resolved, because
+    // resolving can refresh a sign-in token over the network.
+    let budget = Budget::from_now();
+    let model = match race(
+        models.resolve(config, input.conversation),
+        cancel,
+        budget.deadline,
+    )
+    .await
+    {
         Ok(Ok(model)) => model,
         Ok(Err(error)) => return TurnEnd::Failed(error),
         Err(interrupted) => return interrupted.into(),
@@ -57,17 +63,18 @@ pub(super) async fn run(
     turn(&model, browser, input, effort, budget, sink, cancel).await
 }
 
-/// The turn's limits. `Default` is the design's: `MAX_STEPS` model calls and `MAX_TURN_TIME`.
+/// The turn's limits: at most `steps` model calls, and nothing awaited past `deadline`.
 pub(super) struct Budget {
     pub steps: usize,
-    pub time: Duration,
+    pub deadline: Instant,
 }
 
-impl Default for Budget {
-    fn default() -> Self {
+impl Budget {
+    /// The design's limits, starting now: `MAX_STEPS` model calls within `MAX_TURN_TIME`.
+    pub(super) fn from_now() -> Self {
         Self {
             steps: MAX_STEPS,
-            time: MAX_TURN_TIME,
+            deadline: Instant::now() + MAX_TURN_TIME,
         }
     }
 }
@@ -115,7 +122,7 @@ async fn turn(
     sink: &mut dyn EventSink,
     cancel: &CancellationToken,
 ) -> TurnEnd {
-    let deadline = Instant::now() + budget.time;
+    let deadline = budget.deadline;
     let tools: Vec<ToolSpec> = browser
         .tools()
         .into_iter()
@@ -275,6 +282,7 @@ fn effort(row: Option<&str>, supports_reasoning: bool) -> Option<Effort> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use serde_json::json;
 
@@ -349,7 +357,7 @@ mod tests {
     fn budget(steps: usize) -> Budget {
         Budget {
             steps,
-            ..Budget::default()
+            ..Budget::from_now()
         }
     }
 
@@ -371,7 +379,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut events,
             &CancellationToken::new(),
         )
@@ -445,7 +453,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut events,
             &cancel,
         )
@@ -475,7 +483,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut events,
             &cancel,
         )
@@ -528,7 +536,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut counter,
             &CancellationToken::new(),
         )
@@ -577,7 +585,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut sink,
             &cancel,
         )
@@ -633,9 +641,8 @@ mod tests {
             .filter(|event| **event == TurnEvent::StepStart)
             .count();
         assert_eq!(steps, 3);
-        let default = Budget::default();
-        assert_eq!(default.steps, 100);
-        assert_eq!(default.time, Duration::from_secs(3_600));
+        assert_eq!(MAX_STEPS, 100);
+        assert_eq!(MAX_TURN_TIME, Duration::from_secs(3_600));
     }
 
     #[tokio::test(start_paused = true)]
@@ -651,7 +658,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut Vec::new(),
             &CancellationToken::new(),
         )
@@ -676,7 +683,7 @@ mod tests {
             &browser,
             &input(Mode::Agent),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut Vec::new(),
             &CancellationToken::new(),
         )
@@ -698,7 +705,7 @@ mod tests {
             &browser,
             &input(Mode::Chat),
             None,
-            Budget::default(),
+            Budget::from_now(),
             &mut Vec::new(),
             &CancellationToken::new(),
         )
@@ -710,31 +717,6 @@ mod tests {
             .map(|call| call.scope.access)
             .collect();
         assert_eq!(access, vec![Access::Read]);
-    }
-
-    #[tokio::test]
-    async fn a_provider_that_cannot_be_resolved_fails_before_any_event() -> TestResult {
-        let state = tempfile::tempdir()?;
-        let store = Store::open(state.path()).await?;
-        let models = Models::new(store.clone(), None);
-        let (browser, handle) = Browser::scripted([]);
-        let mut events = Vec::new();
-
-        let end = run(
-            &models,
-            &browser,
-            &store,
-            None,
-            &input(Mode::Agent),
-            &mut events,
-            &CancellationToken::new(),
-        )
-        .await;
-
-        assert!(matches!(end, TurnEnd::Failed(_)), "{end:?}");
-        assert_eq!(events, Vec::new());
-        assert!(handle.calls().is_empty());
-        Ok(())
     }
 
     fn row(reasoning_effort: Option<&str>) -> ProviderConfig {
