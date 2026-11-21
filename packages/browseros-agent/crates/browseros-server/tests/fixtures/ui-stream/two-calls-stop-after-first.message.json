@@ -19,7 +19,13 @@
         "code": "click('a')"
       },
       "output": {
-        "clicked": true
+        "content": [
+          {
+            "text": "{\"clicked\":true}",
+            "type": "text"
+          }
+        ],
+        "isError": false
       }
     },
     {

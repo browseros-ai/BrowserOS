@@ -135,7 +135,10 @@ async fn a_turn_on_the_selected_provider_runs_the_tool_then_answers() -> anyhow:
             },
             TurnEvent::ToolDone {
                 id: call,
-                result: Ok(json!("Example Domain")),
+                result: Ok(json!({
+                    "content": [{ "type": "text", "text": "Example Domain" }],
+                    "isError": false
+                })),
             },
             TurnEvent::StepEnd,
             TurnEvent::StepStart,
