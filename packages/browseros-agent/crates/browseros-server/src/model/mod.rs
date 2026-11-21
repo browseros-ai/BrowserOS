@@ -167,9 +167,10 @@ impl Models {
                     model: provider.model,
                 }
             }
-            ProviderKind::Bedrock => {
-                return Err(ChatError::not_implemented("Calling this provider"));
-            }
+            ProviderKind::Bedrock => Route::Bedrock {
+                endpoint: bedrock::endpoint(&provider)?,
+                model: provider.model,
+            },
         };
         Ok(Model {
             route,
@@ -261,6 +262,10 @@ enum Route {
         endpoint: anthropic::Endpoint,
         model: String,
     },
+    Bedrock {
+        endpoint: bedrock::Endpoint,
+        model: String,
+    },
     Scripted {
         script: Script,
         /// The next step to play: one `step` call plays one scripted step.
@@ -343,6 +348,9 @@ impl Model {
                 endpoint,
                 model,
             } => anthropic::step(http, endpoint, model, request, &self.reasoning, sink).await,
+            Route::Bedrock { endpoint, model } => {
+                bedrock::step(endpoint, model, request, &self.reasoning, sink).await
+            }
             Route::Scripted { script, next } => scripted::step(script, next, sink).await,
         };
         result.map_err(|mut error| {
@@ -608,10 +616,6 @@ enum NativeOutput {
     Chat(Value),
     Responses(Vec<Value>),
     Anthropic(Vec<Value>),
-    #[expect(
-        dead_code,
-        reason = "built once chunk `models` writes the Bedrock route"
-    )]
     Bedrock(Box<aws_sdk_bedrockruntime::types::Message>),
 }
 
