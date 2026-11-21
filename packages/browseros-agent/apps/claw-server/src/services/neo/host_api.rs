@@ -4,6 +4,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
+use browseros_core::{TabId, TargetId};
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -175,6 +176,19 @@ struct RunRecord {
     operations: Vec<RunOperation>,
 }
 
+#[derive(Deserialize)]
+struct TabInventory {
+    items: Vec<InventoryTab>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InventoryTab {
+    tab_id: i64,
+    target_id: String,
+    owner: Option<String>,
+}
+
 impl HostApi {
     pub(super) fn new(port: u16, token: String) -> Result<Self, EngineUnavailable> {
         Ok(Self {
@@ -203,7 +217,18 @@ impl HostApi {
             .map_err(|_| EngineUnavailable::new("SDK run metadata had an invalid shape"))
     }
 
-    /// Both routes use the same authentication and bounded streaming. Never
+    async fn run_tab_target(&self, tab: TabId) -> Result<Option<TargetId>, EngineUnavailable> {
+        let bytes = self.read(&["v1", "tabs"], None, 8 * 1024 * 1024).await?;
+        let inventory: TabInventory = serde_json::from_slice(&bytes)
+            .map_err(|_| EngineUnavailable::new("SDK tab inventory had an invalid shape"))?;
+        Ok(inventory
+            .items
+            .into_iter()
+            .find(|entry| entry.tab_id == tab.0 && entry.owner.is_none())
+            .map(|entry| TargetId(entry.target_id)))
+    }
+
+    /// Host routes use the same authentication and bounded streaming. Never
     /// follow a redirect with host credentials or buffer an unlimited body.
     async fn read(
         &self,
@@ -243,6 +268,40 @@ impl HostApi {
 }
 
 impl NeoEngine {
+    /// The SDK owns the reserved tab. Desktop runs use browser scope, so all
+    /// unreserved tabs in this inventory can be resolved against the host's page registry.
+    pub(crate) async fn run_tab_target(
+        &self,
+        tab: TabId,
+    ) -> Result<Option<TargetId>, EngineUnavailable> {
+        let host = self
+            .inner
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .host
+            .clone()
+            .ok_or_else(|| self.not_ready())?;
+        tokio::select! {
+            biased;
+            () = self.inner.stop.cancelled() => Err(self.not_ready()),
+            result = host.run_tab_target(tab) => result,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_host_endpoint(port: u16) -> Result<Self, EngineUnavailable> {
+        let engine = Self::disabled("test engine");
+        engine
+            .inner
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .host = Some(HostApi::new(port, "test-host-token".to_owned())?);
+        engine.inner.state.send_replace(super::EngineState::Ready);
+        Ok(engine)
+    }
+
     /// Blob presentation changes only after the whole bounded fetch succeeds.
     /// A missing/expired blob or a restart keeps the existing markers and note.
     pub(super) async fn hydrate_blobs(&self, outcome: &mut RunOutcome) {

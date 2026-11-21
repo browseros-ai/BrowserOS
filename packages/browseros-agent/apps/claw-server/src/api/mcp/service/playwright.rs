@@ -9,12 +9,15 @@ pub(super) mod surface;
 
 use super::{
     AGENT_NAME_ARG, AGENT_NAME_ARG_DESCRIPTION, AGENT_NAME_TASK_SENTENCE, AWAIT_HELP_TOOL_NAME,
-    ClawMcpService, PURSUE_TOOL_NAME, REQUEST_HELP_TOOL_NAME, TOOL_LIST_WATCH_LIVENESS,
+    ClawMcpService, NamedPage, PURSUE_TOOL_NAME, REQUEST_HELP_TOOL_NAME, TOOL_LIST_WATCH_LIVENESS,
     await_help_tool, pursue, request_help_tool, session_handle, tab_grouping,
 };
 use crate::{
     AppState,
-    services::neo::{EngineState, NeoEngine, RunTool},
+    services::neo::{EngineState, EngineUnavailable, NeoEngine, RunTool},
+};
+use browseros_core::{
+    BrowserSession, TabId, connection::EXCLUDED_URL_PREFIXES, pages::PageInfo, target::BrowserView,
 };
 use rmcp::{
     model::{CallToolRequestParams, CallToolResult, ContentBlock, Tool},
@@ -70,6 +73,38 @@ impl Playwright {
     /// Discovery can wait briefly for the definition while initialize stays independent of startup.
     pub(super) async fn ready(&self, state: &AppState) {
         let _ = state.neo.tool().await;
+    }
+
+    /// Help and pursue follow the SDK's browser-wide reach. The child owns the blank
+    /// keeper tab, while the host owns PageIds and the CDP view used for follow-up work.
+    pub(super) async fn resolve_page(
+        &self,
+        state: &AppState,
+        browser: Arc<BrowserSession>,
+        named: &NamedPage,
+    ) -> Result<Option<(PageInfo, BrowserView)>, EngineUnavailable> {
+        let tab = TabId(named.said);
+        let view = BrowserView::unbound(browser, None);
+        let Some(target) = state.neo.run_tab_target(tab).await? else {
+            return Ok(None);
+        };
+        // The inventories come from separate CDP connections. Refresh after the SDK lookup
+        // and compare identities so a closed or replaced tab cannot inherit admission.
+        let Some(info) = view.page(named.page.clone()).await.ok().filter(|info| {
+            info.tab_id == tab
+                && info.target_id == target
+                && !EXCLUDED_URL_PREFIXES
+                    .iter()
+                    .any(|prefix| info.url.starts_with(prefix))
+        }) else {
+            return Ok(None);
+        };
+        // Pursue keeps this view across model calls. Reuse core's native page
+        // capability so a reconnect cannot send a later action to a reused PageId.
+        Ok(view
+            .with_expected_created_page(&info)
+            .ok()
+            .map(|view| (info, view)))
     }
 
     pub(super) fn listed_tools(

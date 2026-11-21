@@ -122,7 +122,7 @@ where
             }
         }
     }
-    engine.unavailable("the Playwright engine was shut down".to_owned());
+    engine.publish_stopped();
 }
 
 async fn run_attempt(

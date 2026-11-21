@@ -384,10 +384,7 @@ impl NeoEngine {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        // An off host never changes readiness or wakes subscribers during shutdown.
-        if !matches!(self.state(), EngineState::Disabled(_)) {
-            self.unavailable("the Playwright engine was shut down".to_owned());
-        }
+        self.publish_stopped();
         if let Some(mut task) = task
             && tokio::time::timeout(Duration::from_secs(3), &mut task)
                 .await
@@ -398,12 +395,34 @@ impl NeoEngine {
         }
     }
 
-    fn unavailable(&self, reason: String) {
-        tracing::info!(%reason, "the Playwright engine is unavailable");
-        self.unavailable_until(reason, None);
+    fn publish_stopped(&self) {
+        self.clear_connection();
+        self.inner.state.send_if_modified(|state| match state {
+            // An off host never changes readiness or wakes subscribers during shutdown.
+            EngineState::Disabled(_) => false,
+            EngineState::Unavailable { retry_at, .. } => {
+                // Keep the failure that sent the supervisor into backoff. Only the retry ends.
+                retry_at.take().is_some()
+            }
+            EngineState::Starting | EngineState::Ready => {
+                *state = EngineState::Unavailable {
+                    reason: "the Playwright engine was shut down".to_owned(),
+                    retry_at: None,
+                };
+                true
+            }
+        });
     }
 
+    #[cfg(unix)]
     fn unavailable_until(&self, reason: String, retry_at: Option<Instant>) {
+        self.clear_connection();
+        self.inner
+            .state
+            .send_replace(EngineState::Unavailable { reason, retry_at });
+    }
+
+    fn clear_connection(&self) {
         let mut connection = self
             .inner
             .connection
@@ -411,17 +430,16 @@ impl NeoEngine {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         connection.wire = None;
         connection.host = None;
-        drop(connection);
-        self.inner
-            .state
-            .send_replace(EngineState::Unavailable { reason, retry_at });
     }
 
     fn not_ready(&self) -> EngineUnavailable {
         // Readiness can race shutdown on another runtime thread. Once stopped,
         // no caller may forward more work even if it saw the previous Ready state.
         if self.inner.stop.is_cancelled() {
-            return EngineUnavailable::new("the Playwright engine was shut down");
+            return EngineUnavailable::new(match self.state() {
+                EngineState::Unavailable { reason, .. } => reason,
+                _ => "the Playwright engine was shut down".to_owned(),
+            });
         }
         EngineUnavailable::new(match self.state() {
             EngineState::Disabled(why) => why.to_owned(),
