@@ -65,6 +65,13 @@ pub(crate) const SETTLE_MAX: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(500);
 /// The rescan after a flow, as detection's own scan budget.
 const RESCAN_BUDGET: Duration = Duration::from_secs(2);
+/// How long before the solve's deadline the check stops by itself. It then hands back what it
+/// has (unsure, if it must) instead of losing the race to the deadline, which would drop it.
+const DEADLINE_MARGIN: Duration = Duration::from_millis(250);
+/// How long a vendor accepts a token after issuing it, less ten seconds for its delivery:
+/// reCAPTCHA's two minutes, Turnstile's five (rows 9 and 11).
+const RECAPTCHA_TOKEN_LIFE: Duration = Duration::from_secs(110);
+const TURNSTILE_TOKEN_LIFE: Duration = Duration::from_secs(290);
 
 /// What the solver claims, and on what grounds. The grounds decide which signals are definite:
 /// a Turnstile face that is not "success" is proof against a widget pass, but only a hint
@@ -82,12 +89,75 @@ pub(crate) struct Claim<'a> {
     pub before: Option<&'a PageBrief>,
     /// The site's own callback ran, so the page may still be changing when the check starts.
     pub callback_ran: bool,
-    /// Neo's own record of a token it applied to this widget, when the gate keeps one (rows 9
-    /// and 11). `Fresh`: the field still holds the token Neo wrote, inside the vendor's token
-    /// life, so a widget face that never passed is no proof against it (the site checks the
-    /// token). `Stale`: gone from its field or too old. `Unknown`, with no record, changes
-    /// nothing.
-    pub token: TokenReading,
+    /// The token Neo applied to this widget, when the gate keeps a record of it (rows 9 and
+    /// 11). The check reads whether the page's response field still holds it and whether it
+    /// outlived the vendor's token life; `None` changes nothing.
+    pub applied: Option<&'a AppliedToken>,
+}
+
+/// A token Neo wrote into the page, as the gate remembers it: the page's fingerprint of it
+/// ([`token_mark`]), never the token itself, and when it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedToken {
+    pub mark: String,
+    pub at: Instant,
+}
+
+/// The page's fingerprint of a response token: its length in UTF-16 units and its FNV-1a hash,
+/// as `length:hash`. The same function runs inside the page ([`TOKEN_MARKS`]), so the check can
+/// tell whether a field still holds Neo's token while the token never leaves the page.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the gate marks the token it applied with this once it keeps the applied-token memory"
+    )
+)]
+pub(crate) fn token_mark(token: &str) -> String {
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut length = 0_usize;
+    for unit in token.encode_utf16() {
+        hash = (hash ^ u32::from(unit)).wrapping_mul(0x0100_0193);
+        length += 1;
+    }
+    format!("{length}:{hash:x}")
+}
+
+/// Lists the fingerprints of the CAPTCHA response fields' values, in the DOM world. Only the
+/// fingerprints leave the page.
+const TOKEN_MARKS: &str = r#"
+const mark = text => {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
+    return text.length + ':' + hash.toString(16);
+};
+return all('input[name="cf-turnstile-response"], textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"]')
+    .map(e => e.value.trim()).filter(Boolean).map(mark);
+"#;
+
+fn token_marks_script() -> String {
+    format!(
+        "function(closedRoots, truncated) {{ /* captcha:verify-token */ {} {TOKEN_MARKS} }}",
+        detect::DOM_QUERIES
+    )
+}
+
+/// Neo's applied token as the page holds it now. Past the vendor's token life it is stale. A
+/// field that no longer holds it is stale too, unless the site's callback ran: a site may take
+/// its token and clear the field on success, which proves nothing either way.
+fn token_reading(applied: &AppliedToken, marks: &[String], claim: &Claim<'_>) -> TokenReading {
+    let life = match claim.kind {
+        Some(CaptchaKind::Turnstile) => TURNSTILE_TOKEN_LIFE,
+        _ => RECAPTCHA_TOKEN_LIFE,
+    };
+    let held = marks.contains(&applied.mark);
+    if applied.at.elapsed() >= life || (!held && !claim.callback_ran) {
+        TokenReading::Stale
+    } else if held {
+        TokenReading::Fresh
+    } else {
+        TokenReading::Unknown
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,8 +401,8 @@ pub(crate) enum TierOne {
 }
 
 /// Tier 1's rules (design-final §2). Pure, so replay tests need no browser. Proof of a block
-/// comes first, even on a new document; a new document is otherwise unsure, since its hints say
-/// nothing about the claim.
+/// comes first, even on a new document. A new document is otherwise unsure until [`standing`]
+/// has read it once more; it then judges that document as the page (`navigated` cleared).
 pub(crate) fn decide(signals: &Signals, basis: Basis) -> TierOne {
     use TierOne::Settled;
     if signals.policy_wall {
@@ -406,13 +476,16 @@ pub(crate) struct Look {
     /// The site's explicit refusal of automated access (read after a flow; the solve read it
     /// already before a terminal answer).
     pub policy_wall: bool,
+    /// Neo's applied token as the page holds it (only when the claim names one).
+    pub token: TokenReading,
     /// A read failed without closing the page.
     pub partial: bool,
 }
 
 /// Is the page really past the check `claim` says it passed? Reads only; never clicks or
 /// writes. `Err` only for a closed page or a cancel; everything else, a navigation included, is
-/// a [`Standing`]. Every wait is bounded by `budget.until` and raced with `cancel`.
+/// a [`Standing`]. Every read and wait ends [`DEADLINE_MARGIN`] before `budget.until` and is
+/// raced with `cancel`, so the check always answers before the solve's deadline does.
 pub(crate) async fn standing<P: CaptchaPage>(
     page: &P,
     claim: &Claim<'_>,
@@ -423,17 +496,22 @@ pub(crate) async fn standing<P: CaptchaPage>(
     if cancel.is_cancelled() {
         return Err(PageError::Cancelled);
     }
+    let until = finish_by(budget.until);
     let settled = if claim.callback_ran {
-        settle(page, budget.until, cancel).await?
+        settle(page, until, cancel).await?
     } else {
         None
     };
-    let mut look = take_look(page, claim, settled, budget.until, cancel).await?;
+    let mut look = take_look(page, claim, settled, until, cancel).await?;
     let mut confirmed = false;
     let mut reread_new_document = false;
     let mut pending_since: Option<Instant> = None;
     loop {
-        let decision = decide(&signals(&look, claim), claim.basis);
+        let mut signals = signals(&look, claim);
+        // A callback that submits or redirects on a pass moves the page on: once the new
+        // document had its moment, it is the page to judge (row 18).
+        signals.navigated &= !reread_new_document;
+        let decision = decide(&signals, claim.basis);
         // A block counts only when a second read agrees, so a puzzle that is closing or a
         // dialog fading out is not one. A running check is given time to finish. A new
         // document is read once more, after it has had a moment to load.
@@ -447,8 +525,8 @@ pub(crate) async fn standing<P: CaptchaPage>(
             }
             TierOne::Settled(_) | TierOne::AskJudge => false,
         };
-        if read_again && pause(POLL, budget.until, cancel).await? {
-            look = take_look(page, claim, None, budget.until, cancel).await?;
+        if read_again && pause(POLL, until, cancel).await? {
+            look = take_look(page, claim, None, until, cancel).await?;
             continue;
         }
         return conclude(decision, look, judge, budget, cancel).await;
@@ -495,17 +573,16 @@ pub(crate) async fn ask_judge(
             ..Verification::deterministic(Standing::Unsure(Unsure::NoEvidence))
         });
     }
-    let Some(judge) = judge.filter(|_| budget.judge_calls_left > 0) else {
+    let left = finish_by(budget.until)
+        .saturating_duration_since(Instant::now())
+        .min(JUDGE_BUDGET);
+    let Some(judge) = judge.filter(|_| budget.judge_calls_left > 0 && !left.is_zero()) else {
         return Ok(Verification {
             brief: Some(brief),
             ..Verification::deterministic(Standing::Unsure(Unsure::JudgeUnavailable))
         });
     };
     budget.judge_calls_left -= 1;
-    let left = budget
-        .until
-        .saturating_duration_since(Instant::now())
-        .min(JUDGE_BUDGET);
     let request = JudgeRequest {
         evidence: text,
         questions: questions(),
@@ -541,6 +618,11 @@ pub(crate) async fn ask_judge(
             ..Verification::deterministic(Standing::Unsure(Unsure::JudgeUnavailable))
         }),
     }
+}
+
+/// The time the check must be done by: the solve's deadline less [`DEADLINE_MARGIN`].
+fn finish_by(until: Instant) -> Instant {
+    until.checked_sub(DEADLINE_MARGIN).unwrap_or(until)
 }
 
 /// Waits `gap` unless that would pass `until`. `Ok(false)`: no time left for another read.
@@ -671,6 +753,20 @@ async fn gather<P: CaptchaPage>(
             turnstile_widget_state(page, &frame).await,
             &mut look.partial,
         )?;
+    }
+    if let Some(applied) = claim.applied
+        && !look.navigated
+    {
+        let marks = page
+            .scan_dom(None, &token_marks_script())
+            .await
+            .and_then(|value| {
+                serde_json::from_value::<Vec<String>>(value)
+                    .map_err(|_| PageError::Browser("invalid token marks".into()))
+            });
+        look.token = kept(marks, &mut look.partial)?.map_or(TokenReading::Unknown, |marks| {
+            token_reading(applied, &marks, claim)
+        });
     }
     if claim.basis == Basis::WallCleared
         && let Some(document) = &look.document
@@ -842,7 +938,7 @@ pub(crate) fn signals(look: &Look, claim: &Claim<'_>) -> Signals {
     let mut signals = Signals {
         policy_wall: look.policy_wall,
         navigated: look.navigated,
-        token: claim.token,
+        token: look.token,
         ..Signals::default()
     };
     if look.partial {
@@ -1052,7 +1148,9 @@ pub(crate) fn questions() -> Vec<JudgeQuestion> {
     ]
 }
 
-/// Tier 2's thresholds (design-final §3). The choice decides; the noul only vetoes.
+/// Tier 2's thresholds (design-final §3). The choice decides; the noul only vetoes. Jev never
+/// decides a policy wall: that answer stops the agent for good, so it is tier 1's alone
+/// (`policy.rs`); Jev's `agent_policy` counts as blocked, under the same noul veto.
 pub(crate) fn read_judge(reply: &JudgeReply) -> Standing {
     let split = Standing::Unsure(Unsure::JudgeSplit);
     let (Some(choice), Some(noul)) = (
@@ -1077,9 +1175,6 @@ pub(crate) fn read_judge(reply: &JudgeReply) -> Standing {
     }
     let blocked: f64 = BLOCKED_OPTIONS.iter().map(|id| p(id)).sum();
     let clear: f64 = CLEAR_OPTIONS.iter().map(|id| p(id)).sum();
-    if p("agent_policy") >= 0.70 {
-        return Standing::PolicyWall;
-    }
     if blocked >= 0.70 && noul >= 0.35 {
         let top = BLOCKED_OPTIONS
             .iter()
@@ -1101,6 +1196,17 @@ pub(crate) fn read_judge(reply: &JudgeReply) -> Standing {
     split
 }
 
+/// A model name fit for an event or a log line: at most 64 characters of `[A-Za-z0-9._-]`. The
+/// name comes from the remote reply, so anything else is dropped.
+fn model_name(model: &str) -> Option<String> {
+    (!model.is_empty()
+        && model.len() <= 64
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+    .then(|| model.to_owned())
+}
+
 fn judge_use(reply: &JudgeReply, ms: u64) -> JudgeUse {
     let choice = reply.answers.get("standing");
     let sum = |ids: &[&str]| {
@@ -1113,7 +1219,7 @@ fn judge_use(reply: &JudgeReply, ms: u64) -> JudgeUse {
     JudgeUse {
         ms,
         input_tokens: reply.input_tokens,
-        model: reply.model.clone(),
+        model: reply.model.as_deref().and_then(model_name),
         choice: choice.and_then(|answer| {
             answer
                 .probabilities
@@ -1163,6 +1269,18 @@ pub(crate) fn next_step(
         message.clone_into(&mut changed.message);
         Next::Return(changed)
     };
+    // A token Neo applied waits for the visitor's submit: the site has not checked it yet, and
+    // `token_applied` is what tells the agent to submit. Only tier 1's proof that the page is
+    // not ready (a puzzle or vendor frame on top, a wall, a stale token, a check still running,
+    // a policy wall) replaces it; an unsure check or a judge's reading rides along in `verify`.
+    let proof = verification.tier == VerifyTier::Deterministic
+        && matches!(
+            verification.standing,
+            Standing::Blocked(_) | Standing::Pending | Standing::PolicyWall
+        );
+    if claim.basis == Basis::TokenInjected && flow.reason == SolveReason::AwaitingSubmit && !proof {
+        return Next::Return(flow.clone());
+    }
     match verification.standing {
         Standing::Clear => Next::Return(flow.clone()),
         Standing::PolicyWall => answer(
@@ -1331,8 +1449,13 @@ mod tests {
                 &[("agent_policy", 0.91), ("denied", 0.08), ("clear", 0.01)],
                 0.83
             )),
-            Standing::PolicyWall,
-            "Amazon's unauthorized-AI-agent wall"
+            Standing::Blocked(BlockCause::Denied),
+            "Amazon's unauthorized-AI-agent wall, read by Jev alone: a hand-off, never a policy wall"
+        );
+        assert_eq!(
+            read_judge(&reply(&[("agent_policy", 0.91), ("clear", 0.09)], 0.20)),
+            Standing::Unsure(Unsure::JudgeSplit),
+            "terms-of-use wording quoted on a usable page: the noul vetoes it"
         );
     }
 
@@ -1525,14 +1648,14 @@ mod tests {
             url: "https://site.test/".into(),
             loader_id: "l1".into(),
         };
-        let claim = Claim {
+        let token = Claim {
             basis: Basis::TokenInjected,
             kind: Some(CaptchaKind::RecaptchaV2),
             challenge: None,
             document: &document,
             before: None,
             callback_ran: true,
-            token: TokenReading::Unknown,
+            applied: None,
         };
         let applied = flow(SolveStatus::TokenApplied, SolveReason::AwaitingSubmit);
         let open = verification(
@@ -1541,10 +1664,10 @@ mod tests {
         );
         let plenty = Duration::from_secs(100);
         assert_eq!(
-            next_step(&applied, &open, &claim, 0, plenty),
+            next_step(&applied, &open, &token, 0, plenty),
             Next::Retry(Remedy::DismissChallenge)
         );
-        let Next::Return(handed) = next_step(&applied, &open, &claim, MAX_RESOLVES, plenty) else {
+        let Next::Return(handed) = next_step(&applied, &open, &token, MAX_RESOLVES, plenty) else {
             panic!("the second round never retries");
         };
         assert_eq!(
@@ -1552,33 +1675,16 @@ mod tests {
             (SolveStatus::NeedsHuman, SolveReason::StillBlocked, 1),
             "the hand-off keeps the money already spent"
         );
-        let Next::Return(jev_only) = next_step(
-            &applied,
-            &verification(Standing::Blocked(BlockCause::SiteRejected), VerifyTier::Jev),
-            &claim,
-            0,
-            plenty,
-        ) else {
-            panic!("a judge-only block never retries");
-        };
-        assert_eq!(jev_only.reason, SolveReason::StillBlocked);
         let stale = verification(
             Standing::Blocked(BlockCause::TokenStale),
             VerifyTier::Deterministic,
         );
-        assert!(
-            matches!(
-                next_step(&applied, &stale, &claim, 0, Duration::from_secs(20)),
-                Next::Return(_)
-            ),
-            "a paid rerun needs PAID_RETRY_MIN_LEFT"
-        );
+        let Next::Return(late) = next_step(&applied, &stale, &token, 0, Duration::from_secs(20))
+        else {
+            panic!("a paid rerun needs PAID_RETRY_MIN_LEFT");
+        };
+        assert_eq!(late.reason, SolveReason::StillBlocked);
         for (standing, status, reason) in [
-            (
-                Standing::Unsure(Unsure::JudgeUnavailable),
-                SolveStatus::Failed,
-                SolveReason::AcceptanceUnconfirmed,
-            ),
             (
                 Standing::Pending,
                 SolveStatus::Failed,
@@ -1593,27 +1699,73 @@ mod tests {
             let Next::Return(answer) = next_step(
                 &applied,
                 &verification(standing, VerifyTier::Deterministic),
-                &claim,
+                &token,
                 0,
                 plenty,
             ) else {
                 panic!("{standing:?} never retries");
             };
+            assert_eq!(
+                (answer.status, answer.reason),
+                (status, reason),
+                "tier 1's proof replaces even an unsubmitted token"
+            );
+        }
+        for (standing, tier) in [
+            (
+                Standing::Unsure(Unsure::JudgeUnavailable),
+                VerifyTier::Deterministic,
+            ),
+            (Standing::Blocked(BlockCause::SiteRejected), VerifyTier::Jev),
+            (Standing::Pending, VerifyTier::Jev),
+            (Standing::Clear, VerifyTier::Jev),
+        ] {
+            assert_eq!(
+                next_step(&applied, &verification(standing, tier), &token, 0, plenty),
+                Next::Return(applied.clone()),
+                "{standing:?} ({tier:?}): the form is not submitted yet, so the agent still submits"
+            );
+        }
+
+        let checkbox = Claim {
+            basis: Basis::WidgetPassed,
+            ..token
+        };
+        let passed = flow(SolveStatus::Solved, SolveReason::CheckboxPassed);
+        for (standing, tier, status, reason) in [
+            (
+                Standing::Unsure(Unsure::JudgeUnavailable),
+                VerifyTier::Deterministic,
+                SolveStatus::Failed,
+                SolveReason::AcceptanceUnconfirmed,
+            ),
+            (
+                Standing::Blocked(BlockCause::SiteRejected),
+                VerifyTier::Jev,
+                SolveStatus::NeedsHuman,
+                SolveReason::StillBlocked,
+            ),
+        ] {
+            let Next::Return(answer) =
+                next_step(&passed, &verification(standing, tier), &checkbox, 0, plenty)
+            else {
+                panic!("{standing:?} never retries");
+            };
             assert_eq!((answer.status, answer.reason), (status, reason));
             assert!(
                 !answer.status.claims_success(),
-                "an unconfirmed page is never reported as solved"
+                "an unconfirmed pass is never reported as solved"
             );
         }
         assert_eq!(
             next_step(
-                &applied,
+                &passed,
                 &verification(Standing::Clear, VerifyTier::Jev),
-                &claim,
+                &checkbox,
                 0,
                 plenty
             ),
-            Next::Return(applied.clone())
+            Next::Return(passed.clone())
         );
     }
 
@@ -1696,7 +1848,7 @@ mod tests {
             document,
             before: None,
             callback_ran: false,
-            token: TokenReading::Unknown,
+            applied: None,
         }
     }
 
@@ -2042,6 +2194,7 @@ mod tests {
         probes: Mutex<VecDeque<Result<Value, PageError>>>,
         documents: Mutex<VecDeque<DocumentId>>,
         views: Mutex<VecDeque<Value>>,
+        marks: Mutex<VecDeque<Value>>,
         probe_reads: AtomicU32,
     }
 
@@ -2095,6 +2248,9 @@ mod tests {
             }
             if function.contains("captcha:turnstile-state") {
                 return Ok(next(&self.views).unwrap_or(Value::Null));
+            }
+            if function.contains("captcha:verify-token") {
+                return Ok(next(&self.marks).unwrap_or(Value::Null));
             }
             if function.contains("captcha:dom") && frame.is_none() {
                 return Ok(
@@ -2215,17 +2371,46 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_a_new_document_is_read_once_more_then_unsure() -> anyhow::Result<()> {
+    async fn tests_that_a_new_document_is_read_once_more_then_judged() -> anyhow::Result<()> {
         let document = page_document();
         let claim = claim_on(Basis::TokenInjected, None, &document);
-        let page = ScriptedPage::probing(vec![Ok(clean_probe())]);
-        *page
-            .documents
-            .lock()
-            .map_err(|error| anyhow::anyhow!("{error}"))? = [other_document()].into();
-        let verified = check(&page, &claim, None).await?;
-        assert_eq!(verified.standing, Standing::Unsure(Unsure::Navigated));
-        assert_eq!(page.reads(), 2, "one re-read on the new document");
+        let moved = |probes: Vec<Result<Value, PageError>>| -> anyhow::Result<ScriptedPage> {
+            let page = ScriptedPage::probing(probes);
+            *page
+                .documents
+                .lock()
+                .map_err(|error| anyhow::anyhow!("{error}"))? = [other_document()].into();
+            Ok(page)
+        };
+        let results = moved(vec![Ok(clean_probe())])?;
+        assert_eq!(
+            check(&results, &claim, None).await?.standing,
+            Standing::Clear,
+            "a callback that redirects on a pass lands on a page nothing covers"
+        );
+        assert_eq!(results.reads(), 2, "one re-read on the new document");
+        let failure = moved(vec![Ok(json!({"complete": true,
+            "alerts": [["There was an issue verifying your browser. Please try again."]]}))])?;
+        assert_eq!(
+            check(&failure, &claim, None).await?.standing,
+            Standing::Unsure(Unsure::JudgeUnavailable),
+            "the new document's hints go to tier 2 like any page's"
+        );
+        let wall = moved(vec![Ok(widget_on_top("datadome", "puzzle"))])?;
+        assert_eq!(
+            check(&wall, &claim, None).await?.standing,
+            Standing::Blocked(BlockCause::UnsupportedWall)
+        );
+        let mut short = budget();
+        short.until = Instant::now() + POLL;
+        let rushed = moved(vec![Ok(clean_probe())])?;
+        assert_eq!(
+            standing(&rushed, &claim, None, &mut short, &CancellationToken::new())
+                .await?
+                .standing,
+            Standing::Unsure(Unsure::Navigated),
+            "with no time to read the new document again, the check cannot tell"
+        );
         Ok(())
     }
 
@@ -2385,5 +2570,150 @@ mod tests {
             "the rescan no longer finds the widget, and nothing else is in the way"
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_the_token_mark_matches_the_pages() {
+        assert_eq!(token_mark(""), "0:811c9dc5");
+        assert_eq!(token_mark("a"), "1:e40c292c");
+        assert_eq!(token_mark("foobar"), "6:bf9cf968");
+        assert!(
+            token_marks_script().contains("0x811c9dc5") && TOKEN_MARKS.contains("0x01000193"),
+            "the page computes the same FNV-1a"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_neos_applied_token_is_read_from_its_field() -> anyhow::Result<()> {
+        let document = page_document();
+        let routed = widget(CaptchaKind::RecaptchaV2, ChallengeState::Active);
+        let applied = AppliedToken {
+            mark: token_mark("03AFcWeA-the-token"),
+            at: Instant::now(),
+        };
+        let mut claim = claim_on(Basis::TokenInjected, Some(&routed), &document);
+        claim.applied = Some(&applied);
+        let reading = |marks: &[&str], claim: &Claim<'_>| {
+            let marks: Vec<String> = marks.iter().map(|mark| (*mark).to_owned()).collect();
+            token_reading(&applied, &marks, claim)
+        };
+        assert_eq!(reading(&[&applied.mark], &claim), TokenReading::Fresh);
+        assert_eq!(
+            reading(&["9:0"], &claim),
+            TokenReading::Stale,
+            "gone from its field with no callback to take it"
+        );
+        claim.callback_ran = true;
+        assert_eq!(
+            reading(&[], &claim),
+            TokenReading::Unknown,
+            "the site's callback may have taken it on success"
+        );
+        claim.callback_ran = false;
+        let page = ScriptedPage::probing(vec![Ok(clean_probe())]);
+        *page
+            .marks
+            .lock()
+            .map_err(|error| anyhow::anyhow!("{error}"))? = [json!([])].into();
+        assert_eq!(
+            check(&page, &claim, None).await?.standing,
+            Standing::Blocked(BlockCause::TokenStale),
+            "row 9: Neo's token is gone from its field"
+        );
+        tokio::time::advance(RECAPTCHA_TOKEN_LIFE).await;
+        assert_eq!(
+            reading(&[&applied.mark], &claim),
+            TokenReading::Stale,
+            "row 9: older than the vendor's token life"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_check_answers_before_the_deadline_by_itself() -> anyhow::Result<()> {
+        let document = page_document();
+        let claim = claim_on(Basis::NothingFound, None, &document);
+        let stuck = ScriptedPage::probing(vec![Ok(widget_on_top("datadome", "checking"))]);
+        let started = Instant::now();
+        let mut near = budget();
+        near.until = started + Duration::from_secs(3);
+        assert_eq!(
+            standing(&stuck, &claim, None, &mut near, &CancellationToken::new())
+                .await?
+                .standing,
+            Standing::Pending
+        );
+        assert!(
+            started.elapsed() <= Duration::from_secs(3) - DEADLINE_MARGIN,
+            "the pending wait stops short of the solve's deadline"
+        );
+        let cookie = ScriptedPage::probing(vec![Ok(json!({"complete": true, "site": "site.test",
+            "layer": {"dialog": true, "share": 1.0, "text": ["We use cookies to make this site work for you."]},
+            "buttons": ["Accept", "Reject"]}))]);
+        let judge = FixedJudge(
+            Ok(reply(&[("other_overlay", 1.0)], 0.1)),
+            Duration::from_millis(10),
+        );
+        let mut spent = budget();
+        spent.until = Instant::now() + DEADLINE_MARGIN;
+        let verified = standing(
+            &cookie,
+            &claim,
+            Some(&judge),
+            &mut spent,
+            &CancellationToken::new(),
+        )
+        .await?;
+        assert_eq!(
+            (verified.standing, spent.judge_calls_left),
+            (Standing::Unsure(Unsure::JudgeUnavailable), MAX_JUDGE_CALLS),
+            "no time left: no judge call is spent on an answer that would come too late"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_the_turnstile_face_is_read_where_the_rescan_found_the_widget() {
+        let document = page_document();
+        let routed = widget(CaptchaKind::Turnstile, ChallengeState::Active);
+        let claim = claim_on(Basis::WidgetPassed, Some(&routed), &document);
+        let mut redrawn = widget(CaptchaKind::Turnstile, ChallengeState::Passed);
+        redrawn.frame = Some(FrameRef {
+            frame_id: "w2".into(),
+            url: "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile/if/new"
+                .into(),
+            rect: None,
+        });
+        let look = Look {
+            rescan: Some(rescan(vec![redrawn])),
+            ..Look::default()
+        };
+        assert_eq!(
+            turnstile_frame(&look, &claim).map(|frame| frame.frame_id),
+            Some("w2".to_owned()),
+            "a reset redraws the widget in a new frame"
+        );
+        let gone = Look {
+            rescan: Some(rescan(Vec::new())),
+            ..Look::default()
+        };
+        assert_eq!(turnstile_frame(&gone, &claim), None);
+        assert_eq!(
+            turnstile_frame(&Look::default(), &claim).map(|frame| frame.frame_id),
+            Some("w1".to_owned()),
+            "a terminal answer's own scan is moments old"
+        );
+    }
+
+    #[test]
+    fn tests_that_only_a_plain_model_name_reaches_events() {
+        assert_eq!(model_name("jev-1.14.0").as_deref(), Some("jev-1.14.0"));
+        assert_eq!(model_name("jev latest"), None);
+        assert_eq!(model_name("<script>"), None);
+        assert_eq!(model_name(&"x".repeat(65)), None);
+        assert_eq!(model_name(""), None);
+        let mut odd = reply(&[("clear", 1.0)], 0.0);
+        odd.model = Some("jev\n\u{1b}[31m".into());
+        assert_eq!(judge_use(&odd, 1).model, None);
     }
 }
