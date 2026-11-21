@@ -2028,6 +2028,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiError"];
                 };
             };
+            /** @description The sign-in store could not be read. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             /** @description The install id is unreadable, so no sign-in can be stored. */
             503: {
                 headers: {
@@ -2070,6 +2079,15 @@ export interface operations {
             };
             /** @description The request did not come from the extension on this machine. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description The sign-in could not be removed from the store. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
