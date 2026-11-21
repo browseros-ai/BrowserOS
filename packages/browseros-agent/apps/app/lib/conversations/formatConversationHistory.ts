@@ -10,12 +10,20 @@ export interface ConversationMessage {
 
 export function formatConversationHistory(
   messages: UIMessage[],
-): ConversationMessage[] {
-  if (messages.length === 0) return []
+  userMessageId: string | undefined,
+): ConversationMessage[] | undefined {
+  // Rust appends the current user message itself, so replay ends before its ID.
+  const currentIndex = messages.findIndex(
+    (msg) => msg.role === 'user' && msg.id === userMessageId,
+  )
+  if (currentIndex <= 0) return undefined
 
-  const recentMessages = messages.slice(-MAX_MESSAGES)
+  const recentMessages = messages.slice(
+    Math.max(0, currentIndex - MAX_MESSAGES),
+    currentIndex,
+  )
 
-  return recentMessages
+  const history = recentMessages
     .map((msg) => {
       if (!msg.parts?.length) return null
       const role: 'user' | 'assistant' =
@@ -35,4 +43,6 @@ export function formatConversationHistory(
       return { role, content }
     })
     .filter((msg): msg is ConversationMessage => msg !== null)
+
+  return history.length ? history : undefined
 }
