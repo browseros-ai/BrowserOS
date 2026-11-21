@@ -54,12 +54,8 @@ const addresses = [...new Set([
     ...(scope === document ? performance.getEntriesByType('resource').map(e => e.name) : [])
 ])].filter(vendorHost);
 const add = (e, kind, state, list = widgets) => {
-    const field = ({turnstile:'input[name="cf-turnstile-response"]', hcaptcha:'textarea[name="h-captcha-response"]',
-        geetest:'[name="geetest_validate"], [name="geetest_seccode"], [name="captcha_output"]',
-        aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
-    const response = kind === 'arkose' || kind === 'perimeterx' ? null : e && (e.matches(field) ? e : all(field, e)[0]);
     const a = name => e?.getAttribute('data-' + name) || null;
-    const w = {kind, inferred: !e, state: response?.value.trim() ? 'passed' : state, invisible: a('size') === 'invisible', enterprise: false,
+    const w = {kind, inferred: !e, state, invisible: a('size') === 'invisible', enterprise: false,
         sitekey: a('sitekey') || a('pkey') || a('captcha-id') || a('gt') || a('api-key') || e?.getAttribute('apiKey') || null,
         recaptchaS: a('s'), action: a('action'), cdata: a('cdata'), callback: a('callback'), frameUrls: []};
     list.push(w);
@@ -356,7 +352,6 @@ impl Widget {
             [self.challenge.state, other.challenge.state]
                 .into_iter()
                 .max_by_key(|state| match state {
-                    ChallengeState::Passed => 3,
                     ChallengeState::Active => 2,
                     ChallengeState::Unknown => 1,
                     ChallengeState::WidgetOnly => 0,
@@ -732,13 +727,13 @@ async fn scan(
             w.state = ChallengeState::WidgetOnly;
         } else if kind == CaptchaKind::RecaptchaV2 {
             if let Some(probe) = probe {
+                // Even a checked anchor stays Active: detection identifies widgets rather than
+                // judging whether a prior token was accepted, so the flow handles fresh solving.
                 w.state = if probe.expired {
                     ChallengeState::Active
-                } else if probe.checked == Some(true) || w.state == ChallengeState::Passed {
-                    ChallengeState::Passed
                 } else if w.invisible {
                     ChallengeState::WidgetOnly
-                } else if probe.checked == Some(false) {
+                } else if probe.checked.is_some() {
                     ChallengeState::Active
                 } else {
                     ChallengeState::Unknown
@@ -746,13 +741,12 @@ async fn scan(
             }
         } else if kind == CaptchaKind::Hcaptcha && w.state == ChallengeState::WidgetOnly {
             w.state = ChallengeState::Unknown;
-        } else if kind == CaptchaKind::Turnstile && w.state != ChallengeState::Passed {
+        } else if kind == CaptchaKind::Turnstile {
             w.state = ChallengeState::Active;
         } else if matches!(
             kind,
             CaptchaKind::Geetest | CaptchaKind::AwsWaf | CaptchaKind::Arkose
-        ) && w.state != ChallengeState::Passed
-        {
+        ) {
             w.state = if owner.is_some_and(|v| v.visible)
                 || frame.rect.is_some_and(|r| r.width > 0.0 && r.height > 0.0)
             {
@@ -919,8 +913,7 @@ fn fold_vendor_widgets(
                 {
                     w.kind = kind;
                 }
-                if w.state != ChallengeState::Passed
-                    && w.challenge_frame.is_none()
+                if w.challenge_frame.is_none()
                     && (outer
                         .rect
                         .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
@@ -1481,7 +1474,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_child_candidates_need_that_childs_gate() -> Result<(), PageError> {
         let host = frame("host", "https://fixture.test/child");
-        let mut candidate = widget("aws_waf", "passed");
+        let mut candidate = widget("aws_waf", "active");
         candidate["candidate"] = json!(true);
         for (gate, found, complete) in [
             (
@@ -1511,7 +1504,7 @@ mod tests {
             if found {
                 let gate = &result.challenges[0];
                 assert_eq!(gate.kind, CaptchaKind::AwsWaf);
-                assert_eq!(gate.state, ChallengeState::Passed);
+                assert_eq!(gate.state, ChallengeState::Active);
                 assert_eq!(gate.sitekey.as_deref(), Some("child-key"));
                 assert_eq!(gate.host_frame, Some(host.clone()));
             }
@@ -1548,9 +1541,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_a_passed_widget_keeps_a_frame_reported_under_another_url()
+    async fn tests_that_a_turnstile_widget_keeps_a_frame_reported_under_another_url()
     -> Result<(), PageError> {
-        let mut info = widget("turnstile", "passed");
+        let mut info = widget("turnstile", "unknown");
         info["frameUrls"] = json!([
             "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/f/av0/rch/a1/1x00000000000000000000AA/auto/fbE/new/normal"
         ]);
@@ -1562,7 +1555,7 @@ mod tests {
         let result = scan(&page).await?;
         assert!(result.complete);
         assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
-        assert_eq!(result.challenges[0].state, ChallengeState::Passed);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
         assert_eq!(
             result.challenges[0]
                 .frame
@@ -1980,15 +1973,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_checked_and_token_widgets_are_passed() -> Result<(), PageError> {
-        let mut page = FakePage::recaptcha(true);
-        page.main = Mutex::new(VecDeque::from([probe(json!([widget(
-            "recaptcha_v2",
-            "passed"
-        )]))]));
+    async fn tests_that_checked_recaptcha_anchor_is_active() -> Result<(), PageError> {
+        let page = FakePage::recaptcha(true);
         assert_eq!(
             scan(&page).await?.challenges[0].state,
-            ChallengeState::Passed
+            ChallengeState::Active
         );
         Ok(())
     }
@@ -2044,15 +2033,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_a_closed_shadow_turnstile_token_is_passed() -> Result<(), PageError> {
-        let mut page = FakePage::new(json!([widget("turnstile", "passed")]));
+    async fn tests_that_a_closed_shadow_turnstile_with_frame_is_active() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([widget("turnstile", "unknown")]));
         page.frames.push(frame(
             "cf",
             "https://challenges.cloudflare.com/turnstile?sitekey=key",
         ));
         let result = scan(&page).await?;
         assert_eq!(result.challenges.len(), 1);
-        assert_eq!(result.challenges[0].state, ChallengeState::Passed);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
         assert_eq!(
             result.challenges[0]
                 .frame
@@ -2251,7 +2240,11 @@ mod tests {
             "second",
             "https://www.google.com/recaptcha/api2/anchor?k=key&cb=second",
         ));
-        let mut first = widget("recaptcha_v2", "passed");
+        page.frame_results.insert(
+            "anchor".into(),
+            json!({"widgets":[], "frames":[], "checked":true, "expired":false, "complete":true}),
+        );
+        let mut first = widget("recaptcha_v2", "unknown");
         first["sitekey"] = json!("key");
         first["frameUrl"] = json!(page.frames[0].url);
         let mut second = widget("recaptcha_v2", "unknown");
@@ -2260,8 +2253,22 @@ mod tests {
         page.main = Mutex::new(VecDeque::from([probe(json!([first, second]))]));
         let result = scan(&page).await?;
         assert_eq!(result.challenges.len(), 2);
-        assert_eq!(result.challenges[0].state, ChallengeState::Passed);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
         assert_eq!(result.challenges[1].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("anchor")
+        );
+        assert_eq!(
+            result.challenges[1]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("second")
+        );
         Ok(())
     }
 
@@ -2459,7 +2466,7 @@ mod tests {
             ),
             (
                 "turnstile-pass.html",
-                Some((CaptchaKind::Turnstile, ChallengeState::Passed)),
+                Some((CaptchaKind::Turnstile, ChallengeState::Active)),
             ),
             (
                 "turnstile-cf-marker.html",
@@ -2524,10 +2531,19 @@ mod tests {
                 page.click_at(x, y).await?;
                 let deadline = Instant::now() + Duration::from_secs(20);
                 loop {
+                    let checked = page
+                        .eval_in_frame(
+                            frame,
+                            "document.querySelector('#recaptcha-anchor')?.getAttribute('aria-checked') === 'true'",
+                        )
+                        .await
+                        .ok()
+                        == Some(json!(true));
                     let after = detect(&page, Duration::from_secs(2)).await?;
-                    if after.complete
+                    if checked
+                        && after.complete
                         && after.challenges.len() == 1
-                        && after.challenges[0].state == ChallengeState::Passed
+                        && after.challenges[0].state == ChallengeState::Active
                     {
                         assert_eq!(before.document, after.document);
                         results.push(json!({"fixture":route,"after":after}));
@@ -2924,7 +2940,7 @@ window.onTs = function() {{
 
     #[tokio::test]
     #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
-    async fn tests_that_live_response_tokens_belong_to_the_selected_widget() -> anyhow::Result<()> {
+    async fn tests_that_live_filled_response_tokens_keep_widgets_active() -> anyhow::Result<()> {
         for (attribute, field, kind) in [
             (
                 "class=\"geetest_widget\"",
@@ -2950,11 +2966,7 @@ window.onTs = function() {{
                 assert_eq!(result.challenges[0].kind, kind);
                 assert_eq!(
                     result.challenges[0].state,
-                    if inside {
-                        ChallengeState::Passed
-                    } else {
-                        ChallengeState::Active
-                    },
+                    ChallengeState::Active,
                     "{kind:?}, inside={inside}"
                 );
             }
@@ -2978,5 +2990,559 @@ window.onTs = function() {{
             assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
         }
         Ok(())
+    }
+
+    fn eval_dom_scan(
+        dom_setup: &str,
+        vendor: Option<&Vendor>,
+        url: &str,
+        is_top: bool,
+    ) -> anyhow::Result<Value> {
+        let script = dom_script(vendor);
+        let url_json = serde_json::to_string(url)?;
+        let harness = format!(
+            r#"
+const matchOne = (node, sel) => {{
+    if (sel === '*') return true;
+    const parts = sel.match(/\[[^\]]+\]|#[a-zA-Z0-9_-]+|\.[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+/g) || [];
+    if (!parts.length) return false;
+    for (const p of parts) {{
+        if (p[0] === '#') {{ if (node.id !== p.slice(1)) return false; }}
+        else if (p[0] === '.') {{ if (!node.classList.contains(p.slice(1))) return false; }}
+        else if (p[0] === '[') {{
+            const m = /^\[([a-zA-Z0-9_-]+)(?:(\*?=)"([^"]*)")?\]$/.exec(p);
+            if (!m) return false;
+            const v = node.getAttribute(m[1]);
+            if (v === null) return false;
+            if (m[2] === '=' && v !== m[3]) return false;
+            if (m[2] === '*=' && !v.includes(m[3])) return false;
+        }} else if (node.tag !== p.toLowerCase()) return false;
+    }}
+    return true;
+}};
+const walk = (nodes, out = []) => {{
+    for (const n of nodes) {{ out.push(n); walk(n.children, out); }}
+    return out;
+}};
+const roots = [];
+const document = {{
+    title: '',
+    querySelectorAll: sel => walk(roots).filter(node => node.matches(sel)),
+}};
+const el = (tag, attrs = {{}}, children = [], opts = {{}}) => {{
+    const dataset = {{}};
+    for (const [k, v] of Object.entries(attrs)) {{
+        if (k.startsWith('data-')) {{
+            dataset[k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = v;
+        }}
+    }}
+    const classes = (attrs.class || '').split(/\s+/).filter(Boolean);
+    const node = {{
+        tag: tag.toLowerCase(),
+        attrs,
+        children,
+        parentElement: null,
+        shadowRoot: null,
+        isConnected: true,
+        id: attrs.id || '',
+        src: attrs.src || '',
+        value: attrs.value || '',
+        dataset,
+        classList: {{ contains: c => classes.includes(c) }},
+        getAttribute: name => Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null,
+        getRootNode: () => document,
+        getBoundingClientRect: () => opts.hidden
+            ? {{ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }}
+            : {{ x: 10, y: 10, top: 10, left: 10, right: 310, bottom: 88, width: 300, height: 78 }},
+        matches: sel => sel.split(',').some(part => matchOne(node, part.trim())),
+        querySelectorAll: sel => walk(node.children).filter(child => child.matches(sel)),
+        querySelector: sel => walk(node.children).find(child => child.matches(sel)) || null,
+        _style: opts.hidden
+            ? {{ display: 'none', visibility: 'hidden', opacity: '0' }}
+            : {{ display: 'block', visibility: 'visible', opacity: '1' }},
+    }};
+    for (const child of children) child.parentElement = node;
+    return node;
+}};
+globalThis.document = document;
+globalThis.window = {{}};
+globalThis.window.top = {is_top} ? globalThis.window : {{}};
+const parsedUrl = new URL({url_json});
+globalThis.location = {{ href: parsedUrl.href, origin: parsedUrl.origin, pathname: parsedUrl.pathname }};
+Object.defineProperty(globalThis, 'performance', {{ value: {{ getEntriesByType: () => [] }} }});
+globalThis.innerWidth = 1280;
+globalThis.innerHeight = 800;
+globalThis.getComputedStyle = node => node._style;
+{dom_setup}
+const scan = ({script});
+console.log(JSON.stringify(scan([], false)));
+"#
+        );
+        let output = std::process::Command::new("node")
+            .args(["--input-type=module", "-e"])
+            .arg(harness)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "node DOM scan failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(serde_json::from_slice(&output.stdout)?)
+    }
+
+    #[tokio::test]
+    async fn tests_that_visible_turnstile_with_filled_response_token_is_active()
+    -> anyhow::Result<()> {
+        let vendor = Vendor {
+            complete: true,
+            ..Vendor::default()
+        };
+        let cases = [
+            (
+                "declarative",
+                r#"roots.push(el('div', {class: 'cf-turnstile', 'data-sitekey': '1x00000000000000000000AA'}, [
+                    el('input', {name: 'cf-turnstile-response', value: 'stale-turnstile-token'})
+                ]));"#,
+            ),
+            (
+                "explicit",
+                r#"roots.push(el('div', {}, [
+                    el('input', {name: 'cf-turnstile-response', value: 'stale-turnstile-token'})
+                ]));"#,
+            ),
+        ];
+        for (label, dom) in cases {
+            let main_probe = eval_dom_scan(dom, Some(&vendor), "https://fixture.test/", true)?;
+            let mut page = FakePage::new(json!([]));
+            page.main = Mutex::new(VecDeque::from([main_probe]));
+            page.frames.push(frame(
+                "cf",
+                "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/1x00000000000000000000AA/light/normal",
+            ));
+            let result = scan(&page).await?;
+            assert!(result.complete, "{label}");
+            assert_eq!(
+                result.challenges.len(),
+                1,
+                "{label}: {:?}",
+                result.challenges
+            );
+            assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile, "{label}");
+            assert_eq!(
+                result.challenges[0].state,
+                ChallengeState::Active,
+                "{label}"
+            );
+            assert_eq!(
+                result.challenges[0]
+                    .frame
+                    .as_ref()
+                    .map(|f| f.frame_id.as_str()),
+                Some("cf"),
+                "{label}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_checked_recaptcha_v2_with_filled_response_token_is_active()
+    -> anyhow::Result<()> {
+        let vendor = Vendor {
+            complete: true,
+            ..Vendor::default()
+        };
+        let anchor_url = "https://www.google.com/recaptcha/api2/anchor?k=key";
+        let anchor_probe = eval_dom_scan(
+            r#"roots.push(el('span', {id: 'recaptcha-anchor', 'aria-checked': 'true'}));"#,
+            None,
+            anchor_url,
+            false,
+        )?;
+        assert_eq!(anchor_probe["checked"], json!(true));
+        assert_eq!(anchor_probe["expired"], json!(false));
+
+        for (label, dom) in [
+            (
+                "declarative",
+                r#"roots.push(el('div', {class: 'g-recaptcha', 'data-sitekey': 'key'}, [
+                    el('textarea', {name: 'g-recaptcha-response', value: 'stale-recaptcha-token'})
+                ]));"#,
+            ),
+            (
+                "explicit",
+                r#"roots.push(el('div', {}, [
+                    el('textarea', {name: 'g-recaptcha-response', value: 'stale-recaptcha-token'})
+                ]));"#,
+            ),
+        ] {
+            let main_probe = eval_dom_scan(dom, Some(&vendor), "https://fixture.test/", true)?;
+            let mut page = FakePage::new(json!([]));
+            page.main = Mutex::new(VecDeque::from([main_probe]));
+            page.frames.push(frame("anchor", anchor_url));
+            page.frame_result = Ok(anchor_probe.clone());
+            let result = scan(&page).await?;
+            assert!(result.complete, "{label}");
+            assert_eq!(
+                result.challenges.len(),
+                1,
+                "{label}: {:?}",
+                result.challenges
+            );
+            assert_eq!(
+                result.challenges[0].kind,
+                CaptchaKind::RecaptchaV2,
+                "{label}"
+            );
+            assert_eq!(
+                result.challenges[0].state,
+                ChallengeState::Active,
+                "{label}"
+            );
+            assert_eq!(
+                result.challenges[0]
+                    .frame
+                    .as_ref()
+                    .map(|f| f.frame_id.as_str()),
+                Some("anchor"),
+                "{label}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_visible_geetest_and_aws_waf_with_filled_response_fields_are_active()
+    -> anyhow::Result<()> {
+        let vendor = Vendor {
+            complete: true,
+            ..Vendor::default()
+        };
+        let cases = [
+            (
+                CaptchaKind::Geetest,
+                "https://gcaptcha4.geetest.com/load",
+                r#"roots.push(el('div', {class: 'geetest_widget'}, [
+                    el('input', {name: 'geetest_validate', value: 'old-validate'}),
+                    el('input', {name: 'captcha_output', value: 'old-output'})
+                ]));"#,
+            ),
+            (
+                CaptchaKind::AwsWaf,
+                "https://captcha.awswaf.com/widget",
+                r#"roots.push(el('div', {id: 'awswaf-widget'}, [
+                    el('input', {name: 'aws-waf-token', value: 'old-waf-token'}),
+                    el('input', {name: 'captcha_voucher', value: 'old-voucher'})
+                ]));"#,
+            ),
+        ];
+        for (kind, frame_url, dom) in cases {
+            for with_frame in [false, true] {
+                let main_probe = eval_dom_scan(dom, Some(&vendor), "https://fixture.test/", true)?;
+                let mut page = FakePage::new(json!([]));
+                page.main = Mutex::new(VecDeque::from([main_probe]));
+                if with_frame {
+                    page.frames.push(frame("vendor", frame_url));
+                }
+                let result = scan(&page).await?;
+                assert!(result.complete, "{kind:?}, with_frame={with_frame}");
+                assert_eq!(
+                    result.challenges.len(),
+                    1,
+                    "{kind:?}, with_frame={with_frame}: {:?}",
+                    result.challenges
+                );
+                assert_eq!(result.challenges[0].kind, kind);
+                assert_eq!(
+                    result.challenges[0].state,
+                    ChallengeState::Active,
+                    "{kind:?}, with_frame={with_frame}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_passive_script_and_v3_badge_stay_widget_only_while_real_widget_is_selected()
+    -> anyhow::Result<()> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        use browseros_core::PageId;
+        use tokio_util::sync::CancellationToken;
+
+        use crate::{
+            CaptchaSolver, SolveCtx, SolveDriver,
+            config::CaptchaConfig,
+            events::CaptchaEventBus,
+            providers::{CaptchaBackend, ProviderChain},
+            types::{Attempts, FlowResult, SolveMethod, SolveReason, SolveStatus},
+        };
+
+        struct SolverPage<'a>(&'a FakePage);
+        impl CaptchaPage for SolverPage<'_> {
+            async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+                if expression == "navigator.userAgent" {
+                    return Ok(json!("fake-agent"));
+                }
+                self.0.eval_main(expression).await
+            }
+            async fn scan_dom(
+                &self,
+                frame: Option<&FrameRef>,
+                function: &str,
+            ) -> Result<Value, PageError> {
+                self.0.scan_dom(frame, function).await
+            }
+            async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
+                self.0.frames().await
+            }
+            async fn frame_parent_ids(
+                &self,
+            ) -> Result<std::collections::HashMap<String, String>, PageError> {
+                self.0.frame_parent_ids().await
+            }
+            async fn eval_in_frame(
+                &self,
+                frame: &FrameRef,
+                expression: &str,
+            ) -> Result<Value, PageError> {
+                self.0.eval_in_frame(frame, expression).await
+            }
+            async fn eval_in_frame_main(
+                &self,
+                frame: &FrameRef,
+                expression: &str,
+            ) -> Result<Value, PageError> {
+                self.0.eval_in_frame_main(frame, expression).await
+            }
+            async fn document(&self) -> Result<DocumentId, PageError> {
+                self.0.document().await
+            }
+            async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
+                self.0.click_at(x, y).await
+            }
+            async fn screenshot_clip(&self, rect: Rect) -> Result<String, PageError> {
+                self.0.screenshot_clip(rect).await
+            }
+            async fn query_rect_in_frame(
+                &self,
+                frame: &FrameRef,
+                selector: &str,
+            ) -> Result<Option<Rect>, PageError> {
+                self.0.query_rect_in_frame(frame, selector).await
+            }
+        }
+
+        struct RecordingDriver {
+            selected: Mutex<Vec<CaptchaKind>>,
+            solve_calls: AtomicU32,
+        }
+        impl SolveDriver for RecordingDriver {
+            async fn detect<P: CaptchaPage>(&self, page: &P) -> Result<Detection, PageError> {
+                detect(page, Duration::from_secs(2)).await
+            }
+            async fn solve<P: CaptchaPage, B: CaptchaBackend>(
+                &self,
+                _: &SolveCtx<'_, P, B>,
+                challenge: &Challenge,
+            ) -> FlowResult {
+                self.solve_calls.fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut selected) = self.selected.lock() {
+                    selected.push(challenge.kind);
+                }
+                FlowResult {
+                    status: SolveStatus::TokenApplied,
+                    method: SolveMethod::Token,
+                    reason: SolveReason::AwaitingSubmit,
+                    attempts: Attempts {
+                        token: 1,
+                        ..Default::default()
+                    },
+                    paid_tasks: 1,
+                    provider: None,
+                    cost_usd: 0.0,
+                    callback_ran: true,
+                    message: "fresh token applied".into(),
+                }
+            }
+        }
+
+        let vendor = Vendor {
+            complete: true,
+            ..Vendor::default()
+        };
+        let passive_dom = r#"
+roots.push(el('script', {src: 'https://js.hcaptcha.com/1/api.js'}));
+roots.push(el('script', {src: 'https://www.google.com/recaptcha/api.js?render=v3-key'}));
+roots.push(el('div', {class: 'grecaptcha-badge'}));
+"#;
+        let passive_probe =
+            eval_dom_scan(passive_dom, Some(&vendor), "https://fixture.test/", true)?;
+        let passive_page = FakePage::new(json!([]));
+        *passive_page
+            .main
+            .lock()
+            .map_err(|e| anyhow::anyhow!("{e}"))? = VecDeque::from([passive_probe]);
+        let passive_detection = scan(&passive_page).await?;
+        assert!(passive_detection.complete);
+        assert_eq!(passive_detection.challenges.len(), 2);
+        for kind in [CaptchaKind::Hcaptcha, CaptchaKind::RecaptchaV3] {
+            let challenge = passive_detection
+                .challenges
+                .iter()
+                .find(|c| c.kind == kind)
+                .ok_or_else(|| anyhow::anyhow!("missing passive {kind:?}"))?;
+            assert_eq!(challenge.state, ChallengeState::WidgetOnly, "{kind:?}");
+        }
+
+        let service = CaptchaSolver {
+            providers: ProviderChain::new(&CaptchaConfig::default()),
+            reservations: Default::default(),
+            events: CaptchaEventBus::new(),
+            forced_method: None,
+        };
+        let passive_driver = RecordingDriver {
+            selected: Mutex::new(vec![]),
+            solve_calls: AtomicU32::new(0),
+        };
+        let passive_outcome = service
+            .solve_with(
+                &SolverPage(&passive_page),
+                PageId(1),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(2),
+                &passive_driver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(
+            (passive_outcome.status, passive_outcome.reason),
+            (SolveStatus::AlreadyClear, SolveReason::NotBlocking)
+        );
+        assert_eq!(passive_driver.solve_calls.load(Ordering::Relaxed), 0);
+
+        let mixed_dom = format!(
+            "{passive_dom}\nroots.push(el('div', {{class: 'cf-turnstile', 'data-sitekey': '1x00000000000000000000AA'}}, [el('input', {{name: 'cf-turnstile-response', value: 'stale-token'}})]));"
+        );
+        let mixed_probe = eval_dom_scan(&mixed_dom, Some(&vendor), "https://fixture.test/", true)?;
+        let mut mixed_page = FakePage::new(json!([]));
+        mixed_page.main = Mutex::new(VecDeque::from([mixed_probe]));
+        mixed_page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/1x00000000000000000000AA/light/normal",
+        ));
+        let mixed_detection = scan(&mixed_page).await?;
+        assert!(mixed_detection.complete);
+        assert_eq!(
+            mixed_detection
+                .challenges
+                .iter()
+                .find(|c| c.kind == CaptchaKind::Hcaptcha)
+                .map(|c| c.state),
+            Some(ChallengeState::WidgetOnly)
+        );
+        assert_eq!(
+            mixed_detection
+                .challenges
+                .iter()
+                .find(|c| c.kind == CaptchaKind::RecaptchaV3)
+                .map(|c| c.state),
+            Some(ChallengeState::WidgetOnly)
+        );
+        assert_eq!(
+            mixed_detection
+                .challenges
+                .iter()
+                .find(|c| c.kind == CaptchaKind::Turnstile)
+                .map(|c| c.state),
+            Some(ChallengeState::Active)
+        );
+
+        let mixed_driver = RecordingDriver {
+            selected: Mutex::new(vec![]),
+            solve_calls: AtomicU32::new(0),
+        };
+        let mixed_outcome = service
+            .solve_with(
+                &SolverPage(&mixed_page),
+                PageId(2),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(2),
+                &mixed_driver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(mixed_driver.solve_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *mixed_driver
+                .selected
+                .lock()
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            vec![CaptchaKind::Turnstile]
+        );
+        assert_eq!(
+            (
+                mixed_outcome.status,
+                mixed_outcome.reason,
+                mixed_outcome.kind
+            ),
+            (
+                SolveStatus::TokenApplied,
+                SolveReason::AwaitingSubmit,
+                Some(CaptchaKind::Turnstile)
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_widget_merge_ranks_active_over_unknown_over_widget_only() {
+        for (a, b, expected) in [
+            (
+                ChallengeState::Active,
+                ChallengeState::Unknown,
+                ChallengeState::Active,
+            ),
+            (
+                ChallengeState::Unknown,
+                ChallengeState::Active,
+                ChallengeState::Active,
+            ),
+            (
+                ChallengeState::Active,
+                ChallengeState::WidgetOnly,
+                ChallengeState::Active,
+            ),
+            (
+                ChallengeState::WidgetOnly,
+                ChallengeState::Active,
+                ChallengeState::Active,
+            ),
+            (
+                ChallengeState::Unknown,
+                ChallengeState::WidgetOnly,
+                ChallengeState::Unknown,
+            ),
+            (
+                ChallengeState::WidgetOnly,
+                ChallengeState::Unknown,
+                ChallengeState::Unknown,
+            ),
+            (
+                ChallengeState::WidgetOnly,
+                ChallengeState::WidgetOnly,
+                ChallengeState::WidgetOnly,
+            ),
+        ] {
+            let mut left = Widget::new(CaptchaKind::Turnstile);
+            left.challenge.state = a;
+            let mut right = Widget::new(CaptchaKind::Turnstile);
+            right.challenge.state = b;
+            left.merge(right);
+            assert_eq!(left.challenge.state, expected, "{a:?} + {b:?}");
+        }
     }
 }

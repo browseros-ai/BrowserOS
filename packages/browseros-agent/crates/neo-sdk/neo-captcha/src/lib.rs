@@ -376,20 +376,8 @@ impl CaptchaSolver {
                 if detection
                     .challenges
                     .iter()
-                    .all(|challenge| challenge.state == ChallengeState::Passed)
+                    .all(|challenge| challenge.state == ChallengeState::WidgetOnly)
                 {
-                    return terminal(
-                        SolveStatus::AlreadyClear,
-                        SolveReason::AlreadyPassed,
-                        "The CAPTCHA has already passed. Continue the task.",
-                    );
-                }
-                if detection.challenges.iter().all(|challenge| {
-                    matches!(
-                        challenge.state,
-                        ChallengeState::Passed | ChallengeState::WidgetOnly
-                    )
-                }) {
                     return terminal(
                         SolveStatus::AlreadyClear,
                         SolveReason::NotBlocking,
@@ -761,6 +749,7 @@ mod orchestration_tests {
         stall_after: Option<ProviderAnswer>,
         result: Option<FlowResult>,
         expected_forced_method: Option<config::ForcedMethod>,
+        solve_calls: AtomicU32,
     }
     impl FakeDriver {
         fn new(detection: Detection) -> Self {
@@ -769,6 +758,7 @@ mod orchestration_tests {
                 stall_after: None,
                 result: None,
                 expected_forced_method: None,
+                solve_calls: AtomicU32::new(0),
             }
         }
     }
@@ -790,6 +780,7 @@ mod orchestration_tests {
             ctx: &SolveCtx<'_, P, B>,
             challenge: &Challenge,
         ) -> FlowResult {
+            self.solve_calls.fetch_add(1, Ordering::Relaxed);
             assert_eq!(ctx.forced_method, self.expected_forced_method);
             let (method, reason) = match challenge.kind {
                 CaptchaKind::RecaptchaV2 => (SolveMethod::Checkbox, SolveReason::CheckboxPassed),
@@ -1020,11 +1011,12 @@ mod orchestration_tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn tests_that_incomplete_scans_never_claim_the_page_is_clear() -> anyhow::Result<()> {
         for challenges in [
             vec![],
-            vec![(CaptchaKind::RecaptchaV2, ChallengeState::Passed)],
+            vec![(CaptchaKind::RecaptchaV3, ChallengeState::WidgetOnly)],
+            vec![(CaptchaKind::RecaptchaV2, ChallengeState::WidgetOnly)],
         ] {
             let outcome = run(&FakeDriver::new(scan(&challenges, false)), false).await?;
             assert_eq!(
@@ -1159,7 +1151,6 @@ mod orchestration_tests {
                     Some(CaptchaKind::PerimeterX)
                 )
             );
-            assert_eq!(outcome.verdict(), types::Verdict::Unsolved);
             assert_eq!(
                 outcome.message,
                 format!(
@@ -1191,23 +1182,71 @@ mod orchestration_tests {
     }
 
     #[tokio::test]
-    async fn tests_that_passed_and_nonblocking_widgets_are_already_clear() -> anyhow::Result<()> {
-        for (kind, state, reason) in [
-            (
-                CaptchaKind::Hcaptcha,
-                ChallengeState::Passed,
-                SolveReason::AlreadyPassed,
-            ),
-            (
-                CaptchaKind::RecaptchaV3,
-                ChallengeState::WidgetOnly,
-                SolveReason::NotBlocking,
-            ),
+    async fn tests_that_widget_only_challenges_return_not_blocking_and_never_call_the_flow()
+    -> anyhow::Result<()> {
+        for challenges in [
+            vec![(CaptchaKind::Hcaptcha, ChallengeState::WidgetOnly)],
+            vec![(CaptchaKind::RecaptchaV3, ChallengeState::WidgetOnly)],
+            vec![(CaptchaKind::Turnstile, ChallengeState::WidgetOnly)],
+            vec![(CaptchaKind::RecaptchaV2, ChallengeState::WidgetOnly)],
+            vec![
+                (CaptchaKind::Hcaptcha, ChallengeState::WidgetOnly),
+                (CaptchaKind::RecaptchaV3, ChallengeState::WidgetOnly),
+            ],
         ] {
-            let outcome = run(&FakeDriver::new(scan(&[(kind, state)], true)), false).await?;
+            let driver = FakeDriver::new(scan(&challenges, true));
+            let outcome = run(&driver, false).await?;
             assert_eq!(
                 (outcome.status, outcome.reason),
-                (SolveStatus::AlreadyClear, reason)
+                (SolveStatus::AlreadyClear, SolveReason::NotBlocking)
+            );
+            assert_eq!(driver.solve_calls.load(Ordering::Relaxed), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_supported_widget_with_stale_token_calls_solver_and_never_returns_already_passed()
+    -> anyhow::Result<()> {
+        for kind in [CaptchaKind::Turnstile, CaptchaKind::RecaptchaV2] {
+            let driver = FakeDriver {
+                result: Some(FlowResult {
+                    status: SolveStatus::TokenApplied,
+                    method: SolveMethod::Token,
+                    reason: SolveReason::AwaitingSubmit,
+                    attempts: Attempts {
+                        token: 1,
+                        ..Default::default()
+                    },
+                    paid_tasks: 1,
+                    provider: Some(ProviderName::Capsolver),
+                    cost_usd: 0.001,
+                    callback_ran: true,
+                    message: token_applied_message(true),
+                }),
+                ..FakeDriver::new(scan(
+                    &[
+                        (CaptchaKind::Hcaptcha, ChallengeState::WidgetOnly),
+                        (CaptchaKind::RecaptchaV3, ChallengeState::WidgetOnly),
+                        (kind, ChallengeState::Active),
+                    ],
+                    true,
+                ))
+            };
+            let outcome = run(&driver, false).await?;
+            assert_eq!(
+                driver.solve_calls.load(Ordering::Relaxed),
+                1,
+                "{kind:?} must enter its solver flow"
+            );
+            assert_ne!(outcome.reason, SolveReason::AlreadyPassed);
+            assert_eq!(
+                (outcome.status, outcome.reason, outcome.kind),
+                (
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
+                    Some(kind)
+                )
             );
         }
         Ok(())
@@ -1259,16 +1298,12 @@ mod orchestration_tests {
         stale.document = document("old");
         let driver = FakeDriver {
             scans: Mutex::new(VecDeque::from([Ok(stale.clone()), Ok(scan(&[], true))])),
-            stall_after: None,
-            result: None,
-            expected_forced_method: None,
+            ..FakeDriver::new(scan(&[], true))
         };
         assert_eq!(run(&driver, false).await?.reason, SolveReason::NoCaptcha);
         let driver = FakeDriver {
             scans: Mutex::new(VecDeque::from([Ok(stale.clone()), Ok(stale)])),
-            stall_after: None,
-            result: None,
-            expected_forced_method: None,
+            ..FakeDriver::new(scan(&[], true))
         };
         assert_eq!(run(&driver, false).await?.reason, SolveReason::Navigated);
         Ok(())
@@ -1448,25 +1483,26 @@ mod orchestration_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_a_loading_widget_can_become_already_passed() -> anyhow::Result<()> {
+    async fn tests_that_a_loading_widget_can_settle_to_widget_only() -> anyhow::Result<()> {
         let mut driver = FakeDriver::new(scan(
-            &[(CaptchaKind::Turnstile, ChallengeState::Unknown)],
+            &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
             false,
         ));
         driver.scans = Mutex::new(VecDeque::from([
             Ok(scan(
-                &[(CaptchaKind::Turnstile, ChallengeState::Unknown)],
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
                 false,
             )),
             Ok(scan(
-                &[(CaptchaKind::Turnstile, ChallengeState::Passed)],
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::WidgetOnly)],
                 true,
             )),
         ]));
         let outcome = run(&driver, false).await?;
         assert_eq!(outcome.status, SolveStatus::AlreadyClear);
-        assert_eq!(outcome.reason, SolveReason::AlreadyPassed);
+        assert_eq!(outcome.reason, SolveReason::NotBlocking);
         assert_eq!(outcome.attempts, Attempts::default());
+        assert_eq!(driver.solve_calls.load(Ordering::Relaxed), 0);
         Ok(())
     }
 
@@ -1557,7 +1593,7 @@ mod orchestration_tests {
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_readiness_navigation_cancels_before_the_flow() -> anyhow::Result<()> {
-        let mut next = scan(&[(CaptchaKind::RecaptchaV2, ChallengeState::Passed)], true);
+        let mut next = scan(&[(CaptchaKind::RecaptchaV2, ChallengeState::Active)], true);
         next.document = document("navigated");
         let mut driver = FakeDriver::new(scan(
             &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
