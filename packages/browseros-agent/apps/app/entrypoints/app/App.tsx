@@ -5,17 +5,13 @@ import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout
 import { SidebarLayout } from '@/components/layout/SidebarLayout'
 import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
 import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
-import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
 import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
-import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
-import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
 import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
-import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -31,13 +27,9 @@ const OptionsRedirect: FC = () => {
 
   const routeMap: Record<string, string> = {
     ai: '/settings/ai',
-    chat: '/settings/chat',
-    'connect-mcp': '/connect-apps',
-    mcp: '/settings/mcp',
     customization: '/settings/customization',
     search: '/settings/ai',
     'jtbd-agent': '/settings/survey',
-    scheduled: '/scheduled',
   }
 
   const newPath = routeMap[path] || '/settings/ai'
@@ -56,17 +48,12 @@ export const App: FC = () => {
             <Route path="chat" element={<NewTabChat />} />
             <Route path="personalize" element={<Personalize />} />
           </Route>
-
-          <Route path="connect-apps" element={<ConnectMCP />} />
-          <Route path="scheduled" element={<ScheduledTasksPage />} />
         </Route>
 
         <Route element={<SettingsSidebarLayout />}>
           <Route path="settings">
             <Route index element={<Navigate to="/settings/ai" replace />} />
             <Route path="ai" element={<AISettingsPage key="ai" />} />
-            <Route path="chat" element={<LlmHubPage />} />
-            <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
             <Route path="diagnostics" element={<DiagnosticsPage />} />
             <Route
@@ -91,10 +78,6 @@ export const App: FC = () => {
         <Route
           path="/personalize"
           element={<Navigate to="/home/personalize" replace />}
-        />
-        <Route
-          path="/settings/connect-mcp"
-          element={<Navigate to="/connect-apps" replace />}
         />
         <Route path="/audit" element={<Navigate to="/home" replace />} />
         <Route

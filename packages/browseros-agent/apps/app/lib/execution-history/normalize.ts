@@ -5,7 +5,6 @@ import type {
   ExecutionStepState,
 } from './types'
 
-const NUDGE_TOOL_NAMES = new Set(['suggest_schedule', 'suggest_app_connection'])
 const TERMINAL_STEP_STATES = new Set<ExecutionStepState>([
   'output-available',
   'output-error',
@@ -30,13 +29,6 @@ function getToolName(part: ToolLikePart): string {
 
 function isToolPart(part: UIMessage['parts'][number]): part is ToolLikePart {
   return part.type === 'dynamic-tool' || part.type.startsWith('tool-')
-}
-
-function isExecutionToolPart(
-  part: UIMessage['parts'][number],
-): part is ToolLikePart {
-  if (!isToolPart(part)) return false
-  return !NUDGE_TOOL_NAMES.has(getToolName(part))
 }
 
 function getPreviewText(part: ToolLikePart): string {
@@ -141,7 +133,7 @@ export function normalizeExecutionSteps(args: {
 
   const steps = assistantMessage
     ? assistantMessage.parts.flatMap((part, index) => {
-        if (!isExecutionToolPart(part)) return []
+        if (!isToolPart(part)) return []
         const existingStep = previousStepsById.get(part.toolCallId)
         return [createStepRecord(part, index, nowIso, existingStep)]
       })

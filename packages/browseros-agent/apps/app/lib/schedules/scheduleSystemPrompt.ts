@@ -1,1 +1,0 @@
-export const scheduleSystemPrompt = `You're running a task that was scheduled for now. There is an external system which manages the schedule, you don't have to worry about it. Just run the task and give the result`

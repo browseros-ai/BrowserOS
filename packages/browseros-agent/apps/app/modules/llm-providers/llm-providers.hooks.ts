@@ -48,7 +48,7 @@ export interface UseLlmProvidersReturn {
   deleteProvider: (providerId: string) => Promise<void>
 }
 
-export const useProvidersQuery = createQuery<LlmProviderConfig[]>({
+const useProvidersQuery = createQuery<LlmProviderConfig[]>({
   queryKey: ['llm-providers'],
   fetcher: listProviders,
 })

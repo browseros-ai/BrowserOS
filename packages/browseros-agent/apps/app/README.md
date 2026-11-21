@@ -11,7 +11,6 @@ The built-in browser extension that powers BrowserOS's AI interface — new tab 
 - **AI-Powered New Tab**: Custom new tab page with unified search across Google and AI assistants
 - **Side Panel Chat**: Full-featured chat interface for interacting with BrowserOS
 - **Multi-Provider Support**: Connect to various LLM providers (OpenAI, Anthropic, Azure, Bedrock, and more)
-- **MCP Integration**: Model Context Protocol support for extending AI capabilities
 - **Visual Feedback**: Animated glow effect on tabs during AI agent operations
 - **Privacy-First**: Local data handling with configurable provider settings
 
@@ -43,8 +42,6 @@ lib/                       # Shared utilities and hooks
 
 The service worker that manages:
 - Side panel toggling via browser action
-- BrowserOS Core health checks
-- MCP tools fetching
 - LLM provider configuration backup
 - Extension installation triggers (opens onboarding)
 
@@ -80,9 +77,6 @@ Multi-step onboarding flow for new users:
 
 Settings dashboard with multiple sections:
 - **AI Settings**: Configure LLM providers (API keys, models, base URLs)
-- **LLM Hub**: Manage chat-specific provider settings
-- **MCP Settings**: View and manage MCP server connections
-- **Connect MCP**: Add managed or custom MCP servers
 
 ### Glow Content (`glow.content/`)
 

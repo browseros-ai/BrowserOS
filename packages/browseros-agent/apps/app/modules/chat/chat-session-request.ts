@@ -10,7 +10,7 @@ export type LlmChatRequestBodyInput = Parameters<typeof buildChatRequestBody>[0]
 
 export type CommonSidepanelRequestInput = Omit<
   LlmChatRequestBodyInput,
-  'provider' | 'message' | 'isScheduledTask'
+  'provider' | 'message'
 >
 
 export interface BuildSidepanelPreparedSendMessagesRequestInput
@@ -66,7 +66,6 @@ export function buildSidepanelPreparedSendMessagesRequest({
         userWorkingDir: common.userWorkingDir,
         supportsImages: common.supportsImages,
         previousConversation: common.previousConversation,
-        declinedApps: common.declinedApps,
         selectedText: common.selectedText,
         selectedTextSource: common.selectedTextSource,
         attachments: common.attachments?.length

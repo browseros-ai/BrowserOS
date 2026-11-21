@@ -21,16 +21,9 @@ function createAssistantMessage(parts: UIMessage['parts']): UIMessage {
 }
 
 describe('normalizeExecutionSteps', () => {
-  it('filters nudge tools from the execution history', () => {
+  it('records each tool call as a step and skips text parts', () => {
     const message = createAssistantMessage([
       asMessagePart({ type: 'text', text: 'I checked that for you.' }),
-      asMessagePart({
-        type: 'tool-suggest_schedule',
-        toolCallId: 'nudge-1',
-        state: 'output-available',
-        input: { scheduleType: 'daily' },
-        output: { suggestedName: 'Morning briefing' },
-      }),
       asMessagePart({
         type: 'tool-open',
         toolCallId: 'tool-1',
