@@ -15,7 +15,7 @@ let nextId = 1
 function call(
   toolName: string,
   options: {
-    args?: Record<string, unknown> | unknown[]
+    args?: Record<string, unknown> | readonly unknown[]
     title?: string
     url?: string
     meta?: Record<string, unknown>
@@ -341,6 +341,330 @@ describe('calls made inside a run script', () => {
     expect(verbForCall(call('input.click', { args: [3, 'e1'] }))).toBe('click')
     expect(verbForCall(call('nav.goto', { args: [3, 'https://x.y'] }))).toBe(
       'navigate',
+    )
+  })
+})
+
+describe('SDK run audit rows', () => {
+  function sdkRun(
+    dispatchKey = 'run-1',
+    options: Parameters<typeof call>[1] = {},
+  ): ToolDispatchRow {
+    return {
+      ...call('run', {
+        args: { code: '[redacted]' },
+        ...options,
+        meta: { sdkRunId: `sdk-${dispatchKey}`, ...options.meta },
+      }),
+      dispatchKey,
+    }
+  }
+
+  function sdkChild(
+    toolName: string,
+    identity: Pick<ToolDispatchRow, 'parentDispatchId' | 'tabId' | 'pageId'> = {
+      parentDispatchId: 'run-1',
+    },
+  ): ToolDispatchRow {
+    return {
+      ...call(toolName, {
+        args: ['[redacted]'],
+        meta: { cancelled: false, isError: false },
+      }),
+      ...identity,
+    }
+  }
+
+  it('keeps a failed run before its successful children in the normal rail', () => {
+    const run = sdkRun('run-1', { meta: { isError: true } })
+    const child = sdkChild('read', {
+      parentDispatchId: run.dispatchKey,
+      pageId: 2,
+      tabId: 123,
+    })
+    const { steps, hiddenCount } = describeSteps([run, child])
+    expect(hiddenCount).toBe(0)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Something went wrong',
+      'Read the page',
+    ])
+    expect(steps.map((step) => step.isError)).toEqual([true, false])
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [run.dispatchId],
+      [child.dispatchId],
+    ])
+  })
+
+  it('keeps two page openings on different tabs as separate steps', () => {
+    const children = [123, 456].map((tabId) =>
+      sdkChild('pages.newPage', { parentDispatchId: 'run-1', tabId }),
+    )
+    const { steps } = describeSteps([sdkRun(), ...children])
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Opened a new page',
+      'Opened a new page',
+    ])
+    expect(steps.map((step) => step.dispatchIds)).toEqual(
+      children.map((child) => [child.dispatchId]),
+    )
+  })
+
+  it('keeps redacted page openings separate when their tab is not recorded', () => {
+    const children = [sdkChild('pages.newPage'), sdkChild('pages.newPage')]
+    expect(
+      describeSteps([sdkRun(), ...children]).steps.map(
+        (step) => step.dispatchIds,
+      ),
+    ).toEqual(children.map((child) => [child.dispatchId]))
+  })
+
+  it('still folds the same SDK step repeated on one tab in one run', () => {
+    const children = [1, 2].map(() =>
+      sdkChild('input.fill', {
+        parentDispatchId: 'run-1',
+        pageId: 2,
+        tabId: 123,
+      }),
+    )
+    const { steps } = describeSteps([sdkRun(), ...children])
+    expect(steps).toHaveLength(1)
+    expect(steps[0]?.dispatchIds).toEqual(
+      children.map((child) => child.dispatchId),
+    )
+  })
+
+  it('does not fold the same tab step across hidden run parents', () => {
+    const firstRun = sdkRun('run-1')
+    const secondRun = sdkRun('run-2')
+    const first = sdkChild('input.fill', {
+      parentDispatchId: firstRun.dispatchKey,
+      tabId: 123,
+    })
+    const second = sdkChild('input.fill', {
+      parentDispatchId: secondRun.dispatchKey,
+      tabId: 123,
+    })
+    const { steps, hiddenCount } = describeSteps([
+      firstRun,
+      first,
+      secondRun,
+      second,
+    ])
+    expect(hiddenCount).toBe(2)
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [first.dispatchId],
+      [second.dispatchId],
+    ])
+  })
+
+  it('keeps different SDK operations with the same generic sentence separate', () => {
+    const children = ['sdk.operation', 'future.operation'].map((toolName) =>
+      sdkChild(toolName, { parentDispatchId: 'run-1', tabId: 123 }),
+    )
+    expect(
+      describeSteps([sdkRun(), ...children]).steps.map(
+        (step) => step.dispatchIds,
+      ),
+    ).toEqual(children.map((child) => [child.dispatchId]))
+  })
+
+  it.each([
+    ['nav.goto', 'Opened a new page'],
+    ['pages.newPage', 'Opened a new page'],
+    ['nav.back', 'Went back to the page'],
+    ['nav.forward', 'Went forward to the page'],
+    ['nav.reload', 'Reloaded the page'],
+    ['input.click', 'Clicked on the page'],
+    ['input.fill', 'Typed into the page'],
+    ['input.press', 'Pressed a key on the page'],
+    ['input.hover', 'Moved to an item on the page'],
+    ['input.selectOption', 'Picked an option on the page'],
+    ['read', 'Read the page'],
+    ['screenshot', 'Took a picture of the page'],
+    ['pages.close', 'Closed a page it had opened'],
+    ['sdk.operation', 'Worked in the browser'],
+  ])('describes the redacted SDK child %s', (toolName, sentence) => {
+    const child = {
+      ...call(toolName, { args: ['[redacted]'] }),
+      parentDispatchId: 'run-1',
+    }
+    expect(describeStep(child)).toBe(sentence)
+    expect(
+      describeSteps([sdkRun(), child], { includeHidden: true }).steps[1]
+        ?.sentence,
+    ).toBe(sentence)
+  })
+
+  it('tells a run through its redacted unknown child', () => {
+    const run = sdkRun('run-1')
+    const child = {
+      ...call('sdk.operation', { args: ['[redacted]'] }),
+      parentDispatchId: run.dispatchKey,
+    }
+    const { steps, hiddenCount } = describeSteps([run, child])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Worked in the browser',
+    ])
+    expect(steps[0]?.dispatchIds).toEqual([child.dispatchId])
+  })
+
+  it('folds successful parents by identity when their children interleave', () => {
+    const parents = ['run-1', 'run-2'].map((dispatchKey) => sdkRun(dispatchKey))
+    const children = parents.map((parent) =>
+      sdkChild('pages.newPage', { parentDispatchId: parent.dispatchKey }),
+    )
+    const { steps, hiddenCount } = describeSteps([...parents, ...children])
+    expect(hiddenCount).toBe(2)
+    expect(steps.map((step) => step.dispatchIds)).toEqual(
+      children.map((child) => [child.dispatchId]),
+    )
+  })
+
+  it('keeps a standalone run when the following child belongs to another run', () => {
+    const first = sdkRun('run-1')
+    const standalone = sdkRun('run-2')
+    const child = sdkChild('pages.newPage', {
+      parentDispatchId: first.dispatchKey,
+    })
+    const { steps, hiddenCount } = describeSteps([first, standalone, child])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [standalone.dispatchId],
+      [child.dispatchId],
+    ])
+  })
+
+  it('keeps a catalog parent visible when an SDK child follows it', () => {
+    const sdk = sdkRun()
+    const catalog = call('run', FLIGHTS)
+    const child = sdkChild('pages.newPage')
+    const { steps, hiddenCount } = describeSteps([sdk, catalog, child])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      `Worked on ${FLIGHTS.title}`,
+      'Opened a new page',
+    ])
+  })
+
+  it('keeps matching SDK and catalog rows in separate steps', () => {
+    const sdk = sdkRun()
+    const sdkRead = sdkChild('read', { parentDispatchId: 'run-1', tabId: 42 })
+    const catalogRead = { ...call('read'), tabId: 42 }
+    const { steps } = describeSteps([sdk, sdkRead, catalogRead])
+    expect(steps.map((step) => step.dispatchIds)).toEqual([
+      [sdkRead.dispatchId],
+      [catalogRead.dispatchId],
+    ])
+  })
+
+  it('recognizes the marker before the SDK assigns a run ID', () => {
+    const run = sdkRun('run-1', { meta: { sdkRunId: null } })
+    expect(describeStep(run)).toBe('Ran a browser script')
+  })
+
+  it('keeps the stopped SDK parent and the openings on separate tabs', () => {
+    const run = sdkRun('run-1', {
+      meta: {
+        isError: true,
+        cancellationKind: 'cockpit.operator-cancelled',
+      },
+    })
+    const children = [123, 456].map((tabId) =>
+      sdkChild('pages.newPage', { parentDispatchId: run.dispatchKey, tabId }),
+    )
+    const { steps } = describeSteps([run, ...children])
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'You stopped the task',
+      'Opened a new page',
+      'Opened a new page',
+    ])
+  })
+
+  it('describes a redacted run without child rows', () => {
+    const run = sdkRun()
+    expect(describeStep(run)).toBe('Ran a browser script')
+    const { steps, hiddenCount } = describeSteps([run])
+    expect(hiddenCount).toBe(0)
+    expect(steps.map((step) => step.sentence)).toEqual(['Ran a browser script'])
+  })
+
+  it('uses an optional task name without treating the page or agent label as one', () => {
+    expect(
+      describeStep(
+        sdkRun('run-1', {
+          meta: { taskName: '  Find flights  ' },
+          ...FLIGHTS,
+        }),
+      ),
+    ).toBe('Ran a browser script for Find flights')
+    expect(describeStep(sdkRun('run-1', FLIGHTS))).toBe('Ran a browser script')
+    expect(
+      describeStep(sdkRun('run-1', { args: { taskName: 'x'.repeat(100) } })),
+    ).toBe(`Ran a browser script for ${'x'.repeat(59)}…`)
+  })
+
+  it.each(['', '   ', null, 42, { name: 'Find flights' }])(
+    'ignores a task name that is not a nonblank string: %j',
+    (taskName) => {
+      expect(describeStep(sdkRun('run-1', { meta: { taskName } }))).toBe(
+        'Ran a browser script',
+      )
+    },
+  )
+
+  it('still describes a run when its recorded arguments are malformed', () => {
+    expect(describeStep({ ...sdkRun(), argsJson: '{' })).toBe(
+      'Ran a browser script',
+    )
+  })
+
+  it.each([
+    { args: undefined },
+    { args: { code: 'private script' } },
+    { args: [3, { text: 'private text' }] },
+  ])(
+    'uses the same readable fallback for an unfamiliar operation with args %j',
+    ({ args }) => {
+      expect(describeStep(call('future.operation', { args }))).toBe(
+        'Worked in the browser',
+      )
+      expect(
+        describeStep(
+          call('future.operation', { args, title: 'Google Flights' }),
+        ),
+      ).toBe('Worked on Google Flights')
+    },
+  )
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'treats the inherited property name %s as an unfamiliar operation',
+    (toolName) => {
+      for (const args of [undefined, [3, { text: '[redacted]' }]]) {
+        const row = call(toolName, { args })
+        expect(describeStep(row)).toBe('Worked in the browser')
+        expect(verbForCall(row)).toBe('read')
+        expect(isBehindTheScenes(row)).toBe(false)
+      }
+    },
+  )
+
+  it('keeps unfamiliar child dispatches in the displayed steps', () => {
+    const run = sdkRun('run-1')
+    const children = ['future.operation', 'another.operation'].map(
+      (toolName) => ({
+        ...call(toolName, { args: { value: '[redacted]' }, ...FLIGHTS }),
+        parentDispatchId: run.dispatchKey,
+      }),
+    )
+    const { steps, hiddenCount } = describeSteps([run, ...children])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Worked on San Francisco to New York | Google Flights',
+      'Worked on San Francisco to New York | Google Flights',
+    ])
+    expect(steps.flatMap((step) => step.dispatchIds)).toEqual(
+      children.map((child) => child.dispatchId),
     )
   })
 })

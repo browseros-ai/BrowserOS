@@ -247,3 +247,49 @@ describe('neo’s run in What happened', () => {
     expect(container.textContent).not.toContain('ultrafast')
   })
 })
+
+describe('TaskSteps with SDK runs', () => {
+  it('keeps a failed run before its successful children and marks it as failed', async () => {
+    await renderSteps([
+      {
+        ...call('run', 1_000, {
+          meta: { isError: true, sdkRunId: 'sdk-run-1' },
+        }),
+        dispatchKey: 'run-1',
+        url: undefined,
+        argsJson: '{"code":"[redacted]"}',
+      },
+      {
+        ...call('observe.snapshot', 1_010),
+        parentDispatchId: 'run-1',
+        tabId: 42,
+        url: undefined,
+        argsJson: '["[redacted]"]',
+      },
+    ])
+
+    expect(rows()).toEqual(['Something went wrong0:01', 'Read the page0:01'])
+    const failed = container.querySelector('[data-step-index="0"]')
+    expect(failed?.querySelector('.text-red-ink')).not.toBeNull()
+    expect(failed?.querySelector('.lucide-triangle-alert')).not.toBeNull()
+  })
+})
+
+describe('TaskSteps with catalog scripts', () => {
+  it('shows the child in place of a failed catalog run', async () => {
+    await renderSteps([
+      {
+        ...call('run', 1_000, { meta: { isError: true } }),
+        dispatchKey: 'run-1',
+      },
+      {
+        ...call('observe.snapshot', 1_010),
+        parentDispatchId: 'run-1',
+        tabId: 42,
+        argsJson: '[1]',
+      },
+    ])
+
+    expect(rows()).toEqual(['Read shop.example.com0:01'])
+  })
+})

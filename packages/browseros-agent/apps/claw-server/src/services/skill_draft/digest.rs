@@ -484,6 +484,20 @@ mod tests {
     }
 
     #[test]
+    fn a_host_only_sdk_task_can_become_a_skill() -> anyhow::Result<()> {
+        let mut run = row(1, "run", "", "", serde_json::json!({"code": "[redacted]"}));
+        run.url = None;
+        run.title = None;
+        let mut detail = task(vec![run]);
+        detail.summary.site = Some("shop.example.com".into());
+        let draft = build(&detail).ok_or_else(|| anyhow::anyhow!("SDK skill digest missing"))?;
+        assert_eq!(draft.site, "shop.example.com");
+        assert!(draft.pages.is_empty());
+        assert_eq!(draft.hosts(), ["shop.example.com"]);
+        Ok(())
+    }
+
+    #[test]
     fn a_task_stopped_without_errors_can_become_a_skill() {
         let mut summary = task(vec![]).summary;
         assert!(ended_cleanly(&summary));

@@ -150,6 +150,7 @@ impl TestRig {
                 claims: Arc::default(),
                 settings: self.settings.clone(),
                 playwright: Arc::clone(&playwright),
+                script_cdp: false,
             },
         )?;
         Ok(Arc::new(Dispatcher::new(

@@ -4,9 +4,14 @@
 import json
 import os
 import re
+import runpy
 import subprocess
 import tempfile
 import unittest
+import zipfile
+from contextlib import chdir
+from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +35,20 @@ EXPECTED_GIT_CONFIG = {
     "core.preloadindex": "true",
     "depot-tools.allowGlobalGitConfig": "true",
 }
+CLAW_SERVER_TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+
+
+def claw_server_zip_name(target: str) -> str:
+    return f"browseros-claw-server-rust-resources-{target}.zip"
+
+
+def claw_server_zip_bytes(target: str, mode: str | None, build: bytes = b"server") -> bytes:
+    extension = ".exe" if target == "windows-x64" else ""
+    marker = b"" if mode is None else f"browseros-claw-playwright-run={mode};".encode()
+    data = BytesIO()
+    with zipfile.ZipFile(data, "w") as archive:
+        archive.writestr(f"resources/bin/browseros-claw-server{extension}", build + marker)
+    return data.getvalue()
 
 
 def git_bash_path() -> str:
@@ -926,6 +945,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         "macos_arch": ("choice", ["universal", "arm64"], "universal"),
         "linux_arch": ("choice", ["all", "x64", "arm64"], "all"),
         "publication": ("choice", ["alpha", "draft-only"], "alpha"),
+        "playwright_run": ("boolean", None, False),
     }
     NEO_ALPHA = "${{ needs.preflight.outputs.publication == 'alpha' }}"
     NEO_DRAFT_ONLY = "${{ needs.preflight.outputs.publication == 'draft-only' }}"
@@ -957,7 +977,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     inputs = triggers["workflow_dispatch"]["inputs"]
                     self.assertEqual(
                         {
-                            name: (spec["type"], spec["options"], spec["default"])
+                            name: (spec["type"], spec.get("options"), spec["default"])
                             for name, spec in inputs.items()
                         },
                         self.NEO_DISPATCH_INPUTS,
@@ -1301,6 +1321,153 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 )
                 self.assertIn("component|suite", validate["run"])
                 self.assertIn("inputs.state_owner != 'suite'", reflect["if"])
+
+    def test_claw_server_builds_default_to_playwright_off(self):
+        workflow = self.load_workflow("release-claw-server.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        for trigger in ("workflow_dispatch", "workflow_call"):
+            with self.subTest(trigger=trigger):
+                spec = triggers[trigger]["inputs"]["playwright_run"]
+                self.assertEqual(spec["type"], "boolean")
+                self.assertIs(spec["default"], False)
+
+        for job, name in (
+            ("build", "Build BrowserClaw server"),
+            ("publish-versioned", "Upload immutable BrowserClaw server resources"),
+        ):
+            with self.subTest(step=name):
+                step = self.named_step(workflow, job, name)
+                self.assertEqual(
+                    step["env"]["CLAW_PLAYWRIGHT_RUN"],
+                    "${{ inputs.playwright_run && '1' || '0' }}",
+                )
+
+    def test_claw_server_preflight_rejects_playwright_with_ota(self):
+        workflow = self.load_workflow("release-claw-server.yml")
+        step = self.named_step(workflow, "prepare", "Validate lifecycle inputs")
+        self.assertEqual(step["env"]["PLAYWRIGHT_RUN"], "${{ inputs.playwright_run }}")
+        self.assertEqual(step["env"]["PUBLISH_OTA"], "${{ inputs.publish_ota }}")
+        for playwright_run, publish_ota in (
+            ("true", "true"),
+            ("true", "false"),
+            ("false", "true"),
+            ("", ""),  # A tag push has no inputs.
+        ):
+            with (
+                self.subTest(playwright_run=playwright_run, publish_ota=publish_ota),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                output = Path(temp_dir) / "output"
+                result = subprocess.run(
+                    [git_bash_path(), "-c", step["run"]],
+                    env={
+                        **os.environ,
+                        "GITHUB_OUTPUT": str(output),
+                        "MODE": "build",
+                        "PLAYWRIGHT_RUN": playwright_run,
+                        "PUBLISH_OTA": publish_ota,
+                        "REF": "",
+                        "STATE_OWNER": "component",
+                        "VERSION": "",
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+                if playwright_run == publish_ota == "true":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(
+                        "playwright_run cannot be combined with publish_ota", result.stdout
+                    )
+                    self.assertFalse(output.exists())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(output.read_text(encoding="utf-8"), "mode=build\n")
+
+    def test_claw_server_playwright_build_cannot_finalize_in_the_same_run(self):
+        jobs = self.load_workflow("release-claw-server.yml")["jobs"]
+        self.assertEqual(
+            " ".join(jobs["finalize"]["if"].split()),
+            "${{ always() && needs.prepare.result == 'success' "
+            "&& (needs.prepare.outputs.mode == 'finalize' "
+            "|| (needs.prepare.outputs.mode == 'build' && inputs.defer_finalize != true "
+            "&& inputs.playwright_run != true && needs.publish-versioned.result == 'success')) }}",
+        )
+
+    def test_claw_server_recovery_requires_the_requested_playwright_mode(self):
+        workflow = self.load_workflow("release-claw-server.yml")
+        step = self.named_step(
+            workflow, "publish-versioned", "Upload immutable BrowserClaw server resources"
+        )
+        # Run the workflow's Python with a fake R2 client in the same process.
+        _, opening, rest = step["run"].partition("<<'PY'\n")
+        script, closing, _ = rest.partition("\nPY\n")
+        self.assertTrue(opening and closing)
+        source, version = "1" * 40, "1.2.3"
+        target = "windows-x64"
+        name = claw_server_zip_name(target)
+        for requested, stored, succeeds in (
+            ("0", "1", False),
+            ("1", "0", False),
+            ("1", None, False),
+            ("0", None, True),
+            ("1", "1", True),
+        ):
+            with (
+                self.subTest(requested=requested, stored=stored),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                entrypoint = root / "publish.py"
+                entrypoint.write_text(script, encoding="utf-8")
+                dist = root / "dist" / "claw-server"
+                dist.mkdir(parents=True)
+                stored_zip = claw_server_zip_bytes(target, stored, b"previous build")
+                response_by_key = {}
+                fresh_zips = {}
+                for artifact_target in CLAW_SERVER_TARGETS:
+                    filename = claw_server_zip_name(artifact_target)
+                    fresh = claw_server_zip_bytes(artifact_target, requested)
+                    fresh_zips[artifact_target] = fresh
+                    (dist / filename).write_bytes(fresh)
+                    canonical = stored_zip if artifact_target == target else fresh
+                    response_by_key[f"claw-server-rust/prod-resources/{version}/{filename}"] = {
+                        "Body": BytesIO(canonical),
+                        "Metadata": {
+                            "component": "claw-server-rust/prod-resources",
+                            "release-sha": source,
+                            "version": version,
+                            "target": artifact_target,
+                            "sha256": sha256(canonical).hexdigest(),
+                        },
+                    }
+
+                client = mock.Mock()
+                client.get_object.side_effect = lambda *, Bucket, Key: response_by_key[Key]
+                env = {
+                    "AWS_ACCESS_KEY_ID": "fake",
+                    "AWS_SECRET_ACCESS_KEY": "fake",
+                    "CLAW_PLAYWRIGHT_RUN": requested,
+                    "R2_BUCKET": "bucket",
+                    "R2_ENDPOINT": "https://r2.invalid",
+                    "RELEASE_SHA": source,
+                    "VERSION": version,
+                }
+                with (
+                    chdir(root),
+                    mock.patch.dict(os.environ, env),
+                    mock.patch("boto3.client", return_value=client),
+                ):
+                    if succeeds:
+                        runpy.run_path(str(entrypoint))
+                    else:
+                        with self.assertRaisesRegex(
+                            SystemExit, f"{target}: .*does not match CLAW_PLAYWRIGHT_RUN={requested}"
+                        ):
+                            runpy.run_path(str(entrypoint))
+
+                client.put_object.assert_not_called()
+                expected = stored_zip if succeeds else fresh_zips[target]
+                self.assertEqual((dist / name).read_bytes(), expected)
 
     def test_server_latest_aliases_reconcile_monotonically_inside_retained_lock(self):
         expected_groups = {
@@ -1786,12 +1953,15 @@ class NeoReleaseSelectionTest(unittest.TestCase):
         macos_arch: str,
         publication: str,
         linux_arch: str | None = None,
+        *,
+        playwright_run: bool | None = None,
     ):
+        triggers = self.neo.get("on", self.neo.get(True))
+        inputs = triggers["workflow_dispatch"]["inputs"]
         if linux_arch is None:
-            triggers = self.neo.get("on", self.neo.get(True))
-            linux_arch = str(
-                triggers["workflow_dispatch"]["inputs"]["linux_arch"]["default"]
-            )
+            linux_arch = inputs["linux_arch"]["default"]
+        if playwright_run is None:
+            playwright_run = inputs["playwright_run"]["default"]
         step = self.step(self.neo, "preflight", "Validate release selection")
         self.assertEqual(
             step["env"],
@@ -1799,6 +1969,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "MACOS_ARCH": "${{ inputs.macos_arch }}",
                 "LINUX_ARCH": "${{ inputs.linux_arch }}",
                 "PLATFORMS": "${{ inputs.platforms }}",
+                "PLAYWRIGHT_RUN": "${{ inputs.playwright_run }}",
                 "PUBLICATION": "${{ inputs.publication }}",
             },
         )
@@ -1814,6 +1985,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                     "MACOS_ARCH": macos_arch,
                     "LINUX_ARCH": linux_arch,
                     "PLATFORMS": platforms,
+                    "PLAYWRIGHT_RUN": str(playwright_run).lower(),
                     "PUBLICATION": publication,
                 },
                 capture_output=True,
@@ -1838,6 +2010,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "macos_arch": "universal",
                 "linux_arch": "all",
                 "platforms": "all",
+                "playwright_run": "false",
                 "publication": "alpha",
             },
         )
@@ -1855,6 +2028,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "macos_arch": "arm64",
                 "linux_arch": "all",
                 "platforms": "macos",
+                "playwright_run": "false",
                 "publication": "draft-only",
             },
         )
@@ -1907,6 +2081,32 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("::error::", result.stdout)
                 self.assertEqual(outputs, {})
+
+    def test_preflight_forwards_playwright_opt_in_to_the_server(self):
+        result, outputs = self.run_selection(
+            "macos", "arm64", "draft-only", playwright_run=True
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(outputs["playwright_run"], "true")
+        jobs = self.neo["jobs"]
+        self.assertEqual(
+            jobs["preflight"]["outputs"]["playwright_run"],
+            "${{ steps.selection.outputs.playwright_run }}",
+        )
+        self.assertEqual(
+            jobs["server"]["with"]["playwright_run"],
+            "${{ needs.preflight.outputs.playwright_run == 'true' }}",
+        )
+
+    def test_preflight_rejects_playwright_for_alpha_publication(self):
+        result, outputs = self.run_selection(
+            "macos", "arm64", "alpha", playwright_run=True
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("playwright_run requires publication=draft-only", result.stdout)
+        self.assertEqual(outputs, {})
 
     def finalize_runs(
         self,
@@ -2092,7 +2292,7 @@ elif command == "download":
         raise SystemExit(1)
     target = Path(option("--dir"))
     target.mkdir(parents=True, exist_ok=True)
-    (target / name).write_text(release["assets"][name], encoding="utf-8")
+    (target / name).write_bytes(bytes.fromhex(release["assets"][name]))
 else:
     # Every other release subcommand mutates GitHub state.
     record({"command": command, "tag": tag, "args": args[3:],
@@ -2107,24 +2307,51 @@ else:
         if release is None:
             raise SystemExit(1)
         for path in (value for value in args[3:] if not value.startswith("--")):
-            release["assets"][Path(path).name] = Path(path).read_text(encoding="utf-8")
+            release["assets"][Path(path).name] = Path(path).read_bytes().hex()
     state_path.write_text(json.dumps(state))
+"""
+
+
+FAKE_CANONICAL_AWS = r"""#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+operation = sys.argv[2]
+key = sys.argv[sys.argv.index("--key") + 1]
+name = Path(key).name
+target = name.removeprefix("browseros-claw-server-rust-resources-").removesuffix(".zip")
+data = (Path("canonical") / name).read_bytes()
+
+if operation == "head-object":
+    print(json.dumps({
+        "component": "claw-server-rust/prod-resources",
+        "release-sha": os.environ["RELEASE_SHA"],
+        "version": os.environ["VERSION"],
+        "target": target,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }))
+elif operation == "get-object":
+    Path(sys.argv[-1]).write_bytes(data)
+else:
+    raise SystemExit(f"unexpected fake aws operation: {operation}")
 """
 
 
 @unittest.skipIf(os.name == "nt", "component release scripts run on Linux runners")
 class DeferredComponentAttachmentTest(unittest.TestCase):
-    """Deferred component builds may write only to source-bound private drafts.
+    """Component release checks use private draft and canonical artifact fixtures.
 
     These run the shipped attachment scripts against a fake `gh` that keeps
     release state and records every mutating call, so "zero public writes" is
-    observed rather than inferred from the script text.
+    observed directly. The finalize check also reads fixture ZIPs through a fake AWS CLI.
     """
 
     SOURCE = "1" * 40
     OTHER = "2" * 40
     SERVER_TAG = "claw-server/v1.2.3"
-    SERVER_TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
     EXTENSION_TAG = "ext-browserclaw/v1.2.3.0"
     CRX = "browserclaw-1.2.3.0.crx"
 
@@ -2143,23 +2370,40 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
             step for step in workflow["jobs"][job]["steps"] if step.get("name") == step_name
         )
 
-    def run_attachment(self, step, *, files, releases, env):
+    def run_release_step(self, step, *, files, releases, env):
+        def file_bytes(content):
+            return content.encode() if isinstance(content, str) else content
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             fake_bin = root / "bin"
             fake_bin.mkdir()
-            gh = fake_bin / "gh"
-            gh.write_text(FAKE_GH, encoding="utf-8")
-            gh.chmod(0o755)
+            for name, script in (("gh", FAKE_GH), ("aws", FAKE_CANONICAL_AWS)):
+                command = fake_bin / name
+                command.write_text(script, encoding="utf-8")
+                command.chmod(0o755)
             work = root / "work"
             for relative, content in files.items():
                 path = work / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content, encoding="utf-8")
+                path.write_bytes(file_bytes(content))
             state = root / "state.json"
-            state.write_text(json.dumps({"releases": releases}), encoding="utf-8")
+            # The fake gh persists binary assets as hex strings in its JSON state file.
+            release_state = {
+                tag: {
+                    **release,
+                    "assets": {
+                        name: file_bytes(content).hex()
+                        for name, content in release["assets"].items()
+                    },
+                }
+                for tag, release in releases.items()
+            }
+            state.write_text(json.dumps({"releases": release_state}), encoding="utf-8")
             writes = root / "writes.jsonl"
             writes.touch()
+            scratch = root / "tmp"
+            scratch.mkdir()
             result = subprocess.run(
                 [git_bash_path(), "-c", step["run"]],
                 cwd=work,
@@ -2171,6 +2415,7 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
                     "GH_TOKEN": "fake",
                     "RUNNER_TEMP": str(root / "runner-temp"),
                     "GIT_CEILING_DIRECTORIES": str(root),
+                    "TMPDIR": str(scratch),
                     **env,
                 },
                 capture_output=True,
@@ -2182,9 +2427,6 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
             ]
         return result, calls
 
-    def server_zip(self, target: str) -> str:
-        return f"browseros-claw-server-rust-resources-{target}.zip"
-
     def run_server(
         self,
         release,
@@ -2194,38 +2436,41 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
         drop=None,
         alter=None,
         json_fails=False,
+        playwright_run="false",
     ):
         step = self.script(
             "release-claw-server.yml", "publish-versioned", "Attach zips to private draft"
         )
         self.assertEqual(step["env"]["DEFER_FINALIZE"], "${{ inputs.defer_finalize }}")
+        self.assertEqual(step["env"]["PLAYWRIGHT_RUN"], "${{ inputs.playwright_run }}")
         self.assertEqual(
             step["env"]["RESERVATION"], "${{ needs.prepare.outputs.reservation }}"
         )
         files = {
-            f"dist/claw-server/{self.server_zip(target)}": f"canonical {target}"
-            for target in self.SERVER_TARGETS
+            f"dist/claw-server/{claw_server_zip_name(target)}": f"canonical {target}"
+            for target in CLAW_SERVER_TARGETS
         }
         releases = {}
         if release is not None:
             draft, target = release
             assets = {Path(path).name: content for path, content in files.items()}
             if drop:
-                del assets[self.server_zip(drop)]
+                del assets[claw_server_zip_name(drop)]
             if alter:
-                assets[self.server_zip(alter)] = "different bytes"
+                assets[claw_server_zip_name(alter)] = "different bytes"
             releases[self.SERVER_TAG] = {
                 "isDraft": draft,
                 "targetCommitish": target,
                 "assets": assets,
                 "jsonFails": json_fails,
             }
-        return self.run_attachment(
+        return self.run_release_step(
             step,
             files=files,
             releases=releases,
             env={
                 "DEFER_FINALIZE": defer,
+                "PLAYWRIGHT_RUN": playwright_run,
                 "RELEASE_SHA": self.SOURCE,
                 "RELEASE_TAG": self.SERVER_TAG,
                 "RESERVATION": reservation,
@@ -2292,11 +2537,73 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
 
     def test_alpha_server_attachment_is_unchanged(self):
         result, calls = self.run_server(
-            (False, self.SOURCE), defer="", reservation="tag", alter="linux-x64"
+            (False, self.SOURCE),
+            defer="",
+            reservation="tag",
+            alter="linux-x64",
+            playwright_run="",
         )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([call["command"] for call in calls], ["upload"])
+
+    def test_playwright_server_cannot_attach_to_a_public_release(self):
+        result, calls = self.run_server(
+            (False, self.SOURCE), defer="false", reservation="tag", playwright_run="true"
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cannot attach Playwright builds to a public release", result.stdout)
+        self.assertEqual(calls, [])
+
+    def test_claw_server_finalize_rejects_playwright_enabled_zips(self):
+        workflow = yaml.safe_load(
+            (WORKFLOW_DIR / "release-claw-server.yml").read_text(encoding="utf-8")
+        )
+        steps = workflow["jobs"]["finalize"]["steps"]
+        order = [step.get("name") for step in steps]
+        verify = steps[order.index("Verify prepared release")]
+        self.assertNotIn("if", verify)
+        for name in (
+            "Create annotated release tag",
+            "Copy versioned objects to latest",
+            "Publish private draft",
+        ):
+            self.assertLess(order.index(verify["name"]), order.index(name))
+
+        for mode in ("1", "0", None):
+            with self.subTest(mode=mode):
+                assets = {
+                    claw_server_zip_name(target): claw_server_zip_bytes(target, mode)
+                    for target in CLAW_SERVER_TARGETS
+                }
+                result, calls = self.run_release_step(
+                    verify,
+                    files={f"canonical/{name}": data for name, data in assets.items()},
+                    releases={
+                        self.SERVER_TAG: {
+                            "isDraft": True,
+                            "targetCommitish": self.SOURCE,
+                            "assets": assets,
+                        },
+                    },
+                    env={
+                        "R2_BUCKET": "bucket",
+                        "R2_ENDPOINT": "https://r2.invalid",
+                        "RELEASE_SHA": self.SOURCE,
+                        "RELEASE_TAG": self.SERVER_TAG,
+                        "RESERVATION": "reuse",
+                        "VERSION": "1.2.3",
+                    },
+                )
+                if mode == "1":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(
+                        "cannot finalize a Playwright-enabled BrowserClaw server", result.stderr
+                    )
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(calls, [])
 
     def run_extension(self, release, *, defer="true", asset=None, json_fails=False):
         step = self.script("release-extensions.yml", "build", "Attach CRX assets")
@@ -2311,7 +2618,7 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
                 "assets": {} if asset is None else {self.CRX: asset},
                 "jsonFails": json_fails,
             }
-        return self.run_attachment(
+        return self.run_release_step(
             step,
             files={built: "canonical crx"},
             releases=releases,

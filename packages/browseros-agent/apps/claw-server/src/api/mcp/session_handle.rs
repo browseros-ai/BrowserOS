@@ -65,6 +65,18 @@ pub(super) fn offer(mut tool: Tool) -> Tool {
     tool
 }
 
+/// Uses the same wire handle with the active tool family's continuity instructions.
+pub(super) fn offer_described(tool: Tool, description: &str) -> Tool {
+    let mut tool = offer(tool);
+    if let Some(session) = Arc::make_mut(&mut tool.input_schema)
+        .get_mut("properties")
+        .and_then(|properties| properties.get_mut(FIELD))
+    {
+        session["description"] = json!(description);
+    }
+    tool
+}
+
 fn with_property(mut schema: JsonObject, description: &str) -> JsonObject {
     let properties = schema
         .entry("properties")

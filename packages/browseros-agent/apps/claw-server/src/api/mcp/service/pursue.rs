@@ -2,7 +2,7 @@
 //! through the decisions worker. Every move goes down the same dispatch path an agent's own call
 //! takes, and the run is recorded as one local dispatch beside the actions it made.
 
-use super::{ClawMcpService, StartedSession, finish_local_dispatch, hosted};
+use super::{ClawMcpService, PageNaming, StartedSession, finish_local_dispatch, hosted};
 use crate::{
     api::mcp::{
         dispatch::{ToolIdentity, linked_cancel_token},
@@ -213,15 +213,12 @@ impl ClawMcpService {
         raw_args: &Value,
         client_cancel: CancellationToken,
     ) -> ToolResult {
-        let Some(page) = raw_args
-            .get("page")
-            .and_then(Value::as_u64)
-            .and_then(|page| u32::try_from(page).ok())
-        else {
+        let naming = self.page_naming();
+        let Some(page) = naming.pursue_page(raw_args) else {
             return ToolResult::error("pursue needs the page to work on");
         };
         if started.session.pursue_handed_back() {
-            return already_handed_back(page);
+            return already_handed_back(page, naming);
         }
         let Some(goal) = raw_args
             .get("goal")
@@ -251,6 +248,13 @@ impl ClawMcpService {
         let writer = self.state.decisions.writer(self.state.billing.clone());
         let Some(browser_session) = self.state.browser.session().await else {
             return not_started(page, "no browser is connected");
+        };
+        // Resolve the SDK tab after the plan and browser checks so their handbacks take priority.
+        let Some(host_page) = naming.host_page(&self.state, page).await else {
+            return not_started(
+                page,
+                "that tab is no longer open; find it with context.pages() in run",
+            );
         };
         let binding = match self
             .state
@@ -297,7 +301,7 @@ impl ClawMcpService {
         };
         let Some(driver) = PageDriver::new(
             browser_session,
-            page,
+            host_page.0,
             self.catalog.clone(),
             started.session.id().clone(),
             identity,
@@ -347,9 +351,10 @@ pub(super) fn uses_up_pursue(ending: Ending, decisions: u32) -> bool {
 }
 
 /// A call after this task's pursue handed back: run carries the task from here.
-fn already_handed_back(page: u32) -> ToolResult {
+pub(super) fn already_handed_back(page: i64, naming: PageNaming) -> ToolResult {
+    let new_task = naming.new_task_hint();
     let said = format!(
-        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}. pursue is offered again once you start a new task with name_session."
+        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}. pursue is offered again once you start a new task with {new_task}."
     );
     ToolResult::text(
         said.clone(),
@@ -370,7 +375,7 @@ fn already_handed_back(page: u32) -> ToolResult {
 }
 
 /// A run that never asked anything: a hand back with nothing done, which leaves pursue usable.
-fn not_started(page: u32, why: &str) -> ToolResult {
+pub(super) fn not_started(page: i64, why: &str) -> ToolResult {
     let said = format!(
         "neo's fast browsing did not start because {why}, so it is handing this task to you. Carry on with run on page {page}."
     );
@@ -392,7 +397,7 @@ fn not_started(page: u32, why: &str) -> ToolResult {
     )
 }
 
-fn finished(page: u32, ending: Ending, told: &Told, writes: u32, reads: PageReads) -> ToolResult {
+fn finished(page: i64, ending: Ending, told: &Told, writes: u32, reads: PageReads) -> ToolResult {
     let text = match ending {
         Ending::Completed => format!("{}\nRead page {page} to confirm.", told.said),
         Ending::Cancelled => told.said.clone(),
@@ -428,7 +433,7 @@ fn finished(page: u32, ending: Ending, told: &Told, writes: u32, reads: PageRead
 /// What a hand back tells the agent: what neo did, what is left, and the one next step, so
 /// run picks the task up where pursue stopped instead of starting it again.
 fn hand_back_text(
-    page: u32,
+    page: i64,
     url: &str,
     said: &str,
     story: &[String],
