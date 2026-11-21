@@ -2,8 +2,9 @@
 """Common utilities for OTA update modules."""
 
 import zipfile
+from dataclasses import replace
 from pathlib import Path
-from typing import List, Optional
+from typing import AbstractSet, List, Optional
 
 from ...lib.sparkle import sparkle_sign_file as sparkle_sign_file
 from ...products.server_binaries import ServerBundle
@@ -56,15 +57,46 @@ def generate_server_appcast(
     return render_server_appcast(spec, version, artifacts, existing)
 
 
-def merge_base_appcast(publisher, spec: FeedSpec, staging_path: Path) -> Optional[ExistingAppcast]:
-    """Choose the live appcast as the merge base before local staging."""
+def held_server_platforms(bundle: ServerBundle) -> frozenset[str]:
+    """Platform names of the bundle's held targets (none for most bundles)."""
+    return frozenset(
+        p["name"] for p in SERVER_PLATFORMS if p["target"] in bundle.held_targets
+    )
+
+
+def without_platforms(
+    existing: Optional[ExistingAppcast], names: AbstractSet[str]
+) -> Optional[ExistingAppcast]:
+    """Drop platforms from a parsed feed item.
+
+    A same-version publish merges the base item's enclosures into the new one
+    (render_server_appcast), so a held target already in the live item would
+    otherwise survive every re-publish of that version.
+    """
+    if existing is None or not names.intersection(existing.artifacts):
+        return existing
+    kept = {name: a for name, a in existing.artifacts.items() if name not in names}
+    return replace(existing, artifacts=kept)
+
+
+def merge_base_appcast(
+    publisher,
+    spec: FeedSpec,
+    staging_path: Path,
+    held: AbstractSet[str] = frozenset(),
+) -> Optional[ExistingAppcast]:
+    """Choose the live appcast as the merge base before local staging.
+
+    ``held`` names platforms the bundle no longer publishes; they are dropped
+    from the base so the merged item never carries them.
+    """
     live = publisher.fetch_live(spec.key)
     if live is not None:
         parsed = parse_server_appcast_content(live)
         if parsed is not None:
-            return parsed
+            return without_platforms(parsed, held)
         log_error(f"Live {spec.key} is unparseable — falling back to {staging_path}")
-    return parse_existing_appcast(staging_path)
+    return without_platforms(parse_existing_appcast(staging_path), held)
 
 
 def promote_appcast_content(source_content: str, target_spec: FeedSpec) -> str:

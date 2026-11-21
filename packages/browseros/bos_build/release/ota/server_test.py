@@ -14,7 +14,12 @@ from unittest import mock
 
 from ...core.context import Context
 from ...core.step import ValidationError
-from ..feeds.render import ExistingAppcast, SignedArtifact, render_server_appcast
+from ..feeds.render import (
+    ExistingAppcast,
+    SignedArtifact,
+    parse_server_appcast_content,
+    render_server_appcast,
+)
 from ..feeds.spec import server_feed
 from ..resource_pins import ResourceObjectPin, ResourcePin
 from . import server as ota_server
@@ -32,7 +37,10 @@ class _PreconditionFailure(Exception):
     }
 
 
-def _complete_appcast(version: str = "0.0.9") -> str:
+def _complete_appcast(
+    version: str = "0.0.9", held: frozenset[str] = frozenset({"windows_x64"})
+) -> str:
+    """A live alpha feed listing every platform except ``held``."""
     artifacts = [
         SignedArtifact(
             platform=platform["name"],
@@ -43,6 +51,7 @@ def _complete_appcast(version: str = "0.0.9") -> str:
             arch=platform["arch"],
         )
         for platform in SERVER_PLATFORMS
+        if platform["name"] not in held
     ]
     return render_server_appcast(
         server_feed("browseros-server", "alpha"),
@@ -125,6 +134,27 @@ class LiveReleaseReuseTest(unittest.TestCase):
         self.assertEqual(self.output.read_text(), live)
         payloads = self.registry.add.call_args_list[0].args[1]
         self.assertEqual([item.platform for item in payloads], ["darwin_arm64"])
+
+    def test_reuse_drops_a_held_platform_the_live_feed_still_lists(self):
+        live = _complete_appcast(held=frozenset())
+        module = ServerOTAModule(
+            version="0.0.9",
+            channel="alpha",
+            platform_filter="darwin_arm64",
+            release_sha=SOURCE_SHA,
+        )
+        publisher = SimpleNamespace(fetch_live=lambda _: live)
+
+        with (
+            mock.patch.object(ota_server, "FeedPublisher", return_value=publisher),
+            mock.patch.object(ota_server, "get_appcast_path", return_value=self.output),
+        ):
+            self.assertTrue(module._reuse_live_release(self.ctx))
+
+        staged = parse_server_appcast_content(self.output.read_text())
+        assert staged is not None
+        self.assertEqual(staged.artifacts.keys(), {"darwin_arm64", "darwin_x64", "linux_arm64", "linux_x64"})
+        self.assertEqual(staged.pub_date, "Wed, 05 Aug 2026 12:00:00 +0000")
 
     def test_refuses_to_replace_incomplete_same_version_live_payloads(self):
         live = render_server_appcast(

@@ -16,6 +16,7 @@ from ..lib.utils import log_info, log_error, log_success
 from ..release.ota import ServerOTAModule
 from ..release.ota.common import (
     get_appcast_path,
+    held_server_platforms,
     merge_base_appcast,
     promote_appcast_content,
     released_server_platforms,
@@ -182,7 +183,9 @@ def _assemble_server_appcast(
         raise ValueError(f"Missing appcast fragments: {', '.join(missing)}")
 
     spec = server_feed(bundle.id, channel)
-    existing = merge_base_appcast(publisher, spec, output_path)
+    existing = merge_base_appcast(
+        publisher, spec, output_path, held=held_server_platforms(bundle)
+    )
     content = render_server_appcast(
         spec,
         version,

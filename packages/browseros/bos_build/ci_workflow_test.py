@@ -4071,7 +4071,7 @@ class HeldServerTargetsWorkflowTest(unittest.TestCase):
                 return match.group(2)
         return fallback.strip("'")
 
-    def test_ota_payload_jobs_come_from_the_released_platforms(self):
+    def test_ota_payload_matrix_is_the_validate_output(self):
         workflow = self.load_workflow("publish-server-ota.yml")
         build = workflow["jobs"]["build-payloads"]
         self.assertEqual(
@@ -4084,6 +4084,8 @@ class HeldServerTargetsWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(build["env"]["PLATFORM"], "${{ matrix.platform }}")
 
+    def test_ota_payload_jobs_come_from_the_released_platforms(self):
+        build = self.load_workflow("publish-server-ota.yml")["jobs"]["build-payloads"]
         for product, expected in (
             ("browserclaw", self.ALL_PAYLOADS),
             ("browseros", [p for p in self.ALL_PAYLOADS if p["target"] != "windows-x64"]),

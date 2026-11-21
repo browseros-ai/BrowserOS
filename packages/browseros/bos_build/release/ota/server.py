@@ -25,8 +25,10 @@ from .common import (
     create_server_bundle_zip,
     get_appcast_path,
     find_server_resources_dir,
+    held_server_platforms,
     merge_base_appcast,
     released_server_platforms,
+    without_platforms,
 )
 from ..feeds.publisher import FeedPublisher
 from .sign_binary import (
@@ -277,7 +279,17 @@ class ServerOTAModule(Step):
 
         appcast_path = get_appcast_path(self.channel, self.bundle.id)
         appcast_path.parent.mkdir(parents=True, exist_ok=True)
-        appcast_path.write_text(live)
+        held = held_server_platforms(self.bundle)
+        if held.intersection(existing.artifacts):
+            # Keep every released payload and its pubDate; drop only the held
+            # platform the live item still lists.
+            appcast_path.write_text(
+                render_server_appcast(
+                    spec, self.version, [], existing=without_platforms(existing, held)
+                )
+            )
+        else:
+            appcast_path.write_text(live)
         artifacts = [existing.artifacts[name] for name in sorted(requested)]
         ctx.artifact_registry.add("server_ota_artifacts", artifacts)
         ctx.artifact_registry.add("server_appcast", appcast_path)
@@ -353,7 +365,10 @@ class ServerOTAModule(Step):
         spec = server_feed(self.bundle.id, self.channel)
         appcast_path = get_appcast_path(self.channel, self.bundle.id)
         existing_appcast = merge_base_appcast(
-            FeedPublisher(env=ctx.env), spec, appcast_path
+            FeedPublisher(env=ctx.env),
+            spec,
+            appcast_path,
+            held=held_server_platforms(self.bundle),
         )
 
         appcast_content = render_server_appcast(

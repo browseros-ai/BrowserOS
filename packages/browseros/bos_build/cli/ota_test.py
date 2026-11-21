@@ -269,6 +269,32 @@ class AssembleServerAppcastTest(unittest.TestCase):
                 ):
                     self._assemble(bundle, fragments)
 
+    def test_same_version_merge_drops_a_held_platform_already_in_the_feed(self):
+        # The base feed already lists all five at this version, as it would
+        # after a publish that predates the hold. A same-version merge keeps
+        # base enclosures, so only the hold can remove Windows from it.
+        five = [self._fragment(item["name"]) for item in SERVER_PLATFORMS]
+        self._output(BROWSEROS_SERVER_BUNDLE).write_text(
+            render_server_appcast(
+                server_feed("browseros-server", "alpha"),
+                "0.0.129",
+                [
+                    parse_server_appcast_content(Path(f.split("=", 1)[1]).read_text())
+                    .artifacts[f.split("=", 1)[0]]
+                    for f in five
+                ],
+            )
+        )
+
+        result = self._assemble(
+            BROWSEROS_SERVER_BUNDLE,
+            [self._fragment(name) for name in sorted(self.FOUR)],
+        )
+
+        parsed = parse_server_appcast_content(result.read_text())
+        assert parsed is not None
+        self.assertEqual(set(parsed.artifacts), self.FOUR)
+
     def test_browseros_refuses_a_held_windows_fragment(self):
         fragments = [self._fragment(item["name"]) for item in SERVER_PLATFORMS]
 
