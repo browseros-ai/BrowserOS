@@ -90,8 +90,11 @@ struct Shared {
 enum Link {
     Starting,
     Up(Arc<Connection>),
-    /// Exited or failed to start; the supervisor restarts it after a backoff.
-    Down(String),
+    /// Exited or failed to start; the supervisor starts it again at `retry_at`.
+    Down {
+        reason: String,
+        retry_at: tokio::time::Instant,
+    },
     /// The server is shutting down; there is no restart.
     Stopped,
 }
@@ -196,7 +199,16 @@ impl NeoEngine {
                     ));
                 }
                 Link::Starting => "the browser engine is still starting".to_owned(),
-                Link::Down(reason) => reason.clone(),
+                // A restart due after this call would stop waiting: fail now, so a turn
+                // against a browser that is not there is not slowed by every tool call.
+                Link::Down { reason, retry_at }
+                    if *retry_at > tokio::time::Instant::now() + CALL_WAIT =>
+                {
+                    return Err(ToolOutput::failure(format!(
+                        "The browser is not available: {reason}."
+                    )));
+                }
+                Link::Down { reason, .. } => reason.clone(),
             };
             tokio::select! {
                 () = &mut deadline => {

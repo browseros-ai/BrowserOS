@@ -64,7 +64,10 @@ pub(super) async fn supervise(engine: NeoEngine, launch: EngineLaunch, stop: Can
         clashes = 0;
         let delay = backoff.after_failure(up_for);
         tracing::warn!(%reason, retry_in_s = delay.as_secs(), "the browser engine is down");
-        engine.set_link(Link::Down(reason));
+        engine.set_link(Link::Down {
+            reason,
+            retry_at: Instant::now() + delay,
+        });
         tokio::select! {
             biased;
             () = stop.cancelled() => break,
