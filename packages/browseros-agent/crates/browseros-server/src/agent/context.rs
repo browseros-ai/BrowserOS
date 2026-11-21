@@ -19,7 +19,7 @@ use crate::turn::{Role, ToolOutcome, ToolPart, TurnContext, UiMessage, UiPart};
 
 /// What a compacted tool result or picture message says instead of its content.
 const PLACEHOLDER: &str = "[removed to fit the context window]";
-/// The window assumed for a provider row that names none (the old server's default).
+/// The window assumed for a provider row that names none.
 const DEFAULT_WINDOW: usize = 200_000;
 /// Tokens kept free for the response: this much, or half the window when that is smaller.
 const RESERVE: usize = 20_000;
@@ -179,9 +179,8 @@ impl Context {
     }
 
     /// The result of `call`, in the group of the response that asked for it. Every wire takes a
-    /// tool result as text in the first version, so a failed script is marked in the text, and
-    /// pictures follow as a user message when the model takes images (or a note says they
-    /// were left out).
+    /// tool result as text, so a failed script is marked in the text, and pictures follow as a
+    /// user message when the model takes images (or a note says they were left out).
     pub(super) fn push_tool_result(
         &mut self,
         call: &ToolCall,
@@ -393,14 +392,12 @@ impl Context {
     }
 }
 
-/// Characters and pictures of some messages.
 fn size<'a>(meta: impl Iterator<Item = &'a Meta>) -> (usize, usize) {
     meta.fold((0, 0), |(chars, images), meta| {
         (chars + meta.chars, images + meta.images)
     })
 }
 
-/// The character estimate: a third of a token per character, a thousand per picture.
 fn tokens(chars: usize, images: usize) -> usize {
     chars.div_ceil(CHARS_PER_TOKEN) + images * TOKENS_PER_PICTURE
 }
@@ -456,7 +453,7 @@ fn user_text(message: &UiMessage) -> String {
 }
 
 /// Text parts verbatim and each tool part as one line, in part order. Reasoning is never
-/// replayed (as in the old server), and pictures were never stored.
+/// replayed, and pictures were never stored.
 fn assistant_text(message: &UiMessage) -> String {
     let lines: Vec<String> = message
         .parts

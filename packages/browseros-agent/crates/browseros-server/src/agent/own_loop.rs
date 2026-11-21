@@ -74,7 +74,6 @@ pub(super) struct Budget {
 }
 
 impl Budget {
-    /// The design's limits, starting now: `MAX_STEPS` model calls within `MAX_TURN_TIME`.
     pub(super) fn from_now() -> Self {
         Self {
             steps: MAX_STEPS,
