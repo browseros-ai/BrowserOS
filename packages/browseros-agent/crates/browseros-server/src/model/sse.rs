@@ -4,12 +4,60 @@
 use bytes::Bytes;
 use eventsource_stream::{EventStreamError, Eventsource};
 use futures_util::{Stream, StreamExt};
+use http::HeaderMap;
+use serde_json::Value;
+use url::Url;
 
-#[expect(dead_code, reason = "used by the provider wire adapters")]
-pub(super) fn events(
-    response: reqwest::Response,
-) -> impl Stream<Item = Result<String, EventStreamError<reqwest::Error>>> {
-    decode(response.bytes_stream())
+use super::errors;
+use crate::turn::ChatError;
+
+pub(super) async fn post(
+    http: &reqwest::Client,
+    url: &Url,
+    headers: &HeaderMap,
+    body: &Value,
+) -> Result<reqwest::Response, ChatError> {
+    let mut response = http
+        .post(url.clone())
+        .headers(headers.clone())
+        .json(body)
+        .send()
+        .await
+        .map_err(|_| errors::disconnected())?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let retry_after = errors::retry_after(response.headers());
+    // Keep enough of an upstream failure for the error card without buffering an unlimited body.
+    const LIMIT: usize = 64 * 1024;
+    let mut bytes = Vec::new();
+    while bytes.len() < LIMIT {
+        let Ok(Some(chunk)) = response.chunk().await else {
+            break;
+        };
+        bytes.extend_from_slice(&chunk[..chunk.len().min(LIMIT - bytes.len())]);
+    }
+    Err(errors::upstream(
+        Some(status.as_u16()),
+        retry_after,
+        &String::from_utf8_lossy(&bytes),
+        headers,
+    ))
+}
+
+pub(super) fn events(response: reqwest::Response) -> impl Stream<Item = Result<String, ChatError>> {
+    decode(response.bytes_stream()).map(|event| {
+        event.map_err(|error| match error {
+            EventStreamError::Transport(_) => errors::disconnected(),
+            _ => errors::protocol("The provider sent invalid server-sent events."),
+        })
+    })
+}
+
+pub(super) fn json(data: &str) -> Result<Value, ChatError> {
+    serde_json::from_str(data)
+        .map_err(|_| errors::protocol("The provider sent invalid JSON in its event stream."))
 }
 
 fn decode<E>(

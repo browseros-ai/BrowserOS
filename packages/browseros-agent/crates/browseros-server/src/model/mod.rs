@@ -28,21 +28,24 @@ mod sse;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
+use base64::Engine;
+use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use serde_json::Value;
+use url::Url;
+
 pub use chatgpt::{SignIn, SignInError, SignInStatus};
 pub use scripted::{Script, ScriptedCall, ScriptedError, ScriptedStep, ScriptedUsage};
 
-use crate::store::{ProviderConfig, ProviderKind, Store};
-use crate::turn::{ChatError, ConversationId, EventSink, FinishReason, ToolCallId};
+use crate::store::{Credentials, ProviderConfig, ProviderKind, Store};
+use crate::turn::{
+    ChatError, ConversationId, EventSink, FinishReason, ToolCallId, ToolOwner, TurnEvent,
+};
 
-/// The model side of the server, shared by every turn: one shared `reqwest` client (chunk
-/// `models` adds it), the store (for the ChatGPT tokens), and the sign-in. Cheap to clone.
+/// The model side of the server. HTTP connection pooling is shared, while the route and
+/// credentials are resolved per turn.
 #[derive(Clone)]
 pub struct Models {
-    #[expect(
-        dead_code,
-        reason = "read once chunk `models` writes the provider routes"
-    )]
-    store: Store,
+    http: Result<reqwest::Client, Arc<reqwest::Error>>,
     sign_in: Arc<SignIn>,
     /// `Some` when `BROWSEROS_USE_MOCK_LLM` is on: every provider resolves to this script.
     script: Option<Arc<Script>>,
@@ -51,8 +54,15 @@ pub struct Models {
 impl Models {
     pub fn new(store: Store, install_id: Option<String>) -> Self {
         Self {
-            sign_in: Arc::new(SignIn::new(store.clone(), install_id)),
-            store,
+            // Redirects could carry a saved custom credential to a different destination.
+            // Retries belong to Model, which knows whether any output reached the turn.
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .build()
+                .map_err(Arc::new),
+            sign_in: Arc::new(SignIn::new(store, install_id)),
             script: None,
         }
     }
@@ -85,24 +95,38 @@ impl Models {
                 provider.supports_images,
             ));
         }
-        // One arm per provider type, decided by the row's type and never by the model name.
-        // Chunk `models` fills the first eleven; chunk `chatgpt` owns the last.
-        match provider.kind {
-            ProviderKind::Anthropic
-            | ProviderKind::Openai
-            | ProviderKind::Google
+        let kind = provider.kind;
+        let http = self.http.clone().map_err(|_| errors::disconnected())?;
+        let endpoint = match kind {
+            ProviderKind::Google
             | ProviderKind::Openrouter
             | ProviderKind::Fireworks
             | ProviderKind::Azure
             | ProviderKind::OpenaiCompatible
             | ProviderKind::Ollama
             | ProviderKind::Lmstudio
-            | ProviderKind::Moonshot => Err(ChatError::not_implemented("Calling this provider")),
-            ProviderKind::Bedrock => Err(ChatError::not_implemented("Calling AWS Bedrock")),
-            ProviderKind::ChatgptPro => Err(ChatError::not_implemented(
-                "Calling ChatGPT through sign-in",
-            )),
-        }
+            | ProviderKind::Moonshot => chat::endpoint(&provider)?,
+            ProviderKind::Anthropic
+            | ProviderKind::Openai
+            | ProviderKind::Bedrock
+            | ProviderKind::ChatgptPro => {
+                return Err(ChatError::not_implemented("Calling this provider"));
+            }
+        };
+        Ok(Model {
+            route: Route::Chat {
+                http,
+                endpoint,
+                model: provider.model,
+            },
+            window: provider.context_window,
+            supports_images: provider.supports_images,
+            kind: Some(kind),
+            reasoning: Reasoning {
+                effort: provider.reasoning_effort,
+                summary: provider.reasoning_summary,
+            },
+        })
     }
 
     /// `POST /test-provider`: resolve (with a fresh random conversation id), then one tiny step
@@ -124,11 +148,17 @@ pub struct Model {
     route: Route,
     window: usize,
     supports_images: bool,
+    kind: Option<ProviderKind>,
+    reasoning: Reasoning,
 }
 
-/// Which wire a `Model` speaks. Chunk `models` adds genai and Bedrock, chunk `chatgpt` the
-/// sign-in route.
+/// Which wire a resolved model speaks. The route owns its request-scoped authentication.
 enum Route {
+    Chat {
+        http: reqwest::Client,
+        endpoint: chat::Endpoint,
+        model: String,
+    },
     Scripted {
         script: Script,
         /// The next step to play: one `step` call plays one scripted step.
@@ -146,6 +176,8 @@ impl Model {
             },
             window,
             supports_images,
+            kind: None,
+            reasoning: Reasoning::default(),
         }
     }
 
@@ -155,12 +187,44 @@ impl Model {
     /// Cancellation: the caller drops this future and the HTTPS stream closes.
     pub async fn step(
         &self,
-        _request: &StepRequest<'_>,
+        request: &StepRequest<'_>,
         sink: &mut dyn EventSink,
     ) -> Result<AssistantTurn, ChatError> {
-        match &self.route {
-            Route::Scripted { script, next } => scripted::step(script, next, sink).await,
+        let mut sink = ObservedSink {
+            inner: sink,
+            emitted: false,
+        };
+        for attempt in 0..2 {
+            match self.step_once(request, &mut sink).await {
+                Err(error) if !sink.emitted => match errors::retry_delay(&error, attempt) {
+                    Some(delay) => tokio::time::sleep(delay).await,
+                    None => return Err(error),
+                },
+                result => return result,
+            }
         }
+        self.step_once(request, &mut sink).await
+    }
+
+    async fn step_once(
+        &self,
+        request: &StepRequest<'_>,
+        sink: &mut dyn EventSink,
+    ) -> Result<AssistantTurn, ChatError> {
+        let result = match &self.route {
+            Route::Chat {
+                http,
+                endpoint,
+                model,
+            } => chat::step(http, endpoint, model, request, &self.reasoning, sink).await,
+            Route::Scripted { script, next } => scripted::step(script, next, sink).await,
+        };
+        result.map_err(|mut error| {
+            if let Some(kind) = self.kind {
+                error.provider.get_or_insert_with(|| kind.as_str().into());
+            }
+            error
+        })
     }
 
     /// The context window from the provider row; compaction's budget.
@@ -171,6 +235,165 @@ impl Model {
     pub fn supports_images(&self) -> bool {
         self.supports_images
     }
+}
+
+/// Whether the provider has emitted anything the user can see. Replaying a partially
+/// visible response would duplicate text or tool cards, so retries stop at this seam.
+struct ObservedSink<'a> {
+    inner: &'a mut dyn EventSink,
+    emitted: bool,
+}
+
+#[async_trait::async_trait]
+impl EventSink for ObservedSink<'_> {
+    async fn emit(&mut self, event: TurnEvent) {
+        self.emitted = true;
+        self.inner.emit(event).await;
+    }
+}
+
+/// The row supplies exact wire levels; each step supplies the switch and coarse fallback.
+#[derive(Default)]
+struct Reasoning {
+    effort: Option<String>,
+    #[expect(dead_code, reason = "used by the Responses adapter")]
+    summary: Option<String>,
+}
+
+impl Reasoning {
+    fn effort<'a>(&'a self, fallback: Option<Effort>, levels: &[&str]) -> Option<&'a str> {
+        let fallback = fallback?;
+        Some(
+            self.effort
+                .as_deref()
+                .filter(|level| levels.contains(level))
+                .unwrap_or(match fallback {
+                    Effort::Low => "low",
+                    Effort::Medium => "medium",
+                    Effort::High => "high",
+                }),
+        )
+    }
+}
+
+fn endpoint(base: &str, operation: &str) -> Result<Url, ChatError> {
+    let mut url =
+        Url::parse(base).map_err(|_| errors::config("Enter a valid provider base URL."))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(errors::config(
+            "Enter an HTTP or HTTPS base URL without credentials or a fragment.",
+        ));
+    }
+    {
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| errors::config("Enter a valid provider base URL."))?;
+        path.pop_if_empty().extend(operation.split('/'));
+    }
+    Ok(url)
+}
+
+fn headers(custom: &[(String, String)]) -> Result<HeaderMap, ChatError> {
+    let mut headers = HeaderMap::new();
+    for (name, value) in custom {
+        let name = HeaderName::try_from(name.as_str())
+            .map_err(|_| errors::config("A custom header has an invalid name."))?;
+        // An overridden Host can route the request to a different tenant at the same URL.
+        if matches!(
+            name.as_str(),
+            "host" | "content-length" | "transfer-encoding"
+        ) {
+            return Err(errors::config(
+                "A custom header overrides HTTP routing or framing.",
+            ));
+        }
+        set_header(&mut headers, name, value, true)?;
+    }
+    Ok(headers)
+}
+
+fn set_header(
+    headers: &mut HeaderMap,
+    name: HeaderName,
+    value: &str,
+    sensitive: bool,
+) -> Result<(), ChatError> {
+    let mut value = HeaderValue::from_str(value)
+        .map_err(|_| errors::config("A credential or custom header has an invalid value."))?;
+    value.set_sensitive(sensitive);
+    headers.insert(name, value);
+    Ok(())
+}
+
+fn api_key(provider: &ProviderConfig) -> Result<&str, ChatError> {
+    match &provider.credentials {
+        Credentials::ApiKey(key) if !key.expose().trim().is_empty() => Ok(key.expose()),
+        _ => Err(errors::config(format!(
+            "{} requires an API key.",
+            provider.kind.as_str()
+        ))),
+    }
+}
+
+fn bearer(headers: &mut HeaderMap, key: &str) -> Result<(), ChatError> {
+    set_header(headers, AUTHORIZATION, &format!("Bearer {key}"), true)
+}
+
+fn tool_call(id: &Value, name: &Value, input: Value) -> Result<ToolCall, ChatError> {
+    let id = id
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| errors::protocol("A tool call arrived without an id."))?;
+    let name = name
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| errors::protocol("A tool call arrived without a function name."))?;
+    if !input.is_object() {
+        return Err(errors::protocol(
+            "A tool call's input must be a JSON object.",
+        ));
+    }
+    Ok(ToolCall {
+        id: ToolCallId(id.into()),
+        name: name.into(),
+        input,
+    })
+}
+
+fn tool_input(arguments: &Value) -> Result<Value, ChatError> {
+    arguments
+        .as_str()
+        .and_then(|input| serde_json::from_str(input).ok())
+        .ok_or_else(|| errors::protocol("A tool call arrived without complete JSON arguments."))
+}
+
+async fn tool_started(sink: &mut dyn EventSink, id: &str, name: &str) {
+    sink.emit(TurnEvent::ToolStarted {
+        id: ToolCallId(id.into()),
+        name: name.into(),
+        owner: ToolOwner::Server,
+    })
+    .await;
+}
+
+fn data_url(image: &Image) -> String {
+    format!(
+        "data:{};base64,{}",
+        image.media_type,
+        base64::engine::general_purpose::STANDARD.encode(&image.bytes)
+    )
+}
+
+fn usage(input: &Value, output: &Value) -> Option<Usage> {
+    Some(Usage {
+        input_tokens: input.as_u64()?,
+        output_tokens: output.as_u64()?,
+    })
 }
 
 /// One model call's input. Borrowed from the loop, which owns the messages for the turn.
@@ -223,16 +446,11 @@ pub struct Image {
 /// reasoning, call ids) so the next step of the same turn sends it back verbatim. Opaque
 /// to the loop.
 pub struct AssistantTurn {
-    #[expect(
-        dead_code,
-        reason = "read once chunk `models` writes the provider routes"
-    )]
     text: String,
     calls: Vec<ToolCall>,
     finish: FinishReason,
     usage: Option<Usage>,
     /// The provider's own assistant output, sent back untouched on the next step of the turn.
-    #[expect(dead_code, reason = "read once chunk `models` writes the wires")]
     native: NativeOutput,
 }
 
@@ -243,8 +461,7 @@ enum NativeOutput {
     None,
     /// The Chat Completions assistant message, the Responses output items, or the Anthropic
     /// content blocks, exactly as received.
-    #[expect(dead_code, reason = "built once chunk `models` writes the wires")]
-    Json(serde_json::Value),
+    Chat(Value),
     #[expect(
         dead_code,
         reason = "built once chunk `models` writes the Bedrock route"
