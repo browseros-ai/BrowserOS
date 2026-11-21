@@ -19,6 +19,7 @@
 mod cli;
 mod launch;
 mod process;
+mod report;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

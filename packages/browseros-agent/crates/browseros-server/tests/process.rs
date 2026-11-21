@@ -255,15 +255,40 @@ async fn a_lock_held_past_the_start_budget_is_exit_1() -> TestResult {
 
 #[tokio::test]
 async fn sigterm_during_start_up_is_still_exit_3() -> TestResult {
+    use std::io::BufRead;
     let dir = tempfile::tempdir()?;
     let state = dir.path().join("state");
     let holder = tokio::spawn({
         let state = state.clone();
-        async move { hold_lock(&state, Duration::from_secs(4)).await }
+        async move { hold_lock(&state, Duration::from_secs(8)).await }
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let mut child = serve(&launch_file(dir.path(), free_port()?)?, &state)?;
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    let mut child = Command::new(BINARY)
+        .arg(format!(
+            "--config={}",
+            launch_file(dir.path(), free_port()?)?.display()
+        ))
+        .env("BROWSEROS_DIR", &state)
+        .env("BROWSEROS_BROWSER", "off")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Signal only once the server says it is waiting on the lock: a fixed delay can land
+    // before `main` runs (macOS scans a freshly linked binary on its first launch), and the
+    // default action of SIGTERM is then all there is.
+    let stderr = child.stderr.take().ok_or("stderr")?;
+    let (seen, waiting) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if line.contains("locked by another process") {
+                let _ = seen.send(());
+            }
+        }
+    });
+    waiting.recv_timeout(Duration::from_secs(15))?;
     sigterm(&child)?;
     assert_eq!(
         wait_exit(&mut child, Duration::from_secs(5))?,

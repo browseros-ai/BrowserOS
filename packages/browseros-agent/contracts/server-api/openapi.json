@@ -1,0 +1,3321 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BrowserOS server API",
+    "description": "The contract between the BrowserOS extension and its local server. Generated from the server's Rust handlers and wire types; do not edit by hand.\n\nTrust model, for every route except the `system` tag: the server binds `127.0.0.1` only; the `Host` header must name loopback; a request that carries an `Origin` header must carry the extension's origin (or one listed in `BROWSEROS_TRUSTED_ORIGINS`); a request with no `Origin` may only use `GET`, `HEAD` or `OPTIONS`. A refused request gets `403 {\"error\":\"Forbidden\"}`. A preflight `OPTIONS` from an allowed origin is answered by the trust layer itself (`204`, methods `GET, POST, PUT, DELETE, OPTIONS`, headers `Content-Type, Accept`).\n\nTimes are epoch milliseconds. Ids are strings.",
+    "license": {
+      "name": "AGPL-3.0-or-later",
+      "identifier": "AGPL-3.0-or-later"
+    },
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:{port}",
+      "description": "The local server. The port comes from the browser pref `browseros.server.mcp_port`.",
+      "variables": {
+        "port": {
+          "default": "9200",
+          "description": "The server port"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/system/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Liveness. The browser polls it every 30 s and reads only the status code.",
+        "description": "Also served at `/health` for browsers already shipped.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Alive.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Update readiness. The browser swaps in a downloaded server only when `can_update` is true.",
+        "operationId": "getStatus",
+        "responses": {
+          "200": {
+            "description": "`can_update` is false while any chat run or agent tool call is active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/diagnostics": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Version and operating system, for the diagnostics page.",
+        "operationId": "getDiagnostics",
+        "responses": {
+          "200": {
+            "description": "Version and operating system, for the diagnostics page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Diagnostics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/shutdown": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Answer, then exit 0. Also served at `/shutdown` for BrowserOS 0.46.x.",
+        "operationId": "shutdown",
+        "responses": {
+          "200": {
+            "description": "Exiting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShutdownResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Start one turn and stream it.",
+        "description": "Starts a server-owned run for the conversation and returns a subscriber view of it. Closing\nthis response does not stop the run; `stopTurn` does. A turn that cannot run (unknown\nprovider, no provider selected, not signed in, an agent that will not start) is a `200`\nstream whose last chunk is `error`; only a body that does not parse is a `400`. The body is\nthe AI SDK UI message stream v1 for `ai@7.0.114`: each event is `data: <UiMessageChunk>`,\nand the stream ends with `data: [DONE]`.",
+        "operationId": "startTurn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The run's chunks from the first one, then live.",
+            "headers": {
+              "x-vercel-ai-ui-message-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always `v1`."
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiMessageChunk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body did not parse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A turn is already running for this conversation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/panels": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Which tab's side panel shows which run.",
+        "description": "Endless server-sent events. Every event is the whole table, sent on connect, on every\nchange, and every 5 seconds as a heartbeat. The extension's background worker is the only\nreader.",
+        "operationId": "watchPanels",
+        "responses": {
+          "200": {
+            "description": "A stream of full tables.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelAssignments"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/panels/{tabId}": {
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Forget a closed tab.",
+        "operationId": "forgetPanel",
+        "parameters": [
+          {
+            "name": "tabId",
+            "in": "path",
+            "description": "The browser's tab id; a negative one is `400`.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Forgotten, or already unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The tab id is not a non-negative integer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{conversationId}/state": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "The current run of a conversation, for a panel that did not start it.",
+        "operationId": "getRunState",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "While `status` is `running`, `messages` is the history up to and including this turn's user message (the stream supplies the answer); once the run has ended, it is the whole transcript including the sealed answer.",
+            "headers": {
+              "cache-control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always `no-store`."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The conversation id is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run is known for this conversation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{conversationId}/stream": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Replay a run from its first chunk, then follow it live.",
+        "operationId": "resumeStream",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "runId",
+            "in": "query",
+            "description": "The run the panel read from `getRunState`. Absent means the conversation's current run.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Same framing as `startTurn`. A finished run replays and ends.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiMessageChunk"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No run is known for this conversation, or its replay log is gone."
+          },
+          "400": {
+            "description": "The conversation id or `runId` is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A newer run replaced `runId`. Re-read the state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{conversationId}/stop": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Stop the running turn. The only call that cancels a run.",
+        "operationId": "stopTurn",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`stopped` is false when nothing was running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The conversation id is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/{conversationId}": {
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Release what the server holds live for a conversation.",
+        "description": "Stops its run, forgets the run record and its panel assignments. The stored conversation is\nuntouched (`deleteConversation` removes that). Idempotent.",
+        "operationId": "releaseConversation",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Released, or nothing was held.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The conversation id is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversations": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Every conversation, newest first, without messages.",
+        "operationId": "listConversations",
+        "responses": {
+          "200": {
+            "description": "Summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conversations/{conversationId}": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "One conversation with its transcript.",
+        "operationId": "getConversation",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation with its transcript.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The conversation id is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such conversation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Delete the stored conversation and release its live state.",
+        "operationId": "deleteConversation",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The conversation id is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such conversation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Every chat target the server can run, LLM providers and coding agents.",
+        "description": "Rows of a type this server no longer runs are left in the database and not listed.",
+        "operationId": "listProviders",
+        "responses": {
+          "200": {
+            "description": "Rows without secrets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers/default": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The selected chat target.",
+        "operationId": "getDefaultProvider",
+        "responses": {
+          "200": {
+            "description": "The selected row, or null when none is selected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefaultProvider"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Select a chat target.",
+        "operationId": "setDefaultProvider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultProvider"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The newly selected row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body did not parse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/providers/{providerId}": {
+      "put": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Create or update an LLM provider. The id is the client's.",
+        "description": "A credential that is absent or an empty string keeps the stored value; `null` clears it. A\nsave never moves the selection and never rewrites `createdAt`.",
+        "operationId": "saveProvider",
+        "parameters": [
+          {
+            "name": "providerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved row, without secrets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not a provider.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Delete a provider row.",
+        "operationId": "deleteProvider",
+        "parameters": [
+          {
+            "name": "providerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/test-provider": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "One tiny model call to prove a provider works.",
+        "description": "A blank credential is filled from the stored row named by `providerId`, and only from a row\nof the same provider type; when one is borrowed, the stored base URL, resource name and\nregion are forced too, so a saved secret is never sent to an address the caller chose. Every\n`200` and `400` of this route is `{success, message, responseTime?}`, a body that does not\nparse included, because the extension reads that one shape at any status.",
+        "operationId": "testProvider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestProviderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The call succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The call failed, or the request could not be tested; `message` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestProviderResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Coding agents. Must answer 200 even when empty; the composer waits on it.",
+        "operationId": "listAgents",
+        "responses": {
+          "200": {
+            "description": "Agents of a type this server runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Create a coding agent; the server makes the id.",
+        "operationId": "createAgent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created; the server made the id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not an agent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents/{agentId}": {
+      "put": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Edit a coding agent.",
+        "operationId": "updateAgent",
+        "parameters": [
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not an agent patch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such agent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Delete a coding agent.",
+        "operationId": "deleteAgent",
+        "parameters": [
+          {
+            "name": "agentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such agent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/acpx/probe": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Ask an agent which models and reasoning levels it offers.",
+        "description": "Starts the agent's adapter, reads what it advertises, and stops it. It does not prove the\nagent is signed in. A probe that cannot run answers 200 with `error` set and the defaults\n`models: []`, `reasoning: null`, `supportsConfigOption: false`, `agentInfo: null`,\n`protocolVersion: 0`; the dialog still lets the agent be created. (The old server answered\nsuch a probe with `500 {error: {code, message}}`; the dialog renders either.)",
+        "operationId": "probeAgent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the agent advertised.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProbe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body did not parse.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/{provider}/start": {
+      "get": {
+        "tags": [
+          "signin"
+        ],
+        "summary": "Begin \"Sign in with ChatGPT\".",
+        "description": "Opens the callback listener on `127.0.0.1:1455` for as long as a sign-in is pending and\nredirects to OpenAI's authorize page. The extension follows the redirect and opens the final\nURL in a tab.",
+        "operationId": "startSignIn",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The sign-in providers this server owns. Today only ChatGPT.",
+              "enum": [
+                "chatgpt-pro"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To the authorize URL.",
+            "headers": {
+              "location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "OpenAI's authorize URL."
+              }
+            }
+          },
+          "400": {
+            "description": "Not a sign-in provider.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The sign-in could not start for another reason.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Port 1455 is held by another program, or the install id is unreadable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/{provider}/status": {
+      "get": {
+        "tags": [
+          "signin"
+        ],
+        "summary": "Whether tokens are stored for this install.",
+        "operationId": "getSignInStatus",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The sign-in providers this server owns. Today only ChatGPT.",
+              "enum": [
+                "chatgpt-pro"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether tokens are stored for this install.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a sign-in provider.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The install id is unreadable, so no sign-in can be stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/{provider}": {
+      "delete": {
+        "tags": [
+          "signin"
+        ],
+        "summary": "Remove the stored tokens.",
+        "operationId": "signOut",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The sign-in providers this server owns. Today only ChatGPT.",
+              "enum": [
+                "chatgpt-pro"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tokens removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a sign-in provider.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The install id is unreadable, so no sign-in can be stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Agent": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AgentType"
+          },
+          "modelId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningEffort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDirectory": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AgentInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AgentInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1
+          },
+          "type": {
+            "$ref": "#/components/schemas/AgentType"
+          },
+          "modelId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningEffort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDirectory": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentList": {
+        "type": "object",
+        "required": [
+          "agents"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          }
+        }
+      },
+      "AgentPatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80,
+            "minLength": 1
+          },
+          "modelId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningEffort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDirectory": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentProbe": {
+        "type": "object",
+        "description": "What a coding agent advertised. A probe that could not run has `error` set.",
+        "required": [
+          "models",
+          "reasoning",
+          "supportsConfigOption",
+          "agentInfo",
+          "protocolVersion"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeModel"
+            }
+          },
+          "reasoning": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProbeReasoning"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "supportsConfigOption": {
+            "type": "boolean"
+          },
+          "agentInfo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocolVersion": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProbeError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AgentResponse": {
+        "type": "object",
+        "required": [
+          "agent"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          }
+        }
+      },
+      "AgentType": {
+        "type": "string",
+        "enum": [
+          "claude",
+          "codex"
+        ]
+      },
+      "ApiError": {
+        "type": "object",
+        "description": "`{\"error\": \"<one sentence>\"}`: every refusal outside the chat path.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "BrowserContext": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "activeTab": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Tab"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selectedTabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tab"
+            }
+          }
+        }
+      },
+      "ChatAttachment": {
+        "type": "object",
+        "required": [
+          "mediaType",
+          "data"
+        ],
+        "properties": {
+          "mediaType": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string",
+            "description": "A data URL."
+          }
+        }
+      },
+      "ChatError": {
+        "type": "object",
+        "required": [
+          "code",
+          "title",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ChatErrorCode"
+          },
+          "title": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statusCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "docsUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryAfterSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "details": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Upstream text with secrets scrubbed, at most 20,000 characters."
+          }
+        }
+      },
+      "ChatErrorCode": {
+        "type": "string",
+        "enum": [
+          "rate_limited",
+          "auth_failed",
+          "provider_config",
+          "context_length",
+          "content_filter",
+          "connection_failed",
+          "provider_unavailable",
+          "unknown"
+        ]
+      },
+      "ChatErrorEnvelope": {
+        "type": "object",
+        "description": "The chat path's error body: the same envelope an `error` chunk carries in `errorText`, so\nthe chat error card renders both the same way.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ChatError"
+          }
+        }
+      },
+      "ChatMode": {
+        "type": "string",
+        "enum": [
+          "chat",
+          "agent"
+        ]
+      },
+      "ChatRequest": {
+        "type": "object",
+        "description": "One turn. The server owns history: the client sends the new message and the conversation\nid, never the transcript. Unknown fields are ignored, because the extension and the server\nupdate separately.",
+        "required": [
+          "conversationId",
+          "target"
+        ],
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Made by the extension. Keys the run, the stored row and the agent session."
+          },
+          "target": {
+            "$ref": "#/components/schemas/ChatTarget"
+          },
+          "message": {
+            "type": "string",
+            "description": "The user's text for this turn."
+          },
+          "userMessageId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id the client gave this user message. If the stored transcript already holds a\nmessage with this id, everything after it is dropped and it is answered again: this is\nhow Retry and a repeated POST avoid storing the question twice. Absent: the server makes\nan id and appends."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ChatMode",
+            "description": "`chat` gives the agent read-only access to the browser."
+          },
+          "browserContext": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrowserContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "userSystemPrompt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's personalization text."
+          },
+          "userWorkingDir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Working directory for a coding agent. Ignored for LLM targets."
+          },
+          "supportsReasoning": {
+            "type": "boolean",
+            "description": "From the extension's model catalogue. False turns reasoning options off."
+          },
+          "selectedText": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selectedTextSource": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SelectedTextSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "persist": {
+            "type": "boolean",
+            "description": "False in an incognito window: nothing is written, for either kind of target."
+          },
+          "previousConversation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviousMessage"
+            },
+            "description": "Text-only history, sent only when `persist` is false."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatAttachment"
+            },
+            "description": "Files attached to this message. Coding agents only."
+          }
+        }
+      },
+      "ChatTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The server's own agent loop on one of the user's LLM providers.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "providerId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A provider row id. Absent means the selected provider."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "browseros"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "agentId",
+              "type"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "claude"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "agentId",
+              "type"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "codex"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the turn talks to: the server's own loop on an LLM provider (`browseros`), or a coding\nagent run through acpx."
+      },
+      "ConversationDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ConversationSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "messages"
+            ],
+            "properties": {
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/UiMessage"
+                }
+              }
+            }
+          }
+        ],
+        "description": "A conversation summary with its transcript."
+      },
+      "ConversationList": {
+        "type": "object",
+        "required": [
+          "conversations"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationSummary"
+            }
+          }
+        }
+      },
+      "ConversationResponse": {
+        "type": "object",
+        "required": [
+          "conversation"
+        ],
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/ConversationDetail"
+          }
+        }
+      },
+      "ConversationSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "targetType",
+          "lastMessagedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "lastUserMessage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First 200 characters of the last user text."
+          },
+          "origin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetType": {
+            "$ref": "#/components/schemas/ConversationTargetType",
+            "description": "`browseros`, `claude`, `codex`, or `custom` on rows from the old server."
+          },
+          "agentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastMessagedAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ConversationTargetType": {
+        "type": "string",
+        "description": "The kinds of target a stored conversation can name.",
+        "enum": [
+          "browseros",
+          "claude",
+          "codex",
+          "custom"
+        ]
+      },
+      "DefaultProvider": {
+        "type": "object",
+        "description": "The selected row, or `null` when none is selected.",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Provider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Diagnostics": {
+        "type": "object",
+        "required": [
+          "version",
+          "os",
+          "osVersion"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "FinishReason": {
+        "type": "string",
+        "enum": [
+          "stop",
+          "length",
+          "content-filter",
+          "tool-calls",
+          "error",
+          "other"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "cdpConnected"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/StatusOk"
+          },
+          "cdpConnected": {
+            "type": "boolean",
+            "description": "Whether the browser engine is linked to the browser. Always false where the engine is\nnot built."
+          }
+        }
+      },
+      "PanelAssignment": {
+        "type": "object",
+        "required": [
+          "tabId",
+          "conversationId",
+          "runId",
+          "status"
+        ],
+        "properties": {
+          "tabId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "conversationId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "autoOpenId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set once for a tab the agent opened; tells the extension to open its panel there."
+          }
+        }
+      },
+      "PanelAssignments": {
+        "type": "object",
+        "description": "One event of `GET /chat/panels`: the whole table.",
+        "required": [
+          "assignments"
+        ],
+        "properties": {
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelAssignment"
+            }
+          }
+        }
+      },
+      "PreviousMessage": {
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/PreviousRole"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "PreviousRole": {
+        "type": "string",
+        "enum": [
+          "user",
+          "assistant"
+        ]
+      },
+      "ProbeError": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "acpErrorCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ProbeModel": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProbeReasoning": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultValue": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProbeRequest": {
+        "type": "object",
+        "description": "`POST /acpx/probe`.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/AgentType"
+          },
+          "timeoutMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "maximum": 120000,
+            "minimum": 1000
+          }
+        }
+      },
+      "Provider": {
+        "type": "object",
+        "description": "A row of the `providers` table without its four secrets. Every key is always present;\nnullable ones are `null` (the extension's converter reads the keys).",
+        "required": [
+          "id",
+          "kind",
+          "type",
+          "name",
+          "modelId",
+          "reasoningEffort",
+          "reasoningSummary",
+          "isDefault",
+          "baseUrl",
+          "headers",
+          "supportsImages",
+          "contextWindow",
+          "temperature",
+          "resourceName",
+          "region",
+          "workingDirectory",
+          "customConfig",
+          "hasApiKey",
+          "hasAccessKeyId",
+          "hasSecretAccessKey",
+          "hasSessionToken",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderRowKind"
+          },
+          "type": {
+            "type": "string",
+            "description": "A ProviderType for `llm` rows, an AgentType for `acp` rows."
+          },
+          "name": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningEffort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningSummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isDefault": {
+            "type": "boolean"
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headers": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "supportsImages": {
+            "type": "boolean"
+          },
+          "contextWindow": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "temperature": {
+            "type": "number",
+            "format": "double"
+          },
+          "resourceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDirectory": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customConfig": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hasApiKey": {
+            "type": "boolean"
+          },
+          "hasAccessKeyId": {
+            "type": "boolean"
+          },
+          "hasSecretAccessKey": {
+            "type": "boolean"
+          },
+          "hasSessionToken": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ProviderInput": {
+        "type": "object",
+        "description": "`PUT /providers/{providerId}`. A credential that is absent or an empty string keeps the\nstored value; `null` clears it. Any other nullable field: absent keeps, `null` clears.",
+        "required": [
+          "type",
+          "name",
+          "modelId",
+          "contextWindow"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ProviderType"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contextWindow": {
+            "type": "number",
+            "format": "double",
+            "description": "Tokens. A number, stored rounded (the old server validated a number)."
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headers": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A value may contain the literal `{{conversationId}}`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "supportsImages": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "apiKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accessKeyId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secretAccessKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningEffort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoningSummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ProviderList": {
+        "type": "object",
+        "required": [
+          "providers"
+        ],
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Provider"
+            }
+          }
+        }
+      },
+      "ProviderResponse": {
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/Provider"
+          }
+        }
+      },
+      "ProviderRowKind": {
+        "type": "string",
+        "enum": [
+          "llm",
+          "acp"
+        ]
+      },
+      "ProviderType": {
+        "type": "string",
+        "description": "The provider types this server runs. Derived from `store::ProviderKind`, the one list.",
+        "enum": [
+          "anthropic",
+          "openai",
+          "google",
+          "openrouter",
+          "fireworks",
+          "azure",
+          "bedrock",
+          "openai-compatible",
+          "ollama",
+          "lmstudio",
+          "moonshot",
+          "chatgpt-pro"
+        ]
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "system",
+          "user",
+          "assistant"
+        ]
+      },
+      "RunState": {
+        "type": "object",
+        "description": "`messages` is the history up to and including this turn's user message, without the\nassistant message in flight; the stream supplies that.",
+        "required": [
+          "conversationId",
+          "runId",
+          "status",
+          "messages",
+          "chunkCount"
+        ],
+        "properties": {
+          "conversationId": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiMessage"
+            }
+          },
+          "chunkCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "completed",
+          "aborted",
+          "failed"
+        ]
+      },
+      "SelectedTextSource": {
+        "type": "object",
+        "required": [
+          "url",
+          "title"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SetDefaultProvider": {
+        "type": "object",
+        "required": [
+          "providerId"
+        ],
+        "properties": {
+          "providerId": {
+            "type": "string"
+          }
+        }
+      },
+      "ShutdownResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/StatusOk"
+          }
+        }
+      },
+      "SignInStatus": {
+        "type": "object",
+        "description": "Whether tokens are stored for this install.",
+        "required": [
+          "authenticated",
+          "provider"
+        ],
+        "properties": {
+          "authenticated": {
+            "type": "boolean"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "status",
+          "cdpConnected",
+          "can_update"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/StatusOk"
+          },
+          "cdpConnected": {
+            "type": "boolean"
+          },
+          "can_update": {
+            "type": "boolean",
+            "description": "Snake case because the browser's C++ reads this key."
+          }
+        }
+      },
+      "StatusOk": {
+        "type": "string",
+        "description": "Always `ok`: an answer at all is the signal.",
+        "enum": [
+          "ok"
+        ]
+      },
+      "StopResult": {
+        "type": "object",
+        "required": [
+          "stopped"
+        ],
+        "properties": {
+          "stopped": {
+            "type": "boolean",
+            "description": "False when nothing was running."
+          }
+        }
+      },
+      "Success": {
+        "type": "object",
+        "description": "`{\"success\": true}`.",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          }
+        }
+      },
+      "Tab": {
+        "type": "object",
+        "description": "A browser tab by the browser's own id.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The browser's own tab id."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TestProviderRequest": {
+        "type": "object",
+        "description": "`POST /test-provider`. A blank credential is filled from the stored row named by\n`providerId`; when it is, the stored base URL and region are forced too, so a saved secret\nis never sent to an address the caller chose. Unknown fields are ignored.",
+        "required": [
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "providerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A saved row to borrow blank credentials from."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderType"
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "apiKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headers": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "resourceName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "accessKeyId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secretAccessKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TestProviderResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "responseTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Milliseconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "UiMessage": {
+        "type": "object",
+        "description": "An AI SDK `UIMessage` (`ai@7.0.114`). The extension passes it straight to `setMessages`, so\nthe part shapes are the SDK's, not ours; they are left open here on purpose.",
+        "required": [
+          "id",
+          "role",
+          "parts"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "metadata": {},
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UiPart"
+            }
+          }
+        }
+      },
+      "UiMessageChunk": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "First chunk. `messageId` is the server's id for the assistant message; it is the same in\nthe stored transcript and in every replay.",
+            "required": [
+              "messageId",
+              "type"
+            ],
+            "properties": {
+              "messageId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "start"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Around each model call of the loop. A coding-agent turn is one step.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "start-step"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "finish-step"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text-start"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "delta": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text-delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text-end"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reasoning-start"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "delta": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reasoning-delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reasoning-end"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A tool call exists. For the server's loop the tool is `run`; for a coding agent\n`dynamic` and `providerExecuted` are true.",
+            "required": [
+              "toolCallId",
+              "toolName",
+              "type"
+            ],
+            "properties": {
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dynamic": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "providerExecuted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tool-input-start"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "toolCallId",
+              "toolName",
+              "input",
+              "type"
+            ],
+            "properties": {
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "input": {},
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dynamic": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "providerExecuted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tool-input-available"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "toolCallId",
+              "output",
+              "type"
+            ],
+            "properties": {
+              "toolCallId": {
+                "type": "string"
+              },
+              "output": {},
+              "dynamic": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "providerExecuted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tool-output-available"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "toolCallId",
+              "errorText",
+              "type"
+            ],
+            "properties": {
+              "toolCallId": {
+                "type": "string"
+              },
+              "errorText": {
+                "type": "string"
+              },
+              "dynamic": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "providerExecuted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tool-output-error"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "finishReason": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/FinishReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "finish"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`errorText` is a JSON string holding a ChatErrorEnvelope, for both kinds of target.",
+            "required": [
+              "errorText",
+              "type"
+            ],
+            "properties": {
+              "errorText": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The turn was stopped.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "abort"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The subset of the AI SDK `ai@7.0.114` UI message chunk union this server emits, one per\n`data:` event of a chat stream. Field names and order rules are the SDK's; every chunk is\nvalidated by the client and an unknown `type` fails the turn. `turn` serialises the real\nchunks; this type only describes them for the contract."
+      },
+      "UiPart": {
+        "type": "object",
+        "description": "A part as the AI SDK stores it: its `type`, then that type's own fields.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "chat",
+      "description": "Turns, server-owned runs, replay and side-panel routing."
+    },
+    {
+      "name": "conversations",
+      "description": "History. The server is the only writer."
+    },
+    {
+      "name": "providers",
+      "description": "LLM providers, the selected target, connection test."
+    },
+    {
+      "name": "agents",
+      "description": "Coding agents run through acpx (Claude Code, Codex)."
+    },
+    {
+      "name": "signin",
+      "description": "Sign in with ChatGPT."
+    },
+    {
+      "name": "system",
+      "description": "The browser's supervisor contract and diagnostics. No origin check."
+    }
+  ]
+}
