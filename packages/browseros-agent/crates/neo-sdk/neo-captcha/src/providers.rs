@@ -422,6 +422,7 @@ impl CapsolverClient {
                     optional(&mut payload, "recaptchaDataSValue", &params.enterprise_s);
                 }
                 optional(&mut payload, "pageAction", &params.page_action);
+                optional(&mut payload, "userAgent", &params.user_agent);
                 payload
             }
             SolveTask::TurnstileToken(params) => {
@@ -1838,11 +1839,19 @@ mod tests {
                 assert_eq!(sent["type"], "ReCaptchaV2TaskProxyLess");
                 assert_eq!(sent["recaptchaDataSValue"], "data-s");
                 assert_eq!(sent["isInvisible"], true);
+                assert_eq!(
+                    sent["userAgent"], "test-agent",
+                    "CapSolver ReCaptchaV2TaskProxyLess accepts userAgent so solved tokens match the browser session"
+                );
             } else {
                 assert_eq!(sent["type"], "AntiTurnstileTaskProxyLess");
                 assert_eq!(
                     sent["metadata"],
                     json!({"action":"login","cdata":"context"})
+                );
+                assert!(
+                    sent.get("userAgent").is_none(),
+                    "CapSolver ignores userAgent on AntiTurnstileTaskProxyLess"
                 );
             }
         }
@@ -1868,6 +1877,43 @@ mod tests {
         assert_eq!(sent["type"], "ReCaptchaV2EnterpriseTaskProxyLess");
         assert_eq!(sent["enterprisePayload"], json!({"s":"data-s"}));
         assert_eq!(sent["pageAction"], "verify");
+        assert_eq!(
+            sent["userAgent"], "test-agent",
+            "CapSolver ReCaptchaV2EnterpriseTaskProxyLess accepts userAgent so solved tokens match the browser session"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_capsolver_omits_absent_or_blank_recaptcha_user_agent() -> anyhow::Result<()>
+    {
+        for enterprise in [false, true] {
+            for user_agent in [None, Some(""), Some(" \t\n ")] {
+                let mock = vendor(vec![
+                    json!({"errorId":0,"status":"ready","solution":{"gRecaptchaResponse":"token"}})
+                        .into(),
+                ])
+                .await?;
+                let chain = ProviderChain::new(&config(Some(&mock), 1)?);
+                let SolveTask::RecaptchaToken(mut params) = recaptcha() else {
+                    anyhow::bail!("wrong task")
+                };
+                params.enterprise = enterprise;
+                params.user_agent = user_agent.map(str::to_owned);
+                let answer = solve(&chain, &SolveTask::RecaptchaToken(params)).await?;
+                assert_eq!(
+                    answer.answer,
+                    SolveAnswer::Token("token".into()),
+                    "an absent or blank userAgent must not block solving"
+                );
+                let state = mock.state.lock().await;
+                let sent = &state.requests[0].1["task"];
+                assert!(
+                    sent.get("userAgent").is_none(),
+                    "absent or whitespace-only userAgent must be omitted so CapSolver uses its default"
+                );
+            }
+        }
         Ok(())
     }
 
