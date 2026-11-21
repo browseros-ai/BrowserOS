@@ -1,7 +1,6 @@
-import type { ConversationRoutes } from '@browseros/server'
+import { ServerApiClient, ServerApiError } from '@browseros/server-api/client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
-import { hc } from 'hono/client'
 import { removeConversationExecutionHistory } from '@/lib/execution-history/storage'
 import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
@@ -23,50 +22,47 @@ export interface ServerConversation {
 
 async function conversationsClient() {
   const baseUrl = await resolveAgentServerUrl()
-  return hc<ConversationRoutes>(`${baseUrl}/conversations`)
+  return new ServerApiClient(baseUrl)
 }
 
 export async function fetchServerConversations(): Promise<
   ServerConversationSummary[]
 > {
   const client = await conversationsClient()
-  const response = await client.index.$get()
-  if (!response.ok) {
-    throw new Error(`Failed to load conversations (${response.status})`)
+  try {
+    const { conversations } = await client.listConversations()
+    return conversations.map((conversation) => ({
+      id: conversation.id,
+      lastMessagedAt: conversation.lastMessagedAt,
+      lastUserMessage: conversation.lastUserMessage ?? '',
+    }))
+  } catch (error) {
+    if (error instanceof ServerApiError) {
+      throw new Error(`Failed to load conversations (${error.status})`, {
+        cause: error,
+      })
+    }
+    throw error
   }
-  const { conversations } = await response.json()
-  return conversations.map((conversation) => ({
-    id: conversation.id,
-    lastMessagedAt: conversation.lastMessagedAt,
-    lastUserMessage: conversation.lastUserMessage ?? '',
-  }))
 }
 
 export async function fetchServerConversation(
   conversationId: string,
 ): Promise<ServerConversation | null> {
   const client = await conversationsClient()
-  const response = await client[':conversationId'].$get({
-    param: { conversationId },
-  })
-  if (response.status === 404) return null
-  if (!response.ok) {
-    throw new Error(`Failed to load conversation (${response.status})`)
-  }
-  const data = await response.json()
-  if (!('conversation' in data)) {
-    throw new Error('Failed to load conversation')
-  }
-  // hc applies a JSON transform to the response type, and UIMessage[]'s union is
-  // too deep for the compiler to instantiate through it (TS2589). The runtime
-  // shape is UIMessage[] exactly as the server stored it, so assert it here at
-  // the JSON boundary.
-  const messages = data.conversation.messages as UIMessage[]
-  return {
-    id: data.conversation.id,
-    messages,
-    targetType: data.conversation.targetType,
-    agentId: data.conversation.agentId,
+  try {
+    const { conversation } = await client.getConversation({ conversationId })
+    // The contract leaves AI SDK parts open so existing transcripts retain
+    // all their fields when passed back to useChat.
+    return {
+      id: conversation.id,
+      messages: conversation.messages as UIMessage[],
+      targetType: conversation.targetType,
+      agentId: conversation.agentId ?? undefined,
+    }
+  } catch (error) {
+    if (error instanceof ServerApiError && error.status === 404) return null
+    throw error
   }
 }
 
@@ -75,11 +71,10 @@ export async function deleteServerConversationRow(
   conversationId: string,
 ): Promise<void> {
   const client = await conversationsClient()
-  const response = await client[':conversationId'].$delete({
-    param: { conversationId },
-  })
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Failed to delete conversation (${response.status})`)
+  try {
+    await client.deleteConversation({ conversationId })
+  } catch (error) {
+    if (!(error instanceof ServerApiError && error.status === 404)) throw error
   }
 }
 

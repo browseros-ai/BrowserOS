@@ -2,15 +2,15 @@ import {
   Anthropic,
   Azure,
   Bedrock,
+  Fireworks,
   Gemini,
   Kimi,
   LmStudio,
   Ollama,
   OpenAI,
   OpenRouter,
-  Qwen,
 } from '@lobehub/icons'
-import { Bot, Github } from 'lucide-react'
+import { Bot } from 'lucide-react'
 import type { FC, SVGProps } from 'react'
 import type { ProviderType } from './types'
 
@@ -32,8 +32,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   bedrock: Bedrock,
   moonshot: Kimi,
   'chatgpt-pro': OpenAI,
-  'github-copilot': Github,
-  'qwen-code': Qwen,
+  fireworks: Fireworks,
 }
 
 export interface ProviderIconProps {

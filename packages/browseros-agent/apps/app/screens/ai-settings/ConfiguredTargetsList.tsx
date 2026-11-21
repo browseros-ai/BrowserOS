@@ -1,13 +1,8 @@
 import type { FC } from 'react'
 import { AdapterIcon } from '@/components/agents/AdapterIcon'
-import {
-  agentBrandKey,
-  BRAND_MARKS,
-} from '@/components/agents/agent-brand-marks'
 import { InlineErrorAlert } from '@/components/agents/PageAlerts'
 import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import { ConfiguredTargetRow } from './ConfiguredTargetRow'
 import type { CodingAgentsController } from './coding-agents.hooks'
 import {
@@ -28,7 +23,6 @@ export interface ConfiguredTargetsListProps {
   onTestProvider: (provider: LlmProviderConfig) => void
   onEditProvider: (provider: LlmProviderConfig) => void
   onDeleteProvider: (provider: LlmProviderConfig) => void
-  onEditAgent?: (agent: AcpAgent) => void
 }
 
 /**
@@ -47,7 +41,6 @@ export const ConfiguredTargetsList: FC<ConfiguredTargetsListProps> = ({
   onTestProvider,
   onEditProvider,
   onDeleteProvider,
-  onEditAgent,
 }) => {
   const { agents, pageError, dismissPageError, deletingAgentId, handleDelete } =
     coding
@@ -86,13 +79,11 @@ export const ConfiguredTargetsList: FC<ConfiguredTargetsListProps> = ({
         })}
 
         {agents.map((agent) => {
-          const Mark = BRAND_MARKS[agentBrandKey(agent) ?? '']
           const actions = buildAgentActions({
             agent,
             isDeleting: deletingAgentId === agent.id,
             onSelectAgent,
             onDeleteAgent: handleDelete,
-            onEditAgent,
           })
 
           return (
@@ -101,13 +92,7 @@ export const ConfiguredTargetsList: FC<ConfiguredTargetsListProps> = ({
               id={agent.id}
               name={agent.name}
               description={agentDescription(agent)}
-              icon={
-                Mark ? (
-                  <Mark className="size-5" />
-                ) : (
-                  <AdapterIcon adapter={agent.type} className="size-5" />
-                )
-              }
+              icon={<AdapterIcon adapter={agent.type} className="size-5" />}
               kind="agent"
               isSelected={selectedAgentId === agent.id}
               busy={deletingAgentId === agent.id}

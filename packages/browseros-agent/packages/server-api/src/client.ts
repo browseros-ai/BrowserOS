@@ -82,27 +82,42 @@ export class ServerApiClient implements JsonOperations {
     )
   }
 
-  async getRunState(path: PathOf<'getRunState'>): Promise<Schemas['RunState']> {
+  async getRunState(
+    path: PathOf<'getRunState'>,
+    signal?: AbortSignal,
+  ): Promise<Schemas['RunState']> {
     return unwrap(
       await this.client.GET('/chat/{conversationId}/state', {
         params: { path },
+        cache: 'no-store',
+        signal,
       }),
     )
   }
 
-  async stopTurn(path: PathOf<'stopTurn'>): Promise<Schemas['StopResult']> {
+  async stopTurn(
+    path: PathOf<'stopTurn'>,
+    signal?: AbortSignal,
+  ): Promise<Schemas['StopResult']> {
     return unwrap(
       await this.client.POST('/chat/{conversationId}/stop', {
         params: { path },
+        signal,
       }),
     )
   }
 
   async releaseConversation(
     path: PathOf<'releaseConversation'>,
+    signal?: AbortSignal,
   ): Promise<Schemas['Success']> {
     return unwrap(
-      await this.client.DELETE('/chat/{conversationId}', { params: { path } }),
+      await this.client.DELETE('/chat/{conversationId}', {
+        params: { path },
+        // Conversation teardown can outlive the extension page that initiated it.
+        keepalive: true,
+        signal,
+      }),
     )
   }
 
@@ -169,8 +184,15 @@ export class ServerApiClient implements JsonOperations {
     body: Schemas['TestProviderRequest'],
   ): Promise<Schemas['TestProviderResult']> {
     const result = await this.client.POST('/test-provider', { body })
-    if (result.error && 'success' in result.error) return result.error
-    return unwrap(result)
+    const bodyValue: unknown =
+      result.response.status === 400 ? result.error : unwrap(result)
+    if (isTestProviderResult(bodyValue)) return bodyValue
+    if (result.response.ok) {
+      throw new Error(
+        'BrowserOS server returned an invalid provider test result',
+      )
+    }
+    throw new ServerApiError(result.response, bodyValue)
   }
 
   async listAgents(): Promise<Schemas['AgentList']> {
@@ -202,7 +224,23 @@ export class ServerApiClient implements JsonOperations {
   async probeAgent(
     body: Schemas['ProbeRequest'],
   ): Promise<Schemas['AgentProbe']> {
-    return unwrap(await this.client.POST('/acpx/probe', { body }))
+    const result = await this.client.POST('/acpx/probe', { body })
+    const error: unknown = result.error
+    // The TypeScript server reports probe failures as a 500 with a nested
+    // message. The Rust server returns the failure in its success body.
+    if (
+      result.response.status === 500 &&
+      typeof error === 'object' &&
+      error !== null &&
+      'error' in error &&
+      typeof error.error === 'object' &&
+      error.error !== null &&
+      'message' in error.error &&
+      typeof error.error.message === 'string'
+    ) {
+      throw new ServerApiError(result.response, { error: error.error.message })
+    }
+    return unwrap(result)
   }
 
   async getSignInStatus(
@@ -233,6 +271,23 @@ function isApiError(body: unknown): body is Schemas['ApiError'] {
   return (
     typeof body === 'object' &&
     body !== null &&
-    typeof (body as { error?: unknown }).error === 'string'
+    'error' in body &&
+    typeof body.error === 'string'
+  )
+}
+
+function isTestProviderResult(
+  body: unknown,
+): body is Schemas['TestProviderResult'] {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    'success' in body &&
+    typeof body.success === 'boolean' &&
+    'message' in body &&
+    typeof body.message === 'string' &&
+    (!('responseTime' in body) ||
+      body.responseTime === null ||
+      typeof body.responseTime === 'number')
   )
 }

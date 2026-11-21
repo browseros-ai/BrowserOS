@@ -1,43 +1,26 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
-import {
-  type ClientAuthConfig,
-  requestDeviceCode,
-  startTokenPolling,
-} from '@/lib/llm-providers/client-oauth'
 import { CHATGPT_PROVIDER_DISPLAY_NAME } from '@/lib/llm-providers/provider-display-names'
 import { getProviderTemplate } from '@/lib/llm-providers/providerTemplates'
-import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
+import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { useOAuthStatus } from '@/modules/llm-providers/oauth-status.hooks'
 
 export interface OAuthProviderFlowConfig {
-  providerType: ProviderType
+  providerType: 'chatgpt-pro'
   displayName: string
   startedEvent: string
   completedEvent: string
   disconnectedEvent: string
-  /** Client-side auth for providers with WAF-protected endpoints */
-  clientAuth?: ClientAuthConfig
-}
-
-export interface PendingDeviceCode {
-  userCode: string
-  providerName: string
-  verificationUri: string
 }
 
 export interface OAuthProviderFlowReturn {
-  status: { authenticated: boolean; email?: string } | null
   disconnect: () => Promise<void>
   startOAuthFlow: (agentServerUrl: string | undefined) => Promise<void>
-  pendingDeviceCode: PendingDeviceCode | null
-  clearDeviceCode: () => void
 }
 
 export interface SaveOAuthProviderInput {
   config: OAuthProviderFlowConfig
-  status: { email?: string }
   saveProvider: (provider: LlmProviderConfig) => Promise<void> | void
   now?: number
 }
@@ -45,29 +28,22 @@ export interface SaveOAuthProviderInput {
 /** Persists the local provider row created after an OAuth account authenticates. */
 export async function saveOAuthProviderFromStatus({
   config,
-  status,
   saveProvider,
   now = Date.now(),
 }: SaveOAuthProviderInput): Promise<LlmProviderConfig> {
   const template = getProviderTemplate(config.providerType)
-  const providerName =
-    config.providerType === 'chatgpt-pro'
-      ? CHATGPT_PROVIDER_DISPLAY_NAME
-      : `${config.displayName}${status.email ? ` (${status.email})` : ''}`
   const provider: LlmProviderConfig = {
     id: `${config.providerType}-${now}`,
     type: config.providerType,
-    name: providerName,
+    name: CHATGPT_PROVIDER_DISPLAY_NAME,
     modelId: template?.defaultModelId ?? '',
     supportsImages: template?.supportsImages ?? true,
     contextWindow: template?.contextWindow ?? 128000,
     temperature: 0.2,
     createdAt: now,
     updatedAt: now,
-  }
-  if (config.providerType === 'chatgpt-pro') {
-    provider.reasoningEffort = 'medium'
-    provider.reasoningSummary = 'auto'
+    reasoningEffort: 'medium',
+    reasoningSummary: 'auto',
   }
 
   await saveProvider(provider)
@@ -77,7 +53,6 @@ export async function saveOAuthProviderFromStatus({
 /** Coordinates OAuth launch, status polling, and local provider creation. */
 export function useOAuthProviderFlow(
   config: OAuthProviderFlowConfig,
-  _providers: LlmProviderConfig[],
   saveProvider: (provider: LlmProviderConfig) => Promise<void> | void,
 ): OAuthProviderFlowReturn {
   const { status, startPolling, disconnect } = useOAuthStatus(
@@ -85,8 +60,6 @@ export function useOAuthProviderFlow(
   )
   const flowStartedRef = useRef(false)
   const providerSaveRef = useRef<Promise<LlmProviderConfig> | null>(null)
-  const [pendingDeviceCode, setPendingDeviceCode] =
-    useState<PendingDeviceCode | null>(null)
 
   useEffect(() => {
     if (!status?.authenticated) return
@@ -95,13 +68,11 @@ export function useOAuthProviderFlow(
 
     providerSaveRef.current = saveOAuthProviderFromStatus({
       config,
-      status,
       saveProvider,
     })
 
     providerSaveRef.current
       .then(() => {
-        setPendingDeviceCode(null)
         track(config.completedEvent, { email: status.email })
         toast.success(`${config.displayName} Connected`, {
           description: status.email
@@ -131,11 +102,7 @@ export function useOAuthProviderFlow(
     flowStartedRef.current = true
 
     try {
-      if (config.clientAuth) {
-        await handleClientAuth(config.clientAuth, agentServerUrl)
-      } else {
-        await handleServerAuth(agentServerUrl)
-      }
+      await handleServerAuth(agentServerUrl)
     } catch (err) {
       flowStartedRef.current = false
       toast.error(`Failed to start ${config.displayName} authentication`, {
@@ -144,57 +111,25 @@ export function useOAuthProviderFlow(
     }
   }
 
-  async function handleClientAuth(auth: ClientAuthConfig, serverUrl: string) {
-    const { deviceData, codeVerifier } = await requestDeviceCode(auth)
-
-    const verificationUri =
-      deviceData.verification_uri_complete ?? deviceData.verification_uri
-    window.open(verificationUri, '_blank')
-    track(config.startedEvent)
-    setPendingDeviceCode({
-      userCode: deviceData.user_code,
-      providerName: config.displayName,
-      verificationUri,
-    })
-
-    startTokenPolling(auth, deviceData, codeVerifier, async (token) => {
-      await fetch(`${serverUrl}/oauth/${config.providerType}/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(token),
-      })
-      startPolling()
-    })
-  }
-
   async function handleServerAuth(agentServerUrl: string) {
+    // The response is a redirect to the sign-in page. Fetch follows it so we
+    // can open the final URL, which isn't a JSON operation in the client.
     const res = await fetch(
       `${agentServerUrl}/oauth/${config.providerType}/start`,
     )
 
-    if (res.headers.get('content-type')?.includes('application/json')) {
-      const data = (await res.json()) as {
-        userCode?: string
-        verificationUri?: string
-        error?: string
-      }
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error || `Server returned ${res.status}`)
-      }
-      if (!data.userCode || !data.verificationUri) {
-        throw new Error('Invalid response from server')
-      }
-
-      window.open(data.verificationUri, '_blank')
-      startPolling()
-      track(config.startedEvent)
-      setPendingDeviceCode({
-        userCode: data.userCode,
-        providerName: config.displayName,
-        verificationUri: data.verificationUri,
-      })
-      return
+    if (
+      !res.ok &&
+      res.headers.get('content-type')?.includes('application/json')
+    ) {
+      const body: unknown = await res.json()
+      if (
+        typeof body === 'object' &&
+        body !== null &&
+        'error' in body &&
+        typeof body.error === 'string'
+      )
+        throw new Error(body.error)
     }
 
     if (!res.ok) throw new Error(`Server returned ${res.status}`)
@@ -207,10 +142,7 @@ export function useOAuthProviderFlow(
   }
 
   return {
-    status,
     disconnect,
     startOAuthFlow,
-    pendingDeviceCode,
-    clearDeviceCode: () => setPendingDeviceCode(null),
   }
 }

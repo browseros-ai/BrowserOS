@@ -61,8 +61,8 @@ export const BrowserOsAiPane: FC = () => {
     null,
   )
 
-  const addProvider = useAddProvider({ providers, saveProvider })
-  const { oauthFlows } = addProvider
+  const addProvider = useAddProvider({ saveProvider })
+  const { chatgptOAuth } = addProvider
 
   const handleEditProvider = (provider: LlmProviderConfig) => {
     setEditingProvider(provider)
@@ -77,10 +77,9 @@ export const BrowserOsAiPane: FC = () => {
     if (!providerToDelete) return
 
     // Clear OAuth tokens on server for OAuth-based providers
-    const oauthFlow = oauthFlows[providerToDelete.type]
-    if (oauthFlow) {
-      await oauthFlow.disconnect()
-      track(oauthFlow.disconnectedEvent)
+    if (providerToDelete.type === 'chatgpt-pro') {
+      await chatgptOAuth.disconnect()
+      track(chatgptOAuth.disconnectedEvent)
     }
 
     await deleteProvider(providerToDelete.id)
@@ -187,13 +186,11 @@ export const BrowserOsAiPane: FC = () => {
           onTestProvider={handleTestProvider}
           onEditProvider={handleEditProvider}
           onDeleteProvider={handleDeleteProvider}
-          onEditAgent={addProvider.openCustomAgentEditor}
         />
       </section>
 
       <AddProviderSection
         onCreateAgent={addProvider.onCreateAgent}
-        onCreateCustomAgent={addProvider.onCreateCustomAgent}
         onUseTemplate={addProvider.onUseTemplate}
       />
 

@@ -6,7 +6,6 @@ import { AppSidebar } from '@/components/sidebar/AppSidebar'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { useIsMobile } from '@/hooks/use-mobile'
-import { RpcClientProvider } from '@/lib/rpc/RpcClientProvider'
 import { cn } from '@/lib/utils'
 import { ActiveConversationProvider } from '@/modules/conversations/active-conversation-context'
 import { ShortcutsDialog } from '@/screens/newtab/index/ShortcutsDialog'
@@ -57,56 +56,54 @@ const SidebarLayoutContent: FC = () => {
 
   if (isMobile) {
     return (
-      <RpcClientProvider>
-        <div
-          className={cn(
-            'flex flex-col bg-background',
-            isChatPage ? 'h-dvh' : 'min-h-screen',
-          )}
-        >
-          <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="-ml-1 size-7"
-              onClick={() => setMobileOpen(true)}
-              aria-label="Open navigation"
-            >
-              <Menu className="size-4" />
-            </Button>
-            <span className="font-semibold">BrowserOS</span>
-          </header>
-          {isChatPage ? (
-            <main className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        className={cn(
+          'flex flex-col bg-background',
+          isChatPage ? 'h-dvh' : 'min-h-screen',
+        )}
+      >
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="-ml-1 size-7"
+            onClick={() => setMobileOpen(true)}
+            aria-label="Open navigation"
+          >
+            <Menu className="size-4" />
+          </Button>
+          <span className="font-semibold">BrowserOS</span>
+        </header>
+        {isChatPage ? (
+          <main className="relative min-h-0 flex-1 overflow-hidden">
+            <Outlet />
+          </main>
+        ) : (
+          <main className="flex-1 overflow-y-auto">
+            <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
               <Outlet />
-            </main>
-          ) : (
-            <main className="flex-1 overflow-y-auto">
-              <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-                <Outlet />
-              </div>
-            </main>
-          )}
-          <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-            <SheetContent side="left" className="w-72 p-0">
-              <AppSidebar
-                expanded
-                onOpenShortcuts={openShortcuts}
-                onNavigate={() => setMobileOpen(false)}
-              />
-            </SheetContent>
-          </Sheet>
-          <ShortcutsDialog
-            open={shortcutsDialogOpen}
-            onOpenChange={setShortcutsDialogOpen}
-          />
-        </div>
-      </RpcClientProvider>
+            </div>
+          </main>
+        )}
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetContent side="left" className="w-72 p-0">
+            <AppSidebar
+              expanded
+              onOpenShortcuts={openShortcuts}
+              onNavigate={() => setMobileOpen(false)}
+            />
+          </SheetContent>
+        </Sheet>
+        <ShortcutsDialog
+          open={shortcutsDialogOpen}
+          onOpenChange={setShortcutsDialogOpen}
+        />
+      </div>
     )
   }
 
   return (
-    <RpcClientProvider>
+    <>
       {/* pl-14 offsets all content by the collapsed sidebar width (w-14 = 56px) so it never sits under the rail */}
       <div className="relative min-h-screen bg-background pl-14">
         {/* Sidebar - fixed overlay */}
@@ -151,7 +148,7 @@ const SidebarLayoutContent: FC = () => {
         open={shortcutsDialogOpen}
         onOpenChange={setShortcutsDialogOpen}
       />
-    </RpcClientProvider>
+    </>
   )
 }
 

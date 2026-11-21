@@ -237,6 +237,7 @@ export const NewTabChat: FC = () => {
 
       <div className="mx-auto w-full max-w-5xl flex-shrink-0 px-4 pb-2 sm:w-[calc(100%-4rem)]">
         <ChatFooter
+          showWorkspace={selectedProvider?.kind === 'acp'}
           mode={mode}
           onModeChange={handleModeChange}
           input={input}
