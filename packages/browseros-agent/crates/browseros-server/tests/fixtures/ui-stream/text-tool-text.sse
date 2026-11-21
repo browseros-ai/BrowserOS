@@ -1,0 +1,34 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Checking the page."}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"run"}
+
+data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"run","input":{"code":"return document.title"}}
+
+data: {"type":"tool-output-available","toolCallId":"call_1","output":"Example Domain"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t2"}
+
+data: {"type":"text-delta","id":"t2","delta":"The page is titled "}
+
+data: {"type":"text-delta","id":"t2","delta":"Example Domain."}
+
+data: {"type":"text-end","id":"t2"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

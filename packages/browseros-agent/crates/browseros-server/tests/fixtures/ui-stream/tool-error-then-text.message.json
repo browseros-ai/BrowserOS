@@ -1,0 +1,26 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "tool-run",
+      "toolCallId": "call_1",
+      "state": "output-error",
+      "input": {
+        "code": "throw 1"
+      },
+      "errorText": "Script failed: 1"
+    },
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "The script failed.",
+      "state": "done"
+    }
+  ]
+}

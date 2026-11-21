@@ -1,0 +1,9 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    }
+  ]
+}

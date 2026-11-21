@@ -1,0 +1,14 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "Paris is in France.",
+      "state": "done"
+    }
+  ]
+}

@@ -111,6 +111,52 @@ impl ChatError {
     }
 }
 
+impl ChatError {
+    /// The envelope as the `errorText` of the stream's `error` chunk: `{"error": {…}}` as a JSON
+    /// string, which `parseChatErrorEnvelope` in `@browseros/shared` reads. Must stay key for key
+    /// equal to `http::dto::ChatErrorEnvelope`, the same envelope as a response body; a test in
+    /// `http::chat` holds the two together.
+    pub(super) fn envelope_text(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct Envelope<'a> {
+            error: Body<'a>,
+        }
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body<'a> {
+            code: &'static str,
+            title: &'a str,
+            message: &'a str,
+            retryable: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            provider: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            status_code: Option<u16>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            docs_url: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            retry_after_seconds: Option<u64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            details: Option<&'a str>,
+        }
+        let envelope = Envelope {
+            error: Body {
+                code: self.code.as_str(),
+                title: &self.title,
+                message: &self.message,
+                retryable: self.retryable,
+                provider: self.provider.as_deref(),
+                status_code: self.status_code,
+                docs_url: self.docs_url.as_deref(),
+                retry_after_seconds: self.retry_after_seconds,
+                details: self.details.as_deref(),
+            },
+        };
+        // Strings, integers and booleans only: serialization cannot fail.
+        serde_json::to_string(&envelope).unwrap_or_default()
+    }
+}
+
 impl fmt::Display for ChatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.code.as_str(), self.message)
