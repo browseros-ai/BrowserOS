@@ -87,7 +87,10 @@ async fn test_app_with_native_and_mode(
         start_browser,
         native,
         mode,
-        claw_server::config::Behavior::defaults(mode),
+        claw_server::config::Behavior {
+            playwright_run: true,
+            ..claw_server::config::Behavior::defaults(mode)
+        },
     )
     .await
 }
