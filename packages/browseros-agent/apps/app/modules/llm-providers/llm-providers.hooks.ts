@@ -11,6 +11,10 @@ import {
 } from '@/lib/llm-providers/provider-selection'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
+  AGENT_SERVER_READ_RETRY_LIMIT,
+  agentServerReadRetry,
+} from '@/modules/browseros/agent-server-read-retry'
+import {
   deleteProvider as deleteProviderRow,
   fetchDefaultProviderId,
   listProviders,
@@ -49,6 +53,7 @@ export interface UseLlmProvidersReturn {
 }
 
 const useProvidersQuery = createQuery<LlmProviderConfig[]>({
+  ...agentServerReadRetry,
   queryKey: ['llm-providers'],
   fetcher: listProviders,
 })
@@ -61,6 +66,7 @@ const useProvidersQuery = createQuery<LlmProviderConfig[]>({
  * wrote the other pointer and left this one stale.
  */
 export const useDefaultProviderIdQuery = createQuery<string | null>({
+  ...agentServerReadRetry,
   queryKey: ['provider-default'],
   fetcher: fetchDefaultProviderId,
 })
@@ -209,7 +215,13 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     storedDefaultTargetId: storedDefaultId,
     selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
     isLoading: providersQuery.isPending || defaultQuery.isPending,
-    isUnavailable: providersQuery.isError || defaultQuery.isError,
+    // Settings still reports the outage after the normal retry limit while
+    // the panel waits for the server to come up.
+    isUnavailable:
+      providersQuery.isError ||
+      defaultQuery.isError ||
+      providersQuery.failureCount > AGENT_SERVER_READ_RETRY_LIMIT ||
+      defaultQuery.failureCount > AGENT_SERVER_READ_RETRY_LIMIT,
     saveProvider: (provider) => saveMutation.mutateAsync(provider),
     setDefaultProvider,
     deleteProvider: async (providerId) => {

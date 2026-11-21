@@ -2,6 +2,7 @@ import { ServerApiClient } from '@browseros/server-api/client'
 import type { components } from '@browseros/server-api/openapi'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Feature } from '@/lib/browseros/capabilities'
+import { agentServerReadRetry } from '@/modules/browseros/agent-server-read-retry'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { computeAgentsSettled } from './agents.helpers'
@@ -17,6 +18,7 @@ export function useAcpAgents(enabled = true) {
     error: urlError,
   } = useAgentServerUrl()
   const query = useQuery({
+    ...agentServerReadRetry,
     queryKey: [AGENTS_QUERY_KEY, baseUrl],
     queryFn: async () => {
       if (!baseUrl) throw new Error('BrowserOS agent server URL is not ready')
