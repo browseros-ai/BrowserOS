@@ -297,6 +297,9 @@ impl Model {
         request: &StepRequest<'_>,
         sink: &mut dyn EventSink,
     ) -> Result<AssistantTurn, ChatError> {
+        if matches!(self.route, Route::Scripted { .. }) {
+            return self.step_once(request, sink).await;
+        }
         let mut sink = ObservedSink {
             inner: sink,
             emitted: false,
@@ -611,10 +614,11 @@ pub struct AssistantTurn {
 enum NativeOutput {
     /// Earlier turns loaded from SQLite, and the scripted model: nothing to send back.
     None,
-    /// The Chat Completions assistant message, the Responses output items, or the Anthropic
-    /// content blocks, exactly as received.
+    /// The exact assistant message reconstructed from Chat Completions deltas.
     Chat(Value),
+    /// Completed Responses output items, including encrypted reasoning.
     Responses(Vec<Value>),
+    /// Complete Anthropic content blocks, including signed thinking.
     Anthropic(Vec<Value>),
     Bedrock(Box<aws_sdk_bedrockruntime::types::Message>),
 }

@@ -8,7 +8,7 @@ use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use serde_json::{Value, json};
 use url::Url;
 
-use super::{AssistantTurn, ModelMessage, NativeOutput, Reasoning, StepRequest, Usage};
+use super::{AssistantTurn, Effort, ModelMessage, NativeOutput, Reasoning, StepRequest, Usage};
 use super::{
     bearer, data_url, errors, headers, set_header, sse, tool_call, tool_input, tool_started, usage,
 };
@@ -28,10 +28,9 @@ pub(super) fn endpoint(provider: &ProviderConfig) -> Result<Endpoint, ChatError>
         Google => "https://generativelanguage.googleapis.com/v1beta/openai/",
         Openrouter => "https://openrouter.ai/api/v1/",
         Fireworks => "https://api.fireworks.ai/inference/v1/",
-        Moonshot => "https://api.moonshot.ai/v1/",
         Ollama => "http://localhost:11434/v1/",
         Lmstudio => "http://localhost:1234/v1/",
-        Azure | OpenaiCompatible => "",
+        Azure | Moonshot | OpenaiCompatible => "",
         _ => {
             return Err(errors::config(
                 "This provider does not use Chat Completions.",
@@ -42,6 +41,16 @@ pub(super) fn endpoint(provider: &ProviderConfig) -> Result<Endpoint, ChatError>
         .base_url
         .as_deref()
         .filter(|url| !url.trim().is_empty());
+    if provider.kind == Azure && super::api_key(provider).is_err() {
+        return Err(errors::config(
+            "Azure requires an API key and either a resource name or a base URL.",
+        ));
+    }
+    if provider.kind == Moonshot && (base.is_none() || super::api_key(provider).is_err()) {
+        return Err(errors::config(
+            "Moonshot requires an API key and a base URL.",
+        ));
+    }
     let url = match (provider.kind, base) {
         (Azure, None) => {
             let resource = provider
@@ -76,11 +85,10 @@ pub(super) fn endpoint(provider: &ProviderConfig) -> Result<Endpoint, ChatError>
                 true,
             )?;
         }
-        Ollama | Lmstudio => {
-            // Both local presets accept requests with no authentication or placeholder key.
-            headers.remove(AUTHORIZATION);
-        }
-        OpenaiCompatible if matches!(provider.credentials, Credentials::None) => {}
+        // Local configuration can authenticate to a reverse proxy. With no credential
+        // configured, use no placeholder key.
+        OpenaiCompatible | Ollama | Lmstudio
+            if matches!(provider.credentials, Credentials::None) => {}
         _ => bearer(&mut headers, super::api_key(provider)?)?,
     }
     Ok(Endpoint {
@@ -131,7 +139,10 @@ fn body(
     use ProviderKind::*;
     match endpoint.kind {
         Google | Azure => {
-            let levels: &[_] = if endpoint.kind == Google {
+            let gemini_xhigh = ["gemini-4-neon", "gemini-4-hydrogen"]
+                .iter()
+                .any(|family| model.trim_start_matches("models/").starts_with(family));
+            let levels: &[_] = if endpoint.kind == Google && !gemini_xhigh {
                 &["minimal", "low", "medium", "high"]
             } else {
                 &["minimal", "low", "medium", "high", "xhigh"]
@@ -140,19 +151,21 @@ fn body(
                 body["reasoning_effort"] = json!(effort);
             }
         }
-        Openrouter if request.effort.is_some() => {
-            body["reasoning"] = json!({});
-            if let Some(effort) = reasoning
-                .effort
-                .as_deref()
-                .filter(|effort| matches!(*effort, "minimal" | "low" | "medium" | "high" | "xhigh"))
-            {
-                body["reasoning"]["effort"] = json!(effort);
+        Openrouter => {
+            let levels = ["minimal", "low", "medium", "high", "xhigh", "max"];
+            if let Some(effort) = reasoning.effort(request.effort, &levels) {
+                // Keep the established empty options object for the default medium case.
+                body["reasoning"] =
+                    if request.effort == Some(Effort::Medium) && reasoning.effort.is_none() {
+                        json!({})
+                    } else {
+                        json!({"effort": effort})
+                    };
             }
         }
         _ => {}
     }
-    if matches!(endpoint.kind, Azure | Fireworks | Openrouter) {
+    if matches!(endpoint.kind, Azure | Fireworks | Google | Openrouter) {
         body["stream_options"] = json!({"include_usage": true});
     }
     body
@@ -266,18 +279,17 @@ impl Choice {
 /// incremental strings are appended. Null placeholders on later deltas leave earlier data intact.
 fn merge(target: &mut Value, delta: &Value, fragments: &[&str]) {
     if let Some(object) = delta.as_object() {
-        if target.is_null() {
+        if !target.is_object() {
             *target = json!({});
         }
         for (key, value) in object {
             let slot = &mut target[key];
-            match (
-                fragments.contains(&key.as_str()),
-                slot.as_str(),
-                value.as_str(),
-            ) {
-                (true, Some(first), Some(next)) => *slot = json!(format!("{first}{next}")),
-                _ => merge(slot, value, fragments),
+            if fragments.contains(&key.as_str())
+                && let (Value::String(first), Value::String(next)) = (&mut *slot, value)
+            {
+                first.push_str(next);
+            } else {
+                merge(slot, value, fragments);
             }
         }
     } else if !delta.is_null() {

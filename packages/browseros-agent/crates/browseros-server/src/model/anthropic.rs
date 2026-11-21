@@ -227,6 +227,11 @@ impl Message {
             ));
         }
         let block = &event["content_block"];
+        if !block.is_object() {
+            return Err(errors::protocol(
+                "The provider started an invalid content block.",
+            ));
+        }
         match block["type"].as_str() {
             Some("tool_use") => {
                 let tool = tool_call(&block["id"], &block["name"], block["input"].clone())?;
@@ -355,8 +360,9 @@ fn index(event: &Value) -> Result<u64, ChatError> {
 
 fn append<'a>(block: &mut Value, delta: &'a Value, field: &str) -> Option<&'a str> {
     let fragment = delta[field].as_str().filter(|text| !text.is_empty())?;
-    let mut content = block[field].as_str().unwrap_or_default().to_owned();
-    content.push_str(fragment);
-    block[field] = Value::String(content);
+    match &mut block[field] {
+        Value::String(content) => content.push_str(fragment),
+        slot => *slot = Value::String(fragment.into()),
+    }
     Some(fragment)
 }
