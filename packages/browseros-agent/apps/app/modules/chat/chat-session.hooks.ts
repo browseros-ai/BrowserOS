@@ -1,7 +1,6 @@
 import { useChat } from '@ai-sdk/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
-import { compact } from 'es-toolkit/array'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
@@ -22,7 +21,6 @@ import {
   PROVIDER_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
-import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
 import type { ChatRequestBrowserContext } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
@@ -117,8 +115,6 @@ export type ChatOrigin = 'sidepanel' | 'newtab'
 
 export interface ChatSessionOptions {
   origin?: ChatOrigin
-  /** When false, messages are queued until integrations finish syncing. */
-  isIntegrationsSynced?: boolean
 }
 
 const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
@@ -134,16 +130,9 @@ const getUserSystemPrompt = (
 const buildRequestBrowserContext = ({
   activeTab,
   action,
-  enabledMcpServers,
-  customMcpServers,
 }: {
   activeTab?: chrome.tabs.Tab
   action?: ChatAction
-  enabledMcpServers: Array<string | undefined>
-  customMcpServers: {
-    name: string
-    url?: string
-  }[]
 }): ChatRequestBrowserContext | undefined => {
   const browserContext: ChatRequestBrowserContext = {}
 
@@ -164,15 +153,6 @@ const buildRequestBrowserContext = ({
     }))
   }
 
-  const managedMcpServers = compact(enabledMcpServers)
-  if (managedMcpServers.length) {
-    browserContext.enabledMcpServers = managedMcpServers
-  }
-
-  if (customMcpServers.length) {
-    browserContext.customMcpServers = customMcpServers
-  }
-
   return Object.keys(browserContext).length ? browserContext : undefined
 }
 
@@ -180,8 +160,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const {
     selectedLlmProviderRef,
     selectedChatTargetRef,
-    enabledMcpServersRef,
-    enabledCustomServersRef,
     personalizationRef,
     chatTargets,
     selectedChatTarget,
@@ -430,18 +408,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           ? (selectionMapRef.current[String(activeTab.id)] ?? null)
           : null
         const currentMode = modeRef.current
-        const enabledMcpServers = enabledMcpServersRef.current
-        const customMcpServers = enabledCustomServersRef.current
         const lastUserMessage = getLastUserMessageText(messages)
         const action = textToActionRef.current.get(lastUserMessage)
         const requestBrowserContext = buildRequestBrowserContext({
           activeTab,
           action,
-          enabledMcpServers,
-          customMcpServers,
         })
 
-        const declinedApps = await declinedAppsStorage.getValue()
         const persist = persistRef.current
         const previousMessages = messagesRef.current
         // When the server persists, it owns history and loads it itself, so
@@ -465,7 +438,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           userWorkingDir: workingDirRef.current,
           previousConversation,
           persist,
-          declinedApps,
           attachments: getLastUserMessageFiles(messages).map((file) => ({
             mediaType: file.mediaType,
             data: file.url,
@@ -790,8 +762,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // interrupted cloud upload. The local server persists each turn during
   // /chat, so there is nothing left to buffer.
 
-  const isIntegrationsSynced = options?.isIntegrationsSynced ?? true
-  const isIntegrationsSyncedRef = useRef(isIntegrationsSynced)
   /**
    * Sends held while something was still loading, in the order they were made.
    *
@@ -863,10 +833,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     [baseSendMessage, runLocalRequest, startExecutionTask, trackMessageSent],
   )
 
-  useEffect(() => {
-    isIntegrationsSyncedRef.current = isIntegrationsSynced
-  }, [isIntegrationsSynced])
-
   // Flushes what `sendMessage` held while something was still loading. It waits
   // on the target lists too: a queued message dispatched before they settle
   // would name no provider and come back as a server-side rejection.
@@ -881,7 +847,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       return
     }
 
-    if (!isIntegrationsSynced || !agentServerUrl) return
+    if (!agentServerUrl) return
 
     // Taken before the first await so a re-run cannot dispatch them twice.
     const queued = pendingMessagesRef.current
@@ -898,13 +864,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       }
       return dispatchMessage(pending.text, pending.files)
     })
-  }, [
-    agentServerUrl,
-    dispatchMessage,
-    hasAnyTarget,
-    isIntegrationsSynced,
-    isSettled,
-  ])
+  }, [agentServerUrl, dispatchMessage, hasAnyTarget, isSettled])
 
   /**
    * Sends, or reports why it did not.
@@ -924,7 +884,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       hasRestoreError: Boolean(restoreError),
       isSettled: isSettledRef.current,
       hasAnyTarget: hasAnyTargetRef.current,
-      isIntegrationsSynced: isIntegrationsSyncedRef.current,
       hasAgentUrl: Boolean(agentUrlRef.current),
     })
 
@@ -1084,7 +1043,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isSettled,
     sendBlocked,
     canSend,
-    isSyncing: !isIntegrationsSynced,
     isIncognito,
     isRestoringConversation,
     restoreError,

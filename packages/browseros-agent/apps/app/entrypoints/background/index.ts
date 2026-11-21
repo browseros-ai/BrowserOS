@@ -2,11 +2,7 @@ import { registerDiagnostics } from '@browseros/diagnostics/extension'
 import { storage } from '@wxt-dev/storage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
-import {
-  getAgentServerUrl,
-  getHealthCheckUrl,
-  getMcpServerUrl,
-} from '@/lib/browseros/helpers'
+import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   initializeSidePanelOptions,
   openSidePanel,
@@ -14,17 +10,14 @@ import {
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
-import { fetchMcpTools } from '@/lib/mcp/client'
 import {
   onRuntimeMessage,
   RuntimeMessageType,
 } from '@/lib/messaging/runtime/runtimeMessages'
-import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
-import { scheduledJobRuns } from './scheduledJobRuns'
 
 const RETIRED_STORAGE_KEYS = [
   // The unshipped Tool Approvals feature.
@@ -39,6 +32,23 @@ const RETIRED_STORAGE_KEYS = [
 /** Drops state belonging to features that no longer read it. */
 const cleanupRetiredStorage = async () => {
   await storage.removeItems([...RETIRED_STORAGE_KEYS])
+}
+
+const RETIRED_SCHEDULER_ALARM_PREFIX = 'scheduled-job-'
+
+/**
+ * Clears the alarms the removed task scheduler registered, which
+ * would otherwise keep waking the worker for nothing. Runs on every start
+ * because Chrome makes no promise about alarms surviving an extension update
+ * (before Chrome 150), so no one-off lifecycle event can be trusted to see
+ * them; a repeat finds nothing to clear.
+ */
+const clearRetiredSchedulerAlarms = async () => {
+  for (const alarm of await chrome.alarms.getAll()) {
+    if (alarm.name.startsWith(RETIRED_SCHEDULER_ALARM_PREFIX)) {
+      await chrome.alarms.clear(alarm.name)
+    }
+  }
 }
 
 export default defineBackground(() => {
@@ -65,8 +75,7 @@ export default defineBackground(() => {
   })
 
   Capabilities.initialize().catch(() => null)
-
-  scheduledJobRuns()
+  clearRetiredSchedulerAlarms().catch(() => null)
 
   chrome.action.onClicked.addListener(async (tab) => {
     if (typeof tab.id === 'number' && typeof tab.windowId === 'number') {
@@ -128,28 +137,5 @@ export default defineBackground(() => {
         selectedTextStorage.setValue(rest)
       }
     })
-  })
-
-  onServerMessage('checkHealth', async () => {
-    try {
-      const url = await getHealthCheckUrl()
-      const response = await fetch(url)
-      return { healthy: response.ok }
-    } catch {
-      return { healthy: false }
-    }
-  })
-
-  onServerMessage('fetchMcpTools', async () => {
-    try {
-      const url = await getMcpServerUrl()
-      const tools = await fetchMcpTools(url)
-      return { tools }
-    } catch (err) {
-      return {
-        tools: [],
-        error: err instanceof Error ? err.message : 'Failed to fetch tools',
-      }
-    }
   })
 })

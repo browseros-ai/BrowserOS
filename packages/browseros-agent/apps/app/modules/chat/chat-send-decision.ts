@@ -7,7 +7,6 @@ export interface ChatSendDecisionInput {
   /** Whether the provider and agent lists have finished loading. */
   isSettled: boolean
   hasAnyTarget: boolean
-  isIntegrationsSynced: boolean
   hasAgentUrl: boolean
 }
 
@@ -25,9 +24,7 @@ export interface ChatSendDecisionInput {
 export function decideChatSend(input: ChatSendDecisionInput): ChatSendDecision {
   if (input.isRestoring || input.hasRestoreError) return 'drop'
   if (input.isSettled && !input.hasAnyTarget) return 'refuse'
-  if (!input.isSettled || !input.isIntegrationsSynced || !input.hasAgentUrl) {
-    return 'queue'
-  }
+  if (!input.isSettled || !input.hasAgentUrl) return 'queue'
   return 'send'
 }
 

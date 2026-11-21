@@ -4,9 +4,7 @@ import {
   BookOpen,
   Bot,
   Compass,
-  MessageSquare,
   Palette,
-  Server,
 } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink } from 'react-router'
@@ -57,14 +55,7 @@ const sectionLabelClassName =
 const primarySettingsSections: NavSection[] = [
   {
     label: 'Provider Settings',
-    items: [
-      { name: 'AI & Agents', to: '/settings/ai', icon: Bot },
-      {
-        name: 'Chat & Council Provider',
-        to: '/settings/chat',
-        icon: MessageSquare,
-      },
-    ],
+    items: [{ name: 'AI & Agents', to: '/settings/ai', icon: Bot }],
   },
   {
     label: 'Other',
@@ -74,7 +65,6 @@ const primarySettingsSections: NavSection[] = [
         to: '/settings/customization',
         icon: Palette,
       },
-      { name: 'BrowserOS as MCP', to: '/settings/mcp', icon: Server },
     ],
   },
 ]

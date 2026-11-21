@@ -21,44 +21,10 @@ export interface ToolInvocationInfo {
   approval?: { id: string; approved?: boolean; reason?: string }
 }
 
-export type NudgeType = 'schedule_suggestion' | 'app_connection'
-
-export interface NudgeData {
-  type: NudgeType
-  [key: string]: unknown
-}
-
 export type MessageSegment =
   | { type: 'text'; key: string; text: string }
   | { type: 'reasoning'; key: string; text: string; isStreaming: boolean }
   | { type: 'tool-batch'; key: string; tools: ToolInvocationInfo[] }
-  | { type: 'nudge'; key: string; nudgeType: NudgeType; data: NudgeData }
-
-const NUDGE_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
-
-function parseNudgeOutput(output: unknown): NudgeData | null {
-  try {
-    const result = output as {
-      content?: Array<{ type: string; text?: string }>
-      isError?: boolean
-    }
-    if (result?.isError) return null
-
-    const text = result?.content?.find((c) => c.type === 'text')?.text
-    if (!text) return null
-
-    const parsed = JSON.parse(text)
-    if (
-      parsed?.type === 'schedule_suggestion' ||
-      parsed?.type === 'app_connection'
-    ) {
-      return parsed as NudgeData
-    }
-  } catch {
-    return null
-  }
-  return null
-}
 
 export const getMessageSegments = (
   message: UIMessage,
@@ -117,27 +83,14 @@ export const getMessageSegments = (
           ? (toolPart.toolName ?? 'tool')
           : toolPart.type.replace('tool-', '')
 
-      if (NUDGE_TOOLS.has(toolName) && toolPart.state === 'output-available') {
-        flushToolBatch()
-        const nudgeData = parseNudgeOutput(toolPart.output)
-        if (nudgeData) {
-          segments.push({
-            type: 'nudge',
-            key: `${message.id}-nudge-${toolPart.toolCallId}`,
-            nudgeType: nudgeData.type,
-            data: nudgeData,
-          })
-        }
-      } else if (!NUDGE_TOOLS.has(toolName)) {
-        currentToolBatch.push({
-          state: toolPart.state,
-          toolCallId: toolPart.toolCallId,
-          toolName,
-          input: toolPart?.input ?? {},
-          output: toolPart?.output,
-          approval: toolPart?.approval,
-        })
-      }
+      currentToolBatch.push({
+        state: toolPart.state,
+        toolCallId: toolPart.toolCallId,
+        toolName,
+        input: toolPart?.input ?? {},
+        output: toolPart?.output,
+        approval: toolPart?.approval,
+      })
     }
   }
 

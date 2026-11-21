@@ -23,7 +23,6 @@ export interface Feature {
   videoDuration?: string
   gridClass: string
   videoUrl?: string
-  gifUrl?: string
 }
 
 export interface BentoCardProps {
@@ -143,19 +142,6 @@ export const BentoCard: FC<BentoCardProps> = ({ feature, mounted, index }) => {
                       controls
                     />
                   </VideoFrame>
-                )}
-                {feature.gifUrl && !feature.videoUrl && (
-                  <div className="relative overflow-hidden rounded-xl border border-border bg-background shadow-lg">
-                    <div className="flex aspect-video items-center justify-center bg-gradient-to-br from-muted to-background">
-                      <div className="space-y-3 text-center">
-                        <img
-                          className="h-full w-full object-cover"
-                          src={feature.gifUrl}
-                          alt={feature.title}
-                        />
-                      </div>
-                    </div>
-                  </div>
                 )}
               </div>
             </div>
