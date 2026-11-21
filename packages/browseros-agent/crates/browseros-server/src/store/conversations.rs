@@ -9,7 +9,7 @@
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{ActiveValue, EntityTrait, QueryOrder};
 
-use super::entities::conversations::{ActiveModel, Column, Entity};
+use super::entities::conversations::{ActiveModel, Column, Entity, Model};
 use super::{Store, StoreError};
 use crate::turn::{ConversationId, MessageId, Role, UiMessage, UiPart};
 
@@ -42,6 +42,21 @@ pub struct ConversationSummary {
     pub updated_at: i64,
 }
 
+impl ConversationSummary {
+    fn from_model(id: ConversationId, row: Model) -> Self {
+        Self {
+            id,
+            last_user_message: row.last_user_message,
+            origin: row.origin,
+            target_type: row.target_type,
+            agent_id: row.agent_id,
+            last_messaged_at: row.last_messaged_at,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 /// How much of the last user message the history list shows.
 const LAST_USER_MESSAGE_CHARS: usize = 200;
 
@@ -56,16 +71,7 @@ impl ConversationRows<'_> {
         Ok(rows
             .into_iter()
             .filter_map(|row| match uuid::Uuid::parse_str(&row.id) {
-                Ok(id) => Some(ConversationSummary {
-                    id,
-                    last_user_message: row.last_user_message,
-                    origin: row.origin,
-                    target_type: row.target_type,
-                    agent_id: row.agent_id,
-                    last_messaged_at: row.last_messaged_at,
-                    created_at: row.created_at,
-                    updated_at: row.updated_at,
-                }),
+                Ok(id) => Some(ConversationSummary::from_model(id, row)),
                 Err(_) => {
                     tracing::warn!(
                         id = row.id,
@@ -78,6 +84,22 @@ impl ConversationRows<'_> {
     }
 
     pub async fn load(&self, id: ConversationId) -> Result<Option<ConversationRow>, StoreError> {
+        Ok(self
+            .load_with_summary(id)
+            .await?
+            .map(|(summary, messages)| ConversationRow {
+                id,
+                messages,
+                target_type: summary.target_type,
+                agent_id: summary.agent_id,
+            }))
+    }
+
+    /// Reads the transcript and summary from the same row version, including during a checkpoint.
+    pub(crate) async fn load_with_summary(
+        &self,
+        id: ConversationId,
+    ) -> Result<Option<(ConversationSummary, Vec<UiMessage>)>, StoreError> {
         let Some(row) = Entity::find_by_id(id.to_string()).one(self.0.db()).await? else {
             return Ok(None);
         };
@@ -88,12 +110,7 @@ impl ConversationRows<'_> {
                 message.id = MessageId(format!("legacy-{position}"));
             }
         }
-        Ok(Some(ConversationRow {
-            id,
-            messages,
-            target_type: row.target_type,
-            agent_id: row.agent_id,
-        }))
+        Ok(Some((ConversationSummary::from_model(id, row), messages)))
     }
 
     /// Upserts the whole transcript and the derived columns. Idempotent. `created_at` and

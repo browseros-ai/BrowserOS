@@ -203,6 +203,13 @@ async fn run(launch: Launch, started: Instant, reporter: Reporter) -> Result<Exi
     // row is written, while the engine child sees its stdin lifeline close.
     engine_stop.cancel();
     app.conversations.shutdown(RUNS_BUDGET).await;
+    app.agent
+        .shutdown_sessions(
+            SHUTDOWN_BUDGET
+                .saturating_sub(stop_started.elapsed())
+                .saturating_sub(CLOSE_RESERVE),
+        )
+        .await;
     // In-flight responses get what is left; an endless stream (`/chat/panels`) is cut.
     let left = SHUTDOWN_BUDGET
         .saturating_sub(stop_started.elapsed())

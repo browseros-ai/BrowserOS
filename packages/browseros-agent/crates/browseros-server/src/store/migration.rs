@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn the_files_are_byte_for_byte_the_ones_the_old_server_recorded() {
-        // From the old server's own migration history (apps/server/src/lib/db/client.ts).
+        // These hashes were recorded by the TypeScript server's Drizzle migration runner.
         assert_eq!(
             DRIZZLE_MIGRATIONS[0].hash(),
             "aadfc2e86410febb11a974d25d99d5f7196aa797d9635ced9a18cd4eeb503b61"

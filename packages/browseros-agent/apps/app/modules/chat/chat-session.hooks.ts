@@ -1,5 +1,5 @@
 import { useChat } from '@ai-sdk/react'
-import { ServerApiClient, ServerApiError } from '@browseros/server-api/client'
+import { ServerApiClient } from '@browseros/server-api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -499,39 +499,44 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     await streamRequestRef.current?.catch(() => undefined)
   }, [detachStream])
 
-  useEffect(() => {
-    if (options?.origin !== 'newtab') return
-    // Leaving a routed chat detaches its view; the server still owns the run.
-    return () => {
-      void detachView()
-    }
-  }, [detachView, options?.origin])
-
   const stop = useCallback(async () => {
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
-    // no longer a lifecycle signal.
+    // no longer a lifecycle signal. The detached view never receives the run's
+    // last chunks, so the attachment then shows what the server recorded.
     const stoppedConversationId = conversationIdRef.current
     const detaching = detachView()
-    try {
-      const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
-      await new ServerApiClient(serverUrl).stopTurn({
-        conversationId: stoppedConversationId,
-      })
-    } catch (error) {
-      sentry.captureException(error, {
-        extra: {
-          conversationId: conversationIdRef.current,
-          operation: 'stop-server-conversation',
-        },
-      })
-    } finally {
-      await detaching
-    }
+    const stopping = (async () => {
+      try {
+        const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
+        await new ServerApiClient(serverUrl).stopTurn({
+          conversationId: stoppedConversationId,
+        })
+      } catch (error) {
+        sentry.captureException(error, {
+          extra: {
+            conversationId: conversationIdRef.current,
+            operation: 'stop-server-conversation',
+          },
+        })
+      } finally {
+        await detaching
+      }
+    })()
+    await Promise.all([
+      stopping,
+      attachmentRef.current?.reload(
+        stoppedConversationId,
+        stopping,
+        () => conversationIdRef.current === stoppedConversationId,
+      ),
+    ])
   }, [detachView])
 
+  // Both surfaces follow server-owned runs through one attachment: a History
+  // selection on either, and on a side panel also the run the broker assigns to
+  // its tab. Leaving the view detaches it; the server still owns the run.
   useEffect(() => {
-    if (optionsRef.current?.origin === 'newtab') return
     let cancelled = false
     let tabId: number | undefined
     let latestViews:
@@ -544,26 +549,29 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           id,
           AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
         ),
+      loadStored: async (id) => (await fetchServerConversation(id))?.messages,
       ownsLocalStream: (id, runId) => {
         if (localStreamConversationRef.current !== id) return false
         localStreamRunRef.current ??= runId
         return localStreamRunRef.current === runId
       },
-      attach: async (state, isCurrent) => {
+      attach: async (snapshot, isCurrent) => {
         await detachView()
         if (!isCurrent()) return
-        const id = state.conversationId as ReturnType<typeof crypto.randomUUID>
+        const id = snapshot.conversationId as ReturnType<
+          typeof crypto.randomUUID
+        >
         conversationIdRef.current = id
-        messagesRef.current = state.messages
+        messagesRef.current = snapshot.messages
         setConversationId(id)
-        setMessages(state.messages)
-        setSearchParamsRef.current({}, { replace: true })
-        if (state.status === 'running') {
+        setMessages(snapshot.messages)
+        // A run the broker assigns this tab outranks a History restore still
+        // loading; a History selection settles its own restore.
+        if (snapshot.source === 'assigned')
+          setSearchParamsRef.current({}, { replace: true })
+        if (snapshot.liveRunId) {
           streamRequestRef.current = resumeStream({
-            body: {
-              conversationId: state.conversationId,
-              runId: state.runId,
-            },
+            body: { conversationId: id, runId: snapshot.liveRunId },
           })
         }
       },
@@ -584,24 +592,29 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         }),
     })
     attachmentRef.current = attachment
-    const unwatch = conversationPanelViewsStorage.watch((views) => {
-      latestViews = views
-      if (tabId !== undefined)
-        attachment.update(conversationForTab(views, tabId))
-    })
-    void (async () => {
-      panelTabRef.current ??= resolvePanelTabId()
-      tabId = await panelTabRef.current
-      const views = await conversationPanelViewsStorage.getValue()
-      if (!cancelled)
-        attachment.update(conversationForTab(latestViews ?? views, tabId))
-    })().catch((error) => sentry.captureException(error))
+    // The new-tab chat belongs to no tab, so the broker never assigns it a run.
+    const unwatch =
+      optionsRef.current?.origin === 'newtab'
+        ? undefined
+        : conversationPanelViewsStorage.watch((views) => {
+            latestViews = views
+            if (tabId !== undefined)
+              attachment.update(conversationForTab(views, tabId))
+          })
+    if (unwatch)
+      void (async () => {
+        panelTabRef.current ??= resolvePanelTabId()
+        tabId = await panelTabRef.current
+        const views = await conversationPanelViewsStorage.getValue()
+        if (!cancelled)
+          attachment.update(conversationForTab(latestViews ?? views, tabId))
+      })().catch((error) => sentry.captureException(error))
     return () => {
       cancelled = true
       attachment.dispose()
       if (attachmentRef.current === attachment)
         attachmentRef.current = undefined
-      unwatch()
+      unwatch?.()
       void detachView()
     }
   }, [detachView, resumeStream, setMessages])
@@ -637,8 +650,23 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         await detachView()
         return fetchServerConversation(id)
       },
+      fetchRunState: async (id) => {
+        try {
+          return await fetchConversationRunState(
+            agentUrlRef.current ?? (await resolveAgentServerUrl()),
+            id,
+          )
+        } catch (error) {
+          // The stored transcript still restores, as it did before the server
+          // held runs; only following a live turn is lost.
+          sentry.captureException(error, {
+            extra: { conversationId: id, operation: 'restore-run-state' },
+          })
+          return undefined
+        }
+      },
       isCancelled: () => cancelled,
-      onRestore: async (conversation) => {
+      onRestore: async (conversation, run) => {
         // Select before enabling the composer. ACP sessions are keyed by both
         // conversation and agent, so a different agent would lose their context.
         const target = resolveRestoredChatTarget(
@@ -655,11 +683,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           await selectChatTarget(target)
         }
         if (cancelled) return
-        const id = conversation.id as ReturnType<typeof crypto.randomUUID>
-        conversationIdRef.current = id
-        messagesRef.current = conversation.messages
-        setConversationId(id)
-        setMessages(conversation.messages)
+        // The same attachment the broker uses: a live run replays and is
+        // followed to its end, with Stop and retries aimed at it.
+        await attachmentRef.current?.open(
+          conversation.id,
+          conversation.messages,
+          run,
+          () => cancelled,
+        )
+        if (cancelled) return
         if (options?.origin === 'newtab' && !target)
           setRestoreError(
             'The agent used for this conversation is no longer available. Restore it in Settings to continue.',
@@ -919,8 +951,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     void new ServerApiClient(serverUrl)
       .releaseConversation({ conversationId })
       .catch((error) => {
-        // The old server returned 404 if there was no in-memory session.
-        if (error instanceof ServerApiError && error.status === 404) return
         sentry.captureException(error, {
           extra: { conversationId },
         })

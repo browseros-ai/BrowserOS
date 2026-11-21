@@ -3,7 +3,14 @@ import {
   resolveRestoredChatTarget,
   restoreServerConversation,
 } from './chat-session-restore'
+import type { ConversationRunState } from './conversation-run-client'
+import {
+  PanelConversationAttachment,
+  type PanelSnapshot,
+} from './panel-conversation-attachment'
 import type { SidepanelChatTarget } from './sidepanel-chat-targets'
+
+const noRun = async (): Promise<ConversationRunState | undefined> => undefined
 
 describe('restoreServerConversation', () => {
   it('waits for target selection before enabling a restored conversation', async () => {
@@ -11,6 +18,7 @@ describe('restoreServerConversation', () => {
     await restoreServerConversation({
       conversationId: 'c1',
       fetchConversation: async () => ({ id: 'c1', messages: [] }),
+      fetchRunState: noRun,
       isCancelled: () => false,
       onRestore: async () => {
         steps.push('select agent')
@@ -31,9 +39,11 @@ describe('restoreServerConversation', () => {
 
   it('reports a missing row so the composer cannot send into an unrelated chat', async () => {
     const onMissing = mock(() => {})
+    const fetchRunState = mock(noRun)
     await restoreServerConversation({
       conversationId: 'deleted',
       fetchConversation: async () => null,
+      fetchRunState,
       isCancelled: () => false,
       onRestore: () => {
         throw new Error('must not restore')
@@ -43,6 +53,7 @@ describe('restoreServerConversation', () => {
       onSettled: () => {},
     })
     expect(onMissing).toHaveBeenCalledTimes(1)
+    expect(fetchRunState).not.toHaveBeenCalled()
   })
 
   it('does not settle a view cancelled while selecting its target', async () => {
@@ -51,6 +62,7 @@ describe('restoreServerConversation', () => {
     await restoreServerConversation({
       conversationId: 'c1',
       fetchConversation: async () => ({ id: 'c1', messages: [] }),
+      fetchRunState: noRun,
       isCancelled: () => cancelled,
       onRestore: async () => {
         await Promise.resolve()
@@ -69,13 +81,17 @@ describe('restoreServerConversation', () => {
     await restoreServerConversation({
       conversationId: 'c1',
       fetchConversation: async () => ({ id: 'c1', messages: [] }),
+      fetchRunState: noRun,
       isCancelled: () => false,
       onRestore,
       onError,
       onSettled,
     })
 
-    expect(onRestore).toHaveBeenCalledWith({ id: 'c1', messages: [] })
+    expect(onRestore).toHaveBeenCalledWith(
+      { id: 'c1', messages: [] },
+      undefined,
+    )
     expect(onError).not.toHaveBeenCalled()
     expect(onSettled).toHaveBeenCalledTimes(1)
   })
@@ -87,6 +103,7 @@ describe('restoreServerConversation', () => {
     await restoreServerConversation({
       conversationId: 'c1',
       fetchConversation: async () => null,
+      fetchRunState: noRun,
       isCancelled: () => false,
       onRestore,
       onError: mock(() => {}),
@@ -105,6 +122,7 @@ describe('restoreServerConversation', () => {
     await restoreServerConversation({
       conversationId: 'c1',
       fetchConversation: async () => ({ id: 'c1', messages: [] }),
+      fetchRunState: noRun,
       isCancelled: () => true,
       onRestore,
       onError,
@@ -126,6 +144,7 @@ describe('restoreServerConversation', () => {
       fetchConversation: async () => {
         throw failure
       },
+      fetchRunState: noRun,
       isCancelled: () => false,
       onRestore: mock(() => {}),
       onError,
@@ -145,6 +164,7 @@ describe('restoreServerConversation', () => {
       fetchConversation: async () => {
         throw new Error('boom')
       },
+      fetchRunState: noRun,
       isCancelled: () => true,
       onRestore: mock(() => {}),
       onError,
@@ -152,6 +172,93 @@ describe('restoreServerConversation', () => {
     })
 
     expect(onError).not.toHaveBeenCalled()
+    expect(onSettled).not.toHaveBeenCalled()
+  })
+})
+
+describe('restoring a conversation the server is still running', () => {
+  const question = {
+    id: 'u1',
+    role: 'user' as const,
+    parts: [{ type: 'text' as const, text: 'Open example.com' }],
+  }
+  const checkpoint = {
+    id: 'a1',
+    role: 'assistant' as const,
+    parts: [{ type: 'step-start' as const }],
+  }
+  const running: ConversationRunState = {
+    conversationId: 'c1',
+    runId: 'r1',
+    status: 'running',
+    messages: [question],
+  }
+
+  it('opens the attachment on the live run, read after the stored row', async () => {
+    const reads: string[] = []
+    const attach = mock(
+      async (_snapshot: PanelSnapshot, _isCurrent: () => boolean) => {},
+    )
+    const attachment = new PanelConversationAttachment({
+      load: noRun,
+      loadStored: async () => undefined,
+      attach,
+      clear: () => {},
+      ownsLocalStream: () => false,
+      reportError: () => {},
+    })
+    await restoreServerConversation({
+      conversationId: 'c1',
+      fetchConversation: async (id) => {
+        reads.push('row')
+        return { id, messages: [question, checkpoint] }
+      },
+      fetchRunState: async () => {
+        reads.push('run')
+        return running
+      },
+      isCancelled: () => false,
+      onRestore: (conversation, run) =>
+        attachment.open(
+          conversation.id,
+          conversation.messages,
+          run,
+          () => false,
+        ),
+      onError: (error) => {
+        throw error
+      },
+      onSettled: () => {
+        reads.push('settled')
+      },
+    })
+    expect(reads).toEqual(['row', 'run', 'settled'])
+    expect(attach).toHaveBeenCalledTimes(1)
+    expect(attach.mock.calls[0]?.[0]).toMatchObject({
+      conversationId: 'c1',
+      messages: [question],
+      liveRunId: 'r1',
+    })
+    attachment.dispose()
+  })
+
+  it('changes nothing when superseded while its run is read', async () => {
+    let cancelled = false
+    const onRestore = mock(() => {})
+    const onSettled = mock(() => {})
+    await restoreServerConversation({
+      conversationId: 'c1',
+      fetchConversation: async (id) => ({ id, messages: [question] }),
+      fetchRunState: async () => {
+        cancelled = true // another History selection, or New conversation
+        return running
+      },
+      isCancelled: () => cancelled,
+      onRestore,
+      onError: mock(() => {}),
+      onSettled,
+    })
+    expect(onRestore).not.toHaveBeenCalled()
     expect(onSettled).not.toHaveBeenCalled()
   })
 })

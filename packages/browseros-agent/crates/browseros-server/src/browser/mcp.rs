@@ -181,7 +181,24 @@ impl ServerHandler for TaskServer {
                 None,
             ));
         };
-        let args = serde_json::Value::Object(request.arguments.unwrap_or_default());
+        let args = request.arguments.unwrap_or_default();
+        if request.name == "run" {
+            let unknown: Vec<_> = args
+                .keys()
+                .filter(|key| !matches!(key.as_str(), "code" | "timeout"))
+                .map(|key| format!("{key:?}"))
+                .collect();
+            if !unknown.is_empty() {
+                // An MCP tool error reaches the model as a tool result it can correct.
+                // This text is generated here and carries no output from the page.
+                let output = ToolOutput::failure(format!(
+                    "Unknown arguments for run: {}. The run tool takes only code and optional timeout (milliseconds). Put values such as tab IDs and URLs inside the JavaScript in code, then retry.",
+                    unknown.join(", ")
+                ));
+                return Ok(to_mcp_result(output).into());
+            }
+        }
+        let args = serde_json::Value::Object(args);
         // A child of the turn's token: dropping `Armed` stops this call, and so does the agent
         // going away (stateless rmcp's only cancel: it drops `notifications/cancelled`).
         let cancel = armed.cancel.child_token();

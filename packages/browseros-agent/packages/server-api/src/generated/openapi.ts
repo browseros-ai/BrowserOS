@@ -772,8 +772,9 @@ export interface components {
         /** @enum {string} */
         Role: "system" | "user" | "assistant";
         /**
-         * @description `messages` is the history up to and including this turn's user message, without the
-         *     assistant message in flight; the stream supplies that.
+         * @description While `status` is `running`, `messages` ends with this turn's user message and the stream
+         *     supplies the answer. Once the run ends, `messages` contains the whole transcript, including
+         *     any sealed answer.
          */
         RunState: {
             conversationId: string;
