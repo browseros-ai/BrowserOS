@@ -34,18 +34,18 @@ const cleanupRetiredStorage = async () => {
   await storage.removeItems([...RETIRED_STORAGE_KEYS])
 }
 
-const RETIRED_SCHEDULED_JOB_ALARM_PREFIX = 'scheduled-job-'
+const RETIRED_SCHEDULER_ALARM_PREFIX = 'scheduled-job-'
 
 /**
- * Clears the alarms the removed scheduled tasks feature registered, which
+ * Clears the alarms the removed task scheduler registered, which
  * would otherwise keep waking the worker for nothing. Runs on every start
  * because Chrome makes no promise about alarms surviving an extension update
  * (before Chrome 150), so no one-off lifecycle event can be trusted to see
  * them; a repeat finds nothing to clear.
  */
-const clearRetiredScheduledJobAlarms = async () => {
+const clearRetiredSchedulerAlarms = async () => {
   for (const alarm of await chrome.alarms.getAll()) {
-    if (alarm.name.startsWith(RETIRED_SCHEDULED_JOB_ALARM_PREFIX)) {
+    if (alarm.name.startsWith(RETIRED_SCHEDULER_ALARM_PREFIX)) {
       await chrome.alarms.clear(alarm.name)
     }
   }
@@ -75,7 +75,7 @@ export default defineBackground(() => {
   })
 
   Capabilities.initialize().catch(() => null)
-  clearRetiredScheduledJobAlarms().catch(() => null)
+  clearRetiredSchedulerAlarms().catch(() => null)
 
   chrome.action.onClicked.addListener(async (tab) => {
     if (typeof tab.id === 'number' && typeof tab.windowId === 'number') {

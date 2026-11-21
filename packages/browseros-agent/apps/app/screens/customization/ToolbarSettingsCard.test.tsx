@@ -209,14 +209,13 @@ describe('ToolbarSettingsCard', () => {
     expect(state.verticalTabsEnabled).toBe(true)
   })
 
-  it('renders supported toolbar settings without the unsupported Hub control', () => {
+  it('renders only the toolbar settings BrowserOS supports', () => {
     const html = renderCard()
+    const switchIds = [
+      ...html.matchAll(/<button[^>]*role="switch"[^>]*>/g),
+    ].map(([tag]) => tag.match(/id="([^"]+)"/)?.[1])
 
-    expect(html).toContain('Show Button Labels')
-    expect(html).not.toContain('Show Chat Button')
-    expect(html).not.toContain('show-llm-chat')
-    expect(html).not.toContain('Show Hub Button')
-    expect(html).not.toContain('show-llm-hub')
+    expect(switchIds).toEqual(['show-toolbar-labels'])
   })
 
   it('removes the shared panel setting', () => {

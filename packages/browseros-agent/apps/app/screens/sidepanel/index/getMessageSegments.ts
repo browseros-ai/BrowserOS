@@ -26,10 +26,6 @@ export type MessageSegment =
   | { type: 'reasoning'; key: string; text: string; isStreaming: boolean }
   | { type: 'tool-batch'; key: string; tools: ToolInvocationInfo[] }
 
-// Nudge tools the old server still emits and stored conversations still hold.
-// Their cards are gone, so they are skipped rather than shown as tool rows.
-const HIDDEN_TOOLS = new Set(['suggest_schedule', 'suggest_app_connection'])
-
 export const getMessageSegments = (
   message: UIMessage,
   isLastMessage: boolean,
@@ -86,8 +82,6 @@ export const getMessageSegments = (
         part.type === 'dynamic-tool'
           ? (toolPart.toolName ?? 'tool')
           : toolPart.type.replace('tool-', '')
-
-      if (HIDDEN_TOOLS.has(toolName)) continue
 
       currentToolBatch.push({
         state: toolPart.state,

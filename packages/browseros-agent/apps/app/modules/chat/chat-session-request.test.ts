@@ -64,7 +64,6 @@ describe('chat request preparation', () => {
       ],
     })
     expect('provider' in request.body).toBe(false)
-    expect('declinedApps' in request.body).toBe(false)
   })
 
   it('names no provider when nothing is connected', () => {
