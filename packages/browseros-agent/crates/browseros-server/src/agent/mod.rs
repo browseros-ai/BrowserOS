@@ -24,9 +24,7 @@ use std::time::Duration;
 use crate::browser::Browser;
 use crate::model::Models;
 use crate::store::Store;
-use crate::turn::{
-    AgentKind, ChatError, ConversationId, EventSink, Target, TurnEnd, TurnInput, TurnRunner,
-};
+use crate::turn::{AgentKind, ConversationId, EventSink, Target, TurnEnd, TurnInput, TurnRunner};
 
 /// Today's limit on model calls in one turn of the own loop.
 const MAX_STEPS: usize = 100;
@@ -43,10 +41,6 @@ struct Inner {
     models: Models,
     browser: Browser,
     store: Store,
-    #[expect(
-        dead_code,
-        reason = "read once chunk `acp` writes the coding-agent runner"
-    )]
     runtime: AgentRuntime,
 }
 
@@ -73,11 +67,8 @@ impl Agent {
 
     /// Models and reasoning levels a coding agent advertises. A probe that cannot run
     /// returns a result with `error` set, never an `Err`: the dialog must still open.
-    pub async fn probe(&self, _kind: AgentKind, _timeout: std::time::Duration) -> AgentProbe {
-        AgentProbe::failed(
-            "not_implemented",
-            "Probing a coding agent is not implemented in this build of the server.",
-        )
+    pub async fn probe(&self, kind: AgentKind, timeout: std::time::Duration) -> AgentProbe {
+        probe::probe(&self.inner.runtime, kind, timeout).await
     }
 }
 
@@ -107,11 +98,13 @@ impl TurnRunner for Agent {
                 )
                 .await
             }
-            Target::Coding { .. } => {
-                TurnEnd::Failed(ChatError::not_implemented("Running a coding agent"))
+            Target::Coding { kind, agent_id } => {
+                acpx::run(inner, *kind, agent_id, input, sink, cancel).await
             }
         }
     }
 
-    async fn end_session(&self, _conversation: ConversationId) {}
+    async fn end_session(&self, conversation: ConversationId) {
+        acpx::end_session(&self.inner.runtime, conversation).await;
+    }
 }
