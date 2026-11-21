@@ -30,6 +30,7 @@ mod providers;
 mod recaptcha;
 pub mod reservation;
 mod turnstile;
+mod turnstile_state;
 mod twocaptcha;
 pub mod types;
 
@@ -372,6 +373,19 @@ impl CaptchaSolver {
                         );
                     }
                 }
+                // A widget still running its own check outlasted the readiness wait. The page is
+                // neither clear nor ready to solve, whatever else the scan read.
+                if detection
+                    .challenges
+                    .iter()
+                    .any(|challenge| challenge.state == ChallengeState::Pending)
+                {
+                    return terminal(
+                        SolveStatus::Failed,
+                        SolveReason::ScanIncomplete,
+                        STILL_CHECKING,
+                    );
+                }
                 if !detection.complete {
                     return terminal(
                         SolveStatus::Failed,
@@ -565,6 +579,12 @@ impl SolveDriver for LiveDriver {
         }
     }
 }
+/// The answer while a widget is still running its own check (`ChallengeState::Pending`).
+const STILL_CHECKING: &str = "The CAPTCHA is still running its own check. Wait a few seconds, then take a fresh snapshot and retry; do not submit the form yet.";
+
+/// Gives a supported widget up to five seconds to settle before routing: one still loading
+/// (`Unknown`, or an incomplete scan) or still running its own check (`Pending`) is scanned again
+/// every half second, until one is ready to solve or nothing is left to wait for.
 async fn wait_for_ready_detection<P: CaptchaPage>(
     page: &P,
     driver: &impl SolveDriver,
@@ -585,7 +605,11 @@ async fn wait_for_ready_detection<P: CaptchaPage>(
         .any(|challenge| detection.supports(challenge) && challenge.state == ChallengeState::Active)
         && (!detection.complete
             || detection.challenges.iter().any(|challenge| {
-                detection.supports(challenge) && challenge.state == ChallengeState::Unknown
+                detection.supports(challenge)
+                    && matches!(
+                        challenge.state,
+                        ChallengeState::Unknown | ChallengeState::Pending
+                    )
             }))
     {
         tokio::time::sleep_until((Instant::now() + Duration::from_millis(500)).min(until)).await;
@@ -1529,6 +1553,94 @@ mod orchestration_tests {
         assert_eq!(outcome.status, SolveStatus::AlreadyClear);
         assert_eq!(outcome.reason, SolveReason::AlreadyPassed);
         assert_eq!(outcome.attempts, Attempts::default());
+        Ok(())
+    }
+
+    /// A widget still running its own check is waited on like one still loading, and if it is
+    /// still checking after the five seconds the answer says so: never clear, never a solve.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_still_checking_widget_is_waited_on_and_never_called_clear()
+    -> anyhow::Result<()> {
+        for others in [
+            vec![],
+            vec![(CaptchaKind::RecaptchaV3, ChallengeState::WidgetOnly)],
+            vec![(CaptchaKind::Hcaptcha, ChallengeState::Passed)],
+        ] {
+            let mut challenges = others.clone();
+            challenges.push((CaptchaKind::Turnstile, ChallengeState::Pending));
+            let started = tokio::time::Instant::now();
+            let outcome = run(&FakeDriver::new(scan(&challenges, true)), false).await?;
+            assert_eq!(
+                (outcome.status, outcome.reason),
+                (SolveStatus::Failed, SolveReason::ScanIncomplete),
+                "{others:?}"
+            );
+            assert_eq!(outcome.message, STILL_CHECKING);
+            assert_eq!(outcome.verdict(), types::Verdict::Unknown);
+            assert_eq!(outcome.attempts, Attempts::default());
+            assert_eq!(outcome.paid_tasks, 0);
+            assert_eq!(started.elapsed(), Duration::from_secs(5));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_still_checking_widget_is_routed_once_it_settles() -> anyhow::Result<()> {
+        for (settled, status, reason) in [
+            (
+                ChallengeState::Passed,
+                SolveStatus::AlreadyClear,
+                SolveReason::AlreadyPassed,
+            ),
+            (
+                ChallengeState::Active,
+                SolveStatus::Solved,
+                SolveReason::AutoPassed,
+            ),
+        ] {
+            let mut driver = FakeDriver::new(scan(
+                &[(CaptchaKind::Turnstile, ChallengeState::Pending)],
+                true,
+            ));
+            driver.scans = Mutex::new(VecDeque::from([
+                Ok(scan(
+                    &[(CaptchaKind::Turnstile, ChallengeState::Pending)],
+                    true,
+                )),
+                Ok(scan(
+                    &[(CaptchaKind::Turnstile, ChallengeState::Pending)],
+                    true,
+                )),
+                Ok(scan(&[(CaptchaKind::Turnstile, settled)], true)),
+            ]));
+            let started = tokio::time::Instant::now();
+            let outcome = run(&driver, false).await?;
+            assert_eq!((outcome.status, outcome.reason), (status, reason));
+            assert!(started.elapsed() >= Duration::from_secs(1));
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+        Ok(())
+    }
+
+    /// A check still running outranks an incomplete scan in the answer: it is what to wait for.
+    /// An unsupported widget is not waited on, but is never called clear either.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_still_checking_is_the_answer_even_beside_an_incomplete_scan()
+    -> anyhow::Result<()> {
+        for (kind, complete, waited) in [
+            (CaptchaKind::Turnstile, false, Duration::from_secs(5)),
+            (CaptchaKind::Hcaptcha, true, Duration::ZERO),
+        ] {
+            let started = tokio::time::Instant::now();
+            let outcome = run(
+                &FakeDriver::new(scan(&[(kind, ChallengeState::Pending)], complete)),
+                false,
+            )
+            .await?;
+            assert_eq!(outcome.status, SolveStatus::Failed, "{kind:?}");
+            assert_eq!(outcome.message, STILL_CHECKING, "{kind:?}");
+            assert_eq!(started.elapsed(), waited, "{kind:?}");
+        }
         Ok(())
     }
 

@@ -6,14 +6,16 @@ use tokio::time::{Instant, timeout_at};
 use url::Url;
 
 use super::{
-    page::CaptchaPage,
+    page::{CaptchaPage, SkippedFrame},
+    turnstile_state::{TurnstileWidgetState, turnstile_widget_state},
     types::{
         CaptchaKind, Challenge, ChallengeState, Detection, FrameRef, PageError, Rect, ScanOutcome,
     },
 };
 
-/// The document and its nested shadow roots, shared by detection and the Cloudflare wall check.
-const DOM_QUERIES: &str = r#"
+/// The document and its nested shadow roots, shared by detection, the Cloudflare wall check and
+/// the Turnstile widget's own reading (`turnstile_state`).
+pub(crate) const DOM_QUERIES: &str = r#"
 const scope = document;
 const closed = new Map(closedRoots.map(r => [r.host, r]));
 const queryRoots = root => {
@@ -303,6 +305,15 @@ struct Widget {
     /// pages carry too. It stands for a challenge only when the page shows nothing else.
     #[serde(default)]
     marker: bool,
+    /// Known only from a vendor address the page loaded (a script or resource URL), with no
+    /// element or frame of that vendor. The page shows nothing for it, so `scan` drops it unless
+    /// a frame or an element joined it.
+    #[serde(skip)]
+    address_only: bool,
+    /// Its own frame says it is checking, failed or expired
+    /// (`TurnstileWidgetState::holds_the_page`), so a hidden frame does not make it `WidgetOnly`.
+    #[serde(skip)]
+    holds_page: bool,
 }
 
 impl Widget {
@@ -332,6 +343,8 @@ impl Widget {
             frame_urls: vec![],
             inferred: true,
             marker: false,
+            address_only: false,
+            holds_page: false,
         }
     }
 
@@ -348,16 +361,27 @@ impl Widget {
     }
 
     fn merge(&mut self, mut other: Self) {
+        let held = [&*self, &other]
+            .into_iter()
+            .find(|w| w.holds_page)
+            .map(|w| w.challenge.state);
         let state = if self.challenge.challenge_frame.is_some()
             || other.challenge.challenge_frame.is_some()
         {
             ChallengeState::Active
+        } else if let Some(state) = held {
+            // The widget's own frame said it is checking, failed or expired: a token in the
+            // page's field cannot outrank that.
+            state
         } else {
+            // A token passes over every other reading. A challenge to solve outranks a check
+            // still running, which outranks an unread or script-only sighting.
             [self.challenge.state, other.challenge.state]
                 .into_iter()
                 .max_by_key(|state| match state {
-                    ChallengeState::Passed => 3,
-                    ChallengeState::Active => 2,
+                    ChallengeState::Passed => 4,
+                    ChallengeState::Active => 3,
+                    ChallengeState::Pending => 2,
                     ChallengeState::Unknown => 1,
                     ChallengeState::WidgetOnly => 0,
                 })
@@ -366,6 +390,8 @@ impl Widget {
         if self.inferred && !other.inferred {
             std::mem::swap(self, &mut other);
         }
+        self.address_only &= other.address_only;
+        self.holds_page |= other.holds_page;
         let w = &mut self.challenge;
         let extra = other.challenge;
         w.state = state;
@@ -425,6 +451,18 @@ fn decode_probe(value: Value) -> Result<Probe, PageError> {
 /// A vendor frame of `frame` kind can belong to a widget of `widget` kind.
 fn matches_kind(frame: CaptchaKind, widget: CaptchaKind) -> bool {
     frame == widget || (frame == CaptchaKind::RecaptchaV2 && widget == CaptchaKind::RecaptchaV3)
+}
+
+/// Whether a frame the walk skipped leaves the scan unable to say the page is clear. A frame that
+/// detached during the walk took nothing with it, unless it was a CAPTCHA vendor's: that is how a
+/// widget redraws, and its new frame was not in the DOM the walk read. Any other frame could hold
+/// a CAPTCHA, and so could one whose address is unknown.
+fn could_hold_captcha(skipped: &SkippedFrame) -> bool {
+    !skipped.detached
+        || skipped
+            .url
+            .as_deref()
+            .is_none_or(|url| frame_kind(url).is_some())
 }
 
 /// Page.getFrameTree omits the fragment that `location.href` keeps.
@@ -519,8 +557,20 @@ async fn scan(
         addresses.extend(probe.addresses.into_iter().map(|url| (url, None)));
         top_url = probe.url;
     }
-    let frames =
-        partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
+    // One frame the walk cannot read no longer costs the others; the ones that could hold a
+    // CAPTCHA keep the scan from calling the page clear.
+    let frames = match partial(
+        bounded(deadline, page.scan_frames(deadline)).await,
+        &mut complete,
+    )? {
+        Some(walk) => {
+            if walk.skipped.iter().any(could_hold_captcha) {
+                complete = false;
+            }
+            walk.frames
+        }
+        None => Vec::new(),
+    };
     let parents = partial(
         bounded(deadline, page.frame_parent_ids()).await,
         &mut complete,
@@ -543,15 +593,20 @@ async fn scan(
             w.state = ChallengeState::Unknown;
         }
     }
+    // What each Turnstile frame shows inside itself, beside `probes`: it outranks the token the
+    // page's field holds, which can outlive the pass that made it.
+    let mut views = Vec::with_capacity(frames.len());
     let dom = dom_script(None);
     for frame in &frames {
         if is_top(frame, None) {
             probes.push(None);
+            views.push(TurnstileWidgetState::Unreadable);
             continue;
         }
         if Instant::now() >= deadline {
             complete = false;
             probes.push(None);
+            views.push(TurnstileWidgetState::Unreadable);
             continue;
         }
         let mut probe = partial(
@@ -587,7 +642,23 @@ async fn scan(
                 &mut addresses,
             );
         }
+        let address = probe
+            .as_ref()
+            .and_then(|p| p.url.as_deref())
+            .unwrap_or(&frame.url);
+        let view = if matches!(frame_kind(address), Some((CaptchaKind::Turnstile, _)))
+            && probe.as_ref().is_none_or(|p| !p.top)
+        {
+            partial(
+                bounded(deadline, turnstile_widget_state(page, frame)).await,
+                &mut complete,
+            )?
+            .unwrap_or(TurnstileWidgetState::Unreadable)
+        } else {
+            TurnstileWidgetState::Unreadable
+        };
         probes.push(probe);
+        views.push(view);
     }
     for (raw, host) in addresses {
         let Some((kind, url)) = frame_kind(&raw) else {
@@ -618,6 +689,7 @@ async fn scan(
             widget.challenge.state = ChallengeState::WidgetOnly;
             widget.challenge.host_frame = host;
             widget.challenge.sitekey = key;
+            widget.address_only = true;
             widgets.push(widget);
         }
     }
@@ -641,7 +713,7 @@ async fn scan(
                 .unwrap_or(&frame.url)
         })
         .collect();
-    for (frame, probe) in frames.iter().zip(&probes) {
+    for ((frame, probe), view) in frames.iter().zip(&probes).zip(&views) {
         if is_top(frame, probe.as_ref()) {
             continue;
         }
@@ -657,7 +729,10 @@ async fn scan(
             continue;
         }
         let invisible = param(&url, "size").as_deref() == Some("invisible");
-        if !invisible
+        // A Turnstile checking in the background, failed or expired holds the page's form back
+        // though the page hides its frame, so a hidden frame counts for it.
+        let counts_hidden = invisible || view.holds_the_page();
+        if !counts_hidden
             && frame
                 .rect
                 .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
@@ -670,7 +745,7 @@ async fn scan(
         if owners.len() > 1 && (invisible || owners.iter().any(|v| v.visible)) {
             complete = false;
         }
-        if !invisible && owners.iter().any(|v| !v.visible) {
+        if !counts_hidden && owners.iter().any(|v| !v.visible) {
             continue;
         }
         let sitekey = sitekey(kind, &url);
@@ -715,6 +790,8 @@ async fn scan(
             widgets.push(Widget::new(kind));
             widgets.len() - 1
         });
+        widgets[index].address_only = false;
+        widgets[index].holds_page |= view.holds_the_page();
         let w = &mut widgets[index].challenge;
         w.frame = Some(frame.clone());
         w.host_frame = host;
@@ -746,8 +823,8 @@ async fn scan(
             }
         } else if kind == CaptchaKind::Hcaptcha && w.state == ChallengeState::WidgetOnly {
             w.state = ChallengeState::Unknown;
-        } else if kind == CaptchaKind::Turnstile && w.state != ChallengeState::Passed {
-            w.state = ChallengeState::Active;
+        } else if kind == CaptchaKind::Turnstile {
+            w.state = view.challenge_state(w.state);
         } else if matches!(
             kind,
             CaptchaKind::Geetest | CaptchaKind::AwsWaf | CaptchaKind::Arkose
@@ -830,6 +907,10 @@ async fn scan(
     {
         widgets.retain(|w| !w.marker);
     }
+    // A vendor's script or resource URL alone shows nothing: a page loads hCaptcha's script for
+    // a widget it may never draw. As a challenge it would name a CAPTCHA the page does not show
+    // and let `not_blocking` call the page clear over whatever does block it.
+    widgets.retain(|w| !w.address_only);
     Ok((widgets, complete))
 }
 
@@ -904,6 +985,7 @@ fn fold_vendor_widgets(
     let mut folded: Vec<Widget> = Vec::new();
     let mut inferred = Vec::new();
     for mut widget in widgets {
+        let holds_page = widget.holds_page;
         let w = &mut widget.challenge;
         if let Some(source) = w
             .frame
@@ -920,6 +1002,7 @@ fn fold_vendor_widgets(
                     w.kind = kind;
                 }
                 if w.state != ChallengeState::Passed
+                    && !holds_page
                     && w.challenge_frame.is_none()
                     && (outer
                         .rect
@@ -973,6 +1056,8 @@ fn fold_vendor_widgets(
                     frame_urls: vec![],
                     inferred: true,
                     marker: widget.marker,
+                    address_only: widget.address_only,
+                    holds_page: widget.holds_page,
                 });
             }
         }
@@ -1077,7 +1162,10 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome};
+    use crate::{
+        page::FrameScan,
+        types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome},
+    };
 
     struct FakePage {
         main: Mutex<VecDeque<Value>>,
@@ -1092,6 +1180,11 @@ mod tests {
         gate_calls: Mutex<Vec<String>>,
         parent_ids: std::collections::HashMap<String, String>,
         frame_results: std::collections::HashMap<String, Value>,
+        /// Frames the walk could not read, beside `frames`.
+        skipped: Vec<SkippedFrame>,
+        /// What each Turnstile frame's own reading answers; `null` (unreadable) when absent.
+        views: std::collections::HashMap<String, Result<Value, PageError>>,
+        view_calls: Mutex<Vec<String>>,
     }
 
     fn document(loader: &str) -> DocumentId {
@@ -1137,6 +1230,9 @@ mod tests {
                 gate_calls: Mutex::new(vec![]),
                 parent_ids: Default::default(),
                 frame_results: Default::default(),
+                skipped: vec![],
+                views: Default::default(),
+                view_calls: Mutex::new(vec![]),
             }
         }
 
@@ -1171,11 +1267,23 @@ mod tests {
             frame: Option<&FrameRef>,
             function: &str,
         ) -> Result<Value, PageError> {
-            assert!(function.contains("captcha:dom"));
             self.scripts
                 .lock()
                 .map_err(|e| PageError::Browser(e.to_string()))?
                 .push(function.into());
+            if function.contains("captcha:turnstile-state") {
+                let frame = frame.ok_or_else(|| PageError::Browser("no widget frame".into()))?;
+                self.view_calls
+                    .lock()
+                    .map_err(|e| PageError::Browser(e.to_string()))?
+                    .push(frame.frame_id.clone());
+                return self
+                    .views
+                    .get(&frame.frame_id)
+                    .cloned()
+                    .unwrap_or(Ok(Value::Null));
+            }
+            assert!(function.contains("captcha:dom"));
             self.dom_calls
                 .lock()
                 .map_err(|e| PageError::Browser(e.to_string()))?
@@ -1202,6 +1310,13 @@ mod tests {
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
             tokio::time::sleep(self.frame_delay).await;
             Ok(self.frames.clone())
+        }
+
+        async fn scan_frames(&self, _deadline: Instant) -> Result<FrameScan, PageError> {
+            Ok(FrameScan {
+                frames: self.frames().await?,
+                skipped: self.skipped.clone(),
+            })
         }
 
         async fn frame_parent_ids(
@@ -1640,8 +1755,12 @@ mod tests {
         Ok(())
     }
 
+    /// A vendor's script or resource URL alone is no challenge: the page shows nothing for it,
+    /// so it can neither name the answer's type nor call the page clear as `not_blocking` (the
+    /// Yelp page had an hCaptcha script under a DataDome wall). With nothing else found, the
+    /// answer is `no_captcha` with no type.
     #[tokio::test]
-    async fn tests_that_loaded_vendor_addresses_are_not_blocking() -> anyhow::Result<()> {
+    async fn tests_that_vendor_addresses_alone_are_no_challenge() -> anyhow::Result<()> {
         use crate::{
             CaptchaSolver, LiveDriver,
             config::CaptchaConfig,
@@ -1652,68 +1771,95 @@ mod tests {
         use browseros_core::PageId;
         use tokio_util::sync::CancellationToken;
 
-        for (address, kind, key) in [
-            (
-                "https://static.geetest.com/v4/gt4.js?captcha_id=gt-key",
-                CaptchaKind::Geetest,
-                Some("gt-key"),
-            ),
-            (
-                "https://static.geevisit.com/gt.js?gt=v3-key",
-                CaptchaKind::Geetest,
-                Some("v3-key"),
-            ),
-            (
-                "https://a.token.awswaf.com/challenge.js",
-                CaptchaKind::AwsWaf,
-                None,
-            ),
-            (
-                "https://client-api.arkoselabs.com/v2/pk-key/api.js",
-                CaptchaKind::Arkose,
-                Some("pk-key"),
-            ),
-            (
-                "https://client-api.arkoselabs.cn/v2/cn-key/api.js",
-                CaptchaKind::Arkose,
-                Some("cn-key"),
-            ),
-            (
-                "https://funcaptcha.com/fc/api.js",
-                CaptchaKind::Arkose,
-                None,
-            ),
+        for address in [
+            "https://js.hcaptcha.com/1/api.js?render=explicit",
+            "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html",
+            "https://static.geetest.com/v4/gt4.js?captcha_id=gt-key",
+            "https://static.geevisit.com/gt.js?gt=v3-key",
+            "https://a.token.awswaf.com/challenge.js",
+            "https://client-api.arkoselabs.com/v2/pk-key/api.js",
+            "https://client-api.arkoselabs.cn/v2/cn-key/api.js",
+            "https://funcaptcha.com/fc/api.js",
+            "https://challenges.cloudflare.com/turnstile/v0/api.js",
         ] {
-            let page = FakePage::new(json!([]));
-            let mut loaded = probe(json!([]));
-            loaded["addresses"] = json!([address]);
-            *page.main.lock().map_err(|e| anyhow::anyhow!("{e}"))? = VecDeque::from([loaded]);
-            let result = scan(&page).await?;
-            assert_eq!(result.challenges.len(), 1, "{address}");
-            assert_eq!(result.challenges[0].kind, kind);
-            assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
-            assert_eq!(result.challenges[0].sitekey.as_deref(), key);
-            let service = CaptchaSolver {
-                providers: ProviderChain::new(&CaptchaConfig::default()),
-                reservations: Default::default(),
-                events: CaptchaEventBus::new(),
-                forced_method: None,
-            };
-            let outcome = service
-                .solve_with(
-                    &page,
-                    PageId(1),
-                    CancellationToken::new(),
-                    false,
-                    Instant::now() + Duration::from_secs(2),
-                    &LiveDriver,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            assert_eq!(outcome.status, SolveStatus::AlreadyClear);
-            assert_eq!(outcome.reason, SolveReason::NotBlocking);
-            assert_eq!(outcome.paid_tasks, 0);
+            for child in [false, true] {
+                let mut page = FakePage::new(json!([]));
+                let mut loaded = probe(json!([]));
+                loaded["addresses"] = json!([address]);
+                if child {
+                    page.frames
+                        .push(frame("host", "https://fixture.test/child"));
+                    page.frame_result = Ok(loaded);
+                } else {
+                    *page.main.lock().map_err(|e| anyhow::anyhow!("{e}"))? =
+                        VecDeque::from([loaded]);
+                }
+                let result = scan(&page).await?;
+                assert!(result.complete, "{address}");
+                assert_eq!(
+                    result.outcome,
+                    ScanOutcome::None,
+                    "{address}, child {child}"
+                );
+                assert!(
+                    result.challenges.is_empty(),
+                    "{address}: {:?}",
+                    result.challenges
+                );
+                let service = CaptchaSolver {
+                    providers: ProviderChain::new(&CaptchaConfig::default()),
+                    reservations: Default::default(),
+                    events: CaptchaEventBus::new(),
+                    forced_method: None,
+                };
+                let outcome = service
+                    .solve_with(
+                        &page,
+                        PageId(1),
+                        CancellationToken::new(),
+                        false,
+                        Instant::now() + Duration::from_secs(2),
+                        &LiveDriver,
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                assert_eq!(outcome.status, SolveStatus::AlreadyClear, "{address}");
+                assert_eq!(outcome.reason, SolveReason::NoCaptcha, "{address}");
+                assert_eq!(
+                    outcome.kind, None,
+                    "{address}: no type the page does not show"
+                );
+                assert_eq!(outcome.paid_tasks, 0);
+            }
         }
+        Ok(())
+    }
+
+    /// An address still enriches the widget the page does show, and a frame turns an address
+    /// sighting into that widget.
+    #[tokio::test]
+    async fn tests_that_an_address_joined_by_a_frame_or_widget_stays() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let mut main = probe(json!([]));
+        main["addresses"] = json!(["https://js.hcaptcha.com/1/api.js"]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(frame(
+            "h",
+            "https://newassets.hcaptcha.com/captcha/v1/test/hcaptcha.html#sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Hcaptcha);
+        assert!(result.challenges[0].frame.is_some());
+
+        let mut page = FakePage::new(json!([]));
+        let mut main = probe(json!([widget("geetest", "active")]));
+        main["addresses"] = json!(["https://static.geetest.com/v4/gt4.js?captcha_id=gt-key"]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].sitekey.as_deref(), Some("gt-key"));
         Ok(())
     }
 
@@ -2063,6 +2209,242 @@ mod tests {
                 .map(|f| f.frame_id.as_str()),
             Some("cf")
         );
+        Ok(())
+    }
+
+    const TURNSTILE_FRAME: &str = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/0x4AAAAAAA/light/normal";
+
+    /// A Turnstile `.cf-turnstile` widget with its frame. `state` is what the page's own field
+    /// says (`passed` when it holds a token) and `views` what the widget's frame shows.
+    fn turnstile_page(state: &str, views: Result<Value, PageError>) -> FakePage {
+        let mut info = widget("turnstile", state);
+        info["frameUrls"] = json!([TURNSTILE_FRAME]);
+        let mut page = FakePage::new(json!([info]));
+        page.frames.push(frame("cf", TURNSTILE_FRAME));
+        page.views.insert("cf".into(), views);
+        page
+    }
+
+    /// The NY page: a token from an earlier pass sat in `cf-turnstile-response` while the
+    /// widget's frame read "Verification failed". The frame decides; the token only when the
+    /// frame cannot be read.
+    #[tokio::test]
+    async fn tests_that_the_turnstile_frame_outranks_a_stale_token() -> Result<(), PageError> {
+        use ChallengeState::{Active, Passed, Pending};
+        for (field, views, expected) in [
+            ("passed", Ok(json!(["failed"])), Active),
+            ("passed", Ok(json!(["expired"])), Active),
+            ("passed", Ok(json!(["checkbox"])), Active),
+            ("passed", Ok(json!(["success", "failed"])), Active),
+            ("passed", Ok(json!(["verifying"])), Pending),
+            ("passed", Ok(json!(["success"])), Passed),
+            ("active", Ok(json!(["success"])), Passed),
+            ("active", Ok(json!(["verifying"])), Pending),
+            ("active", Ok(json!(["failed"])), Active),
+            // Unreadable: the page's token decides, as before the frame was read.
+            ("passed", Ok(Value::Null), Passed),
+            ("passed", Ok(json!([])), Passed),
+            (
+                "passed",
+                Err(PageError::Browser("frame gone".into())),
+                Passed,
+            ),
+            ("active", Ok(Value::Null), Active),
+        ] {
+            let page = turnstile_page(field, views.clone());
+            let result = scan(&page).await?;
+            assert!(result.complete, "{field} {views:?}");
+            assert_eq!(result.challenges.len(), 1, "{field} {views:?}");
+            let challenge = &result.challenges[0];
+            assert_eq!(challenge.kind, CaptchaKind::Turnstile);
+            assert_eq!(challenge.state, expected, "{field} {views:?}");
+            assert_eq!(
+                challenge.frame.as_ref().map(|f| f.frame_id.as_str()),
+                Some("cf")
+            );
+            let read = page
+                .view_calls
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .clone();
+            assert_eq!(read, ["cf"], "only the Turnstile frame is read inside");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_only_turnstile_frames_are_read_inside() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames
+            .push(frame("other", "https://fixture.test/child"));
+        scan(&page).await?;
+        assert!(
+            page.view_calls
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_closed_page_during_the_widget_read_ends_detection()
+    -> Result<(), PageError> {
+        for error in [PageError::Closed, PageError::Cancelled] {
+            let page = turnstile_page("passed", Err(error.clone()));
+            assert_eq!(scan(&page).await.err(), Some(error));
+        }
+        let page = turnstile_page("passed", Err(PageError::Navigated));
+        let result = scan(&page).await?;
+        assert!(
+            !result.complete,
+            "a navigated frame leaves the scan unfinished"
+        );
+        Ok(())
+    }
+
+    /// Texas and NY: Turnstile ran its check hidden ("Please wait…") with no token yet, and only
+    /// `window.turnstile` showed on the page, which read as a widget that does not block. A
+    /// hidden frame now counts when the widget inside is checking, failed or expired.
+    #[tokio::test]
+    async fn tests_that_a_hidden_turnstile_still_checking_is_pending() -> Result<(), PageError> {
+        use ChallengeState::{Active, Pending, WidgetOnly};
+        for hidden_by_rect in [true, false] {
+            for (views, state, framed) in [
+                (json!(["verifying"]), Pending, true),
+                (json!(["failed"]), Active, true),
+                (json!(["expired"]), Active, true),
+                // A hidden checkbox or pass, or nothing read: the frame still does not count.
+                (json!(["checkbox"]), WidgetOnly, false),
+                (json!(["success"]), WidgetOnly, false),
+                (Value::Null, WidgetOnly, false),
+            ] {
+                let mut script = widget("turnstile", "widget_only");
+                script["inferred"] = json!(true);
+                let mut main = probe(json!([script]));
+                let mut hidden = frame("cf", TURNSTILE_FRAME);
+                if hidden_by_rect {
+                    hidden.rect = Some(Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                    });
+                } else {
+                    main["frames"] = json!([{"url": TURNSTILE_FRAME, "visible": false}]);
+                }
+                let mut page = FakePage::new(json!([]));
+                page.main = Mutex::new(VecDeque::from([main]));
+                page.frames.push(hidden);
+                page.views.insert("cf".into(), Ok(views.clone()));
+                let result = scan(&page).await?;
+                assert!(result.complete, "{views}");
+                assert_eq!(
+                    result.challenges.len(),
+                    1,
+                    "{views}: {:?}",
+                    result.challenges
+                );
+                let challenge = &result.challenges[0];
+                assert_eq!(challenge.kind, CaptchaKind::Turnstile);
+                assert_eq!(
+                    challenge.state, state,
+                    "{views}, hidden by rect {hidden_by_rect}"
+                );
+                assert_eq!(challenge.frame.is_some(), framed, "{views}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Two sightings of one widget merge; the one whose own frame said it failed or is checking
+    /// keeps that state over a token, whichever side the merge starts from.
+    #[test]
+    fn tests_that_a_merge_keeps_what_the_widgets_frame_said() {
+        for held in [ChallengeState::Active, ChallengeState::Pending] {
+            for frame_first in [true, false] {
+                let mut framed = Widget::new(CaptchaKind::Turnstile);
+                framed.challenge.state = held;
+                framed.holds_page = true;
+                let mut token = Widget::new(CaptchaKind::Turnstile);
+                token.challenge.state = ChallengeState::Passed;
+                token.inferred = false;
+                let (mut first, second) = if frame_first {
+                    (framed, token)
+                } else {
+                    (token, framed)
+                };
+                first.merge(second);
+                assert_eq!(first.challenge.state, held, "frame first: {frame_first}");
+                assert!(first.holds_page);
+            }
+        }
+    }
+
+    /// A pending widget is shown on the page, so Cloudflare's bot-management marker yields to it
+    /// as it does to an active one.
+    #[tokio::test]
+    async fn tests_that_a_pending_turnstile_outranks_cloudflares_marker() -> Result<(), PageError> {
+        let mut page = turnstile_page("active", Ok(json!(["verifying"])));
+        let mut info = widget("turnstile", "active");
+        info["frameUrls"] = json!([TURNSTILE_FRAME]);
+        page.main = Mutex::new(VecDeque::from([probe(json!([cloudflare_marker(), info]))]));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        assert_eq!(result.challenges[0].state, ChallengeState::Pending);
+        Ok(())
+    }
+
+    /// The Texas `scan_incomplete`: one frame the walk could not read used to cost every frame.
+    /// Now the rest are scanned, and only a skipped frame that could hold a CAPTCHA keeps the
+    /// page from being called clear.
+    #[tokio::test]
+    async fn tests_that_a_skipped_frame_costs_only_itself() -> Result<(), PageError> {
+        let skipped = |url: Option<&str>, detached| SkippedFrame {
+            url: url.map(str::to_owned),
+            detached,
+        };
+        // The widget beside the skipped frame is still found and read.
+        let mut page = turnstile_page("active", Ok(json!(["verifying"])));
+        page.skipped
+            .push(skipped(Some("https://ads.example/slot"), false));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Pending);
+        for (frame, complete) in [
+            // Still there but unreadable, or an unknown document: it could hold a CAPTCHA.
+            (skipped(Some("https://ads.example/slot"), false), false),
+            (skipped(None, false), false),
+            (skipped(None, true), false),
+            // Detached mid-walk: gone, unless a vendor's widget was redrawing its frame.
+            (skipped(Some("https://ads.example/slot"), true), true),
+            (skipped(Some("/same-origin/helper.html"), true), true),
+            (skipped(Some("about:blank"), true), true),
+            (skipped(Some(TURNSTILE_FRAME), true), false),
+            (
+                skipped(
+                    Some("https://www.google.com/recaptcha/api2/anchor?k=key"),
+                    true,
+                ),
+                false,
+            ),
+        ] {
+            let mut page = FakePage::new(json!([]));
+            page.skipped.push(frame.clone());
+            let result = scan(&page).await?;
+            assert_eq!(result.complete, complete, "{frame:?}");
+            assert_eq!(
+                result.outcome,
+                if complete {
+                    ScanOutcome::None
+                } else {
+                    ScanOutcome::Unknown
+                },
+                "a skipped frame never turns into no CAPTCHA: {frame:?}"
+            );
+        }
         Ok(())
     }
 
@@ -2646,8 +3028,17 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_scan_snippets_do_not_assign_page_globals_or_ids() -> Result<(), PageError> {
-        let page = FakePage::recaptcha(false);
+        let mut page = FakePage::recaptcha(false);
+        page.frames.push(frame("cf", TURNSTILE_FRAME));
         scan(&page).await?;
+        assert!(
+            page.scripts
+                .lock()
+                .map_err(|e| PageError::Browser(e.to_string()))?
+                .iter()
+                .any(|script| script.contains("captcha:turnstile-state")),
+            "the widget's own reading is checked too"
+        );
         for script in page
             .scripts
             .lock()
