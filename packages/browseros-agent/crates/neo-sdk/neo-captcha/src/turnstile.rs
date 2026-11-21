@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{collections::HashSet, fmt, future::Future};
 
 use serde_json::{Value, json};
 use tokio::time::{Duration, Instant, sleep_until};
@@ -29,10 +29,18 @@ const visible = e => !!e && e.isConnected && e.getBoundingClientRect().width > 0
 
 const READ: &str = r#"
 /* turnstile:read */
-let token = [...document.querySelectorAll('input[name="cf-turnstile-response"]')].some(e => !!e.value.trim());
-try { token ||= !!window.turnstile?.getResponse(); } catch {}
+const tokens = [];
+const push = value => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (trimmed && !tokens.includes(trimmed)) tokens.push(trimmed);
+};
+for (const input of document.querySelectorAll('input[name="cf-turnstile-response"]')) {
+    push(input.value);
+}
+try { push(window.turnstile?.getResponse()); } catch {}
 const sitekey = widget?.getAttribute('data-sitekey') ?? args.sitekey;
-return { token, sitekey,
+return { tokens, sitekey,
     action: widget?.getAttribute('data-action') ?? args.action,
     cdata: widget?.getAttribute('data-cdata') ?? args.cdata,
     callback: widget?.getAttribute('data-callback') ?? args.callback,
@@ -195,6 +203,46 @@ async fn read<P: CaptchaPage, B: CaptchaBackend>(
     checked(ctx, ctx.page.eval_main(&script(READ, &json!(challenge)))).await
 }
 
+/// Response tokens already present on the page when `run` starts.
+///
+/// An existing token proves nothing: it may be old, rejected by the site, or one Neo wrote on an
+/// earlier call. Token values live in Rust memory for set-difference checks against later `READ`
+/// responses (simpler than mutating the page or forwarding `prior` into every read script) and are
+/// redacted in `Debug` so they never leak into logs, events, or messages.
+#[derive(Default)]
+struct PriorTokens(HashSet<String>);
+
+impl fmt::Debug for PriorTokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PriorTokens(<{} redacted>)", self.0.len())
+    }
+}
+
+impl PriorTokens {
+    fn from_read(state: &Value) -> Self {
+        Self(read_tokens(state).map(str::to_owned).collect())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn has_fresh(&self, state: &Value) -> bool {
+        read_tokens(state).any(|token| !self.0.contains(token))
+    }
+}
+
+fn read_tokens(value: &Value) -> impl Iterator<Item = &str> {
+    value
+        .get("tokens")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
 fn flag(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool) == Some(true)
 }
@@ -231,17 +279,26 @@ fn attempt<P: CaptchaPage, B: CaptchaBackend>(
 async fn wait_token<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
+    prior: &PriorTokens,
     duration: Duration,
 ) -> Result<Value, PageError> {
-    let until = Instant::now() + duration;
-    let mut state = json!({"token": false});
+    wait_token_until(ctx, challenge, prior, Instant::now() + duration).await
+}
+
+async fn wait_token_until<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+    prior: &PriorTokens,
+    until: Instant,
+) -> Result<Value, PageError> {
+    let mut state = json!({"tokens": []});
     loop {
         match tokio::time::timeout_at(until, read(ctx, challenge)).await {
             Ok(value) => state = value?,
             Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
             Err(_) => return Ok(state),
         }
-        if flag(&state, "token") || Instant::now() >= until {
+        if prior.has_fresh(&state) || Instant::now() >= until {
             return Ok(state);
         }
         pause(ctx, until).await?;
@@ -289,6 +346,33 @@ async fn checkbox<P: CaptchaPage, B: CaptchaBackend>(
     Ok(None)
 }
 
+fn checkbox_click_point(rect: Rect) -> Option<(f64, f64)> {
+    let (x, y) = rect.center();
+    let x = x + rand::random_range(-1.0..=1.0) * (rect.width * 0.1).min(1.5);
+    let y = y + rand::random_range(-1.0..=1.0) * (rect.height * 0.1).min(1.5);
+    (x >= 0.0 && y >= 0.0).then_some((x, y))
+}
+
+async fn click_and_verify<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+    prior: &PriorTokens,
+    point: (f64, f64),
+    result: &mut FlowResult,
+) -> Result<bool, PageError> {
+    result.attempts.checkbox += 1;
+    attempt(
+        ctx,
+        result,
+        SolveMethod::Checkbox,
+        SolveStep::Checkbox,
+        result.attempts.checkbox,
+    );
+    checked(ctx, ctx.page.click_at(point.0, point.1)).await?;
+    let state = wait_token(ctx, challenge, prior, VERIFY).await?;
+    Ok(prior.has_fresh(&state))
+}
+
 async fn run<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
@@ -302,76 +386,92 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         ));
     }
     guard(ctx).await?;
+    // Snapshot tokens already in the page on entry so a stale, rejected, or previously applied
+    // token never short-circuits the flow into a false pass.
     if ctx.forced_method == Some(ForcedMethod::Token) {
-        return token(ctx, challenge, result).await;
+        let initial = read(ctx, challenge).await?;
+        let prior = PriorTokens::from_read(&initial);
+        return token(ctx, challenge, &prior, Some(initial), result).await;
     }
-    attempt(ctx, result, SolveMethod::AutoPass, SolveStep::AutoPass, 1);
-    let state = wait_token(ctx, challenge, Duration::from_secs(8)).await?;
-    if flag(&state, "token") {
+    let auto_pass_until = Instant::now() + Duration::from_secs(8);
+    let prior = match tokio::time::timeout_at(auto_pass_until, read(ctx, challenge)).await {
+        Ok(value) => PriorTokens::from_read(&value?),
+        Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+        Err(_) => PriorTokens::default(),
+    };
+
+    if prior.is_empty() {
+        attempt(ctx, result, SolveMethod::AutoPass, SolveStep::AutoPass, 1);
+        if Instant::now() < auto_pass_until {
+            pause(ctx, auto_pass_until).await?;
+            if Instant::now() < auto_pass_until {
+                let state = wait_token_until(ctx, challenge, &prior, auto_pass_until).await?;
+                if prior.has_fresh(&state) {
+                    return Ok(passed(result));
+                }
+            }
+        }
+
+        for _ in 0..2 {
+            let until = Instant::now() + VERIFY;
+            let rect = loop {
+                let state = match tokio::time::timeout_at(until, read(ctx, challenge)).await {
+                    Ok(value) => value?,
+                    Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+                    Err(_) => break None,
+                };
+                if prior.has_fresh(&state) {
+                    return Ok(passed(result));
+                }
+                let rect = match tokio::time::timeout_at(until, checkbox(ctx, challenge)).await {
+                    Ok(value) => value?,
+                    Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+                    Err(_) => break None,
+                };
+                if let Some(rect) = rect {
+                    break Some(rect);
+                }
+                if Instant::now() >= until {
+                    break None;
+                }
+                pause(ctx, until).await?;
+                if Instant::now() >= until {
+                    break None;
+                }
+            };
+            let Some(rect) = rect else {
+                break;
+            };
+            let Some(point) = checkbox_click_point(rect) else {
+                break;
+            };
+            if click_and_verify(ctx, challenge, &prior, point, result).await? {
+                return Ok(passed(result));
+            }
+        }
+    } else if let Some(rect) = checkbox(ctx, challenge).await?
+        && let Some(point) = checkbox_click_point(rect)
+        && click_and_verify(ctx, challenge, &prior, point, result).await?
+    {
         return Ok(passed(result));
     }
 
-    for _ in 0..2 {
-        let until = Instant::now() + VERIFY;
-        let rect = loop {
-            let state = match tokio::time::timeout_at(until, read(ctx, challenge)).await {
-                Ok(value) => value?,
-                Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
-                Err(_) => break None,
-            };
-            if flag(&state, "token") {
-                return Ok(passed(result));
-            }
-            let rect = match tokio::time::timeout_at(until, checkbox(ctx, challenge)).await {
-                Ok(value) => value?,
-                Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
-                Err(_) => break None,
-            };
-            if let Some(rect) = rect {
-                break Some(rect);
-            }
-            if Instant::now() >= until {
-                break None;
-            }
-            pause(ctx, until).await?;
-            if Instant::now() >= until {
-                break None;
-            }
-        };
-        let Some(rect) = rect else {
-            break;
-        };
-        let (x, y) = rect.center();
-        let x = x + rand::random_range(-1.0..=1.0) * (rect.width * 0.1).min(1.5);
-        let y = y + rand::random_range(-1.0..=1.0) * (rect.height * 0.1).min(1.5);
-        if x < 0.0 || y < 0.0 {
-            break;
-        }
-        result.attempts.checkbox += 1;
-        attempt(
-            ctx,
-            result,
-            SolveMethod::Checkbox,
-            SolveStep::Checkbox,
-            result.attempts.checkbox,
-        );
-        checked(ctx, ctx.page.click_at(x, y)).await?;
-        if flag(&wait_token(ctx, challenge, VERIFY).await?, "token") {
-            return Ok(passed(result));
-        }
-    }
-
-    token(ctx, challenge, result).await
+    token(ctx, challenge, &prior, None, result).await
 }
 
 async fn token<P: CaptchaPage, B: CaptchaBackend>(
     ctx: &SolveCtx<'_, P, B>,
     challenge: &Challenge,
+    prior: &PriorTokens,
+    initial: Option<Value>,
     result: &mut FlowResult,
 ) -> Result<Terminal, PageError> {
     let configured = ctx.backend.is_configured();
-    let state = read(ctx, challenge).await?;
-    if flag(&state, "token") {
+    let state = match initial {
+        Some(state) => state,
+        None => read(ctx, challenge).await?,
+    };
+    if prior.has_fresh(&state) {
         return Ok(passed(result));
     }
     if !configured {
@@ -445,7 +545,7 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
         ));
     }
     let fresh = read(ctx, challenge).await?;
-    if flag(&fresh, "token") {
+    if prior.has_fresh(&fresh) {
         return Ok(passed(result));
     }
     if fresh.get("sitekey") != state.get("sitekey") {
@@ -456,6 +556,9 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
         ));
     }
     let mut args = fresh;
+    if let Some(fields) = args.as_object_mut() {
+        fields.remove("tokens");
+    }
     args["token"] = json!(token);
     guard(ctx).await?;
     ctx.lease
@@ -543,7 +646,10 @@ fn provider_failure(error: ProviderError) -> Terminal {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex, MutexGuard},
+    };
 
     use serde_json::{Value, json};
     use tokio::time::{Duration, Instant};
@@ -561,8 +667,11 @@ mod tests {
 
     struct State {
         polls: usize,
+        tokens: Vec<String>,
         token_at: usize,
+        poll_token: String,
         pass_on_click: bool,
+        click_token: String,
         rect: Option<Rect>,
         secondary_rect: Option<Rect>,
         selected_frame: bool,
@@ -570,6 +679,7 @@ mod tests {
         navigated: bool,
         error: Option<PageError>,
         applied: Option<String>,
+        applied_tokens: Vec<String>,
         written: bool,
         token_retained: bool,
         callback_declared: bool,
@@ -584,8 +694,11 @@ mod tests {
         fn default() -> Self {
             Self {
                 polls: 0,
+                tokens: Vec::new(),
                 token_at: usize::MAX,
+                poll_token: "native-poll-token".into(),
                 pass_on_click: false,
+                click_token: "native-click-token".into(),
                 rect: None,
                 secondary_rect: None,
                 selected_frame: false,
@@ -593,6 +706,7 @@ mod tests {
                 navigated: false,
                 error: None,
                 applied: None,
+                applied_tokens: Vec::new(),
                 written: true,
                 token_retained: true,
                 callback_declared: true,
@@ -603,6 +717,14 @@ mod tests {
                 delay_once: false,
             }
         }
+    }
+
+    fn extract_script_args(expression: &str) -> Option<Value> {
+        let rest = expression.strip_prefix("(async () => { const args = ")?;
+        serde_json::Deserializer::from_str(rest)
+            .into_iter::<Value>()
+            .next()?
+            .ok()
     }
 
     #[derive(Default)]
@@ -631,6 +753,14 @@ mod tests {
             }
             if expression.contains("turnstile:apply") {
                 state.applied = Some(expression.into());
+                if let Some(token) = extract_script_args(expression)
+                    .and_then(|args| args.get("token").and_then(Value::as_str).map(str::to_owned))
+                {
+                    state.applied_tokens.push(token.clone());
+                    if state.written {
+                        state.tokens = vec![token];
+                    }
+                }
                 return Ok(
                     json!({"written": state.written, "callbackRan": state.callback,
                     "callbackDeclared": state.callback_declared,
@@ -644,9 +774,18 @@ mod tests {
                 return Ok(json!({"transition": state.transition}));
             }
             state.polls += 1;
+            let mut tokens = state.tokens.clone();
+            if state.polls >= state.token_at && !tokens.contains(&state.poll_token) {
+                tokens.push(state.poll_token.clone());
+            }
+            if state.pass_on_click
+                && !state.clicks.is_empty()
+                && !tokens.contains(&state.click_token)
+            {
+                tokens.push(state.click_token.clone());
+            }
             Ok(json!({
-                "token": state.polls >= state.token_at
-                    || (state.pass_on_click && !state.clicks.is_empty()),
+                "tokens": tokens,
                 "sitekey": "fresh-key", "action": "fresh-action", "cdata": "fresh-data",
                 "callback": if state.callback_declared { Some("onAccepted") } else { None }, "failed": state.failed,
             }))
@@ -710,7 +849,9 @@ mod tests {
 
     struct FakeBackend {
         answer: Result<ProviderAnswer, ProviderError>,
+        answers: Mutex<VecDeque<Result<ProviderAnswer, ProviderError>>>,
         tasks: Mutex<Vec<SolveTask>>,
+        called_at: Mutex<Vec<Instant>>,
         on_solve: Option<Arc<Mutex<State>>>,
         on_configured: Option<Arc<Mutex<State>>>,
         configured: Option<bool>,
@@ -725,7 +866,9 @@ mod tests {
                     message: "ERROR_KEY_DENIED_ACCESS; ERROR_ZERO_BALANCE".into(),
                     charged: kind == ProviderErrorKind::Unsolvable,
                 }),
+                answers: Mutex::default(),
                 tasks: Mutex::default(),
+                called_at: Mutex::default(),
                 on_solve: None,
                 on_configured: None,
                 configured: None,
@@ -744,15 +887,41 @@ mod tests {
                     task_id: Some("task".into()),
                     cost_usd: Some(0.001),
                 }),
+                answers: Mutex::default(),
                 tasks: Mutex::default(),
+                called_at: Mutex::default(),
                 on_solve: None,
                 on_configured: None,
                 configured: None,
             }
         }
 
+        fn tokens(values: &[&str]) -> Self {
+            let backend = Self::token();
+            let mut queue = backend
+                .answers
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for value in values {
+                queue.push_back(Ok(ProviderAnswer {
+                    answer: SolveAnswer::Token((*value).into()),
+                    provider: ProviderName::Capsolver,
+                    task_id: Some("task".into()),
+                    cost_usd: Some(0.001),
+                }));
+            }
+            drop(queue);
+            backend
+        }
+
         fn tasks(&self) -> MutexGuard<'_, Vec<SolveTask>> {
             self.tasks.lock().unwrap_or_else(|error| error.into_inner())
+        }
+
+        fn called_at(&self) -> MutexGuard<'_, Vec<Instant>> {
+            self.called_at
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
         }
     }
 
@@ -773,6 +942,7 @@ mod tests {
             _: Instant,
             _: &CancellationToken,
         ) -> Result<ProviderAnswer, ProviderError> {
+            self.called_at().push(Instant::now());
             self.tasks().push(task.clone());
             if let Some(state) = &self.on_solve {
                 state
@@ -780,7 +950,12 @@ mod tests {
                     .unwrap_or_else(|error| error.into_inner())
                     .navigated = true;
             }
-            self.answer.clone()
+            let queued = self
+                .answers
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .pop_front();
+            queued.unwrap_or_else(|| self.answer.clone())
         }
     }
 
@@ -1599,6 +1774,380 @@ mod tests {
             assert_eq!(result.paid_tasks, 1);
             assert!(page.state().applied.is_none());
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_read_script_collects_trimmed_deduplicated_token_values()
+    -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
+        for (input_values, api_mode, expected) in [
+            (vec![], "missing", vec![]),
+            (vec!["", "   "], "empty", vec![]),
+            (
+                vec!["  stale-a  ", "stale-a", "", "stale-b"],
+                "same",
+                vec!["stale-a", "stale-b"],
+            ),
+            (
+                vec!["stale-dom"],
+                "distinct",
+                vec!["stale-dom", "stale-api"],
+            ),
+            (vec!["stale-dom"], "throws", vec!["stale-dom"]),
+            (vec!["stale-dom"], "non-string", vec!["stale-dom"]),
+        ] {
+            let code = format!(
+                r#"
+                const inputs = {}.map(value => ({{ value }}));
+                const apiMode = {};
+                const document = {{
+                    querySelectorAll: selector => selector === 'input[name="cf-turnstile-response"]' ? inputs : [],
+                }};
+                const window = apiMode === 'missing' ? {{}} : {{
+                    turnstile: {{
+                        getResponse() {{
+                            if (apiMode === 'throws') throw new Error('boom');
+                            if (apiMode === 'empty') return '   ';
+                            if (apiMode === 'same') return ' stale-a ';
+                            if (apiMode === 'distinct') return '  stale-api  ';
+                            if (apiMode === 'non-string') return 42;
+                            return undefined;
+                        }},
+                    }},
+                }};
+                return await {};
+                "#,
+                json!(input_values),
+                json!(api_mode),
+                script(READ, &json!({"sitekey": "test-key"})),
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code": code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(
+                !result.is_error,
+                "{api_mode}: {:?}",
+                result.structured_content
+            );
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true, "{api_mode}: {output}");
+            assert_eq!(output["value"]["tokens"], json!(expected), "{api_mode}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_prior_tokens_debug_redacts_token_values() {
+        let prior = PriorTokens::from_read(&json!({"tokens": ["secret-prior-token"]}));
+        let debug = format!("{prior:?}");
+        assert_eq!(debug, "PriorTokens(<1 redacted>)");
+        assert!(!debug.contains("secret-prior-token"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_without_checkbox_skips_wait_and_mints_fresh_token()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.tokens = vec!["stale-token".into()];
+            state.callback = true;
+        }
+        let backend = FakeBackend::tokens(&["minted-fresh-token"]);
+        let started = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            None,
+        )
+        .await?;
+        let called_at = backend.called_at();
+        let first_call = called_at
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("provider was never called"))?;
+        assert!(
+            first_call.duration_since(started) < Duration::from_secs(1),
+            "stale token must skip the 8 s auto-pass wait and 6 s checkbox poll before calling the provider"
+        );
+        assert_eq!(backend.tasks().len(), 1);
+        assert_eq!(page.state().applied_tokens, vec!["minted-fresh-token"]);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        assert!(!matches!(
+            result.reason,
+            SolveReason::AutoPassed | SolveReason::CheckboxPassed | SolveReason::AlreadyPassed
+        ));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.data["method"] != "auto_pass"),
+            "no auto_pass solving event should be emitted when prior tokens exist"
+        );
+        let events_json = serde_json::to_string(&events)?;
+        assert!(!events_json.contains("stale-token"));
+        assert!(!events_json.contains("minted-fresh-token"));
+        assert!(!result.message.contains("stale-token"));
+        assert!(!result.message.contains("minted-fresh-token"));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_with_checkbox_passes_when_click_yields_different_token()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.tokens = vec!["stale-token".into()];
+            state.rect = Some(Rect {
+                x: 130.0,
+                y: 220.0,
+                width: 24.0,
+                height: 24.0,
+            });
+            state.pass_on_click = true;
+            state.click_token = "fresh-checkbox-token".into();
+        }
+        let backend = FakeBackend::token();
+        let started = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            None,
+        )
+        .await?;
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "stale token with an immediately visible checkbox must not wait 8 s"
+        );
+        assert_eq!(page.state().clicks.len(), 1);
+        assert_eq!(result.attempts.checkbox, 1);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(result.paid_tasks, 0);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed,
+            )
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.data["method"] != "auto_pass"),
+            "no auto_pass solving event should be emitted when prior tokens exist"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.data["method"] == "checkbox"),
+            "checkbox solving event must be emitted"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stale_token_with_checkbox_falls_back_to_paid_token_when_click_yields_nothing_new()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.tokens = vec!["stale-token".into()];
+            state.rect = Some(Rect {
+                x: 130.0,
+                y: 220.0,
+                width: 24.0,
+                height: 24.0,
+            });
+            state.pass_on_click = false;
+            state.callback = true;
+        }
+        let backend = FakeBackend::tokens(&["minted-after-click"]);
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            None,
+        )
+        .await?;
+        assert_eq!(
+            page.state().clicks.len(),
+            1,
+            "stale-token path tries the visible checkbox once before falling back to a paid token"
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(backend.tasks().len(), 1);
+        assert_eq!(page.state().applied_tokens, vec!["minted-after-click"]);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.data["method"] != "auto_pass")
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_unchanged_stale_token_does_not_short_circuit_paid_path_rereads()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.tokens = vec!["stale-dom-token".into(), "stale-api-token".into()];
+            state.callback = true;
+        }
+        let backend = FakeBackend::tokens(&["minted-paid-token"]);
+        let result = finish(&page, &backend).await?;
+        assert_eq!(
+            page.state().polls,
+            3,
+            "entry snapshot plus both pre-provider and post-provider re-reads in token() must run"
+        );
+        assert_eq!(backend.tasks().len(), 1);
+        assert_eq!(page.state().applied_tokens, vec!["minted-paid-token"]);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_retry_after_applied_token_mints_and_applies_again() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        page.state().callback = true;
+        let backend = FakeBackend::tokens(&["minted-first-token", "minted-second-token"]);
+
+        let first = finish(&page, &backend).await?;
+        assert_eq!(
+            (first.status, first.method, first.reason, first.paid_tasks),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+                1,
+            )
+        );
+        assert_eq!(page.state().tokens, vec!["minted-first-token"]);
+
+        let retry_started = Instant::now();
+        let (second, retry_events) = run_with_method(
+            &page,
+            &backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            None,
+        )
+        .await?;
+        assert_eq!(
+            (
+                second.status,
+                second.method,
+                second.reason,
+                second.paid_tasks,
+            ),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+                1,
+            )
+        );
+        let called_at = backend.called_at();
+        let second_call = called_at
+            .get(1)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("second provider task was never called"))?;
+        assert!(
+            second_call.duration_since(retry_started) < Duration::from_secs(1),
+            "retry sees the first run's applied token as prior and skips the 8 s wait"
+        );
+        assert!(
+            retry_events
+                .iter()
+                .all(|event| event.data["method"] != "auto_pass")
+        );
+        assert_eq!(backend.tasks().len(), 2);
+        assert_eq!(
+            page.state().applied_tokens,
+            vec!["minted-first-token", "minted-second-token"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_forced_token_method_with_stale_token_still_mints_and_applies()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.tokens = vec!["stale-token".into()];
+            state.callback = true;
+        }
+        let backend = FakeBackend::tokens(&["minted-forced-token"]);
+        let started = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            Some(super::super::config::ForcedMethod::Token),
+        )
+        .await?;
+        let called_at = backend.called_at();
+        let first_call = called_at
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("provider was never called"))?;
+        assert_eq!(first_call.duration_since(started), Duration::ZERO);
+        assert_eq!(backend.tasks().len(), 1);
+        assert_eq!(page.state().applied_tokens, vec!["minted-forced-token"]);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        assert!(page.state().clicks.is_empty());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data["method"], "token");
         Ok(())
     }
 
