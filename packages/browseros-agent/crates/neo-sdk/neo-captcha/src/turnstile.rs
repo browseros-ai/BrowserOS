@@ -282,15 +282,7 @@ async fn wait_token<P: CaptchaPage, B: CaptchaBackend>(
     prior: &PriorTokens,
     duration: Duration,
 ) -> Result<Value, PageError> {
-    wait_token_until(ctx, challenge, prior, Instant::now() + duration).await
-}
-
-async fn wait_token_until<P: CaptchaPage, B: CaptchaBackend>(
-    ctx: &SolveCtx<'_, P, B>,
-    challenge: &Challenge,
-    prior: &PriorTokens,
-    until: Instant,
-) -> Result<Value, PageError> {
+    let until = Instant::now() + duration;
     let mut state = json!({"tokens": []});
     loop {
         match tokio::time::timeout_at(until, read(ctx, challenge)).await {
@@ -386,30 +378,20 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         ));
     }
     guard(ctx).await?;
-    // Snapshot tokens already in the page on entry so a stale, rejected, or previously applied
-    // token never short-circuits the flow into a false pass.
+    // Snapshot tokens already in the page from a completed read so a stale, rejected, or
+    // previously applied token never short-circuits the flow into a false pass. Never fall back
+    // to an empty prior on a slow read.
+    let initial = read(ctx, challenge).await?;
+    let prior = PriorTokens::from_read(&initial);
     if ctx.forced_method == Some(ForcedMethod::Token) {
-        let initial = read(ctx, challenge).await?;
-        let prior = PriorTokens::from_read(&initial);
         return token(ctx, challenge, &prior, Some(initial), result).await;
     }
-    let auto_pass_until = Instant::now() + Duration::from_secs(8);
-    let prior = match tokio::time::timeout_at(auto_pass_until, read(ctx, challenge)).await {
-        Ok(value) => PriorTokens::from_read(&value?),
-        Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
-        Err(_) => PriorTokens::default(),
-    };
 
     if prior.is_empty() {
         attempt(ctx, result, SolveMethod::AutoPass, SolveStep::AutoPass, 1);
-        if Instant::now() < auto_pass_until {
-            pause(ctx, auto_pass_until).await?;
-            if Instant::now() < auto_pass_until {
-                let state = wait_token_until(ctx, challenge, &prior, auto_pass_until).await?;
-                if prior.has_fresh(&state) {
-                    return Ok(passed(result));
-                }
-            }
+        let state = wait_token(ctx, challenge, &prior, Duration::from_secs(8)).await?;
+        if prior.has_fresh(&state) {
+            return Ok(passed(result));
         }
 
         for _ in 0..2 {
@@ -688,6 +670,7 @@ mod tests {
         failed: bool,
         delay: Duration,
         delay_once: bool,
+        delay_skip: usize,
     }
 
     impl Default for State {
@@ -715,6 +698,7 @@ mod tests {
                 failed: false,
                 delay: Duration::ZERO,
                 delay_once: false,
+                delay_skip: 0,
             }
         }
     }
@@ -740,11 +724,16 @@ mod tests {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
             let delay = {
                 let mut state = self.state();
-                let delay = state.delay;
-                if state.delay_once {
-                    state.delay = Duration::ZERO;
+                if state.delay_skip > 0 {
+                    state.delay_skip -= 1;
+                    Duration::ZERO
+                } else {
+                    let delay = state.delay;
+                    if state.delay_once {
+                        state.delay = Duration::ZERO;
+                    }
+                    delay
                 }
-                delay
             };
             tokio::time::sleep(delay).await;
             let mut state = self.state();
@@ -1606,8 +1595,13 @@ mod tests {
     async fn tests_that_a_stalled_auto_pass_read_obeys_the_eight_second_budget()
     -> anyhow::Result<()> {
         let page = FakePage::default();
-        page.state().delay = Duration::from_secs(60);
-        page.state().delay_once = true;
+        {
+            let mut state = page.state();
+            // Let the entry prior-token snapshot finish, then stall the first auto-pass read.
+            state.delay_skip = 1;
+            state.delay = Duration::from_secs(60);
+            state.delay_once = true;
+        }
         let backend = FakeBackend::error(ProviderErrorKind::NotConfigured);
         let start = Instant::now();
         let result = finish(&page, &backend).await?;
@@ -2148,6 +2142,58 @@ mod tests {
         assert!(page.state().clicks.is_empty());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data["method"], "token");
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_slow_entry_read_with_stale_token_still_mints_fresh_token()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.tokens = vec!["stale-token".into()];
+            state.delay = Duration::from_secs(10);
+            state.delay_once = true;
+            state.callback = true;
+        }
+        let backend = FakeBackend::tokens(&["minted-after-slow-entry"]);
+        let started = Instant::now();
+        let (result, events) = run_with_method(
+            &page,
+            &backend,
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            None,
+        )
+        .await?;
+        let called_at = backend.called_at();
+        let first_call = called_at
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("provider was never called"))?;
+        assert_eq!(
+            first_call.duration_since(started),
+            Duration::from_secs(10),
+            "flow waits for the slow entry snapshot rather than falling back to an empty prior, then skips the 8 s auto-pass wait"
+        );
+        assert_eq!(backend.tasks().len(), 1);
+        assert_eq!(page.state().applied_tokens, vec!["minted-after-slow-entry"]);
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit,
+            )
+        );
+        assert_eq!(result.paid_tasks, 1);
+        assert_ne!(result.reason, SolveReason::AutoPassed);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.data["method"] != "auto_pass"),
+            "no auto_pass solving event should be emitted when the slow entry snapshot found a stale token"
+        );
         Ok(())
     }
 
