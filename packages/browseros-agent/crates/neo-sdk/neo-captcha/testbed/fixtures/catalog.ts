@@ -254,6 +254,35 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     notes:
       'A cross-site frame that never loads and is replaced every 2 s: the scan reads the widget past it.',
   },
+  // The verify check's own pages. Their sitekey is the always-blocks key that still gates the
+  // page, so the server checks the posted token with the always-fail secret and refuses it.
+  {
+    ...fixture(
+      'verify-second-challenge',
+      'A second Turnstile check opens after the first passes',
+      'turnstile',
+      '/verify-second-challenge.html',
+      '2x00000000000000000000AB',
+      ['unsolved', 'unknown'],
+    ),
+    notes:
+      "Kelmar's NC and NY pages: the first widget passes on Neo's click, then a dialog with a failing widget covers the page. Without the check Neo answers solved; with it, a vendor frame on top (challenge_open) ends in unsolved / still_blocked.",
+  },
+  {
+    ...fixture(
+      'verify-alert-only',
+      'Only an alert says the check failed',
+      'turnstile',
+      '/verify-alert-only.html',
+      '2x00000000000000000000BB',
+      ['unsolved', 'unknown'],
+    ),
+    // Ready once the widget has failed out of sight, left an old token and lost its frame.
+    ready:
+      "(s => s.rendered === true && s.stale === true && s.frameGone === true)(JSON.parse(document.documentElement.dataset.captchaFixture || '{}'))",
+    notes:
+      'NY once its dialog closed: an alert, an old token in a hidden widget with no frame, nothing on top. Only words show the block, so the check asks Jev: unsolved when Jev reads a block, unknown without Jev. Never already_clear.',
+  },
   fixture(
     'turnstile-cf-marker',
     'Turnstile beside Cloudflare bot management',

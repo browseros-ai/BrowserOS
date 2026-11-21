@@ -81,6 +81,8 @@ test('tests that the catalog contains every required page with unique ids and ex
     'turnstile-stale-token',
     'turnstile-hidden-verifying',
     'turnstile-frame-never-loads',
+    'verify-second-challenge',
+    'verify-alert-only',
     'turnstile-cf-marker',
     'cloudflare-wall',
     'no-captcha',
@@ -399,11 +401,12 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
     expect(html.match(/<form\b/g)).toHaveLength(1)
     expect(html).toContain('id="captcha-form"')
     expect(html).toContain('id="submit" type="submit"')
-    // The bound, PerimeterX, stale-token and hidden Turnstile fixtures have their own
+    // The bound, PerimeterX, stale-token, hidden Turnstile and verify fixtures have their own
     // lifecycle tests.
     if (
       page.id === 'recaptcha-v2-invisible-bind' ||
       page.id.startsWith('perimeterx-') ||
+      page.id.startsWith('verify-') ||
       page.id === 'turnstile-stale-token' ||
       page.id === 'turnstile-hidden-verifying'
     )
@@ -594,6 +597,224 @@ test('tests that the hidden page starts its widget out of sight and never shows 
     callbackFired: true,
     tokenLength: 10,
   })
+})
+
+const NY_ALERT =
+  'There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.'
+
+/**
+ * Runs a verify fixture's inline scripts against a fake page that keeps what they touch: the
+ * widgets rendered, the timers set, the dialog, the alert inserted after the heading, and the
+ * widget's markup as Turnstile lays it out (a wrapper holding the frame beside the response field).
+ */
+async function runVerifyFixture(id: string) {
+  const page = FIXTURE_PAGES.find((p) => p.id === id)
+  if (!page) throw new Error(`missing ${id}`)
+  const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
+  const dataset: Record<string, string> = {}
+  const renders: { target: string; options: Record<string, unknown> }[] = []
+  const timers: (() => void)[] = []
+  const inserted: Record<string, unknown>[] = []
+  let visible = false
+  let resize = () => {}
+  let close = () => {}
+  const field = {
+    value: '',
+    getAttribute: (name: string) =>
+      name === 'name' ? 'cf-turnstile-response' : null,
+  }
+  const frame = { tagName: 'IFRAME' }
+  const wrapper = { frame, field, getAttribute: () => null }
+  const widget = {
+    children: [wrapper] as unknown[],
+    querySelectorAll: (selector: string) =>
+      selector === '[name="cf-turnstile-response"]' &&
+      (widget.children.includes(wrapper) || widget.children.includes(field))
+        ? [field]
+        : [],
+    querySelector: (selector: string) =>
+      selector === 'iframe' && widget.children.includes(wrapper) ? frame : null,
+    replaceChildren: (...nodes: unknown[]) => {
+      widget.children = nodes
+    },
+  }
+  const dialog = { hidden: true }
+  const elements: Record<string, unknown> = {
+    widget,
+    dialog,
+    close: {
+      addEventListener: (_type: string, listener: () => void) => {
+        close = listener
+      },
+    },
+  }
+  const context = {
+    window: {} as Record<string, unknown>,
+    document: {
+      documentElement: { dataset },
+      getElementById: (elementId: string) =>
+        elementId === 'alert'
+          ? (inserted.find((node) => node.id === 'alert') ?? null)
+          : (elements[elementId] ?? null),
+      querySelector: (selector: string) => {
+        if (selector === 'h1')
+          return {
+            after: (node: Record<string, unknown>) => inserted.push(node),
+          }
+        if (selector === '#widget') return widget
+        return visible
+          ? { getBoundingClientRect: () => ({ width: 300, height: 65 }) }
+          : null
+      },
+      createElement: () => {
+        const node: Record<string, unknown> = {
+          id: '',
+          textContent: '',
+          setAttribute: (name: string, value: string) => {
+            node[name] = value
+          },
+        }
+        return node
+      },
+    },
+    turnstile: {
+      render: (target: string, options: Record<string, unknown>) => {
+        renders.push({ target, options })
+      },
+    },
+    setTimeout: (callback: () => void) => timers.push(callback),
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+    },
+    ResizeObserver: class {
+      constructor(callback: () => void) {
+        resize = callback
+      }
+      observe() {}
+      disconnect() {}
+    },
+  }
+  for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g))
+    runInNewContext(match[1] ?? '', context)
+  const callback = (index: number, name: string) =>
+    renders[index]?.options[name] as (value?: string) => void
+  return {
+    page,
+    html,
+    renders,
+    field,
+    widget,
+    dialog,
+    inserted,
+    callback,
+    state: () => JSON.parse(dataset.captchaFixture ?? '{}'),
+    ready: () => runInNewContext(page.ready, context),
+    load: () => (context.window.fixtureLoaded as () => void)(),
+    show: () => {
+      visible = true
+      resize()
+    },
+    fireTimers: () => {
+      for (const timer of timers.splice(0)) timer()
+    },
+    close: () => close(),
+  }
+}
+
+test('tests that the second-challenge page covers itself with a failing check only after its first widget passes', async () => {
+  const fixture = await runVerifyFixture('verify-second-challenge')
+  expect(fixture.page).toMatchObject({
+    sitekey: '2x00000000000000000000AB',
+    expect: ['unsolved', 'unknown'],
+  })
+  // The first widget is in the form; the dialog, with the key that gates the page, is outside it.
+  const form = fixture.html.match(/<form\b[\s\S]*?<\/form>/)?.[0] ?? ''
+  expect(form).toContain(
+    '<div id="widget" class="cf-turnstile" data-sitekey="3x00000000000000000000FF"></div>',
+  )
+  expect(form).not.toContain('second-widget')
+  expect(fixture.html).toContain(
+    '<div id="dialog" role="dialog" aria-label="Please check the box below to continue." hidden>',
+  )
+  expect(fixture.html).toContain(
+    '<div id="second-widget" class="cf-turnstile" data-sitekey="2x00000000000000000000AB"></div>',
+  )
+  expect(fixture.ready()).toBe(false)
+  fixture.load()
+  expect(fixture.renders).toHaveLength(1)
+  expect(fixture.renders[0]).toMatchObject({
+    target: '#widget',
+    options: { sitekey: '3x00000000000000000000FF' },
+  })
+  fixture.show()
+  expect(fixture.ready()).toBe(true)
+  // Nothing covers the page until the first widget passes, and then only once its timer runs.
+  fixture.callback(0, 'callback')('first-token')
+  expect(fixture.state()).toMatchObject({
+    callbackFired: true,
+    tokenLength: 11,
+    secondChallenge: false,
+  })
+  expect(fixture.dialog.hidden).toBe(true)
+  fixture.fireTimers()
+  expect(fixture.dialog.hidden).toBe(false)
+  expect(fixture.renders[1]).toMatchObject({
+    target: '#second-widget',
+    options: { sitekey: fixture.page.sitekey, retry: 'never' },
+  })
+  expect(fixture.state().secondChallenge).toBe(true)
+  // Its failure adds NY's alert, word for word, once.
+  expect(fixture.inserted).toHaveLength(0)
+  fixture.callback(1, 'error-callback')('600010')
+  fixture.callback(1, 'error-callback')('600010')
+  expect(fixture.state()).toMatchObject({ secondFailed: true })
+  expect(fixture.inserted).toHaveLength(1)
+  expect(fixture.inserted[0]).toMatchObject({
+    id: 'alert',
+    role: 'alert',
+    textContent: NY_ALERT,
+  })
+  fixture.close()
+  expect(fixture.dialog.hidden).toBe(true)
+})
+
+test('tests that the alert-only page is ready only once its hidden widget failed, kept an old token and lost its frame', async () => {
+  const fixture = await runVerifyFixture('verify-alert-only')
+  expect(fixture.page).toMatchObject({
+    sitekey: '2x00000000000000000000BB',
+    expect: ['unsolved', 'unknown'],
+  })
+  expect(fixture.html).toContain(
+    '<div id="widget" class="cf-turnstile" data-sitekey="2x00000000000000000000BB" style="display: none"></div>',
+  )
+  expect(fixture.ready()).toBe(false)
+  fixture.load()
+  expect(fixture.renders).toHaveLength(1)
+  expect(fixture.renders[0]).toMatchObject({
+    target: '#widget',
+    options: { sitekey: fixture.page.sitekey, retry: 'never' },
+  })
+  // Started out of sight is not enough: the check must have failed first.
+  expect(fixture.state().rendered).toBe(true)
+  expect(fixture.ready()).toBe(false)
+  expect(fixture.inserted).toHaveLength(0)
+  fixture.callback(0, 'error-callback')('600010')
+  expect(fixture.field.value).toBe('stale-token-from-an-earlier-pass')
+  expect(fixture.widget.children).toEqual([fixture.field])
+  expect(fixture.state()).toMatchObject({
+    stale: true,
+    frameGone: true,
+    tokenLength: 'stale-token-from-an-earlier-pass'.length,
+    errors: ['600010'],
+  })
+  expect(fixture.inserted).toHaveLength(1)
+  expect(fixture.inserted[0]).toMatchObject({
+    id: 'alert',
+    role: 'alert',
+    textContent: NY_ALERT,
+  })
+  expect(fixture.ready()).toBe(true)
 })
 
 test('tests that the never-loading frame comes after the page load and points at the hanging address', async () => {
