@@ -53,6 +53,9 @@ describe('sessionStatusBadge', () => {
   it('lets an ended task say how it ended whatever its last activity', () => {
     expect(sessionStatusBadge('done', idle).label).toBe('Done')
     expect(sessionStatusBadge('cancelled', idle).label).toBe('Stopped')
+  })
+
+  it('keeps the recorded result after a task ends with help pending', () => {
     expect(sessionStatusBadge('failed', waiting).label).toBe('Didn’t finish')
     expect(sessionStatusBadge('done', waiting).label).toBe('Done')
   })

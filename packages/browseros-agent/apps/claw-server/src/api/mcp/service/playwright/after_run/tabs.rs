@@ -10,11 +10,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::super::{
+use super::super::super::StartedSession;
+use crate::api::mcp::{
     dispatch::{CreatedPageCapture, ToolCall, ToolIdentity},
     effects::{ownership_claims, tab_groups},
-    service::StartedSession,
-    tab_ref,
+    page_naming::page_for_tab,
 };
 use crate::{
     AppState,
@@ -64,7 +64,7 @@ fn claim_start(tab_id: i64, operations: &[RunOperation], run_started_at: i64, no
         .map_or(now, |started_at| started_at.max(run_started_at).min(now))
 }
 
-pub(in crate::api::mcp) async fn apply(
+pub(in crate::api::mcp::service::playwright) async fn apply(
     state: &AppState,
     started: &StartedSession,
     operations: &[RunOperation],
@@ -273,7 +273,7 @@ async fn census(state: &AppState) -> Result<Vec<CensusTab>, ()> {
 }
 
 async fn resolve_page(state: &AppState, browser: &BrowserSession, tab_id: i64) -> Option<PageInfo> {
-    let page = tab_ref::page_for_tab(state, tab_id).await?;
+    let page = page_for_tab(state, tab_id).await?;
     browser
         .pages
         .get_info(page)

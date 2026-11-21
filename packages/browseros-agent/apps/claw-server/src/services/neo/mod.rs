@@ -12,10 +12,7 @@ mod wire;
 
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -41,7 +38,6 @@ struct Inner {
     state: watch::Sender<EngineState>,
     connection: Mutex<Connection>,
     sessions: Mutex<session_tasks::SessionTasks>,
-    started: AtomicBool,
     stop: CancellationToken,
     supervisor: Mutex<Option<JoinHandle<()>>>,
 }
@@ -77,13 +73,13 @@ pub struct EngineLaunch {
     config_path: PathBuf,
     cdp_port: u16,
     browseros_version: Option<String>,
-    hosted: bool,
 }
 
 impl EngineLaunch {
+    /// A launch exists only on a host that will advertise the SDK's tool.
     #[must_use]
-    pub fn from_config(config: &Config, config_path: &Path) -> Self {
-        Self {
+    pub fn from_config(config: &Config, config_path: &Path) -> Option<Self> {
+        config.serves_playwright_run().then(|| Self {
             state_dir: config.browserclaw_dir.clone(),
             resources_dir: config.resources_dir.clone(),
             config_path: config_path.to_path_buf(),
@@ -93,8 +89,7 @@ impl EngineLaunch {
                 .capabilities
                 .browseros_version()
                 .map(|version| version.to_string()),
-            hosted: config.mode.is_hosted(),
-        }
+        })
     }
 }
 
@@ -229,48 +224,38 @@ impl NeoEngine {
                 state,
                 connection: Mutex::new(Connection::default()),
                 sessions: Mutex::new(session_tasks::SessionTasks::default()),
-                started: AtomicBool::new(false),
                 stop: CancellationToken::new(),
                 supervisor: Mutex::new(None),
             }),
         }
     }
 
-    /// Starts once without holding up host boot. A failed start becomes state.
-    pub fn start(&self, launch: EngineLaunch) {
-        if self.inner.stop.is_cancelled() {
-            return;
-        }
-        if self.inner.started.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if launch.hosted {
-            tracing::info!("the Playwright engine is disabled in hosted mode");
-            self.inner
-                .state
-                .send_replace(EngineState::Disabled("hosted mode uses its existing run"));
-            return;
-        }
+    /// Starts once without holding up host boot. Catalog hosts have no launch to schedule.
+    pub fn start(&self, launch: Option<EngineLaunch>) {
         #[cfg(unix)]
         {
-            tracing::info!("the Playwright engine is starting");
-            self.inner.state.send_replace(EngineState::Starting);
-            let engine = self.clone();
-            let task = tokio::spawn(async move {
-                child::supervise(&engine, launch).await;
-            });
-            *self
+            let Some(launch) = launch else {
+                return;
+            };
+            // Publish the task under the same lock shutdown uses to take it.
+            let mut supervisor = self
                 .inner
                 .supervisor
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.inner.stop.is_cancelled() || supervisor.is_some() {
+                return;
+            }
+            tracing::info!("the Playwright engine is starting");
+            self.inner.state.send_replace(EngineState::Starting);
+            let engine = self.clone();
+            *supervisor = Some(tokio::spawn(async move {
+                child::supervise(&engine, launch).await;
+            }));
         }
         #[cfg(not(unix))]
         {
-            tracing::info!("the Playwright engine is disabled on Windows");
-            self.inner.state.send_replace(EngineState::Disabled(
-                "the Playwright run is not available on Windows yet",
-            ));
+            debug_assert!(launch.is_none(), "this platform has no Playwright engine");
         }
     }
 
@@ -393,13 +378,16 @@ impl NeoEngine {
     /// necessary. kill_on_drop also covers cancellation of the supervisor.
     pub async fn shutdown(&self) {
         self.inner.stop.cancel();
-        self.unavailable("the Playwright engine was shut down".to_owned());
         let task = self
             .inner
             .supervisor
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
+        // An off host never changes readiness or wakes subscribers during shutdown.
+        if !matches!(self.state(), EngineState::Disabled(_)) {
+            self.unavailable("the Playwright engine was shut down".to_owned());
+        }
         if let Some(mut task) = task
             && tokio::time::timeout(Duration::from_secs(3), &mut task)
                 .await

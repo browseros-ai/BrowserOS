@@ -2,7 +2,7 @@
 //! through the decisions worker. Every move goes down the same dispatch path an agent's own call
 //! takes, and the run is recorded as one local dispatch beside the actions it made.
 
-use super::{ClawMcpService, StartedSession, finish_local_dispatch, hosted};
+use super::{ClawMcpService, PageNaming, StartedSession, finish_local_dispatch, hosted};
 use crate::{
     api::mcp::{
         dispatch::{ToolIdentity, linked_cancel_token},
@@ -56,7 +56,7 @@ pub(super) fn pursue_tool() -> Tool {
         "properties": {
             "page": {
                 "type": "integer",
-                "description": "The native tab id from page.tabId in a run script. The returned page uses this same id."
+                "description": "The page to work on, from tabs or navigate."
             },
             "goal": {
                 "type": "string",
@@ -103,7 +103,7 @@ pub(super) fn pursue_tool() -> Tool {
             "decisions": { "type": "integer" },
             "jevTokens": { "type": "integer" },
             "writerCalls": { "type": "integer" },
-            "pagesRead": { "type": "integer", "description": "Page states inspected by neo without sending their contents to you." },
+            "pagesRead": { "type": "integer", "description": "Page states neo read itself, none of which went to you." },
             "pageTokens": { "type": "integer", "description": "Estimated tokens of the page text neo read itself." }
         },
         "required": ["outcome", "said", "page", "status"]
@@ -213,15 +213,12 @@ impl ClawMcpService {
         raw_args: &Value,
         client_cancel: CancellationToken,
     ) -> ToolResult {
-        let Some(page) = raw_args
-            .get("page")
-            .and_then(Value::as_i64)
-            .filter(|page| *page > 0)
-        else {
+        let naming = self.page_naming();
+        let Some(page) = naming.pursue_page(raw_args) else {
             return ToolResult::error("pursue needs the page to work on");
         };
         if started.session.pursue_handed_back() {
-            return already_handed_back(page);
+            return already_handed_back(page, naming);
         }
         let Some(goal) = raw_args
             .get("goal")
@@ -252,9 +249,8 @@ impl ClawMcpService {
         let Some(browser_session) = self.state.browser.session().await else {
             return not_started(page, "no browser is connected");
         };
-        // MCP speaks native tab ids; the internal driver and dispatch pipeline
-        // still speak host page ids. Translate once and keep the native id for replies.
-        let Some(host_page) = self.script_page(page).await else {
+        // Resolve the SDK tab after the plan and browser checks so their handbacks take priority.
+        let Some(host_page) = naming.host_page(&self.state, page).await else {
             return not_started(
                 page,
                 "that tab is no longer open; find it with context.pages() in run",
@@ -355,9 +351,10 @@ pub(super) fn uses_up_pursue(ending: Ending, decisions: u32) -> bool {
 }
 
 /// A call after this task's pursue handed back: run carries the task from here.
-fn already_handed_back(page: i64) -> ToolResult {
+pub(super) fn already_handed_back(page: i64, naming: PageNaming) -> ToolResult {
+    let new_task = naming.new_task_hint();
     let said = format!(
-        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}. pursue is offered again once you start a new task with neo.createTask(name)."
+        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}. pursue is offered again once you start a new task with {new_task}."
     );
     ToolResult::text(
         said.clone(),
@@ -377,21 +374,8 @@ fn already_handed_back(page: i64) -> ToolResult {
     )
 }
 
-/// A cached caller after the exception switch is disabled gets the same
-/// no-work handback as an unavailable plan, without opening a session or worker call.
-pub(super) fn gate_off(raw_args: &Value) -> ToolResult {
-    let Some(page) = raw_args
-        .get("page")
-        .and_then(Value::as_i64)
-        .filter(|page| *page > 0)
-    else {
-        return ToolResult::error("pursue needs page.tabId from a run script");
-    };
-    not_started(page, "fast browsing is turned off")
-}
-
 /// A run that never asked anything: a hand back with nothing done, which leaves pursue usable.
-fn not_started(page: i64, why: &str) -> ToolResult {
+pub(super) fn not_started(page: i64, why: &str) -> ToolResult {
     let said = format!(
         "neo's fast browsing did not start because {why}, so it is handing this task to you. Carry on with run on page {page}."
     );
@@ -515,29 +499,6 @@ fn values_from(raw_args: &Value) -> Vec<NamedValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gate_off_returns_a_native_tab_handback_without_work() {
-        let result = gate_off(&json!({"page": 5000000000i64}));
-        assert!(!result.is_error);
-        let body = result.structured_content.unwrap_or_default();
-        assert_eq!(body["page"], 5000000000i64);
-        assert_eq!(body["continueWith"], "run");
-        assert_eq!(body["decisions"], 0);
-        for text in [
-            not_started(7, "the worker is unavailable"),
-            already_handed_back(7),
-        ] {
-            for block in text.content {
-                if let Some(text) = block.as_text() {
-                    assert_eq!(
-                        crate::api::mcp::surface::removed_tool_reference(&text.text),
-                        None
-                    );
-                }
-            }
-        }
-    }
 
     #[test]
     fn only_a_satisfied_run_is_completed() {

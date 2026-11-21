@@ -2,12 +2,11 @@
 //! SDK task touches are the rename signal, including tasks created before a failed run.
 //! Desktop rename reminders live here so pursue's internal dispatches cannot consume them.
 
-use super::super::service::StartedSession;
+use super::super::super::StartedSession;
 use crate::{
     AppState,
     api::mcp::{
         effects::tab_groups::apply_agent_tab_group_title,
-        hosted::rename_tip,
         naming::{normalize_small_name, session_group_title},
     },
     services::neo::{RunOutcome, RunStatus, TaskTouchKind},
@@ -15,7 +14,9 @@ use crate::{
 
 /// Live naming and the parent audit row share one declaration rule so History
 /// retains the same label, including when task creation precedes a run failure.
-pub(in crate::api::mcp) fn created_task_name(outcome: &RunOutcome) -> Option<String> {
+pub(in crate::api::mcp::service::playwright) fn created_task_name(
+    outcome: &RunOutcome,
+) -> Option<String> {
     outcome
         .tasks
         .iter()
@@ -25,7 +26,7 @@ pub(in crate::api::mcp) fn created_task_name(outcome: &RunOutcome) -> Option<Str
         .find(|name| !name.is_empty())
 }
 
-pub(in crate::api::mcp) async fn apply(
+pub(in crate::api::mcp::service::playwright) async fn apply(
     state: &AppState,
     started: &StartedSession,
     outcome: &RunOutcome,
@@ -68,9 +69,9 @@ pub(in crate::api::mcp) async fn apply(
     let Some(label) = started.session.take_rename_nudge().await else {
         return Vec::new();
     };
-    vec![rename_tip(
-        state.config.mode,
-        &session_group_title(&started.session, &label),
+    let title = session_group_title(&started.session, &label);
+    vec![format!(
+        "Tip: this session is \"{title}\". Start a run script with neo.createTask('<2-3 word task label>') to name your work."
     )]
 }
 
@@ -92,6 +93,7 @@ mod tests {
             ServerMode::Desktop,
             Behavior {
                 tab_grouping: grouping,
+                playwright_run: true,
                 ..Behavior::default()
             },
         )
@@ -259,7 +261,7 @@ mod tests {
             assert_eq!(notes.len(), 1);
             assert!(notes[0].contains("neo.createTask("), "{}", notes[0]);
             assert_eq!(
-                crate::api::mcp::surface::removed_tool_reference(&notes[0]),
+                super::super::super::surface::removed_tool_reference(&notes[0]),
                 None,
                 "{}",
                 notes[0]

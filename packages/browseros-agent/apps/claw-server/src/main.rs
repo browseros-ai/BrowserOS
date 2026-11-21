@@ -191,7 +191,7 @@ async fn run(
     runtime: &mut AppRuntime,
     config: Arc<claw_server::config::Config>,
     stdio_mode: bool,
-    launch: EngineLaunch,
+    launch: Option<EngineLaunch>,
 ) -> anyhow::Result<()> {
     let state = runtime.state();
     state.browser.wait_for_initial_attempt().await;
@@ -290,7 +290,7 @@ fn init_tracing(config: Arc<claw_server::config::Config>) -> anyhow::Result<Work
 async fn serve(
     runtime: &mut AppRuntime,
     config: Arc<claw_server::config::Config>,
-    launch: EngineLaunch,
+    launch: Option<EngineLaunch>,
 ) -> anyhow::Result<()> {
     let state = runtime.state();
     let heal_state = state.clone();
