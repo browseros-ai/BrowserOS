@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc5dd7fa0a 100644
+index 142bd94887c32abbc4e840521a8a4e892eb71ce8..2806d7f98c3b6918c00a47ca7c4e7c645800879a 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 @@ -8,6 +8,29 @@
@@ -32,7 +32,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
  
    # The state of the browser window.
    experimental type WindowState extends string
-@@ -31,6 +54,251 @@ domain Browser
+@@ -31,6 +54,273 @@ domain Browser
        # The window state. Default to normal.
        optional WindowState windowState
  
@@ -81,6 +81,28 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
 +      string color
 +      boolean collapsed
 +      array of TabID tabIds
++
++  # Saved groups with no local tab-strip group, scoped to a loaded regular profile.
++  experimental type ClosedTabGroupInfo extends object
++    properties
++      string savedGroupId
++      BrowserProfileID browserProfileId
++      string title
++      string color
++      integer tabCount
++      boolean shared
++
++  # List closed saved groups without loading profiles or opening windows.
++  experimental command getClosedTabGroups
++    returns
++      array of ClosedTabGroupInfo groups
++
++  # Delete exactly one closed saved group. Open and shared groups are refused.
++  # This removes the saved record and propagates through normal tab-group sync.
++  experimental command deleteClosedTabGroup
++    parameters
++      BrowserProfileID browserProfileId
++      string savedGroupId
 +
 +  # Lists saved regular profiles without loading them or opening windows.
 +  experimental command getProfiles
@@ -254,7 +276,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
 +    returns
 +      TabGroupInfo group
 +
-+  # Close all tabs in a group, destroying the group.
++  # Close all tabs in a group. Its saved record is preserved for reopening.
 +  experimental command closeTabGroup
 +    parameters
 +      TabGroupID groupId
@@ -284,7 +306,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc
    experimental type PermissionType extends string
      enum
        ar
-@@ -304,6 +572,28 @@ domain Browser
+@@ -304,6 +594,28 @@ domain Browser
        # position and size are returned.
        Bounds bounds
  

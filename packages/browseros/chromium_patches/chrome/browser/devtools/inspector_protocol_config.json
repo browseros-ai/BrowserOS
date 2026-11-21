@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
-index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..168000235e16ca00d682ffa54b4da497e4235c05 100644
+index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..93e789ed37198460a3291be2502e82a3ffc526d5 100644
 --- a/chrome/browser/devtools/inspector_protocol_config.json
 +++ b/chrome/browser/devtools/inspector_protocol_config.json
 @@ -18,9 +18,21 @@
@@ -7,7 +7,7 @@ index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..168000235e16ca00d682ffa54b4da497
              {
                  "domain": "Browser",
 -                "include": [ "getWindowForTarget", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride" ],
-+                "include": [ "getWindowForTarget", "getTabForTarget", "getTargetForTab", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride", "getProfiles", "loadProfile", "getWindows", "getActiveWindow", "createWindow", "closeWindow", "activateWindow", "setWindowVisibility", "getTabs", "getActiveTab", "getTabInfo", "createTab", "closeTab", "activateTab", "moveTab", "duplicateTab", "pinTab", "unpinTab", "showTab", "getTabGroups", "createTabGroup", "updateTabGroup", "closeTabGroup", "addTabsToGroup", "removeTabsFromGroup", "moveTabGroup" ],
++                "include": [ "getWindowForTarget", "getTabForTarget", "getTargetForTab", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride", "getProfiles", "loadProfile", "getWindows", "getActiveWindow", "createWindow", "closeWindow", "activateWindow", "setWindowVisibility", "getTabs", "getActiveTab", "getTabInfo", "createTab", "closeTab", "activateTab", "moveTab", "duplicateTab", "pinTab", "unpinTab", "showTab", "getTabGroups", "getClosedTabGroups", "deleteClosedTabGroup", "createTabGroup", "updateTabGroup", "closeTabGroup", "addTabsToGroup", "removeTabsFromGroup", "moveTabGroup" ],
 +                "include_events": [],
 +                "async": [ "loadProfile" ]
 +            },
