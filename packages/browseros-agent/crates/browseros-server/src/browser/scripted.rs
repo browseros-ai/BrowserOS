@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio_util::sync::CancellationToken;
 
-use super::{Armed, Browser, Engine, Scope, Tool, ToolOutput};
+use super::{Browser, Engine, Scope, Tool, ToolOutput};
 
 /// The browser paragraph the double puts in the system prompt.
 pub const GUIDANCE: &str = "The scripted test browser. Call `run` with a script.";
@@ -82,7 +82,7 @@ impl Browser {
                 opened: Mutex::new(Vec::new()),
             }),
         };
-        let browser = Browser::from_engine(Engine::Scripted(handle.clone()));
+        let browser = Browser::from_engine(Engine::Scripted(handle.clone()), 0);
         (browser, handle)
     }
 }
@@ -149,13 +149,9 @@ impl ScriptedBrowser {
         }
     }
 
-    pub(super) fn arm(&self, scope: Scope) -> Armed {
-        let cancel = CancellationToken::new();
-        lock(&self.state.armed).push((scope.task.clone(), cancel.clone()));
-        Armed {
-            url: format!("http://127.0.0.1:0/mcp/{}", scope.task),
-            cancel,
-        }
+    /// `Browser::arm` reports each arming here, so `is_armed` sees it until the `Armed` drops.
+    pub(super) fn armed(&self, task: &str, cancel: CancellationToken) {
+        lock(&self.state.armed).push((task.to_owned(), cancel));
     }
 }
 
