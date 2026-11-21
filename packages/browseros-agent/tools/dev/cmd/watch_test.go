@@ -245,7 +245,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}
 	var killedPort int
-	cfg := clawBackendProcConfig(clawServerBackend, root, env, ports, userDataDir, sidecarPath, func(port int, _ time.Duration) error {
+	cfg := rustServerProcConfig(clawServerBackend, root, env, ports, userDataDir, sidecarPath, func(port int, _ time.Duration) error {
 		killedPort = port
 		return nil
 	})
@@ -323,7 +323,7 @@ func TestClawRustServerBuildsInItsOwnCargoDir(t *testing.T) {
 		{[]string{"CARGO_BUILD_BUILD_DIR=/ssd/build"}, ownDir, "/ssd/build"},
 	} {
 		shared := slices.Clone(tc.env)
-		cfg := clawBackendProcConfig(clawServerBackend, root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json", nil)
+		cfg := rustServerProcConfig(clawServerBackend, root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json", nil)
 		if got := envValue(cfg.Env, "CARGO_TARGET_DIR"); got != tc.wantTarget {
 			t.Errorf("env %v: expected CARGO_TARGET_DIR %q, got %q", tc.env, tc.wantTarget, got)
 		}
@@ -452,6 +452,26 @@ func TestEnsureCargoPresentFindsPathBinary(t *testing.T) {
 
 	if err := ensureCargoPresent(); err != nil {
 		t.Fatalf("expected cargo to resolve, got %v", err)
+	}
+}
+
+func TestBrowserOSWatchChecksPinnedCargo(t *testing.T) {
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+	if err := os.WriteFile(filepath.Join(binDir, "cargo"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWatchCargo(t.Context(), browserOSServerBackend); err == nil ||
+		!strings.Contains(err.Error(), "rustup toolchain install 1.98.0") {
+		t.Fatalf("expected rustup install hint despite Cargo on PATH, got %v", err)
+	}
+
+	rustup := []byte("#!/bin/sh\n[ \"$*\" = 'run 1.98.0 cargo --version' ]\n")
+	if err := os.WriteFile(filepath.Join(binDir, "rustup"), rustup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWatchCargo(t.Context(), browserOSServerBackend); err != nil {
+		t.Fatalf("expected pinned Cargo preflight to succeed, got %v", err)
 	}
 }
 
