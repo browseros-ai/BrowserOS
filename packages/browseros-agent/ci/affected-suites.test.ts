@@ -39,8 +39,47 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
-  it('maps the app package to the agent suite', () => {
-    expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
+  it('runs the agent and server API suites when the app manifest changes its AI SDK version', () => {
+    expect(
+      suiteNames(
+        [pkg('@browseros/app', 'apps/app')],
+        ['packages/browseros-agent/apps/app/package.json'],
+      ),
+    ).toEqual(['agent', 'server-api'])
+  })
+
+  it('runs the server API suite when the client package is affected', () => {
+    expect(
+      suiteNames([pkg('@browseros/server-api', 'packages/server-api')]),
+    ).toEqual(['server-api'])
+  })
+
+  it.each([
+    'crates/browseros-server/tests/fixtures/ui-stream/text-only.message.json',
+    'contracts/server-api/openapi.json',
+    'packages/server-api/src/generated/openapi.ts',
+  ])('runs the server API suite when %s changes', (path) => {
+    expect(suiteNames([], [`packages/browseros-agent/${path}`])).toEqual([
+      'server-api',
+    ])
+  })
+
+  it('runs the server API suite when the shared TypeScript generator changes', () => {
+    expect(
+      suiteNames(
+        [],
+        ['packages/browseros-agent/scripts/codegen/server-api.ts'],
+      ),
+    ).toEqual(['server-api', 'build'])
+  })
+
+  it('keeps Rust server implementation changes out of the server API suite', () => {
+    expect(
+      suiteNames(
+        [pkg('browseros-server', 'crates/browseros-server')],
+        ['packages/browseros-agent/crates/browseros-server/src/lib.rs'],
+      ),
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('tests that the cursor package selects its own and pointer integration suites', () => {
@@ -285,6 +324,7 @@ describe('computeAffectedSuites', () => {
     // path request it, and the order follows the SUITES declaration.
     expect(result).toEqual([
       'agent',
+      'server-api',
       'claw-app',
       'claw-server',
       'claw-server-quality',

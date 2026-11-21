@@ -64,7 +64,8 @@ function printOpenApi(): string {
   return `${JSON.stringify(JSON.parse(result.stdout), null, 2)}\n`
 }
 
-function runOpenApiTypescript(spec: string, output: string): void {
+/** Produces the client types from a spec file for both codegen and the Bun contract test. */
+export function generateServerApiTypes(spec: string): string {
   // openapi-typescript 7 uses the TypeScript 5 compiler API, while the workspace's TypeScript 7
   // package no longer exports it (the same pin as scripts/codegen/claw-api.ts). `bun x --bun`
   // from process.execPath runs the CLI on the Bun that started this script instead of on
@@ -80,15 +81,19 @@ function runOpenApiTypescript(spec: string, output: string): void {
       'openapi-typescript@7.13.0',
       'openapi-typescript',
       spec,
-      '--output',
-      output,
     ],
-    { stdio: 'inherit' },
+    {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'inherit'],
+    },
   )
   if (result.error) throw result.error
   if (result.status !== 0) {
     throw new Error(`openapi-typescript exited with status ${result.status}`)
   }
+  return `// Generated from ${SPEC} by \`bun run codegen:server-api\`. Do not edit.\n${result.stdout}`
 }
 
 /** Writes both generated files under `outputRoot`, at their paths relative to the agent root. */
@@ -98,11 +103,7 @@ function generate(outputRoot: string): void {
   mkdirSync(dirname(spec), { recursive: true })
   mkdirSync(dirname(types), { recursive: true })
   writeFileSync(spec, printOpenApi())
-  runOpenApiTypescript(spec, types)
-  writeFileSync(
-    types,
-    `// Generated from ${SPEC} by \`bun run codegen:server-api\`. Do not edit.\n${readFileSync(types, 'utf8')}`,
-  )
+  writeFileSync(types, generateServerApiTypes(spec))
 }
 
 if (import.meta.main) {
