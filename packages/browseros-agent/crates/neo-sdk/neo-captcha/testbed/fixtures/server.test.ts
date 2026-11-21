@@ -46,6 +46,19 @@ const cases = [
     'cf-turnstile-response',
     '2x0000000000000000000000000000000AA',
   ],
+  // The verify pages are gated by an always-blocks key: the site refuses whatever token is posted.
+  [
+    'verify-second-challenge',
+    'turnstile',
+    'cf-turnstile-response',
+    '2x0000000000000000000000000000000AA',
+  ],
+  [
+    'verify-alert-only',
+    'turnstile',
+    'cf-turnstile-response',
+    '2x0000000000000000000000000000000AA',
+  ],
   [
     'turnstile-frame-never-loads',
     'turnstile',
