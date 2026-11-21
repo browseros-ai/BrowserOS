@@ -1,5 +1,5 @@
-//! Owns desktop MCP discovery and admission. The internal catalog stays intact for
-//! pursue and host effects, but cached MCP callers must pass this same policy.
+//! Governs discovery and cached MCP calls on the Playwright tool list.
+//! Pursue still dispatches catalog tools inside the host.
 
 use super::super::{
     AWAIT_HELP_TOOL_NAME, ClawMcpService, PURSUE_TOOL_NAME, PageNaming, REQUEST_HELP_TOOL_NAME,
@@ -9,15 +9,14 @@ use crate::services::agent_settings::HumanHelp;
 use browseros_mcp::ToolResult;
 use serde_json::Value;
 
-/// Set false to expose only the SDK's run, including to cached exception callers.
+/// Hides the shared tools when false. Cached waits can still drain and cached
+/// pursue calls receive a handback.
 pub(super) const LIST_EXCEPTIONS: bool = true;
 const EXCEPTIONS: [&str; 3] = [
     PURSUE_TOOL_NAME,
     REQUEST_HELP_TOOL_NAME,
     AWAIT_HELP_TOOL_NAME,
 ];
-/// Internal handlers remain usable by host dispatch. Retired local tools stay
-/// compiled for hosted compatibility but have no desktop MCP entry point.
 #[derive(Clone, Copy)]
 enum Exposure {
     Run,

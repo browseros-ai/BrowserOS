@@ -1331,8 +1331,8 @@ impl ServerHandler for ClawMcpService {
         Some(requested.supported_by(&self.get_info().capabilities))
     }
 
-    // Holds the 2026-07-28 stream open, and says so on it whenever ultrafast skills turn on or
-    // off, since that adds or removes `run_skill`.
+    // Ultrafast can change the available tools while a 2026-07-28 stream is open.
+    // Playwright clients also need a notice when the child publishes a different run definition.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         if context.accepted().tools_list_changed != Some(true) {
             context.cancelled().await;

@@ -335,8 +335,6 @@ async fn desktop_lists_only_run_and_gated_exceptions() -> anyhow::Result<()> {
                     human_help: help,
                     pursue_offered: pursue,
                 };
-                // The gate is the same for list, lookup and call, including a
-                // cached exception caller after the one-tool switch flips.
                 let tools = service
                     .playwright
                     .as_ref()

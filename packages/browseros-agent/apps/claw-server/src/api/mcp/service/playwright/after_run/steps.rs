@@ -102,8 +102,8 @@ pub(in crate::api::mcp::service::playwright) async fn prepare(
                 target_id: None,
                 url: None,
                 title: None,
-                // The cockpit recognizes positional args as a script child and
-                // hides its parent run. Preserve that shape with no real values.
+                // The cockpit reads positional arguments as a script call.
+                // Preserve that shape without storing the script's values.
                 args_json: json!(["[redacted]"]).to_string(),
                 result_meta: json!({
                     "isError": matches!(operation.outcome, Some(OperationOutcome::Error)),
