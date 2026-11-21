@@ -8,6 +8,8 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Mapping
+from unittest import mock
 
 from bos_build.release.components import COMPONENTS
 from bos_build.release.server_resources import (
@@ -376,6 +378,43 @@ class ServerResourceBuilderTest(unittest.TestCase):
         self.assertTrue(
             (result.destination / "resources/bin/third_party/bun.exe").is_file()
         )
+
+    def test_only_browseros_cargo_links_the_windows_crt_statically(self) -> None:
+        key = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS"
+        target_root = self.agent / "target"
+        seen: dict[str, Mapping[str, str]] = {}
+
+        def run(command, cwd, env):
+            product = "browseros" if "browseros_server" in command else "browserclaw"
+            seen[product] = env
+            triple = command[command.index("--target") + 1]
+            name = command[command.index("--bin") + 1] + ".exe"
+            binary = target_root / triple / "release" / name
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(b"rust-server")
+
+        builder = ServerResourceBuilder(
+            self.repo,
+            host_platform="windows",
+            run=run,
+            which=lambda name: f"/usr/bin/{name}",
+            rust_targets=lambda: {"x86_64-pc-windows-msvc"},
+            download_r2=lambda key, destination: destination.write_bytes(b"bun") > 0,
+            r2_configured=lambda: True,
+            cargo_target_dir=target_root,
+        )
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(key, None)
+            for product in ("browseros", "browserclaw"):
+                builder.prepare(
+                    product=product,
+                    target="windows-x64",
+                    version="0.1.0" if product == "browseros" else "0.0.18",
+                    source_sha=SOURCE_SHA,
+                )
+
+        self.assertEqual(seen["browseros"][key], "-C target-feature=+crt-static")
+        self.assertNotIn(key, seen["browserclaw"])
 
     def test_failed_r2_download_stops_staging(self) -> None:
         builder = self._browseros_builder("linux", "x86_64-unknown-linux-gnu", [])

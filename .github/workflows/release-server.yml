@@ -297,6 +297,11 @@ jobs:
             runner: windows-latest
             binary_ext: ".exe"
     env:
+      # The Windows server links the C runtime statically, so it needs no Visual
+      # C++ redistributable. Target-scoped: the other four builds ignore it.
+      # Must equal browserosServerCargoEnv in scripts/build/server/descriptor.ts;
+      # release-server-workflow.test.ts holds them together.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       BINARY_EXT: ${{ matrix.binary_ext }}
       BROWSEROS_TARGET: ${{ matrix.target }}
       CARGO_COMMAND: ${{ matrix.cargo_command }}

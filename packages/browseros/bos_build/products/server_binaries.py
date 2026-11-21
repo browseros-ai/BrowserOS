@@ -7,7 +7,7 @@ product-keyed lookups. Registry access is lazy to avoid an import
 cycle (product files import these types).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -47,6 +47,10 @@ class ServerBundle:
     required_in_chromium_output: bool = True
     unsigned_artifact_prefix: str = "artifacts/server"
     unsigned_artifact_base_name: Optional[str] = None
+    # Extra environment for the source build's Cargo run. It mirrors the
+    # product's agent-side build settings (for BrowserOS,
+    # browserosServerCargoEnv in scripts/build/server/descriptor.ts).
+    cargo_env: Dict[str, str] = field(default_factory=dict)
 
     def unsigned_artifact_key(
         self,

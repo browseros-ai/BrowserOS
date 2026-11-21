@@ -524,7 +524,11 @@ class ServerResourceBuilder:
         )
         # The inherited environment carries compile-time values such as the
         # optional BROWSEROS_SENTRY_DSN, which the server embeds at build time.
-        environment = {**os.environ, "CARGO_TARGET_DIR": str(self.cargo_target_dir)}
+        environment = {
+            **os.environ,
+            **bundle.cargo_env,
+            "CARGO_TARGET_DIR": str(self.cargo_target_dir),
+        }
         self.run(command, self.agent_root, environment)
         self._stage(
             artifact,

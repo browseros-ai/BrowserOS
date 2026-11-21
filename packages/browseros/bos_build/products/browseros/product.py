@@ -45,4 +45,9 @@ BROWSEROS_SERVER_BUNDLE = ServerBundle(
     cargo_binary_name="browseros_server",
     runtime_binary_name="browseros_server",
     resource_manifest=Path("scripts/build/config/server-prod-resources.json"),
+    # A static C runtime keeps the Windows exe off VCRUNTIME140.dll, which a
+    # clean Windows install lacks. Target-scoped, so other targets ignore it.
+    cargo_env={
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS": "-C target-feature=+crt-static",
+    },
 )

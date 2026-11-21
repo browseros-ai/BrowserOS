@@ -7,6 +7,7 @@ import { rustBuildInvocation } from '../build/rust-compiler'
 import {
   browserosServerBinary,
   browserosServerBuildProduct,
+  browserosServerCargoEnv,
 } from '../build/server/descriptor'
 
 const repoRoot = resolve(import.meta.dir, '../../../..')
@@ -208,6 +209,12 @@ describe('release-server workflow', () => {
     expect(zig.run).toContain(
       'cargo install --locked cargo-zigbuild --version 0.23.0',
     )
+  })
+
+  it('builds with the same Cargo settings as a local server build', () => {
+    for (const [name, value] of Object.entries(browserosServerCargoEnv)) {
+      expect(parsed.jobs.build.env?.[name]).toBe(value)
+    }
   })
 
   it('builds with the optional Sentry DSN and checks the stamped version', () => {

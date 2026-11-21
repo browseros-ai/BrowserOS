@@ -9,6 +9,7 @@ import { compileRustBinaries } from './rust-compiler'
 import {
   browserosServerBinary,
   browserosServerBuildProduct,
+  browserosServerCargoEnv,
 } from './server/descriptor'
 import { prebuiltServerCompiler } from './server/prebuilt'
 
@@ -26,7 +27,7 @@ const compiler: ProductCompiler = prebuiltDir
         binary: browserosServerBinary,
         label: product.label,
         targets,
-        env: { ...processEnv, ...envVars },
+        env: { ...processEnv, ...envVars, ...browserosServerCargoEnv },
       })
 
 runCompiledResourceBuild(
