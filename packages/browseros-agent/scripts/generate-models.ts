@@ -90,9 +90,19 @@ export const CHATGPT_SUBSCRIPTION_ID = 'chatgpt-pro'
  */
 const CODEX_MIN_GENERATION = 5
 
-// The ChatGPT backend returned model_not_found for these IDs on 2026-11-21.
-// Checked with one ChatGPT account. This filter does not apply to the OpenAI API.
+// Subscription availability checked with one ChatGPT account on 2026-11-21.
 const CODEX_REJECTED_MODELS = new Set([
+  // Test connection failed and the signed-in model catalogue omitted these IDs.
+  'gpt-5',
+  'gpt-5-mini',
+  'gpt-5-nano',
+  'gpt-5.1',
+  'gpt-5.1-codex',
+  'gpt-5.1-codex-max',
+  'gpt-5.1-codex-mini',
+  'gpt-5.2',
+  'gpt-5.2-codex',
+  // The backend returned model_not_found for these IDs.
   'gpt-5.3-codex',
   'gpt-5.3-codex-spark',
   'gpt-5.4',
@@ -102,55 +112,25 @@ const CODEX_REJECTED_MODELS = new Set([
   'gpt-5.6',
 ])
 
-// Include Codex-only models and use subscription-specific limits where known.
+// Keep the verified default available with the subscription's limits.
 const CODEX_MODELS: DatedModel[] = [
   {
     lastUpdated: '2026-09-29',
     model: {
-      ...codexVariant('gpt-6.1-sol', 'GPT-6.1 Sol', 500000),
+      id: 'gpt-6.1-sol',
+      name: 'GPT-6.1 Sol',
+      contextWindow: 500000,
+      maxOutput: 128000,
+      supportsImages: true,
+      supportsReasoning: true,
+      supportsToolCall: true,
       supportsTemperature: false,
       reasoningControls: [
         { type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] },
       ],
     },
   },
-  {
-    lastUpdated: '2025-12-11',
-    model: codexVariant('gpt-5.2-codex', 'GPT-5.2 Codex', 400000),
-  },
-  {
-    lastUpdated: '2025-11-13',
-    model: codexVariant('gpt-5.1-codex-max', 'GPT-5.1 Codex Max', 400000),
-  },
-  {
-    lastUpdated: '2025-11-13',
-    model: codexVariant('gpt-5.1-codex', 'GPT-5.1 Codex', 400000),
-  },
-  {
-    lastUpdated: '2025-11-13',
-    model: codexVariant('gpt-5.1-codex-mini', 'GPT-5.1 Codex Mini', 400000),
-  },
 ]
-
-function codexVariant(
-  id: string,
-  name: string,
-  contextWindow: number,
-): OutputModel {
-  return {
-    id,
-    name,
-    contextWindow,
-    maxOutput: 128000,
-    supportsImages: true,
-    supportsReasoning: true,
-    supportsToolCall: true,
-    supportsTemperature: true,
-    reasoningControls: [
-      { type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh'] },
-    ],
-  }
-}
 
 /** The generation in a `gpt-<n>` id, or null when the id is not of that shape. */
 function gptGeneration(id: string): number | null {
@@ -322,7 +302,7 @@ function sortByRecency(models: DatedModel[]): OutputModel[] {
  * Built from the openai catalogue rather than listed by hand, so a new
  * generation is selectable the day models.dev carries it. Two corrections are
  * applied on top: drop models the Codex chat path cannot serve, then use
- * Codex's model entries to include its variants and apply subscription limits.
+ * the verified Codex default with its subscription limits.
  */
 export function deriveChatGptSubscription(
   openai: ModelsDevProvider,

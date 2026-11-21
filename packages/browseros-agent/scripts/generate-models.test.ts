@@ -311,19 +311,15 @@ describe('deriveChatGptSubscription', () => {
     expect(ids).not.toContain('gpt-6-pro')
   })
 
-  test('adds back the codex variants the platform API never exposed', () => {
-    const ids = idsFor(['gpt-5.6-sol'])
-
-    expect(ids).toContain('gpt-5.1-codex-max')
-    expect(ids).toContain('gpt-5.1-codex-mini')
-    expect(ids).toContain('gpt-5.2-codex')
+  test('includes the verified Codex default when the platform catalogue omits it', () => {
+    expect(idsFor(['gpt-5.6-sol'])).toContain('gpt-6.1-sol')
   })
 
   test('orders newest first so the picker opens on current models', () => {
     const models = deriveChatGptSubscription(
       provider({
         old: model({
-          id: 'gpt-5',
+          id: 'gpt-5.6-sol',
           reasoning: true,
           last_updated: '2025-08-07',
         }),
@@ -338,11 +334,20 @@ describe('deriveChatGptSubscription', () => {
     expect(
       models
         .map((entry) => entry.id)
-        .filter((id) => ['gpt-5', 'gpt-6'].includes(id)),
-    ).toEqual(['gpt-6', 'gpt-5'])
+        .filter((id) => ['gpt-5.6-sol', 'gpt-6'].includes(id)),
+    ).toEqual(['gpt-6', 'gpt-5.6-sol'])
   })
 
   const rejected = [
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-5.1',
+    'gpt-5.1-codex',
+    'gpt-5.1-codex-max',
+    'gpt-5.1-codex-mini',
+    'gpt-5.2',
+    'gpt-5.2-codex',
     'gpt-5.3-codex',
     'gpt-5.3-codex-spark',
     'gpt-5.4',
