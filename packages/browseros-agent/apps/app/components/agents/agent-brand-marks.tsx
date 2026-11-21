@@ -10,14 +10,6 @@ export interface AgentMarkProps {
   className?: string
 }
 
-/**
- * Real brand marks for agents, keyed by a brand id: the built-in agent types
- * (`claude`, `codex`) and the popular custom-agent ids (`opencode`, `openclaw`,
- * `antigravity`). Reuses the project's shared svg components where they exist.
- * Ids with no mark (pi, hermes) fall back to a monogram or a generic icon at the
- * call site.
- */
-
 const ClaudeMark: FC<AgentMarkProps> = ({ className }) => (
   <ClaudeAiIcon className={className} />
 )
@@ -135,17 +127,4 @@ export const BRAND_MARKS: Record<string, FC<AgentMarkProps>> = {
   antigravity: AntigravityMark,
   pi: PiMark,
   hermes: HermesMark,
-}
-
-/**
- * The brand id to look up in {@link BRAND_MARKS} for an agent: its type for the
- * built-ins, or the popular-agent id stored on a custom agent (set when a user
- * picks a popular agent) for custom agents.
- */
-export function agentBrandKey(agent: {
-  type: string
-  customConfig?: { icon?: string }
-}): string | undefined {
-  if (agent.type === 'custom') return agent.customConfig?.icon
-  return agent.type
 }

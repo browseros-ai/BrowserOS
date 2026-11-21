@@ -1,4 +1,5 @@
 import { useChat } from '@ai-sdk/react'
+import { ServerApiClient, ServerApiError } from '@browseros/server-api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -61,32 +62,12 @@ import { PanelConversationAttachment } from './panel-conversation-attachment'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { stripImageToolOutputs } from './tool-output-strip'
 
-const getLastMessageText = (messages: UIMessage[]) => {
-  const lastMessage = messages[messages.length - 1]
-  if (!lastMessage) return ''
-  return lastMessage.parts
+const getMessageText = (message: UIMessage | undefined) => {
+  if (!message) return ''
+  return message.parts
     .filter((part) => part.type === 'text')
     .map((part) => part.text)
     .join('')
-}
-
-const getLastUserMessageText = (messages: UIMessage[]) => {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]?.role === 'user') {
-      return getLastMessageText([messages[i]])
-    }
-  }
-  return ''
-}
-
-const getLastUserMessageFiles = (messages: UIMessage[]) => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message?.role === 'user') {
-      return message.parts.filter((part) => part.type === 'file')
-    }
-  }
-  return []
 }
 
 const getResponseAndQueryFromMessageId = (
@@ -408,8 +389,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           ? (selectionMapRef.current[String(activeTab.id)] ?? null)
           : null
         const currentMode = modeRef.current
-        const lastUserMessage = getLastUserMessageText(messages)
-        const action = textToActionRef.current.get(lastUserMessage)
+        const lastUserMessage = messages.findLast(({ role }) => role === 'user')
+        const lastUserText = getMessageText(lastUserMessage)
+        const action = textToActionRef.current.get(lastUserText)
         const requestBrowserContext = buildRequestBrowserContext({
           activeTab,
           action,
@@ -432,19 +414,21 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         )
         const commonRequest = {
           conversationId: conversationIdRef.current,
+          // Retry reuses the user message id rather than the SDK's trigger id,
+          // which can identify the assistant response being regenerated.
+          userMessageId: lastUserMessage?.id,
           mode: currentMode,
           browserContext: requestBrowserContext,
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
           persist,
-          attachments: getLastUserMessageFiles(messages).map((file) => ({
-            mediaType: file.mediaType,
-            data: file.url,
-          })),
+          attachments: lastUserMessage?.parts
+            .filter((part) => part.type === 'file')
+            .map((file) => ({ mediaType: file.mediaType, data: file.url })),
         }
 
-        const message = getLastMessageText(messages)
+        const message = getMessageText(messages.at(-1))
 
         const result = await prepareSidepanelSendMessagesRequest({
           resolveAgentServerUrl,
@@ -501,7 +485,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       const responseMessage =
         nextMessages.find((each) => each.id === message.id) ?? message
       await finishExecutionTask({
-        responseText: getLastMessageText([responseMessage]),
+        responseText: getMessageText(responseMessage),
         isAbort,
         isError,
       })
@@ -531,13 +515,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const detaching = detachView()
     try {
       const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
-      const response = await fetch(
-        `${serverUrl}/chat/${encodeURIComponent(stoppedConversationId)}/stop`,
-        { method: 'POST' },
-      )
-      if (!response.ok) {
-        throw new Error(`Conversation stop failed (${response.status})`)
-      }
+      await new ServerApiClient(serverUrl).stopTurn({
+        conversationId: stoppedConversationId,
+      })
     } catch (error) {
       sentry.captureException(error, {
         extra: {
@@ -562,7 +542,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         fetchConversationRunState(
           agentUrlRef.current ?? (await resolveAgentServerUrl()),
           id,
-          fetch,
           AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
         ),
       ownsLocalStream: (id, runId) => {
@@ -937,16 +916,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const discardServerSession = useCallback((conversationId: string) => {
     const serverUrl = agentUrlRef.current
     if (!serverUrl) return
-    void fetch(`${serverUrl}/chat/${encodeURIComponent(conversationId)}`, {
-      method: 'DELETE',
-      keepalive: true,
-    })
-      .then((response) => {
-        if (!response.ok && response.status !== 404) {
-          throw new Error(`Session cleanup failed (${response.status})`)
-        }
-      })
+    void new ServerApiClient(serverUrl)
+      .releaseConversation({ conversationId })
       .catch((error) => {
+        // The old server returned 404 if there was no in-memory session.
+        if (error instanceof ServerApiError && error.status === 404) return
         sentry.captureException(error, {
           extra: { conversationId },
         })

@@ -23,9 +23,7 @@ export const ADD_PROVIDER_CATEGORY_LABELS: Record<AddProviderCategory, string> =
   }
 
 /**
- * Categories for every provider template that ships today. The three
- * subscription entries are exactly the three that run an OAuth flow rather
- * than asking for a key.
+ * Categories for the templates shown in settings and onboarding.
  *
  * A template with no entry here falls back to `api-key`, which is the safe
  * default (it is what an unknown hosted provider almost certainly is), and
@@ -34,12 +32,11 @@ export const ADD_PROVIDER_CATEGORY_LABELS: Record<AddProviderCategory, string> =
  */
 const TEMPLATE_CATEGORIES: Record<string, AddProviderCategory> = {
   'chatgpt-pro': 'subscription',
-  'github-copilot': 'subscription',
-  'qwen-code': 'subscription',
   openai: 'api-key',
   anthropic: 'api-key',
   google: 'api-key',
   openrouter: 'api-key',
+  fireworks: 'api-key',
   moonshot: 'api-key',
   azure: 'api-key',
   bedrock: 'api-key',
@@ -64,12 +61,6 @@ export interface AddProviderEntryMeta {
   key: string
   label: string
   category: AddProviderCategory
-  /**
-   * Extra terms this entry should answer to. The custom-agent entry uses it so
-   * searching for a specific ACP agent by name finds the tile that connects
-   * it, rather than returning nothing.
-   */
-  keywords?: readonly string[]
 }
 
 export interface AddProviderGroup<T extends AddProviderEntryMeta> {
@@ -78,16 +69,8 @@ export interface AddProviderGroup<T extends AddProviderEntryMeta> {
   entries: T[]
 }
 
-export function matchesQuery(
-  label: string,
-  query: string,
-  keywords: readonly string[] = [],
-): boolean {
-  const trimmed = query.trim().toLowerCase()
-  if (!trimmed) return true
-  return [label, ...keywords].some((term) =>
-    term.toLowerCase().includes(trimmed),
-  )
+export function matchesQuery(label: string, query: string): boolean {
+  return label.toLowerCase().includes(query.trim().toLowerCase())
 }
 
 /**
@@ -98,9 +81,7 @@ export function groupAddProviderEntries<T extends AddProviderEntryMeta>(
   entries: readonly T[],
   query = '',
 ): AddProviderGroup<T>[] {
-  const matched = entries.filter((entry) =>
-    matchesQuery(entry.label, query, entry.keywords),
-  )
+  const matched = entries.filter((entry) => matchesQuery(entry.label, query))
 
   return ADD_PROVIDER_CATEGORY_ORDER.map((category) => ({
     category,

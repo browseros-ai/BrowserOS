@@ -81,7 +81,6 @@ import {
 } from './models'
 import { ProviderHeadersFields } from './ProviderHeadersFields'
 import {
-  isCredentiallessProviderType,
   normalizeProviderFormValues,
   type ProviderFormValues,
   providerFormSchema,
@@ -101,11 +100,7 @@ const KEEP_SAVED_PLACEHOLDER = 'Leave blank to keep the saved value'
 // is hidden for them rather than letting users save headers that would be
 // silently ignored. Keep in sync with the provider factories that omit
 // config.headers.
-const HEADERLESS_PROVIDER_TYPES = new Set<string>([
-  'chatgpt-pro',
-  'github-copilot',
-  'qwen-code',
-])
+const HEADERLESS_PROVIDER_TYPES = new Set<string>(['chatgpt-pro'])
 
 function headerEntries(headers: LlmProviderConfig['headers']) {
   return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }))
@@ -152,9 +147,6 @@ function isProviderTypeOptionSupported(
   supports: (feature: Feature) => boolean,
 ): boolean {
   if (value === 'chatgpt-pro') return supports(Feature.CHATGPT_PRO_SUPPORT)
-  if (value === 'github-copilot')
-    return supports(Feature.GITHUB_COPILOT_SUPPORT)
-  if (value === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
   return true
 }
 
@@ -198,13 +190,7 @@ function isProviderTestable(input: {
     input.secretAccessKey || input.stored?.hasSecretAccessKey,
   )
 
-  if (
-    input.type === 'chatgpt-pro' ||
-    input.type === 'github-copilot' ||
-    input.type === 'qwen-code'
-  ) {
-    return true
-  }
+  if (input.type === 'chatgpt-pro') return true
 
   if (input.type === 'azure') {
     return Boolean((input.resourceName || input.baseUrl) && hasApiKey)
@@ -663,18 +649,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   )
 
   const renderProviderSpecificFields = () => {
-    if (
-      isCredentiallessProviderType(watchedType) &&
-      watchedType !== 'chatgpt-pro'
-    ) {
-      const name = watchedType === 'github-copilot' ? 'GitHub' : 'Qwen Code'
-      return (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-          Credentials are managed via {name} OAuth. No API key needed.
-        </div>
-      )
-    }
-
     if (watchedType === 'chatgpt-pro') {
       return (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">

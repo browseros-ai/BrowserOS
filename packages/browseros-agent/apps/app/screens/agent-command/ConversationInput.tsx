@@ -174,18 +174,20 @@ function CalmContextControls({
           />
         </>
       ) : null}
-      <WorkspaceSelector>
-        <button
-          type="button"
-          className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
-        >
-          <Folder className="size-3" />
-          <span>Workspace</span>
-          <span className="font-mono text-[10.5px] text-muted-foreground/70">
-            {selectedFolder?.name ?? 'none'}
-          </span>
-        </button>
-      </WorkspaceSelector>
+      {selectedProvider?.kind === 'acp' && (
+        <WorkspaceSelector>
+          <button
+            type="button"
+            className="inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          >
+            <Folder className="size-3" />
+            <span>Workspace</span>
+            <span className="font-mono text-[10.5px] text-muted-foreground/70">
+              {selectedFolder?.name ?? 'none'}
+            </span>
+          </button>
+        </WorkspaceSelector>
+      )}
       <TabPickerPopover
         variant="selector"
         selectedTabs={selectedTabs}

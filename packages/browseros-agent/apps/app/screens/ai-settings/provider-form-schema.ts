@@ -16,13 +16,8 @@ const providerTypeEnum = z.enum([
   'lmstudio',
   'bedrock',
   'chatgpt-pro',
-  'github-copilot',
-  'qwen-code',
+  'fireworks',
 ])
-
-const credentiallessProviderTypes: ReadonlySet<
-  z.infer<typeof providerTypeEnum>
-> = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
 
 export const providerFormSchema = z
   .object({
@@ -125,7 +120,7 @@ export const providerFormSchema = z
           path: ['region'],
         })
       }
-    } else if (credentiallessProviderTypes.has(data.type)) {
+    } else if (data.type === 'chatgpt-pro') {
       return
     } else if (!data.baseUrl) {
       ctx.addIssue({
@@ -143,13 +138,6 @@ export const providerFormSchema = z
   })
 
 export type ProviderFormValues = z.infer<typeof providerFormSchema>
-
-/** Identifies provider types whose settings form does not collect credentials. */
-export function isCredentiallessProviderType(
-  type: z.infer<typeof providerTypeEnum>,
-): boolean {
-  return credentiallessProviderTypes.has(type)
-}
 
 export function normalizeProviderFormValues(
   values: ProviderFormValues,

@@ -1,4 +1,4 @@
-import { agentBrandKey } from '@/components/agents/agent-brand-marks'
+import { adapterLabel } from '@/components/agents/AdapterIcon'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import type { AcpAgent, AcpAgentType } from '@/modules/agents/acp-agent-types'
 
@@ -17,7 +17,7 @@ export type SidepanelChatTarget =
       type: 'acp'
       agentId: string
       agentType: AcpAgentType
-      /** Brand id for the agent's logo (its type, or a popular-agent id). */
+      /** Brand id for the agent's logo (the adapter type). */
       brandKey?: string
       adapterName: string
       modelId: string
@@ -58,19 +58,12 @@ function toAcpTargetForAgent(agent: AcpAgent): SidepanelChatTarget {
     type: 'acp',
     agentId: agent.id,
     agentType: agent.type,
-    brandKey: agentBrandKey(agent),
-    adapterName: formatAdapterName(agent.type),
+    brandKey: agent.type,
+    adapterName: adapterLabel(agent.type),
     modelId: agent.modelId ?? 'default',
     modelLabel: agent.modelId ?? 'Agent default',
     reasoningEffort: agent.reasoningEffort ?? 'default',
   }
-}
-
-function formatAdapterName(adapter: AcpAgentType): string {
-  if (adapter === 'claude') return 'Claude Code'
-  if (adapter === 'codex') return 'Codex'
-  if (adapter === 'custom') return 'Custom agent'
-  return adapter
 }
 
 /**

@@ -71,7 +71,6 @@ describe('shouldOfferCustomModel', () => {
 describe('hasInferredCatalog', () => {
   it('covers the catalogues the app assembles rather than reads', () => {
     expect(hasInferredCatalog('chatgpt-pro')).toBe(true)
-    expect(hasInferredCatalog('qwen-code')).toBe(true)
   })
 
   it('excludes catalogues published by the provider itself', () => {
@@ -114,10 +113,6 @@ describe('getIncompleteCatalogHint', () => {
     expect(getIncompleteCatalogHint('chatgpt-pro', 22, providerName)).toBe(
       `This list is a snapshot, not ${providerName}'s own. Paste the exact ID of any model your plan offers.`,
     )
-  })
-
-  it('covers the other hand-maintained catalogue too', () => {
-    expect(getIncompleteCatalogHint('qwen-code', 4, 'Qwen Code')).not.toBeNull()
   })
 
   it('stays silent for providers with an authoritative catalog', () => {

@@ -21,7 +21,7 @@ import {
  */
 export const OnboardingAiPage: FC = () => {
   const navigate = useNavigate()
-  const { providers, saveProvider, setDefaultProvider } = useLlmProviders()
+  const { saveProvider, setDefaultProvider } = useLlmProviders()
 
   const goHome = () => navigate('/home', { replace: true })
 
@@ -30,7 +30,6 @@ export const OnboardingAiPage: FC = () => {
   // The default is what new chats read, and it names a row of either kind;
   // await it before the hop so the new tab page opens on what was just set up.
   const addProvider = useAddProvider({
-    providers,
     saveProvider,
     onProviderAdded: async (provider) => {
       await setDefaultProvider(provider.id)
@@ -56,7 +55,6 @@ export const OnboardingAiPage: FC = () => {
 
         <AddProviderSection
           onCreateAgent={addProvider.onCreateAgent}
-          onCreateCustomAgent={addProvider.onCreateCustomAgent}
           onUseTemplate={addProvider.onUseTemplate}
         />
 

@@ -6,7 +6,7 @@ import {
 
 describe('conversation run client', () => {
   it('loads the server-owned base messages for a panel', async () => {
-    const fetchImpl = mock(async () =>
+    const fetchImpl = mock(async (_request: Request) =>
       Response.json({
         conversationId: 'conversation/one',
         runId: 'run-1',
@@ -15,16 +15,21 @@ describe('conversation run client', () => {
       }),
     )
 
+    const controller = new AbortController()
     const state = await fetchConversationRunState(
       'http://127.0.0.1:9000',
       'conversation/one',
-      fetchImpl as unknown as typeof fetch,
+      controller.signal,
+      fetchImpl,
     )
 
-    expect(fetchImpl).toHaveBeenCalledWith(
+    const request = fetchImpl.mock.calls[0]?.[0]
+    expect(request?.url).toBe(
       'http://127.0.0.1:9000/chat/conversation%2Fone/state',
-      { cache: 'no-store' },
     )
+    expect(request?.cache).toBe('no-store')
+    controller.abort()
+    expect(request?.signal.aborted).toBe(true)
     expect(state.status).toBe('running')
     expect(state.messages[0]?.id).toBe('user-1')
   })
@@ -46,8 +51,8 @@ describe('conversation run client', () => {
       fetchConversationRunState(
         'http://127.0.0.1:9000',
         'conversation',
-        (async () =>
-          Response.json({ status: 'running' })) as unknown as typeof fetch,
+        undefined,
+        async () => Response.json({ status: 'running' }),
       ),
     ).rejects.toThrow('Invalid active conversation state')
   })

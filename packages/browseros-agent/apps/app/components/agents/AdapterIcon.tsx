@@ -1,6 +1,6 @@
+import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { Blocks, Bot } from 'lucide-react'
 import type { FC } from 'react'
-import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
 import { BRAND_MARKS } from './agent-brand-marks'
 
 export interface AdapterIconProps {

@@ -85,4 +85,21 @@ describe('buildChatRequestBody', () => {
     })
     expect(body.userSystemPrompt).toBe('Stay in the current tab.')
   })
+
+  it('drops tabs the server cannot address', () => {
+    const body = buildChatRequestBody({
+      conversationId: '6ff46e3b-e45a-40a4-9157-ca520e800f43',
+      browserContext: {
+        windowId: 2,
+        activeTab: { title: 'Opening' },
+        selectedTabs: [{ title: 'Opening' }, { id: 0, title: 'Selected' }],
+      },
+    })
+
+    expect(body.browserContext?.activeTab).toBeUndefined()
+    expect(body.browserContext?.selectedTabs).toEqual([
+      { id: 0, title: 'Selected' },
+    ])
+    expect(body).not.toHaveProperty('supportsImages')
+  })
 })

@@ -9,16 +9,9 @@ export function providerDescription(provider: LlmProviderConfig): string {
     : provider.modelId
 }
 
-/** A custom agent identifies itself by its launch command, not its adapter. */
 export function agentDescription(agent: AcpAgent): string {
-  const isCustom = agent.type === 'custom'
-  const primaryLabel =
-    isCustom && agent.customConfig?.command
-      ? agent.customConfig.command
-      : adapterLabel(agent.type)
-
   return [
-    primaryLabel,
+    adapterLabel(agent.type),
     agent.modelId ?? 'Agent default model',
     agent.reasoningEffort,
   ]
@@ -62,23 +55,16 @@ export function buildProviderActions(input: {
   return actions
 }
 
-/** Only custom agents are editable, and only when a handler is supplied. */
 export function buildAgentActions(input: {
   agent: AcpAgent
   isDeleting: boolean
   onSelectAgent: (agentId: string) => void
   onDeleteAgent: (agent: AcpAgent) => void | Promise<void>
-  onEditAgent?: (agent: AcpAgent) => void
 }): TargetRowAction[] {
   const { agent, isDeleting } = input
   const actions: TargetRowAction[] = [
     { label: 'Set as default', onSelect: () => input.onSelectAgent(agent.id) },
   ]
-
-  if (agent.type === 'custom' && input.onEditAgent) {
-    const onEditAgent = input.onEditAgent
-    actions.push({ label: 'Edit', onSelect: () => onEditAgent(agent) })
-  }
 
   actions.push({
     label: 'Delete',

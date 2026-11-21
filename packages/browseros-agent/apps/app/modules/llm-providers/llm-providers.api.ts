@@ -1,5 +1,4 @@
-import type { ProviderRoutes } from '@browseros/server'
-import { hc } from 'hono/client'
+import { ServerApiClient, ServerApiError } from '@browseros/server-api/client'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import { toProviderConfigs, toProviderPayload } from './llm-providers.helpers'
@@ -7,28 +6,24 @@ import { bumpProviderRevision } from './llm-providers.revision'
 
 async function providersClient() {
   const baseUrl = await resolveAgentServerUrl()
-  return hc<ProviderRoutes>(`${baseUrl}/providers`)
+  return new ServerApiClient(baseUrl)
 }
 
 export async function putProvider(config: LlmProviderConfig): Promise<void> {
   const client = await providersClient()
-  const response = await client[':providerId'].$put({
-    param: { providerId: config.id },
-    json: toProviderPayload(config),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to save provider (${response.status})`)
-  }
+  await client.saveProvider(
+    { providerId: config.id },
+    toProviderPayload(config),
+  )
   await bumpProviderRevision()
 }
 
 export async function deleteProvider(providerId: string): Promise<void> {
   const client = await providersClient()
-  const response = await client[':providerId'].$delete({
-    param: { providerId },
-  })
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Failed to delete provider (${response.status})`)
+  try {
+    await client.deleteProvider({ providerId })
+  } catch (error) {
+    if (!(error instanceof ServerApiError && error.status === 404)) throw error
   }
   await bumpProviderRevision()
 }
@@ -42,30 +37,19 @@ export async function deleteProvider(providerId: string): Promise<void> {
  */
 export async function fetchDefaultProviderId(): Promise<string | null> {
   const client = await providersClient()
-  const response = await client.default.$get()
-  if (!response.ok) {
-    throw new Error(`Failed to load the default provider (${response.status})`)
-  }
-  const { provider } = await response.json()
+  const { provider } = await client.getDefaultProvider()
   return provider?.id ?? null
 }
 
 export async function putDefaultProvider(providerId: string): Promise<void> {
   const client = await providersClient()
-  const response = await client.default.$put({ json: { providerId } })
-  if (!response.ok) {
-    throw new Error(`Failed to set the default provider (${response.status})`)
-  }
+  await client.setDefaultProvider({ providerId })
   await bumpProviderRevision()
 }
 
 export async function listProviders(): Promise<LlmProviderConfig[]> {
   const client = await providersClient()
-  const response = await client.index.$get()
-  if (!response.ok) {
-    throw new Error(`Failed to load providers (${response.status})`)
-  }
-  const { providers } = await response.json()
+  const { providers } = await client.listProviders()
   return toProviderConfigs(providers)
 }
 

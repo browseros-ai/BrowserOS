@@ -41,6 +41,8 @@ function enrichTemplate(
   }
 }
 
+const FIREWORKS_BASE_URL = 'https://api.fireworks.ai/inference/v1'
+
 /**
  * Available provider templates for quick setup
  * @public
@@ -54,24 +56,6 @@ export const providerTemplates: ProviderTemplate[] = [
     supportsImages: true,
     contextWindow: 1050000,
     setupGuideUrl: 'https://docs.browseros.com/features/chatgpt-pro-oauth',
-  },
-  {
-    id: 'github-copilot',
-    name: 'GitHub Copilot',
-    defaultBaseUrl: 'https://api.githubcopilot.com',
-    defaultModelId: 'gpt-5-mini',
-    supportsImages: true,
-    contextWindow: 128000,
-    setupGuideUrl: 'https://docs.browseros.com/features/github-copilot-oauth',
-  },
-  {
-    id: 'qwen-code',
-    name: 'Qwen Code',
-    defaultBaseUrl: 'https://portal.qwen.ai/v1',
-    defaultModelId: 'coder-model',
-    supportsImages: true,
-    contextWindow: 1000000,
-    setupGuideUrl: 'https://docs.browseros.com/features/qwen-code-oauth',
   },
   {
     id: 'moonshot',
@@ -125,6 +109,14 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#openrouter',
   }),
+  {
+    id: 'fireworks',
+    name: 'Fireworks',
+    defaultBaseUrl: FIREWORKS_BASE_URL,
+    defaultModelId: '',
+    supportsImages: false,
+    contextWindow: 128000,
+  },
   enrichTemplate('lmstudio', {
     defaultModelId: 'openai/gpt-oss-20b',
     defaultBaseUrl: 'http://localhost:1234/v1',
@@ -149,14 +141,13 @@ export const providerTemplates: ProviderTemplate[] = [
  */
 export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'chatgpt-pro', label: CHATGPT_PROVIDER_DISPLAY_NAME },
-  { value: 'github-copilot', label: 'GitHub Copilot' },
-  { value: 'qwen-code', label: 'Qwen Code' },
   { value: 'moonshot', label: 'Moonshot AI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
   { value: 'google', label: 'Gemini' },
   { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'fireworks', label: 'Fireworks' },
   { value: 'azure', label: 'Azure' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'lmstudio', label: 'LM Studio' },
@@ -179,14 +170,13 @@ export const getProviderTemplate = (
  */
 const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'chatgpt-pro': 'https://chatgpt.com/backend-api',
-  'github-copilot': 'https://api.githubcopilot.com',
-  'qwen-code': 'https://portal.qwen.ai/v1',
   moonshot: 'https://api.moonshot.ai/v1',
   anthropic: 'https://api.anthropic.com/v1',
   openai: 'https://api.openai.com/v1',
   'openai-compatible': '',
   google: 'https://generativelanguage.googleapis.com/v1beta',
   openrouter: 'https://openrouter.ai/api/v1',
+  fireworks: FIREWORKS_BASE_URL,
   azure: '',
   ollama: 'http://localhost:11434/v1',
   lmstudio: 'http://localhost:1234/v1',

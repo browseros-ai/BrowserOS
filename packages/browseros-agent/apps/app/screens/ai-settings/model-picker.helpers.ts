@@ -17,23 +17,9 @@ export function servesUserLoadedModels(providerType: ProviderType): boolean {
   return USER_LOADED_MODEL_PROVIDERS.has(providerType)
 }
 
-/**
- * Providers whose catalogue is inferred rather than published.
- *
- * A ChatGPT subscription reaches the Codex backend, which publishes no model
- * list, so ours is derived from the platform API's catalogue and corrected by
- * hand. Qwen Code's is typed out in full. Both are close enough to be useful
- * and neither can be vouched for, which is the distinction that matters here:
- * a short list with no caveat reads as the complete set, and that is how
- * subscription users concluded a newer model was unsupported.
- */
-const INFERRED_CATALOG_PROVIDERS: ReadonlySet<ProviderType> = new Set([
-  'chatgpt-pro',
-  'qwen-code',
-])
-
+/** The ChatGPT subscription model catalogue is inferred from the platform catalogue. */
 export function hasInferredCatalog(providerType: ProviderType): boolean {
-  return INFERRED_CATALOG_PROVIDERS.has(providerType)
+  return providerType === 'chatgpt-pro'
 }
 
 /**
