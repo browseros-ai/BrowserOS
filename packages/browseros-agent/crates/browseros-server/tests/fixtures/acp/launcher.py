@@ -3,10 +3,12 @@
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import time
 
-fixtures = Path(__file__).parent
+fixtures = Path(__file__).resolve().parent
 args = sys.argv[1:]
 
 def send(message):
@@ -56,10 +58,16 @@ if operation == "sessions":
         send({"action":"session_ensured", "created":not marker.exists()})
         marker.touch()
     elif action == "close":
+        if (home / "stubborn-owner").exists():
+            (home / "close-attempted").touch()
+            time.sleep(60)
         if (home / "fail-close").exists():
             (home / "fail-close").unlink()
             send({"jsonrpc":"2.0","id":None,"error":{"code":-32603}})
             sys.exit(1)
+        owner = home / "owner.pid"
+        if owner.exists():
+            os.kill(int(owner.read_text()), signal.SIGTERM)
         marker.unlink(missing_ok=True)
         send({"action":"session_closed"})
 elif operation in ("set-mode", "set"):
@@ -73,6 +81,17 @@ elif operation == "cancel":
 elif operation == "prompt":
     prompt = sys.stdin.read()
     record(prompt=prompt)
+    if "spawn a fixture owner" in prompt:
+        # Like acpx's queue owner, this child survives the CLI and its process group.
+        owner = subprocess.Popen(["sleep", "60"], start_new_session=True,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        (home / "owner.pid").write_text(str(owner.pid))
+        if "stubborn" in prompt:
+            (home / "stubborn-owner").touch()
+        if "fail incognito close" in prompt:
+            (fixtures / "incognito-owner.pid").write_text(str(owner.pid))
+            (home / "fail-close").touch()
     fixture = "auth" if "claude-agent-acp@" in command else (
         "cancel" if "cancel this turn" in prompt else "success"
     )
@@ -84,8 +103,25 @@ elif operation == "prompt":
                 time.sleep(.01)
             if "lose the reply" in prompt:
                 sys.exit()
-        if reply.get("stopReason") == "end_turn" and "refuse this turn" in prompt:
-            reply["stopReason"] = "refusal"
+        if reply.get("stopReason") == "end_turn":
+            if "refuse this turn" in prompt:
+                reply["stopReason"] = "refusal"
+            if "fail browser tools" in prompt:
+                for suffix, raw in [
+                    ("mcp-error", {"result": {"content": [
+                        {"type": "text", "text": "[UNTRUSTED_PAGE_CONTENT nonce=fixture origin=run] Data follows.\nReal browser failure.\n"
+                         + "é" * 40000 + "\n[END_UNTRUSTED_PAGE_CONTENT nonce=fixture]"},
+                    ]}, "error": None}),
+                    ("command-error", {"formatted_output": "Fixture command failure.", "exit_code": 2}),
+                    ("no-detail", None),
+                ]:
+                    send({"jsonrpc":"2.0", "method":"session/update", "params":{
+                        "sessionId":"fixture-session", "update":{
+                            "sessionUpdate":"tool_call", "toolCallId":suffix,
+                            "title":"Command" if suffix == "command-error" else "mcp.browseros.run",
+                            "status":"failed", "rawOutput":raw,
+                        },
+                    }})
         send(message)
         if "lose the stream" in prompt and message.get("method") == "session/prompt":
             (home / "fail-close").touch()

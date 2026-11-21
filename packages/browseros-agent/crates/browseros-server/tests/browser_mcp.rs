@@ -178,6 +178,38 @@ async fn an_armed_task_completes_the_handshake_and_runs_under_the_armed_scope() 
 }
 
 #[tokio::test]
+async fn extra_run_arguments_return_a_correctable_tool_error() -> TestResult {
+    let server = with_replies(Vec::new()).await?;
+    let _armed = server.app.browser.arm(scope(Access::Full));
+    let reply = reply_to(
+        &server,
+        json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {
+                "name": "run",
+                "arguments": {"code": "await page.goto(url)", "tabId": 123, "url": "https://example.com"}
+            }
+        }),
+    ).await?;
+    assert_eq!(reply["result"]["isError"], true);
+    let error = reply["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or("no error text")?;
+    assert!(error.contains("\"tabId\", \"url\""), "{error}");
+    assert!(error.contains("only code and optional timeout"), "{error}");
+    assert!(error.contains("inside the JavaScript in code"), "{error}");
+    assert!(
+        server
+            .browser
+            .as_ref()
+            .ok_or("no browser double")?
+            .calls()
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn dropping_armed_stops_a_call_in_flight_and_closes_the_endpoint() -> TestResult {
     let server = with_replies(vec![ScriptedReply::UntilCancelled]).await?;
     let browser = server.browser.clone().ok_or("no browser double")?;
