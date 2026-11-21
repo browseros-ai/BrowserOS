@@ -614,6 +614,7 @@ async function runVerifyFixture(id: string) {
   const dataset: Record<string, string> = {}
   const renders: { target: string; options: Record<string, unknown> }[] = []
   const timers: (() => void)[] = []
+  const delays: number[] = []
   const inserted: Record<string, unknown>[] = []
   let visible = false
   let resize = () => {}
@@ -682,7 +683,10 @@ async function runVerifyFixture(id: string) {
         renders.push({ target, options })
       },
     },
-    setTimeout: (callback: () => void) => timers.push(callback),
+    setTimeout: (callback: () => void, ms = 0) => {
+      delays.push(ms)
+      return timers.push(callback)
+    },
     MutationObserver: class {
       observe() {}
       disconnect() {}
@@ -707,6 +711,7 @@ async function runVerifyFixture(id: string) {
     widget,
     dialog,
     inserted,
+    delays,
     callback,
     state: () => JSON.parse(dataset.captchaFixture ?? '{}'),
     ready: () => runInNewContext(page.ready, context),
@@ -779,7 +784,7 @@ test('tests that the second-challenge page covers itself with a failing check on
   expect(fixture.dialog.hidden).toBe(true)
 })
 
-test('tests that the alert-only page is ready only once its hidden widget failed, kept an old token and lost its frame', async () => {
+test('tests that the alert-only page is ready only 3 s after its hidden widget failed, kept an old token and lost its frame', async () => {
   const fixture = await runVerifyFixture('verify-alert-only')
   expect(fixture.page).toMatchObject({
     sitekey: '2x00000000000000000000BB',
@@ -805,6 +810,7 @@ test('tests that the alert-only page is ready only once its hidden widget failed
   expect(fixture.state()).toMatchObject({
     stale: true,
     frameGone: true,
+    frameGoneLong: false,
     tokenLength: 'stale-token-from-an-earlier-pass'.length,
     errors: ['600010'],
   })
@@ -814,6 +820,12 @@ test('tests that the alert-only page is ready only once its hidden widget failed
     role: 'alert',
     textContent: NY_ALERT,
   })
+  // A frame gone this moment is not NY's state yet: ready waits one 3 s timer, set once.
+  expect(fixture.ready()).toBe(false)
+  fixture.callback(0, 'expired-callback')()
+  expect(fixture.delays).toEqual([3000])
+  fixture.fireTimers()
+  expect(fixture.state().frameGoneLong).toBe(true)
   expect(fixture.ready()).toBe(true)
 })
 
