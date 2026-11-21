@@ -88,6 +88,15 @@ pub(super) fn upstream(
                 None
             }
         });
+    // Codex sends a named code. llama.cpp's router reports the same failure as a 400
+    // with a model-specific message, so a generic 400 still keeps its normal classification.
+    let model_not_found = [inner, outer]
+        .into_iter()
+        .flatten()
+        .any(|error| error["code"] == "model_not_found")
+        || (status == Some(400)
+            && message
+                .is_some_and(|text| text.starts_with("model '") && text.ends_with("' not found")));
     let clue = format!(
         "{body} {}",
         parsed_raw
@@ -97,6 +106,11 @@ pub(super) fn upstream(
     )
     .to_ascii_lowercase();
     use ChatErrorCode::*;
+    let config_error = (
+        ProviderConfig,
+        "Check provider settings",
+        "Check the model name and provider URL.",
+    );
     let (code, title, fallback) = match status {
         Some(401 | 403) => (
             AuthFailed,
@@ -118,6 +132,7 @@ pub(super) fn upstream(
             "Provider unavailable",
             "The provider could not complete the request.",
         ),
+        _ if model_not_found => config_error,
         _ if [
             "context length",
             "context_length",
@@ -174,11 +189,7 @@ pub(super) fn upstream(
             "Provider unavailable",
             "The provider could not complete the request.",
         ),
-        Some(404) => (
-            ProviderConfig,
-            "Check provider settings",
-            "Check the model name and provider URL.",
-        ),
+        Some(404) => config_error,
         _ => (
             Unknown,
             "Provider call failed",

@@ -42,7 +42,7 @@ describe('ChatGPT subscription models', () => {
   })
 
   it('carries context windows so a saved provider sizes its conversation', () => {
-    expect(getModelContextLength('chatgpt-pro', 'gpt-5.5')).toBe(1050000)
+    expect(getModelContextLength('chatgpt-pro', 'gpt-6.1-sol')).toBe(500000)
     expect(getModelContextLength('chatgpt-pro', 'gpt-5.1')).toBe(400000)
   })
 })
