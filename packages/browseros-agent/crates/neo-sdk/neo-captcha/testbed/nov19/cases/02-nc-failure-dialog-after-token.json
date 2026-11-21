@@ -1,0 +1,109 @@
+{
+  "case": "02-nc-failure-dialog-after-token",
+  "source": "11-state-db-2.browseros.txt tab 835399556: 2:10 turnstile/token_applied (paid 1), 2:13 snapshot (F2). The dialog's widget is the one Neo applied its token to, so its failure face is a hint for a token claim (review R2-2) and Jev decides.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "token_injected",
+    "callbackRan": true,
+    "challenge": {
+      "kind": "turnstile",
+      "state": "active",
+      "frame": {
+        "frameId": "nc-widget",
+        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/nc/0x4AAAAAAA/light/normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "0x4AAAAAAA",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "unclaimed.nccash.gov",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "overSubmit": true,
+        "vendor": "turnstile",
+        "part": "checkbox",
+        "text": ["Please check the box below to continue.", "Close"]
+      },
+      "widgets": [
+        {
+          "vendor": "turnstile",
+          "part": "checkbox",
+          "shown": true,
+          "inLayer": true
+        }
+      ],
+      "submit": {
+        "label": "Search",
+        "covered": true
+      },
+      "alerts": [
+        [
+          "There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again."
+        ]
+      ],
+      "headings": ["Search for Unclaimed Property", "SEARCH"],
+      "buttons": ["Close", "arrow_left HOME", "?", "Search"],
+      "text": [
+        "Please check the box below to continue.",
+        "Close",
+        "Search for Unclaimed Property",
+        "There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.",
+        "SEARCH",
+        "To search for funds, enter last name or business name in the Last or Business Name field and your first name in the First Name field.",
+        "To narrow your search results, enter a city or zip code.",
+        "Select the property(ies) you wish to claim."
+      ]
+    },
+    "face": "failed",
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "turnstile",
+          "state": "active",
+          "frame": {
+            "frameId": "nc-widget",
+            "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/nc/0x4AAAAAAA/light/normal",
+            "rect": null
+          },
+          "challengeFrame": null,
+          "sitekey": "0x4AAAAAAA",
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": false
+    }
+  },
+  "jev": {
+    "source": "measured by claudef with jev-1.14.0 on 2026-11-20 (design-claudef §5): NY failure dialog (the same Kelmar dialog and alert)",
+    "standing": {
+      "challenge": 0.14,
+      "failed": 0.85,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.0,
+      "clear": 0.01,
+      "insufficient": 0.0
+    },
+    "blocked": 0.99
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "jev",
+    "cause": "site_rejected"
+  }
+}

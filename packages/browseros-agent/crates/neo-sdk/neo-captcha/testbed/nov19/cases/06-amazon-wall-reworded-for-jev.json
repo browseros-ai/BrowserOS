@@ -1,0 +1,41 @@
+{
+  "case": "06-amazon-wall-reworded-for-jev",
+  "source": "06-desk-amazon.browseros.txt 15:39 (S7), replayed as if policy.rs's phrase list had missed its wording, to pin Jev's agent_policy path: Jev alone never decides a policy wall, so it is a hand-off block.",
+  "truth": "policy",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "www.amazon.com",
+      "headings": ["Access restricted"],
+      "text": [
+        "Access restricted",
+        "Continued access by an unauthorized AI agent violates Amazon's Conditions of Use, to which our customers have agreed.",
+        "Continue",
+        "Conditions of Use",
+        "Privacy Notice"
+      ]
+    }
+  },
+  "jev": {
+    "source": "measured by claudef with jev-1.14.0 on 2026-11-20 (design-claudef §5): Amazon wall",
+    "standing": {
+      "challenge": 0.0,
+      "failed": 0.0,
+      "checking": 0.0,
+      "denied": 0.08,
+      "agent_policy": 0.91,
+      "other_overlay": 0.0,
+      "clear": 0.01,
+      "insufficient": 0.0
+    },
+    "blocked": 0.83
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "jev",
+    "cause": "denied"
+  }
+}

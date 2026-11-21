@@ -1,0 +1,41 @@
+{
+  "case": "13-ny-results-clear",
+  "source": "03-ny-unclaimed.browseros.txt 1:17 (1:14 turnstile/not_blocking); the site accepted the search.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "ouf.osc.ny.gov",
+      "submit": {
+        "label": "Search"
+      },
+      "headings": [
+        "Claim Unclaimed Property",
+        "Search for Unclaimed Property",
+        "SEARCH",
+        "RESULTS"
+      ],
+      "buttons": [
+        "HOME",
+        "propertyID tooltip",
+        "Search",
+        "Continue To File Claim (0) properties",
+        "Back To Top"
+      ],
+      "text": [
+        "This is a free and secure service provided by the New York State Comptroller’s Office of Unclaimed Funds to claim lost money.",
+        "Search Instructions",
+        "Enter your last name or the name of your business in the Last or Business Name field and select Search .",
+        "RESULTS",
+        "Your search returned 1000 unclaimed properties. Exact name matches will be shown first, followed by properties with similar names to the one entered."
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}

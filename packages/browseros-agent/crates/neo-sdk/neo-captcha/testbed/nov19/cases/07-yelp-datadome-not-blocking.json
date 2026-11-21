@@ -1,0 +1,76 @@
+{
+  "case": "07-yelp-datadome-not-blocking",
+  "source": "01-dintaifung-yelp.browseros.txt 0:57 snapshot, 1:02 hcaptcha/not_blocking (S1); 1:10 click log names geo.captcha-delivery.com/captcha/ in a container 'over the whole view'.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "www.yelp.com",
+      "layer": {
+        "dialog": false,
+        "share": 1.0,
+        "overSubmit": true,
+        "vendor": "datadome",
+        "part": "puzzle",
+        "text": []
+      },
+      "widgets": [
+        {
+          "vendor": "datadome",
+          "part": "puzzle",
+          "shown": true,
+          "inLayer": true
+        }
+      ],
+      "submit": {
+        "label": "Search",
+        "covered": true
+      },
+      "alerts": [
+        [
+          "We’re having trouble searching for availability right now. Please try again later"
+        ]
+      ],
+      "headings": [
+        "Make a reservation",
+        "Notes from the Business",
+        "About",
+        "Photos",
+        "Review Highlights",
+        "Browse Nearby",
+        "People found Din Tai Fung by searching for...",
+        "Reviews from Din Tai Fung"
+      ],
+      "buttons": [
+        "Search",
+        "Yelp for Business",
+        "Start a Project",
+        "Restaurants sub-categories",
+        "Home & Garden sub-categories",
+        "More sub-categories",
+        "Previous",
+        "Next"
+      ],
+      "text": [
+        "Make a reservation",
+        "Din Tai Fung",
+        "We’re having trouble searching for availability right now. Please try again later",
+        "Thu, Nov 19",
+        "Notes from the Business",
+        "About",
+        "Photos",
+        "See all photos",
+        "Review Highlights",
+        "Read reviews for Din Tai Fung"
+      ]
+    }
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "deterministic",
+    "cause": "unsupported_wall"
+  }
+}

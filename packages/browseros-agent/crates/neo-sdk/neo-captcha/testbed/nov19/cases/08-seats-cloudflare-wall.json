@@ -1,0 +1,65 @@
+{
+  "case": "08-seats-cloudflare-wall",
+  "source": "02-sfo-paris-seatsaero.browseros.txt 4:02 snapshot (S6). The claim is synthetic: as if the Cloudflare observer had called the wall gone; the rescan still reads the wall.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "wall_cleared",
+    "challenge": {
+      "kind": "cloudflare_challenge",
+      "state": "active",
+      "frame": null,
+      "challengeFrame": null,
+      "sitekey": null,
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "seats.aero",
+      "widgets": [
+        {
+          "vendor": "turnstile",
+          "part": "checkbox",
+          "shown": true,
+          "inLayer": false
+        }
+      ],
+      "headings": ["seats.aero", "Performing security verification"],
+      "text": [
+        "seats.aero",
+        "Performing security verification",
+        "This website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.",
+        "Performance and Security by",
+        "Cloudflare",
+        "Privacy"
+      ]
+    },
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "cloudflare_challenge",
+          "state": "active",
+          "frame": null,
+          "challengeFrame": null,
+          "sitekey": null,
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": true
+    }
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "deterministic",
+    "cause": "wall_showing"
+  }
+}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Search after a failed check</title></head>
+<body>
+<h1>Search after a failed check</h1>
+<form id="captcha-form" method="post" action="/submit/verify-alert-only">
+  <label>Last or Business Name: <input name="last" value="Rivera"></label>
+  <div id="widget" class="cf-turnstile" data-sitekey="2x00000000000000000000BB" style="display: none"></div>
+  <button id="submit" type="submit">Search</button>
+</form>
+<script>
+// NY on Nov 19 once its failure dialog was closed (3:36 in the trace): the page showed only the
+// alert "There was an issue verifying your browser. …", the widget was gone, and the form still
+// held the token of an earlier pass. No vendor frame covers the page and no widget face can be
+// read, so only the page's words say it is blocked: the verify check's deterministic tier has
+// hints and no proof, and asks Jev.
+//
+// Cloudflare's invisible always-blocks key checks out of sight and fails (retry off). The page
+// then leaves an old token in the widget's own response field, removes the widget's frame (the
+// field stays, as the form kept it), and shows NY's alert, word for word. The server checks the
+// token with the always-fail secret, so the site refuses the search as NY's did.
+//
+// NY's widget had been gone for minutes. A solve started the moment the frame goes can still read
+// the widget as active and buy a token instead of checking the page, so the page reports
+// `frameGoneLong` only once the frame has been gone FRAME_GONE_WAIT_MS, and the catalog waits
+// for it.
+const STALE_TOKEN = 'stale-token-from-an-earlier-pass';
+const ALERT = 'There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.';
+const FRAME_GONE_WAIT_MS = 3000;
+const fixtureState = window.__captchaFixture = { id: 'verify-alert-only', family: 'turnstile', sitekey: '2x00000000000000000000BB', rendered: false, stale: false, frameGone: false, frameGoneLong: false, callbackFired: false, tokenLength: 0, errors: [] };
+let frameGoneTimer = null;
+function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
+function leaveOnlyTheAlert() {
+  const widget = document.getElementById('widget');
+  // Turnstile nests its response field beside its frame inside a wrapper: keep the field, drop
+  // the rest (the frame with it).
+  const fields = [...widget.querySelectorAll('[name="cf-turnstile-response"]')];
+  for (const field of fields) field.value = STALE_TOKEN;
+  widget.replaceChildren(...fields);
+  fixtureState.stale = fields.length > 0;
+  fixtureState.tokenLength = fixtureState.stale ? STALE_TOKEN.length : 0;
+  fixtureState.frameGone = fields.length > 0 && widget.children.length === fields.length && !widget.querySelector('iframe');
+  if (fixtureState.frameGone && frameGoneTimer === null) {
+    frameGoneTimer = setTimeout(() => { fixtureState.frameGoneLong = true; mirror(); }, FRAME_GONE_WAIT_MS);
+  }
+  if (!document.getElementById('alert')) {
+    const alert = document.createElement('p');
+    alert.id = 'alert';
+    alert.setAttribute('role', 'alert');
+    alert.textContent = ALERT;
+    document.querySelector('h1').after(alert);
+  }
+}
+window.fixtureLoaded = function() {
+  turnstile.render('#widget', {
+    sitekey: fixtureState.sitekey,
+    retry: 'never',
+    callback: token => { fixtureState.callbackFired = true; fixtureState.tokenLength = token.length; mirror(); },
+    'error-callback': code => { fixtureState.errors.push(String(code || 'widget-error')); leaveOnlyTheAlert(); mirror(); },
+    'expired-callback': () => { fixtureState.errors.push('expired'); leaveOnlyTheAlert(); mirror(); }
+  });
+  // The widget never shows, so rendered means started.
+  fixtureState.rendered = true;
+  mirror();
+};
+mirror();
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=fixtureLoaded&amp;render=explicit" async defer onerror="fixtureState.errors.push('script-load-error'); mirror()"></script>
+</body>
+</html>
