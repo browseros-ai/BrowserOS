@@ -467,6 +467,13 @@
         "@types/react-dom": "^19.3.0",
       },
     },
+    "packages/server-api": {
+      "name": "@browseros/server-api",
+      "version": "1.0.0",
+      "dependencies": {
+        "openapi-fetch": "0.17.0",
+      },
+    },
     "packages/shared": {
       "name": "@browseros/shared",
       "version": "0.0.1",
@@ -757,6 +764,8 @@
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 
     "@browseros/server": ["@browseros/server@workspace:apps/server"],
+
+    "@browseros/server-api": ["@browseros/server-api@workspace:packages/server-api"],
 
     "@browseros/shared": ["@browseros/shared@workspace:packages/shared"],
 
