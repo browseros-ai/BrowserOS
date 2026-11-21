@@ -1763,9 +1763,6 @@ mod tests {
     async fn tests_that_vendor_addresses_alone_are_no_challenge() -> anyhow::Result<()> {
         use crate::{
             CaptchaSolver, LiveDriver,
-            config::CaptchaConfig,
-            events::CaptchaEventBus,
-            providers::ProviderChain,
             types::{SolveReason, SolveStatus},
         };
         use browseros_core::PageId;
@@ -1806,12 +1803,7 @@ mod tests {
                     "{address}: {:?}",
                     result.challenges
                 );
-                let service = CaptchaSolver {
-                    providers: ProviderChain::new(&CaptchaConfig::default()),
-                    reservations: Default::default(),
-                    events: CaptchaEventBus::new(),
-                    forced_method: None,
-                };
+                let service = CaptchaSolver::unkeyed();
                 let outcome = service
                     .solve_with(
                         &page,

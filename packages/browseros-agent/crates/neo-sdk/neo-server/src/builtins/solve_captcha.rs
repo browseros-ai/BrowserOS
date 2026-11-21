@@ -290,6 +290,12 @@ fn cause(reason: SolveReason) -> &'static str {
         SolveReason::ChallengeNotPassed => "the challenge was attempted and not passed",
         SolveReason::SpendLimitReached => "this Neo's CAPTCHA budget is used up",
         SolveReason::PolicyWall => "automated agents are prohibited",
+        SolveReason::StillBlocked => {
+            "Neo checked the page after the solve and the CAPTCHA still blocks it"
+        }
+        SolveReason::ChallengePending => {
+            "the site's own check is still running; wait a few seconds and ask again, do not reload"
+        }
     }
 }
 
@@ -314,7 +320,7 @@ mod tests {
         Verdict::Unknown,
     ];
 
-    const REASONS: [SolveReason; 23] = [
+    const REASONS: [SolveReason; 25] = [
         SolveReason::AutoPassed,
         SolveReason::CheckboxPassed,
         SolveReason::TilesAccepted,
@@ -338,6 +344,8 @@ mod tests {
         SolveReason::ChallengeNotPassed,
         SolveReason::SpendLimitReached,
         SolveReason::PolicyWall,
+        SolveReason::StillBlocked,
+        SolveReason::ChallengePending,
     ];
 
     fn outcome(status: SolveStatus, reason: SolveReason) -> SolveOutcome {
@@ -355,6 +363,7 @@ mod tests {
             cost_usd: 0.0,
             message: "Call request_human_help with kind \"captcha\".".to_owned(),
             events: Vec::new(),
+            verify: None,
         }
     }
 

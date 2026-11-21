@@ -983,17 +983,10 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_public_solve_dispatches_a_detected_arkose_widget() -> anyhow::Result<()> {
-        use super::super::{
-            CaptchaSolver, LiveDriver, config::CaptchaConfig, providers::ProviderChain,
-        };
+        use super::super::{CaptchaSolver, LiveDriver};
 
         let page = FakePage::default();
-        let service = CaptchaSolver {
-            providers: ProviderChain::new(&CaptchaConfig::default()),
-            reservations: Arc::default(),
-            events: CaptchaEventBus::new(),
-            forced_method: None,
-        };
+        let service = CaptchaSolver::unkeyed();
         let detection = super::super::detect::detect(&page, Duration::from_secs(2)).await?;
         assert!(detection.complete);
         assert_eq!(detection.challenges.len(), 1);

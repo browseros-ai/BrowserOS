@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use super::types::{
-    CaptchaEvent, CaptchaEventName, CaptchaKind, ChallengeState, ProviderName, SolveMethod,
-    SolveOutcome, SolveReason, SolveStatus,
+    BlockCause, CaptchaEvent, CaptchaEventName, CaptchaKind, ChallengeState, ProviderName,
+    SolveMethod, SolveOutcome, SolveReason, SolveStatus, VerifyResult, VerifyTier,
 };
 
 #[derive(Clone)]
@@ -124,6 +124,25 @@ fn log_data(event: &CaptchaEvent) -> Value {
             fields["reason"] = typed::<SolveReason>(data, "reason");
             fields["humanHelp"] = typed::<bool>(data, "humanHelp");
             fields["provider"] = typed::<ProviderName>(data, "provider");
+        }
+        // Only typed figures reach the log: the Jev evidence (page text) never leaves `verify.rs`.
+        CaptchaEventName::Verified => {
+            fields["result"] = typed::<VerifyResult>(data, "result");
+            fields["tier"] = typed::<VerifyTier>(data, "tier");
+            fields["cause"] = typed::<BlockCause>(data, "cause");
+            fields["round"] = typed::<u32>(data, "round");
+            fields["ms"] = typed::<u64>(data, "ms");
+            if let Some(jev) = data.get("jev") {
+                fields["jev"] = json!({
+                    "ms": typed::<u64>(jev, "ms"),
+                    "inputTokens": typed::<u32>(jev, "inputTokens"),
+                    "model": typed::<String>(jev, "model"),
+                    "choice": typed::<String>(jev, "choice"),
+                    "blocked": typed::<f64>(jev, "blocked"),
+                    "clear": typed::<f64>(jev, "clear"),
+                    "noul": typed::<f64>(jev, "noul"),
+                });
+            }
         }
     }
     fields
@@ -358,6 +377,7 @@ mod tests {
                 cost_usd: 0.002,
                 message: "secret-token https://example.com/private?q=secret secret-image".into(),
                 events: Vec::new(),
+                verify: None,
             },
             Some("https://user:password@example.com/private?q=secret"),
             Some(ProviderName::Capsolver),

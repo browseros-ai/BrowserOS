@@ -7,8 +7,36 @@ pub const CAPSOLVER_URL_ENV: &str = "BROWSEROS_CAPSOLVER_API_URL";
 pub const PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_PAID_TASK_LIMIT";
 pub const HOST_PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_HOST_PAID_TASK_LIMIT";
 pub const TEST_FORCE_METHOD_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_METHOD";
+/// `on`, `shadow` or `off`: whether the verify check may change an answer (see [`VerifyMode`]).
+pub const VERIFY_ENV: &str = "BROWSEROS_CAPTCHA_VERIFY";
+/// Test-only: ask the judge even when the deterministic tier is definite, and only log its answer.
+pub const TEST_FORCE_JUDGE_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_JUDGE";
 
 const DEFAULT_HOST_PAID_TASK_LIMIT: u32 = 3;
+/// `Off` until the gate's bodies land (wave 2 piece V4 flips it to `On`), so this skeleton
+/// changes no answer.
+const DEFAULT_VERIFY_MODE: VerifyMode = VerifyMode::Off;
+
+/// Whether the verify check runs after a success claim, and whether it may change the answer.
+/// `Shadow` runs it and emits `captcha.verified` but returns the flow's answer unchanged: the
+/// rollout and proof mode. `Off` is the rollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyMode {
+    On,
+    Shadow,
+    Off,
+}
+
+impl VerifyMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "on" => Some(Self::On),
+            "shadow" => Some(Self::Shadow),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
 
 /// Test-only: skip free paths. Vendors reject localhost websiteURLs, so use public pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +48,9 @@ pub enum ForcedMethod {
 pub struct ApiKey(String);
 
 impl ApiKey {
+    pub(crate) fn new(key: String) -> Self {
+        Self(key)
+    }
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -51,6 +82,10 @@ pub struct CaptchaConfig {
     /// Paid tasks a host can start in a rolling 30-minute window. Zero disables paid tasks.
     pub host_paid_task_limit: u32,
     pub force_method: Option<ForcedMethod>,
+    /// The default judge for the verify check's second tier; `None` runs tier 1 only.
+    pub judge: Option<crate::judge::JudgeConfig>,
+    pub verify: VerifyMode,
+    pub force_judge: bool,
 }
 
 impl Default for CaptchaConfig {
@@ -61,6 +96,9 @@ impl Default for CaptchaConfig {
             paid_task_limit: 100,
             host_paid_task_limit: DEFAULT_HOST_PAID_TASK_LIMIT,
             force_method: None,
+            judge: None,
+            verify: DEFAULT_VERIFY_MODE,
+            force_judge: false,
         }
     }
 }
@@ -95,6 +133,14 @@ impl CaptchaConfig {
                     None
                 }
             }),
+            judge: crate::judge::JudgeConfig::from_lookup(&lookup),
+            verify: lookup(VERIFY_ENV).map_or(DEFAULT_VERIFY_MODE, |value| {
+                VerifyMode::parse(&value).unwrap_or_else(|| {
+                    tracing::warn!(target: "captcha", variable = VERIFY_ENV, "Unknown CAPTCHA verify mode ignored; use on, shadow or off");
+                    DEFAULT_VERIFY_MODE
+                })
+            }),
+            force_judge: lookup(TEST_FORCE_JUDGE_ENV).is_some_and(|value| value.trim() == "1"),
         }
     }
 
@@ -239,6 +285,29 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.clone())
         })
+    }
+    #[test]
+    fn tests_that_the_verify_mode_is_off_until_the_gate_lands_and_accepts_overrides() {
+        assert_eq!(from_vars(&[]).verify, VerifyMode::Off);
+        assert_eq!(CaptchaConfig::default().verify, VerifyMode::Off);
+        for (value, mode) in [
+            ("on", VerifyMode::On),
+            (" shadow ", VerifyMode::Shadow),
+            ("off", VerifyMode::Off),
+            ("ON", VerifyMode::Off),
+        ] {
+            assert_eq!(
+                from_vars(&[(VERIFY_ENV, value.into())]).verify,
+                mode,
+                "{value:?}"
+            );
+        }
+        assert!(!from_vars(&[]).force_judge);
+        assert!(from_vars(&[(TEST_FORCE_JUDGE_ENV, "1".into())]).force_judge);
+        assert!(
+            from_vars(&[]).judge.is_none(),
+            "no key file means tier 1 only"
+        );
     }
     #[test]
     fn tests_that_unset_keys_disable_the_provider_and_default_the_limit() {

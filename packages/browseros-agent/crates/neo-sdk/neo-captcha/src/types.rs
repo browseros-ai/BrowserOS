@@ -389,6 +389,20 @@ impl SolveStatus {
             Self::Failed => Verdict::Unknown,
         }
     }
+
+    /// The statuses that tell the agent the page is past the challenge. The verify gate
+    /// (`verify.rs`) checks exactly these before they reach a host; no wildcard, so a new status
+    /// must decide whether it is a success claim.
+    pub const fn claims_success(self) -> bool {
+        match self {
+            Self::Solved | Self::TokenApplied | Self::AlreadyClear => true,
+            Self::Unsupported
+            | Self::Failed
+            | Self::Cancelled
+            | Self::NeedsHuman
+            | Self::PolicyWall => false,
+        }
+    }
 }
 
 /// What a host can branch on after a solve, coarser than [`SolveStatus`]. claw-sdk returns it as
@@ -450,8 +464,14 @@ pub enum SolveReason {
     ProviderUnavailable,
     TilesExhausted,
     ChallengeNotPassed,
-    SpendLimitReached, // needs_human
+    SpendLimitReached,
+    /// The verify check proved the challenge still blocks the page after the bounded re-solve
+    /// (or Jev was confident it does). Status `needs_human`.
+    StillBlocked, // needs_human
     PolicyWall,
+    /// The site's own check was still running when the verify check's wait ran out. Status
+    /// `failed`: it may finish moments later, so it is never `unsolved`.
+    ChallengePending, // failed
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -476,6 +496,10 @@ pub enum CaptchaEventName {
     Failed,
     #[serde(rename = "captcha.handoff")]
     Handoff,
+    /// The verify check's finding for a success claim: result, tier, cause, round, and the Jev
+    /// figures when Jev was asked. Never URLs or page text.
+    #[serde(rename = "captcha.verified")]
+    Verified,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -506,11 +530,61 @@ pub struct SolveOutcome {
     pub cost_usd: f64,
     pub message: String,
     pub events: Vec<CaptchaEvent>,
+    /// What the verify check found, when it ran. Left off the wire when it did not, so outcomes
+    /// with the check off are byte-identical to before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<VerifyReport>,
 }
 impl SolveOutcome {
     pub fn verdict(&self) -> Verdict {
         self.status.verdict()
     }
+}
+
+/// The wire half of the verify check (`verify.rs`): what it concluded about a success claim.
+/// Hosts may read it to tell a proven block (`tier: deterministic`) from Jev's reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyReport {
+    pub result: VerifyResult,
+    pub tier: VerifyTier,
+    pub cause: Option<BlockCause>,
+    /// Solve rounds run, counting the first: at most `1 + verify::MAX_RESOLVES`.
+    pub rounds: u32,
+    pub judge_calls: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyResult {
+    Clear,
+    Blocked,
+    Pending,
+    PolicyWall,
+    Unsure,
+}
+
+/// Which tier settled the check. Only `Deterministic` is proof; `Jev` is a confident reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifyTier {
+    Deterministic,
+    Jev,
+}
+
+/// Why the page is still blocked. The first five come from the vendor's own state (tier 1);
+/// `SiteRejected` and `Denied` are Jev's readings of the page text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockCause {
+    ChallengeOpen,
+    WidgetFailed,
+    WidgetExpired,
+    TokenStale,
+    WallShowing,
+    UnsupportedWall,
+    SiteRejected,
+    Denied,
 }
 
 /// What a flow (recaptcha.rs / turnstile.rs) returns; mod.rs adds request id, page, timing, events.
@@ -797,6 +871,7 @@ mod tests {
                     at_ms: 140,
                     data: json!({"state": "active", "complete": true, "challenges": 1}),
                 }],
+                verify: None,
             };
             let wire = to_value(&outcome)?;
             assert_eq!(
@@ -866,6 +941,7 @@ mod tests {
             (CaptchaEventName::TokenApplied, "captcha.token_applied"),
             (CaptchaEventName::Failed, "captcha.failed"),
             (CaptchaEventName::Handoff, "captcha.handoff"),
+            (CaptchaEventName::Verified, "captcha.verified"),
         ] {
             assert_eq!(to_value(event)?, wire);
         }
@@ -900,5 +976,110 @@ mod tests {
             format!("{:?}", SolveAnswer::Tiles(vec![0, 3])),
             "Tiles([0, 3])"
         );
+    }
+
+    #[test]
+    fn tests_that_only_success_statuses_are_checked_by_the_verify_gate() {
+        for (status, claims) in [
+            (SolveStatus::Solved, true),
+            (SolveStatus::TokenApplied, true),
+            (SolveStatus::AlreadyClear, true),
+            (SolveStatus::Unsupported, false),
+            (SolveStatus::Failed, false),
+            (SolveStatus::Cancelled, false),
+            (SolveStatus::NeedsHuman, false),
+            (SolveStatus::PolicyWall, false),
+        ] {
+            assert_eq!(
+                status.claims_success(),
+                claims,
+                "{status:?}: the gate checks exactly the answers that tell the agent to carry on"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_verify_values_match_the_contract_spellings() -> anyhow::Result<()> {
+        assert_eq!(to_value(SolveReason::StillBlocked)?, "still_blocked");
+        assert_eq!(
+            to_value(SolveReason::ChallengePending)?,
+            "challenge_pending"
+        );
+        assert_eq!(
+            to_value([
+                VerifyResult::Clear,
+                VerifyResult::Blocked,
+                VerifyResult::Pending,
+                VerifyResult::PolicyWall,
+                VerifyResult::Unsure,
+            ])?,
+            json!(["clear", "blocked", "pending", "policy_wall", "unsure"])
+        );
+        assert_eq!(
+            to_value([VerifyTier::Deterministic, VerifyTier::Jev])?,
+            json!(["deterministic", "jev"])
+        );
+        assert_eq!(
+            to_value([
+                BlockCause::ChallengeOpen,
+                BlockCause::WidgetFailed,
+                BlockCause::WidgetExpired,
+                BlockCause::TokenStale,
+                BlockCause::WallShowing,
+                BlockCause::UnsupportedWall,
+                BlockCause::SiteRejected,
+                BlockCause::Denied,
+            ])?,
+            json!([
+                "challenge_open",
+                "widget_failed",
+                "widget_expired",
+                "token_stale",
+                "wall_showing",
+                "unsupported_wall",
+                "site_rejected",
+                "denied"
+            ])
+        );
+        let report = VerifyReport {
+            result: VerifyResult::Blocked,
+            tier: VerifyTier::Jev,
+            cause: Some(BlockCause::SiteRejected),
+            rounds: 2,
+            judge_calls: 1,
+        };
+        assert_eq!(
+            to_value(report)?,
+            json!({"result":"blocked","tier":"jev","cause":"site_rejected","rounds":2,"judgeCalls":1})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_an_outcome_without_a_check_has_no_verify_field() -> anyhow::Result<()> {
+        let outcome = SolveOutcome {
+            status: SolveStatus::AlreadyClear,
+            kind: None,
+            method: SolveMethod::None,
+            reason: SolveReason::NoCaptcha,
+            request_id: "cap_test".into(),
+            page: 1,
+            duration_ms: 0,
+            attempts: Attempts::default(),
+            paid_tasks: 0,
+            provider: None,
+            cost_usd: 0.0,
+            message: String::new(),
+            events: Vec::new(),
+            verify: None,
+        };
+        let wire = to_value(&outcome)?;
+        assert!(
+            wire.get("verify").is_none(),
+            "hosts with the check off must see the same bytes as before it existed"
+        );
+        let back: SolveOutcome = serde_json::from_value(wire)?;
+        assert_eq!(back, outcome);
+        Ok(())
     }
 }
