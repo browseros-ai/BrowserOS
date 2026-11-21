@@ -1,6 +1,7 @@
 # BrowserOS Agent
 
-The agent platform behind [BrowserOS neo](../../README.md): `claw-app` plus `claw-server`.
+The [BrowserOS extension](apps/app/) uses the local [Rust server](crates/browseros-server/).
+[BrowserOS neo](../../README.md) uses `claw-app` and `claw-server`.
 
 ## Start here instead
 
@@ -9,7 +10,7 @@ Setup, the dev loop, what each project is built with, and where the code lives a
 - **[Contributing to BrowserOS neo](CONTRIBUTING.md)**
 - **[Root contributing guide](../../CONTRIBUTING.md)** for the browser build, the CLA and PR conventions
 
-What follows is reference material for people already set up: how environment configuration works, how the server is configured at startup, and how production artifacts are built.
+Use `bun run dev:watch` to start BrowserOS with the extension and Rust server. Use the neo contributing guide for its dev loop.
 
 ## Environment configuration
 
@@ -31,12 +32,12 @@ Existing checkouts that still have old per-app env files can run `bun run env:mi
 | `dev-tools` | `.env.development` | Local tooling inputs such as `CDP_PROTOCOL_JSON` and `BROWSEROS_BINARY` |
 | `app` | `.env.development` | Extension and local BrowserOS launch settings: dev ports, public Vite values, source-map upload, optional GraphQL schema path |
 | `claw` | `.env.development` | BrowserOS neo overrides: API URL, user-data dir, CDP port, `BROWSERCLAW_DIR` |
-| `server` | `.env.development`, `.env.production` | Server config URL, telemetry, Sentry, `NODE_ENV`, log level, local server test settings |
+| `server` | `.env.development`, `.env.production` | Optional `BROWSEROS_SENTRY_DSN`, `BROWSEROS_LOG` tracing filter, `NODE_ENV`, and live-test settings |
 | `upload` | `.env.production` | Cloudflare R2 credentials and bucket for artifact uploads |
 
 Production build and upload scripts read `.env.production` plus exported process env through `@browseros/shared/env/*`, and **exported process env wins**. A missing required value fails with an error naming the key, the section, and the file.
 
-## Server sidecar config
+## BrowserOS neo sidecar config
 
 `claw-server` reads its startup configuration from a sidecar JSON file passed as `--config <path>`, rather than from flags or env. `tools/dev`, dogfood, and Chromium-managed launches all generate this file.
 
@@ -65,9 +66,9 @@ bun run build:claw-server               # five-platform BrowserOS neo Rust resou
 bun run build:claw-onboard:resources    # the onboarding flow's resources, uploads to R2
 ```
 
-### BrowserOS neo Rust artifacts
+### Local server builds
 
-The Rust builder runs on macOS and produces the same five resource zips as `release-claw-server.yml`: macOS ARM64 and x64, Linux ARM64 and x64, and Windows x64. Darwin targets use Cargo and Xcode, Linux targets use Zig with a glibc 2.17 floor, and Windows uses the MSVC ABI through `cargo-xwin`.
+Both local Rust builders run on macOS and support five targets: macOS ARM64 and x64, Linux ARM64 and x64, and Windows x64. Darwin targets use Cargo and Xcode, Linux targets use Zig with a glibc 2.17 floor, and Windows uses the MSVC ABI through `cargo-xwin`.
 
 One-time host toolchain:
 
@@ -93,15 +94,21 @@ The build preflights every selected target before compiling and repeats the inst
 
 ```bash
 bun scripts/build/claw-server.ts --target=all --ci        # all five, no R2 credentials needed
-bun scripts/build/claw-server.ts --target=darwin-arm64 --no-upload    # one target, local only
+bun scripts/build/claw-server.ts --target=darwin-arm64 --no-upload
+bun scripts/build/server.ts --target=darwin-arm64 --no-upload
 ```
+
+The BrowserOS archive is `dist/prod/server/browseros-server-resources-darwin-arm64.zip`.
+The local BrowserOS build still needs R2 read access to fetch the Bun executable used by
+coding agents. Set `BROWSEROS_SENTRY_DSN` to embed an optional reporting endpoint.
 
 ## Focused test groups
 
 The full suites are `bun run test` and `bun run test:rust`. When you want a narrower loop:
 
 ```bash
-cargo test -p claw-server          # the Rust backend only
+cargo test -p browseros-server     # the BrowserOS backend
+cargo test -p claw-server          # the BrowserOS neo backend
 bun run test:claw-api-contract     # the API contract fixtures and schema
 bun run test:claw-mcp-contract     # the MCP tool surface against a real browser
 bun run test:claw-mcp-smoke        # a quick pass of the same
