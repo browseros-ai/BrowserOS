@@ -117,13 +117,11 @@ Output shows interactive elements with IDs:
 
 **Click-based** (use element IDs from snapshot):
 ```bash
-bun scripts/dev/inspect-ui.ts click app.html 65    # Click "Scheduled Tasks"
 ```
 
 **Hash routing** (faster, no snapshot needed):
 ```bash
 bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/settings'"
-bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/scheduled-tasks'"
 bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/home'"
 ```
 
@@ -231,7 +229,7 @@ bun scripts/dev/inspect-ui.ts eval app.html "document.querySelector('#root')?.in
 
 The extension talks to the MCP server. Verify the server is reachable:
 ```bash
-bun scripts/dev/inspect-ui.ts eval sidepanel "fetch('http://127.0.0.1:<serverPort>/health').then(r => r.ok).catch(() => false)"
+bun scripts/dev/inspect-ui.ts eval sidepanel "fetch('http://127.0.0.1:<serverPort>/system/health').then(r => r.ok).catch(() => false)"
 ```
 
 ### Common issues
@@ -271,7 +269,6 @@ These can be used with `eval app.html "window.location.hash = '#/<route>'"`:
 |-------|------|
 | `/home` | Home page with search bar and top sites |
 | `/settings` | Settings (LLM providers, customization, workflows, MCP) |
-| `/scheduled-tasks` | Scheduled Tasks management |
 | `/onboarding` | Onboarding flow (first-run experience) |
 
 ## Gotchas learned from real testing

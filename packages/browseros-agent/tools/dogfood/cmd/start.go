@@ -319,7 +319,6 @@ func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentR
 		proc.LogMsg(proc.TagServer, proc.WarnColor.Sprint("CDP not available, starting server anyway"))
 	}
 	runtimeEnv := serverRuntimeEnv(os.Environ(), cfg)
-	serverDir := filepath.Join(agentRoot, "apps/server")
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
 	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "resources")); err != nil {
 		e.Stop()
@@ -329,7 +328,7 @@ func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentR
 	reportProgress(opts, "starting server")
 	e.managed = append(e.managed, proc.StartManaged(ctx, &e.wg, proc.ProcConfig{
 		Tag:         proc.TagServer,
-		Dir:         serverDir,
+		Dir:         agentRoot,
 		Env:         runtimeEnv,
 		Restart:     true,
 		LogPath:     cfg.LogPath(serverLogName),
@@ -413,7 +412,7 @@ func (e *environment) ForceKill() {
 }
 
 func serverCommand(configPath string) []string {
-	return []string{"bun", "--env-file=../../.env.development", "src/index.ts", "--config", configPath}
+	return []string{"rustup", "run", "1.98.0", "cargo", "run", "--locked", "-p", "browseros-server", "--", "--config", configPath}
 }
 
 func clawAppCommand() []string {

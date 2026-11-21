@@ -10,11 +10,6 @@
  * field. Structure therefore travels as JSON serialized into that string, and
  * the same envelope is used for pre-stream HTTP error bodies so both channels
  * parse identically on the client.
- *
- * Intentionally dependency-free rather than a Zod schema like its siblings:
- * apps/app resolves `zod` to v4 while apps/server and this package resolve v3,
- * and unlike the other shared schemas this module is imported as a runtime
- * value on both sides of the wire.
  */
 
 /** Categories the UI can render a tailored action for. */

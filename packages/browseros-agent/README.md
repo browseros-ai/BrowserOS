@@ -28,7 +28,7 @@ Existing checkouts that still have old per-app env files can run `bun run env:mi
 
 | Section | File | Purpose |
 |---|---|---|
-| `dev-tools` | `.env.development` | Codegen and local tooling inputs such as `CDP_PROTOCOL_JSON` and `BROWSEROS_BINARY` |
+| `dev-tools` | `.env.development` | Local tooling inputs such as `CDP_PROTOCOL_JSON` and `BROWSEROS_BINARY` |
 | `app` | `.env.development` | Extension and local BrowserOS launch settings: dev ports, public Vite values, source-map upload, optional GraphQL schema path |
 | `claw` | `.env.development` | BrowserOS neo overrides: API URL, user-data dir, CDP port, `BROWSERCLAW_DIR` |
 | `server` | `.env.development`, `.env.production` | Server config URL, telemetry, Sentry, `NODE_ENV`, log level, local server test settings |
