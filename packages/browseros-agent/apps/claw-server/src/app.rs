@@ -15,7 +15,7 @@ use crate::{
         capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
-        harness_skills::{load_browserclaw_skill, with_ultrafast},
+        harness_skills::{ManagedSkills, managed_skills},
         neo::NeoEngine,
         page_hold::PageHoldService,
         profiles::ProfileService,
@@ -186,8 +186,10 @@ impl AppState {
         let ultrafast_ledger = Arc::new(crate::db::ultrafast_ledger::UltrafastLedger::new(
             database.clone(),
         ));
-        let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
-        let ultrafast_skill = with_ultrafast(&skill)?;
+        let ManagedSkills {
+            plain: skill,
+            ultrafast: ultrafast_skill,
+        } = managed_skills(&config.resources_dir, &config)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),

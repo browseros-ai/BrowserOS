@@ -1288,7 +1288,9 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions({
+            .with_instructions(if let Some(playwright) = &self.playwright {
+                playwright.instructions(self)
+            } else {
                 let instructions = mcp_instructions(
                     self.mode(),
                     self.human_help(),
@@ -1296,7 +1298,7 @@ impl ServerHandler for ClawMcpService {
                     self.native(),
                     self.tab_grouping(),
                 );
-                if self.surface().listed(PURSUE_TOOL_NAME) {
+                if self.pursue_offered() {
                     with_pursue_guidance(instructions)
                 } else {
                     instructions
