@@ -1,0 +1,95 @@
+[package]
+name = "browseros-server"
+# Above the TypeScript server's 0.0.168: Chromium launches a downloaded server only when its
+# version is strictly higher than the bundled one.
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The BrowserOS agent server: chat, providers, coding agents and history for the extension"
+
+# Every dependency any chunk of the design needs is declared here, once, so that the chunks built
+# in parallel after the skeleton never edit this file or move Cargo.lock.
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+# The file name Chromium launches: resources/bin/browseros_server.
+name = "browseros_server"
+path = "src/main.rs"
+
+[features]
+# `browser::scripted`, the browser test double. The dev-dependency on this crate below turns it
+# on for every test build; release builds never have it.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+http.workspace = true
+os_info = "3.15.0"
+rand.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+# The private MCP endpoint a coding agent reaches the browser through (`browser::mcp`).
+rmcp.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+sentry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+# The contract: every wire type derives `ToSchema` and every route is one `routes!` entry, so the
+# axum router and contracts/server-api/openapi.json come from one declaration. The layering test
+# keeps both crates inside `http`.
+utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "preserve_order", "preserve_path_order"] }
+utoipa-axum = "0.3.0"
+
+# Model calls (`model`). The provider wires (OpenAI Chat Completions and Responses, Anthropic
+# Messages, Gemini, the ChatGPT backend) are spoken directly over the workspace reqwest, which
+# needs `stream` for a streamed response body; the TLS features stay the workspace's. An LLM
+# crate is deliberately absent: genai 0.7.5 turns on serde_json/preserve_order, which changes
+# serde_json for every crate in a build, neo-server included (tests/feature_guard.rs).
+eventsource-stream = "0.2"
+# AWS Bedrock through ConverseStream, with the row's key, secret and session token scoped to one
+# request. These releases keep the workspace's Rust 1.94 floor; later ones declare 1.94.1. Only
+# the current HTTPS client (hyper 1, rustls 0.23) and the tokio runtime: the default features
+# add a legacy rustls 0.21 stack and the SSO and credential-process chains, which a
+# request-scoped key never uses.
+aws-config = { version = "=1.8.18", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-bedrockruntime = { version = "=1.135.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
+# `Document`, the JSON value a Bedrock tool schema and tool input are written in; the runtime
+# crate does not re-export it.
+aws-smithy-types = "1.5"
+
+[target.'cfg(unix)'.dependencies]
+# The browser engine child (`browseros_server __neo-engine`), whose body is neo-server's own main.
+# Unix only: the SDK does not build on Windows, where `browser` has no engine.
+neo-server.workspace = true
+
+[dev-dependencies]
+browseros-server = { path = ".", features = ["test-support"] }
+# Only for tests/dependency_boundaries.rs, which parses src/ to enforce the module layering.
+syn = { version = "2", features = ["full", "visit"] }
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
