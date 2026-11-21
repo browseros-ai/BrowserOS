@@ -5,7 +5,7 @@
 mod fake_provider;
 
 use anyhow::Context;
-use browseros_server::model::ModelMessage;
+use browseros_server::model::{AssistantTurn, Image, ModelMessage};
 use browseros_server::store::{Credentials, ProviderKind, Secret};
 use browseros_server::turn::{FinishReason, TurnEvent};
 use fake_provider::{FakeProvider, Reply, models, provider, request};
@@ -17,6 +17,172 @@ fn finished() -> Reply {
         json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}),
         json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}], "usage":{"prompt_tokens":10,"completion_tokens":2}}),
     ])
+}
+
+#[tokio::test]
+async fn adjacent_users_send_one_message_with_text_and_pictures_in_order() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![finished()]).await?;
+    let (_dir, models) = models().await?;
+    let config = provider(
+        ProviderKind::OpenaiCompatible,
+        format!("{}/v1", fake.base),
+        Credentials::None,
+    );
+    let model = models.resolve(config, Uuid::new_v4()).await?;
+    let user = |text: &str, images: Vec<Image>| ModelMessage::User {
+        text: text.into(),
+        images,
+    };
+    let picture = |byte| Image {
+        media_type: "image/png".into(),
+        bytes: vec![byte],
+    };
+    let messages = [
+        user("earlier", vec![]),
+        user("now", vec![]),
+        ModelMessage::Assistant(AssistantTurn::text("an answer".into())),
+        user("first photo", vec![picture(1)]),
+        user("second photo", vec![picture(2)]),
+        ModelMessage::Assistant(AssistantTurn::text("another answer".into())),
+    ];
+    model.step(&request(&messages), &mut Vec::new()).await?;
+
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    let messages = calls[0].body["messages"]
+        .as_array()
+        .context("wire messages")?;
+    assert_eq!(
+        messages[1..],
+        [
+            json!({"role":"user","content":"earlier\n\nnow"}),
+            json!({"role":"assistant","content":"an answer"}),
+            json!({"role":"user","content":[
+                {"type":"text","text":"first photo"},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}},
+                {"type":"text","text":"\n\nsecond photo"},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,Ag=="}}
+            ]}),
+            json!({"role":"assistant","content":"another answer"}),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn all_results_follow_the_assistant_before_pictures_labelled_by_call() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![
+        Reply::events(&[
+            json!({"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[
+            {"index":0,"id":"first","type":"function","function":{"name":"run","arguments":"{}"}},
+            {"index":1,"id":"second","type":"function","function":{"name":"run","arguments":"{}"}}
+        ]},"finish_reason":"tool_calls"}]}),
+        ]),
+        finished(),
+        finished(),
+    ])
+    .await?;
+    let (_dir, models) = models().await?;
+    let config = provider(
+        ProviderKind::OpenaiCompatible,
+        format!("{}/v1", fake.base),
+        Credentials::None,
+    );
+    let model = models.resolve(config, Uuid::new_v4()).await?;
+    let turn = model.step(&request(&[]), &mut Vec::new()).await?;
+    let capture = "Attached image from the tool result:";
+    let picture_message = |byte| ModelMessage::User {
+        text: capture.into(),
+        images: vec![Image {
+            media_type: "image/png".into(),
+            bytes: vec![byte],
+        }],
+    };
+    let mut follow_up = Vec::new();
+    for (index, call) in turn.tool_calls().iter().enumerate() {
+        follow_up.push(ModelMessage::ToolResult {
+            id: call.id.clone(),
+            text: "done".into(),
+        });
+        follow_up.push(picture_message(u8::try_from(index)? + 1));
+    }
+    follow_up.insert(0, ModelMessage::Assistant(turn));
+    model
+        .step(&request(&follow_up[..4]), &mut Vec::new())
+        .await?;
+    model.step(&request(&follow_up), &mut Vec::new()).await?;
+
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    for (received, both_picture_sets) in [(&calls[1], false), (&calls[2], true)] {
+        let messages = received.body["messages"]
+            .as_array()
+            .context("wire messages")?;
+        let roles: Vec<_> = messages
+            .iter()
+            .filter_map(|message| message["role"].as_str())
+            .collect();
+        assert_eq!(roles, ["system", "assistant", "tool", "tool", "user"]);
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "first");
+        assert_eq!(messages[1]["tool_calls"][1]["id"], "second");
+        assert_eq!(messages[2]["tool_call_id"], "first");
+        assert_eq!(messages[3]["tool_call_id"], "second");
+        let mut expected = vec![
+            json!({"type":"text","text":format!("Tool call first: {capture}")}),
+            json!({"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}),
+        ];
+        if both_picture_sets {
+            expected.extend([
+                json!({"type":"text","text":format!("\n\nTool call second: {capture}")}),
+                json!({"type":"image_url","image_url":{"url":"data:image/png;base64,Ag=="}}),
+            ]);
+        }
+        assert_eq!(messages[4]["content"], Value::Array(expected));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn pictures_after_one_tool_result_keep_their_message() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![finished()]).await?;
+    let (_dir, models) = models().await?;
+    let config = provider(
+        ProviderKind::OpenaiCompatible,
+        format!("{}/v1", fake.base),
+        Credentials::None,
+    );
+    let model = models.resolve(config, Uuid::new_v4()).await?;
+    let messages = [
+        ModelMessage::ToolResult {
+            id: browseros_server::turn::ToolCallId("one".into()),
+            text: "done".into(),
+        },
+        ModelMessage::User {
+            text: "Attached image from the tool result:".into(),
+            images: vec![Image {
+                media_type: "image/png".into(),
+                bytes: vec![1],
+            }],
+        },
+    ];
+    model.step(&request(&messages), &mut Vec::new()).await?;
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    assert_eq!(calls[0].body["messages"][1]["tool_call_id"], "one");
+    assert_eq!(
+        calls[0].body["messages"][2],
+        json!({"role":"user","content":[
+            {"type":"text","text":"Attached image from the tool result:"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}
+        ]})
+    );
+    Ok(())
 }
 
 #[tokio::test]

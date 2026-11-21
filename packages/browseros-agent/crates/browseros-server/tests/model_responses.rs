@@ -4,12 +4,65 @@
 mod fake_provider;
 
 use anyhow::Context;
-use browseros_server::model::ModelMessage;
+use browseros_server::model::{AssistantTurn, Image, ModelMessage};
 use browseros_server::store::{Credentials, ProviderKind, Secret};
 use browseros_server::turn::{FinishReason, TurnEvent};
 use fake_provider::{FakeProvider, Reply, models, provider, request};
 use serde_json::json;
 use uuid::Uuid;
+
+#[tokio::test]
+async fn adjacent_users_send_one_input_with_text_and_pictures_in_order() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![Reply::events(&[
+        json!({"type":"response.output_text.delta","delta":"ok"}),
+        json!({"type":"response.completed","response":{"status":"completed"}}),
+    ])])
+    .await?;
+    let (_dir, models) = models().await?;
+    let config = provider(
+        ProviderKind::Openai,
+        format!("{}/v1", fake.base),
+        Credentials::ApiKey(Secret::new("fixture-key")),
+    );
+    let model = models.resolve(config, Uuid::new_v4()).await?;
+    let user = |text: &str, images: Vec<Image>| ModelMessage::User {
+        text: text.into(),
+        images,
+    };
+    let picture = |byte| Image {
+        media_type: "image/png".into(),
+        bytes: vec![byte],
+    };
+    let messages = [
+        user("earlier", vec![]),
+        user("now", vec![]),
+        ModelMessage::Assistant(AssistantTurn::text("an answer".into())),
+        user("first photo", vec![picture(1)]),
+        user("second photo", vec![picture(2)]),
+        ModelMessage::Assistant(AssistantTurn::text("another answer".into())),
+    ];
+    model.step(&request(&messages), &mut Vec::new()).await?;
+
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    assert_eq!(
+        calls[0].body["input"],
+        json!([
+            {"role":"user","content":[{"type":"input_text","text":"earlier\n\nnow"}]},
+            {"role":"assistant","content":"an answer"},
+            {"role":"user","content":[
+                {"type":"input_text","text":"first photo"},
+                {"type":"input_image","image_url":"data:image/png;base64,AQ==","detail":"auto"},
+                {"type":"input_text","text":"\n\nsecond photo"},
+                {"type":"input_image","image_url":"data:image/png;base64,Ag==","detail":"auto"}
+            ]},
+            {"role":"assistant","content":"another answer"}
+        ])
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn responses_replays_the_completed_encrypted_item_and_tool_call() -> anyhow::Result<()> {
@@ -52,7 +105,14 @@ async fn responses_replays_the_completed_encrypted_item_and_tool_call() -> anyho
         id: turn.tool_calls()[0].id.clone(),
         text: "2".into(),
     };
-    let messages = [ModelMessage::Assistant(turn), result];
+    let pictures = ModelMessage::User {
+        text: "Attached image from the tool result:".into(),
+        images: vec![Image {
+            media_type: "image/png".into(),
+            bytes: vec![1],
+        }],
+    };
+    let messages = [ModelMessage::Assistant(turn), result, pictures];
     let mut next = request(&messages);
     next.effort = None;
     let turn = model.step(&next, &mut events).await?;
@@ -78,7 +138,15 @@ async fn responses_replays_the_completed_encrypted_item_and_tool_call() -> anyho
     assert!(calls[1].body.get("reasoning").is_none());
     assert_eq!(
         calls[1].body["input"],
-        json!([reasoning, call, {"type":"function_call_output","call_id":"call_1","output":"2"}])
+        json!([
+            reasoning,
+            call,
+            {"type":"function_call_output","call_id":"call_1","output":"2"},
+            {"role":"user","content":[
+                {"type":"input_text","text":"Attached image from the tool result:"},
+                {"type":"input_image","image_url":"data:image/png;base64,AQ==","detail":"auto"}
+            ]}
+        ])
     );
     Ok(())
 }

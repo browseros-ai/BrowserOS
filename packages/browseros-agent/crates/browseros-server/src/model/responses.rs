@@ -37,24 +37,21 @@ fn body(
     reasoning: &Reasoning,
 ) -> Value {
     let mut input = Vec::new();
-    for message in request.messages {
-        match message {
-            ModelMessage::User { text, images } => {
-                let mut content = Vec::new();
-                if !text.is_empty() || images.is_empty() {
-                    content.push(json!({"type": "input_text", "text": text}));
-                }
-                content.extend(images.iter().map(|image|
-                    json!({"type": "input_image", "image_url": data_url(image), "detail": "auto"})));
-                input.push(json!({"role": "user", "content": content}));
-            }
-            ModelMessage::Assistant(turn) => match &turn.native {
+    for run in request.messages.chunk_by(|left, right| {
+        matches!(
+            (left, right),
+            (ModelMessage::User { .. }, ModelMessage::User { .. })
+        )
+    }) {
+        match run {
+            [ModelMessage::Assistant(turn)] => match &turn.native {
                 NativeOutput::Responses(items) => input.extend(items.iter().cloned()),
                 _ => input.push(json!({"role": "assistant", "content": turn.text})),
             },
-            ModelMessage::ToolResult { id, text } => input.push(json!({
+            [ModelMessage::ToolResult { id, text }] => input.push(json!({
                 "type": "function_call_output", "call_id": id.0, "output": text
             })),
+            users => input.push(user_input(users)),
         }
     }
     let mut instructions = request.system;
@@ -107,6 +104,38 @@ fn body(
         );
     }
     body
+}
+
+/// Join the retained questions at serialization, after the loop has compacted its copy.
+fn user_input(users: &[ModelMessage]) -> Value {
+    let mut content = Vec::new();
+    let mut text = None::<String>;
+    let mut saw_text = false;
+    for message in users {
+        let ModelMessage::User { text: user, images } = message else {
+            continue;
+        };
+        if !user.is_empty() || images.is_empty() {
+            let buffer = text.get_or_insert_with(String::new);
+            if saw_text {
+                buffer.push_str("\n\n");
+            }
+            buffer.push_str(user);
+            saw_text = true;
+        }
+        if !images.is_empty() {
+            if let Some(text) = text.take() {
+                content.push(json!({"type": "input_text", "text": text}));
+            }
+            content.extend(images.iter().map(|image| {
+                json!({"type": "input_image", "image_url": data_url(image), "detail": "auto"})
+            }));
+        }
+    }
+    if let Some(text) = text {
+        content.push(json!({"type": "input_text", "text": text}));
+    }
+    json!({"role": "user", "content": content})
 }
 
 /// One Responses call. Same contract as `Model::step`.
