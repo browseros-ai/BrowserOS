@@ -219,7 +219,9 @@ async function runPage(
     } catch {
       record.note ||= 'token observation failed'
     }
-    if (entry.site) {
+    if (record.verdict === 'policy_wall') {
+      record.site = 'n/a'
+    } else if (entry.site) {
       try {
         const found = await page.submit(entry.site)
         if (found) record.site = found

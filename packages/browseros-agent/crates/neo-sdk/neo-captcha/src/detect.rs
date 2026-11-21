@@ -1155,6 +1155,9 @@ mod tests {
 
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+            if expression.contains("captcha:policy-wall") {
+                return Ok(Value::Null);
+            }
             assert!(expression.contains("captcha:vendor"));
             self.scripts
                 .lock()

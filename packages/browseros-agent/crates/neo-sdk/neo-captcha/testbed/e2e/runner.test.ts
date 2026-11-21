@@ -303,10 +303,10 @@ for (const server of ['sdk', 'claw-server'] as const) {
     expect(records.filter((r) => r.outcome !== 'PASS')).toEqual([])
     expect(exitCode(records)).toBe(0)
     expect(summarize(records)).toMatchObject({
-      pass: 22,
+      pass: 24,
       siteAccepted: 7,
       deliveredOnly: 0,
-      detected: 15,
+      detected: 17,
       paidTasks: 0,
     })
     // PerimeterX's check is a detection refused by name (type `unknown` on purpose); its frame
@@ -323,6 +323,22 @@ for (const server of ['sdk', 'claw-server'] as const) {
       verdict: 'already_clear',
       check: 'solve',
       site: 'accepted',
+      outcome: 'PASS',
+    })
+    expect(records.find((r) => r.id === 'policy-wall-ai-agent')).toMatchObject({
+      verdict: 'policy_wall',
+      reason: 'policy_wall',
+      type: null,
+      check: 'detect',
+      outcome: 'PASS',
+    })
+    expect(
+      records.find((r) => r.id === 'policy-wall-terms-footer'),
+    ).toMatchObject({
+      verdict: 'already_clear',
+      reason: 'no_captcha',
+      type: null,
+      check: 'detect',
       outcome: 'PASS',
     })
     const recaptcha = records.find((r) => r.id === 'recaptcha-v2-test')
@@ -348,6 +364,18 @@ for (const server of ['sdk', 'claw-server'] as const) {
     expect(closes).toHaveLength(records.length)
   })
 }
+
+test('tests that a policy wall stops the runner before a configured site submit', async () => {
+  const { records, calls } = await run('contract', {
+    pages: [{ ...solvePage, expect: ['policy_wall'] }],
+  })
+  expect(records[0]).toMatchObject({
+    verdict: 'policy_wall',
+    site: 'n/a',
+    outcome: 'PASS',
+  })
+  expect(calls.some((call) => call.step === 'submit')).toBe(false)
+})
 
 test('tests that SDK scripts run in a task per page and never call claw-server tools', async () => {
   const { calls } = await run('contract', {
@@ -423,14 +451,14 @@ test('tests that an absent SDK solver passes every page only when absence is exp
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
   expect(summarize(expected.records)).toMatchObject({
-    pass: 22,
+    pass: 24,
     siteAccepted: 0,
     deliveredOnly: 0,
     detected: 0,
-    absent: 22,
+    absent: 24,
   })
   expect(renderSummary(expected.records)).toContain(
-    'solver absent as expected: 22',
+    'solver absent as expected: 24',
   )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),

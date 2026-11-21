@@ -98,7 +98,9 @@ test('tests that the server serves every catalog page and health check', async (
     const response = await fetch(fixture.url(page.path ?? '/missing'))
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/html')
-    expect(await response.text()).toContain(`action="/submit/${page.id}"`)
+    const html = await response.text()
+    if (page.site) expect(html).toContain(`action="/submit/${page.id}"`)
+    else expect(html).not.toContain('<form')
   }
 })
 

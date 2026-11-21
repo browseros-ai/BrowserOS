@@ -25,6 +25,7 @@ export type Verdict =
   | 'token_applied'
   | 'already_clear'
   | 'unsolved'
+  | 'policy_wall'
   | 'cancelled'
   | 'unknown'
 export const SUCCESS_VERDICTS: readonly Verdict[] = [
@@ -90,8 +91,12 @@ export interface CaptchaPage {
  * `detect`: the right type, with no solve claimed.
  */
 export function pageCheck(page: CaptchaPage): 'solve' | 'deliver' | 'detect' {
-  if (!page.expect.some((verdict) => SUCCESS_VERDICTS.includes(verdict)))
-    return 'detect'
+  const expectsSolve = page.expect.some(
+    (verdict) =>
+      SUCCESS_VERDICTS.includes(verdict) &&
+      (verdict !== 'already_clear' || page.site !== undefined),
+  )
+  if (!expectsSolve) return 'detect'
   return page.site ? 'solve' : 'deliver'
 }
 
@@ -240,6 +245,30 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     undefined,
     ['already_clear'],
   ),
+  {
+    id: 'policy-wall-ai-agent',
+    title: 'Access restricted for AI agents',
+    kind: 'fixture',
+    family: 'none',
+    path: '/policy-wall-ai-agent.html',
+    expect: ['policy_wall'],
+    expectReason: ['policy_wall'],
+    maxPaidTasks: 0,
+    mayNeedPaid: false,
+    ready: "document.readyState !== 'loading'",
+  },
+  {
+    id: 'policy-wall-terms-footer',
+    title: 'Ordinary storefront with terms in the footer',
+    kind: 'fixture',
+    family: 'none',
+    path: '/policy-wall-terms-footer.html',
+    expect: ['already_clear'],
+    expectReason: ['no_captcha'],
+    maxPaidTasks: 0,
+    mayNeedPaid: false,
+    ready: "document.readyState !== 'loading'",
+  },
   {
     ...fixture(
       'hcaptcha-test',

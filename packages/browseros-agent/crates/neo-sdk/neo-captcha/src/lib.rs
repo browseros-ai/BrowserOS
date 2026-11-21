@@ -25,6 +25,7 @@ mod detect;
 pub mod events;
 mod geetest;
 mod page;
+mod policy;
 mod providers;
 mod recaptcha;
 pub mod reservation;
@@ -131,9 +132,7 @@ pub struct CaptchaSolver {
 }
 
 /// Whether the host gives the agent a way to hand the page to a person. It picks the closing
-/// line of a `needs_human` or `unsupported` message and the `humanHelp` field of the handoff
-/// event: `Available` points at `request_human_help`, `Unavailable` says to stop and tell the
-/// user.
+/// instruction in handoff messages and the `humanHelp` field of the handoff event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HumanHelp {
     Available,
@@ -229,6 +228,19 @@ impl CaptchaSolver {
             let mut user_agent = None;
             let mut read_user_agent = false;
             for rescan in 0..=1 {
+                // An explicit access restriction takes precedence over any widget on the page.
+                match policy::policy_wall(page).await {
+                    Ok(Some(_)) => {
+                        return terminal(
+                            SolveStatus::PolicyWall,
+                            SolveReason::PolicyWall,
+                            "This site blocks automated agents. Stop acting on the page.",
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(PageError::Navigated) if rescan == 0 => continue,
+                    Err(error) => return page_failure(error),
+                }
                 let detection = match driver.detect(page).await {
                     Err(PageError::Navigated) if rescan == 0 => continue,
                     result => match result {
@@ -463,10 +475,12 @@ impl CaptchaSolver {
         }
         if matches!(
             flow.status,
-            SolveStatus::NeedsHuman | SolveStatus::Unsupported
+            SolveStatus::NeedsHuman | SolveStatus::Unsupported | SolveStatus::PolicyWall
         ) {
             flow.message.push_str(if human_help_available {
                 " Call request_human_help with kind \"captcha\"."
+            } else if flow.status == SolveStatus::PolicyWall {
+                " Ask the user to take over this page."
             } else {
                 " Stop and tell the user that this CAPTCHA needs their help."
             });
@@ -481,7 +495,7 @@ impl CaptchaSolver {
                 CaptchaEventName::TokenApplied,
                 json!({"type":kind,"method":flow.method,"durationMs":duration_ms,"callbackRan":flow.callback_ran,"provider":flow.provider}),
             ),
-            SolveStatus::NeedsHuman => events.emit(
+            SolveStatus::NeedsHuman | SolveStatus::PolicyWall => events.emit(
                 CaptchaEventName::Handoff,
                 json!({"type":kind,"reason":flow.reason,"humanHelp":human_help_available,"provider":flow.provider}),
             ),

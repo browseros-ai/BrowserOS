@@ -41,6 +41,8 @@ impl CaptchaService {
         self.solver.reservations()
     }
 
+    /// MCP exposes the solver's status, reason and message directly. The solver words handoffs
+    /// for the tools this agent has.
     pub async fn solve(
         &self,
         view: BrowserView,

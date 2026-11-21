@@ -92,7 +92,10 @@ pub(super) async fn observe<P: CaptchaPage, B: CaptchaBackend>(
         terminal(
             SolveStatus::NeedsHuman,
             SolveReason::ChallengeNotPassed,
-            "Cloudflare's full-page check is still showing.",
+            &format!(
+                "Neo watched the Cloudflare check for {} seconds. It did not clear. Neo did not interact with it.",
+                WAIT.as_secs()
+            ),
         )
     } else {
         terminal(
@@ -293,6 +296,10 @@ mod tests {
             );
             assert_eq!(outcome.paid_tasks, 0);
             assert_eq!(outcome.duration_ms, 10_000);
+            assert_eq!(outcome.method, SolveMethod::AutoPass);
+            assert!(outcome.message.starts_with(
+                "Neo watched the Cloudflare check for 10 seconds. It did not clear. Neo did not interact with it."
+            ));
         }
         Ok(())
     }

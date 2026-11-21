@@ -104,13 +104,14 @@ declare global {
     /** Pick a task. An unknown id throws `task_not_found`; recover with
      * `context.pages()` and each page's `taskId`. */
     task(id: string): Promise<Task>
-    /** Solves the CAPTCHA on a page. Every verdict, unsolved too, is a value to branch on. */
+    /** Solves the CAPTCHA on a page. On `policy_wall`, stop and hand the page to the user. */
     solveCaptcha(page: Page): Promise<{
       verdict:
         | 'solved'
         | 'token_applied'
         | 'already_clear'
         | 'unsolved'
+        | 'policy_wall'
         | 'cancelled'
         | 'unknown'
       type: string | null

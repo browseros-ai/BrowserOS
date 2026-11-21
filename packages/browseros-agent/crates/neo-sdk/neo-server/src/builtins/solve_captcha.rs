@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use browseros_core::CoreError;
 use neo_captcha::types::{
-    CaptchaEvent, CaptchaKind, ProviderName, SolveOutcome, SolveReason, Verdict,
+    CaptchaEvent, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, Verdict,
 };
 use neo_captcha::{CaptchaSolver, HumanHelp, SolveRefusal};
 use neo_trace::Effect;
@@ -21,8 +21,9 @@ use crate::dispatch::{
 /// Its time limit is neo-captcha's [`neo_captcha::SOLVE_DEADLINE`], which a test checks.
 const LISTED: &str = "neo.solveCaptcha(page) → { verdict, type, reason, message, durationMs, \
     paidTasks, provider }: solves the CAPTCHA on the page, in up to 120 s. Branch on `verdict`: solved | \
-    token_applied | already_clear | unsolved | cancelled | unknown. After cancelled or unknown, \
-    look at the page again. Await it before any other action on that page: a write there \
+    token_applied | already_clear | unsolved | policy_wall | cancelled | unknown. On policy_wall, \
+    stop and hand the page to the user. After cancelled or unknown, look at the page again. \
+    Await it before any other action on that page: a write there \
     meanwhile fails `page_busy`.";
 /// Why every call fails without a key: the deployment's to fix, not the script's (decision 7).
 const NO_KEY: &str = "this Neo has no CAPTCHA provider key, so neo.solveCaptcha is off; the \
@@ -151,7 +152,7 @@ fn verdict_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
         verdict,
         kind: outcome.kind,
         reason: outcome.reason,
-        message: message_for(verdict, outcome.reason, outcome.kind),
+        message: message_for(verdict, outcome),
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
         provider: outcome.provider,
@@ -209,16 +210,22 @@ fn message(verdict: Verdict, reason: SolveReason) -> String {
 const NONE_FOUND: &str = "Neo found no CAPTCHA it knows on the page; carry on with the task. If \
     a human check still covers the page, stop and tell the user it needs their help.";
 
-/// [`message`], naming the family when the answer's `type` cannot: `PerimeterX`'s is `unknown`
-/// (see neo-captcha's `CaptchaKind::PerimeterX`), so its refusal says what blocks the page.
-fn message_for(verdict: Verdict, reason: SolveReason, kind: Option<CaptchaKind>) -> String {
-    if kind == Some(CaptchaKind::PerimeterX) && reason == SolveReason::UnsupportedType {
-        return worded(
+fn message_for(verdict: Verdict, outcome: &SolveOutcome) -> String {
+    match (outcome.kind, outcome.method, outcome.reason) {
+        // The observer knows how long it watched. This SDK calls the solver with human help
+        // unavailable, so the shared line does not point at an MCP tool here.
+        (
+            Some(CaptchaKind::CloudflareChallenge),
+            SolveMethod::AutoPass,
+            SolveReason::ChallengeNotPassed,
+        ) => outcome.message.clone(),
+        // PerimeterX's wire type is unknown, so the line names the family.
+        (Some(CaptchaKind::PerimeterX), _, SolveReason::UnsupportedType) => worded(
             verdict,
             "it is PerimeterX's press-and-hold human check, which only a person can pass",
-        );
+        ),
+        (_, _, reason) => message(verdict, reason),
     }
-    message(verdict, reason)
 }
 
 fn worded(verdict: Verdict, why: &str) -> String {
@@ -233,6 +240,11 @@ fn worded(verdict: Verdict, why: &str) -> String {
             "The CAPTCHA still blocks the page",
             "stop and tell the user it needs their help.",
         ),
+        Verdict::PolicyWall => {
+            return format!(
+                "The site restricts access because {why}. Stop and hand the page to the user."
+            );
+        }
         Verdict::Cancelled => (
             "The solve stopped early",
             "look at the page again before acting.",
@@ -270,6 +282,7 @@ fn cause(reason: SolveReason) -> &'static str {
         SolveReason::TilesExhausted => "every image round failed",
         SolveReason::ChallengeNotPassed => "the challenge was attempted and not passed",
         SolveReason::SpendLimitReached => "this Neo's CAPTCHA budget is used up",
+        SolveReason::PolicyWall => "automated agents are prohibited",
     }
 }
 
@@ -282,16 +295,17 @@ mod tests {
 
     use super::{LISTED, cause, message, verdict_value};
 
-    const VERDICTS: [Verdict; 6] = [
+    const VERDICTS: [Verdict; 7] = [
         Verdict::Solved,
         Verdict::TokenApplied,
         Verdict::AlreadyClear,
         Verdict::Unsolved,
+        Verdict::PolicyWall,
         Verdict::Cancelled,
         Verdict::Unknown,
     ];
 
-    const REASONS: [SolveReason; 22] = [
+    const REASONS: [SolveReason; 23] = [
         SolveReason::AutoPassed,
         SolveReason::CheckboxPassed,
         SolveReason::TilesAccepted,
@@ -314,6 +328,7 @@ mod tests {
         SolveReason::TilesExhausted,
         SolveReason::ChallengeNotPassed,
         SolveReason::SpendLimitReached,
+        SolveReason::PolicyWall,
     ];
 
     fn outcome(status: SolveStatus, reason: SolveReason) -> SolveOutcome {
@@ -364,6 +379,14 @@ mod tests {
                 SolveReason::SpendLimitReached,
                 "The CAPTCHA still blocks the page (this Neo's CAPTCHA budget is used up); stop \
                  and tell the user it needs their help.",
+            ),
+            (
+                Verdict::PolicyWall,
+                SolveReason::PolicyWall,
+                concat!(
+                    "The site restricts access because automated agents are prohibited. ",
+                    "Stop and hand the page to the user.",
+                ),
             ),
             (
                 Verdict::Cancelled,
@@ -419,6 +442,29 @@ mod tests {
             value.as_deref(),
             Some(message(Verdict::Unsolved, SolveReason::UnsupportedType).as_str())
         );
+    }
+
+    #[test]
+    fn tests_that_only_the_cloudflare_observer_uses_the_watch_message() {
+        let mut solve = outcome(SolveStatus::NeedsHuman, SolveReason::ChallengeNotPassed);
+        solve.kind = Some(CaptchaKind::CloudflareChallenge);
+        solve.method = SolveMethod::AutoPass;
+        solve.message = concat!(
+            "Neo watched the Cloudflare check for 10 seconds. It did not clear. ",
+            "Neo did not interact with it. Stop and tell the user that this CAPTCHA needs their help.",
+        )
+        .into();
+        let attempted = "the challenge was attempted and not passed";
+        assert_eq!(
+            verdict_value(&solve).map(|value| value.message).as_deref(),
+            Some(solve.message.as_str())
+        );
+
+        solve.method = SolveMethod::Checkbox;
+        assert!(verdict_value(&solve).is_some_and(|value| value.message.contains(attempted)));
+        solve.kind = Some(CaptchaKind::AwsWaf);
+        solve.method = SolveMethod::AutoPass;
+        assert!(verdict_value(&solve).is_some_and(|value| value.message.contains(attempted)));
     }
 
     #[test]

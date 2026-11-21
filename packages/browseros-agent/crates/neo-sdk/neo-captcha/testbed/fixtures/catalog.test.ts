@@ -15,6 +15,7 @@ const VERDICTS = [
   'token_applied',
   'already_clear',
   'unsolved',
+  'policy_wall',
   'cancelled',
   'unknown',
 ]
@@ -80,6 +81,8 @@ test('tests that the catalog contains every required page with unique ids and ex
     'turnstile-cf-marker',
     'cloudflare-wall',
     'no-captcha',
+    'policy-wall-ai-agent',
+    'policy-wall-terms-footer',
     'hcaptcha-test',
     'perimeterx-modal',
     'perimeterx-waiting',
@@ -99,11 +102,12 @@ test('tests that the catalog contains every required page with unique ids and ex
     expect(
       await Bun.file(`${import.meta.dir}/pages${page.path}`).exists(),
     ).toBe(true)
-    expect(page.site).toEqual({
-      submitSelector: '#submit',
-      acceptedPattern: '^ACCEPTED',
-      rejectedPattern: '^REJECTED',
-    })
+    if (page.site)
+      expect(page.site).toEqual({
+        submitSelector: '#submit',
+        acceptedPattern: '^ACCEPTED',
+        rejectedPattern: '^REJECTED',
+      })
   }
 })
 
@@ -386,6 +390,7 @@ test('tests that the bound v2 fixture becomes ready with its badge and submits t
 
 test('tests that standalone pages mirror their lifecycle state and wait for visible iframes', async () => {
   for (const page of FIXTURE_PAGES) {
+    if (!page.site) continue
     const html = await Bun.file(`${import.meta.dir}/pages${page.path}`).text()
     expect(html.match(/<form\b/g)).toHaveLength(1)
     expect(html).toContain('id="captcha-form"')
