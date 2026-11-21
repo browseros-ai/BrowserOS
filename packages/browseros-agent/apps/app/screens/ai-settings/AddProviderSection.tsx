@@ -1,4 +1,3 @@
-import { Plus } from 'lucide-react'
 import { type FC, useId, useState } from 'react'
 import { AdapterIcon, adapterLabel } from '@/components/agents/AdapterIcon'
 import { Input } from '@/components/ui/input'
@@ -9,7 +8,7 @@ import {
   type ProviderTemplate,
   providerTemplates,
 } from '@/lib/llm-providers/providerTemplates'
-import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
+import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { AddProviderTile } from './AddProviderTile'
 import {
@@ -17,27 +16,21 @@ import {
   categoryForTemplate,
   groupAddProviderEntries,
 } from './add-provider.helpers'
-import { CustomAgentTile } from './CustomAgentTile'
-import { POPULAR_ACP_AGENTS } from './popular-acp-agents'
 
 export interface AddProviderSectionProps {
-  onCreateAgent: (type: AcpAgentType) => void
-  onCreateCustomAgent: () => void
+  onCreateAgent: (type: AcpAgent['type']) => void
   onUseTemplate: (template: ProviderTemplate) => void
 }
 
 interface Entry extends AddProviderEntryMeta {
   icon: React.ReactNode
   onAdd: () => void
-  /** Rendered as the wide tile rather than one cell of the grid. */
-  featured?: boolean
 }
 
 const AGENT_TYPES = ['claude', 'codex'] as const
 
 export const AddProviderSection: FC<AddProviderSectionProps> = ({
   onCreateAgent,
-  onCreateCustomAgent,
   onUseTemplate,
 }) => {
   const searchId = useId()
@@ -49,10 +42,6 @@ export const AddProviderSection: FC<AddProviderSectionProps> = ({
     .filter((template) => {
       if (template.id === 'chatgpt-pro')
         return supports(Feature.CHATGPT_PRO_SUPPORT)
-      if (template.id === 'github-copilot')
-        return supports(Feature.GITHUB_COPILOT_SUPPORT)
-      if (template.id === 'qwen-code')
-        return supports(Feature.QWEN_CODE_SUPPORT)
       return true
     })
     .map((template) => ({
@@ -64,27 +53,13 @@ export const AddProviderSection: FC<AddProviderSectionProps> = ({
     }))
 
   const agentEntries: Entry[] = supportsCodingAgents
-    ? [
-        ...AGENT_TYPES.map((type) => ({
-          key: `agent-${type}`,
-          label: adapterLabel(type),
-          category: 'agent' as const,
-          icon: <AdapterIcon adapter={type} className="size-[26px]" />,
-          onAdd: () => onCreateAgent(type),
-        })),
-        {
-          key: 'agent-custom',
-          label: 'Custom ACP agent',
-          category: 'agent' as const,
-          keywords: POPULAR_ACP_AGENTS.flatMap((agent) => [
-            agent.id,
-            agent.label,
-          ]),
-          icon: <Plus className="size-[26px]" />,
-          onAdd: onCreateCustomAgent,
-          featured: true,
-        },
-      ]
+    ? AGENT_TYPES.map((type) => ({
+        key: `agent-${type}`,
+        label: adapterLabel(type),
+        category: 'agent' as const,
+        icon: <AdapterIcon adapter={type} className="size-[26px]" />,
+        onAdd: () => onCreateAgent(type),
+      }))
     : []
 
   const groups = groupAddProviderEntries(
@@ -118,18 +93,14 @@ export const AddProviderSection: FC<AddProviderSectionProps> = ({
               {group.label}
             </h4>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {group.entries.map((entry) =>
-                entry.featured ? (
-                  <CustomAgentTile key={entry.key} onAdd={entry.onAdd} />
-                ) : (
-                  <AddProviderTile
-                    key={entry.key}
-                    label={entry.label}
-                    icon={entry.icon}
-                    onAdd={entry.onAdd}
-                  />
-                ),
-              )}
+              {group.entries.map((entry) => (
+                <AddProviderTile
+                  key={entry.key}
+                  label={entry.label}
+                  icon={entry.icon}
+                  onAdd={entry.onAdd}
+                />
+              ))}
             </div>
           </div>
         ))

@@ -1,3 +1,4 @@
+import { ServerApiClient } from '@browseros/server-api/client'
 import { useEffect, useRef, useState } from 'react'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
@@ -16,18 +17,24 @@ export interface UseOAuthStatusReturn {
   disconnect: () => Promise<void>
 }
 
-export function useOAuthStatus(provider: string): UseOAuthStatusReturn {
+export function useOAuthStatus(provider: 'chatgpt-pro'): UseOAuthStatusReturn {
   const [status, setStatus] = useState<OAuthStatus | null>(null)
   const [isPolling, setIsPolling] = useState(false)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const statusVersion = useRef(0)
+
   async function fetchStatus(): Promise<OAuthStatus | null> {
+    const version = statusVersion.current
     try {
       const serverUrl = await getAgentServerUrl()
-      const res = await fetch(`${serverUrl}/oauth/${provider}/status`)
-      if (!res.ok) return null
-      const data = (await res.json()) as OAuthStatus
+      const result = await new ServerApiClient(serverUrl).getSignInStatus({
+        provider,
+      })
+      // An earlier poll can resolve after sign-out. Its snapshot is stale.
+      if (version !== statusVersion.current) return null
+      const data = { ...result, email: result.email ?? undefined }
       setStatus(data)
       return data
     } catch {
@@ -60,7 +67,12 @@ export function useOAuthStatus(provider: string): UseOAuthStatusReturn {
   async function disconnect() {
     try {
       const serverUrl = await getAgentServerUrl()
-      await fetch(`${serverUrl}/oauth/${provider}`, { method: 'DELETE' })
+      const { success } = await new ServerApiClient(serverUrl).signOut({
+        provider,
+      })
+      if (!success) return
+      statusVersion.current += 1
+      stopPolling()
       setStatus({ authenticated: false, provider })
     } catch {
       // Best-effort disconnect

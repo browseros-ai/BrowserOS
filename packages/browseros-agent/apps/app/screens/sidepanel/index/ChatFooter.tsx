@@ -23,6 +23,7 @@ export interface ChatFooterProps {
   status: 'streaming' | 'submitted' | 'ready' | 'error'
   onStop: () => void
   sendDisabled?: boolean
+  showWorkspace: boolean
   attachedTabs: chrome.tabs.Tab[]
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
@@ -37,6 +38,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   status,
   onStop,
   sendDisabled,
+  showWorkspace,
   attachedTabs,
   onToggleTab,
   onRemoveTab,
@@ -136,30 +138,32 @@ export const ChatFooter: FC<ChatFooterProps> = ({
               <ChevronDown className="h-3 w-3" />
             </button>
 
-            <WorkspaceSelector side="top">
-              <button
-                type="button"
-                className={cn(
-                  'flex cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors hover:bg-muted/50 data-[state=open]:bg-accent',
-                  selectedFolder
-                    ? 'text-foreground'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-                title={
-                  selectedFolder
-                    ? selectedFolder.name
-                    : 'Select workspace folder'
-                }
-              >
-                <div className="relative">
-                  <Folder className="h-4 w-4" />
-                  {selectedFolder && (
-                    <div className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-[var(--accent-orange)]" />
+            {showWorkspace && (
+              <WorkspaceSelector side="top">
+                <button
+                  type="button"
+                  className={cn(
+                    'flex cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors hover:bg-muted/50 data-[state=open]:bg-accent',
+                    selectedFolder
+                      ? 'text-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
                   )}
-                </div>
-                <ChevronDown className="h-3 w-3" />
-              </button>
-            </WorkspaceSelector>
+                  title={
+                    selectedFolder
+                      ? selectedFolder.name
+                      : 'Select workspace folder'
+                  }
+                >
+                  <div className="relative">
+                    <Folder className="h-4 w-4" />
+                    {selectedFolder && (
+                      <div className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-[var(--accent-orange)]" />
+                    )}
+                  </div>
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </WorkspaceSelector>
+            )}
           </div>
         </div>
 

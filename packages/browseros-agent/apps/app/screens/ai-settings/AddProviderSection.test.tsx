@@ -9,16 +9,6 @@ mock.module('@/components/agents/AdapterIcon', () => ({
 mock.module('@/lib/llm-providers/providerIcons', () => ({
   ProviderIcon: () => createElement('span', { 'data-icon': 'provider' }),
 }))
-mock.module('@/components/agents/agent-brand-marks', () => ({
-  BRAND_MARKS: {
-    opencode: () => createElement('span', { 'data-mark': 'opencode' }),
-    hermes: () => createElement('span', { 'data-mark': 'hermes' }),
-    openclaw: () => createElement('span', { 'data-mark': 'openclaw' }),
-    pi: () => createElement('span', { 'data-mark': 'pi' }),
-    antigravity: () => createElement('span', { 'data-mark': 'antigravity' }),
-  },
-  agentBrandKey: () => undefined,
-}))
 mock.module('@/modules/browseros/capabilities.hooks', () => ({
   useCapabilities: () => ({ supports: () => true }),
 }))
@@ -35,7 +25,6 @@ function render() {
   return renderToStaticMarkup(
     createElement(AddProviderSection, {
       onCreateAgent: () => {},
-      onCreateCustomAgent: () => {},
       onUseTemplate: () => {},
     }),
   )
@@ -61,15 +50,12 @@ describe('AddProviderSection', () => {
     )
   })
 
-  // The old grid injected agent tiles inside the provider loop, which put the
-  // custom-agent tile in the middle of the providers.
-  it('keeps the custom agent tile inside the coding agents group', () => {
+  it('offers Fireworks and omits retired targets', () => {
     const html = render()
-    const agentsStart = html.indexOf('Coding agents')
-    const nextGroup = html.indexOf('Sign in with a subscription')
-    const custom = html.indexOf('Custom ACP agent')
-    expect(custom).toBeGreaterThan(agentsStart)
-    expect(custom).toBeLessThan(nextGroup)
+    expect(html).toContain('Add Fireworks')
+    for (const name of ['Custom ACP agent', 'GitHub Copilot', 'Qwen Code']) {
+      expect(html).not.toContain(name)
+    }
   })
 
   it('groups the on-device runtimes under the local heading', () => {
@@ -91,29 +77,12 @@ describe('AddProviderSection', () => {
     const html = render()
     expect(html).toContain('aria-label="Add OpenAI"')
     expect(html).toContain('aria-label="Add Ollama"')
-    expect(html).toContain('aria-label="Add Custom ACP agent"')
   })
 
   it('gives the search field a real label rather than a placeholder', () => {
     const html = render()
     expect(html).toContain('Search providers and agents')
     expect(html).toMatch(/<label[^>]*for="[^"]+"/)
-  })
-
-  // "Custom ACP agent" says what it is, not what it gets you. The marks of the
-  // agents the picker offers are what make the tile worth clicking.
-  it('shows the popular agent marks on the custom agent tile', () => {
-    const html = render()
-    for (const id of ['opencode', 'hermes', 'openclaw', 'pi', 'antigravity']) {
-      expect(html).toContain(`data-mark="${id}"`)
-    }
-  })
-
-  it('names those agents in the custom tile copy', () => {
-    const html = render()
-    expect(html).toContain('opencode')
-    expect(html).toContain('OpenClaw')
-    expect(html).toContain('any other ACP compatible agent')
   })
 
   it('keeps a brand icon on every tile', () => {

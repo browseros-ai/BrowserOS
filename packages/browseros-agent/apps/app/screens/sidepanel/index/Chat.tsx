@@ -211,6 +211,7 @@ export const Chat = () => {
       {isIncognito && <IncognitoNotice />}
 
       <ChatFooter
+        showWorkspace={selectedProvider?.kind === 'acp'}
         mode={mode}
         onModeChange={handleModeChange}
         input={input}

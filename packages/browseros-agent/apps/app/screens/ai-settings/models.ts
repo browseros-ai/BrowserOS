@@ -25,12 +25,6 @@ export interface ModelInfo {
 const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
   'openai-compatible': [],
   ollama: [],
-  'qwen-code': [
-    { modelId: 'coder-model', contextLength: 1000000 },
-    { modelId: 'qwen3-coder-plus', contextLength: 1000000 },
-    { modelId: 'qwen3-coder-flash', contextLength: 1000000 },
-    { modelId: 'qwen3.5-plus', contextLength: 1000000 },
-  ],
 }
 
 function fromModelsDevModel(m: ModelsDevModel): ModelInfo {

@@ -22,6 +22,8 @@ describe('chat request preparation', () => {
     expect(request.body).toMatchObject({
       target: { type: 'browseros', providerId: 'openai-1' },
       message: 'Summarize this page',
+      userMessageId: 'user-1',
+      persist: false,
     })
     // The provider is named, not described: its configuration is resolved
     // from the id on the server.
@@ -52,7 +54,8 @@ describe('chat request preparation', () => {
       browserContext: commonRequestInput().browserContext,
       userSystemPrompt: 'Be concise',
       userWorkingDir: '/tmp/work',
-      supportsImages: undefined,
+      userMessageId: 'user-1',
+      persist: false,
       previousConversation: commonRequestInput().previousConversation,
       selectedText: 'selected text',
       selectedTextSource: commonRequestInput().selectedTextSource,
@@ -108,6 +111,8 @@ describe('chat request preparation', () => {
 function commonRequestInput() {
   return {
     conversationId,
+    userMessageId: 'user-1',
+    persist: false,
     mode: 'agent' as const,
     browserContext: {
       activeTab: { id: 10, url: 'https://example.com', title: 'Example' },
