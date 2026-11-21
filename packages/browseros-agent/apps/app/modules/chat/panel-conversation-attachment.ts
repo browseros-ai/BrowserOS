@@ -1,12 +1,36 @@
 import type { ConversationPanelAssignment } from '@browseros/shared/schemas/conversation-panels'
+import type { UIMessage } from 'ai'
 import type { ConversationRunState } from './conversation-run-client'
 
+/**
+ * What the panel follows, and what a retry hydrates again: the run the broker assigned to this
+ * panel's tab, or a conversation the user opened from History. A History selection belongs to no
+ * tab binding and may have no run, so it carries its stored transcript for that case.
+ */
+type Subject = { conversationId: string } & (
+  | { kind: 'assigned'; runId: string }
+  | { kind: 'opened'; stored: UIMessage[] }
+)
+
+/**
+ * What the panel installs. `liveRunId` is set only while the server is still running the turn:
+ * `messages` then stops at the user's message, and the panel replays that run's stream from its
+ * first chunk and follows it live, exactly as the server's `/state` and `/stream` pair promises.
+ */
+export interface PanelSnapshot {
+  source: Subject['kind']
+  conversationId: string
+  messages: UIMessage[]
+  liveRunId?: string
+}
+
 export interface PanelConversationAttachmentDeps {
+  /** The server's run for the conversation, or `undefined` when it knows none. */
   load(
     conversationId: string,
     signal: AbortSignal,
-  ): Promise<ConversationRunState>
-  attach(state: ConversationRunState, isCurrent: () => boolean): Promise<void>
+  ): Promise<ConversationRunState | undefined>
+  attach(snapshot: PanelSnapshot, isCurrent: () => boolean): Promise<void>
   clear(conversationId: string): void
   ownsLocalStream(conversationId: string, runId: string): boolean
   reportError(error: unknown): void
@@ -14,13 +38,15 @@ export interface PanelConversationAttachmentDeps {
 }
 
 /**
- * One tab's subscription lifecycle. Epochs cancel stale hydration across new
- * turns, reassignment, and retirement; explicit retries also cover SDK failures
- * reported through onError instead of rejected resumeStream promises.
+ * One panel's subscription lifecycle. It follows one subject at a time, whichever came last: a
+ * new run the broker assigns to the tab, or a History selection. Epochs cancel stale hydration
+ * across new turns, reassignment, History selections, and retirement; explicit retries also
+ * cover SDK failures reported through onError instead of rejected resumeStream promises.
  */
 export class PanelConversationAttachment {
-  private view: ConversationPanelAssignment | undefined
-  private attached = ''
+  /** The broker's latest binding for this tab. Heartbeats repeat it and must not re-hydrate. */
+  private assignment: ConversationPanelAssignment | undefined
+  private subject: Subject | undefined
   private epoch = 0
   private abort: AbortController | undefined
   private retryTimer: ReturnType<typeof setTimeout> | undefined
@@ -33,33 +59,59 @@ export class PanelConversationAttachment {
   update(view: ConversationPanelAssignment | undefined): void {
     if (this.disposed) return
     if (view && this.retired.has(view.conversationId)) return
-    if (key(view) === key(this.view)) {
-      this.view = view
-      return
-    }
-    const previous = this.view
-    this.invalidate()
-    this.view = view
-    this.attached = ''
-    this.retryDelay = 0
+    const previous = this.assignment
+    this.assignment = view
+    if (key(view) === key(previous)) return
     if (!view) {
+      // The tab losing its binding says nothing about a conversation opened from History.
+      if (this.subject?.kind === 'opened') return
+      this.follow(undefined)
       if (previous) this.deps.clear(previous.conversationId)
       return
     }
-    if (this.deps.ownsLocalStream(view.conversationId, view.runId)) {
-      this.attached = key(view)
-      return
-    }
+    this.follow({
+      kind: 'assigned',
+      conversationId: view.conversationId,
+      runId: view.runId,
+    })
+    if (this.deps.ownsLocalStream(view.conversationId, view.runId)) return
     void this.hydrate()
+  }
+
+  /**
+   * Shows a conversation the user opened from History. The caller reads `run` after `stored`, so
+   * a run that ends in between still answers with its whole transcript: a live run is followed to
+   * its end, a finished one shows its whole transcript, and with no run the stored one stands.
+   *
+   * `isCancelled` is the restore's own guard. A newer History selection cancels this one before
+   * its requests reach `open`, so the install checks it too, after attach has detached the view.
+   */
+  async open(
+    conversationId: string,
+    stored: UIMessage[],
+    run: ConversationRunState | undefined,
+    isCancelled: () => boolean,
+  ): Promise<void> {
+    if (this.disposed || isCancelled()) return
+    // An explicit history selection may resume a previously retired conversation.
+    this.retired.delete(conversationId)
+    const subject: Subject = { kind: 'opened', conversationId, stored }
+    this.follow(subject)
+    const isCurrent = this.nextEpoch()
+    await this.deps.attach(
+      snapshotOf(subject, run),
+      () => isCurrent() && !isCancelled(),
+    )
+    // A selection cancelled before it landed must not come back on a retry.
+    if (isCancelled() && this.subject === subject) this.follow(undefined)
   }
 
   retire(conversationId: string): void {
     this.retired.add(conversationId)
-    this.invalidate()
-    if (this.view?.conversationId === conversationId) {
-      this.view = undefined
-      this.attached = ''
-    }
+    // The panel moves to a new conversation, so a retry must not bring back what it followed.
+    this.follow(undefined)
+    if (this.assignment?.conversationId === conversationId)
+      this.assignment = undefined
   }
 
   beginLocalTurn(conversationId: string): void {
@@ -69,14 +121,10 @@ export class PanelConversationAttachment {
   }
 
   retry(): void {
-    if (
-      this.disposed ||
-      !this.view ||
-      this.retired.has(this.view.conversationId)
-    )
+    const subject = this.subject
+    if (this.disposed || !subject || this.retired.has(subject.conversationId))
       return
     this.invalidate()
-    this.attached = ''
     this.retryDelay = Math.min(
       this.retryDelay ? this.retryDelay * 2 : (this.deps.retryMs ?? 250),
       5_000,
@@ -89,34 +137,66 @@ export class PanelConversationAttachment {
     this.invalidate()
   }
 
+  private follow(subject: Subject | undefined): void {
+    this.invalidate()
+    this.subject = subject
+    this.retryDelay = 0
+  }
+
   private invalidate(): void {
     this.epoch += 1
     this.abort?.abort()
     clearTimeout(this.retryTimer)
   }
 
-  private async hydrate(): Promise<void> {
-    const view = this.view
-    if (!view || this.disposed || this.attached === key(view)) return
+  /** Starts an epoch. Its check turns false as soon as anything newer starts. */
+  private nextEpoch(): () => boolean {
     const epoch = ++this.epoch
+    return () => !this.disposed && epoch === this.epoch
+  }
+
+  private async hydrate(): Promise<void> {
+    const subject = this.subject
+    if (!subject || this.disposed) return
+    const isCurrent = this.nextEpoch()
     this.abort = new AbortController()
-    const isCurrent = () => !this.disposed && epoch === this.epoch
     try {
-      const state = await this.deps.load(view.conversationId, this.abort.signal)
+      const run = await this.deps.load(
+        subject.conversationId,
+        this.abort.signal,
+      )
       if (!isCurrent()) return
-      if (
-        state.conversationId !== view.conversationId ||
-        state.runId !== view.runId
-      ) {
-        throw new Error('Panel assignment changed during hydration')
-      }
-      this.attached = key(view)
-      await this.deps.attach(state, isCurrent)
+      await this.deps.attach(snapshotOf(subject, run), isCurrent)
     } catch (error) {
       if (!isCurrent()) return
       this.deps.reportError(error)
       this.retry()
     }
+  }
+}
+
+/** A broker assignment needs its exact run; a History selection takes whatever run the server has. */
+function snapshotOf(
+  subject: Subject,
+  run: ConversationRunState | undefined,
+): PanelSnapshot {
+  const { kind: source, conversationId } = subject
+  if (!run) {
+    if (subject.kind === 'assigned')
+      throw new Error('The server knows no run for this panel assignment')
+    return { source, conversationId, messages: subject.stored }
+  }
+  if (
+    run.conversationId !== conversationId ||
+    (subject.kind === 'assigned' && run.runId !== subject.runId)
+  ) {
+    throw new Error('Panel assignment changed during hydration')
+  }
+  return {
+    source,
+    conversationId,
+    messages: run.messages,
+    liveRunId: run.status === 'running' ? run.runId : undefined,
   }
 }
 
