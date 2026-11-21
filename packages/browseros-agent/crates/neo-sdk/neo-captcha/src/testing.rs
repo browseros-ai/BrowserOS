@@ -67,7 +67,7 @@ pub async fn replay_brief(case: &str, judge: Option<&dyn Judge>) -> Result<Repla
         document: &document,
         before: before.as_ref(),
         callback_ran: case.claim.callback_ran,
-        token: case.claim.token.into(),
+        applied: None,
     };
     let brief = match case.look.probe {
         Some(probe) => {
@@ -96,6 +96,7 @@ pub async fn replay_brief(case: &str, judge: Option<&dyn Judge>) -> Result<Repla
         face: case.look.face.map(Into::into),
         clearance: case.look.clearance,
         policy_wall: case.look.policy_wall,
+        token: case.look.token.into(),
         partial: case.look.partial,
     };
     let decision = verify::decide(&verify::signals(&look, &claim), claim.basis);
@@ -148,8 +149,6 @@ struct ClaimCase {
     challenge: Option<Challenge>,
     #[serde(default)]
     callback_ran: bool,
-    #[serde(default)]
-    token: TokenCase,
 }
 
 /// One look, as the check's reads would have gathered it.
@@ -170,6 +169,9 @@ struct LookCase {
     clearance: bool,
     #[serde(default)]
     policy_wall: bool,
+    /// Neo's applied token as the page held it (rows 9 and 11), when the recording knows.
+    #[serde(default)]
+    token: TokenCase,
     #[serde(default)]
     partial: bool,
     #[serde(default)]
