@@ -488,9 +488,9 @@ export interface components {
         /** @description What a coding agent advertised. A probe that could not run has `error` set. */
         AgentProbe: {
             models: components["schemas"]["ProbeModel"][];
-            reasoning?: components["schemas"]["ProbeReasoning"] | null;
+            reasoning: components["schemas"]["ProbeReasoning"] | null;
             supportsConfigOption: boolean;
-            agentInfo?: components["schemas"]["AgentInfo"] | null;
+            agentInfo: components["schemas"]["AgentInfo"] | null;
             /** Format: int64 */
             protocolVersion: number;
             error?: components["schemas"]["ProbeError"] | null;
@@ -631,12 +631,12 @@ export interface components {
         ConversationTargetType: "browseros" | "claude" | "codex" | "custom";
         /** @description The selected row, or `null` when none is selected. */
         DefaultProvider: {
-            provider?: components["schemas"]["Provider"] | null;
+            provider: components["schemas"]["Provider"] | null;
         };
         Diagnostics: {
             version: string;
             os: string;
-            osVersion?: string | null;
+            osVersion: string | null;
         };
         /** @enum {string} */
         FinishReason: "stop" | "length" | "content-filter" | "tool-calls" | "error" | "other";
@@ -915,6 +915,7 @@ export interface components {
         } | {
             toolCallId: string;
             toolName: string;
+            title?: string | null;
             dynamic?: boolean | null;
             providerExecuted?: boolean | null;
             /** @enum {string} */
@@ -923,6 +924,7 @@ export interface components {
             toolCallId: string;
             toolName: string;
             input: unknown;
+            title?: string | null;
             dynamic?: boolean | null;
             providerExecuted?: boolean | null;
             /** @enum {string} */
@@ -954,11 +956,12 @@ export interface components {
             /** @enum {string} */
             type: "abort";
         };
-        /**
-         * @description One part of a `UIMessage`, in the SDK's shape: an object with a `type` and that type's own
-         *     fields.
-         */
-        UiPart: Record<string, never>;
+        /** @description A part as the AI SDK stores it: its `type`, then that type's own fields. */
+        UiPart: {
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
     };
     responses: never;
     parameters: never;

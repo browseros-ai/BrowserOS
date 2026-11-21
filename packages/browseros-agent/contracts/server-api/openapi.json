@@ -1573,7 +1573,9 @@
         "description": "What a coding agent advertised. A probe that could not run has `error` set.",
         "required": [
           "models",
+          "reasoning",
           "supportsConfigOption",
+          "agentInfo",
           "protocolVersion"
         ],
         "properties": {
@@ -2056,6 +2058,9 @@
       "DefaultProvider": {
         "type": "object",
         "description": "The selected row, or `null` when none is selected.",
+        "required": [
+          "provider"
+        ],
         "properties": {
           "provider": {
             "oneOf": [
@@ -2073,7 +2078,8 @@
         "type": "object",
         "required": [
           "version",
-          "os"
+          "os",
+          "osVersion"
         ],
         "properties": {
           "version": {
@@ -3070,6 +3076,12 @@
               "toolName": {
                 "type": "string"
               },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "dynamic": {
                 "type": [
                   "boolean",
@@ -3106,6 +3118,12 @@
                 "type": "string"
               },
               "input": {},
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "dynamic": {
                 "type": [
                   "boolean",
@@ -3261,7 +3279,16 @@
       },
       "UiPart": {
         "type": "object",
-        "description": "One part of a `UIMessage`, in the SDK's shape: an object with a `type` and that type's own\nfields."
+        "description": "A part as the AI SDK stores it: its `type`, then that type's own fields.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
       }
     }
   },
