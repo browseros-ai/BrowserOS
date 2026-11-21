@@ -46,6 +46,15 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Finish the cold Cargo build before starting the server readiness timeout.
+	cargo := browserOSServerBackend.cargoCommand("build", "--locked", "-p", browserOSServerBackend.Package)
+	build := exec.CommandContext(cmd.Context(), cargo[0], cargo[1:]...)
+	build.Dir = root
+	build.Stdout, build.Stderr = os.Stdout, os.Stderr
+	if err := build.Run(); err != nil {
+		return fmt.Errorf("building BrowserOS server: %w", err)
+	}
+
 	proc.LogMsg(proc.TagInfo, "Killing processes on test ports...")
 	proc.KillPorts(p)
 	proc.LogMsg(proc.TagInfo, "Ports cleared")
@@ -104,7 +113,6 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}()
 
 	env := proc.BuildEnv(p, "test")
-	serverDir := filepath.Join(root, "apps/server")
 
 	tempDir, err = os.MkdirTemp("", "browseros-test-")
 	if err != nil {
@@ -121,14 +129,15 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 	proc.LogMsg(proc.TagServer, "Starting server...")
 	procs = append(procs, proc.StartManaged(ctx, &wg, proc.ProcConfig{
-		Tag:     proc.TagServer,
-		Dir:     root,
-		Env:     env,
+		Tag: proc.TagServer,
+		Dir: root,
+		// Keep the SQLite store in this test's private profile even if the caller
+		// exports a regular BrowserOS state directory.
+		Env:     replaceEnvValue(env, "BROWSEROS_DIR", filepath.Join(tempDir, "state")),
 		Restart: false,
-		Cmd: []string{
-			"bun", filepath.Join(serverDir, "src/index.ts"),
-			"--config", sidecarPath,
-		},
+		Cmd: browserOSServerBackend.cargoCommand(
+			"run", "--locked", "-p", browserOSServerBackend.Package, "--", "--config", sidecarPath,
+		),
 	}))
 
 	proc.LogMsg(proc.TagServer, "Waiting for server health...")

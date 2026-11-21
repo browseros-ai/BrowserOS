@@ -24,55 +24,6 @@ export interface SuiteConfig {
 
 /** Every suite, in the order `test.yml` declares them (stable CI ordering). */
 export const SUITES: Record<string, SuiteConfig> = {
-  'server-agent': {
-    suite: 'server-agent',
-    command: '(cd apps/server && bun run test:agent)',
-    junit_path: 'test-results/server-agent.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
-  'server-api': {
-    suite: 'server-api',
-    command: '(cd apps/server && bun run test:api)',
-    junit_path: 'test-results/server-api.xml',
-    needs_browser: true,
-    needs_rust: false,
-  },
-  'server-tools': {
-    suite: 'server-tools',
-    command: '(cd apps/server && bun run test:tools)',
-    junit_path: 'test-results/server-tools.xml',
-    needs_browser: true,
-    needs_rust: false,
-  },
-  'server-browser': {
-    suite: 'server-browser',
-    command: '(cd apps/server && bun run test:browser)',
-    junit_path: 'test-results/server-browser.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
-  'server-integration': {
-    suite: 'server-integration',
-    command: '(cd apps/server && bun run test:integration)',
-    junit_path: 'test-results/server-integration.xml',
-    needs_browser: true,
-    needs_rust: false,
-  },
-  'server-lib': {
-    suite: 'server-lib',
-    command: '(cd apps/server && bun run test:lib)',
-    junit_path: 'test-results/server-lib.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
-  'server-root': {
-    suite: 'server-root',
-    command: '(cd apps/server && bun run test:root)',
-    junit_path: 'test-results/server-root.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
   agent: {
     suite: 'agent',
     command: '(cd apps/app && bun run test)',
@@ -181,15 +132,6 @@ export const SUITES: Record<string, SuiteConfig> = {
 
 /** Workspace package name -> the suites that cover it. */
 const PACKAGE_SUITES: Record<string, string[]> = {
-  '@browseros/server': [
-    'server-agent',
-    'server-api',
-    'server-tools',
-    'server-browser',
-    'server-integration',
-    'server-lib',
-    'server-root',
-  ],
   '@browseros/app': ['agent'],
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],

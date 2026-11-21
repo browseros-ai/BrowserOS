@@ -22,11 +22,11 @@ describe('migrateLocalEnv', () => {
 
   test('merges known non-empty values and reports dropped keys', async () => {
     const rootDir = requireTempRoot(tempRoot)
-    await writeFixture(rootDir, 'apps/server/.env.development', {
-      POSTHOG_API_KEY: 'server-key',
+    await writeFixture(rootDir, 'apps/app/.env.development', {
+      CLAW_POSTHOG_KEY: 'server-key',
       R2_UPLOAD_PREFIX: 'retired-prefix',
     })
-    await writeFixture(rootDir, 'apps/app/.env.development', {
+    await writeFixture(rootDir, 'apps/claw-app/.env.development', {
       VITE_ALPHA_FEATURES: 'false',
       UNKNOWN_LOCAL_KEY: 'drop-me',
     })
@@ -37,7 +37,7 @@ describe('migrateLocalEnv', () => {
     expect(result.wrote.map((path) => path.replace(`${rootDir}/`, ''))).toEqual(
       ['.env.development', '.env.production'],
     )
-    expect(development).toContain('POSTHOG_API_KEY=server-key')
+    expect(development).toContain('CLAW_POSTHOG_KEY=server-key')
     expect(development).toContain('VITE_ALPHA_FEATURES=false')
     expect(result.dropped).toEqual(
       expect.arrayContaining([
@@ -55,35 +55,35 @@ describe('migrateLocalEnv', () => {
 
   test('keeps the first non-empty value and reports conflicts', async () => {
     const rootDir = requireTempRoot(tempRoot)
-    await writeFixture(rootDir, 'apps/server/.env.development', {
-      LOG_LEVEL: 'debug',
-    })
     await writeFixture(rootDir, 'apps/app/.env.development', {
-      LOG_LEVEL: 'warn',
+      BROWSEROS_LOG: 'debug',
+    })
+    await writeFixture(rootDir, 'apps/claw-app/.env.development', {
+      BROWSEROS_LOG: 'warn',
     })
 
     const plan = buildLocalEnvMigration(rootDir)
     const development = plan.files.find((file) => file.mode === 'development')
 
-    expect(development?.content).toContain('LOG_LEVEL=debug')
-    expect(development?.content).not.toContain('LOG_LEVEL=warn')
+    expect(development?.content).toContain('BROWSEROS_LOG=debug')
+    expect(development?.content).not.toContain('BROWSEROS_LOG=warn')
     expect(plan.conflicts).toEqual([
       expect.objectContaining({
-        key: 'LOG_LEVEL',
-        keptSourceFile: join(rootDir, 'apps/server/.env.development'),
-        conflictingSourceFile: join(rootDir, 'apps/app/.env.development'),
+        key: 'BROWSEROS_LOG',
+        keptSourceFile: join(rootDir, 'apps/app/.env.development'),
+        conflictingSourceFile: join(rootDir, 'apps/claw-app/.env.development'),
       }),
     ])
   })
 
   test('harvests root .env and .env.local into development at lowest priority', async () => {
     const rootDir = requireTempRoot(tempRoot)
-    await writeFixture(rootDir, 'apps/server/.env.development', {
-      LOG_LEVEL: 'debug',
+    await writeFixture(rootDir, 'apps/app/.env.development', {
+      BROWSEROS_LOG: 'debug',
     })
     await writeFixture(rootDir, '.env', {
       CDP_PROTOCOL_JSON: '/tmp/protocol.json',
-      LOG_LEVEL: 'info',
+      BROWSEROS_LOG: 'info',
     })
     await writeFixture(rootDir, '.env.local', {
       BROWSEROS_BINARY: '/tmp/BrowserOS',
@@ -96,8 +96,8 @@ describe('migrateLocalEnv', () => {
       'CDP_PROTOCOL_JSON=/tmp/protocol.json',
     )
     expect(development?.content).toContain('BROWSEROS_BINARY=/tmp/BrowserOS')
-    expect(development?.content).toContain('LOG_LEVEL=debug')
-    expect(development?.content).not.toContain('LOG_LEVEL=info')
+    expect(development?.content).toContain('BROWSEROS_LOG=debug')
+    expect(development?.content).not.toContain('BROWSEROS_LOG=info')
     expect(plan.oldFiles).toEqual(
       expect.arrayContaining([
         join(rootDir, '.env'),
@@ -108,7 +108,7 @@ describe('migrateLocalEnv', () => {
 
   test('warns loudly when retired R2 prefixes differ from code defaults', async () => {
     const rootDir = requireTempRoot(tempRoot)
-    await writeFixture(rootDir, 'apps/server/.env.production', {
+    await writeFixture(rootDir, 'apps/claw-app/.env.production', {
       R2_UPLOAD_PREFIX: 'custom/server',
       R2_DOWNLOAD_PREFIX: 'custom/vendor',
     })
@@ -143,8 +143,8 @@ describe('migrateLocalEnv', () => {
 
   test('refuses to overwrite root env files without force', async () => {
     const rootDir = requireTempRoot(tempRoot)
-    await writeFixture(rootDir, 'apps/server/.env.development', {
-      POSTHOG_API_KEY: 'server-key',
+    await writeFixture(rootDir, 'apps/app/.env.development', {
+      CLAW_POSTHOG_KEY: 'server-key',
     })
     await writeFile(join(rootDir, '.env.development'), 'EXISTING=1\n')
 
@@ -159,13 +159,13 @@ describe('migrateLocalEnv', () => {
 
     expect(forced.refused).toEqual([])
     expect(readFileSync(join(rootDir, '.env.development'), 'utf8')).toContain(
-      'POSTHOG_API_KEY=server-key',
+      'CLAW_POSTHOG_KEY=server-key',
     )
   })
 
   test('dry-run returns the plan without writing root env files', async () => {
     const rootDir = requireTempRoot(tempRoot)
-    await writeFixture(rootDir, 'apps/server/.env.production', {
+    await writeFixture(rootDir, 'apps/claw-app/.env.production', {
       R2_BUCKET: 'custom-bucket',
     })
 
