@@ -1,4 +1,8 @@
 import type { UIMessage } from 'ai'
+import {
+  TOOL_NOT_RUN,
+  TOOL_STOPPED,
+} from '@/lib/messaging/server/tool-output-status'
 
 export type ToolInvocationState =
   | 'partial-call'
@@ -19,6 +23,7 @@ export interface ToolInvocationInfo {
   input: Record<string, unknown>
   output: unknown
   approval?: { id: string; approved?: boolean; reason?: string }
+  skippedStatus?: typeof TOOL_STOPPED | typeof TOOL_NOT_RUN
 }
 
 export type MessageSegment =
@@ -77,19 +82,28 @@ export const getMessageSegments = (
         input: Record<string, unknown>
         output: unknown
         approval?: { id: string; approved?: boolean; reason?: string }
+        errorText?: string
       }
       const toolName =
         part.type === 'dynamic-tool'
           ? (toolPart.toolName ?? 'tool')
           : toolPart.type.replace('tool-', '')
 
+      // The stream and History seal skipped calls as output-error to keep the
+      // SDK tool state terminal. Preserve their distinction for the batch UI.
+      const { state, errorText } = toolPart
       currentToolBatch.push({
-        state: toolPart.state,
+        state,
         toolCallId: toolPart.toolCallId,
         toolName,
         input: toolPart?.input ?? {},
         output: toolPart?.output,
         approval: toolPart?.approval,
+        skippedStatus:
+          state === 'output-error' &&
+          (errorText === TOOL_STOPPED || errorText === TOOL_NOT_RUN)
+            ? errorText
+            : undefined,
       })
     }
   }

@@ -398,15 +398,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         })
 
         const persist = persistRef.current
-        const previousMessages = messagesRef.current
-        // When the server persists, it owns history and loads it itself, so
-        // the client stops replaying it. Only an unpersisted conversation has
-        // to ship its own projection.
-        const history =
-          !persist && previousMessages.length > 0
-            ? formatConversationHistory(previousMessages)
-            : undefined
-        const previousConversation = history?.length ? history : undefined
+        const userMessageId = lastUserMessage?.id
+        // Rust loads persisted history. For incognito, replay from the
+        // same transport snapshot that supplied this turn's user message.
+        const previousConversation = persist
+          ? undefined
+          : formatConversationHistory(messages, userMessageId)
 
         const userSystemPrompt = getUserSystemPrompt(
           optionsRef.current?.origin,
@@ -416,7 +413,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           conversationId: conversationIdRef.current,
           // Retry reuses the user message id rather than the SDK's trigger id,
           // which can identify the assistant response being regenerated.
-          userMessageId: lastUserMessage?.id,
+          userMessageId,
           mode: currentMode,
           browserContext: requestBrowserContext,
           userSystemPrompt,
