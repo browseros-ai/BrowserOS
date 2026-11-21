@@ -346,6 +346,95 @@ async fn a_cancelled_prompt_that_loses_its_reply_retires_the_owner() -> Result<(
 }
 
 #[tokio::test]
+async fn a_broken_stream_blocks_reattachment_until_the_stale_owner_is_closed() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let agent = fixture.agent();
+    let target = fixture.target(AgentKind::Codex).await?;
+    let broken = input("lose the stream")?;
+    let cancel = CancellationToken::new();
+    let end = agent
+        .run_turn(&target, &broken, &mut Vec::new(), &cancel)
+        .await;
+    assert!(matches!(end, TurnEnd::Failed(error) if error.code == ChatErrorCode::ConnectionFailed));
+    let prior_calls = fixture.calls()?;
+    assert!(prior_calls.iter().any(|call| call["operation"] == "cancel"));
+    assert_eq!(
+        prior_calls.last().map(|call| &call["args"][1]),
+        Some(&json!("close"))
+    );
+
+    let mut retry = input("read the fixture")?;
+    retry.conversation = broken.conversation;
+    let end = agent
+        .run_turn(&target, &retry, &mut Vec::new(), &cancel)
+        .await;
+    assert_eq!(end, TurnEnd::Done(FinishReason::Stop));
+    let calls = fixture.calls()?;
+    let owner_command = &calls[prior_calls.len()];
+    assert_eq!(
+        owner_command["args"],
+        json!(["sessions", "close", retry.conversation])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn retry_seeds_history_if_model_setup_failed_before_the_first_prompt() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let agent = fixture.agent();
+    let target = fixture.target(AgentKind::Codex).await?;
+    let Target::Coding { agent_id, .. } = &target else {
+        anyhow::bail!("expected coding target");
+    };
+    let store = &fixture.server.app.store;
+    store
+        .agents()
+        .update(
+            agent_id,
+            AgentPatch {
+                model_id: Edit::Set("unavailable-model".into()),
+                ..AgentPatch::default()
+            },
+        )
+        .await?;
+    let input = input("read the fixture")?;
+    let cancel = CancellationToken::new();
+    let end = agent
+        .run_turn(&target, &input, &mut Vec::new(), &cancel)
+        .await;
+    assert!(matches!(end, TurnEnd::Failed(_)));
+    assert!(
+        !fixture
+            .calls()?
+            .iter()
+            .any(|call| call["operation"] == "prompt")
+    );
+
+    store
+        .agents()
+        .update(
+            agent_id,
+            AgentPatch {
+                model_id: Edit::Set("first-model".into()),
+                ..AgentPatch::default()
+            },
+        )
+        .await?;
+    let end = agent
+        .run_turn(&target, &input, &mut Vec::new(), &cancel)
+        .await;
+    assert_eq!(end, TurnEnd::Done(FinishReason::Stop));
+    let calls = fixture.calls()?;
+    assert!(!calls.iter().any(|call| call["args"][1] == "close"));
+    assert!(calls.iter().any(|call| {
+        call["prompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.contains("earlier reply"))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
 async fn incognito_seeds_history_and_cleans_its_session_and_attachments() -> Result<()> {
     let fixture = Fixture::new().await?;
     let agent = fixture.agent();

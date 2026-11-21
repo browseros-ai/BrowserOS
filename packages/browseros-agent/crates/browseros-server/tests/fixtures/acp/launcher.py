@@ -56,9 +56,16 @@ if operation == "sessions":
         send({"action":"session_ensured", "created":not marker.exists()})
         marker.touch()
     elif action == "close":
+        if (home / "fail-close").exists():
+            (home / "fail-close").unlink()
+            send({"jsonrpc":"2.0","id":None,"error":{"code":-32603}})
+            sys.exit(1)
         marker.unlink(missing_ok=True)
         send({"action":"session_closed"})
 elif operation in ("set-mode", "set"):
+    if after_globals[-1] == "unavailable-model":
+        send({"jsonrpc":"2.0","id":None,"error":{"code":-32602}})
+        sys.exit(1)
     send({"action":"config_set"})
 elif operation == "cancel":
     (home / "cancelled").touch()
@@ -80,3 +87,7 @@ elif operation == "prompt":
         if reply.get("stopReason") == "end_turn" and "refuse this turn" in prompt:
             reply["stopReason"] = "refusal"
         send(message)
+        if "lose the stream" in prompt and message.get("method") == "session/prompt":
+            (home / "fail-close").touch()
+            print("broken ACP stdout", flush=True)
+            sys.exit(1)

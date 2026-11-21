@@ -11,7 +11,7 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::time::timeout;
 
 use super::AgentRuntime;
-use super::acpx::{Adapter, Process};
+use super::acpx::{Adapter, Process, absolute_runtime};
 use crate::turn::AgentKind;
 
 /// What a coding agent advertised. A probe that could not run has `error` set and empty lists,
@@ -84,6 +84,7 @@ async fn discover(
     adapter: Adapter,
     budget: Duration,
 ) -> Result<AgentProbe, ProbeError> {
+    let runtime = &absolute_runtime(runtime).map_err(probe_io)?;
     let root = &runtime.state_dir;
     std::fs::create_dir_all(root).map_err(probe_io)?;
     let scratch = tempfile::Builder::new()
