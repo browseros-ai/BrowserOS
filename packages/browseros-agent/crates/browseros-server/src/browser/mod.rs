@@ -346,11 +346,14 @@ impl Browser {
 
     /// `None` when there is no engine: the coding agent then runs with no browser tools.
     pub fn arm(&self, scope: Scope) -> Option<Armed> {
-        match &self.inner.engine {
-            Engine::Off { .. } => return None,
-            #[cfg(unix)]
-            Engine::Neo(engine) if engine.failing() => return None,
-            _ => {}
+        if matches!(self.inner.engine, Engine::Off { .. }) {
+            return None;
+        }
+        #[cfg(unix)]
+        if let Engine::Neo(engine) = &self.inner.engine
+            && engine.failing()
+        {
+            return None;
         }
         let url = format!(
             "http://127.0.0.1:{}/mcp/{}",
