@@ -96,11 +96,14 @@ pub(crate) struct Claim<'a> {
 }
 
 /// A token Neo wrote into the page, as the gate remembers it: the page's fingerprint of it
-/// ([`token_mark`]), never the token itself, and when it was written.
+/// ([`token_mark`]), never the token itself, when it was written, and for which family and
+/// solve round, so a claim about another widget never inherits it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppliedToken {
     pub mark: String,
     pub at: Instant,
+    pub kind: CaptchaKind,
+    pub round: u32,
 }
 
 /// The page's fingerprint of a response token: its length in UTF-16 units and its FNV-1a hash,
@@ -2583,6 +2586,8 @@ mod tests {
         let applied = AppliedToken {
             mark: token_mark("03AFcWeA-the-token"),
             at: Instant::now(),
+            kind: CaptchaKind::RecaptchaV2,
+            round: 0,
         };
         let mut claim = claim_on(Basis::TokenInjected, Some(&routed), &document);
         claim.applied = Some(&applied);
