@@ -189,7 +189,7 @@ func buildAndStartBrowserOSEnvironment(ctx context.Context, cfg config.Config, a
 	if err := resolveStartBrowserApp(&cfg); err != nil {
 		return nil, err
 	}
-	reportProgress(opts, "building agent")
+	reportProgress(opts, "building the BrowserOS extension and server")
 	if err := pipeline.Build(ctx, agentRoot, opts.Runner); err != nil {
 		return nil, err
 	}
@@ -319,7 +319,6 @@ func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentR
 		proc.LogMsg(proc.TagServer, proc.WarnColor.Sprint("CDP not available, starting server anyway"))
 	}
 	runtimeEnv := serverRuntimeEnv(os.Environ(), cfg)
-	serverDir := filepath.Join(agentRoot, "apps/server")
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
 	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "resources")); err != nil {
 		e.Stop()
@@ -329,7 +328,7 @@ func startBrowserOSEnvironment(parent context.Context, cfg config.Config, agentR
 	reportProgress(opts, "starting server")
 	e.managed = append(e.managed, proc.StartManaged(ctx, &e.wg, proc.ProcConfig{
 		Tag:         proc.TagServer,
-		Dir:         serverDir,
+		Dir:         agentRoot,
 		Env:         runtimeEnv,
 		Restart:     true,
 		LogPath:     cfg.LogPath(serverLogName),
@@ -413,7 +412,7 @@ func (e *environment) ForceKill() {
 }
 
 func serverCommand(configPath string) []string {
-	return []string{"bun", "--env-file=../../.env.development", "src/index.ts", "--config", configPath}
+	return pipeline.BrowserOSServerCargoCommand("run", "--", "--config", configPath)
 }
 
 func clawAppCommand() []string {
@@ -425,17 +424,14 @@ func clawServerCommand(configPath string) []string {
 }
 
 func serverRuntimeEnv(base []string, cfg config.Config) []string {
-	env := make([]string, 0, len(base)+2)
+	env := make([]string, 0, len(base)+1)
 	for _, entry := range base {
 		if strings.HasPrefix(entry, "BROWSEROS_DIR=") {
 			continue
 		}
 		env = append(env, entry)
 	}
-	return append(env,
-		"NODE_ENV=development",
-		fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir),
-	)
+	return append(env, fmt.Sprintf("BROWSEROS_DIR=%s", cfg.BrowserOSDir))
 }
 
 // clawRuntimeEnv wires the WXT app and standalone Claw server to the same BrowserClaw state.

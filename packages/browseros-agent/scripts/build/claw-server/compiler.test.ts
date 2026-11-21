@@ -4,13 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { resolveTargets } from '@browseros/build-server-tools'
-
 import {
   preflightRustBuild,
   type RustToolchainProbe,
   rustBuildInvocation,
-  validateCompiledBinary,
-} from './compiler'
+} from '../rust-compiler'
+import { clawServerBinary, validateCompiledBinary } from './compiler'
 
 describe('BrowserClaw Rust compiler', () => {
   let tempDir: string | null = null
@@ -25,7 +24,7 @@ describe('BrowserClaw Rust compiler', () => {
   it('maps every shipped target to its release cross-compiler and output', () => {
     const invocations = resolveTargets('all').map((target) => ({
       id: target.id,
-      ...rustBuildInvocation(target),
+      ...rustBuildInvocation(target, clawServerBinary),
     }))
 
     expect(invocations).toEqual([
@@ -93,11 +92,15 @@ describe('BrowserClaw Rust compiler', () => {
     const targets = resolveTargets('all')
     const probe = fakeProbe({
       targets: new Set(
-        targets.map((target) => rustBuildInvocation(target).rustTarget),
+        targets.map(
+          (target) => rustBuildInvocation(target, clawServerBinary).rustTarget,
+        ),
       ),
     })
 
-    await expect(preflightRustBuild(targets, probe)).resolves.toBeUndefined()
+    await expect(
+      preflightRustBuild(targets, 'BrowserClaw Rust server', probe),
+    ).resolves.toBeUndefined()
   })
 
   it('rejects non-macOS hosts before probing tools', async () => {
@@ -111,7 +114,11 @@ describe('BrowserClaw Rust compiler', () => {
     })
 
     await expect(
-      preflightRustBuild(resolveTargets('darwin-arm64'), probe),
+      preflightRustBuild(
+        resolveTargets('darwin-arm64'),
+        'BrowserClaw Rust server',
+        probe,
+      ),
     ).rejects.toThrow('requires macOS')
     expect(probed).toBe(false)
   })
@@ -132,9 +139,11 @@ describe('BrowserClaw Rust compiler', () => {
       targets: new Set(['aarch64-apple-darwin']),
     })
 
-    const error = await preflightRustBuild(resolveTargets('all'), probe).catch(
-      (caught) => caught as Error,
-    )
+    const error = await preflightRustBuild(
+      resolveTargets('all'),
+      'BrowserClaw Rust server',
+      probe,
+    ).catch((caught) => caught as Error)
 
     expect(error.message).toContain('brew install zig')
     expect(error.message).toContain('brew install llvm')
@@ -157,9 +166,9 @@ describe('BrowserClaw Rust compiler', () => {
       targets: new Set(['x86_64-unknown-linux-gnu']),
     })
 
-    await expect(preflightRustBuild(target, probe)).rejects.toThrow(
-      'Xcode Command Line Tools: xcode-select --install',
-    )
+    await expect(
+      preflightRustBuild(target, 'BrowserClaw Rust server', probe),
+    ).rejects.toThrow('Xcode Command Line Tools: xcode-select --install')
   })
 
   it('validates embedded version and telemetry key without exposing the key', async () => {

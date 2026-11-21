@@ -35,11 +35,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.Ports.CDP != 9015 || cfg.Ports.Server != 9115 || cfg.Ports.Extension != 9315 {
 		t.Fatalf("unexpected ports: %+v", cfg.Ports)
 	}
-	if cfg.ProductionEnv.Server["BROWSEROS_CONFIG_URL"] == "" {
+	if _, ok := cfg.ProductionEnv.Server["BROWSEROS_SENTRY_DSN"]; !ok {
 		t.Fatalf("missing server production env defaults: %#v", cfg.ProductionEnv.Server)
 	}
-	if cfg.ProductionEnv.Server["LOG_LEVEL"] != "debug" {
-		t.Fatalf("server log level got %q want debug", cfg.ProductionEnv.Server["LOG_LEVEL"])
+	if cfg.ProductionEnv.Server["BROWSEROS_LOG"] != "debug" {
+		t.Fatalf("server log level got %q want debug", cfg.ProductionEnv.Server["BROWSEROS_LOG"])
 	}
 	if cfg.ProductionEnv.CLI["R2_BUCKET"] != "browseros" {
 		t.Fatalf("missing cli production env defaults: %#v", cfg.ProductionEnv.CLI)

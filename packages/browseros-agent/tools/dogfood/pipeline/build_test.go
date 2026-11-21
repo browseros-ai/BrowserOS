@@ -14,6 +14,10 @@ func TestBuildRunsExpectedCommands(t *testing.T) {
 	want := []string{
 		"./tools/dev/setup.sh",
 		"bun --cwd apps/app --env-file=../../.env.development wxt build --mode development",
+		"env NODE_ENV=development bun --env-file=.env.development run -- rustup run 1.98.0 cargo build --locked -p browseros-server",
+	}
+	if len(r.Commands) != len(want) {
+		t.Fatalf("commands got %#v want %#v", r.Commands, want)
 	}
 	for i := range want {
 		if r.Commands[i] != want[i] {

@@ -10,7 +10,6 @@ import {
   validateArtifactArchive,
 } from './archive'
 import { parseBuildArgs } from './cli'
-import { compileProductBinaries } from './compile'
 import { loadBuildConfig } from './config'
 import { log } from './log'
 import { getTargetRules, loadManifest } from './manifest'
@@ -22,7 +21,6 @@ import {
 import { stageCompiledArtifact, stageTargetArtifact } from './stage'
 import type {
   ArtifactMetadataIdentity,
-  BuildProductDescriptor,
   BuildTarget,
   ProductCompiler,
   R2Config,
@@ -359,17 +357,4 @@ export async function runCompiledResourceBuild<
   } finally {
     client?.destroy()
   }
-}
-
-export async function runProdResourceBuild(
-  product: BuildProductDescriptor,
-  argv: string[],
-  options: { rootDir?: string } = {},
-): Promise<void> {
-  return runCompiledResourceBuild(
-    product,
-    compileProductBinaries,
-    argv,
-    options,
-  )
 }

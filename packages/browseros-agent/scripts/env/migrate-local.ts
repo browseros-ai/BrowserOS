@@ -61,11 +61,6 @@ const RETIRED_PREFIX_DEFAULTS: Record<string, readonly string[]> = {
   ],
   R2_DOWNLOAD_PREFIX: ['artifacts/vendor'],
 }
-const PRIMARY_OLD_FILES: Record<EnvMode, string[]> = {
-  development: ['apps/server/.env.development', 'apps/app/.env.development'],
-  production: ['apps/server/.env.production'],
-}
-
 /** Builds the root env migration plan from existing per-app env files. */
 export function buildLocalEnvMigration(rootDir: string): LocalEnvMigrationPlan {
   const harvested: HarvestedValue[] = []
@@ -194,25 +189,14 @@ function harvestEnvFile(options: {
 }
 
 function findOldEnvFiles(rootDir: string, mode: EnvMode): string[] {
-  const primaryFiles = PRIMARY_OLD_FILES[mode].map((path) =>
-    join(rootDir, path),
-  )
   const found = findAppEnvFiles(rootDir, `.env.${mode}`)
   const legacyRootFiles =
     mode === 'development'
       ? [join(rootDir, '.env'), join(rootDir, '.env.local')]
       : []
-  const ordered = [...primaryFiles, ...found.sort(), ...legacyRootFiles]
-  const seen = new Set<string>()
-
-  return ordered.filter((path) => {
-    if (seen.has(path) || !existsSync(path)) {
-      return false
-    }
-
-    seen.add(path)
-    return true
-  })
+  return [...found.sort(), ...legacyRootFiles].filter((path) =>
+    existsSync(path),
+  )
 }
 
 function retiredPrefixWarning(
