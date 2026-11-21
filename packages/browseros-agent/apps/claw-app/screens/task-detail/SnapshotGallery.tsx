@@ -26,7 +26,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/motion/tooltip'
-import { describeStep } from '@/lib/step-sentences'
+import { describeStep, isSdkRun } from '@/lib/step-sentences'
 import {
   type ToolDispatchRow,
   taskScreenshotUrl,
@@ -174,7 +174,9 @@ export function SnapshotGallery({
               No pictures for this task
             </span>
             <span className="text-[14.5px] text-ink-2">
-              No snapshots were saved for this task.
+              {dispatches.some(isSdkRun)
+                ? 'No snapshots were saved for this task.'
+                : 'neo takes pictures as your AI agents work. This task stopped before the first one.'}
             </span>
           </span>
         </Card>
