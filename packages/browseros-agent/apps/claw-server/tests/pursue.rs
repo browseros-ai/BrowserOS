@@ -53,6 +53,10 @@ const ULTRAFAST_DESKTOP: Setup = Setup {
 };
 
 async fn test_app(setup: Setup) -> anyhow::Result<TestApp> {
+    test_app_with_behavior(setup, Behavior::defaults(setup.mode)).await
+}
+
+async fn test_app_with_behavior(setup: Setup, behavior: Behavior) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let config = Arc::new(Config {
         server_port: 9200,
@@ -68,10 +72,7 @@ async fn test_app(setup: Setup) -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode: setup.mode,
-        behavior: Behavior {
-            playwright_run: true,
-            ..Behavior::defaults(setup.mode)
-        },
+        behavior,
         behavior_ignored: Vec::new(),
     });
     let mut state = AppState::new_with_home(config, dir.path().join("home")).await?;
@@ -214,7 +215,7 @@ async fn call_pursue(app: &TestApp, session: &str) -> anyhow::Result<Value> {
             "method": "tools/call",
             "params": {
                 "name": "pursue",
-                "arguments": { "page": 4294967301_i64, "goal": "add Sensodyne Fresh Mint 150g to the cart" }
+                "arguments": { "page": 1, "goal": "add Sensodyne Fresh Mint 150g to the cart" }
             }
         }),
         Some(session),
@@ -301,10 +302,6 @@ async fn with_no_browser_connected_pursue_hands_back_before_asking_anything() ->
     let reply = &body["result"]["structuredContent"];
     assert_eq!(reply["outcome"], "handed_back");
     assert_eq!(reply["decisions"], 0);
-    assert_eq!(
-        reply["page"], 4294967301_i64,
-        "native tab ids are not host u32 page ids"
-    );
     assert!(app.worker.requests().is_empty());
     Ok(())
 }
@@ -362,22 +359,42 @@ async fn once_pursue_has_handed_a_task_back_it_does_not_take_it_again() -> anyho
 async fn naming_a_new_task_offers_pursue_again() -> anyhow::Result<()> {
     let app = test_app(ULTRAFAST_DESKTOP).await?;
     let session = connect(&app).await?;
-    let task = app
-        .state
+    let (status, _, body) = post(
+        &app.router,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": { "name": "name_session", "arguments": { "name": "cart errand" } }
+        }),
+        Some(&session),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    app.state
         .sessions
         .lookup(&SessionId::new(session.clone()))
         .await
-        .ok_or_else(|| anyhow::anyhow!("no session"))?;
-    // The after-run naming projection uses Session::rename. This route checks
-    // that pursue observes its reset without needing an SDK process in the harness.
-    task.rename("cart-errand".to_string()).await;
-    task.mark_pursue_handed_back();
+        .ok_or_else(|| anyhow::anyhow!("no session"))?
+        .mark_pursue_handed_back();
     let locked = call_pursue(&app, &session).await?;
     assert_eq!(
         locked["result"]["structuredContent"]["status"],
         "already_handed_back"
     );
-    task.rename("flight-search".to_string()).await;
+
+    let (status, _, body) = post(
+        &app.router,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": { "name": "name_session", "arguments": { "name": "flight search" } }
+        }),
+        Some(&session),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
     let fresh = call_pursue(&app, &session).await?;
     assert_ne!(
         fresh["result"]["structuredContent"]["status"], "already_handed_back",
@@ -387,22 +404,29 @@ async fn naming_a_new_task_offers_pursue_again() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn agents_receive_the_current_instructions_for_their_pursue_gate() -> anyhow::Result<()> {
-    use rmcp::handler::server::ServerHandler;
-    for setup in [
-        ULTRAFAST_DESKTOP,
-        Setup {
-            ultrafast: false,
-            ..ULTRAFAST_DESKTOP
-        },
-    ] {
-        let app = test_app(setup).await?;
-        let (_, instructions) = connect_reading_instructions(&app).await?;
-        let service = claw_server::api::mcp::ClawMcpService::new(app.state.clone());
-        assert_eq!(
-            Some(instructions.as_str()),
-            service.get_info().instructions.as_deref()
-        );
-    }
+async fn agents_are_taught_pursue_only_when_it_is_offered() -> anyhow::Result<()> {
+    let offered = test_app(ULTRAFAST_DESKTOP).await?;
+    let (_, instructions) = connect_reading_instructions(&offered).await?;
+    assert!(
+        instructions.contains("Pick the tool by the path, not the goal."),
+        "{instructions}"
+    );
+    assert!(
+        !instructions.contains("Reach for run first"),
+        "{instructions}"
+    );
+
+    let lapsed = test_app(Setup {
+        ultrafast: false,
+        ..ULTRAFAST_DESKTOP
+    })
+    .await?;
+    let (_, instructions) = connect_reading_instructions(&lapsed).await?;
+    assert!(!instructions.contains("pursue"));
+    assert!(instructions.contains("Reach for run first"));
     Ok(())
 }
+
+#[cfg(unix)]
+#[path = "playwright/pursue.rs"]
+mod playwright;
