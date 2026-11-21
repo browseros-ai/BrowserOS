@@ -585,13 +585,12 @@ async fn probe<P: CaptchaPage>(
     page: &P,
     cancel: &CancellationToken,
 ) -> Result<Option<PageBrief>, PageError> {
-    let mut partial = false;
     let read = tokio::select! {
         biased;
         () = cancel.cancelled() => return Err(PageError::Cancelled),
         read = evidence::brief(page) => read,
     };
-    kept(read, &mut partial)
+    kept(read, &mut false)
 }
 
 /// One look, raced with `cancel` and cut off at `until` (an unfinished look is partial).
@@ -635,9 +634,8 @@ async fn gather<P: CaptchaPage>(
             moved = true;
             look.partial = true;
         }
-        Err(error) => {
-            kept::<()>(Err(error), &mut look.partial)?;
-        }
+        Err(error @ (PageError::Closed | PageError::Cancelled)) => return Err(error),
+        Err(PageError::Timeout | PageError::Browser(_)) => look.partial = true,
     }
     let brief = match settled {
         Some(brief) => Some(brief),
@@ -1252,10 +1250,21 @@ pub(crate) fn event_data(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::{BTreeMap, VecDeque},
+        sync::{
+            Mutex,
+            atomic::{AtomicU32, Ordering},
+        },
+    };
+
+    use futures_util::future::BoxFuture;
 
     use super::*;
-    use crate::{judge::JudgeAnswer, types::Attempts, types::SolveMethod};
+    use crate::{
+        judge::{JudgeAnswer, JudgeFault},
+        types::{Attempts, Rect, ScanOutcome, SolveMethod},
+    };
 
     fn reply(choice: &[(&str, f64)], noul: f64) -> JudgeReply {
         let mut probabilities: BTreeMap<String, f64> = questions()
@@ -1715,7 +1724,7 @@ mod tests {
 
     fn rescan(challenges: Vec<Challenge>) -> Detection {
         Detection {
-            outcome: crate::types::ScanOutcome::Detected,
+            outcome: ScanOutcome::Detected,
             challenges,
             complete: true,
             document: page_document(),
@@ -2030,27 +2039,27 @@ mod tests {
     /// answers from its own queue.
     #[derive(Default)]
     struct ScriptedPage {
-        probes: std::sync::Mutex<std::collections::VecDeque<Result<Value, PageError>>>,
-        documents: std::sync::Mutex<std::collections::VecDeque<DocumentId>>,
-        views: std::sync::Mutex<std::collections::VecDeque<Value>>,
-        probe_reads: std::sync::atomic::AtomicU32,
+        probes: Mutex<VecDeque<Result<Value, PageError>>>,
+        documents: Mutex<VecDeque<DocumentId>>,
+        views: Mutex<VecDeque<Value>>,
+        probe_reads: AtomicU32,
     }
 
     impl ScriptedPage {
         fn probing(probes: Vec<Result<Value, PageError>>) -> Self {
             Self {
-                probes: std::sync::Mutex::new(probes.into()),
-                documents: std::sync::Mutex::new([page_document()].into()),
+                probes: Mutex::new(probes.into()),
+                documents: Mutex::new([page_document()].into()),
                 ..Self::default()
             }
         }
 
         fn reads(&self) -> u32 {
-            self.probe_reads.load(std::sync::atomic::Ordering::Relaxed)
+            self.probe_reads.load(Ordering::Relaxed)
         }
     }
 
-    fn next<T: Clone>(queue: &std::sync::Mutex<std::collections::VecDeque<T>>) -> Option<T> {
+    fn next<T: Clone>(queue: &Mutex<VecDeque<T>>) -> Option<T> {
         let mut queue = queue.lock().ok()?;
         if queue.len() > 1 {
             queue.pop_front()
@@ -2081,8 +2090,7 @@ mod tests {
             function: &str,
         ) -> Result<Value, PageError> {
             if function.contains("captcha:verify-probe") {
-                self.probe_reads
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.probe_reads.fetch_add(1, Ordering::Relaxed);
                 return next(&self.probes).unwrap_or(Ok(Value::Null));
             }
             if function.contains("captcha:turnstile-state") {
@@ -2099,7 +2107,7 @@ mod tests {
         async fn click_at(&self, _: f64, _: f64) -> Result<(), PageError> {
             panic!("the verify check never clicks")
         }
-        async fn screenshot_clip(&self, _: crate::types::Rect) -> Result<String, PageError> {
+        async fn screenshot_clip(&self, _: Rect) -> Result<String, PageError> {
             panic!("the verify check never captures")
         }
         async fn document(&self) -> Result<DocumentId, PageError> {
@@ -2109,21 +2117,20 @@ mod tests {
             &self,
             _: &FrameRef,
             _: &str,
-        ) -> Result<Option<crate::types::Rect>, PageError> {
+        ) -> Result<Option<Rect>, PageError> {
             Ok(None)
         }
     }
 
     /// A judge with one fixed answer, after a delay.
-    struct FixedJudge(Result<JudgeReply, crate::judge::JudgeFault>, Duration);
+    struct FixedJudge(Result<JudgeReply, JudgeFault>, Duration);
 
     impl Judge for FixedJudge {
         fn ask<'a>(
             &'a self,
             _: &'a JudgeRequest,
             _: Duration,
-        ) -> futures_util::future::BoxFuture<'a, Result<JudgeReply, crate::judge::JudgeFault>>
-        {
+        ) -> BoxFuture<'a, Result<JudgeReply, JudgeFault>> {
             Box::pin(async move {
                 tokio::time::sleep(self.1).await;
                 self.0.clone()
@@ -2291,10 +2298,7 @@ mod tests {
             Standing::Unsure(Unsure::JudgeUnavailable)
         );
         assert!(started.elapsed() <= JUDGE_BUDGET + Duration::from_millis(10));
-        let refused = FixedJudge(
-            Err(crate::judge::JudgeFault::Refused { status: 401 }),
-            Duration::ZERO,
-        );
+        let refused = FixedJudge(Err(JudgeFault::Refused { status: 401 }), Duration::ZERO);
         assert_eq!(
             check(&page, &claim, Some(&refused)).await?.standing,
             Standing::Unsure(Unsure::JudgeUnavailable)

@@ -25,6 +25,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::time::Instant;
+use url::Url;
 
 use crate::{
     detect::DOM_QUERIES,
@@ -247,7 +248,7 @@ async fn frame_texts<P: CaptchaPage>(
     for host in hosts {
         // The main frame is first in a walk; only child frames are cross-site candidates.
         let Some(frame) = walk.frames.iter().skip(1).find(|frame| {
-            url::Url::parse(&frame.url)
+            Url::parse(&frame.url)
                 .ok()
                 .and_then(|url| url.host_str().map(str::to_owned))
                 .as_deref()
@@ -829,7 +830,7 @@ fn scrub_links(text: &str) -> String {
         .map(|word| {
             let lower = word.to_ascii_lowercase();
             if lower.starts_with("http://") || lower.starts_with("https://") {
-                url::Url::parse(word)
+                Url::parse(word)
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned))
                     .unwrap_or_else(|| "[link]".to_owned())
