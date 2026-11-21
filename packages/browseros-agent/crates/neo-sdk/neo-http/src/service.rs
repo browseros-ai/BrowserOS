@@ -60,6 +60,20 @@ pub struct ServiceInputs {
     pub tab_task: TabTask,
     /// The tab that opened each tab, for a released takeover's `openedTabs` `openerTabId`.
     pub tab_opener: TabOpener,
+    /// Whose screen and windows these are, which decides whether the start puts them home.
+    pub screen: NeoScreen,
+}
+
+/// Whose screen Xvnc and the browser's windows are, for the start's recovery of a cut-short fit
+/// (decision 30).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NeoScreen {
+    /// Hosted mode: the image's Xvnc and openbox windows, which nobody sees but through a fit or a
+    /// view. The start puts them home, since only a fit changes them.
+    Own,
+    /// A person's desktop, a developer's machine or a headless launch. The start never resizes
+    /// Xvnc or changes a window's state: a fullscreen window there is the person's choice.
+    NotNeos,
 }
 
 /// Names the tab Neo keeps for itself (`Some("neo")` for its blank tab), or `None`. Asked once per
@@ -122,9 +136,9 @@ pub(crate) struct ServiceState {
 impl Service {
     /// Starts the workers: the event log's numbering tasks, which subscribe to the writer, the
     /// locks and the takeovers before this returns, so every event from then on gets a number,
-    /// and the camera that answers the writer's screenshot jobs. It also puts Neo's screen and
-    /// window home, in the background (decision 30). Live views connect to the browser when the
-    /// first one opens.
+    /// and the camera that answers the writer's screenshot jobs. On Neo's own screen
+    /// ([`NeoScreen::Own`]) it also puts the screen and window home, in the background
+    /// (decision 30). Live views connect to the browser when the first one opens.
     ///
     /// # Panics
     /// Outside a Tokio runtime, as `tokio::spawn` does.
@@ -156,6 +170,7 @@ impl Service {
             tab_owner,
             tab_task,
             tab_opener,
+            screen,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -189,14 +204,21 @@ impl Service {
         );
         events.follow_takeovers(takeovers.subscribe());
         let front = displays.front();
-        // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
-        // owner's size and the window fullscreen, and nothing else would ever put them back.
-        // Best-effort and logged. A fit that takes the surface first wins; its release puts
-        // the surface home instead.
-        tokio::spawn({
-            let fits = Arc::clone(&fits);
-            async move { fits.put_surface_home().await }
-        });
+        match screen {
+            // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
+            // owner's size and the window fullscreen, and nothing else would ever put them back.
+            // Best-effort and logged. A fit that takes the surface first wins; its release puts
+            // the surface home instead.
+            NeoScreen::Own => {
+                tokio::spawn({
+                    let fits = Arc::clone(&fits);
+                    async move { fits.put_surface_home().await }
+                });
+            }
+            // Nothing of Neo's changed this screen: a fullscreen window there is the person's,
+            // and `CLAW_XVNC_ADDR`'s default port can be the desktop's own screen sharing.
+            NeoScreen::NotNeos => {}
+        }
         let shutdown = CancellationToken::new();
         let live = CaptureHub::new(
             Arc::new(LiveTabs::new(browser.clone())),

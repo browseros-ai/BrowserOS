@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_http::{Settings, SettingsDefaults, TookPrivateText};
+use neo_http::{NeoScreen, Settings, SettingsDefaults, TookPrivateText};
 use neo_trace::{
     Effect, EpochMillis, OperationId, RedactionLimits, Redactor, RunEnded, RunId, RunStarted,
     RunStatus, RunTabsScope, Screenshots, TraceStore, Values, WriterConfig,
@@ -135,6 +135,7 @@ impl Host {
             sink,
             screenshots,
             xvnc: CLOSED_XVNC,
+            screen: NeoScreen::Own,
             // The fake browser has no CDP port, and no test here opens a live view to dial it.
             cdp_port: 0,
             settings_file: dir.path().join("settings.json"),

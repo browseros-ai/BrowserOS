@@ -6,7 +6,7 @@
 //!        ─▶ Settings loaded from settings.json (with a socket) or the defaults (without)
 //!  the link's first connect ─▶ HostApi::serve ─▶ Service::start
 //!        (store, sink, session, viewports, screenshot jobs,
-//!        xvnc, cdp port, settings)
+//!        xvnc, whose screen it is, cdp port, settings)
 //!        ─▶ TakeoverLock armed with Service::locks, AgentFront with Service::front,
 //!           HostHolds with Service::tab_hold
 //!        ─▶ Service::retain_tabs(a listing taken then, Service::tab_fence from before it)
