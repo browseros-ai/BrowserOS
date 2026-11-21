@@ -683,6 +683,18 @@ def _resolve_preset(
         if from_ is not None:
             arch_plans = slice_runs_from(arch_plans, from_)
 
+        # Check the effective timeline: --skip/--from may remove clean even
+        # when the release preset enables it. Without provisioning, its source
+        # reset deletes hook-managed toolchains that nothing will restore.
+        if switches.provision == "none" and any(
+            "clean" in steps for _, steps in arch_plans
+        ):
+            raise ValueError(
+                "--provision none cannot run clean: cleaning removes hook-managed "
+                "Chromium toolchains. Use --no-clean, or choose "
+                "--provision full or --provision shallow to restore them."
+            )
+
         header = [
             f"Preset plan: preset={switches.preset} product={switches.product} "
             f"platform={get_platform()}",

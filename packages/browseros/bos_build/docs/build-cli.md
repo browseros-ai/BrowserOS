@@ -23,6 +23,18 @@ browseros build --preset release --from sign_macos
 browseros build --preset debug --gn-arg symbol_level=2 --gn-arg dcheck_always_on=true
 ```
 
+### `--provision none` and cleaning
+
+Use `--no-clean` when building against an already prepared Chromium checkout
+with `--provision none`. The release preset enables cleaning by default; its
+source reset deletes hook-managed toolchains such as clang and Rust. With no
+provisioning step to restore them, the CLI rejects this combination before
+touching the checkout, including with `--show-plan`.
+
+To clean and restore the toolchains, use `--provision full` or
+`--provision shallow`. `--skip clean` and `--from` remain valid with
+`--provision none` when the resulting plan contains no clean step.
+
 ### `--skip`
 
 Subtracts **after** composition, so it never re-triggers composition rules —
