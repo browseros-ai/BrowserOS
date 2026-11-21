@@ -127,15 +127,8 @@ pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub document: DocumentId,
     pub user_agent: Option<String>,
     pub forced_method: Option<config::ForcedMethod>,
-    /// Set in a second round only: what the verify check found wrong with the first round's
-    /// claim, for the flow to fix before it solves again (`turnstile.rs`, `recaptcha.rs`).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the flows read it once their remedies land (piece V5)"
-        )
-    )]
+    /// The fix a second round applies before its flow runs again (`verify::next_step` chose
+    /// it from the block the check found). `None` in the first round.
     pub remedy: Option<verify::Remedy>,
 }
 

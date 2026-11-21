@@ -6,6 +6,7 @@ use tokio::time::Instant;
 
 use super::{
     SolveCtx, config::ForcedMethod, events, page::CaptchaPage, providers::CaptchaBackend, types::*,
+    verify::Remedy,
 };
 
 const WAIT: Duration = Duration::from_secs(6);
@@ -56,6 +57,28 @@ const APPLY: &str = r#"
  }
  try{if(typeof fn==='function'){fn.call(owner,p.token);return {written:true,callback:true}}}catch{}
  return {written:true,callback:false};
+"#;
+// reCAPTCHA lays an open puzzle out in the main frame as box > [backdrop, arrows, bubble > frame].
+// The backdrop is the fixed, page-wide layer; a click on it closes the puzzle, as a person's
+// click beside the puzzle does. The point returned is one where the backdrop itself is the
+// element on top, so the click can reach nothing of the page.
+const BACKDROP: &str = r#"
+ const f=fs.find(f=>f.src===p.bframe);if(!visible(f))return null;
+ const bubble=f.parentElement,box=bubble?.parentElement;
+ const backdrop=box?[...box.children].find(e=>e!==bubble&&!e.contains(f)&&getComputedStyle(e).position==='fixed'):null;
+ if(!backdrop)return null;
+ const r=f.getBoundingClientRect(),m=8,w=innerWidth,h=innerHeight;
+ for(const [x,y] of [[m,m],[w-m,m],[m,h-m],[w-m,h-m],[w/2,m],[w/2,h-m],[m,h/2],[w-m,h/2]]){
+   if(x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom)continue;
+   if(document.elementFromPoint(x,y)===backdrop)return {x,y};
+ }
+ return null;
+"#;
+// `reset()` without an id resets the first widget the page made, so it runs only where this
+// widget is the page's only one.
+const RESET: &str = r#"
+ if(anchors.length!==1||!a)return false;
+ try{const g=window.grecaptcha;(g?.enterprise?.reset?g.enterprise:g).reset();return true}catch{return false}
 "#;
 const TOKEN_PRESENT: &str = "return fields.length > 0 && fields.every(e => e.value === p.token);";
 
@@ -915,11 +938,24 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
     /// never reach the fallback, so the document a token would be written to is still the one
     /// the challenge was found on. Every token request goes through `CaptchaBackend::solve`,
     /// which holds the paid-task limits, including the per-host cap.
+    ///
+    /// A second round (`ctx.remedy`, design-final §5) starts from the one fix the check chose
+    /// and never runs picture rounds, so it buys at most one token.
     async fn run(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
         if self.ctx.forced_method == Some(ForcedMethod::Token) {
             return self.token().await;
         }
-        let failure = match self.free().await {
+        let free = match self.ctx.remedy {
+            Some(Remedy::Rerun) => return self.token().await,
+            Some(Remedy::DismissChallenge) => return self.dismiss().await,
+            Some(Remedy::ResetWidget) => match self.reset().await {
+                Ok(()) => self.checkbox().await,
+                Err(stop) => Err(stop),
+            },
+            // A Cloudflare wall is another flow's to watch.
+            Some(Remedy::Rewatch) | None => self.free().await,
+        };
+        let failure = match free {
             Ok(Some(passed)) => return Ok(passed),
             Ok(None) => return self.token().await,
             Err(failure) => failure,
@@ -948,9 +984,109 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             outcome => outcome,
         }
     }
+    /// `Remedy::DismissChallenge`: Neo's token is in the form but a picture puzzle still covers
+    /// the page. One click closes it, and only where the puzzle's own backdrop is the element
+    /// on top. Nothing is bought, and the answer is the round's claim for the check to read
+    /// again: a puzzle that stays open is reported as still blocking.
+    async fn dismiss(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
+        #[derive(Deserialize)]
+        struct Point {
+            x: f64,
+            y: f64,
+        }
+        let mut v = self.read().await?;
+        if v.main.frame_ready {
+            let point: Option<Point> = self
+                .read_state(
+                    "Finding the puzzle backdrop in the main frame",
+                    self.ctx.page.eval_main(&self.script(
+                        "backdrop",
+                        BACKDROP,
+                        v.anchor.as_ref(),
+                        v.frame.as_ref(),
+                        None,
+                    )),
+                )
+                .await?;
+            if let Some(point) = point.filter(|point| {
+                point.x.is_finite() && point.y.is_finite() && point.x >= 0. && point.y >= 0.
+            }) {
+                self.current().await?;
+                self.bounded(
+                    "Clicking the puzzle backdrop",
+                    self.ctx.page.click_at(point.x, point.y),
+                )
+                .await?;
+                self.current().await?;
+                v = self.wait(|v| v.passed() || !v.main.frame_ready).await?;
+            }
+        }
+        if v.passed() {
+            return Ok(self.accepted());
+        }
+        if v.main.frame_ready {
+            return Err(Stop(
+                SolveStatus::NeedsHuman,
+                SolveReason::StillBlocked,
+                "The reCAPTCHA picture puzzle still covers the page.".into(),
+            ));
+        }
+        if !v.main.response {
+            return Err(fail(
+                SolveReason::AcceptanceUnconfirmed,
+                "The applied token is no longer in the form; take a fresh snapshot and retry.",
+            ));
+        }
+        self.out.method = SolveMethod::Token;
+        Err(Stop(
+            SolveStatus::TokenApplied,
+            SolveReason::AwaitingSubmit,
+            "The CAPTCHA token is in the page and the picture puzzle is closed. Submit the form or continue the action and check the result. If the site rejects it, call solve_captcha again.".into(),
+        ))
+    }
+    /// `Remedy::ResetWidget`: the widget claimed a pass the page did not honour. Its own reset
+    /// clears that state, so the checkbox click that follows does real work. The anchor frame
+    /// reloads on reset; reads fail until its new document is up, so this waits for one.
+    async fn reset(&mut self) -> Result<(), Stop> {
+        let v = self.read().await?;
+        let reset: bool = self
+            .read_state(
+                "Resetting the widget in the main frame",
+                self.ctx.page.eval_main(&self.script(
+                    "reset",
+                    RESET,
+                    v.anchor.as_ref(),
+                    v.frame.as_ref(),
+                    None,
+                )),
+            )
+            .await?;
+        if !reset {
+            return Ok(());
+        }
+        let end = Instant::now() + WAIT;
+        loop {
+            match self.read().await {
+                Ok(v) if !v.passed() => return Ok(()),
+                Ok(_) | Err(Stop(_, SolveReason::BrowserError, _)) if Instant::now() < end => {
+                    self.pause(POLL).await?;
+                }
+                Ok(_) => return Ok(()),
+                Err(stop) => return Err(stop),
+            }
+        }
+    }
     /// The free path: the checkbox click and up to three picture rounds. `None` means the
     /// widget is still unsolved and nothing failed.
     async fn free(&mut self) -> Result<Option<(SolveMethod, SolveReason)>, Stop> {
+        if let Some(passed) = self.checkbox().await? {
+            return Ok(Some(passed));
+        }
+        Ok(self.tiles().await?.then(|| self.accepted()))
+    }
+    /// The checkbox click, tried twice. `None` means it did not pass: a puzzle opened, or the
+    /// click did not register.
+    async fn checkbox(&mut self) -> Result<Option<(SolveMethod, SolveReason)>, Stop> {
         let mut v = self.read().await?;
         if v.passed() {
             return Ok(Some((SolveMethod::Checkbox, SolveReason::CheckboxPassed)));
@@ -981,7 +1117,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 return Ok(Some((SolveMethod::Checkbox, SolveReason::CheckboxPassed)));
             }
         }
-        Ok(self.tiles().await?.then(|| self.accepted()))
+        Ok(None)
     }
 }
 
@@ -1068,6 +1204,9 @@ mod tests {
         anchor_error: Option<PageError>,
         grid_error: Option<PageError>,
         tile_click_error: Option<PageError>,
+        backdrop: Option<(f64, f64)>,
+        puzzle_closed: bool,
+        resets: u32,
         fetch_fails: bool,
         clear_on_image: bool,
         hide_on_fetch: bool,
@@ -1110,6 +1249,9 @@ mod tests {
                 anchor_error: None,
                 grid_error: None,
                 tile_click_error: None,
+                backdrop: None,
+                puzzle_closed: false,
+                resets: 0,
                 fetch_fails: false,
                 clear_on_image: false,
                 hide_on_fetch: false,
@@ -1211,6 +1353,20 @@ mod tests {
                 });
                 return Ok(self.read(|s| json!({"written": s.written, "callback": s.callback})));
             }
+            if expression.starts_with("/*recaptcha:backdrop*/") {
+                return Ok(self.read(|s| {
+                    s.backdrop
+                        .map_or(Value::Null, |(x, y)| json!({"x": x, "y": y}))
+                }));
+            }
+            if expression.starts_with("/*recaptcha:reset*/") {
+                self.edit(|s| {
+                    s.resets += 1;
+                    s.checked = false;
+                    s.response = false;
+                });
+                return Ok(json!(true));
+            }
             if expression.starts_with("/*recaptcha:token-present*/") {
                 return Ok(self.read(|s| json!(s.token_retained)));
             }
@@ -1231,7 +1387,7 @@ mod tests {
             Ok(self.read(|s| {
                 json!({"response": s.response, "present": !(s.applied && s.transition),
                 "visible": !(s.applied && (s.transition || s.dim_after_apply)),
-                "hidden": s.applied && s.transition, "frameReady": true})
+                "hidden": s.applied && s.transition, "frameReady": !s.puzzle_closed})
             }))
         }
         async fn eval_in_frame(&self, f: &FrameRef, expression: &str) -> Result<Value, PageError> {
@@ -1287,6 +1443,13 @@ mod tests {
         async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
             if let Some(error) = self.read(|s| s.tile_click_error.clone().filter(|_| y > 200.)) {
                 return Err(error);
+            }
+            if self.read(|s| s.backdrop == Some((x, y))) {
+                self.edit(|s| {
+                    s.clicks.push((x, y));
+                    s.puzzle_closed = true;
+                });
+                return Ok(());
             }
             self.edit(|s| {
                 s.clicks.push((x, y));
@@ -1421,6 +1584,27 @@ mod tests {
         deadline: Instant,
         forced_method: Option<super::super::config::ForcedMethod>,
     ) -> (FlowResult, Vec<CaptchaEvent>) {
+        run_round(
+            page,
+            backend,
+            challenge,
+            cancel,
+            deadline,
+            forced_method,
+            None,
+        )
+        .await
+    }
+
+    async fn run_round(
+        page: &FakePage,
+        backend: &FakeBackend,
+        challenge: &Challenge,
+        cancel: &CancellationToken,
+        deadline: Instant,
+        forced_method: Option<super::super::config::ForcedMethod>,
+        remedy: Option<Remedy>,
+    ) -> (FlowResult, Vec<CaptchaEvent>) {
         let reservations = Arc::<TabReservations>::default();
         let lease = reservations
             .try_reserve(42, "test")
@@ -1439,12 +1623,25 @@ mod tests {
                 document: document(false),
                 user_agent: Some("test-agent".into()),
                 forced_method,
-                remedy: None,
+                remedy,
             },
             challenge,
         )
         .await;
         (result, events.events())
+    }
+    async fn second_round(page: &FakePage, backend: &FakeBackend, remedy: Remedy) -> FlowResult {
+        run_round(
+            page,
+            backend,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            None,
+            Some(remedy),
+        )
+        .await
+        .0
     }
     async fn attempt(page: &FakePage, backend: &FakeBackend) -> FlowResult {
         run(
@@ -2425,5 +2622,210 @@ mod tests {
             backend.tasks().as_slice(),
             [SolveTask::RecaptchaToken(_)]
         ));
+    }
+
+    /// A page a first round left with Neo's token in the form and a picture puzzle open.
+    fn page_with_an_applied_token() -> FakePage {
+        let page = FakePage::new(true);
+        page.edit(|state| state.response = true);
+        page
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_open_puzzle_is_dismissed_by_one_click_on_its_backdrop() {
+        let page = page_with_an_applied_token();
+        page.edit(|state| state.backdrop = Some((8., 8.)));
+        let mut backend = FakeBackend::new(vec![]);
+        backend.push_reply(token_reply());
+        let result = second_round(&page, &backend, Remedy::DismissChallenge).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::TokenApplied,
+                SolveMethod::Token,
+                SolveReason::AwaitingSubmit
+            ),
+            "the token is still in the form and nothing covers it now"
+        );
+        assert_eq!(
+            page.read(|state| state.clicks.clone()),
+            [(8., 8.)],
+            "one click, at the point the backdrop was hit-tested on top"
+        );
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty(), "closing a puzzle is free");
+        assert!(result.message.to_lowercase().contains("submit"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_puzzle_without_a_backdrop_on_top_is_never_clicked() {
+        let page = page_with_an_applied_token();
+        let mut backend = FakeBackend::new(vec![]);
+        backend.push_reply(token_reply());
+        let result = second_round(&page, &backend, Remedy::DismissChallenge).await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::NeedsHuman, SolveReason::StillBlocked),
+            "an open puzzle Neo may not click away still blocks the page"
+        );
+        assert!(
+            page.read(|state| state.clicks.is_empty()),
+            "a click anywhere else could land on the page"
+        );
+        assert!(backend.tasks().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dismissing_reports_a_token_that_left_the_form_or_a_closed_puzzle() {
+        for (response, status, reason) in [
+            (true, SolveStatus::TokenApplied, SolveReason::AwaitingSubmit),
+            (
+                false,
+                SolveStatus::Failed,
+                SolveReason::AcceptanceUnconfirmed,
+            ),
+        ] {
+            let page = FakePage::new(true);
+            page.edit(|state| {
+                state.response = response;
+                state.puzzle_closed = true;
+                state.backdrop = Some((8., 8.));
+            });
+            let backend = FakeBackend::new(vec![]);
+            let result = second_round(&page, &backend, Remedy::DismissChallenge).await;
+            assert_eq!((result.status, result.reason), (status, reason));
+            assert!(
+                page.read(|state| state.clicks.is_empty()),
+                "a puzzle that is already closed needs no click"
+            );
+            assert!(backend.tasks().is_empty());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rerun_goes_straight_to_one_token() {
+        let page = FakePage::new(true);
+        let mut backend = FakeBackend::new(vec![]);
+        backend.push_reply(token_reply());
+        let result = second_round(&page, &backend, Remedy::Rerun).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Token,
+                SolveReason::TokenAccepted
+            )
+        );
+        assert!(
+            page.read(|state| state.clicks.is_empty() && state.screenshots.is_empty()),
+            "a rerun skips the checkbox and the pictures"
+        );
+        assert!(matches!(
+            backend.tasks().as_slice(),
+            [SolveTask::RecaptchaToken(_)]
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reset_round_clicks_the_checkbox_again_and_buys_no_picture_task() {
+        // The checkbox passes after the reset: nothing is bought.
+        let page = FakePage::new(false);
+        page.edit(|state| {
+            state.checked = true;
+            state.response = true;
+        });
+        let backend = FakeBackend::new(vec![]);
+        let result = second_round(&page, &backend, Remedy::ResetWidget).await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Solved, SolveReason::CheckboxPassed)
+        );
+        assert_eq!(
+            page.read(|state| (state.resets, state.clicks.len())),
+            (1, 1),
+            "without the reset the stale pass would be claimed again with no click"
+        );
+        assert!(backend.tasks().is_empty());
+
+        // The checkbox opens a puzzle: the round goes to its one token, never to picture tasks.
+        let page = FakePage::new(true);
+        let mut backend = FakeBackend::new(vec![SolveAnswer::Tiles(vec![0])]);
+        backend.push_reply(token_reply());
+        let result = second_round(&page, &backend, Remedy::ResetWidget).await;
+        assert_eq!(page.read(|state| state.resets), 1);
+        assert_eq!(result.attempts.tile_rounds, 0);
+        assert_eq!(
+            backend.tasks().len(),
+            1,
+            "a second round buys at most one task"
+        );
+        assert!(
+            !matches!(backend.tasks()[0], SolveTask::RecaptchaTiles(_)),
+            "and never a picture task"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_backdrop_point_is_one_where_the_backdrop_itself_is_on_top() -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = crate::turnstile::tests::script_context().await;
+        let flow_script = |body: &str| {
+            let p = json!({"anchor":"https://www.google.com/recaptcha/api2/anchor?k=k",
+                "bframe":"https://www.google.com/recaptcha/api2/bframe?k=k","key":"k","callback":null,"token":null});
+            format!("(() => {{const p={p};{LOCATE}{body}}})()")
+        };
+        // `top` names what the page's hit test finds at every point: the backdrop, the page's
+        // own content above it, or (shape "flat") a layout with no backdrop layer at all.
+        for (shape, expected) in [
+            ("backdrop", json!({"x": 8, "y": 8})),
+            ("content", Value::Null),
+            ("flat", Value::Null),
+            ("closed", Value::Null),
+        ] {
+            let code = format!(
+                r#"
+                const shape = {};
+                const style = position => ({{position, display:'block', visibility:'visible', opacity:'1'}});
+                const node = (position, rect) => ({{
+                    position, parentElement:null, children:[],
+                    getBoundingClientRect:()=>rect, getAnimations:()=>[], contains(e){{return e===this}}
+                }});
+                const open = shape !== 'closed';
+                const frame = node('static', open ? {{width:400,height:580,left:300,right:700,top:50,bottom:630}}
+                    : {{width:0,height:0,left:0,right:0,top:-9999,bottom:-9999}});
+                frame.src = 'https://www.google.com/recaptcha/api2/bframe?k=k';
+                const bubble = node('relative', {{width:400,height:580,left:300,right:700,top:50,bottom:630}});
+                const backdrop = node('fixed', {{width:1280,height:720,left:0,right:1280,top:0,bottom:720}});
+                const box = node('absolute', {{width:1280,height:720,left:0,right:1280,top:0,bottom:720}});
+                frame.parentElement = bubble; bubble.parentElement = box; backdrop.parentElement = box;
+                bubble.contains = e => e === bubble || e === frame;
+                box.children = shape === 'flat' ? [bubble] : [backdrop, bubble];
+                const content = node('static', {{width:1280,height:720,left:0,right:1280,top:0,bottom:720}});
+                const getComputedStyle = e => style(e.position);
+                const innerWidth = 1280, innerHeight = 720;
+                const document = {{
+                    querySelectorAll: () => [frame],
+                    elementFromPoint: () => shape === 'content' ? content : backdrop,
+                }};
+                return {};
+            "#,
+                json!(shape),
+                flow_script(BACKDROP)
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code":code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(!result.is_error, "{shape}: {:?}", result.structured_content);
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true, "{shape}: {output}");
+            assert_eq!(output["value"], expected, "{shape}");
+        }
+        Ok(())
     }
 }
