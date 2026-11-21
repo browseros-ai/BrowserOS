@@ -1,13 +1,25 @@
 #!/usr/bin/env bun
 
-import { runProdResourceBuild } from '@browseros/build-server-tools'
+import { runCompiledResourceBuild } from '@browseros/build-server-tools'
 
-import { browserosServerBuildProduct } from './server/descriptor'
+import { compileRustBinaries } from './rust-compiler'
+import {
+  browserosServerBinary,
+  browserosServerBuildProduct,
+} from './server/descriptor'
 
-runProdResourceBuild(browserosServerBuildProduct, process.argv.slice(2)).catch(
-  (error) => {
-    const message = error instanceof Error ? error.message : String(error)
-    console.error(`\n✗ ${message}\n`)
-    process.exit(1)
-  },
-)
+runCompiledResourceBuild(
+  browserosServerBuildProduct,
+  (product, targets, envVars, processEnv) =>
+    compileRustBinaries({
+      binary: browserosServerBinary,
+      label: product.label,
+      targets,
+      env: { ...processEnv, ...envVars },
+    }),
+  process.argv.slice(2),
+).catch((error) => {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`\n✗ ${message}\n`)
+  process.exit(1)
+})
