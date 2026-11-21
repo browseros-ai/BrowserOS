@@ -144,19 +144,14 @@ fn aws_request(
                 .map_err(build_error)?,
         );
     }
-    if model.contains("anthropic")
-        && let Some(effort) = reasoning.effort(
-            request.effort,
-            &["minimal", "low", "medium", "high", "xhigh", "max"],
-        )
+    if let Some((_, model)) = model.split_once("anthropic.")
+        && let Some((fields, max_tokens)) =
+            super::anthropic::thinking_fields(model, request.effort, reasoning)
     {
-        let budget = super::thinking_budget(effort);
-        call = call.additional_model_request_fields(document(&json!({
-            "thinking": {"type":"enabled","budget_tokens":budget}
-        })));
+        call = call.additional_model_request_fields(document(&Value::Object(fields)));
         call = call.inference_config(
             InferenceConfiguration::builder()
-                .max_tokens(budget + 4096)
+                .max_tokens(max_tokens)
                 .build(),
         );
     }
@@ -487,6 +482,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::model::fake_provider::{FakeProvider, Reply};
     use crate::model::{Effort, Models, ToolSpec};
     use crate::store::{ProviderKind, Secret, Store};
     use crate::turn::{ChatErrorCode, ToolCallId};
@@ -515,43 +511,47 @@ mod tests {
             1
         );
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let url = format!("http://{}", listener.local_addr()?);
-        let (send, mut captured) = tokio::sync::mpsc::channel(2);
-        let app = axum::Router::new().fallback(async move |headers: HeaderMap| {
-            let _ = send.send(headers).await;
-            http::StatusCode::BAD_REQUEST
-        });
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        let east = aws::Client::from_conf(east.to_builder().endpoint_url(&url).build());
-        let west = aws::Client::from_conf(west.to_builder().endpoint_url(&url).build());
+        let refusal = || {
+            Reply(
+                http::StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                String::new(),
+            )
+        };
+        let fake = FakeProvider::new(vec![refusal(), refusal()]).await?;
+        let east = aws::Client::from_conf(east.to_builder().endpoint_url(&fake.base).build());
+        let west = aws::Client::from_conf(west.to_builder().endpoint_url(&fake.base).build());
         let (east_result, west_result) = tokio::join!(
             east.converse_stream().model_id("test-east").send(),
             west.converse_stream().model_id("test-west").send(),
         );
-        server.abort();
         assert!(
             east_result.is_err() && west_result.is_err(),
             "the local SDK endpoint returns 400"
         );
-        let mut seen = std::collections::BTreeSet::new();
-        for _ in 0..2 {
-            let headers = captured.recv().await.context("signed request")?;
-            let authorization = headers["authorization"].to_str()?;
-            if authorization.contains("Credential=fixture-east/") {
-                assert!(authorization.contains("/us-east-1/bedrock/aws4_request"));
-                assert_eq!(headers["x-amz-security-token"], "east-token");
-                seen.insert("east");
-            } else {
-                assert!(authorization.contains("Credential=fixture-west/"));
-                assert!(authorization.contains("/us-west-2/bedrock/aws4_request"));
-                assert!(!headers.contains_key("x-amz-security-token"));
-                seen.insert("west");
+        {
+            let calls = fake
+                .calls
+                .lock()
+                .map_err(|_| anyhow::anyhow!("capture lock"))?;
+            let mut seen = std::collections::BTreeSet::new();
+            assert_eq!(calls.len(), 2);
+            for call in calls.iter() {
+                let headers = &call.headers;
+                let authorization = headers["authorization"].to_str()?;
+                if authorization.contains("Credential=fixture-east/") {
+                    assert!(authorization.contains("/us-east-1/bedrock/aws4_request"));
+                    assert_eq!(headers["x-amz-security-token"], "east-token");
+                    seen.insert("east");
+                } else {
+                    assert!(authorization.contains("Credential=fixture-west/"));
+                    assert!(authorization.contains("/us-west-2/bedrock/aws4_request"));
+                    assert!(!headers.contains_key("x-amz-security-token"));
+                    seen.insert("west");
+                }
             }
+            assert_eq!(seen, std::collections::BTreeSet::from(["east", "west"]));
         }
-        assert_eq!(seen, std::collections::BTreeSet::from(["east", "west"]));
 
         let dir = tempfile::tempdir()?;
         let models = Models::new(Store::open(dir.path()).await?, None);
@@ -703,13 +703,13 @@ mod tests {
             effort: Some("max".into()),
             summary: None,
         };
-        let request = aws_request(
+        let older_model = aws_request(
             &client,
             "anthropic.claude-sonnet-4-5-v1:0",
             &request,
             &reasoning,
         )?;
-        let input = request.as_input();
+        let input = older_model.as_input();
         let messages = input.get_messages().as_ref().context("Converse input")?;
         assert!(
             matches!(messages[1].content(), [ContentBlock::ReasoningContent(ReasoningContentBlock::ReasoningText(thinking)), ContentBlock::ToolUse(tool)]
@@ -723,6 +723,20 @@ mod tests {
             &Some(document(
                 &json!({"thinking":{"type":"enabled","budget_tokens":32000}})
             ))
+        );
+        let current_model = aws_request(
+            &client,
+            "us.anthropic.claude-opus-4-7",
+            &request,
+            &reasoning,
+        )?;
+        assert_eq!(
+            current_model
+                .as_input()
+                .get_additional_model_request_fields(),
+            &Some(document(
+                &json!({"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"max"}})
+            )),
         );
         Ok(())
     }

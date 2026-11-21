@@ -30,6 +30,14 @@ mod responses;
 mod scripted;
 mod sse;
 
+#[cfg(test)]
+#[path = "../../tests/support/fake_provider.rs"]
+#[allow(
+    dead_code,
+    reason = "some fixture helpers are used only by the integration tests"
+)]
+mod fake_provider;
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 

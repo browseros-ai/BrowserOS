@@ -83,7 +83,7 @@ fn body(
     }
     if let Some(effort) = reasoning.effort(
         request.effort,
-        &["minimal", "low", "medium", "high", "xhigh"],
+        &["minimal", "low", "medium", "high", "xhigh", "max"],
     ) {
         let summary = reasoning
             .summary
@@ -247,37 +247,19 @@ impl Output {
 
 #[cfg(test)]
 mod tests {
-    use axum::{Json, Router, extract::State, routing::post};
-    use tokio::net::TcpListener;
-    use tokio::sync::{Mutex, oneshot};
-
     use super::*;
     use crate::model::Effort;
+    use crate::model::fake_provider::{FakeProvider, Reply};
     use crate::turn::ToolCallId;
 
     #[tokio::test]
     async fn codex_request_rewrites_input_and_replays_encrypted_reasoning() -> anyhow::Result<()> {
-        let (captured, request_body) = oneshot::channel();
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let url = url::Url::parse(&format!(
-            "http://{}/backend-api/codex/responses",
-            listener.local_addr()?
-        ))?;
-        let app = Router::new().route(
-            "/backend-api/codex/responses",
-            post(async |State(captured): State<std::sync::Arc<Mutex<Option<oneshot::Sender<Value>>>>>, Json(body): Json<Value>| {
-                if let Some(captured) = captured.lock().await.take() {
-                    let _ = captured.send(body);
-                }
-                ([("content-type", "text/event-stream")], concat!(
-                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
-                    "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
-                ))
-            }),
-        ).with_state(std::sync::Arc::new(Mutex::new(Some(captured))));
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
+        let fake = FakeProvider::new(vec![Reply::events(&[
+            json!({"type":"response.output_text.delta","delta":"ok"}),
+            json!({"type":"response.completed","response":{"status":"completed"}}),
+        ])])
+        .await?;
+        let url = url::Url::parse(&format!("{}/backend-api/codex/responses", fake.base))?;
         let assistant = AssistantTurn {
             native: NativeOutput::Responses(vec![
                 json!({"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque"}),
@@ -311,10 +293,14 @@ mod tests {
             &mut events,
         )
         .await;
-        server.abort();
         assert_eq!(result?.finish(), FinishReason::Stop);
         assert_eq!(events, [TurnEvent::Text("ok".into())]);
-        let body = request_body.await?;
+        let calls = fake
+            .calls
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capture lock"))?;
+        assert_eq!(calls[0].uri.path(), "/backend-api/codex/responses");
+        let body = &calls[0].body;
         assert_eq!(body["stream"], true, "streaming required");
         assert_eq!(body["store"], false, "server-side storage disabled");
         assert!(

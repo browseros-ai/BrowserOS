@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use futures_util::StreamExt;
 use http::header::{HeaderMap, HeaderName};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use url::Url;
 
-use super::{AssistantTurn, ModelMessage, NativeOutput, Reasoning, StepRequest, Usage};
+use super::{AssistantTurn, Effort, ModelMessage, NativeOutput, Reasoning, StepRequest, Usage};
 use super::{errors, headers, set_header, sse, tool_call, tool_started};
 use crate::store::ProviderConfig;
 use crate::turn::{ChatError, EventSink, FinishReason, TurnEvent};
@@ -84,20 +84,11 @@ fn body(model: &str, request: &StepRequest<'_>, reasoning: &Reasoning) -> Value 
             "name": tool.name, "description": tool.description, "input_schema": tool.input_schema
         })).collect());
     }
-    if let Some(effort) = reasoning.effort(
-        request.effort,
-        &["minimal", "low", "medium", "high", "xhigh", "max"],
-    ) {
-        if adaptive_thinking(model) {
-            body["thinking"] = json!({"type": "adaptive", "display": "summarized"});
-            body["output_config"] =
-                json!({"effort": if effort == "minimal" { "low" } else { effort }});
-            body["max_tokens"] = json!(32_768);
-        } else {
-            let budget = super::thinking_budget(effort);
-            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-            body["max_tokens"] = json!(budget + 4096);
-        }
+    if let Some((fields, max_tokens)) = thinking_fields(model, request.effort, reasoning)
+        && let Some(body) = body.as_object_mut()
+    {
+        body.extend(fields);
+        body.insert("max_tokens".into(), json!(max_tokens));
     }
     body
 }
@@ -111,32 +102,51 @@ fn flush_user(messages: &mut Vec<Value>, user: &mut Vec<Value>) {
     }
 }
 
-fn adaptive_thinking(model: &str) -> bool {
-    // Manual budgets are the legacy format. Starting with 4.7 Anthropic rejects them,
-    // while 4.6 Opus and Sonnet already support (and prefer) adaptive thinking.
+/// Claude on the Messages API and Bedrock uses the same model-specific thinking fields.
+pub(super) fn thinking_fields(
+    model: &str,
+    requested: Option<Effort>,
+    reasoning: &Reasoning,
+) -> Option<(Map<String, Value>, i32)> {
     let mut parts = model.split('-');
-    matches!(
-        (parts.next(), parts.next(), parts.next(), parts.next()),
-        (Some("claude"), Some("mythos" | "fable"), _, _)
-            | (
-                Some("claude"),
-                Some("opus" | "sonnet"),
-                Some("4"),
-                Some("6" | "7" | "8" | "9")
-            )
-            | (
-                Some("claude"),
-                Some("haiku"),
-                Some("4"),
-                Some("7" | "8" | "9")
-            )
-            | (
-                Some("claude"),
-                Some("opus" | "sonnet" | "haiku"),
-                Some("5" | "6" | "7" | "8" | "9"),
-                _
-            )
-    )
+    let family = parts.next();
+    let series = parts.next();
+    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let adaptive = family == Some("claude")
+        && (matches!(series, Some("fable" | "mythos"))
+            || major.is_some_and(|major| major >= 5)
+            || (major == Some(4)
+                && matches!(series, Some("sonnet" | "opus"))
+                && minor.is_some_and(|minor| minor >= 6)));
+    let mut fields = Map::new();
+    let max_tokens = if adaptive {
+        // Claude 4.6 accepts max, with xhigh introduced for later models.
+        let levels: &[_] = if major == Some(4) && minor == Some(6) {
+            &["low", "medium", "high", "max"]
+        } else {
+            &["low", "medium", "high", "xhigh", "max"]
+        };
+        let effort = reasoning.effort(requested, levels)?;
+        fields.insert(
+            "thinking".into(),
+            json!({"type": "adaptive", "display": "summarized"}),
+        );
+        fields.insert("output_config".into(), json!({"effort": effort}));
+        32_768
+    } else {
+        let effort = reasoning.effort(
+            requested,
+            &["minimal", "low", "medium", "high", "xhigh", "max"],
+        )?;
+        let budget = super::thinking_budget(effort);
+        fields.insert(
+            "thinking".into(),
+            json!({"type": "enabled", "budget_tokens": budget}),
+        );
+        budget + 4096
+    };
+    Some((fields, max_tokens))
 }
 
 pub(super) async fn step(
