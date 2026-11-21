@@ -1,0 +1,14 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Let me check"}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"error","errorText":"{\"error\":{\"code\":\"rate_limited\",\"title\":\"Rate limit reached\",\"message\":\"The provider is limiting requests. Try again in a minute.\",\"retryable\":true,\"provider\":\"openai\",\"statusCode\":429,\"retryAfterSeconds\":60}}"}
+
+data: [DONE]
+

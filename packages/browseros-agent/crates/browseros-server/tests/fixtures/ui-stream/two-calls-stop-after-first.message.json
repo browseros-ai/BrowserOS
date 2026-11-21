@@ -1,0 +1,32 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "reasoning",
+      "id": "r1",
+      "text": "Two clicks.",
+      "state": "done"
+    },
+    {
+      "type": "tool-run",
+      "toolCallId": "call_1",
+      "state": "output-available",
+      "input": {
+        "code": "click('a')"
+      },
+      "output": {
+        "clicked": true
+      }
+    },
+    {
+      "type": "tool-run",
+      "toolCallId": "call_2",
+      "state": "output-error",
+      "errorText": "Not run"
+    }
+  ]
+}

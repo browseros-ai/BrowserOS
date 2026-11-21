@@ -1,0 +1,26 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"run"}
+
+data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"run","input":{"code":"throw 1"}}
+
+data: {"type":"tool-output-error","toolCallId":"call_1","errorText":"Script failed: 1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"The script failed."}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+
