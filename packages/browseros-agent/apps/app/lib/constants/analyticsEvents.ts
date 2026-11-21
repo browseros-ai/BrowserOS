@@ -61,10 +61,6 @@ export const QWEN_CODE_OAUTH_DISCONNECTED_EVENT =
 export const HUB_PROVIDER_ADDED_EVENT = 'settings.hub_provider.added'
 
 /** @public */
-export const BROWSERCLAW_MCP_BANNER_CLICKED_EVENT =
-  'settings.browserclaw_mcp_banner.clicked'
-
-/** @public */
 export const BROWSERCLAW_PROMO_BANNER_CLICKED_EVENT =
   'ui.browserclaw_promo_banner.clicked'
 
@@ -82,20 +78,6 @@ export const PRODUCT_HUNT_BANNER_CLICKED_EVENT =
 /** @public */
 export const PRODUCT_HUNT_BANNER_DISMISSED_EVENT =
   'ui.product_hunt_banner.dismissed'
-
-/** @public */
-export const MCP_EXTERNAL_ACCESS_ENABLED_EVENT =
-  'settings.mcp_external_access.enabled'
-
-/** @public */
-export const MCP_EXTERNAL_ACCESS_DISABLED_EVENT =
-  'settings.mcp_external_access.disabled'
-
-/** @public */
-export const MCP_SERVER_RESTARTED_EVENT = 'settings.mcp_server.restarted'
-
-/** @public */
-export const MCP_PROXY_PORT_CHANGED_EVENT = 'settings.mcp_proxy_port.changed'
 
 /** @public */
 export const AGENT_DELETED_EVENT = 'agents.agent.deleted'

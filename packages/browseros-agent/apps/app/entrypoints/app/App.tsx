@@ -9,7 +9,6 @@ import { CustomizationPage } from '@/screens/customization/CustomizationPage'
 import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
 import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
-import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
@@ -30,7 +29,6 @@ const OptionsRedirect: FC = () => {
   const routeMap: Record<string, string> = {
     ai: '/settings/ai',
     chat: '/settings/chat',
-    mcp: '/settings/mcp',
     customization: '/settings/customization',
     search: '/settings/ai',
     'jtbd-agent': '/settings/survey',
@@ -59,7 +57,6 @@ export const App: FC = () => {
             <Route index element={<Navigate to="/settings/ai" replace />} />
             <Route path="ai" element={<AISettingsPage key="ai" />} />
             <Route path="chat" element={<LlmHubPage />} />
-            <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
             <Route path="diagnostics" element={<DiagnosticsPage />} />
             <Route

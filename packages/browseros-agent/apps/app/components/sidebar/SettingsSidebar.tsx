@@ -6,7 +6,6 @@ import {
   Compass,
   MessageSquare,
   Palette,
-  Server,
 } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink } from 'react-router'
@@ -74,7 +73,6 @@ const primarySettingsSections: NavSection[] = [
         to: '/settings/customization',
         icon: Palette,
       },
-      { name: 'BrowserOS as MCP', to: '/settings/mcp', icon: Server },
     ],
   },
 ]

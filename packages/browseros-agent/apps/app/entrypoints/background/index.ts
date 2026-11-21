@@ -2,11 +2,7 @@ import { registerDiagnostics } from '@browseros/diagnostics/extension'
 import { storage } from '@wxt-dev/storage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
-import {
-  getAgentServerUrl,
-  getHealthCheckUrl,
-  getMcpServerUrl,
-} from '@/lib/browseros/helpers'
+import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   initializeSidePanelOptions,
   openSidePanel,
@@ -14,12 +10,10 @@ import {
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
-import { fetchMcpTools } from '@/lib/mcp/client'
 import {
   onRuntimeMessage,
   RuntimeMessageType,
 } from '@/lib/messaging/runtime/runtimeMessages'
-import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
@@ -143,28 +137,5 @@ export default defineBackground(() => {
         selectedTextStorage.setValue(rest)
       }
     })
-  })
-
-  onServerMessage('checkHealth', async () => {
-    try {
-      const url = await getHealthCheckUrl()
-      const response = await fetch(url)
-      return { healthy: response.ok }
-    } catch {
-      return { healthy: false }
-    }
-  })
-
-  onServerMessage('fetchMcpTools', async () => {
-    try {
-      const url = await getMcpServerUrl()
-      const tools = await fetchMcpTools(url)
-      return { tools }
-    } catch (err) {
-      return {
-        tools: [],
-        error: err instanceof Error ? err.message : 'Failed to fetch tools',
-      }
-    }
   })
 })

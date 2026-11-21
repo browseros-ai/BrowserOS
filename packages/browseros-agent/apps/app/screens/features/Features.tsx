@@ -3,10 +3,8 @@ import {
   ArrowRight,
   BookOpenText,
   Bot,
-  Code2,
   FolderOpen,
   LinkIcon,
-  Plug,
   SplitSquareHorizontal,
 } from 'lucide-react'
 import { type FC, useEffect, useState } from 'react'
@@ -17,10 +15,8 @@ import { PillIndicator } from '@/components/elements/pill-indicator'
 import { Button } from '@/components/ui/button'
 import {
   AGENT_MODE_DEMO_URL,
-  AGENTIC_CODING_DEMO_URL,
   BROWSER_OS_INTRO_VIDEO_URL,
   COWORK_DEMO_URL,
-  MCP_SERVER_DEMO_URL,
   SPLIT_VIEW_GIF_URL,
 } from '@/lib/constants/mediaUrls'
 import {
@@ -55,25 +51,6 @@ const features: Feature[] = [
     videoUrl: AGENT_MODE_DEMO_URL,
   },
   {
-    id: 'mcp-server',
-    Icon: Plug,
-    tag: 'MCP',
-    title: 'BrowserOS as MCP Server',
-    description:
-      'Connect Claude Code, Gemini CLI, or any MCP client to control your browser with 31 tools.',
-    detailedDescription:
-      'BrowserOS includes a built-in MCP server that lets AI coding agents control your browser. Claude Code can open tabs, click elements, fill forms, take screenshots, and read page content—all through natural language commands. Unlike Chrome DevTools MCP which requires debug profiles and separate servers, BrowserOS works out of the box. Just copy the URL from settings and connect.',
-    highlights: [
-      'One-line setup — run `claude mcp add` with your server URL to connect',
-      '31 browser tools — tabs, clicks, typing, screenshots, bookmarks, history',
-      'Works everywhere — Claude Code, Gemini CLI, Codex, Cursor, Zed',
-      'Authenticated access — extract data from logged-in pages like LinkedIn',
-    ],
-    videoDuration: '1:40',
-    gridClass: 'md:col-span-1',
-    videoUrl: MCP_SERVER_DEMO_URL,
-  },
-  {
     id: 'cowork',
     Icon: FolderOpen,
     tag: 'FILES',
@@ -88,7 +65,7 @@ const features: Feature[] = [
       'Browser + files — combine web research with local file operations',
       'Sandboxed security — agent can only access the folder you select',
     ],
-    gridClass: 'md:col-span-2',
+    gridClass: 'md:col-span-1',
     videoUrl: COWORK_DEMO_URL || undefined,
   },
   {
@@ -108,24 +85,6 @@ const features: Feature[] = [
     ],
     gridClass: 'md:col-span-2',
     gifUrl: SPLIT_VIEW_GIF_URL,
-  },
-  {
-    id: 'agentic-coding',
-    Icon: Code2,
-    tag: 'DEV',
-    title: 'Agentic Coding',
-    description:
-      'Claude Code tests your web app, reads console errors, and fixes your code in one loop.',
-    detailedDescription:
-      'The killer workflow for frontend developers. Claude Code connects to BrowserOS, opens your localhost app, clicks through the UI, reads console errors and network failures, then goes back to your codebase to fix the bugs—all in one continuous loop. No more switching between terminal and browser. No more copy-pasting error messages. Just describe the issue and let the agent debug it end-to-end.',
-    highlights: [
-      'Test & fix loop — Claude navigates your app, finds bugs, and patches them',
-      'Console access — read browser console and network errors from your terminal',
-      'Screenshot debugging — Claude captures screenshots to understand visual issues',
-      'Rapid prototyping — build UIs faster with AI that sees your work',
-    ],
-    gridClass: 'md:col-span-1',
-    videoUrl: AGENTIC_CODING_DEMO_URL || undefined,
   },
 ]
 

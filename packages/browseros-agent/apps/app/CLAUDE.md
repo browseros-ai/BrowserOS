@@ -26,7 +26,7 @@ cd apps/app && bun run codegen
 apps/app/
 |- entrypoints/
 |  |- sidepanel/     Chat UI
-|  |- app/           Settings, AI providers, agents, MCP, usage
+|  |- app/           Settings, AI providers, agents, usage
 |  |- newtab/        BrowserOS new tab UI
 |  |- onboarding/    First-run flow
 |  |- background/    Extension background logic

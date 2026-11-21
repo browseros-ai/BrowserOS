@@ -42,8 +42,6 @@ lib/                       # Shared utilities and hooks
 
 The service worker that manages:
 - Side panel toggling via browser action
-- BrowserOS Core health checks
-- MCP tools fetching
 - LLM provider configuration backup
 - Extension installation triggers (opens onboarding)
 
@@ -80,7 +78,6 @@ Multi-step onboarding flow for new users:
 Settings dashboard with multiple sections:
 - **AI Settings**: Configure LLM providers (API keys, models, base URLs)
 - **LLM Hub**: Manage chat-specific provider settings
-- **MCP Settings**: View and manage MCP server connections
 
 ### Glow Content (`glow.content/`)
 
