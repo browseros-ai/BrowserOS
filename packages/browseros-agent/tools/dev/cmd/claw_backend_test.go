@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,16 @@ import (
 	"browseros-dev/browser"
 	"browseros-dev/proc"
 )
+
+func reserveRustServerTestPort(t *testing.T) *net.TCPListener {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	return listener
+}
 
 func TestSelectClawBackend(t *testing.T) {
 	for _, tc := range []struct {
@@ -50,14 +62,12 @@ func TestBrowserOSServerProcConfigPassesSidecarAndCargoEnv(t *testing.T) {
 	t.Setenv("CARGO_BUILD_BUILD_DIR", "")
 	t.Setenv("BROWSEROS_BINARY", "")
 	root, profile := t.TempDir(), t.TempDir()
-	ports := proc.Ports{CDP: 9012, Server: 9123, Extension: 9321}
+	listener := reserveRustServerTestPort(t)
+	ports := proc.Ports{CDP: 9012, Server: listener.Addr().(*net.TCPAddr).Port, Extension: 9321}
+	listener.Close()
 	env := buildWatchEnvWithResolvedState(ports, profile, false, browser.BinaryResolution{}, "BROWSEROS_DIR", filepath.Join(profile, "state"))
 	sidecar := watchSidecarConfigPath(profile, browserOSServerBackend.SidecarName)
-	var clearedPort int
-	cfg := rustServerProcConfig(browserOSServerBackend, root, env, ports, profile, sidecar, func(port int, _ time.Duration) error {
-		clearedPort = port
-		return nil
-	})
+	cfg := rustServerProcConfig(browserOSServerBackend, root, env, ports, profile, sidecar)
 	wantPath := filepath.Join(profile, "sidecars", "browseros-server.json")
 	wantCmd := []string{"rustup", "run", "1.98.0", "cargo", "run", "-p", "browseros-server", "--", "--config", wantPath}
 	if !slices.Equal(cfg.Cmd, wantCmd) || cfg.Dir != root || !cfg.Restart {
@@ -66,7 +76,7 @@ func TestBrowserOSServerProcConfigPassesSidecarAndCargoEnv(t *testing.T) {
 	t.Logf("command from %s: %s", cfg.Dir, strings.Join(cfg.Cmd, " "))
 	for key, want := range map[string]string{
 		"BROWSEROS_CDP_PORT":       "9012",
-		"BROWSEROS_SERVER_PORT":    "9123",
+		"BROWSEROS_SERVER_PORT":    fmt.Sprint(ports.Server),
 		"BROWSEROS_EXTENSION_PORT": "9321",
 		"BROWSEROS_DIR":            filepath.Join(profile, "state"),
 		"BROWSEROS_USER_DATA_DIR":  profile,
@@ -84,9 +94,6 @@ func TestBrowserOSServerProcConfigPassesSidecarAndCargoEnv(t *testing.T) {
 
 	if err := cfg.BeforeStart(); err != nil {
 		t.Fatal(err)
-	}
-	if clearedPort != ports.Server {
-		t.Errorf("cleared port %d, want %d", clearedPort, ports.Server)
 	}
 	raw, err := os.ReadFile(wantPath)
 	if err != nil {
@@ -114,11 +121,26 @@ func TestBrowserOSServerProcConfigPassesSidecarAndCargoEnv(t *testing.T) {
 	if launch.Ports.Server != ports.Server || launch.Ports.CDP != ports.CDP || launch.Ports.Proxy != ports.Server {
 		t.Errorf("unexpected BrowserOS launch ports: %+v", launch.Ports)
 	}
-	if launch.Directories.Resources != filepath.Join(root, "resources") || launch.Directories.Execution != profile {
+	if launch.Directories.Resources != filepath.Join(root, "resources") || launch.Directories.Execution != filepath.Join(profile, ".browseros") {
 		t.Errorf("unexpected BrowserOS launch directories: %+v", launch.Directories)
 	}
 	if !launch.Flags.DevMode || launch.Flags.AllowRemoteInMCP == nil || *launch.Flags.AllowRemoteInMCP {
 		t.Errorf("unexpected BrowserOS launch flags: %+v", launch.Flags)
+	}
+}
+
+func TestRustServerLaunchReportsBusyPort(t *testing.T) {
+	listener := reserveRustServerTestPort(t)
+	profile := t.TempDir()
+	port := listener.Addr().(*net.TCPAddr).Port
+	cfg := rustServerProcConfig(browserOSServerBackend, t.TempDir(), nil,
+		proc.Ports{CDP: 9012, Server: port}, profile, watchSidecarConfigPath(profile, browserOSServerBackend.SidecarName))
+
+	if err := cfg.BeforeStart(); err == nil || err.Error() != fmt.Sprintf("server port %d is already in use", port) {
+		t.Fatalf("BeforeStart conflict = %v", err)
+	}
+	if proc.IsPortAvailable(port) {
+		t.Fatal("launch displaced the existing listener")
 	}
 }
 
@@ -156,14 +178,11 @@ func TestBrowserOSServerWatchesServerAndSDKInputs(t *testing.T) {
 func TestSdkServerProcConfigPassesSidecarAndCargoEnv(t *testing.T) {
 	root := t.TempDir()
 	profile := t.TempDir()
-	ports := proc.Ports{CDP: 9012, Server: 9123, Extension: 9321}
+	listener := reserveRustServerTestPort(t)
+	ports := proc.Ports{CDP: 9012, Server: listener.Addr().(*net.TCPAddr).Port, Extension: 9321}
+	listener.Close()
 	sidecar := watchSidecarConfigPath(profile, sdkServerBackend.SidecarName)
-	cfg := rustServerProcConfig(sdkServerBackend, root, nil, ports, profile, sidecar, func(port int, _ time.Duration) error {
-		if port != ports.Server {
-			t.Errorf("cleared port %d, want %d", port, ports.Server)
-		}
-		return nil
-	})
+	cfg := rustServerProcConfig(sdkServerBackend, root, nil, ports, profile, sidecar)
 	wantPath := filepath.Join(profile, "sidecars", "claw-sdk.json")
 	wantCmd := []string{"cargo", "run", "-p", "neo-server", "--bin", "browseros-claw-sdk", "--", "--config", wantPath}
 	if !slices.Equal(cfg.Cmd, wantCmd) || cfg.Dir != root || !cfg.Restart {
