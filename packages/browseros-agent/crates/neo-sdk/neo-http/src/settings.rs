@@ -20,8 +20,8 @@
 
 use crate::setting::{
     Checked, FILE_READ_DIRS, FILL_PICTURES, FILL_PICTURES_NEVER, INPUT_CURSOR, SCREENSHOTS_OFF,
-    SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE, TABS_SCOPE, TABS_SCOPE_BROWSER,
-    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
+    SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE, TABS_BRING_FORWARD, TABS_SCOPE,
+    TABS_SCOPE_BROWSER, TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots, Values};
@@ -194,6 +194,14 @@ impl Settings {
                 TabsScope::Task
             }
         }
+    }
+
+    /// `tabs.bringForward` is not `off`: Neo makes an agent tab its window's active tab before it
+    /// sends the tab input or takes its picture. Any value but `off` keeps hosted Neo's rule. Read
+    /// at each move, so a change applies from the next input or capture.
+    #[must_use]
+    pub fn brings_tabs_forward(&self) -> bool {
+        !matches!(self.value(&TABS_BRING_FORWARD), SettingValue::Choice("off"))
     }
 
     /// `trace.retentionSeconds`: the retention sweep deletes runs older than this. Read at each

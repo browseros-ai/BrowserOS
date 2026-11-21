@@ -22,7 +22,8 @@ use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostInputs, TakeoverLock,
+    AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostInputs,
+    TakeoverLock,
 };
 use crate::browser::{Adopt, BrowserLink, NeoTab, TabRegistry};
 use crate::builtins::{self, EntryParts, PrivateEntry};
@@ -161,7 +162,7 @@ impl Host {
             EntryParts {
                 entry: Arc::clone(&entry) as Arc<dyn PrivateEntry>,
                 hosted: false,
-                front: Arc::default(),
+                front: Arc::new(AgentFront::new(settings.clone())),
                 // The fill touches no file; an empty policy reads nothing.
                 file_access: Arc::new(FileAccess::new(Vec::new, Vec::new())),
             },
@@ -188,7 +189,7 @@ impl Host {
         let serving = tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&link),
             Arc::clone(&takeover),
-            Arc::default(),
+            Arc::new(AgentFront::new(settings.clone())),
             Arc::default(),
             Some(Arc::clone(&blank_tab)),
             shutdown.clone(),

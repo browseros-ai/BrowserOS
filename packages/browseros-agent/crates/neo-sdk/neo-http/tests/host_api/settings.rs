@@ -18,7 +18,7 @@ use tokio::time::Instant;
 /// Every setting at its default, as `GET` answers on a new folder.
 fn defaults() -> Value {
     json!({
-        "tabs": { "idleCloseSeconds": 1800, "scope": "task" },
+        "tabs": { "idleCloseSeconds": 1800, "scope": "task", "bringForward": "on" },
         "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
         "input": { "cursor": "off" },
@@ -183,7 +183,7 @@ async fn a_partial_startup_file_reports_sorted_names_without_echoing_values() ->
     assert_eq!(
         reply.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 300, "scope": "task" },
+            "tabs": { "idleCloseSeconds": 300, "scope": "task", "bringForward": "on" },
             "trace": { "retentionSeconds": 604_800, "screenshots": "off", "valueBytes": 0, "values": "off" },
             "files": { "readDirs": [] },
             "input": { "cursor": "off" },
@@ -264,7 +264,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         .put(r#"{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400}}"#)
         .await?;
     let set = json!({
-        "tabs": { "idleCloseSeconds": 300, "scope": "task" },
+        "tabs": { "idleCloseSeconds": 300, "scope": "task", "bringForward": "on" },
         "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
         "input": { "cursor": "off" },
@@ -288,7 +288,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
     assert_eq!(
         patched.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 600, "scope": "task" },
+            "tabs": { "idleCloseSeconds": 600, "scope": "task", "bringForward": "on" },
             "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
             "input": { "cursor": "off" },
@@ -332,7 +332,7 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
     assert_eq!(
         reply.body["settings"],
         json!({
-            "tabs": { "idleCloseSeconds": 300, "scope": "task" },
+            "tabs": { "idleCloseSeconds": 300, "scope": "task", "bringForward": "on" },
             "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
             "input": { "cursor": "off" },
@@ -1249,6 +1249,49 @@ async fn the_tab_scope_is_task_unless_set_and_a_misspelt_value_is_skipped() -> T
         loaded.tabs_scope(),
         TabsScope::Browser,
         "a saved value, as the settings file at start or a fixed file copied over it gives"
+    );
+    Ok(())
+}
+
+/// `tabs.bringForward` is `on` unless a host sets `off`, for a browser a person is using. A change
+/// reaches the next move live and survives a restart; a `PUT` that leaves it out puts back `on`,
+/// hosted Neo's rule, and a value Neo does not have changes nothing.
+#[tokio::test]
+async fn bring_forward_is_on_unless_set_off_and_the_change_applies_live() -> TestResult {
+    let harness = harness().await?;
+    let read = harness.get("/v1/settings").await?;
+    assert_eq!(read.body["settings"]["tabs"]["bringForward"], "on");
+    assert!(harness.settings.brings_tabs_forward(), "hosted Neo's rule");
+
+    let off = harness.patch(r#"{"tabs":{"bringForward":"off"}}"#).await?;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.body);
+    assert_eq!(off.body["settings"]["tabs"]["bringForward"], "off");
+    assert!(
+        !harness.settings.brings_tabs_forward(),
+        "the next input or capture reads it"
+    );
+    let unknown = harness
+        .patch(r#"{"tabs":{"bringForward":"sometimes"}}"#)
+        .await?;
+    assert_eq!(unknown.status, StatusCode::OK, "{}", unknown.body);
+    assert_eq!(unknown.body["unknownValues"], json!(["tabs.bringForward"]));
+    assert!(
+        !harness.settings.brings_tabs_forward(),
+        "a PATCH that names only a value Neo does not have changes nothing"
+    );
+    assert!(
+        !Settings::load(harness.settings_file(), Default::default())
+            .await
+            .brings_tabs_forward(),
+        "the saved `off` comes back at the next start"
+    );
+
+    let reset = harness.put("{}").await?;
+    assert_eq!(reset.status, StatusCode::OK, "{}", reset.body);
+    assert_eq!(reset.body["settings"]["tabs"]["bringForward"], "on");
+    assert!(
+        harness.settings.brings_tabs_forward(),
+        "a PUT that leaves it out puts back the default"
     );
     Ok(())
 }

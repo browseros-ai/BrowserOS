@@ -276,7 +276,7 @@ impl App {
             holder_notes,
         ));
         // Armed by the host API with the owner's screen and views, beside the takeover lock.
-        let front = Arc::new(AgentFront::default());
+        let front = Arc::new(AgentFront::new(settings.clone()));
         // Read back before the facade starts, which marks its tabs before any op runs.
         let filled = FilledTabs::open(&config.env.trace_dir()).await;
         tokio::spawn(forget_closed_filled_tabs(

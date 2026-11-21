@@ -69,7 +69,7 @@ impl HostedStack {
         let playwright = PlaywrightFacade::start(
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
-            Arc::new(AgentFront::without_host()),
+            Arc::new(AgentFront::without_host(settings.clone())),
             file_access,
             None,
         );
