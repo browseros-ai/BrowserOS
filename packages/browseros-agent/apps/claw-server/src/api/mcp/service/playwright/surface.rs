@@ -80,7 +80,7 @@ pub(in crate::api::mcp::service) enum Admission {
 /// One matcher for host-authored desktop prose. Ordinary English and SDK method
 /// names remain valid; only references to the retired MCP tools are forbidden.
 #[cfg(test)]
-pub(in crate::api::mcp) fn removed_tool_reference(text: &str) -> Option<&'static str> {
+pub(in crate::api::mcp::service) fn removed_tool_reference(text: &str) -> Option<&'static str> {
     for &(name, _) in REMOVED_TOOLS {
         if name.contains('_') || name == "setViewport" {
             if text.contains(name) {

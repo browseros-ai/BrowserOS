@@ -10,14 +10,9 @@ pub mod observers;
 mod page_naming;
 mod prompt;
 pub mod pursue;
-pub(crate) mod recipes;
 pub mod script_hook;
 mod service;
 mod session_handle;
-#[cfg(test)]
-mod surface {
-    pub(super) use super::service::removed_tool_reference;
-}
 mod tab_grouping;
 mod timeouts;
 mod working_overlay;

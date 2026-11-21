@@ -2,11 +2,10 @@
 
 mod after_run;
 mod before_run;
+mod prompt;
+mod recipes;
 pub(super) mod run;
 pub(super) mod surface;
-
-#[cfg(test)]
-pub(in crate::api::mcp) use surface::removed_tool_reference;
 
 use super::{
     AGENT_NAME_ARG, AGENT_NAME_ARG_DESCRIPTION, AGENT_NAME_TASK_SENTENCE, AWAIT_HELP_TOOL_NAME,

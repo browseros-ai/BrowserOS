@@ -71,10 +71,6 @@ mod playwright;
 mod pursue;
 mod ultrafast;
 
-// The existing prompt tests use this until the Playwright prompt moves beside its tool policy.
-#[cfg(test)]
-pub(super) use playwright::removed_tool_reference;
-
 pub(super) use pursue::PURSUE_TOOL_NAME;
 pub(super) use ultrafast::RUN_SKILL_TOOL_NAME;
 pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
@@ -242,11 +238,6 @@ impl ClawMcpService {
         } else {
             PageNaming::HostPage
         }
-    }
-
-    // The Playwright prompt still uses this until it moves beside its tool policy.
-    fn surface(&self) -> playwright::surface::Surface {
-        playwright::surface::Surface::for_host(self)
     }
 
     fn find_tool_index(&self, name: &str) -> Option<usize> {
@@ -1256,7 +1247,9 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions({
+            .with_instructions(if let Some(playwright) = &self.playwright {
+                playwright.instructions(self)
+            } else {
                 let instructions = mcp_instructions(
                     self.mode(),
                     self.human_help(),
@@ -1264,7 +1257,7 @@ impl ServerHandler for ClawMcpService {
                     self.native(),
                     self.tab_grouping(),
                 );
-                if self.surface().listed(PURSUE_TOOL_NAME) {
+                if self.pursue_offered() {
                     with_pursue_guidance(instructions)
                 } else {
                     instructions
