@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"fixture-session","prompt":[{"type":"text","text":"Fixture prompt"}]}}
+{"jsonrpc":"2.0","id":3,"error":{"code":-32000,"message":"Authentication required"}}

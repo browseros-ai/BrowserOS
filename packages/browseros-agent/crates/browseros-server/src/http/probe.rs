@@ -1,15 +1,15 @@
 //! `POST /acpx/probe`: which models and reasoning levels a coding agent offers. A probe that
-//! cannot run answers `200` with `error` set, so the new-agent dialog still opens. Chunk `acp`
-//! fills the body.
+//! cannot run answers `200` with `error` set, so the new-agent dialog still opens.
 
 use axum::extract::State;
-use axum::response::Response;
+use std::time::Duration;
+
+use axum::Json;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use super::ApiError;
-use super::dto;
 use super::extract::Body;
+use super::{ApiError, dto};
 use crate::app::App;
 
 pub(super) fn routes() -> OpenApiRouter<App> {
@@ -35,8 +35,17 @@ pub(super) fn routes() -> OpenApiRouter<App> {
     )
 )]
 async fn probe_agent(
-    State(_app): State<App>,
-    Body(_body): Body<dto::ProbeRequest>,
-) -> Result<Response, ApiError> {
-    Err(ApiError::not_implemented())
+    State(app): State<App>,
+    Body(body): Body<dto::ProbeRequest>,
+) -> Result<Json<dto::AgentProbeBody>, ApiError> {
+    let timeout_ms = body.timeout_ms.unwrap_or(120_000);
+    if !(1_000..=120_000).contains(&timeout_ms) {
+        return Err(ApiError::bad_request(
+            "timeoutMs must be between 1000 and 120000.",
+        ));
+    }
+    let timeout = Duration::from_millis(timeout_ms);
+    Ok(Json(
+        app.agent.probe(body.r#type.into(), timeout).await.into(),
+    ))
 }
