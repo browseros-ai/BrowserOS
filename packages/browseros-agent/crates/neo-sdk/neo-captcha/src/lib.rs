@@ -92,6 +92,9 @@ struct Payments {
     pending: Option<ProviderName>,
     count: u32,
     cost_usd: f64,
+    /// The fingerprint of the last token a provider sold this solve, and when: the token a
+    /// `token_applied` claim rests on. The token itself is never kept.
+    applied: Option<verify::AppliedToken>,
 }
 
 impl Payments {
@@ -102,6 +105,12 @@ impl Payments {
             Ok(answer) => {
                 self.count += 1;
                 self.provider = Some(answer.provider);
+                if let types::SolveAnswer::Token(token) = &answer.answer {
+                    self.applied = Some(verify::AppliedToken {
+                        mark: verify::token_mark(token),
+                        at: Instant::now(),
+                    });
+                }
                 self.cost_usd += answer
                     .cost_usd
                     .filter(|cost| cost.is_finite() && *cost >= 0.0)
@@ -142,6 +151,7 @@ pub(crate) struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
 /// What every round of one solve shares: the request's lease, events, payments and deadline,
 /// and the routing record the gate reads after each round.
 struct RoundCtx<'a> {
+    page: u32,
     lease: &'a SolveLease,
     events: &'a EventLog,
     payments: &'a Arc<Mutex<Payments>>,
@@ -211,7 +221,21 @@ pub struct CaptchaSolver {
     /// page then reads `unknown`.
     judge: Option<Arc<dyn judge::Judge>>,
     verify: config::VerifyMode,
+    /// The last token Neo applied on each page, so a later call on the same document can tell
+    /// Neo's fresh token from a stale one (the check reads whether the field still holds it).
+    /// Entries past every vendor's token life are dropped on the next write.
+    applied_tokens: Mutex<std::collections::HashMap<u32, RememberedToken>>,
 }
+
+/// A token Neo applied, with the document and family it was applied to.
+struct RememberedToken {
+    document: DocumentId,
+    kind: CaptchaKind,
+    token: verify::AppliedToken,
+}
+
+/// Longer than any vendor's token life (Turnstile's is the longest, 300 s).
+const REMEMBER_TOKENS_FOR: Duration = Duration::from_secs(300);
 
 /// What routing chose, kept for the verify gate: the gate runs after the routed work returns,
 /// so routing records here which widget and document a success claim is about.
@@ -271,6 +295,7 @@ impl CaptchaSolver {
             forced_method: config.force_method,
             judge,
             verify: config.verify,
+            applied_tokens: Mutex::default(),
         })
     }
 
@@ -335,6 +360,7 @@ impl CaptchaSolver {
         let mut host = None;
         let rounds_started: Mutex<Vec<usize>> = Mutex::new(Vec::new());
         let rc = RoundCtx {
+            page: page_id.0,
             lease: &lease,
             events: &events,
             payments: &payments,
@@ -537,6 +563,7 @@ impl CaptchaSolver {
             forced_method: None,
             judge: None,
             verify: config::VerifyMode::Off,
+            applied_tokens: Mutex::default(),
         }
     }
 
@@ -786,6 +813,46 @@ impl CaptchaSolver {
         page_failure(PageError::Navigated)
     }
 
+    /// The token a claim rests on. A `token_applied` claim names the token this solve bought
+    /// (and the solver remembers it for the page); any other claim on the same document and
+    /// family may name the one an earlier call applied there.
+    fn applied_token(
+        &self,
+        rc: &RoundCtx<'_>,
+        routed: &Routed,
+        basis: verify::Basis,
+    ) -> Option<verify::AppliedToken> {
+        let mut remembered = self
+            .applied_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let bought = (basis == verify::Basis::TokenInjected)
+            .then(|| {
+                rc.payments
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .applied
+                    .clone()
+            })
+            .flatten();
+        if let (Some(token), Some(kind)) = (&bought, routed.kind) {
+            remembered.retain(|_, entry| entry.token.at.elapsed() < REMEMBER_TOKENS_FOR);
+            remembered.insert(
+                rc.page,
+                RememberedToken {
+                    document: routed.document.clone(),
+                    kind,
+                    token: token.clone(),
+                },
+            );
+            return bought;
+        }
+        remembered
+            .get(&rc.page)
+            .filter(|entry| entry.document == routed.document && Some(entry.kind) == routed.kind)
+            .map(|entry| entry.token.clone())
+    }
+
     /// The deadline a flow gets: the solve's, less what the check needs after it.
     fn flow_deadline(&self, deadline: Instant) -> Instant {
         match self.verify {
@@ -824,14 +891,16 @@ impl CaptchaSolver {
             }
             return Checked::Done(unconfirmed(&flow), None);
         };
+        let basis = verify::Basis::of(&flow, routed.kind);
+        let applied = self.applied_token(rc, &routed, basis);
         let claim = verify::Claim {
-            basis: verify::Basis::of(&flow, routed.kind),
+            basis,
             kind: routed.kind,
             challenge: routed.challenge.as_ref(),
             document: &routed.document,
             before: routed.before.as_ref(),
             callback_ran: flow.callback_ran,
-            applied: None,
+            applied: applied.as_ref(),
         };
         let started = Instant::now();
         let verification = match driver
@@ -1192,6 +1261,8 @@ mod orchestration_tests {
         second: Option<FlowResult>,
         /// The check stops with this error instead of finding anything.
         check_error: Option<PageError>,
+        /// The fingerprint of the applied token each check was handed.
+        applied_seen: Mutex<Vec<Option<String>>>,
     }
     impl FakeDriver {
         fn new(detection: Detection) -> Self {
@@ -1206,6 +1277,7 @@ mod orchestration_tests {
                 judged: Mutex::new(Vec::new()),
                 second: None,
                 check_error: None,
+                applied_seen: Mutex::new(Vec::new()),
             }
         }
         fn finding(standing: verify::Standing, tier: types::VerifyTier) -> verify::Verification {
@@ -1307,6 +1379,10 @@ mod orchestration_tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(judge.is_some());
+            self.applied_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(claim.applied.map(|token| token.mark.clone()));
             if let Some(error) = &self.check_error {
                 return Err(error.clone());
             }
@@ -1527,6 +1603,24 @@ mod orchestration_tests {
         }
     }
 
+    /// A checkbox pass (`solved`), whose claim rests on the widget, not on a token.
+    fn checkbox_flow_driver(findings: Vec<verify::Verification>) -> FakeDriver {
+        FakeDriver {
+            result: Some(FlowResult {
+                status: SolveStatus::Solved,
+                method: SolveMethod::Checkbox,
+                reason: SolveReason::CheckboxPassed,
+                attempts: Attempts::default(),
+                paid_tasks: 0,
+                provider: None,
+                cost_usd: 0.0,
+                callback_ran: false,
+                message: "The CAPTCHA is solved.".into(),
+            }),
+            ..token_flow_driver(findings)
+        }
+    }
+
     async fn run_checked(
         solver: &CaptchaSolver,
         page: &FakePage,
@@ -1655,7 +1749,7 @@ mod orchestration_tests {
     async fn tests_that_a_judge_only_block_hands_off_without_a_retry_or_money() -> anyhow::Result<()>
     {
         use types::{BlockCause, VerifyTier};
-        let driver = token_flow_driver(vec![FakeDriver::finding(
+        let driver = checkbox_flow_driver(vec![FakeDriver::finding(
             verify::Standing::Blocked(BlockCause::SiteRejected),
             VerifyTier::Jev,
         )]);
@@ -1690,14 +1784,16 @@ mod orchestration_tests {
     async fn tests_that_an_unsure_check_is_unknown_and_shadow_keeps_the_claim() -> anyhow::Result<()>
     {
         use types::{BlockCause, VerifyResult, VerifyTier};
-        let driver = token_flow_driver(vec![FakeDriver::finding(
-            verify::Standing::Unsure(verify::Unsure::JudgeUnavailable),
-            VerifyTier::Deterministic,
-        )]);
+        let unsure = || {
+            vec![FakeDriver::finding(
+                verify::Standing::Unsure(verify::Unsure::JudgeUnavailable),
+                VerifyTier::Deterministic,
+            )]
+        };
         let outcome = run_checked(
             &checking(config::VerifyMode::On),
             &FakePage::new(Ok(document("current"))),
-            &driver,
+            &checkbox_flow_driver(unsure()),
         )
         .await?;
         assert_eq!(
@@ -1708,6 +1804,18 @@ mod orchestration_tests {
                 types::Verdict::Unknown
             ),
             "an unavailable judge never clears and never blocks"
+        );
+        // A token waiting for the visitor's submit keeps its next step: only tier-1 proof
+        // overrides `token_applied`, and the report says the check was unsure.
+        let outcome = run_checked(
+            &checking(config::VerifyMode::On),
+            &FakePage::new(Ok(document("current"))),
+            &token_flow_driver(unsure()),
+        )
+        .await?;
+        assert_eq!(
+            (outcome.status, outcome.verify.map(|report| report.result)),
+            (SolveStatus::TokenApplied, Some(VerifyResult::Unsure))
         );
 
         let driver = token_flow_driver(vec![FakeDriver::finding(
@@ -1844,6 +1952,63 @@ mod orchestration_tests {
         Ok(())
     }
 
+    /// The check learns which token is Neo's: the one this solve bought, by fingerprint, and on
+    /// a later call the one an earlier call applied to the same document and family.
+    #[tokio::test]
+    async fn tests_that_the_check_is_told_which_token_neo_applied() -> anyhow::Result<()> {
+        use types::VerifyTier;
+        let clear = || {
+            vec![FakeDriver::finding(
+                verify::Standing::Clear,
+                VerifyTier::Deterministic,
+            )]
+        };
+        let solver = checking(config::VerifyMode::On);
+        let mark = Some(verify::token_mark("token"));
+        let first = token_flow_driver(clear());
+        run_checked(&solver, &FakePage::new(Ok(document("current"))), &first).await?;
+        assert_eq!(
+            first
+                .applied_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_slice(),
+            std::slice::from_ref(&mark)
+        );
+
+        let again = FakeDriver {
+            findings: Mutex::new(clear().into()),
+            ..FakeDriver::new(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Passed)],
+                true,
+            ))
+        };
+        let outcome = run_checked(&solver, &FakePage::new(Ok(document("current"))), &again).await?;
+        assert_eq!(outcome.reason, SolveReason::AlreadyPassed);
+        assert_eq!(
+            *again.applied_seen.lock().unwrap_or_else(|e| e.into_inner()),
+            [mark],
+            "an `already_passed` over Neo's own token is checked as Neo's token"
+        );
+
+        let mut moved = scan(&[(CaptchaKind::RecaptchaV2, ChallengeState::Passed)], true);
+        moved.document = document("next");
+        let elsewhere = FakeDriver {
+            findings: Mutex::new(clear().into()),
+            ..FakeDriver::new(moved)
+        };
+        run_checked(&solver, &FakePage::new(Ok(document("next"))), &elsewhere).await?;
+        assert_eq!(
+            *elsewhere
+                .applied_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            [None],
+            "a token belongs to the document it was applied to"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tests_that_a_remedy_reaches_only_the_family_it_was_chosen_for() -> anyhow::Result<()> {
         use types::{BlockCause, VerifyTier};
@@ -1911,6 +2076,7 @@ mod orchestration_tests {
         let payments = Arc::new(Mutex::new(Payments::default()));
         let cancel = CancellationToken::new();
         let rc = RoundCtx {
+            page: 42,
             lease: &lease,
             events: &events,
             payments: &payments,
@@ -2033,8 +2199,9 @@ mod orchestration_tests {
                 outcome.paid_tasks,
             ));
         }
-        // The fake page has nothing the check can read, so `on` must say "unconfirmed",
-        // never "token_applied"; `shadow` keeps the claim and reports the check beside it.
+        // The fake page has nothing the check can read, so the check is unsure. A token waiting
+        // for the visitor's submit keeps `token_applied` on unsure (only tier-1 proof overrides
+        // it); `shadow` keeps every claim. Both report the check beside the answer.
         assert_eq!(
             seen,
             [
@@ -2056,8 +2223,8 @@ mod orchestration_tests {
                 ),
                 (
                     config::VerifyMode::On,
-                    SolveStatus::Failed,
-                    SolveReason::AcceptanceUnconfirmed,
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
                     Some(types::VerifyResult::Unsure),
                     true,
                     1

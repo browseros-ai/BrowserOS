@@ -106,13 +106,6 @@ pub(crate) struct AppliedToken {
 /// The page's fingerprint of a response token: its length in UTF-16 units and its FNV-1a hash,
 /// as `length:hash`. The same function runs inside the page ([`TOKEN_MARKS`]), so the check can
 /// tell whether a field still holds Neo's token while the token never leaves the page.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the gate marks the token it applied with this once it keeps the applied-token memory"
-    )
-)]
 pub(crate) fn token_mark(token: &str) -> String {
     let mut hash: u32 = 0x811c_9dc5;
     let mut length = 0_usize;
