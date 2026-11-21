@@ -15,8 +15,9 @@ pub const TEST_FORCE_JUDGE_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_JUDGE";
 /// Room for one whole checked solve per site per 30 minutes: up to 4 paid tasks in the first
 /// round (reCAPTCHA: 3 tile rounds + a token) and 1 in the verify re-solve.
 const DEFAULT_HOST_PAID_TASK_LIMIT: u32 = 6;
-/// Off: the check runs only when `BROWSEROS_CAPTCHA_VERIFY` asks for it.
-const DEFAULT_VERIFY_MODE: VerifyMode = VerifyMode::Off;
+/// On: every success claim is checked before it reaches a host. `shadow` and `off` stay
+/// available through `BROWSEROS_CAPTCHA_VERIFY` for rollout and rollback.
+const DEFAULT_VERIFY_MODE: VerifyMode = VerifyMode::On;
 
 /// Whether the verify check runs after a success claim, and whether it may change the answer.
 /// `Shadow` runs it and emits `captcha.verified` but returns the flow's answer unchanged, so
@@ -288,14 +289,14 @@ mod tests {
         })
     }
     #[test]
-    fn tests_that_the_verify_mode_is_off_until_the_gate_lands_and_accepts_overrides() {
-        assert_eq!(from_vars(&[]).verify, VerifyMode::Off);
-        assert_eq!(CaptchaConfig::default().verify, VerifyMode::Off);
+    fn tests_that_the_verify_check_is_on_by_default_and_accepts_overrides() {
+        assert_eq!(from_vars(&[]).verify, VerifyMode::On);
+        assert_eq!(CaptchaConfig::default().verify, VerifyMode::On);
         for (value, mode) in [
             ("on", VerifyMode::On),
             (" shadow ", VerifyMode::Shadow),
             ("off", VerifyMode::Off),
-            ("ON", VerifyMode::Off),
+            ("ON", VerifyMode::On),
         ] {
             assert_eq!(
                 from_vars(&[(VERIFY_ENV, value.into())]).verify,
