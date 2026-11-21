@@ -4,11 +4,11 @@
  * No recipe may target a window or group outside this case's disposable state.
  */
 import { expect } from 'bun:test'
-import recipes from '../../../resources/skills/browserclaw/recipes.json'
+import recipes from '../../../../resources/skills/browserclaw/recipes.json'
+import { expectError, expectOk, waitUntil } from '../helpers'
+import { McpSession } from '../mcp-client'
+import { startRustServer } from '../rust-server'
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk, waitUntil } from './helpers'
-import { McpSession } from './mcp-client'
-import { startRustServer } from './rust-server'
 
 const scenarios: Record<string, { prepare: string; verify: string }> = {
   'list-groups': {

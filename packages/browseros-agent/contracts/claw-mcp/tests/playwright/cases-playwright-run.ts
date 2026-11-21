@@ -3,8 +3,8 @@
  * The runner closes any tabs left by a script, including one that throws. */
 import { expect } from 'bun:test'
 import { join } from 'node:path'
+import { expectError } from '../helpers'
 import type { ContractCase } from './cases'
-import { expectError } from './helpers'
 import { runValue } from './sdk-helpers'
 
 export const playwrightRunCases: ContractCase[] = [

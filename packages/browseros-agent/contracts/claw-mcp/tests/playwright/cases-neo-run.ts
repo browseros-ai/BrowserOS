@@ -5,12 +5,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describeSteps } from '../../../apps/claw-app/lib/step-sentences'
-import { findFreePort } from './browser'
+import { describeSteps } from '../../../../apps/claw-app/lib/step-sentences'
+import { findFreePort } from '../browser'
+import { apiGet, expectOk, waitUntil } from '../helpers'
+import { McpSession, readRpcResponse, textOf } from '../mcp-client'
+import { RUST_BINARY, startRustServer } from '../rust-server'
 import type { ContractCase } from './cases'
-import { apiGet, expectOk, waitUntil } from './helpers'
-import { McpSession, readRpcResponse, textOf } from './mcp-client'
-import { RUST_BINARY, startRustServer } from './rust-server'
 
 function engineChildren(parentPid: number): number[] {
   const result = Bun.spawnSync({
@@ -210,7 +210,7 @@ export const neoRunCases: ContractCase[] = [
       )
       const parent = Bun.spawn({
         cmd: [RUST_BINARY, '--config', sidecar],
-        cwd: resolve(import.meta.dir, '../../..'),
+        cwd: resolve(import.meta.dir, '../../../..'),
         env: {
           ...process.env,
           HOME: homeDir,
@@ -916,7 +916,7 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       // interrupting the suite server or its cleanup session. The browser is suite-owned.
       const parent = Bun.spawn({
         cmd: [RUST_BINARY, '--config', sidecar],
-        cwd: resolve(import.meta.dir, '../../..'),
+        cwd: resolve(import.meta.dir, '../../../..'),
         env: {
           ...process.env,
           HOME: homeDir,
@@ -1154,7 +1154,7 @@ return await page.screenshot({clip: {x:0,y:0,width:900,height:700}})`,
       const recorderScript = resolve(
         Bun.resolveSync(
           'rrweb',
-          resolve(import.meta.dir, '../../../apps/claw-app'),
+          resolve(import.meta.dir, '../../../../apps/claw-app'),
         ),
         '../rrweb.umd.min.cjs',
       )
