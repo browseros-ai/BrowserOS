@@ -35,6 +35,56 @@ function verdict(accepted: boolean, codes: string[] = []): Response {
   )
 }
 
+async function verifySubmission(
+  page: (typeof FIXTURE_PAGES)[number],
+  request: Request,
+  verifyUrls?: Partial<Record<Vendor, string>>,
+): Promise<Response> {
+  if (page.family === 'none') return verdict(true)
+  // PerimeterX's check has no token to verify: only a person passes it. The page refuses the
+  // submission as the covered site would, so a run reads a verdict rather than wait on a 404.
+  if (page.family === 'perimeterx')
+    return verdict(false, ['human-check-not-passed'])
+  if (!(page.family in verification))
+    return new Response('not found', { status: 404 })
+  const vendor = page.family as Vendor
+  const config = verification[vendor]
+  try {
+    const token = (await request.formData()).get(config.field)
+    if (typeof token !== 'string' || !token.trim())
+      return verdict(false, ['missing-input-response'])
+    // Stale-token fixtures reject their pre-populated constant before consulting the vendor,
+    // so a submission passes only when Neo replaced the stale token with a fresh one.
+    if (page.staleToken && token.trim() === page.staleToken)
+      return verdict(false, ['stale-token'])
+    const secret =
+      page.id === 'turnstile-block'
+        ? '2x0000000000000000000000000000000AA'
+        : config.secret
+    const response = await fetch(verifyUrls?.[vendor] ?? config.url, {
+      method: 'POST',
+      body: new URLSearchParams({ secret, response: token }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!response.ok) return verdict(false, ['verification-unavailable'])
+    const result = (await response.json()) as {
+      success?: unknown
+      'error-codes'?: unknown
+    }
+    const codes = Array.isArray(result['error-codes'])
+      ? result['error-codes'].filter(
+          (code): code is string => typeof code === 'string',
+        )
+      : []
+    return verdict(
+      result.success === true,
+      codes.length ? codes : ['verification-failed'],
+    )
+  } catch {
+    return verdict(false, ['verification-unavailable'])
+  }
+}
+
 export async function startCaptchaFixtureServer(
   options: {
     hostname?: string
@@ -75,45 +125,7 @@ export async function startCaptchaFixtureServer(
     const page = FIXTURE_PAGES.find((page) => pathname === `/submit/${page.id}`)
     if (request.method !== 'POST' || !page)
       return new Response('not found', { status: 404 })
-    if (page.family === 'none') return verdict(true)
-    // PerimeterX's check has no token to verify: only a person passes it. The page refuses the
-    // submission as the covered site would, so a run reads a verdict rather than wait on a 404.
-    if (page.family === 'perimeterx')
-      return verdict(false, ['human-check-not-passed'])
-    if (!(page.family in verification))
-      return new Response('not found', { status: 404 })
-    const vendor = page.family as Vendor
-    const config = verification[vendor]
-    try {
-      const token = (await request.formData()).get(config.field)
-      if (typeof token !== 'string' || !token.trim())
-        return verdict(false, ['missing-input-response'])
-      const secret =
-        page.id === 'turnstile-block'
-          ? '2x0000000000000000000000000000000AA'
-          : config.secret
-      const response = await fetch(options.verifyUrls?.[vendor] ?? config.url, {
-        method: 'POST',
-        body: new URLSearchParams({ secret, response: token }),
-        signal: AbortSignal.timeout(10_000),
-      })
-      if (!response.ok) return verdict(false, ['verification-unavailable'])
-      const result = (await response.json()) as {
-        success?: unknown
-        'error-codes'?: unknown
-      }
-      const codes = Array.isArray(result['error-codes'])
-        ? result['error-codes'].filter(
-            (code): code is string => typeof code === 'string',
-          )
-        : []
-      return verdict(
-        result.success === true,
-        codes.length ? codes : ['verification-failed'],
-      )
-    } catch {
-      return verdict(false, ['verification-unavailable'])
-    }
+    return verifySubmission(page, request, options.verifyUrls)
   }
   function listen(port?: number) {
     let lastError: unknown

@@ -116,7 +116,7 @@
             ...(page === undefined ? {} : { page }),
           }),
         ),
-      // Every CAPTCHA verdict, unsolved included, remains a value to branch on.
+      // Every completed CAPTCHA solve returns a factual result object describing what Neo did.
       solveCaptcha: (page) => invoke('neo.solveCaptcha', { page }),
     })
   })

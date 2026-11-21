@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use browseros_core::CoreError;
 use neo_captcha::types::{
-    CaptchaEvent, CaptchaKind, ProviderName, SolveOutcome, SolveReason, Verdict,
+    CaptchaEvent, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason,
 };
 use neo_captcha::{CaptchaSolver, HumanHelp, SolveRefusal};
 use neo_trace::Effect;
@@ -19,11 +19,12 @@ use crate::dispatch::{
 
 /// The method's own line in the `run` description, shown only when this Neo has a provider key.
 /// Its time limit is neo-captcha's [`neo_captcha::SOLVE_DEADLINE`], which a test checks.
-const LISTED: &str = "neo.solveCaptcha(page) → { verdict, type, reason, message, durationMs, \
-    paidTasks, provider }: solves the CAPTCHA on the page, in up to 120 s. Branch on `verdict`: solved | \
-    token_applied | already_clear | unsolved | cancelled | unknown. After cancelled or unknown, \
-    look at the page again. Await it before any other action on that page: a write there \
-    meanwhile fails `page_busy`.";
+const LISTED: &str = "neo.solveCaptcha(page) → { attempted, type, method, reason, message, \
+    durationMs, paidTasks, provider }: runs one fresh solve attempt on the page's CAPTCHA, in up \
+    to 120 s. It reports what Neo did, never whether the site accepted it: afterwards inspect a \
+    fresh page.ariaSnapshot() and page.screenshot(), and call it again if the page is still \
+    blocked. Await it before any other action on that page: a write there meanwhile fails \
+    `page_busy`.";
 /// Why every call fails without a key: the deployment's to fix, not the script's (decision 7).
 const NO_KEY: &str = "this Neo has no CAPTCHA provider key, so neo.solveCaptcha is off; the \
     deployment must configure one";
@@ -57,16 +58,17 @@ struct SolveInput {
     page: PageTarget,
 }
 
-/// What the script gets back. Every verdict is a value, `unsolved` included, so a script can
-/// branch on it (decision 8); the crate guarantees a verdict is never a guess. A plain data bag.
+/// What the script gets back. Every completed solve is a value carrying only what Neo did and
+/// observed, never a claim that the site accepted it. A plain data bag.
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SolveOutput {
-    verdict: Verdict,
+    attempted: bool,
     #[serde(rename = "type")]
     kind: Option<CaptchaKind>,
+    method: SolveMethod,
     reason: SolveReason,
-    /// claw-sdk's own line; the crate's names claw-server's MCP tools (decision 9).
+    /// Neo SDK's own line; neo-captcha's names claw-server's MCP tools.
     message: String,
     duration_ms: u64,
     paid_tasks: u32,
@@ -134,28 +136,97 @@ impl Method for SolveCaptcha {
         for event in &outcome.events {
             op.note(event_line(event));
         }
-        verdict_value(&outcome).ok_or_else(|| op.stopped())
+        solve_value(&outcome).ok_or_else(|| op.stopped())
     }
+}
+
+/// Whether the wire `attempted` flag is set, used to pick the closing and browser-error wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Attempt {
+    Ran,
+    Skipped,
+}
+
+/// Whether the solver actually ran a step (a non-`none` method, any attempt counter above zero,
+/// or any paid task), as distinct from `attempted`, which follows the reason-level wire rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SolverWork {
+    Acted,
+    StoppedEarly,
 }
 
 /// The script's value for an outcome, or `None` for a solve the crate reports cancelled by its
 /// caller: it may have clicked before it stopped, so it is the stop's ambiguous error (delivery
 /// `unknown`), never a `done` value. The crate says so when its token fires, which is the run's
 /// stop, and when a provider cancelled the task.
-fn verdict_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
+fn solve_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
     if outcome.reason == SolveReason::CallerCancelled {
         return None;
     }
-    let verdict = outcome.verdict();
+    let did_attempt = attempted(outcome);
+    let attempt = if did_attempt {
+        Attempt::Ran
+    } else {
+        Attempt::Skipped
+    };
+    let work = solver_work(outcome);
     Some(SolveOutput {
-        verdict,
+        attempted: did_attempt,
         kind: outcome.kind,
+        method: outcome.method,
         reason: outcome.reason,
-        message: message_for(verdict, outcome.reason, outcome.kind),
+        message: message_for(outcome.reason, outcome.kind, attempt, work),
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
         provider: outcome.provider,
     })
+}
+
+/// Whether the solver actually clicked, waited with a method, or made a provider request.
+const fn solver_work(outcome: &SolveOutcome) -> SolverWork {
+    let did_work = !matches!(outcome.method, SolveMethod::None)
+        || outcome.attempts.checkbox > 0
+        || outcome.attempts.tile_rounds > 0
+        || outcome.attempts.token > 0
+        || outcome.paid_tasks > 0;
+    if did_work {
+        SolverWork::Acted
+    } else {
+        SolverWork::StoppedEarly
+    }
+}
+
+/// Whether Neo ran a solve attempt rather than stopping before acting. Exhaustive on
+/// [`SolveReason`] so a new reason does not compile until classified.
+fn attempted(outcome: &SolveOutcome) -> bool {
+    let acted =
+        outcome.paid_tasks > 0 || outcome.attempts.checkbox > 0 || outcome.attempts.tile_rounds > 0;
+    match outcome.reason {
+        SolveReason::NoCaptcha
+        | SolveReason::NotBlocking
+        | SolveReason::AlreadyPassed
+        | SolveReason::UnsupportedType
+        | SolveReason::ScanIncomplete => false,
+        SolveReason::NoProvider
+        | SolveReason::ProviderUnavailable
+        | SolveReason::SpendLimitReached => acted,
+        SolveReason::AutoPassed
+        | SolveReason::CheckboxPassed
+        | SolveReason::TilesAccepted
+        | SolveReason::TokenAccepted
+        | SolveReason::AwaitingSubmit
+        | SolveReason::AcceptanceUnconfirmed
+        | SolveReason::TilesExhausted
+        | SolveReason::ChallengeNotPassed
+        | SolveReason::DeadlineExceeded => true,
+        SolveReason::ProviderError
+        | SolveReason::BrowserError
+        | SolveReason::CallerCancelled
+        | SolveReason::TabClosed
+        | SolveReason::Navigated => {
+            acted || outcome.method != SolveMethod::None || outcome.attempts.token > 0
+        }
+    }
 }
 
 /// A refusal from inside `solve`, after `mark_sent`. The crate guarantees a refusal detected,
@@ -191,105 +262,174 @@ fn event_line(event: &CaptchaEvent) -> String {
     format!("{name} at {} ms: {}", event.at_ms, event.data)
 }
 
-/// claw-sdk's one line for an outcome, worded for a script with no human-help tool: what the
-/// verdict means, why, then what to do. The verdict leads, so the line never contradicts what
-/// the script branches on. Exhaustive on both enums, so a new verdict or reason does not
-/// compile until someone words it.
-fn message(verdict: Verdict, reason: SolveReason) -> String {
-    // The solver detects only the families it knows, so finding none is not proof that nothing
-    // blocks the page: an unknown human check that covers it reads the same. The line says what
-    // was found, and what such a check means for the script.
-    if verdict == Verdict::AlreadyClear && reason == SolveReason::NoCaptcha {
-        return NONE_FOUND.to_owned();
-    }
-    worded(verdict, cause(reason))
-}
+/// Closing when Neo ran a solve attempt: never claims site acceptance.
+const CLOSING_ATTEMPTED: &str = "Neo cannot confirm site acceptance — inspect a fresh snapshot \
+    and screenshot before continuing, retry neo.solveCaptcha(page) if still blocked, or hand off \
+    to the user.";
 
-/// The line for `already_clear` with no CAPTCHA found.
-const NONE_FOUND: &str = "Neo found no CAPTCHA it knows on the page; carry on with the task. If \
-    a human check still covers the page, stop and tell the user it needs their help.";
+/// Closing when Neo attempted nothing: never claims the page is clear.
+const CLOSING_NOT_ATTEMPTED: &str = "Neo cannot tell whether the page is clear — inspect a fresh \
+    snapshot and screenshot before continuing, and hand off to the user if a check still blocks \
+    it.";
 
-/// [`message`], naming the family when the answer's `type` cannot: `PerimeterX`'s is `unknown`
-/// (see neo-captcha's `CaptchaKind::PerimeterX`), so its refusal says what blocks the page.
-fn message_for(verdict: Verdict, reason: SolveReason, kind: Option<CaptchaKind>) -> String {
-    if kind == Some(CaptchaKind::PerimeterX) && reason == SolveReason::UnsupportedType {
-        return worded(
-            verdict,
-            "it is PerimeterX's press-and-hold human check, which only a person can pass",
-        );
-    }
-    message(verdict, reason)
-}
-
-fn worded(verdict: Verdict, why: &str) -> String {
-    let (said, next) = match verdict {
-        Verdict::Solved => ("The CAPTCHA is solved", "carry on with the task."),
-        Verdict::TokenApplied => (
-            "A CAPTCHA token is in the page",
-            "submit the form, and the site checks the token then.",
-        ),
-        Verdict::AlreadyClear => ("No CAPTCHA blocks the page", "carry on with the task."),
-        Verdict::Unsolved => (
-            "The CAPTCHA still blocks the page",
-            "stop and tell the user it needs their help.",
-        ),
-        Verdict::Cancelled => (
-            "The solve stopped early",
-            "look at the page again before acting.",
-        ),
-        Verdict::Unknown => (
-            "Neo could not tell whether the CAPTCHA passed",
-            "look at the page again before acting.",
-        ),
+/// Neo SDK's one line for an outcome: what Neo did, then how the caller must verify the page.
+/// Exhaustive on [`SolveReason`] and [`CaptchaKind`] so new variants do not compile until worded.
+fn message_for(
+    reason: SolveReason,
+    kind: Option<CaptchaKind>,
+    attempt: Attempt,
+    work: SolverWork,
+) -> String {
+    let action = what_neo_did(reason, kind, attempt, work);
+    let close = match attempt {
+        Attempt::Ran => CLOSING_ATTEMPTED,
+        Attempt::Skipped => CLOSING_NOT_ATTEMPTED,
     };
-    format!("{said} ({why}); {next}")
+    format!("{action}; {close}")
 }
 
-/// Why, in a few words.
-fn cause(reason: SolveReason) -> &'static str {
+/// The family's display name for modifier positions (e.g. `the Turnstile widget`), falling back
+/// to `CAPTCHA` when the family is absent or unknown so articles stay grammatical.
+const fn family_label(kind: Option<CaptchaKind>) -> &'static str {
+    match kind {
+        Some(CaptchaKind::RecaptchaV2 | CaptchaKind::RecaptchaV3) => "reCAPTCHA",
+        Some(CaptchaKind::Turnstile) => "Turnstile",
+        Some(CaptchaKind::CloudflareChallenge) => "Cloudflare",
+        Some(CaptchaKind::Hcaptcha) => "hCaptcha",
+        Some(CaptchaKind::Geetest) => "GeeTest",
+        Some(CaptchaKind::AwsWaf) => "AWS WAF",
+        Some(CaptchaKind::Arkose) => "Arkose",
+        Some(CaptchaKind::PerimeterX) => "PerimeterX",
+        Some(CaptchaKind::Unknown) | None => "CAPTCHA",
+    }
+}
+
+/// The family's display name for standalone noun positions (e.g. `solves Turnstile`), saying
+/// `the CAPTCHA` when the family is absent or unknown.
+const fn family_name(kind: Option<CaptchaKind>) -> &'static str {
+    match kind {
+        Some(CaptchaKind::Unknown) | None => "the CAPTCHA",
+        other => family_label(other),
+    }
+}
+
+/// Factual summary of what Neo did for `reason`, naming the family from `kind`.
+fn what_neo_did(
+    reason: SolveReason,
+    kind: Option<CaptchaKind>,
+    attempt: Attempt,
+    work: SolverWork,
+) -> String {
+    let label = family_label(kind);
+    let name = family_name(kind);
+    let article = if matches!(kind, Some(CaptchaKind::AwsWaf | CaptchaKind::Arkose)) {
+        "an"
+    } else {
+        "a"
+    };
     match reason {
-        SolveReason::AutoPassed => "it passed on its own",
-        SolveReason::CheckboxPassed => "its checkbox was clicked",
-        SolveReason::TilesAccepted => "its image challenge was solved",
-        SolveReason::TokenAccepted => "a solver's token was accepted",
-        SolveReason::AwaitingSubmit => "the site has not checked it yet",
-        SolveReason::NoCaptcha => "no CAPTCHA was found",
-        SolveReason::AlreadyPassed => "it had already passed",
-        SolveReason::NotBlocking => "its widget does not block the page",
-        SolveReason::UnsupportedType => "Neo cannot solve this CAPTCHA type",
-        SolveReason::ScanIncomplete => "the page could not be fully scanned",
-        SolveReason::AcceptanceUnconfirmed => "the site's acceptance could not be confirmed",
-        SolveReason::ProviderError => "the CAPTCHA provider failed",
-        SolveReason::BrowserError => "a browser call failed",
-        SolveReason::DeadlineExceeded => "it ran past its 120 s limit",
-        SolveReason::CallerCancelled => "the run stopped",
-        SolveReason::TabClosed => "the tab closed",
-        SolveReason::Navigated => "the page navigated, maybe past the CAPTCHA",
-        SolveReason::NoProvider => "no provider of this Neo solves this type",
-        SolveReason::ProviderUnavailable => "the CAPTCHA provider is unavailable",
-        SolveReason::TilesExhausted => "every image round failed",
-        SolveReason::ChallengeNotPassed => "the challenge was attempted and not passed",
-        SolveReason::SpendLimitReached => "this Neo's CAPTCHA budget is used up",
+        SolveReason::AutoPassed if kind == Some(CaptchaKind::CloudflareChallenge) => {
+            "Neo waited and Cloudflare's full-page check went away".to_owned()
+        }
+        SolveReason::ChallengeNotPassed if kind == Some(CaptchaKind::CloudflareChallenge) => {
+            "Neo waited on Cloudflare's full-page check and it did not go away".to_owned()
+        }
+        SolveReason::ChallengeNotPassed
+        | SolveReason::TilesExhausted
+        | SolveReason::AcceptanceUnconfirmed
+        | SolveReason::DeadlineExceeded
+            if work == SolverWork::StoppedEarly =>
+        {
+            format!(
+                "Neo found the {label} widget and stopped before it clicked or requested anything"
+            )
+        }
+        SolveReason::AutoPassed => {
+            format!("Neo waited and the {label} widget produced a new response on its own")
+        }
+        SolveReason::CheckboxPassed => {
+            format!("Neo clicked the {label} checkbox and the widget produced a new response")
+        }
+        SolveReason::TilesAccepted => {
+            format!(
+                "Neo answered the {label} image challenge and the widget produced a new response"
+            )
+        }
+        SolveReason::TokenAccepted => {
+            format!("Neo applied {article} {label} token and the page changed after it")
+        }
+        SolveReason::AwaitingSubmit => format!("Neo applied {article} {label} token"),
+        SolveReason::NoCaptcha => {
+            "Neo found no CAPTCHA it knows on the page and attempted nothing".to_owned()
+        }
+        SolveReason::NotBlocking => format!(
+            "Neo found only a passive {label} script or badge, no visible widget, and attempted \
+             nothing"
+        ),
+        SolveReason::AlreadyPassed => {
+            format!("Neo attempted nothing: the {label} widget's own script reports it complete")
+        }
+        SolveReason::UnsupportedType if kind == Some(CaptchaKind::PerimeterX) => {
+            "Neo detected PerimeterX's press-and-hold human check and attempted nothing: only a \
+             person can pass it"
+                .to_owned()
+        }
+        SolveReason::UnsupportedType => {
+            format!("Neo detected {name} and attempted nothing: it cannot solve this type")
+        }
+        SolveReason::ScanIncomplete => {
+            "Neo could not fully scan the page and attempted nothing".to_owned()
+        }
+        SolveReason::AcceptanceUnconfirmed => {
+            format!("Neo attempted {article} {label} solve and could not confirm the result")
+        }
+        SolveReason::ProviderError => {
+            format!(
+                "Neo asked a CAPTCHA provider for {article} {label} answer and the provider failed"
+            )
+        }
+        SolveReason::BrowserError => match attempt {
+            Attempt::Ran => format!("A browser call failed during Neo's {label} attempt"),
+            Attempt::Skipped => "A browser call failed before Neo could attempt a solve".to_owned(),
+        },
+        SolveReason::DeadlineExceeded => {
+            format!("Neo's {label} attempt timed out before it finished")
+        }
+        SolveReason::CallerCancelled => "The run stopped during Neo's attempt".to_owned(),
+        SolveReason::TabClosed => "The tab closed during Neo's attempt".to_owned(),
+        SolveReason::Navigated => "The page navigated during Neo's attempt".to_owned(),
+        SolveReason::NoProvider => {
+            format!("Neo requested no token: no provider of this Neo solves {name}")
+        }
+        SolveReason::ProviderUnavailable => {
+            "Neo requested no token: the CAPTCHA provider is unavailable".to_owned()
+        }
+        SolveReason::TilesExhausted => {
+            format!("Neo tried the {label} image challenge and every round failed")
+        }
+        SolveReason::ChallengeNotPassed => {
+            format!("Neo attempted the {label} challenge and the widget produced no response")
+        }
+        SolveReason::SpendLimitReached => {
+            "Neo requested no token: this Neo's CAPTCHA budget is used up".to_owned()
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::error::Error;
+
     use neo_captcha::types::{
         Attempts, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, SolveStatus,
-        Verdict,
     };
+    use serde_json::json;
 
-    use super::{LISTED, cause, message, verdict_value};
-
-    const VERDICTS: [Verdict; 6] = [
-        Verdict::Solved,
-        Verdict::TokenApplied,
-        Verdict::AlreadyClear,
-        Verdict::Unsolved,
-        Verdict::Cancelled,
-        Verdict::Unknown,
-    ];
+    use super::{
+        Attempt, CLOSING_ATTEMPTED, CLOSING_NOT_ATTEMPTED, LISTED, SolverWork, attempted,
+        message_for, solve_value,
+    };
 
     const REASONS: [SolveReason; 22] = [
         SolveReason::AutoPassed,
@@ -316,11 +456,34 @@ mod tests {
         SolveReason::SpendLimitReached,
     ];
 
+    const KINDS: [Option<CaptchaKind>; 11] = [
+        None,
+        Some(CaptchaKind::RecaptchaV2),
+        Some(CaptchaKind::RecaptchaV3),
+        Some(CaptchaKind::Turnstile),
+        Some(CaptchaKind::CloudflareChallenge),
+        Some(CaptchaKind::Hcaptcha),
+        Some(CaptchaKind::Geetest),
+        Some(CaptchaKind::AwsWaf),
+        Some(CaptchaKind::Arkose),
+        Some(CaptchaKind::PerimeterX),
+        Some(CaptchaKind::Unknown),
+    ];
+
+    const FORBIDDEN: [&str; 6] = [
+        "carry on",
+        "is solved",
+        "already passed",
+        "No CAPTCHA blocks",
+        "request_human_help",
+        "solve_captcha",
+    ];
+
     fn outcome(status: SolveStatus, reason: SolveReason) -> SolveOutcome {
         SolveOutcome {
             status,
             kind: Some(CaptchaKind::Turnstile),
-            method: SolveMethod::Checkbox,
+            method: SolveMethod::None,
             reason,
             request_id: "cap_test".to_owned(),
             page: 1,
@@ -335,136 +498,433 @@ mod tests {
     }
 
     #[test]
-    fn each_verdict_has_claw_sdks_own_line() {
-        let table = [
-            (
-                Verdict::Solved,
-                SolveReason::CheckboxPassed,
-                "The CAPTCHA is solved (its checkbox was clicked); carry on with the task.",
-            ),
-            (
-                Verdict::TokenApplied,
-                SolveReason::AwaitingSubmit,
-                "A CAPTCHA token is in the page (the site has not checked it yet); submit the \
-                 form, and the site checks the token then.",
-            ),
-            (
-                Verdict::AlreadyClear,
-                SolveReason::NoCaptcha,
-                "Neo found no CAPTCHA it knows on the page; carry on with the task. If a human \
-                 check still covers the page, stop and tell the user it needs their help.",
-            ),
-            (
-                Verdict::AlreadyClear,
-                SolveReason::AlreadyPassed,
-                "No CAPTCHA blocks the page (it had already passed); carry on with the task.",
-            ),
-            (
-                Verdict::Unsolved,
-                SolveReason::SpendLimitReached,
-                "The CAPTCHA still blocks the page (this Neo's CAPTCHA budget is used up); stop \
-                 and tell the user it needs their help.",
-            ),
-            (
-                Verdict::Cancelled,
-                SolveReason::Navigated,
-                "The solve stopped early (the page navigated, maybe past the CAPTCHA); look at \
-                 the page again before acting.",
-            ),
-            (
-                Verdict::Unknown,
-                SolveReason::DeadlineExceeded,
-                "Neo could not tell whether the CAPTCHA passed (it ran past its 120 s limit); \
-                 look at the page again before acting.",
-            ),
-        ];
-        for (verdict, reason, line) in table {
-            assert_eq!(message(verdict, reason), line, "{verdict:?} / {reason:?}");
+    fn every_reason_and_kind_produces_an_honest_single_line() {
+        for reason in REASONS {
+            for kind in KINDS {
+                for attempt in [Attempt::Ran, Attempt::Skipped] {
+                    for work in [SolverWork::Acted, SolverWork::StoppedEarly] {
+                        let line = message_for(reason, kind, attempt, work);
+                        assert!(
+                            !line.contains('\n'),
+                            "message must be a single line ({reason:?} / {kind:?} / {work:?}): \
+                             {line}"
+                        );
+                        assert!(
+                            line.contains("snapshot and screenshot"),
+                            "message must tell the caller to inspect snapshot and screenshot \
+                             ({reason:?} / {kind:?} / {work:?}): {line}"
+                        );
+                        let expected_closing = match attempt {
+                            Attempt::Ran => CLOSING_ATTEMPTED,
+                            Attempt::Skipped => CLOSING_NOT_ATTEMPTED,
+                        };
+                        assert!(
+                            line.ends_with(&format!("; {expected_closing}")),
+                            "message must use the matching closing ({reason:?} / {kind:?}): {line}"
+                        );
+                        for banned in FORBIDDEN {
+                            assert!(
+                                !line.contains(banned),
+                                "message must not contain `{banned}` ({reason:?} / {kind:?}): \
+                                 {line}"
+                            );
+                        }
+                        assert!(
+                            !line.contains("the the ")
+                                && !line.contains("a the ")
+                                && !line.contains("Neo's the "),
+                            "message must stay grammatical when kind is absent or unknown \
+                             ({reason:?} / {kind:?}): {line}"
+                        );
+                    }
+                }
+            }
         }
     }
 
-    /// The listed time limit and the deadline reason's words are the solver's own deadline.
     #[test]
-    fn the_listed_time_limit_is_the_solvers_deadline() {
-        let said = format!("in up to {} s", neo_captcha::SOLVE_DEADLINE.as_secs());
-        assert!(LISTED.contains(&said), "the line says: {said}");
-        let deadline = format!("its {} s limit", neo_captcha::SOLVE_DEADLINE.as_secs());
-        assert!(cause(SolveReason::DeadlineExceeded).contains(&deadline));
+    fn serialized_output_has_the_eight_contract_keys_and_no_verdict() -> Result<(), Box<dyn Error>>
+    {
+        let mut solved = outcome(SolveStatus::TokenApplied, SolveReason::AwaitingSubmit);
+        solved.method = SolveMethod::Token;
+        solved.paid_tasks = 1;
+        solved.provider = Some(ProviderName::Capsolver);
+        let output = solve_value(&solved).ok_or("awaiting_submit is a value")?;
+        let value = serde_json::to_value(output)?;
+        let object = value
+            .as_object()
+            .ok_or("SolveOutput must serialize as a JSON object")?;
+        let keys: BTreeSet<&str> = object.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = BTreeSet::from([
+            "attempted",
+            "type",
+            "method",
+            "reason",
+            "message",
+            "durationMs",
+            "paidTasks",
+            "provider",
+        ]);
+        assert_eq!(
+            keys, expected,
+            "wire key set must match the shared contract: {value}"
+        );
+        assert!(
+            !object.contains_key("verdict"),
+            "verdict must not appear on the wire: {value}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn turnstile_awaiting_submit_matches_the_plan_example_byte_for_byte()
+    -> Result<(), serde_json::Error> {
+        let mut solved = outcome(SolveStatus::TokenApplied, SolveReason::AwaitingSubmit);
+        solved.kind = Some(CaptchaKind::Turnstile);
+        solved.method = SolveMethod::Token;
+        solved.duration_ms = 1234;
+        solved.paid_tasks = 1;
+        solved.provider = Some(ProviderName::Capsolver);
+        let value = solve_value(&solved).map(serde_json::to_value).transpose()?;
+        assert_eq!(
+            value,
+            Some(json!({
+                "attempted": true,
+                "type": "turnstile",
+                "method": "token",
+                "reason": "awaiting_submit",
+                "message": "Neo applied a Turnstile token; Neo cannot confirm site acceptance — \
+                            inspect a fresh snapshot and screenshot before continuing, retry \
+                            neo.solveCaptcha(page) if still blocked, or hand off to the user.",
+                "durationMs": 1234,
+                "paidTasks": 1,
+                "provider": "capsolver",
+            })),
+            "Turnstile awaiting_submit must match the contract example byte for byte"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attempted_classifies_every_solve_reason() {
+        let always_false = [
+            SolveReason::NoCaptcha,
+            SolveReason::NotBlocking,
+            SolveReason::AlreadyPassed,
+            SolveReason::UnsupportedType,
+            SolveReason::ScanIncomplete,
+        ];
+        for reason in always_false {
+            let mut sample = outcome(SolveStatus::AlreadyClear, reason);
+            assert!(!attempted(&sample), "{reason:?} default must be false");
+            sample.paid_tasks = 1;
+            sample.method = SolveMethod::Token;
+            assert!(!attempted(&sample), "{reason:?} stays false with counters");
+        }
+
+        let only_if_acted = [
+            SolveReason::NoProvider,
+            SolveReason::ProviderUnavailable,
+            SolveReason::SpendLimitReached,
+        ];
+        for reason in only_if_acted {
+            let idle = outcome(SolveStatus::NeedsHuman, reason);
+            assert!(!attempted(&idle), "{reason:?} idle must be false");
+
+            let mut clicked = outcome(SolveStatus::NeedsHuman, reason);
+            clicked.attempts.checkbox = 1;
+            assert!(
+                attempted(&clicked),
+                "{reason:?} checkbox click must be true"
+            );
+
+            let mut tiled = outcome(SolveStatus::NeedsHuman, reason);
+            tiled.attempts.tile_rounds = 1;
+            assert!(attempted(&tiled), "{reason:?} tile rounds must be true");
+
+            let mut paid = outcome(SolveStatus::NeedsHuman, reason);
+            paid.paid_tasks = 1;
+            assert!(attempted(&paid), "{reason:?} paid task must be true");
+
+            let mut token_only = outcome(SolveStatus::NeedsHuman, reason);
+            token_only.method = SolveMethod::Token;
+            token_only.attempts.token = 1;
+            assert!(
+                !attempted(&token_only),
+                "{reason:?} depends strictly on acted (paid_tasks, checkbox, tile_rounds)"
+            );
+        }
+
+        let always_true = [
+            SolveReason::AutoPassed,
+            SolveReason::CheckboxPassed,
+            SolveReason::TilesAccepted,
+            SolveReason::TokenAccepted,
+            SolveReason::AwaitingSubmit,
+            SolveReason::AcceptanceUnconfirmed,
+            SolveReason::TilesExhausted,
+            SolveReason::ChallengeNotPassed,
+            SolveReason::DeadlineExceeded,
+        ];
+        for reason in always_true {
+            assert!(
+                attempted(&outcome(SolveStatus::Solved, reason)),
+                "{reason:?} must be true"
+            );
+        }
+
+        let acted_or_method_or_token = [
+            SolveReason::ProviderError,
+            SolveReason::BrowserError,
+            SolveReason::CallerCancelled,
+            SolveReason::TabClosed,
+            SolveReason::Navigated,
+        ];
+        for reason in acted_or_method_or_token {
+            assert!(
+                !attempted(&outcome(SolveStatus::Failed, reason)),
+                "{reason:?} with method none and zero attempts must be false"
+            );
+            let mut with_token_method = outcome(SolveStatus::Failed, reason);
+            with_token_method.method = SolveMethod::Token;
+            assert!(
+                attempted(&with_token_method),
+                "{reason:?} with method token must be true"
+            );
+            let mut with_token_attempt = outcome(SolveStatus::Failed, reason);
+            with_token_attempt.attempts.token = 1;
+            assert!(
+                attempted(&with_token_attempt),
+                "{reason:?} with attempts.token > 0 must be true"
+            );
+            let mut with_checkbox = outcome(SolveStatus::Failed, reason);
+            with_checkbox.attempts.checkbox = 1;
+            assert!(
+                attempted(&with_checkbox),
+                "{reason:?} with a checkbox attempt must be true"
+            );
+        }
+
+        assert_eq!(
+            always_false.len()
+                + only_if_acted.len()
+                + always_true.len()
+                + acted_or_method_or_token.len(),
+            REASONS.len(),
+            "every SolveReason variant is tested in one of the four groups"
+        );
     }
 
     /// `PerimeterX`'s `type` stays `unknown` (claw-server's closed schema does not list it), so its
-    /// refusal names the family in the line, and every other answer reads as before.
+    /// refusal names the family and a person in the message.
     #[test]
-    fn a_perimeterx_refusal_names_the_family_and_a_person() {
+    fn a_perimeterx_refusal_names_the_family_and_a_person() -> Result<(), serde_json::Error> {
         let mut refused = outcome(SolveStatus::Unsupported, SolveReason::UnsupportedType);
         refused.kind = Some(CaptchaKind::PerimeterX);
-        let value = verdict_value(&refused).and_then(|value| serde_json::to_value(value).ok());
+        let value = solve_value(&refused)
+            .map(serde_json::to_value)
+            .transpose()?;
         assert_eq!(
             value,
-            Some(serde_json::json!({
-                "verdict": "unsolved",
+            Some(json!({
+                "attempted": false,
                 "type": "unknown",
+                "method": "none",
                 "reason": "unsupported_type",
-                "message": "The CAPTCHA still blocks the page (it is PerimeterX's press-and-hold \
-                            human check, which only a person can pass); stop and tell the user it \
-                            needs their help.",
+                "message": "Neo detected PerimeterX's press-and-hold human check and attempted \
+                            nothing: only a person can pass it; Neo cannot tell whether the page \
+                            is clear — inspect a fresh snapshot and screenshot before continuing, \
+                            and hand off to the user if a check still blocks it.",
                 "durationMs": 1840,
                 "paidTasks": 0,
                 "provider": null,
             }))
         );
         refused.kind = Some(CaptchaKind::Hcaptcha);
-        let value = verdict_value(&refused).map(|value| value.message);
+        let hcaptcha_message = solve_value(&refused).map(|output| output.message);
         assert_eq!(
-            value.as_deref(),
-            Some(message(Verdict::Unsolved, SolveReason::UnsupportedType).as_str())
+            hcaptcha_message.as_deref(),
+            Some(
+                "Neo detected hCaptcha and attempted nothing: it cannot solve this type; Neo \
+                 cannot tell whether the page is clear — inspect a fresh snapshot and screenshot \
+                 before continuing, and hand off to the user if a check still blocks it."
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cloudflare_wall_and_browser_error_wording_follow_the_plan() {
+        assert_eq!(
+            message_for(
+                SolveReason::AutoPassed,
+                Some(CaptchaKind::CloudflareChallenge),
+                Attempt::Ran,
+                SolverWork::StoppedEarly,
+            ),
+            format!("Neo waited and Cloudflare's full-page check went away; {CLOSING_ATTEMPTED}")
+        );
+        assert_eq!(
+            message_for(
+                SolveReason::ChallengeNotPassed,
+                Some(CaptchaKind::CloudflareChallenge),
+                Attempt::Ran,
+                SolverWork::StoppedEarly,
+            ),
+            format!(
+                "Neo waited on Cloudflare's full-page check and it did not go away; \
+                 {CLOSING_ATTEMPTED}"
+            )
+        );
+        assert_eq!(
+            message_for(
+                SolveReason::BrowserError,
+                Some(CaptchaKind::Turnstile),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!("A browser call failed during Neo's Turnstile attempt; {CLOSING_ATTEMPTED}")
+        );
+        assert_eq!(
+            message_for(
+                SolveReason::BrowserError,
+                None,
+                Attempt::Skipped,
+                SolverWork::StoppedEarly,
+            ),
+            format!(
+                "A browser call failed before Neo could attempt a solve; {CLOSING_NOT_ATTEMPTED}"
+            )
         );
     }
 
     #[test]
-    fn no_line_points_at_claw_servers_tools() {
-        for verdict in VERDICTS {
-            for reason in REASONS {
-                let line = message(verdict, reason);
-                assert!(
-                    !line.contains('\n')
-                        && !line.contains("request_human_help")
-                        && !line.contains("solve_captcha")
-                        && !line.contains("snapshot"),
-                    "claw-sdk has none of claw-server's MCP tools, so its one line names none: \
-                     {line}"
-                );
-            }
+    fn stopped_early_reasons_do_not_claim_an_attempt() -> Result<(), Box<dyn Error>> {
+        let cases = [
+            (
+                SolveReason::ChallengeNotPassed,
+                CaptchaKind::AwsWaf,
+                "AWS WAF",
+                "Neo attempted the AWS WAF challenge and the widget produced no response",
+            ),
+            (
+                SolveReason::TilesExhausted,
+                CaptchaKind::RecaptchaV2,
+                "reCAPTCHA",
+                "Neo tried the reCAPTCHA image challenge and every round failed",
+            ),
+            (
+                SolveReason::AcceptanceUnconfirmed,
+                CaptchaKind::Turnstile,
+                "Turnstile",
+                "Neo attempted a Turnstile solve and could not confirm the result",
+            ),
+            (
+                SolveReason::DeadlineExceeded,
+                CaptchaKind::Turnstile,
+                "Turnstile",
+                "Neo's Turnstile attempt timed out before it finished",
+            ),
+        ];
+        for (reason, kind, label, acted_prefix) in cases {
+            let mut stopped = outcome(SolveStatus::Failed, reason);
+            stopped.kind = Some(kind);
+            let output = solve_value(&stopped).ok_or("reason returns a value")?;
+            assert!(output.attempted, "{reason:?} keeps attempted = true");
+            assert_eq!(
+                output.message,
+                format!(
+                    "Neo found the {label} widget and stopped before it clicked or requested \
+                     anything; {CLOSING_ATTEMPTED}"
+                ),
+                "{reason:?} with no method, attempts, or paid tasks must not claim an attempt"
+            );
+
+            let mut clicked = stopped.clone();
+            clicked.attempts.checkbox = 1;
+            let clicked_out = solve_value(&clicked).ok_or("reason returns a value")?;
+            assert_eq!(
+                clicked_out.message,
+                format!("{acted_prefix}; {CLOSING_ATTEMPTED}"),
+                "{reason:?} with a checkbox click keeps its acted wording"
+            );
+
+            let mut token_tried = stopped;
+            token_tried.attempts.token = 1;
+            let token_out = solve_value(&token_tried).ok_or("reason returns a value")?;
+            assert_eq!(
+                token_out.message,
+                format!("{acted_prefix}; {CLOSING_ATTEMPTED}"),
+                "{reason:?} with a token attempt keeps its acted wording"
+            );
         }
+        Ok(())
     }
 
     #[test]
-    fn a_verdict_is_a_value_with_the_crates_facts_and_claw_sdks_line() {
-        let mut paid = outcome(SolveStatus::NeedsHuman, SolveReason::TilesExhausted);
-        paid.paid_tasks = 1;
-        paid.provider = Some(ProviderName::TwoCaptcha);
-        let value = verdict_value(&paid);
-        let value = value.map(|value| serde_json::to_value(value).ok());
+    fn acceptance_unconfirmed_and_deadline_exceeded_do_not_overclaim() {
         assert_eq!(
-            value,
-            Some(Some(serde_json::json!({
-                "verdict": "unsolved",
-                "type": "turnstile",
-                "reason": "tiles_exhausted",
-                "message": "The CAPTCHA still blocks the page (every image round failed); stop \
-                            and tell the user it needs their help.",
-                "durationMs": 1840,
-                "paidTasks": 1,
-                "provider": "2captcha",
-            }))),
-            "unsolved is a value a script branches on, not a thrown error"
+            message_for(
+                SolveReason::AcceptanceUnconfirmed,
+                Some(CaptchaKind::CloudflareChallenge),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!(
+                "Neo attempted a Cloudflare solve and could not confirm the result; \
+                 {CLOSING_ATTEMPTED}"
+            )
         );
+        assert_eq!(
+            message_for(
+                SolveReason::AcceptanceUnconfirmed,
+                Some(CaptchaKind::AwsWaf),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!(
+                "Neo attempted an AWS WAF solve and could not confirm the result; \
+                 {CLOSING_ATTEMPTED}"
+            )
+        );
+        assert_eq!(
+            message_for(
+                SolveReason::DeadlineExceeded,
+                Some(CaptchaKind::Turnstile),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!("Neo's Turnstile attempt timed out before it finished; {CLOSING_ATTEMPTED}")
+        );
+    }
+
+    /// The listed time limit is the solver's own deadline, and `LISTED` advertises the eight
+    /// contract fields without verdict or carry-on claims.
+    #[test]
+    fn the_listed_line_names_the_deadline_and_contract_without_verdict() {
+        let said = format!("in up to {} s", neo_captcha::SOLVE_DEADLINE.as_secs());
+        assert!(LISTED.contains("neo.solveCaptcha(page)"), "names the call");
+        assert!(LISTED.contains(&said), "the line says: {said}");
+        assert!(
+            LISTED.contains(
+                "{ attempted, type, method, reason, message, durationMs, paidTasks, provider }"
+            ),
+            "lists the eight fields in contract order: {LISTED}"
+        );
+        assert!(!LISTED.contains('\n'), "stays one entry: {LISTED}");
+        assert!(!LISTED.contains("verdict"), "no verdict: {LISTED}");
+        for banned in FORBIDDEN {
+            assert!(
+                !LISTED.contains(banned),
+                "LISTED must not contain `{banned}`: {LISTED}"
+            );
+        }
     }
 
     #[test]
     fn a_solve_its_caller_cancelled_is_never_a_value() {
         assert_eq!(
-            verdict_value(&outcome(
+            solve_value(&outcome(
                 SolveStatus::Cancelled,
                 SolveReason::CallerCancelled
             )),
@@ -472,7 +932,7 @@ mod tests {
             "it may have clicked before it stopped, so the op fails ambiguous instead"
         );
         assert!(
-            verdict_value(&outcome(SolveStatus::Cancelled, SolveReason::TabClosed)).is_some(),
+            solve_value(&outcome(SolveStatus::Cancelled, SolveReason::TabClosed)).is_some(),
             "the page's own cancel (closed, navigated) is still a value"
         );
     }
