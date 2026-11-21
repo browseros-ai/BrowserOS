@@ -7,9 +7,9 @@
 //! server does not offer them. Naming moves off the `name_session` tool onto an optional
 //! `taskName` argument that rides on any call, so naming a task costs no extra round trip.
 //!
-//! Desktop is untouched: it lists the same tools as before and never advertises `taskName`.
-//! Both modes still accept and strip `taskName`, because a catalog tool rejects unknown fields
-//! and a stray one would otherwise fail the call it rode on.
+//! Desktop exposure is owned by `surface`; this module retains the hosted catalog and words.
+//! Both modes still accept and strip `taskName`, because a tool rejects unknown fields and a
+//! stray one would otherwise fail the call it rode on.
 
 use super::{
     naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name},
@@ -151,7 +151,7 @@ pub fn take_task_name(args: &mut Value) -> Result<Option<String>, &'static str> 
 pub fn rename_tip(mode: ServerMode, title: &str) -> String {
     match mode {
         ServerMode::Desktop => format!(
-            "Tip: this session is \"{title}\" — rename it with name_session name=\"<2-3 word task label>\""
+            "Tip: this session is \"{title}\". Start a run script with neo.createTask('<2-3 word task label>') to name your work."
         ),
         ServerMode::Hosted => format!(
             "Tip: this session is \"{title}\" — name it by passing taskName=\"<2-3 word task label>\" on your next call"
@@ -248,7 +248,7 @@ mod tests {
         let desktop = rename_tip(ServerMode::Desktop, "codex/agile-alpaca");
         assert_eq!(
             desktop,
-            "Tip: this session is \"codex/agile-alpaca\" — rename it with name_session name=\"<2-3 word task label>\""
+            "Tip: this session is \"codex/agile-alpaca\". Start a run script with neo.createTask('<2-3 word task label>') to name your work."
         );
         let hosted = rename_tip(ServerMode::Hosted, "codex/agile-alpaca");
         assert!(hosted.contains("taskName=\""), "{hosted}");

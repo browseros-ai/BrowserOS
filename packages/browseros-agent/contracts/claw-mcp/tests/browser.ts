@@ -100,12 +100,11 @@ function launchArgs(
 /**
  * Points the profile's download folder inside itself.
  *
- * The download tool leaves the browser's download behaviour alone, so the
- * browser picks the destination. Without this the suite's downloads land in the
- * real one belonging to whoever is running it, because the browser does not take
- * that folder from HOME. Setting the preference keeps a run hermetic and also
- * exercises a relocated download folder, which the tool handles by asking the
- * browser where it saved through CDP rather than guessing.
+ * Playwright downloads initially use the browser's configured destination.
+ * Without this the suite's downloads land in the real one belonging to whoever
+ * is running it, because the browser does not take
+ * that folder from HOME. The preference isolates the initial download; each
+ * saveAs case separately chooses a destination in the suite scratch directory.
  */
 async function seedDownloadDirectory(userDataDir: string): Promise<void> {
   const downloadDir = join(userDataDir, 'Downloads')

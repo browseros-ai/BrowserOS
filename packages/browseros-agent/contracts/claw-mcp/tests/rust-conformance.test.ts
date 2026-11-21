@@ -16,7 +16,7 @@ import { type FixturePair, startFixturePair } from '../fixtures/server'
 import { type BrowserHandle, isSuiteEnabled, launchBrowser } from './browser'
 import { runCaptureMode } from './capture'
 import { CASE_TIMEOUT_MS, type CaseContext, contractCases } from './cases'
-import { parsePageId, waitUntil } from './helpers'
+import { expectOk, waitUntil } from './helpers'
 import { McpSession, textOf } from './mcp-client'
 import { type ContractServer, startRustServer } from './rust-server'
 
@@ -34,15 +34,9 @@ interface ServerRun {
   server: ContractServer
   browser: BrowserHandle
   mcp: McpSession
-  scoped?: Promise<{ server: ContractServer; mcp: McpSession } | undefined>
   extraSessions: McpSession[]
-  openedPages: Array<{ session: McpSession; page: number }>
   scratchDir: string
 }
-
-// The lowest BrowserOS release with profile targeting; asserting it gives the scoped server
-// the same bound views a BrowserOS-launched server uses.
-const PROFILE_TARGETING_VERSION = '0.51.1.3'
 
 let fixtures: FixturePair | undefined
 let run: ServerRun | undefined
@@ -97,7 +91,6 @@ async function ensureRun(
       browser,
       mcp,
       extraSessions: [],
-      openedPages: [],
       scratchDir: await mkdtemp(join(tmpdir(), 'claw-mcp-scratch-')),
     }
     return run
@@ -114,50 +107,19 @@ async function connectAttached(
   clientName: string,
 ): Promise<McpSession> {
   const mcp = await McpSession.connect(server.baseUrl, clientName)
-  // The rust server attaches to the browser asynchronously after
-  // /system/health turns ok; wait until tool calls stop reporting a
-  // disconnected browser before running cases.
+  // Health can precede the SDK's browser attachment. Read actual tabs through
+  // run so an unavailable browser cannot look ready just because the realm runs.
   await waitUntil(
     async () => {
-      const result = await mcp.callTool('tabs', { action: 'list' })
-      return !(
-        result.isError &&
-        textOf(result).includes('browser session not connected')
-      )
+      const result = await mcp.callTool('run', {
+        code: 'return (await context.pages()).map(p => p.tabId)',
+      })
+      return !result.isError && Array.isArray(result.structuredContent?.value)
     },
-    'Rust server to attach to the browser',
+    'Rust server and SDK to attach to the browser',
     { timeoutMs: 30_000, intervalMs: 500 },
   )
   return mcp
-}
-
-/** The scoped server, or `undefined` when the browser has no native profile targeting. */
-async function startScoped(
-  run: ServerRun,
-): Promise<{ server: ContractServer; mcp: McpSession } | undefined> {
-  const server = await startRustServer(run.browser.cdpPort, {
-    env: { CLAW_NATIVE_BROWSEROS_VERSION: PROFILE_TARGETING_VERSION },
-  })
-  try {
-    const mcp = await connectAttached(server, 'claw-contract-scoped')
-    const probe = await mcp.callTool('tabs', { action: 'list' })
-    if (
-      probe.isError &&
-      textOf(probe).includes('target_scope_unsupported_native')
-    ) {
-      // A BrowserOS without profile targeting runs its server unbound as well.
-      console.warn(
-        'scoped server unavailable: this browser has no native profile targeting; scoped cases use the primary server',
-      )
-      await mcp.close().catch(() => {})
-      await server.stop().catch(() => {})
-      return undefined
-    }
-    return { server, mcp }
-  } catch (error) {
-    await server.stop().catch(() => {})
-    throw error
-  }
 }
 
 function makeContext(run: ServerRun): CaseContext {
@@ -167,10 +129,6 @@ function makeContext(run: ServerRun): CaseContext {
     server: run.server,
     browser: run.browser,
     mcp: run.mcp,
-    async scopedMcp() {
-      run.scoped ??= startScoped(run)
-      return (await run.scoped)?.mcp ?? run.mcp
-    },
     scratchDir: run.scratchDir,
     async openSession(clientName = 'claw-contract-extra') {
       const session = await McpSession.connect(run.server.baseUrl, clientName)
@@ -180,27 +138,31 @@ function makeContext(run: ServerRun): CaseContext {
     fixture: (path) => pair.primary.url(path),
     fixture2: (path) => pair.secondary.url(path),
     async openPage(url, session = run.mcp) {
-      const result = await session.callTool('tabs', {
-        action: 'new',
-        url,
+      const result = await session.callTool('run', {
+        code: `const p = await context.newPage(); await p.goto(${JSON.stringify(url)}); return p.tabId`,
       })
-      if (result.isError) {
-        throw new Error(`tabs new failed: ${textOf(result)}`)
+      expectOk(result, 'open fixture tab')
+      const tabId = result.structuredContent?.value
+      if (typeof tabId !== 'number') {
+        throw new Error(`run did not return a tab id: ${textOf(result)}`)
       }
-      const page = parsePageId(result)
-      run.openedPages.push({ session, page })
-      return page
+      return tabId
     },
   }
 }
 
-/** Close pages a case opened so the next case starts from a clean browser. */
+/**
+ * This profile belongs entirely to the suite. Enumerating it also reclaims tabs
+ * created before a script throws, which cannot be tracked from its return value.
+ */
 async function cleanupCase(run: ServerRun): Promise<void> {
-  const opened = run.openedPages.splice(0)
   if (!(await run.browser.isRunning())) return
-  for (const { session, page } of opened) {
-    await session.callTool('tabs', { action: 'close', page }).catch(() => {})
-  }
+  expectOk(
+    await run.mcp.callTool('run', {
+      code: 'for (const p of await context.pages()) await p.close(); return null',
+    }),
+    'close case tabs',
+  )
 }
 
 async function teardownRun(): Promise<void> {
@@ -210,17 +172,13 @@ async function teardownRun(): Promise<void> {
   for (const session of [...current.extraSessions, current.mcp]) {
     await session.close().catch(() => {})
   }
-  const scoped = await current.scoped?.catch(() => undefined)
-  await scoped?.mcp.close().catch(() => {})
-  await scoped?.server.stop().catch(() => {})
   await current.server.stop().catch(() => {})
   await current.browser.kill().catch(() => {})
   await rm(current.scratchDir, { recursive: true, force: true })
 }
 
 gate('Rust /mcp conformance', () => {
-  // Two owned servers can each use their six-second shutdown grace before the
-  // browser/profile cleanup. Bun's default five-second hook limit cuts that off.
+  // The server's shutdown grace plus profile cleanup exceeds Bun's default hook limit.
   afterAll(async () => {
     await teardownRun()
   }, 30_000)

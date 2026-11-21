@@ -27,7 +27,7 @@ async fn state_with_overlay() -> anyhow::Result<AppState> {
     let call = tool_call_with_behavior(
         "act",
         json!({ "page": 1, "kind": "click", "ref": "e1" }),
-        ServerMode::Desktop,
+        ServerMode::Hosted,
         behavior_with_overlay(),
     )
     .await?;
@@ -63,6 +63,15 @@ async fn the_rollout_switch_and_the_setting_both_gate_the_overlay() -> anyhow::R
     )
     .await?;
     assert!(!hosted.state.page_hold.enabled());
+
+    let sdk = tool_call_with_behavior(
+        "act",
+        json!({ "page": 1, "kind": "click", "ref": "e1" }),
+        ServerMode::Desktop,
+        behavior_with_overlay(),
+    )
+    .await?;
+    assert!(!sdk.state.page_hold.enabled());
 
     let state = state_with_overlay().await?;
     assert!(page_hold(&state).enabled());

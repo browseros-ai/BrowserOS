@@ -31,7 +31,7 @@ export function TechnicalDetails({
   const tokens = session.tokenUsage?.totalTokenEstimate
   const rows: [string, string][] = [
     ['Task id', session.sessionId],
-    ['Name your AI gave it', session.slug],
+    ['Agent id', session.slug],
     ['Steps recorded', dispatchCount.toLocaleString()],
     ['Tokens used', tokens != null ? tokens.toLocaleString() : 'Not measured'],
     ['Started', dateTime(session.startedAt)],

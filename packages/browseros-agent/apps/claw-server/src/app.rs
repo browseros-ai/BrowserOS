@@ -16,6 +16,7 @@ use crate::{
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
         harness_skills::{load_browserclaw_skill, with_ultrafast},
+        neo::NeoEngine,
         page_hold::PageHoldService,
         profiles::ProfileService,
         recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
@@ -68,6 +69,8 @@ pub struct AppState {
     pub targets: Arc<TargetBindings>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
+    /// The production entrypoint owns startup. Tests construct a disabled engine.
+    pub neo: NeoEngine,
     pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
     /// Per-tab viewport modes; hosted only, so desktop page geometry is never touched.
     pub viewports: Option<Arc<browseros_core::viewport::Viewports>>,
@@ -286,8 +289,10 @@ impl AppState {
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
         let help = Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT));
+        // SDK input cannot yield the legacy overlay's shield. Desktop must not
+        // leave a pursue hold in front of the SDK run it hands the page back to.
         let page_hold = PageHoldService::new(
-            config.behavior.working_overlay,
+            config.behavior.working_overlay && config.mode.is_hosted(),
             agent_settings.clone(),
             sessions.clone(),
             browser.clone(),
@@ -348,6 +353,7 @@ impl AppState {
             targets,
             session_efficiency,
             browser,
+            neo: NeoEngine::disabled("the Playwright engine has not been started"),
             captcha,
             viewports,
             visuals,

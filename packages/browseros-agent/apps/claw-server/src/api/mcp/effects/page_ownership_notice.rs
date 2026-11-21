@@ -28,16 +28,13 @@
 //!
 //! The rule: **ownership answers "whose is this", never "may I".**
 
-use crate::api::mcp::{
-    dispatch::{ToolEffect, ToolEffectContext, extract_page_id},
-    tab_grouping,
-};
+use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id};
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 
-/// The same-client note's advice to rejoin the earlier task's tab group. `tab_grouping`
-/// rewrites it under explicit grouping, where that task never had a group to rejoin.
+/// Automatic grouping can recover the earlier task's group. Internal page tools still
+/// use this notice, so explicit grouping chooses its own advice at the call site.
 pub(crate) const RECLAIM_ADVICE: &str = "If that was you and you are continuing that work, pass its tab group id as groupId on tabs action=\"new\" to take it back; tabs action=\"list\" reports the id.";
 
 /// Appends a one-line note when the acted-on page belongs to someone else.
@@ -105,14 +102,24 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                         |session| session.agent().slug() == identity.agent.slug(),
                     );
                 if same_client {
-                    let note = format!(
+                    let advice = if context
+                        .call
+                        .state
+                        .config
+                        .behavior
+                        .tab_grouping
+                        .is_automatic()
+                    {
+                        RECLAIM_ADVICE
+                    } else {
+                        "If that was you, carry on in it."
+                    };
+                    format!(
                         "Note: page {} was opened by {label} in an earlier session. \
-                         {RECLAIM_ADVICE} Otherwise you are still allowed to use it: leave it as \
+                         {advice} Otherwise you are still allowed to use it: leave it as \
                          you found it unless the user asked you to change it.",
                         page_id.0
-                    );
-                    tab_grouping::text(&note, context.call.state.config.behavior.tab_grouping)
-                        .into_owned()
+                    )
                 } else {
                     format!(
                         "Note: page {} belongs to another agent ({label}). You are allowed to use it; \
