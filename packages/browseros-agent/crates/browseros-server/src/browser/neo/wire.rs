@@ -32,6 +32,10 @@ impl Wire {
         let client = Client::builder()
             // A proxy from the environment must never see a loopback call into the browser.
             .no_proxy()
+            // A fresh connection per request: a kept-alive one to a child that just died fails
+            // in a way that cannot say whether the script started, while a fresh connect to a
+            // dead port is refused, which proves nothing ran (`WireError::NotDelivered`).
+            .pool_max_idle_per_host(0)
             .connect_timeout(Duration::from_secs(1))
             .build()
             .map_err(|error| format!("building the engine client: {error}"))?;
@@ -57,7 +61,8 @@ impl Wire {
             self.request("tools/list", json!({})),
         )
         .await
-        .map_err(|_| "the engine's tool list timed out".to_owned())??;
+        .map_err(|_| "the engine's tool list timed out".to_owned())?
+        .map_err(|error| error.to_string())?;
         let run = listed["tools"]
             .as_array()
             .and_then(|tools| tools.iter().find(|tool| tool["name"] == RUN))
@@ -67,7 +72,7 @@ impl Wire {
 
     /// One `run` call. `scope` is `None` only for the readiness probe. The arguments go through
     /// as the caller gave them, for the engine to validate (`code`, `timeout`, nothing else).
-    pub(super) async fn run(&self, args: Value, scope: Option<&Scope>) -> Result<Value, String> {
+    pub(super) async fn run(&self, args: Value, scope: Option<&Scope>) -> Result<Value, WireError> {
         let mut params = json!({ "name": RUN, "arguments": args });
         if let Some(scope) = scope {
             params["_meta"] = json!({ RUN_META: run_meta(scope) });
@@ -75,7 +80,7 @@ impl Wire {
         self.request("tools/call", params).await
     }
 
-    async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+    async fn request(&self, method: &str, params: Value) -> Result<Value, WireError> {
         let id = json!(uuid::Uuid::new_v4().to_string());
         let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         let mut response = self
@@ -89,8 +94,13 @@ impl Wire {
             .json(&body)
             .send()
             .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| format!("the engine did not answer: {error}"))?;
+            // The engine's stateless MCP answers with headers as soon as it takes a call, before
+            // the script runs; a send that fails before any answer means it never took it.
+            .map_err(|error| {
+                WireError::NotDelivered(format!("the engine did not answer: {}", chain(&error)))
+            })?
+            .error_for_status()
+            .map_err(|error| WireError::Failed(format!("the engine refused the call: {error}")))?;
         let sse = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -102,14 +112,16 @@ impl Wire {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|error| format!("the engine's reply broke off: {error}"))?
+            .map_err(|error| WireError::Failed(format!("the engine's reply broke off: {error}")))?
         {
             read += chunk.len();
             if read > MAX_REPLY_BYTES {
-                return Err("the engine's reply exceeded its wire limit".to_owned());
+                return Err(WireError::Failed(
+                    "the engine's reply exceeded its wire limit".to_owned(),
+                ));
             }
             if sse {
-                if let Some(result) = events.push(&chunk, &id)? {
+                if let Some(result) = events.push(&chunk, &id).map_err(WireError::Failed)? {
                     return Ok(result);
                 }
             } else {
@@ -119,15 +131,50 @@ impl Wire {
         if sse {
             // The last event may end at EOF without its blank line.
             events
-                .push(b"\n\n", &id)?
-                .ok_or_else(|| "the engine's stream ended without a reply".to_owned())
+                .push(b"\n\n", &id)
+                .map_err(WireError::Failed)?
+                .ok_or_else(|| {
+                    WireError::Failed("the engine's stream ended without a reply".to_owned())
+                })
         } else {
-            let message: Value = serde_json::from_slice(&body)
-                .map_err(|error| format!("the engine's reply is not JSON: {error}"))?;
-            response_result(&message, &id)?
-                .ok_or_else(|| "the engine replied to another request".to_owned())
+            let message: Value = serde_json::from_slice(&body).map_err(|error| {
+                WireError::Failed(format!("the engine's reply is not JSON: {error}"))
+            })?;
+            response_result(&message, &id)
+                .map_err(WireError::Failed)?
+                .ok_or_else(|| {
+                    WireError::Failed("the engine replied to another request".to_owned())
+                })
         }
     }
+}
+
+/// Why a request to the engine failed. `NotDelivered`: no answer came at all, which together
+/// with the child's death means the engine never took the call. `Failed`: the engine answered,
+/// so a script may have acted and the call is never repeated.
+pub(super) enum WireError {
+    NotDelivered(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for WireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotDelivered(reason) | Self::Failed(reason) => f.write_str(reason),
+        }
+    }
+}
+
+/// An error with its causes: reqwest's own text ("error sending request") names none of them.
+fn chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 /// `taskId` always; `access: "read"` only for read-only scope, because the engine refuses an

@@ -73,12 +73,43 @@ impl Host {
         .await
     }
 
+    /// The runs the engine has in flight (`GET /v1/runs?status=running`).
+    #[cfg(feature = "test-support")]
+    pub(super) async fn running_runs(&self) -> Result<usize, String> {
+        #[derive(Deserialize)]
+        struct RunList {
+            items: Vec<serde_json::Value>,
+        }
+        let bytes = self
+            .get_query(
+                &["v1", "runs"],
+                Some("status=running&limit=100"),
+                CENSUS_LIMIT,
+                Duration::from_secs(3),
+            )
+            .await?;
+        serde_json::from_slice::<RunList>(&bytes)
+            .map(|list| list.items.len())
+            .map_err(|error| format!("the run list has an unexpected shape: {error}"))
+    }
+
     async fn get(&self, path: &[&str], limit: usize, timeout: Duration) -> Result<Vec<u8>, String> {
+        self.get_query(path, None, limit, timeout).await
+    }
+
+    async fn get_query(
+        &self,
+        path: &[&str],
+        query: Option<&str>,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, String> {
         let mut url = reqwest::Url::parse(&self.endpoint)
             .map_err(|error| format!("the host address does not parse: {error}"))?;
         url.path_segments_mut()
             .map_err(|()| "the host address cannot take a path".to_owned())?
             .extend(path);
+        url.set_query(query);
         let mut response = self
             .client
             .get(url)

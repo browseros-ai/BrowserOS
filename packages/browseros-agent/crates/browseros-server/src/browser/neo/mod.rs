@@ -41,6 +41,9 @@ const RUN: &str = "run";
 /// through instead of an error.
 const CALL_WAIT: Duration = Duration::from_secs(20);
 
+/// How long a call that got no answer waits to learn that its engine died.
+const REPLACED_WITHIN: Duration = Duration::from_secs(3);
+
 /// The browser paragraph of the system prompt while the engine is the browser.
 pub(super) const GUIDANCE: &str = "You can see and act in the user's own browser, signed in \
     to their accounts, with the `run` tool: each call runs a short Playwright script there and \
@@ -149,31 +152,38 @@ impl NeoEngine {
                 "There is no browser tool `{tool}`; the browser has one tool, `run`."
             ));
         }
-        let connection = match self.connection(cancel).await {
-            Ok(connection) => connection,
-            Err(output) => return output,
-        };
-        let run = async {
-            let result = connection.wire.run(args, Some(scope)).await?;
-            let reply = reply::Reply::parse(result)?;
+        // Dropping this future drops the POST to the engine, which cancels the script at once:
+        // no `requestId` is sent, so the engine keeps no orphan waiting for a retry.
+        let call = async {
+            let mut connection = self.connection().await?;
+            let result = match connection.wire.run(args.clone(), Some(scope)).await {
+                // No answer at all, and the supervisor confirms that child is gone: it died
+                // before it took the call, so the call goes to the restarted one. A live
+                // engine's failure, or one after the engine answered, is never repeated: the
+                // script may have acted.
+                Err(wire::WireError::NotDelivered(reason)) if self.replaced(&connection).await => {
+                    tracing::warn!(%reason, "the browser engine died before the call; sending it to the restarted one");
+                    connection = self.connection().await?;
+                    connection.wire.run(args, Some(scope)).await
+                }
+                result => result,
+            };
+            let result = result.map_err(|error| failed(&error))?;
+            let reply = reply::Reply::parse(result).map_err(|reason| failed(&reason))?;
             let blobs = reply::fetch_blobs(&reply, &connection.host).await;
             // A failed script can still have opened a tab, so the census follows every reply.
             self.record_opened_tabs(&connection.host, &scope.task).await;
-            Ok::<_, String>(reply.present(&blobs))
+            Ok::<_, ToolOutput>(reply.present(&blobs))
         };
-        // Dropping `run` drops the POST to the engine, which cancels the script at once: no
-        // `requestId` is sent, so the engine keeps no orphan waiting for a retry.
         tokio::select! {
             biased;
             () = cancel.cancelled() => ToolOutput::failure("Stopped"),
-            result = run => result.unwrap_or_else(|reason| {
-                ToolOutput::failure(format!("The browser call failed: {reason}."))
-            }),
+            output = call => output.unwrap_or_else(|failure| failure),
         }
     }
 
     /// The live connection, waiting up to `CALL_WAIT` while the engine starts or restarts.
-    async fn connection(&self, cancel: &CancellationToken) -> Result<Arc<Connection>, ToolOutput> {
+    async fn connection(&self) -> Result<Arc<Connection>, ToolOutput> {
         let mut link = self.shared.link.subscribe();
         let deadline = tokio::time::sleep(CALL_WAIT);
         tokio::pin!(deadline);
@@ -189,7 +199,6 @@ impl NeoEngine {
                 Link::Down(reason) => reason.clone(),
             };
             tokio::select! {
-                () = cancel.cancelled() => return Err(ToolOutput::failure("Stopped")),
                 () = &mut deadline => {
                     return Err(ToolOutput::failure(format!("The browser is not available: {reason}.")));
                 }
@@ -200,6 +209,39 @@ impl NeoEngine {
                 }
             }
         }
+    }
+
+    /// Whether the supervisor, within `REPLACED_WITHIN`, reports that `connection`'s child is
+    /// gone. It sees a child's exit at once, so a dead child shows here in milliseconds.
+    async fn replaced(&self, connection: &Arc<Connection>) -> bool {
+        let mut link = self.shared.link.subscribe();
+        let deadline = tokio::time::sleep(REPLACED_WITHIN);
+        tokio::pin!(deadline);
+        loop {
+            if !matches!(&*link.borrow_and_update(), Link::Up(current) if Arc::ptr_eq(current, connection))
+            {
+                return true;
+            }
+            tokio::select! {
+                () = &mut deadline => return false,
+                changed = link.changed() => {
+                    if changed.is_err() {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// How many runs the engine still has in flight, from its host API, so a live test can see
+    /// that a stop reached the engine and not only this side.
+    #[cfg(feature = "test-support")]
+    pub(super) async fn running_runs(&self) -> Option<usize> {
+        let connection = match &*self.shared.link.borrow() {
+            Link::Up(connection) => connection.clone(),
+            _ => return None,
+        };
+        connection.host.running_runs().await.ok()
     }
 
     async fn record_opened_tabs(&self, host: &host::Host, task: &str) {
@@ -280,6 +322,10 @@ impl TabBook {
     fn take(&mut self, task: &str) -> Vec<i64> {
         self.pending.remove(task).unwrap_or_default()
     }
+}
+
+fn failed(reason: &dyn std::fmt::Display) -> ToolOutput {
+    ToolOutput::failure(format!("The browser call failed: {reason}."))
 }
 
 /// The engine's `run` definition as `tools/list` gave it for this crate's pinned neo-server,

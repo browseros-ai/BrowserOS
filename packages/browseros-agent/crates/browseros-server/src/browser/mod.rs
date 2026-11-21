@@ -418,6 +418,18 @@ impl Browser {
     }
 }
 
+#[cfg(feature = "test-support")]
+impl Browser {
+    /// How many runs the engine has in flight, from its own record; `None` without an engine.
+    pub async fn engine_running_runs(&self) -> Option<usize> {
+        match &self.inner.engine {
+            #[cfg(unix)]
+            Engine::Neo(engine) => engine.running_runs().await,
+            _ => None,
+        }
+    }
+}
+
 /// The body of `<exe> __neo-engine --config <file>`: exactly neo-server's own `main`. Runs in
 /// the engine child process, never in the server's own.
 #[cfg(unix)]

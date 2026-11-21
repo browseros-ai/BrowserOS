@@ -156,7 +156,10 @@ async fn become_ready(wire: &Wire) -> Result<Tool, String> {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let tool = wire.tool().await?;
-        let probe = wire.run(json!({ "code": "return 1" }), None).await?;
+        let probe = wire
+            .run(json!({ "code": "return 1" }), None)
+            .await
+            .map_err(|error| error.to_string())?;
         if probe["structuredContent"]["value"] != json!(1) {
             return Err(format!(
                 "the engine's first run did not return 1: {}",
