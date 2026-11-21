@@ -1,5 +1,5 @@
 //! Hand-authored streams from the OpenAI Chat Completions streaming grammar, with extensions
-//! from the Gemini OpenAI compatibility and OpenRouter reasoning-details documentation.
+//! from the Gemini OpenAI compatibility, OpenRouter reasoning-details and Kimi chat documentation.
 
 #[path = "support/fake_provider.rs"]
 mod fake_provider;
@@ -23,13 +23,19 @@ fn finished() -> Reply {
 async fn tool_deltas_and_provider_extensions_survive_follow_up() -> anyhow::Result<()> {
     let signature = json!({"google":{"thought_signature":"opaque-gemini-signature"}});
     let detail = json!({"type":"reasoning.encrypted","format":"anthropic-claude-v1","index":0,"data":"opaque-ciphertext"});
-    for kind in [ProviderKind::Google, ProviderKind::Openrouter] {
+    for kind in [
+        ProviderKind::Google,
+        ProviderKind::Openrouter,
+        ProviderKind::Moonshot,
+    ] {
         let mut delta = json!({"role":"assistant","tool_calls":[{"index":1,"id":"second","type":"function","function":{"name":"run","arguments":"{\"tab\":"}},{"index":0,"id":"first","type":"function","function":{"name":"run","arguments":"{}"}}]});
         if kind == ProviderKind::Google {
             delta["tool_calls"][0]["extra_content"] = signature.clone();
-        } else {
+        } else if kind == ProviderKind::Openrouter {
             delta["reasoning"] = json!("Thinking");
             delta["reasoning_details"] = json!([detail]);
+        } else {
+            delta["reasoning_content"] = json!("Kimi is thinking");
         }
         let fake = FakeProvider::new(vec![
             Reply::events(&[
@@ -93,10 +99,13 @@ async fn tool_deltas_and_provider_extensions_survive_follow_up() -> anyhow::Resu
         if kind == ProviderKind::Google {
             expected["extra_content"] = signature.clone();
             assert_eq!(calls[0].body["reasoning_effort"], "medium");
-        } else {
+        } else if kind == ProviderKind::Openrouter {
             assert_eq!(replay["reasoning_details"], json!([detail]));
             assert_eq!(replay["reasoning"], "Thinking");
             assert_eq!(calls[0].body["reasoning"], json!({}));
+        } else {
+            assert_eq!(replay["reasoning_content"], "Kimi is thinking");
+            assert_eq!(events[0], TurnEvent::Reasoning("Kimi is thinking".into()));
         }
         assert_eq!(replay["tool_calls"][1], expected);
         assert_eq!(calls[1].body["messages"][3]["tool_call_id"], "second");
@@ -335,5 +344,50 @@ async fn a_content_filter_finishes_without_running_tools() -> anyhow::Result<()>
     let turn = model.step(&request(&[]), &mut Vec::new()).await?;
     assert_eq!(turn.finish(), FinishReason::ContentFilter);
     assert!(turn.tool_calls().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn refusal_is_visible_and_retains_its_native_field() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![
+        Reply::events(&[
+            json!({"choices":[{"index":0,"delta":{"refusal":"I cannot "}}]}),
+            json!({"choices":[{"index":0,"delta":{"refusal":"do that."},"finish_reason":"stop"}]}),
+        ]),
+        finished(),
+    ])
+    .await?;
+    let (_dir, models) = models().await?;
+    let model = models
+        .resolve(
+            provider(
+                ProviderKind::OpenaiCompatible,
+                fake.base.clone(),
+                Credentials::None,
+            ),
+            Uuid::new_v4(),
+        )
+        .await?;
+    let mut events = Vec::new();
+    let turn = model.step(&request(&[]), &mut events).await?;
+    assert_eq!(turn.finish(), FinishReason::Stop);
+    assert_eq!(
+        events,
+        [
+            TurnEvent::Text("I cannot ".into()),
+            TurnEvent::Text("do that.".into())
+        ]
+    );
+    model
+        .step(&request(&[ModelMessage::Assistant(turn)]), &mut Vec::new())
+        .await?;
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    assert_eq!(
+        calls[1].body["messages"][1],
+        json!({"role":"assistant","content":null,"refusal":"I cannot do that."})
+    );
     Ok(())
 }

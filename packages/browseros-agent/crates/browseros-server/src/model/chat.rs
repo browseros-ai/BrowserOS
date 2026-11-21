@@ -176,6 +176,7 @@ fn body(
 #[derive(Default)]
 struct Choice {
     text: String,
+    refusal: String,
     reasoning: String,
     details: BTreeMap<(u64, String), Value>,
     calls: BTreeMap<u64, Value>,
@@ -195,6 +196,10 @@ impl Choice {
             self.text.push_str(text);
             sink.emit(TurnEvent::Text(text.into())).await;
         }
+        if let Some(refusal) = nonempty(&delta["refusal"]) {
+            self.refusal.push_str(refusal);
+            sink.emit(TurnEvent::Text(refusal.into())).await;
+        }
         if kind == ProviderKind::Openrouter {
             if let Some(text) = nonempty(&delta["reasoning"]) {
                 self.reasoning.push_str(text);
@@ -212,6 +217,11 @@ impl Choice {
             && let Some(text) =
                 nonempty(&delta["reasoning_content"]).or_else(|| nonempty(&delta["reasoning"]))
         {
+            // Kimi validates reasoning_content in the assistant message preceding tool results.
+            // Generic compatible gateways may reject this extension on replay.
+            if kind == ProviderKind::Moonshot {
+                self.reasoning.push_str(text);
+            }
             sink.emit(TurnEvent::Reasoning(text.into())).await;
         }
         if let Some(calls) = delta["tool_calls"].as_array() {
@@ -236,7 +246,7 @@ impl Choice {
         Ok(())
     }
 
-    fn complete(self) -> Result<AssistantTurn, ChatError> {
+    fn complete(self, kind: ProviderKind) -> Result<AssistantTurn, ChatError> {
         let finish = self.finish.ok_or_else(errors::disconnected)?;
         let calls = if finish == FinishReason::ToolCalls {
             self.calls
@@ -253,20 +263,28 @@ impl Choice {
             Vec::new()
         };
         let mut message = json!({"role": "assistant", "content": self.text});
+        if self.text.is_empty() && (!self.calls.is_empty() || !self.refusal.is_empty()) {
+            message["content"] = Value::Null;
+        }
         if !self.calls.is_empty() {
             message["tool_calls"] = Value::Array(self.calls.into_values().collect());
-            if self.text.is_empty() {
-                message["content"] = Value::Null;
-            }
+        }
+        if !self.refusal.is_empty() {
+            message["refusal"] = json!(self.refusal);
         }
         if !self.reasoning.is_empty() {
-            message["reasoning"] = json!(self.reasoning);
+            let field = if kind == ProviderKind::Moonshot {
+                "reasoning_content"
+            } else {
+                "reasoning"
+            };
+            message[field] = json!(self.reasoning);
         }
         if !self.details.is_empty() {
             message["reasoning_details"] = Value::Array(self.details.into_values().collect());
         }
         Ok(AssistantTurn {
-            text: self.text,
+            text: self.text + &self.refusal,
             calls,
             finish,
             usage: self.usage,
@@ -351,5 +369,5 @@ pub(super) async fn step(
             }
         }
     }
-    choice.complete()
+    choice.complete(endpoint.kind)
 }
