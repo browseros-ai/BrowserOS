@@ -423,7 +423,10 @@ mod tests {
                 },
                 TurnEvent::ToolDone {
                     id: call_id(0, 0),
-                    result: Ok(json!("Example Domain")),
+                    result: Ok(json!({
+                        "content": [{ "type": "text", "text": "Example Domain" }],
+                        "isError": false
+                    })),
                 },
                 TurnEvent::StepEnd,
                 TurnEvent::StepStart,
@@ -629,7 +632,10 @@ mod tests {
                 },
                 TurnEvent::ToolDone {
                     id: call_id(0, 0),
-                    result: Ok(json!("0")),
+                    result: Ok(json!({
+                        "content": [{ "type": "text", "text": "0" }],
+                        "isError": false
+                    })),
                 },
             ]
         );

@@ -17,7 +17,15 @@
       "input": {
         "code": "return document.title"
       },
-      "output": "Example Domain"
+      "output": {
+        "content": [
+          {
+            "text": "Example Domain",
+            "type": "text"
+          }
+        ],
+        "isError": false
+      }
     },
     {
       "type": "step-start"

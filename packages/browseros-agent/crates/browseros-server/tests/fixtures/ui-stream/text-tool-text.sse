@@ -12,7 +12,7 @@ data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"run"}
 
 data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"run","input":{"code":"return document.title"}}
 
-data: {"type":"tool-output-available","toolCallId":"call_1","output":"Example Domain"}
+data: {"type":"tool-output-available","toolCallId":"call_1","output":{"content":[{"text":"Example Domain","type":"text"}],"isError":false}}
 
 data: {"type":"finish-step"}
 

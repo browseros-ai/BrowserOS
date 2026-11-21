@@ -13,7 +13,7 @@
 use serde_json::Value;
 
 use super::prompt;
-use crate::browser::ToolOutput;
+use crate::browser::{ToolOutput, panel_result_text};
 use crate::model::{AssistantTurn, Image, ModelMessage, ToolCall};
 use crate::turn::{Role, ToolOutcome, ToolPart, TurnContext, UiMessage, UiPart};
 
@@ -480,6 +480,9 @@ fn tool_line(tool: &ToolPart) -> String {
         },
     };
     let result = match &tool.outcome {
+        ToolOutcome::Output(value) if tool.name == "run" => {
+            panel_result_text(value).map_or_else(|| value.to_string(), str::to_owned)
+        }
         ToolOutcome::Output(Value::String(text)) => text.clone(),
         ToolOutcome::Output(value) => value.to_string(),
         ToolOutcome::Error(error) => format!("error: {error}"),
@@ -683,6 +686,30 @@ mod tests {
                 ModelMessage::Assistant(turn) => assert!(turn.tool_calls().is_empty()),
                 ModelMessage::User { .. } => {}
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn earlier_run_results_reach_the_model_as_text_in_both_stored_formats() -> TestResult {
+        let text = "[UNTRUSTED_PAGE_CONTENT nonce=sample origin=run] Page data follows.\nThe result was \"Paris\".\n[END_UNTRUSTED_PAGE_CONTENT nonce=sample]";
+        for output in [
+            json!(text),
+            json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+        ] {
+            let history: Vec<UiMessage> = serde_json::from_value(json!([
+                { "id": "a1", "role": "assistant", "parts": [
+                    { "type": "tool-run", "toolCallId": "r1", "state": "output-available",
+                      "input": { "code": "return document.title" }, "output": output }
+                ]}
+            ]))?;
+            let (projected, _) = project(&history, &turn_context());
+            assert_eq!(
+                projected,
+                [Projected::Assistant(format!(
+                    "[run: return document.title → {text}]"
+                ))]
+            );
         }
         Ok(())
     }

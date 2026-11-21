@@ -102,13 +102,17 @@ const PANEL_LIMIT: usize = 64 * 1024;
 impl ToolOutput {
     /// What the panel, the run log and the stored row get: the text, never the bytes, cut at
     /// 64 KiB with a note. A cut keeps the fence's closing marker, so the next turn's model, which
-    /// reads this stored copy, still sees where the page content ends.
+    /// reads this stored copy, still sees where the page content ends. The bundled TypeScript
+    /// server feeds successful outputs to its MCP adapter when it reloads the same SQLite row.
     pub fn for_panel(&self) -> Result<serde_json::Value, String> {
         let text = cut_for_panel(&self.text);
         if self.is_error {
             Err(text)
         } else {
-            Ok(serde_json::Value::String(text))
+            Ok(serde_json::json!({
+                "content": [{ "type": "text", "text": text }],
+                "isError": false
+            }))
         }
     }
 
@@ -120,6 +124,22 @@ impl ToolOutput {
             pictures: Vec::new(),
             is_error: true,
         }
+    }
+}
+
+/// Reads the single text block written for a successful browser result, including development
+/// rows from before the server wrote the MCP envelope.
+pub(crate) fn panel_result_text(output: &serde_json::Value) -> Option<&str> {
+    if let Some(text) = output.as_str() {
+        return Some(text);
+    }
+    let [item] = output.get("content")?.as_array()?.as_slice() else {
+        return None;
+    };
+    if item.get("type")?.as_str()? == "text" {
+        item.get("text")?.as_str()
+    } else {
+        None
     }
 }
 
@@ -447,27 +467,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_short_result_reaches_the_panel_whole() {
+    fn a_short_result_reaches_the_panel_as_mcp_text() {
         let output = ToolOutput {
             text: "2".into(),
             pictures: Vec::new(),
             is_error: false,
         };
-        assert_eq!(output.for_panel(), Ok(serde_json::json!("2")));
+        assert_eq!(
+            output.for_panel(),
+            Ok(serde_json::json!({
+                "content": [{ "type": "text", "text": "2" }],
+                "isError": false
+            }))
+        );
         let failed = ToolOutput::failure("script / boom: no");
         assert_eq!(failed.for_panel(), Err("script / boom: no".to_owned()));
     }
 
     #[test]
-    fn a_long_fenced_result_is_cut_and_keeps_its_closing_marker() {
+    fn a_long_fenced_result_is_cut_and_keeps_its_closing_marker() -> anyhow::Result<()> {
         let page = "é".repeat(100_000);
-        let fenced = fence(&page);
-        let cut = cut_for_panel(&fenced);
+        let output = ToolOutput {
+            text: fence(&page),
+            pictures: Vec::new(),
+            is_error: false,
+        };
+        let result = output.for_panel().map_err(anyhow::Error::msg)?;
+        let cut = result["content"][0]["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing stored text"))?;
         assert!(cut.len() <= PANEL_LIMIT, "{} bytes", cut.len());
         assert!(cut.starts_with(FENCE_START));
-        let closing = fenced.rsplit_once('\n').map(|(_, last)| last);
+        let closing = output.text.rsplit_once('\n').map(|(_, last)| last);
         assert_eq!(cut.rsplit_once('\n').map(|(_, last)| last), closing);
-        assert!(cut.contains(&format!("the result was {} bytes", fenced.len())));
+        assert!(cut.contains(&format!("the result was {} bytes", output.text.len())));
+        Ok(())
     }
 
     #[test]

@@ -114,6 +114,31 @@ describe(`the golden UI streams under ai@${aiVersion}`, () => {
   }
 })
 
+test('the panel still replays a browser result saved as a string', async () => {
+  const golden = readFileSync(join(fixtures, 'text-tool-text.sse'), 'utf8')
+  const body = golden.replace(
+    /^data: \{"type":"tool-output-available".*$/m,
+    (line) => {
+      const chunk = JSON.parse(line.slice('data: '.length))
+      return `data: ${JSON.stringify({ ...chunk, output: 'Example Domain' })}`
+    },
+  )
+  const outcome = await reduce(body)
+
+  expect(outcome.status).toBe('ready')
+  expect(outcome.message).toMatchObject({
+    parts: expect.arrayContaining([
+      {
+        type: 'tool-run',
+        toolCallId: 'call_1',
+        state: 'output-available',
+        input: { code: 'return document.title' },
+        output: 'Example Domain',
+      },
+    ]),
+  })
+})
+
 describe('the stream the old server captured (r4)', () => {
   test('every chunk in it is one the extension accepts', async () => {
     const body = readFileSync(join(fixtures, 'r4-ts-response.sse'), 'utf8')

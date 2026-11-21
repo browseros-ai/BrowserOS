@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
+use browseros_server::browser::ToolOutput;
 use browseros_server::turn::{
     ChatError, ChatErrorCode, FinishReason, MessageId, ToolCallId, ToolOwner, Transcript, TurnEnd,
     TurnEvent,
@@ -68,6 +69,18 @@ fn done(id: &str, result: Result<Value, &str>) -> TurnEvent {
     }
 }
 
+fn browser_done(id: &str, text: &str) -> TurnEvent {
+    let output = ToolOutput {
+        text: text.into(),
+        pictures: Vec::new(),
+        is_error: false,
+    };
+    TurnEvent::ToolDone {
+        id: ToolCallId(id.into()),
+        result: output.for_panel(),
+    }
+}
+
 fn provider_error() -> ChatError {
     let mut error = ChatError::new(
         ChatErrorCode::RateLimited,
@@ -112,7 +125,7 @@ fn cases() -> Vec<Case> {
                     server,
                     json!({ "code": "return document.title" }),
                 ),
-                done("call_1", Ok(json!("Example Domain"))),
+                browser_done("call_1", "Example Domain"),
                 StepEnd,
                 StepStart,
                 text("The page is titled "),
@@ -143,7 +156,7 @@ fn cases() -> Vec<Case> {
                 started("call_1", "run", server),
                 started("call_2", "run", server),
                 input("call_1", "run", server, json!({ "code": "click('a')" })),
-                done("call_1", Ok(json!({ "clicked": true }))),
+                browser_done("call_1", r#"{"clicked":true}"#),
             ],
             end: TurnEnd::Stopped,
         },
