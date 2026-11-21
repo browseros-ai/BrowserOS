@@ -177,8 +177,46 @@ impl Models {
 
     /// `POST /test-provider`: resolve (with a fresh random conversation id), then one tiny step
     /// with no tools and a 15 s limit.
-    pub async fn test(&self, _provider: ProviderConfig) -> Result<std::time::Duration, ChatError> {
-        Err(ChatError::not_implemented("Testing a provider"))
+    pub async fn test(&self, provider: ProviderConfig) -> Result<std::time::Duration, ChatError> {
+        let start = std::time::Instant::now();
+        let probe = async {
+            let model = self.resolve(provider, ConversationId::new_v4()).await?;
+            let messages = [ModelMessage::User {
+                text: "Respond with exactly: 'ok'".into(),
+                images: Vec::new(),
+            }];
+            let turn = model
+                .step_once(
+                    &StepRequest {
+                        system: "",
+                        messages: &messages,
+                        tools: &[],
+                        effort: None,
+                    },
+                    &mut ProbeSink,
+                )
+                .await?;
+            match turn.finish() {
+                FinishReason::ContentFilter => Err(ChatError::new(
+                    crate::turn::ChatErrorCode::ContentFilter,
+                    "Content filtered",
+                    "The provider blocked the connection test.",
+                )),
+                FinishReason::Error => Err(errors::protocol(
+                    "The provider returned a failed connection test.",
+                )),
+                _ => Ok(start.elapsed()),
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(15), probe)
+            .await
+            .map_err(|_| {
+                ChatError::new(
+                    crate::turn::ChatErrorCode::ConnectionFailed,
+                    "Connection test timed out",
+                    "The provider did not respond within 15 seconds.",
+                )
+            })?
     }
 
     pub fn sign_in(&self) -> &SignIn {
@@ -320,6 +358,14 @@ impl EventSink for ObservedSink<'_> {
         self.emitted = true;
         self.inner.emit(event).await;
     }
+}
+
+/// The settings probe drives the same stream to completion without producing panel events.
+struct ProbeSink;
+
+#[async_trait::async_trait]
+impl EventSink for ProbeSink {
+    async fn emit(&mut self, _event: TurnEvent) {}
 }
 
 /// The row supplies exact wire levels; each step supplies the switch and coarse fallback.

@@ -187,3 +187,153 @@ async fn concurrent_models_keep_their_own_keys() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn classifies_provider_errors_and_retries_only_before_output() -> anyhow::Result<()> {
+    use browseros_server::turn::ChatErrorCode;
+    use http::{HeaderMap, HeaderValue, StatusCode};
+
+    let (_dir, models) = models().await?;
+    for (status, code, retry, attempts) in [
+        (401, ChatErrorCode::AuthFailed, None, 1),
+        (403, ChatErrorCode::AuthFailed, None, 1),
+        (429, ChatErrorCode::RateLimited, Some("9"), 1),
+        (429, ChatErrorCode::RateLimited, Some("0"), 3),
+        (413, ChatErrorCode::ContextLength, None, 1),
+        (500, ChatErrorCode::ProviderUnavailable, None, 3),
+    ] {
+        let mut headers = HeaderMap::new();
+        if let Some(retry) = retry {
+            headers.insert("retry-after", HeaderValue::from_str(retry)?);
+        }
+        let status = StatusCode::from_u16(status)?;
+        let fake = FakeProvider::new(
+            (0..attempts)
+                .map(|_| {
+                    Reply(
+                        status,
+                        headers.clone(),
+                        json!({"error":{"message":"Upstream echoed fixture-secret"}}).to_string(),
+                    )
+                })
+                .collect(),
+        )
+        .await?;
+        let model = models
+            .resolve(
+                provider(
+                    ProviderKind::Openrouter,
+                    fake.base.clone(),
+                    Credentials::ApiKey(Secret::new("fixture-secret")),
+                ),
+                Uuid::new_v4(),
+            )
+            .await?;
+        let Err(error) = model.step(&request(&[]), &mut Vec::new()).await else {
+            anyhow::bail!("expected provider error for {status}");
+        };
+        assert_eq!(error.code, code);
+        assert_eq!(error.status_code, Some(status.as_u16()));
+        assert_eq!(
+            error.retry_after_seconds,
+            retry.and_then(|value| value.parse().ok())
+        );
+        assert_eq!(error.message, "Upstream echoed [redacted]");
+        assert!(
+            !error
+                .details
+                .context("error details")?
+                .contains("fixture-secret")
+        );
+        assert_eq!(
+            fake.calls
+                .lock()
+                .map_err(|_| anyhow::anyhow!("capture lock"))?
+                .len(),
+            attempts
+        );
+    }
+
+    let fake = FakeProvider::new(vec![Reply::events(&[
+        json!({"choices":[{"index":0,"delta":{"content":"visible"}}]}),
+        json!({"error":{"code":502,"message":"upstream wrapper","metadata":{"raw":"{\"error\":{\"message\":\"actual upstream failure\"}}"}}}),
+    ])]).await?;
+    let model = models
+        .resolve(
+            provider(
+                ProviderKind::Openrouter,
+                fake.base.clone(),
+                Credentials::ApiKey(Secret::new("fixture-secret")),
+            ),
+            Uuid::new_v4(),
+        )
+        .await?;
+    let mut events = Vec::new();
+    let Err(error) = model.step(&request(&[]), &mut events).await else {
+        anyhow::bail!("expected an embedded stream error");
+    };
+    assert_eq!(error.code, ChatErrorCode::ProviderUnavailable);
+    assert_eq!(error.message, "actual upstream failure");
+    assert_eq!(events, [TurnEvent::Text("visible".into())]);
+    assert_eq!(
+        fake.calls
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capture lock"))?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropped_connection_is_classified_after_two_safe_retries() -> anyhow::Result<()> {
+    use tokio::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base = format!("http://{}", listener.local_addr()?);
+    let escaped = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (socket, _) = listener.accept().await?;
+            drop(socket);
+        }
+        std::io::Result::Ok(())
+    });
+    let (_dir, models) = models().await?;
+    let model = models
+        .resolve(
+            provider(ProviderKind::OpenaiCompatible, base, Credentials::None),
+            Uuid::new_v4(),
+        )
+        .await?;
+    let Err(error) = model.step(&request(&[]), &mut Vec::new()).await else {
+        anyhow::bail!("expected dropped connection");
+    };
+    assert_eq!(
+        error.code,
+        browseros_server::turn::ChatErrorCode::ConnectionFailed
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), escaped).await???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_content_filter_finishes_without_running_tools() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![Reply::events(&[
+        json!({"choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}),
+    ])])
+    .await?;
+    let (_dir, models) = models().await?;
+    let model = models
+        .resolve(
+            provider(
+                ProviderKind::OpenaiCompatible,
+                fake.base.clone(),
+                Credentials::None,
+            ),
+            Uuid::new_v4(),
+        )
+        .await?;
+    let turn = model.step(&request(&[]), &mut Vec::new()).await?;
+    assert_eq!(turn.finish(), FinishReason::ContentFilter);
+    assert!(turn.tool_calls().is_empty());
+    Ok(())
+}
