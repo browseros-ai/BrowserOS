@@ -27,6 +27,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use super::launch::{Launch, LaunchEnv, read_install_id};
+use super::report::Reporter;
 use super::{App, Parts, Shutdown};
 use crate::browser::{Browser, BrowserConfig};
 use crate::model::{Models, Script};
@@ -68,6 +69,20 @@ enum StartError {
     TooSlow,
 }
 
+impl StartError {
+    /// What a failed start reports: the kind only, never the message, which names folders.
+    fn kind(&self) -> &'static str {
+        match self {
+            StartError::StateDir { .. } => "state directory",
+            StartError::Store(_) => "store",
+            StartError::Script(_) => "mock script",
+            StartError::PortInUse { .. } => "port in use",
+            StartError::Bind { .. } => "bind",
+            StartError::TooSlow => "start-up budget",
+        }
+    }
+}
+
 /// `--print-openapi`: the generated contract on stdout, for `scripts/codegen/server-api.ts`.
 pub(super) fn print_openapi() -> ExitCode {
     match crate::http::openapi().to_pretty_json() {
@@ -97,7 +112,8 @@ pub(super) fn serve(config: &Path) -> ExitCode {
     };
     // Declared before the runtime, so it drops after it: the last lines of shutdown still reach
     // the file.
-    let _logging = install_logging(&launch.execution);
+    let reporter = Reporter::from_env();
+    let _logging = install_logging(&launch.execution, reporter.clone());
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -108,7 +124,7 @@ pub(super) fn serve(config: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let result = runtime.block_on(run(launch, started));
+    let result = runtime.block_on(run(launch, started, reporter.clone()));
     // A task still holding a socket or a child must not keep the process past the launcher's
     // kill: the shutdown budget already gave everything its time.
     runtime.shutdown_timeout(Duration::from_millis(100));
@@ -123,12 +139,14 @@ pub(super) fn serve(config: &Path) -> ExitCode {
         }
         Err(error) => {
             tracing::error!(%error, "the server did not start");
+            reporter.failed_start(error.kind());
+            reporter.flush(Duration::from_millis(500));
             ExitCode::FAILURE
         }
     }
 }
 
-async fn run(launch: Launch, started: Instant) -> Result<ExitCode, StartError> {
+async fn run(launch: Launch, started: Instant, reporter: Reporter) -> Result<ExitCode, StartError> {
     let shutdown = Shutdown::new();
     let engine_stop = tokio_util::sync::CancellationToken::new();
     // Installed before start-up: SIGTERM while the store waits on a lock must still end in
@@ -156,7 +174,10 @@ async fn run(launch: Launch, started: Instant) -> Result<ExitCode, StartError> {
         "listening"
     );
 
-    let router = crate::http::router(app.clone());
+    let router = crate::http::router(app.clone()).layer(axum::middleware::from_fn({
+        let reporter = reporter.clone();
+        move |request, next| reporter.clone().watch_500s(request, next)
+    }));
     let stopping = shutdown.token().clone();
     let server = tokio::spawn(async move {
         axum::serve(listener, router)
@@ -182,6 +203,11 @@ async fn run(launch: Launch, started: Instant) -> Result<ExitCode, StartError> {
     }
     signals.abort();
     app.store.close().await;
+    reporter.flush(
+        SHUTDOWN_BUDGET
+            .saturating_sub(stop_started.elapsed())
+            .min(CLOSE_RESERVE),
+    );
     tracing::info!(elapsed_ms = stop_started.elapsed().as_millis(), "stopped");
     Ok(if shutdown.exit_requested() {
         ExitCode::SUCCESS
@@ -307,8 +333,8 @@ async fn forward_signals(shutdown: Shutdown) {
 
 /// `tracing` to stderr and to a daily file in the execution directory, filtered by
 /// `BROWSEROS_LOG` (default `info`), and a panic hook that writes the panic to the same folder
-/// before the process dies. The returned guard flushes the file when dropped.
-fn install_logging(execution: &Path) -> Option<WorkerGuard> {
+/// and reports its location before the process dies. The returned guard flushes the file when dropped.
+fn install_logging(execution: &Path, reporter: Reporter) -> Option<WorkerGuard> {
     let filter =
         || EnvFilter::try_from_env("BROWSEROS_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr = tracing_subscriber::fmt::layer()
@@ -350,6 +376,7 @@ fn install_logging(execution: &Path) -> Option<WorkerGuard> {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&panics) {
             let _ = writeln!(file, "{info}");
         }
+        reporter.panic(info.location());
         previous(info);
     }));
     guard
