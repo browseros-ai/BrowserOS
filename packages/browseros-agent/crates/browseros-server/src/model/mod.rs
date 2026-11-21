@@ -159,7 +159,15 @@ impl Models {
                     model: provider.model,
                 }
             }
-            ProviderKind::Anthropic | ProviderKind::Bedrock => {
+            ProviderKind::Anthropic => {
+                let endpoint = anthropic::endpoint(&provider)?;
+                Route::Anthropic {
+                    http,
+                    endpoint,
+                    model: provider.model,
+                }
+            }
+            ProviderKind::Bedrock => {
                 return Err(ChatError::not_implemented("Calling this provider"));
             }
         };
@@ -248,6 +256,11 @@ enum Route {
         endpoint: ResponsesEndpoint,
         model: String,
     },
+    Anthropic {
+        http: reqwest::Client,
+        endpoint: anthropic::Endpoint,
+        model: String,
+    },
     Scripted {
         script: Script,
         /// The next step to play: one `step` call plays one scripted step.
@@ -325,6 +338,11 @@ impl Model {
                     .await
                 }
             }
+            Route::Anthropic {
+                http,
+                endpoint,
+                model,
+            } => anthropic::step(http, endpoint, model, request, &self.reasoning, sink).await,
             Route::Scripted { script, next } => scripted::step(script, next, sink).await,
         };
         result.map_err(|mut error| {
@@ -388,6 +406,17 @@ impl Reasoning {
                     Effort::High => "high",
                 }),
         )
+    }
+}
+
+/// The token budgets used by Claude models that implement manual extended thinking.
+fn thinking_budget(effort: &str) -> i32 {
+    match effort {
+        "minimal" => 1024,
+        "low" => 4096,
+        "high" => 24_576,
+        "xhigh" | "max" => 32_000,
+        _ => 8192,
     }
 }
 
@@ -578,6 +607,7 @@ enum NativeOutput {
     /// content blocks, exactly as received.
     Chat(Value),
     Responses(Vec<Value>),
+    Anthropic(Vec<Value>),
     #[expect(
         dead_code,
         reason = "built once chunk `models` writes the Bedrock route"
