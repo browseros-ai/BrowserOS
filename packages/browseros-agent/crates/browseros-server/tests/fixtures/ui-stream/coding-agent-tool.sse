@@ -1,0 +1,28 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Reading the file."}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"tool-input-start","toolCallId":"toolu_01","toolName":"Read","providerExecuted":true,"dynamic":true}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"Read","input":{"file_path":"README.md"},"providerExecuted":true,"dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":"# BrowserOS","providerExecuted":true,"dynamic":true}
+
+data: {"type":"text-start","id":"t2"}
+
+data: {"type":"text-delta","id":"t2","delta":"It is the readme."}
+
+data: {"type":"text-end","id":"t2"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

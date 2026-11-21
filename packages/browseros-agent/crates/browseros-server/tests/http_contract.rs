@@ -158,7 +158,7 @@ async fn refusals_answer_in_the_shapes_the_contract_promises() -> TestResult {
     let parsed = server.send(server.json(Method::POST, "/chat", &chat)).await;
     assert_eq!(
         parsed.status(),
-        StatusCode::NOT_IMPLEMENTED,
+        StatusCode::OK,
         "unknown fields are ignored"
     );
 
@@ -209,7 +209,7 @@ async fn a_negative_tab_id_is_refused_and_a_large_attachment_is_not() -> TestRes
     let response = server.send(server.json(Method::POST, "/chat", &chat)).await;
     assert_eq!(
         response.status(),
-        StatusCode::NOT_IMPLEMENTED,
+        StatusCode::OK,
         "a 3 MiB attachment parses"
     );
     Ok(())

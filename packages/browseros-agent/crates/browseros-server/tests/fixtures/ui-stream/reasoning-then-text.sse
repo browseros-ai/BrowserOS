@@ -1,0 +1,24 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"r1"}
+
+data: {"type":"reasoning-delta","id":"r1","delta":"The user asks about Paris. "}
+
+data: {"type":"reasoning-delta","id":"r1","delta":"Answer directly."}
+
+data: {"type":"reasoning-end","id":"r1"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Paris is in France."}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

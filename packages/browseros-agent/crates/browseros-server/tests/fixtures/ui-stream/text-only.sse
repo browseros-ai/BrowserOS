@@ -1,0 +1,18 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Paris is "}
+
+data: {"type":"text-delta","id":"t1","delta":"in France."}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+
