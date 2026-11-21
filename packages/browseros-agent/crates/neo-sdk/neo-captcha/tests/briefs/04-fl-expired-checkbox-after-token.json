@@ -1,0 +1,94 @@
+{
+  "case": "04-fl-expired-checkbox-after-token",
+  "source": "04-ohio-florida.browseros.txt 3:41 snapshot: the anchor frame reads 'Verification challenge expired. Check the checkbox again.'; the form was never sent. The rescan reads the anchor open again.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "token_injected",
+    "challenge": {
+      "kind": "recaptcha_v2",
+      "state": "active",
+      "frame": {
+        "frameId": "fl-anchor",
+        "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "fl-site-key",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "portal.claimyourcashfl.gov",
+      "widgets": [
+        {
+          "vendor": "recaptcha",
+          "part": "checkbox",
+          "shown": true,
+          "inLayer": false
+        }
+      ],
+      "submit": {
+        "label": "Search"
+      },
+      "buttons": ["Search", "Clear"],
+      "text": [
+        "ABANDONED PROPERTY SEARCH",
+        "Last Name",
+        "First Name",
+        "If the search yields too many results, narrow it by adding: City",
+        "OR Property Id",
+        "You should also consider searching all of your names, such as maiden, married, etc., and for your current and any past Florida cities in which you have resided.",
+        "Contact Us",
+        "Legislative Statute",
+        "Administrative Rules",
+        "Copyright © Florida Department of Financial Services 2019"
+      ]
+    },
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "recaptcha_v2",
+          "state": "active",
+          "frame": {
+            "frameId": "fl-anchor",
+            "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+            "rect": null
+          },
+          "challengeFrame": null,
+          "sitekey": "fl-site-key",
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": false
+    }
+  },
+  "jev": {
+    "source": "assumed, not measured: a plausible reading that pins the code path; re-measure with the live test",
+    "standing": {
+      "challenge": 0.75,
+      "failed": 0.15,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.0,
+      "clear": 0.05,
+      "insufficient": 0.05
+    },
+    "blocked": 0.85
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "jev",
+    "cause": "challenge_open"
+  }
+}

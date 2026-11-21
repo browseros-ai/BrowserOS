@@ -37,6 +37,8 @@ mod policy;
 mod providers;
 mod recaptcha;
 pub mod reservation;
+#[doc(hidden)]
+pub mod testing;
 mod turnstile;
 mod turnstile_state;
 mod twocaptcha;
@@ -848,6 +850,7 @@ impl CaptchaSolver {
             document: &routed.document,
             before: routed.before.as_ref(),
             callback_ran: flow.callback_ran,
+            token: verify::TokenReading::Unknown,
         };
         let started = Instant::now();
         let verification = match driver

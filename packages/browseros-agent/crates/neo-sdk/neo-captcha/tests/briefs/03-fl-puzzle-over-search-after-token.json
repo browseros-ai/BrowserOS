@@ -1,0 +1,101 @@
+{
+  "case": "03-fl-puzzle-over-search-after-token",
+  "source": "04-ohio-florida.browseros.txt tab 686190378: 1:54 recaptcha_v2/token_applied (paid 4); 2:01 the click on Search lands on the bframe 'recaptcha challenge expires in two minutes' (www.google.com/recaptcha/api2/bframe), 'Nothing was pressed' (S4). No snapshot at 2:01: page text from the 3:41 snapshot of the same page; bframe share assumes a 400x580 puzzle in a 1280x800 view.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "token_injected",
+    "callbackRan": true,
+    "challenge": {
+      "kind": "recaptcha_v2",
+      "state": "active",
+      "frame": {
+        "frameId": "fl-anchor",
+        "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "fl-site-key",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "portal.claimyourcashfl.gov",
+      "layer": {
+        "dialog": false,
+        "share": 0.23,
+        "overSubmit": true,
+        "vendor": "recaptcha",
+        "part": "puzzle",
+        "text": []
+      },
+      "puzzle": "recaptcha",
+      "widgets": [
+        {
+          "vendor": "recaptcha",
+          "part": "checkbox",
+          "shown": true,
+          "inLayer": false
+        },
+        {
+          "vendor": "recaptcha",
+          "part": "puzzle",
+          "shown": true,
+          "inLayer": true
+        }
+      ],
+      "submit": {
+        "label": "Search",
+        "covered": true
+      },
+      "buttons": ["Search", "Clear"],
+      "text": [
+        "ABANDONED PROPERTY SEARCH",
+        "Last Name",
+        "First Name",
+        "If the search yields too many results, narrow it by adding: City",
+        "OR Property Id",
+        "You should also consider searching all of your names, such as maiden, married, etc., and for your current and any past Florida cities in which you have resided.",
+        "Contact Us",
+        "Legislative Statute",
+        "Administrative Rules",
+        "Copyright © Florida Department of Financial Services 2019"
+      ]
+    },
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "recaptcha_v2",
+          "state": "active",
+          "frame": {
+            "frameId": "fl-anchor",
+            "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+            "rect": null
+          },
+          "challengeFrame": {
+            "frameId": "fl-bframe",
+            "url": "https://www.google.com/recaptcha/api2/bframe?hl=en&k=fl-site-key",
+            "rect": null
+          },
+          "sitekey": "fl-site-key",
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": false
+    }
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "deterministic",
+    "cause": "challenge_open"
+  }
+}

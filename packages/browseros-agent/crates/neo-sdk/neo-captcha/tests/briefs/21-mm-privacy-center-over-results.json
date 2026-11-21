@@ -1,0 +1,56 @@
+{
+  "case": "21-mm-privacy-center-over-results",
+  "source": "04-ohio-florida.browseros.txt 2:43: OneTrust 'Privacy Preference Center' over MissingMoney results (Turnstile had passed at 2:25).",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "missingmoney.com",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "text": [
+          "Privacy Preference Center",
+          "When you visit any website, it may store or retrieve information on your browser, mostly in the form of cookies.",
+          "Manage Consent Preferences",
+          "Strictly Necessary Cookies",
+          "Always Active",
+          "Reject All",
+          "Confirm My Choices"
+        ]
+      },
+      "headings": [
+        "Privacy Preference Center",
+        "Manage Consent Preferences",
+        "Strictly Necessary Cookies",
+        "Performance Cookies",
+        "Functional Cookies",
+        "CLAIM unclaimed property",
+        "Search for Unclaimed Property"
+      ],
+      "buttons": ["Reject All", "Confirm My Choices"],
+      "text": ["RESULTS: Your search returned 1000 unclaimed properties."]
+    }
+  },
+  "jev": {
+    "source": "assumed, not measured: a plausible reading that pins the code path; re-measure with the live test",
+    "standing": {
+      "challenge": 0.0,
+      "failed": 0.0,
+      "checking": 0.0,
+      "denied": 0.0,
+      "agent_policy": 0.0,
+      "other_overlay": 0.86,
+      "clear": 0.12,
+      "insufficient": 0.02
+    },
+    "blocked": 0.08
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "jev"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "case": "17-yelp-reservation-clear",
+  "source": "01-dintaifung-yelp.browserbase.txt 0:58 (0:47 no_captcha); the DataDome device check passed by itself.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "www.yelp.com",
+      "headings": [
+        "Make a reservation",
+        "Notes from the Business",
+        "About",
+        "Photos",
+        "Review Highlights"
+      ],
+      "buttons": [
+        "Restaurants sub-categories",
+        "Home & Garden sub-categories",
+        "Auto Services sub-categories",
+        "Health & Beauty sub-categories",
+        "Travel & Activities sub-categories",
+        "More sub-categories",
+        "Previous",
+        "Next"
+      ],
+      "text": [
+        "Make a reservation",
+        "If your preferred reservation date/time isn't available, we recommend coming in as a walk-in to join our waitlist, as neither Guest Services nor the restaurant is able to add a reservation for you.",
+        "We require all party members to be present before being seated.",
+        "The maximum party size for reservations is 6, including all children."
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}
