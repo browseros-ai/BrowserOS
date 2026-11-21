@@ -498,6 +498,9 @@ pub(super) fn twocaptcha_task(task: &SolveTask) -> Result<Value, String> {
     payload(task, true)
 }
 
+/// Builds one vendor's GeeTest task. The page's User-Agent goes to 2Captcha only: its
+/// GeeTest table documents `userAgent` for both versions, while CapSolver's createTask
+/// documents none (it reports the one it used in the v3 solution instead).
 fn payload(task: &SolveTask, twocaptcha: bool) -> Result<Value, String> {
     let kind = if twocaptcha {
         "GeeTestTaskProxyless"
@@ -521,6 +524,9 @@ fn payload(task: &SolveTask, twocaptcha: bool) -> Result<Value, String> {
                 json!({"type":kind,"websiteURL":p.website_url,"captchaId":p.captcha_id})
             };
             super::providers::optional(&mut value, "riskType", &p.risk_type);
+            if twocaptcha {
+                super::providers::optional(&mut value, "userAgent", &p.user_agent);
+            }
             (value, &p.website_url)
         }
         _ => return Err("invalid GeeTest parameters".into()),
@@ -689,11 +695,24 @@ mod tests {
         let mut v4 = task(4);
         if let SolveTask::GeetestV4(params) = &mut v4 {
             params.risk_type = Some("slide".into());
+            params.user_agent = Some("browser-agent".into());
         }
-        assert_eq!(
-            capsolver_task(&v4).map_err(anyhow::Error::msg)?["riskType"],
-            "slide"
+        let cap = capsolver_task(&v4).map_err(anyhow::Error::msg)?;
+        let two = twocaptcha_task(&v4).map_err(anyhow::Error::msg)?;
+        assert_eq!(cap["riskType"], "slide");
+        assert!(
+            cap.get("userAgent").is_none(),
+            "CapSolver documents no userAgent for GeeTest"
         );
+        assert_eq!(
+            two["userAgent"], "browser-agent",
+            "2Captcha documents userAgent for v4 as well as v3"
+        );
+        if let SolveTask::GeetestV4(params) = &mut v4 {
+            params.risk_type = None;
+            params.user_agent = Some(" ".into());
+        }
+        assert_eq!(twocaptcha_task(&v4), twocaptcha_task(&task(4)));
         Ok(())
     }
 

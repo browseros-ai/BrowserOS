@@ -498,6 +498,12 @@ impl CapsolverClient {
         Ok(())
     }
 
+    /// Translates a task into CapSolver's createTask body.
+    ///
+    /// No body carries the page's User-Agent: none of the task types used here documents a
+    /// `userAgent` request field (the Turnstile guide says a custom one is ignored). CapSolver
+    /// mints with a User-Agent of its own and reports it in the solution. 2Captcha does take
+    /// one, so its bodies in `twocaptcha.rs` send it.
     fn task_payload(&self, task: &SolveTask) -> Result<Value, ProviderError> {
         let bad = || {
             self.error(
@@ -2089,6 +2095,44 @@ mod tests {
         assert_eq!(sent["type"], "ReCaptchaV2EnterpriseTaskProxyLess");
         assert_eq!(sent["enterprisePayload"], json!({"s":"data-s"}));
         assert_eq!(sent["pageAction"], "verify");
+        Ok(())
+    }
+
+    #[test]
+    fn capsolver_bodies_never_carry_the_page_user_agent() -> anyhow::Result<()> {
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(file.path(), KEY)?;
+        let config = CaptchaConfig::from_lookup(|name| {
+            (name == CAPSOLVER_KEY_FILE_ENV).then(|| file.path().to_string_lossy().into())
+        });
+        let Some(provider) = &config.capsolver else {
+            anyhow::bail!("the capsolver test config is missing")
+        };
+        let client = CapsolverClient::new(provider, Client::new());
+        let SolveTask::RecaptchaToken(mut enterprise) = recaptcha() else {
+            anyhow::bail!("wrong task")
+        };
+        enterprise.enterprise = true;
+        let mut geetest = fresh_geetest("0123456789abcdef0123456789abcdef");
+        if let SolveTask::GeetestV3(params) = &mut geetest {
+            params.user_agent = Some("test-agent".into());
+        }
+        for task in [
+            recaptcha(),
+            SolveTask::RecaptchaToken(enterprise),
+            turnstile(),
+            geetest,
+            tiles(TileGrid::ThreeByThree),
+        ] {
+            let body = client
+                .task_payload(&task)
+                .map_err(|error| anyhow::anyhow!("{}: {}", task.label(), error.message))?;
+            assert!(
+                !body.to_string().to_ascii_lowercase().contains("useragent"),
+                "CapSolver documents no userAgent request field for {}",
+                task.label()
+            );
+        }
         Ok(())
     }
 
