@@ -205,7 +205,7 @@ function task(overrides: Partial<SessionSummary> = {}): SessionSummary {
 }
 
 beforeEach(async () => {
-  features = ['claw.ultrafast', 'claw.skill_drafts']
+  features = ['claw.ultrafast']
   draftReply = ready
   draftCalls = 0
   created = []
@@ -296,8 +296,8 @@ async function click(target: Element | undefined) {
 }
 
 describe('making a skill from a task', () => {
-  it('tests that a plan without skill drafts sees no button', async () => {
-    features = ['claw.ultrafast']
+  it('tests that a plan without ultrafast sees no button', async () => {
+    features = []
     await mount(task())
     expect(button('Make it a skill')).toBeUndefined()
   })

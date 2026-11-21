@@ -61,9 +61,9 @@ const draft: SkillDraft = {
 }
 
 describe('who sees the button', () => {
-  test('needs ultrafast and skill drafts', () => {
-    expect(canDraftSkills(['claw.ultrafast', 'claw.skill_drafts'])).toBe(true)
-    expect(canDraftSkills(['claw.ultrafast'])).toBe(false)
+  test('comes with ultrafast', () => {
+    expect(canDraftSkills(['claw.ultrafast'])).toBe(true)
+    expect(canDraftSkills([])).toBe(false)
     expect(canDraftSkills(undefined)).toBe(false)
   })
 
