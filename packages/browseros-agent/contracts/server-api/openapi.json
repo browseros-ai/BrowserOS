@@ -1334,6 +1334,16 @@
               }
             }
           },
+          "500": {
+            "description": "The sign-in store could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "503": {
             "description": "The install id is unreadable, so no sign-in can be stored.",
             "content": {
@@ -1391,6 +1401,16 @@
           },
           "403": {
             "description": "The request did not come from the extension on this machine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The sign-in could not be removed from the store.",
             "content": {
               "application/json": {
                 "schema": {
