@@ -244,7 +244,10 @@ impl Message {
         }
         match block["type"].as_str() {
             Some("tool_use") => {
-                let tool = tool_call(&block["id"], &block["name"], block["input"].clone())?;
+                // Some compatible servers omit the initial input object and stream it
+                // entirely as deltas. Preserve the block so completion still requires input.
+                let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
+                let tool = tool_call(&block["id"], &block["name"], input)?;
                 tool_started(sink, &tool.id.0, &tool.name).await;
             }
             Some("text") => {

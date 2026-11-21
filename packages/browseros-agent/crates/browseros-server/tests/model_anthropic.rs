@@ -25,7 +25,7 @@ async fn signed_and_redacted_thinking_replay_with_the_tool_result() -> anyhow::R
             json!({"type":"content_block_stop","index":0}),
             json!({"type":"content_block_start","index":1,"content_block":redacted}),
             json!({"type":"content_block_stop","index":1}),
-            json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"run","input":{}}}),
+            json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"run"}}),
             json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"code\":"}}),
             json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\"1+1\"}"}}),
             json!({"type":"content_block_stop","index":2}),

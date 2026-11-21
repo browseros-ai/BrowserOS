@@ -294,6 +294,33 @@ async fn classifies_provider_errors_and_retries_only_before_output() -> anyhow::
     Ok(())
 }
 
+// Codex returns a named error. llama.cpp's router returns a numeric code.
+const MISSING_MODEL_REPLIES: [&str; 2] = [
+    r#"{"error":{"type":"invalid_request_error","code":"model_not_found","message":"The 'fixture-model' model is not supported."}}"#,
+    r#"{"error":{"type":"invalid_request_error","code":400,"message":"model 'fixture-model' not found"}}"#,
+];
+
+#[tokio::test]
+async fn invalid_model_opens_provider_settings() -> anyhow::Result<()> {
+    use browseros_server::turn::ChatErrorCode;
+    use http::{HeaderMap, StatusCode};
+
+    let replies = MISSING_MODEL_REPLIES
+        .map(|body| Reply(StatusCode::BAD_REQUEST, HeaderMap::new(), body.into()));
+    let fake = FakeProvider::new(Vec::from(replies)).await?;
+    let (_dir, models) = models().await?;
+    for _ in MISSING_MODEL_REPLIES {
+        let key = Credentials::ApiKey(Secret::new("fixture-key"));
+        let config = provider(ProviderKind::Openai, fake.base.clone(), key);
+        let Err(error) = models.test(config).await else {
+            anyhow::bail!("expected a model configuration error");
+        };
+        assert_eq!(error.code, ChatErrorCode::ProviderConfig);
+        assert!(error.message.contains("fixture-model"));
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn dropped_connection_is_classified_after_two_safe_retries() -> anyhow::Result<()> {
     use tokio::net::TcpListener;

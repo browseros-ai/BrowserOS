@@ -90,14 +90,30 @@ export const CHATGPT_SUBSCRIPTION_ID = 'chatgpt-pro'
  */
 const CODEX_MIN_GENERATION = 5
 
-/**
- * Codex variants models.dev does not carry, because they are not on the
- * platform API.
- *
- * `lastUpdated` here only orders the picker and is aligned with each model's
- * generation; it is not sourced from anywhere.
- */
-const CODEX_ONLY_MODELS: Array<{ lastUpdated: string; model: OutputModel }> = [
+// The ChatGPT backend returned model_not_found for these IDs on 2026-11-21.
+// Checked with one ChatGPT account. This filter does not apply to the OpenAI API.
+const CODEX_REJECTED_MODELS = new Set([
+  'gpt-5.3-codex',
+  'gpt-5.3-codex-spark',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.4-nano',
+  'gpt-5.5',
+  'gpt-5.6',
+])
+
+// Include Codex-only models and use subscription-specific limits where known.
+const CODEX_MODELS: DatedModel[] = [
+  {
+    lastUpdated: '2026-09-29',
+    model: {
+      ...codexVariant('gpt-6.1-sol', 'GPT-6.1 Sol', 500000),
+      supportsTemperature: false,
+      reasoningControls: [
+        { type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      ],
+    },
+  },
   {
     lastUpdated: '2025-12-11',
     model: codexVariant('gpt-5.2-codex', 'GPT-5.2 Codex', 400000),
@@ -153,7 +169,7 @@ function gptGeneration(id: string): number | null {
 function isServedByCodexChat(model: OutputModel): boolean {
   const generation = gptGeneration(model.id)
   if (generation === null || generation < CODEX_MIN_GENERATION) return false
-  return !model.id.endsWith('-pro')
+  return !model.id.endsWith('-pro') && !CODEX_REJECTED_MODELS.has(model.id)
 }
 
 export const PROVIDER_MAP: Record<string, string> = {
@@ -305,21 +321,22 @@ function sortByRecency(models: DatedModel[]): OutputModel[] {
  *
  * Built from the openai catalogue rather than listed by hand, so a new
  * generation is selectable the day models.dev carries it. Two corrections are
- * applied on top, both narrower than the catalogue itself: models the Codex
- * chat path cannot serve are dropped, and the codex-only variants the platform
- * API never exposed are added back.
+ * applied on top: drop models the Codex chat path cannot serve, then use
+ * Codex's model entries to include its variants and apply subscription limits.
  */
 export function deriveChatGptSubscription(
   openai: ModelsDevProvider,
 ): OutputProvider {
-  const served = datedModels(openai).filter((entry) =>
-    isServedByCodexChat(entry.model),
+  const served = new Map(
+    [...datedModels(openai), ...CODEX_MODELS]
+      .filter(({ model }) => isServedByCodexChat(model))
+      .map((entry) => [entry.model.id, entry]),
   )
 
   return {
     name: 'ChatGPT',
     doc: openai.doc,
-    models: sortByRecency([...served, ...CODEX_ONLY_MODELS]),
+    models: sortByRecency([...served.values()]),
   }
 }
 

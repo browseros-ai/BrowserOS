@@ -49,13 +49,12 @@ const FIREWORKS_BASE_URL = 'https://api.fireworks.ai/inference/v1'
  */
 export const providerTemplates: ProviderTemplate[] = [
   {
-    id: 'chatgpt-pro',
+    ...enrichTemplate('chatgpt-pro', {
+      defaultBaseUrl: 'https://chatgpt.com/backend-api',
+      defaultModelId: 'gpt-6.1-sol',
+      setupGuideUrl: 'https://docs.browseros.com/features/chatgpt-pro-oauth',
+    }),
     name: CHATGPT_PROVIDER_DISPLAY_NAME,
-    defaultBaseUrl: 'https://chatgpt.com/backend-api',
-    defaultModelId: 'gpt-5.5',
-    supportsImages: true,
-    contextWindow: 1050000,
-    setupGuideUrl: 'https://docs.browseros.com/features/chatgpt-pro-oauth',
   },
   {
     id: 'moonshot',
