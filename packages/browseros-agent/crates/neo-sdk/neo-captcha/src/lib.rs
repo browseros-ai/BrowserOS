@@ -76,6 +76,8 @@ pub const SOLVE_DEADLINE: Duration = Duration::from_secs(120);
 /// Kept back from each flow's deadline while the verify check is on, so the check (rescan,
 /// probe, settle, one judge call) always has time after the flow.
 const VERIFY_RESERVE: Duration = Duration::from_secs(8);
+/// The most the page brief taken before a flow may cost.
+const BEFORE_BRIEF_BUDGET: Duration = Duration::from_millis(1_500);
 /// Paid tasks a second round may buy: one token for a remedy, never another tile solve. The
 /// chain checks it against the solve's charged tasks before every vendor attempt.
 const RETRY_MAX_PAID: u32 = 1;
@@ -95,6 +97,9 @@ struct Payments {
     /// The fingerprint of the last token a provider sold this solve, and when: the token a
     /// `token_applied` claim rests on. The token itself is never kept.
     applied: Option<verify::AppliedToken>,
+    /// The family and round of the flow running now, stamped on a token it buys.
+    flow_kind: Option<CaptchaKind>,
+    round: u32,
 }
 
 impl Payments {
@@ -105,10 +110,14 @@ impl Payments {
             Ok(answer) => {
                 self.count += 1;
                 self.provider = Some(answer.provider);
-                if let types::SolveAnswer::Token(token) = &answer.answer {
+                if let (types::SolveAnswer::Token(token), Some(kind)) =
+                    (&answer.answer, self.flow_kind)
+                {
                     self.applied = Some(verify::AppliedToken {
                         mark: verify::token_mark(token),
                         at: Instant::now(),
+                        kind,
+                        round: self.round,
                     });
                 }
                 self.cost_usd += answer
@@ -706,11 +715,21 @@ impl CaptchaSolver {
                         .for_solve(Arc::clone(rc.payments), host.as_deref());
                     let backend = providers.with_paid_ceiling(plan.paid_ceiling);
                     // The page before the flow, so the check can tell new alerts from old ones.
+                    // Bounded: a page whose scripts stall must not eat the flow's time. Without a
+                    // before-brief the check simply cannot tell new alerts from old ones.
                     let before = if self.verify == config::VerifyMode::Off {
                         None
                     } else {
-                        evidence::brief(page).await.ok()
+                        tokio::time::timeout(BEFORE_BRIEF_BUDGET, evidence::brief(page))
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
                     };
+                    {
+                        let mut paid = rc.payments.lock().unwrap_or_else(|e| e.into_inner());
+                        paid.flow_kind = Some(challenge.kind);
+                        paid.round = plan.round;
+                    }
                     let ctx = SolveCtx {
                         page,
                         backend: &backend,
@@ -813,14 +832,15 @@ impl CaptchaSolver {
         page_failure(PageError::Navigated)
     }
 
-    /// The token a claim rests on. A `token_applied` claim names the token this solve bought
-    /// (and the solver remembers it for the page); any other claim on the same document and
-    /// family may name the one an earlier call applied there.
+    /// The token a claim rests on. A `token_applied` claim names the token this round's flow
+    /// bought for this family (and the solver remembers it for the page); any other claim on the
+    /// same document and family may name the one an earlier call applied there.
     fn applied_token(
         &self,
         rc: &RoundCtx<'_>,
         routed: &Routed,
         basis: verify::Basis,
+        round: u32,
     ) -> Option<verify::AppliedToken> {
         let mut remembered = self
             .applied_tokens
@@ -834,7 +854,10 @@ impl CaptchaSolver {
                     .applied
                     .clone()
             })
-            .flatten();
+            .flatten()
+            // Only this round's token for this widget's family: a rescan may route another
+            // family in round two, and its claim must not rest on round one's token.
+            .filter(|token| Some(token.kind) == routed.kind && token.round == round);
         if let (Some(token), Some(kind)) = (&bought, routed.kind) {
             remembered.retain(|_, entry| entry.token.at.elapsed() < REMEMBER_TOKENS_FOR);
             remembered.insert(
@@ -892,7 +915,7 @@ impl CaptchaSolver {
             return Checked::Done(unconfirmed(&flow), None);
         };
         let basis = verify::Basis::of(&flow, routed.kind);
-        let applied = self.applied_token(rc, &routed, basis);
+        let applied = self.applied_token(rc, &routed, basis, round);
         let claim = verify::Claim {
             basis,
             kind: routed.kind,
@@ -1196,6 +1219,10 @@ mod orchestration_tests {
         notice: Option<Value>,
         /// The policy-wall read throws, as on a page still loading.
         notice_fails: bool,
+        /// What the check's read of the response fields' fingerprints returns.
+        token_marks: Option<Value>,
+        /// Every DOM scan hangs, as on a page whose scripts stall.
+        dom_stalls: bool,
     }
     impl FakePage {
         fn new(document: Result<DocumentId, PageError>) -> Self {
@@ -1204,6 +1231,8 @@ mod orchestration_tests {
                 clicks: AtomicU32::new(0),
                 notice: None,
                 notice_fails: false,
+                token_marks: None,
+                dom_stalls: false,
             }
         }
     }
@@ -1231,6 +1260,15 @@ mod orchestration_tests {
         async fn click_at(&self, _: f64, _: f64) -> Result<(), PageError> {
             self.clicks.fetch_add(1, Ordering::Relaxed);
             Ok(())
+        }
+        async fn scan_dom(&self, _: Option<&FrameRef>, function: &str) -> Result<Value, PageError> {
+            if self.dom_stalls {
+                std::future::pending::<()>().await;
+            }
+            match &self.token_marks {
+                Some(marks) if function.contains("captcha:verify-token") => Ok(marks.clone()),
+                _ => Err(PageError::Browser("DOM scan unavailable".into())),
+            }
         }
         async fn screenshot_clip(&self, _: Rect) -> Result<String, PageError> {
             Ok(String::new())
@@ -1263,6 +1301,8 @@ mod orchestration_tests {
         check_error: Option<PageError>,
         /// The fingerprint of the applied token each check was handed.
         applied_seen: Mutex<Vec<Option<String>>>,
+        /// Only the first flow run buys a token.
+        pays_first_only: bool,
     }
     impl FakeDriver {
         fn new(detection: Detection) -> Self {
@@ -1278,6 +1318,7 @@ mod orchestration_tests {
                 second: None,
                 check_error: None,
                 applied_seen: Mutex::new(Vec::new()),
+                pays_first_only: false,
             }
         }
         fn finding(standing: verify::Standing, tier: types::VerifyTier) -> verify::Verification {
@@ -1311,6 +1352,7 @@ mod orchestration_tests {
             let (method, reason) = match challenge.kind {
                 CaptchaKind::RecaptchaV2 => (SolveMethod::Checkbox, SolveReason::CheckboxPassed),
                 CaptchaKind::Turnstile => (SolveMethod::AutoPass, SolveReason::AutoPassed),
+                CaptchaKind::Arkose => (SolveMethod::Token, SolveReason::AwaitingSubmit),
                 _ => unreachable!("unsupported challenge reached flow"),
             };
             ctx.lease
@@ -1349,7 +1391,11 @@ mod orchestration_tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(ctx.remedy);
-            if let Some(answer) = &self.pays {
+            if let Some(answer) = self
+                .pays
+                .as_ref()
+                .filter(|_| !self.pays_first_only || earlier_runs == 0)
+            {
                 // Through the round's backend, so a second round's one-task limit applies.
                 let task = types::SolveTask::TurnstileToken(types::TurnstileParams {
                     website_url: ctx.page_url.clone(),
@@ -2009,6 +2055,99 @@ mod orchestration_tests {
         Ok(())
     }
 
+    /// A rescan that routes another family in round two gets no token of round one's.
+    #[tokio::test]
+    async fn tests_that_a_token_is_named_only_for_its_own_family_and_round() -> anyhow::Result<()> {
+        use types::{BlockCause, VerifyTier};
+        let mut driver = FakeDriver {
+            pays_first_only: true,
+            ..token_flow_driver(vec![
+                FakeDriver::finding(
+                    verify::Standing::Blocked(BlockCause::ChallengeOpen),
+                    VerifyTier::Deterministic,
+                ),
+                FakeDriver::finding(verify::Standing::Clear, VerifyTier::Deterministic),
+            ])
+        };
+        driver.scans = Mutex::new(VecDeque::from([
+            Ok(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                true,
+            )),
+            Ok(scan(
+                &[(CaptchaKind::Turnstile, ChallengeState::Active)],
+                true,
+            )),
+        ]));
+        run_checked(
+            &checking(config::VerifyMode::On),
+            &FakePage::new(Ok(document("current"))),
+            &driver,
+        )
+        .await?;
+        assert_eq!(
+            *driver
+                .applied_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            [Some(verify::token_mark("token")), None],
+            "the Turnstile claim must not rest on the reCAPTCHA token"
+        );
+        Ok(())
+    }
+
+    /// The page brief taken before a flow is bounded: a page whose scripts stall costs the
+    /// solve 1.5 s, never its deadline.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_stalled_page_brief_costs_at_most_its_budget() -> anyhow::Result<()> {
+        let page = FakePage {
+            dom_stalls: true,
+            ..FakePage::new(Ok(document("current")))
+        };
+        let driver = token_flow_driver(vec![FakeDriver::finding(
+            verify::Standing::Clear,
+            types::VerifyTier::Deterministic,
+        )]);
+        let started = Instant::now();
+        let outcome = run_checked(&checking(config::VerifyMode::On), &page, &driver).await?;
+        assert_eq!(outcome.status, SolveStatus::TokenApplied);
+        assert!(started.elapsed() >= BEFORE_BRIEF_BUDGET);
+        assert!(started.elapsed() < BEFORE_BRIEF_BUDGET + Duration::from_secs(1));
+        Ok(())
+    }
+
+    /// Arkose keeps its token outside the fields the check reads. A field that is not there
+    /// proves nothing, so the claim keeps telling the agent to submit, and no money moves.
+    #[tokio::test]
+    #[ignore = "needs verify::token_reading to read a missing response field as Unknown (review R2-1)"]
+    async fn tests_that_an_arkose_token_applied_keeps_its_answer() -> anyhow::Result<()> {
+        let page = FakePage {
+            token_marks: Some(json!([])),
+            ..FakePage::new(Ok(document("current")))
+        };
+        let mut driver = token_flow_driver(Vec::new());
+        // Arkose's flow declares no callback, so nothing excuses a missing field but the rule
+        // that a field which is not there proves nothing.
+        if let Some(result) = &mut driver.result {
+            result.callback_ran = false;
+        }
+        driver.scans = Mutex::new(VecDeque::from([Ok(scan(
+            &[(CaptchaKind::Arkose, ChallengeState::Active)],
+            true,
+        ))]));
+        let outcome = run_checked(&checking(config::VerifyMode::On), &page, &driver).await?;
+        assert_eq!(
+            (outcome.status, outcome.reason, outcome.paid_tasks),
+            (SolveStatus::TokenApplied, SolveReason::AwaitingSubmit, 1)
+        );
+        assert_eq!(
+            *driver.remedies.lock().unwrap_or_else(|e| e.into_inner()),
+            [None],
+            "no second round"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tests_that_a_remedy_reaches_only_the_family_it_was_chosen_for() -> anyhow::Result<()> {
         use types::{BlockCause, VerifyTier};
@@ -2118,7 +2257,7 @@ mod orchestration_tests {
     }
 
     #[test]
-    fn tests_that_page_read_failures_start_with_the_shared_wording() {
+    fn tests_that_page_read_failures_start_with_the_shared_wording() -> anyhow::Result<()> {
         for error in [
             PageError::Timeout,
             PageError::Browser("Frame was detached".into()),
@@ -2128,10 +2267,11 @@ mod orchestration_tests {
                 "neo-server passes on exactly these lines"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn tests_that_flows_get_less_time_only_while_the_check_runs() {
+    fn tests_that_flows_get_less_time_only_while_the_check_runs() -> anyhow::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(120);
         assert_eq!(
             checking(config::VerifyMode::Off).flow_deadline(deadline),
@@ -2143,6 +2283,7 @@ mod orchestration_tests {
                 deadline - VERIFY_RESERVE
             );
         }
+        Ok(())
     }
 
     #[tokio::test]

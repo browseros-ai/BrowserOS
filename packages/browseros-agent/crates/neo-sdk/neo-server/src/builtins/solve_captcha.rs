@@ -212,9 +212,10 @@ fn message(verdict: Verdict, reason: SolveReason) -> String {
     worded(verdict, cause(reason))
 }
 
-/// Words of claw-server's MCP tools, which the crate's own messages may use and this SDK's
-/// lines must not.
-const CLAW_SERVER_WORDS: [&str; 3] = ["snapshot", "solve_captcha", "request_human_help"];
+/// Phrases naming claw-server's MCP tools, which the crate's own messages may use and this
+/// SDK's lines must not. Phrases, not bare words: a browser cause such as
+/// `DOMSnapshot.captureSnapshot failed` is no tool and still reaches the script.
+const CLAW_SERVER_WORDS: [&str; 3] = ["fresh snapshot", "solve_captcha", "request_human_help"];
 
 fn names_claw_server_tools(line: &str) -> bool {
     CLAW_SERVER_WORDS.iter().any(|word| line.contains(word))
@@ -561,7 +562,8 @@ mod tests {
     }
 
     #[test]
-    fn a_browser_error_never_passes_on_a_line_naming_claw_server_tools() {
+    fn a_browser_error_never_passes_on_a_line_naming_claw_server_tools()
+    -> Result<(), Box<dyn Error>> {
         use super::message_for;
         for flow_line in [
             "The Turnstile solve stopped; take a fresh snapshot before continuing.",
@@ -586,6 +588,17 @@ mod tests {
             message_for(Verdict::Unknown, &solve).contains("(Frame was detached)"),
             "the browser call that failed still reaches the script"
         );
+        for cause in ["Frame was detached", "DOMSnapshot.captureSnapshot failed"] {
+            let mut solve = outcome(SolveStatus::Failed, SolveReason::BrowserError);
+            format!("{} failed ({cause}).", neo_captcha::PAGE_CHECK_FAILED)
+                .clone_into(&mut solve.message);
+            let value = verdict_value(&solve).ok_or("missing verdict")?;
+            assert!(
+                value.message.contains(cause),
+                "a browser cause is no claw-server tool: {cause}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
