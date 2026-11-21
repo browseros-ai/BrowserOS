@@ -18,16 +18,12 @@ import type {
 import { neoName } from '@/screens/skills/skills.helpers'
 
 export const ULTRAFAST_FEATURE = 'claw.ultrafast'
-export const SKILL_DRAFTS_FEATURE = 'claw.skill_drafts'
 
-/** Whether this plan can make skills from tasks: ultrafast plus the skill drafts feature. */
+/** Whether this plan can make skills from tasks: every ultrafast plan can. */
 export function canDraftSkills(
   features: readonly string[] | undefined,
 ): boolean {
-  return (
-    features?.includes(ULTRAFAST_FEATURE) === true &&
-    features.includes(SKILL_DRAFTS_FEATURE)
-  )
+  return features?.includes(ULTRAFAST_FEATURE) === true
 }
 
 /** A finished, or stopped but error-free, task with at least two steps and no skill yet can become one. */
