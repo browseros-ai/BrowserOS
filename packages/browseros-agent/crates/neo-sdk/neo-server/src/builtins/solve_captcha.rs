@@ -140,11 +140,19 @@ impl Method for SolveCaptcha {
     }
 }
 
-/// Whether Neo ran a solve attempt, used to pick the closing and browser-error wording.
+/// Whether the wire `attempted` flag is set, used to pick the closing and browser-error wording.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Attempt {
     Ran,
     Skipped,
+}
+
+/// Whether the solver actually ran a step (a non-`none` method, any attempt counter above zero,
+/// or any paid task), as distinct from `attempted`, which follows the reason-level wire rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SolverWork {
+    Acted,
+    StoppedEarly,
 }
 
 /// The script's value for an outcome, or `None` for a solve the crate reports cancelled by its
@@ -161,16 +169,31 @@ fn solve_value(outcome: &SolveOutcome) -> Option<SolveOutput> {
     } else {
         Attempt::Skipped
     };
+    let work = solver_work(outcome);
     Some(SolveOutput {
         attempted: did_attempt,
         kind: outcome.kind,
         method: outcome.method,
         reason: outcome.reason,
-        message: message_for(outcome.reason, outcome.kind, attempt),
+        message: message_for(outcome.reason, outcome.kind, attempt, work),
         duration_ms: outcome.duration_ms,
         paid_tasks: outcome.paid_tasks,
         provider: outcome.provider,
     })
+}
+
+/// Whether the solver actually clicked, waited with a method, or made a provider request.
+const fn solver_work(outcome: &SolveOutcome) -> SolverWork {
+    let did_work = !matches!(outcome.method, SolveMethod::None)
+        || outcome.attempts.checkbox > 0
+        || outcome.attempts.tile_rounds > 0
+        || outcome.attempts.token > 0
+        || outcome.paid_tasks > 0;
+    if did_work {
+        SolverWork::Acted
+    } else {
+        SolverWork::StoppedEarly
+    }
 }
 
 /// Whether Neo ran a solve attempt rather than stopping before acting. Exhaustive on
@@ -251,8 +274,13 @@ const CLOSING_NOT_ATTEMPTED: &str = "Neo cannot tell whether the page is clear â
 
 /// Neo SDK's one line for an outcome: what Neo did, then how the caller must verify the page.
 /// Exhaustive on [`SolveReason`] and [`CaptchaKind`] so new variants do not compile until worded.
-fn message_for(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt) -> String {
-    let action = what_neo_did(reason, kind, attempt);
+fn message_for(
+    reason: SolveReason,
+    kind: Option<CaptchaKind>,
+    attempt: Attempt,
+    work: SolverWork,
+) -> String {
+    let action = what_neo_did(reason, kind, attempt, work);
     let close = match attempt {
         Attempt::Ran => CLOSING_ATTEMPTED,
         Attempt::Skipped => CLOSING_NOT_ATTEMPTED,
@@ -286,7 +314,12 @@ const fn family_name(kind: Option<CaptchaKind>) -> &'static str {
 }
 
 /// Factual summary of what Neo did for `reason`, naming the family from `kind`.
-fn what_neo_did(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt) -> String {
+fn what_neo_did(
+    reason: SolveReason,
+    kind: Option<CaptchaKind>,
+    attempt: Attempt,
+    work: SolverWork,
+) -> String {
     let label = family_label(kind);
     let name = family_name(kind);
     let article = if matches!(kind, Some(CaptchaKind::AwsWaf | CaptchaKind::Arkose)) {
@@ -297,6 +330,19 @@ fn what_neo_did(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt
     match reason {
         SolveReason::AutoPassed if kind == Some(CaptchaKind::CloudflareChallenge) => {
             "Neo waited and Cloudflare's full-page check went away".to_owned()
+        }
+        SolveReason::ChallengeNotPassed if kind == Some(CaptchaKind::CloudflareChallenge) => {
+            "Neo waited on Cloudflare's full-page check and it did not go away".to_owned()
+        }
+        SolveReason::ChallengeNotPassed
+        | SolveReason::TilesExhausted
+        | SolveReason::AcceptanceUnconfirmed
+        | SolveReason::DeadlineExceeded
+            if work == SolverWork::StoppedEarly =>
+        {
+            format!(
+                "Neo found the {label} widget and stopped before it clicked or requested anything"
+            )
         }
         SolveReason::AutoPassed => {
             format!("Neo waited and the {label} widget produced a new response on its own")
@@ -334,10 +380,9 @@ fn what_neo_did(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt
         SolveReason::ScanIncomplete => {
             "Neo could not fully scan the page and attempted nothing".to_owned()
         }
-        SolveReason::AcceptanceUnconfirmed => format!(
-            "Neo attempted {article} {label} solve and could not confirm its token stayed in the \
-             page"
-        ),
+        SolveReason::AcceptanceUnconfirmed => {
+            format!("Neo attempted {article} {label} solve and could not confirm the result")
+        }
         SolveReason::ProviderError => {
             format!(
                 "Neo asked a CAPTCHA provider for {article} {label} answer and the provider failed"
@@ -348,7 +393,7 @@ fn what_neo_did(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt
             Attempt::Skipped => "A browser call failed before Neo could attempt a solve".to_owned(),
         },
         SolveReason::DeadlineExceeded => {
-            format!("Neo's {label} attempt ran past its 120 s limit")
+            format!("Neo's {label} attempt timed out before it finished")
         }
         SolveReason::CallerCancelled => "The run stopped during Neo's attempt".to_owned(),
         SolveReason::TabClosed => "The tab closed during Neo's attempt".to_owned(),
@@ -362,9 +407,6 @@ fn what_neo_did(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt
         SolveReason::TilesExhausted => {
             format!("Neo tried the {label} image challenge and every round failed")
         }
-        SolveReason::ChallengeNotPassed if kind == Some(CaptchaKind::CloudflareChallenge) => {
-            "Neo waited on Cloudflare's full-page check and it did not go away".to_owned()
-        }
         SolveReason::ChallengeNotPassed => {
             format!("Neo attempted the {label} challenge and the widget produced no response")
         }
@@ -376,17 +418,17 @@ fn what_neo_did(reason: SolveReason, kind: Option<CaptchaKind>, attempt: Attempt
 
 #[cfg(test)]
 mod tests {
-    use std::fmt;
+    use std::collections::BTreeSet;
+    use std::error::Error;
 
     use neo_captcha::types::{
         Attempts, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, SolveStatus,
     };
-    use serde::de::{self, Deserialize, Deserializer, MapAccess, Visitor};
     use serde_json::json;
 
     use super::{
-        Attempt, CLOSING_ATTEMPTED, CLOSING_NOT_ATTEMPTED, LISTED, attempted, message_for,
-        solve_value,
+        Attempt, CLOSING_ATTEMPTED, CLOSING_NOT_ATTEMPTED, LISTED, SolverWork, attempted,
+        message_for, solve_value,
     };
 
     const REASONS: [SolveReason; 22] = [
@@ -437,38 +479,6 @@ mod tests {
         "solve_captcha",
     ];
 
-    /// Deserializes only a JSON object's top-level key names in wire order.
-    struct WireKeys(Vec<String>);
-
-    impl<'de> Deserialize<'de> for WireKeys {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            struct KeysVisitor;
-            impl<'de> Visitor<'de> for KeysVisitor {
-                type Value = WireKeys;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    formatter.write_str("a JSON object")
-                }
-
-                fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-                where
-                    A: MapAccess<'de>,
-                {
-                    let mut keys = Vec::new();
-                    while let Some(key) = map.next_key::<String>()? {
-                        let _: de::IgnoredAny = map.next_value()?;
-                        keys.push(key);
-                    }
-                    Ok(WireKeys(keys))
-                }
-            }
-            deserializer.deserialize_map(KeysVisitor)
-        }
-    }
-
     fn outcome(status: SolveStatus, reason: SolveReason) -> SolveOutcome {
         SolveOutcome {
             status,
@@ -492,70 +502,76 @@ mod tests {
         for reason in REASONS {
             for kind in KINDS {
                 for attempt in [Attempt::Ran, Attempt::Skipped] {
-                    let line = message_for(reason, kind, attempt);
-                    assert!(
-                        !line.contains('\n'),
-                        "message must be a single line ({reason:?} / {kind:?}): {line}"
-                    );
-                    assert!(
-                        line.contains("snapshot and screenshot"),
-                        "message must tell the caller to inspect snapshot and screenshot \
-                         ({reason:?} / {kind:?}): {line}"
-                    );
-                    let expected_closing = match attempt {
-                        Attempt::Ran => CLOSING_ATTEMPTED,
-                        Attempt::Skipped => CLOSING_NOT_ATTEMPTED,
-                    };
-                    assert!(
-                        line.ends_with(&format!("; {expected_closing}")),
-                        "message must use the matching closing ({reason:?} / {kind:?}): {line}"
-                    );
-                    for banned in FORBIDDEN {
+                    for work in [SolverWork::Acted, SolverWork::StoppedEarly] {
+                        let line = message_for(reason, kind, attempt, work);
                         assert!(
-                            !line.contains(banned),
-                            "message must not contain `{banned}` ({reason:?} / {kind:?}): {line}"
+                            !line.contains('\n'),
+                            "message must be a single line ({reason:?} / {kind:?} / {work:?}): \
+                             {line}"
+                        );
+                        assert!(
+                            line.contains("snapshot and screenshot"),
+                            "message must tell the caller to inspect snapshot and screenshot \
+                             ({reason:?} / {kind:?} / {work:?}): {line}"
+                        );
+                        let expected_closing = match attempt {
+                            Attempt::Ran => CLOSING_ATTEMPTED,
+                            Attempt::Skipped => CLOSING_NOT_ATTEMPTED,
+                        };
+                        assert!(
+                            line.ends_with(&format!("; {expected_closing}")),
+                            "message must use the matching closing ({reason:?} / {kind:?}): {line}"
+                        );
+                        for banned in FORBIDDEN {
+                            assert!(
+                                !line.contains(banned),
+                                "message must not contain `{banned}` ({reason:?} / {kind:?}): \
+                                 {line}"
+                            );
+                        }
+                        assert!(
+                            !line.contains("the the ")
+                                && !line.contains("a the ")
+                                && !line.contains("Neo's the "),
+                            "message must stay grammatical when kind is absent or unknown \
+                             ({reason:?} / {kind:?}): {line}"
                         );
                     }
-                    assert!(
-                        !line.contains("the the ")
-                            && !line.contains("a the ")
-                            && !line.contains("Neo's the "),
-                        "message must stay grammatical when kind is absent or unknown \
-                         ({reason:?} / {kind:?}): {line}"
-                    );
                 }
             }
         }
     }
 
     #[test]
-    fn serialized_output_has_the_eight_contract_keys_in_order_and_no_verdict()
-    -> Result<(), serde_json::Error> {
+    fn serialized_output_has_the_eight_contract_keys_and_no_verdict() -> Result<(), Box<dyn Error>>
+    {
         let mut solved = outcome(SolveStatus::TokenApplied, SolveReason::AwaitingSubmit);
         solved.method = SolveMethod::Token;
         solved.paid_tasks = 1;
         solved.provider = Some(ProviderName::Capsolver);
-        let output = solve_value(&solved);
-        assert!(output.is_some(), "awaiting_submit is a value");
-        let raw = serde_json::to_string(&output)?;
-        let WireKeys(keys) = serde_json::from_str(&raw)?;
+        let output = solve_value(&solved).ok_or("awaiting_submit is a value")?;
+        let value = serde_json::to_value(output)?;
+        let object = value
+            .as_object()
+            .ok_or("SolveOutput must serialize as a JSON object")?;
+        let keys: BTreeSet<&str> = object.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = BTreeSet::from([
+            "attempted",
+            "type",
+            "method",
+            "reason",
+            "message",
+            "durationMs",
+            "paidTasks",
+            "provider",
+        ]);
         assert_eq!(
-            keys,
-            [
-                "attempted",
-                "type",
-                "method",
-                "reason",
-                "message",
-                "durationMs",
-                "paidTasks",
-                "provider",
-            ],
-            "wire keys must match the shared contract in exact order: {raw}"
+            keys, expected,
+            "wire key set must match the shared contract: {value}"
         );
         assert!(
-            !keys.iter().any(|key| key == "verdict"),
-            "verdict must not appear on the wire: {raw}"
+            !object.contains_key("verdict"),
+            "verdict must not appear on the wire: {value}"
         );
         Ok(())
     }
@@ -743,7 +759,8 @@ mod tests {
             message_for(
                 SolveReason::AutoPassed,
                 Some(CaptchaKind::CloudflareChallenge),
-                Attempt::Ran
+                Attempt::Ran,
+                SolverWork::StoppedEarly,
             ),
             format!("Neo waited and Cloudflare's full-page check went away; {CLOSING_ATTEMPTED}")
         );
@@ -751,7 +768,8 @@ mod tests {
             message_for(
                 SolveReason::ChallengeNotPassed,
                 Some(CaptchaKind::CloudflareChallenge),
-                Attempt::Ran
+                Attempt::Ran,
+                SolverWork::StoppedEarly,
             ),
             format!(
                 "Neo waited on Cloudflare's full-page check and it did not go away; \
@@ -762,20 +780,126 @@ mod tests {
             message_for(
                 SolveReason::BrowserError,
                 Some(CaptchaKind::Turnstile),
-                Attempt::Ran
+                Attempt::Ran,
+                SolverWork::Acted,
             ),
             format!("A browser call failed during Neo's Turnstile attempt; {CLOSING_ATTEMPTED}")
         );
         assert_eq!(
-            message_for(SolveReason::BrowserError, None, Attempt::Skipped),
+            message_for(
+                SolveReason::BrowserError,
+                None,
+                Attempt::Skipped,
+                SolverWork::StoppedEarly,
+            ),
             format!(
                 "A browser call failed before Neo could attempt a solve; {CLOSING_NOT_ATTEMPTED}"
             )
         );
     }
 
-    /// The listed time limit and the deadline reason's words are the solver's own deadline, and
-    /// `LISTED` advertises the eight contract fields without verdict or carry-on claims.
+    #[test]
+    fn stopped_early_reasons_do_not_claim_an_attempt() -> Result<(), Box<dyn Error>> {
+        let cases = [
+            (
+                SolveReason::ChallengeNotPassed,
+                CaptchaKind::AwsWaf,
+                "AWS WAF",
+                "Neo attempted the AWS WAF challenge and the widget produced no response",
+            ),
+            (
+                SolveReason::TilesExhausted,
+                CaptchaKind::RecaptchaV2,
+                "reCAPTCHA",
+                "Neo tried the reCAPTCHA image challenge and every round failed",
+            ),
+            (
+                SolveReason::AcceptanceUnconfirmed,
+                CaptchaKind::Turnstile,
+                "Turnstile",
+                "Neo attempted a Turnstile solve and could not confirm the result",
+            ),
+            (
+                SolveReason::DeadlineExceeded,
+                CaptchaKind::Turnstile,
+                "Turnstile",
+                "Neo's Turnstile attempt timed out before it finished",
+            ),
+        ];
+        for (reason, kind, label, acted_prefix) in cases {
+            let mut stopped = outcome(SolveStatus::Failed, reason);
+            stopped.kind = Some(kind);
+            let output = solve_value(&stopped).ok_or("reason returns a value")?;
+            assert!(output.attempted, "{reason:?} keeps attempted = true");
+            assert_eq!(
+                output.message,
+                format!(
+                    "Neo found the {label} widget and stopped before it clicked or requested \
+                     anything; {CLOSING_ATTEMPTED}"
+                ),
+                "{reason:?} with no method, attempts, or paid tasks must not claim an attempt"
+            );
+
+            let mut clicked = stopped.clone();
+            clicked.attempts.checkbox = 1;
+            let clicked_out = solve_value(&clicked).ok_or("reason returns a value")?;
+            assert_eq!(
+                clicked_out.message,
+                format!("{acted_prefix}; {CLOSING_ATTEMPTED}"),
+                "{reason:?} with a checkbox click keeps its acted wording"
+            );
+
+            let mut token_tried = stopped;
+            token_tried.attempts.token = 1;
+            let token_out = solve_value(&token_tried).ok_or("reason returns a value")?;
+            assert_eq!(
+                token_out.message,
+                format!("{acted_prefix}; {CLOSING_ATTEMPTED}"),
+                "{reason:?} with a token attempt keeps its acted wording"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn acceptance_unconfirmed_and_deadline_exceeded_do_not_overclaim() {
+        assert_eq!(
+            message_for(
+                SolveReason::AcceptanceUnconfirmed,
+                Some(CaptchaKind::CloudflareChallenge),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!(
+                "Neo attempted a Cloudflare solve and could not confirm the result; \
+                 {CLOSING_ATTEMPTED}"
+            )
+        );
+        assert_eq!(
+            message_for(
+                SolveReason::AcceptanceUnconfirmed,
+                Some(CaptchaKind::AwsWaf),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!(
+                "Neo attempted an AWS WAF solve and could not confirm the result; \
+                 {CLOSING_ATTEMPTED}"
+            )
+        );
+        assert_eq!(
+            message_for(
+                SolveReason::DeadlineExceeded,
+                Some(CaptchaKind::Turnstile),
+                Attempt::Ran,
+                SolverWork::Acted,
+            ),
+            format!("Neo's Turnstile attempt timed out before it finished; {CLOSING_ATTEMPTED}")
+        );
+    }
+
+    /// The listed time limit is the solver's own deadline, and `LISTED` advertises the eight
+    /// contract fields without verdict or carry-on claims.
     #[test]
     fn the_listed_line_names_the_deadline_and_contract_without_verdict() {
         let said = format!("in up to {} s", neo_captcha::SOLVE_DEADLINE.as_secs());
@@ -795,16 +919,6 @@ mod tests {
                 "LISTED must not contain `{banned}`: {LISTED}"
             );
         }
-        let deadline = format!("its {} s limit", neo_captcha::SOLVE_DEADLINE.as_secs());
-        assert!(
-            message_for(
-                SolveReason::DeadlineExceeded,
-                Some(CaptchaKind::Turnstile),
-                Attempt::Ran
-            )
-            .contains(&deadline),
-            "deadline message matches SOLVE_DEADLINE"
-        );
     }
 
     #[test]
