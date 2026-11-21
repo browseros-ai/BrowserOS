@@ -75,6 +75,8 @@ elif operation == "prompt":
         if reply.get("stopReason") == "cancelled" and fixture == "cancel":
             while not (home / "cancelled").exists():
                 time.sleep(.01)
+            if "lose the reply" in prompt:
+                sys.exit()
         if reply.get("stopReason") == "end_turn" and "refuse this turn" in prompt:
             reply["stopReason"] = "refusal"
         send(message)

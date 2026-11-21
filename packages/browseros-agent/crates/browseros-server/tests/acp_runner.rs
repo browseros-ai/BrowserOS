@@ -314,6 +314,38 @@ async fn cancelling_waits_for_the_owner_and_discards_the_late_completion() -> Re
 }
 
 #[tokio::test]
+async fn a_cancelled_prompt_that_loses_its_reply_retires_the_owner() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let agent = fixture.agent();
+    let target = fixture.target(AgentKind::Codex).await?;
+    let input = input("cancel this turn and lose the reply")?;
+    let cancel = CancellationToken::new();
+    let mut sink = StopAtTool {
+        cancel: cancel.clone(),
+        events: Vec::new(),
+    };
+    let end = tokio::time::timeout(
+        Duration::from_secs(6),
+        agent.run_turn(&target, &input, &mut sink, &cancel),
+    )
+    .await?;
+    assert_eq!(end, TurnEnd::Stopped);
+    assert!(
+        fixture
+            .calls()?
+            .iter()
+            .any(|call| { call["args"] == json!(["sessions", "close", input.conversation]) })
+    );
+    assert!(
+        !fixture
+            .session_dir()
+            .join(input.conversation.to_string())
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn incognito_seeds_history_and_cleans_its_session_and_attachments() -> Result<()> {
     let fixture = Fixture::new().await?;
     let agent = fixture.agent();

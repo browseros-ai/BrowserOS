@@ -396,9 +396,9 @@ impl Session<'_> {
         // prompt while cancel runs so acpx can flush its reply and retire the active turn.
         drop(armed.take());
         let deadline = Instant::now() + STOP_GRACE;
-        let cancel_owner = self.cancel_until_admitted();
-        tokio::pin!(cancel_owner);
         let settled = timeout_at(deadline, async {
+            let cancel_owner = self.cancel_until_admitted();
+            tokio::pin!(cancel_owner);
             tokio::select! {
                 _ = &mut cancel_owner => (&mut stream).await,
                 reply = &mut stream => reply,
@@ -410,10 +410,16 @@ impl Session<'_> {
         }
         let _ = timeout(Duration::from_millis(300), child.0.wait()).await;
         drop(child);
-        if settled.is_err() {
-            // A responsive owner returns a terminal reply. When it fails to do so,
-            // close it so another turn cannot queue behind the abandoned prompt.
-            let _ = timeout_at(deadline + STOP_GRACE, self.close()).await;
+        if !matches!(settled, Ok(Ok(_))) {
+            // A dead CLI can lose the reply while the detached owner is still running.
+            // Retire it before another turn can queue behind the abandoned prompt.
+            match timeout_at(deadline + STOP_GRACE, self.close()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(?error, "abandoned acpx prompt owner could not close")
+                }
+                Err(_) => tracing::warn!("abandoned acpx prompt owner close timed out"),
+            }
         }
         if cancel.is_cancelled() {
             Ok(TurnEnd::Stopped)
