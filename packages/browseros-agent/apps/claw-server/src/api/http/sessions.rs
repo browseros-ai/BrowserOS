@@ -228,8 +228,8 @@ pub(super) async fn draft_skill(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<SkillDraftStatus>, CanonicalError> {
-    use crate::services::skill_draft::{SKILL_DRAFTS_FEATURE, digest};
-    if !state.ultrafast_enabled() || !state.billing.has_feature(SKILL_DRAFTS_FEATURE).await {
+    use crate::{app::ULTRAFAST_FEATURE, services::skill_draft::digest};
+    if !state.ultrafast_enabled() || !state.billing.has_feature(ULTRAFAST_FEATURE).await {
         return Err(error(
             &request_id,
             StatusCode::FORBIDDEN,
