@@ -67,11 +67,7 @@ async fn the_trust_rule_refuses_pages_and_writes_without_an_origin() -> TestResu
     assert_eq!(body_json(page).await, json!({ "error": "Forbidden" }));
 
     let extension = server.send(server.get("/providers")).await;
-    assert_eq!(
-        extension.status(),
-        StatusCode::NOT_IMPLEMENTED,
-        "trusted, and not built yet"
-    );
+    assert_eq!(extension.status(), StatusCode::OK);
     assert_eq!(
         extension
             .headers()
@@ -88,7 +84,7 @@ async fn the_trust_rule_refuses_pages_and_writes_without_an_origin() -> TestResu
     let read_without_origin = server
         .send(from(None, Method::GET, "/agents", "127.0.0.1:9200"))
         .await;
-    assert_eq!(read_without_origin.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(read_without_origin.status(), StatusCode::OK);
 
     let rebinding = server
         .send(from(
@@ -130,10 +126,7 @@ async fn a_trusted_development_origin_is_accepted() -> TestResult {
         .header(header::HOST, "127.0.0.1:9200")
         .header(header::ORIGIN, "http://localhost:5173")
         .body(Body::empty())?;
-    assert_eq!(
-        server.send(request).await.status(),
-        StatusCode::NOT_IMPLEMENTED
-    );
+    assert_eq!(server.send(request).await.status(), StatusCode::OK);
     Ok(())
 }
 
