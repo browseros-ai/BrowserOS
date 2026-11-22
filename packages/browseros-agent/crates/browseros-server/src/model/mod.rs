@@ -193,13 +193,21 @@ const CONVERSATION_ID_PLACEHOLDER: &str = "{{conversationId}}";
 /// Log targets turned off in every filter the server installs, because they can write a
 /// credential or a provider's own text before the server scrubs it (`errors`). Rig is off as a
 /// whole: its crates log provider-sent strings (event types, call ids, finish reasons, error
-/// messages) at several sites, and an upgrade can add more. `tests/model_logs` holds this list to
-/// the `rig-*` crates in Cargo.lock and drives the known sites; it is the gate on an upgrade.
+/// messages) at several sites, and an upgrade can add more. A filter target matches every target
+/// it is a prefix of, so these also cover each crate's modules. `tests/model_logs` holds this
+/// list to the `rig-*` crates in Cargo.lock and to every target those crates' sources name, and
+/// drives the known sites; it is the gate on an upgrade.
 const UNSCRUBBED_LOG_TARGETS: &[&str] = &[
     "rig_core",
     "rig_bedrock",
     "rig_http",
     "rig_reqwest",
+    // Rig also logs under names of its own, outside its crates' module paths: `rig::completions`
+    // and `rig::streaming` write a request's and a reply's raw JSON at trace, and `rig::embedding`,
+    // `rig::transcription`, `rig::modalities` and `rig` the like.
+    "rig",
+    // Rig's Gemini cache client, which no route uses.
+    "gemini.cache",
     // The AWS SDK's endpoint resolution, at debug, prints the request's credentials with the
     // access key id in clear.
     "aws_smithy_runtime::client::orchestrator::endpoints",
@@ -208,9 +216,10 @@ const UNSCRUBBED_LOG_TARGETS: &[&str] = &[
 /// The server's log filter for `spec` (`BROWSEROS_LOG`; `info` when unset or invalid), with each
 /// unscrubbed target turned off. A developer who wants some of it back names a target in
 /// `BROWSEROS_LOG`: a more specific one wins over these (`BROWSEROS_LOG=info,rig_core::driver=warn`)
-/// and the same one is left as written (`BROWSEROS_LOG=debug,rig_core=debug`). The guarantee holds
-/// at the default level and at debug; `trace` is a raw developer level, where the AWS SDK logs the
-/// signed request it sends.
+/// and the same one is left as written (`BROWSEROS_LOG=debug,rig_core=debug`). Rig's raw request
+/// and reply JSON comes back with `BROWSEROS_LOG=info,rig::completions=trace,rig::streaming=trace`,
+/// and it can hold credentials a provider echoes. The guarantee holds at the default level and at
+/// debug; `trace` is a raw developer level, where the AWS SDK logs the signed request it sends.
 pub fn log_filter(spec: Option<&str>) -> tracing_subscriber::EnvFilter {
     use tracing_subscriber::EnvFilter;
     let spec = spec
