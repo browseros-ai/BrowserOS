@@ -39,6 +39,9 @@ impl Fixture {
             "success.ndjson",
             "cancel.ndjson",
             "auth.ndjson",
+            "claude-model-rejected.ndjson",
+            "codex-model-rejected.ndjson",
+            "codex-model-unadvertised.ndjson",
         ] {
             std::fs::copy(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -262,6 +265,187 @@ async fn create_fixture_agent(client: &reqwest::Client, base: &str) -> Result<Va
         .json()
         .await?;
     Ok(response["agent"]["id"].clone())
+}
+
+#[tokio::test]
+async fn codex_service_refusal_fails_without_storing_diagnostics_as_an_answer() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    std::fs::write(
+        fixture
+            .server
+            .state_dir()
+            .join("fake adapter/probe-include-refused"),
+        "",
+    )?;
+    let (mut child, base, _) = fixture.serve().await?;
+    let client = reqwest::Client::new();
+    let agent: Value = client
+        .post(format!("{base}/agents"))
+        .header("Origin", EXTENSION_ORIGIN)
+        .json(&json!({"name":"Fixture", "type":"codex", "modelId":"gpt-6.1-terra"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let conversation = uuid::Uuid::new_v4();
+    let stream = client
+        .post(format!("{base}/chat"))
+        .header("Origin", EXTENSION_ORIGIN)
+        .json(&json!({
+            "conversationId": conversation,
+            "target": {"type":"codex", "agentId":agent["agent"]["id"]},
+            "message": "Open amazon.com in current tab and add sensodyne toothpaste to cart",
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let state: Value = client
+        .get(format!("{base}/chat/{conversation}/state"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(state["status"], "failed", "{stream}");
+    let card = stream
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|chunk| chunk["type"] == "error")
+        .ok_or_else(|| anyhow::anyhow!("missing error chunk"))?;
+    let envelope: Value = serde_json::from_str(card["errorText"].as_str().unwrap_or_default())?;
+    assert_eq!(envelope["error"]["code"], "provider_config");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("gpt-6.1-terra"))
+    );
+    assert!(!stream.contains("text-delta"), "{stream}");
+    let history: Value = client
+        .get(format!("{base}/conversations/{conversation}"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let messages = history["conversation"]["messages"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing stored conversation"))?;
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0]["role"], "user");
+
+    let probe: Value = client
+        .post(format!("{base}/acpx/probe"))
+        .header("Origin", EXTENSION_ORIGIN)
+        .json(&json!({"type":"codex"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(probe["models"][1]["id"], "gpt-6.1-terra");
+    assert_eq!(
+        probe["models"][1]["description"],
+        "This model was previously refused by Codex. Choose Agent default or another model if you still use the same sign-in."
+    );
+    shutdown_server(&client, &base, &mut child).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn refused_model_controls_name_the_model_in_a_configuration_error() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let agent = fixture.agent();
+    for (kind, model) in [
+        (AgentKind::Codex, "gpt-6.1-terra"),
+        (AgentKind::Claude, "claude-invalid-f11-example"),
+    ] {
+        let row = fixture
+            .server
+            .app
+            .store
+            .agents()
+            .create(NewAgent {
+                kind,
+                name: "Fixture".into(),
+                model_id: Some(model.into()),
+                reasoning_effort: None,
+                working_directory: None,
+            })
+            .await?;
+        let end = agent
+            .run_turn(
+                &Target::Coding {
+                    kind,
+                    agent_id: row.id,
+                },
+                &input("read the fixture")?,
+                &mut Vec::new(),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(end, TurnEnd::Failed(error)
+            if error.code == ChatErrorCode::ProviderConfig && error.message.contains(model)));
+    }
+    assert!(
+        !fixture
+            .calls()?
+            .iter()
+            .any(|call| call["operation"] == "prompt")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_keeps_quoted_diagnostics_and_fails_on_unstructured_service_errors() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    std::fs::write(
+        fixture
+            .server
+            .state_dir()
+            .join("fake adapter/probe-include-refused"),
+        "",
+    )?;
+    let agent = fixture.agent();
+    let target = fixture.target(AgentKind::Codex).await?;
+    let cancel = CancellationToken::new();
+    let mut events = Vec::new();
+    let end = agent
+        .run_turn(&target, &input("quote a diagnostic")?, &mut events, &cancel)
+        .await;
+    assert_eq!(end, TurnEnd::Done(FinishReason::Stop));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TurnEvent::Text(text) if text.contains("model_not_found")
+    )));
+    let probe = agent.probe(AgentKind::Codex, Duration::from_secs(5)).await;
+    assert!(
+        probe
+            .models
+            .iter()
+            .any(|model| model.id == "gpt-6.1-terra" && model.description.is_none())
+    );
+
+    for (prompt, code) in [
+        ("legacy service failure", ChatErrorCode::ProviderUnavailable),
+        ("legacy quota failure", ChatErrorCode::RateLimited),
+        ("legacy authentication failure", ChatErrorCode::AuthFailed),
+    ] {
+        events.clear();
+        let end = agent
+            .run_turn(&target, &input(prompt)?, &mut events, &cancel)
+            .await;
+        assert!(matches!(end, TurnEnd::Failed(error) if error.code == code));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TurnEvent::Text(_)))
+        );
+    }
+    Ok(())
 }
 
 async fn turn_with_owner(

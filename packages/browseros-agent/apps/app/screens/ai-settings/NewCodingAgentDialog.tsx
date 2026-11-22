@@ -55,6 +55,8 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
 
   const probeError =
     probe.error?.message ?? probe.data?.error?.message ?? undefined
+  const models = probe.data?.models ?? []
+  const modelDescription = models.find(({ id }) => id === modelId)?.description
 
   const handleCreate = async () => {
     if (!type || !name.trim()) return
@@ -93,25 +95,40 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
           </div>
 
           <div className="space-y-2">
-            <Label>Model</Label>
+            <Label htmlFor="coding-agent-model">Model</Label>
             <Select
               value={modelId || AGENT_DEFAULT}
               onValueChange={(value) =>
                 setModelId(value === AGENT_DEFAULT ? '' : value)
               }
             >
-              <SelectTrigger>
+              <SelectTrigger
+                id="coding-agent-model"
+                aria-describedby={
+                  modelDescription
+                    ? 'coding-agent-model-description'
+                    : undefined
+                }
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={AGENT_DEFAULT}>Agent default</SelectItem>
-                {(probe.data?.models ?? []).map((model) => (
+                {models.map((model) => (
                   <SelectItem key={model.id} value={model.id}>
                     {model.name ?? model.id}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {modelDescription ? (
+              <p
+                id="coding-agent-model-description"
+                className="text-muted-foreground text-sm"
+              >
+                {modelDescription}
+              </p>
+            ) : null}
           </div>
 
           {(probe.data?.reasoning?.values.length ?? 0) > 0 ? (
