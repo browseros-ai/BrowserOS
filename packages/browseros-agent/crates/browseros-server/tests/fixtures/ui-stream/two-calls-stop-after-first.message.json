@@ -32,6 +32,7 @@
       "type": "tool-run",
       "toolCallId": "call_2",
       "state": "output-error",
+      "input": {},
       "errorText": "Not run"
     }
   ]

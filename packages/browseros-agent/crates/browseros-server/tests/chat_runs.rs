@@ -278,7 +278,13 @@ async fn stop_ends_the_stream_with_abort_and_stores_the_call_as_stopped() -> Tes
     let rest = stream.rest().await;
     assert_eq!(
         chunk_types(&rest),
-        ["tool-output-error", "tool-output-error", "abort", "[DONE]"]
+        [
+            "tool-output-error",
+            "tool-input-available",
+            "tool-output-error",
+            "abort",
+            "[DONE]"
+        ]
     );
     assert_eq!(
         chunk(&rest[0])["errorText"],
@@ -286,7 +292,17 @@ async fn stop_ends_the_stream_with_abort_and_stores_the_call_as_stopped() -> Tes
         "the call in flight"
     );
     assert_eq!(
-        chunk(&rest[1])["errorText"],
+        chunk(&rest[1]),
+        json!({
+            "type": "tool-input-available",
+            "toolCallId": "call_2",
+            "toolName": "run",
+            "input": {},
+        }),
+        "the queued call gets an empty input before its error"
+    );
+    assert_eq!(
+        chunk(&rest[2])["errorText"],
         json!("Not run"),
         "the call queued behind it"
     );
@@ -295,11 +311,13 @@ async fn stop_ends_the_stream_with_abort_and_stores_the_call_as_stopped() -> Tes
     let parts = &row[1]["parts"];
     assert_eq!(parts[2]["state"], json!("output-error"));
     assert_eq!(parts[2]["errorText"], json!("Stopped"));
-    assert_eq!(parts[3]["errorText"], json!("Not run"));
-    assert!(
-        parts[3].get("input").is_none(),
-        "a call that never ran has no input"
+    assert_eq!(
+        parts[2]["input"],
+        json!({ "code": "return document.title" })
     );
+    assert_eq!(parts[3]["state"], json!("output-error"));
+    assert_eq!(parts[3]["errorText"], json!("Not run"));
+    assert_eq!(parts[3]["input"], json!({}));
 
     let state = body_json(
         server

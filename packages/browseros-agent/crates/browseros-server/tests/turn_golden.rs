@@ -14,7 +14,7 @@
 //! ```
 //!
 //! After a deliberate change to the stream, regenerate in this order:
-//! `BROWSEROS_UPDATE_GOLDENS=1 cargo test -p browseros-server --test turn_golden`, then
+//! `BROWSEROS_UPDATE_GOLDENS=1 cargo test -p browseros-server --test turn_golden every_golden_stream_is_what_the_reducer_emits`, then
 //! `BROWSEROS_UPDATE_GOLDENS=1 bun test contracts/server-api/tests/ui-stream.test.ts`, then review the diff.
 
 use std::path::{Path, PathBuf};
