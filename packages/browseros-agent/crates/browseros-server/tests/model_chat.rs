@@ -616,3 +616,42 @@ async fn a_refusal_is_visible_text_and_replays_as_the_answer() -> anyhow::Result
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn the_row_decides_whether_its_model_sees_pictures() -> anyhow::Result<()> {
+    let responses = Reply::events(&[
+        json!({"type":"response.output_text.delta","delta":"ok"}),
+        json!({"type":"response.completed","response":{"status":"completed"}}),
+    ]);
+    let fake = FakeProvider::new(vec![finished(), responses]).await?;
+    let (_dir, models) = models().await?;
+    let picture = [ModelMessage::User {
+        text: "What is this?".into(),
+        images: vec![Image {
+            media_type: "image/png".into(),
+            bytes: vec![1],
+        }],
+    }];
+    // A model Rig's catalogue lists as text-only, on a row that says it reads images.
+    for kind in [ProviderKind::OpenaiCompatible, ProviderKind::Openai] {
+        let mut config = provider(
+            kind,
+            format!("{}/v1", fake.base),
+            Credentials::ApiKey(Secret::new("fixture-key")),
+        );
+        config.model = "gpt-3.5-turbo".into();
+        let model = models.resolve(config, Uuid::new_v4()).await?;
+        model.step(&request(&picture), &mut Vec::new()).await?;
+    }
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    let chat = calls[0].body["messages"].to_string();
+    let responses = calls[1].body["input"].to_string();
+    for body in [chat, responses] {
+        assert!(body.contains("data:image/png;base64,AQ=="), "{body}");
+        assert!(!body.contains("image omitted"), "{body}");
+    }
+    Ok(())
+}

@@ -75,6 +75,8 @@ utoipa-axum = "0.3.0"
 # left off on purpose: it turns on reqwest's `system-proxy`, which reaches the one hyper-util in
 # the build and would make every reqwest client in this binary, 0.12 included, start reading the
 # macOS and Windows proxy settings. Rustls alone comes from the reqwest line below.
+# Exact versions: on an upgrade of Rig or the AWS SDK, re-read their log sites for any that write
+# provider or request text (`model::UNSCRUBBED_LOG_SITES`); tests/model_logs is the gate.
 rig-core = { version = "=0.47.0", default-features = false, features = ["reqwest"] }
 rig-reqwest = { version = "=0.47.0", default-features = false }
 rig-bedrock = "=0.47.0"

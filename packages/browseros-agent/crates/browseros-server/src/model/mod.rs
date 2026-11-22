@@ -27,6 +27,14 @@ mod scripted;
 #[path = "../../tests/support/fake_provider.rs"]
 mod fake_provider;
 
+#[cfg(test)]
+#[path = "../../tests/support/event_stream.rs"]
+mod event_stream;
+
+#[cfg(test)]
+#[path = "../../tests/model_logs/mod.rs"]
+mod logs;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -173,6 +181,41 @@ impl Models {
 
 /// The literal a provider row's header value may hold, replaced by the conversation id.
 const CONVERSATION_ID_PLACEHOLDER: &str = "{{conversationId}}";
+
+/// Log sites in the model libraries that write a credential or a provider's own text before the
+/// server scrubs it (`errors`): a provider can echo the request's credential in an error. Every
+/// filter the server installs turns them off. On an upgrade of Rig or the AWS SDK, re-read their
+/// log sites; `tests/model_logs` is the gate.
+const UNSCRUBBED_LOG_SITES: &[&str] = &[
+    // Rig's Chat Completions decoder warns with an error event's message, as the provider sent it.
+    "rig_core::providers::openai::wire::chat::finish",
+    // The AWS SDK's endpoint resolution, at debug, prints the request's credentials with the
+    // access key id in clear.
+    "aws_smithy_runtime::client::orchestrator::endpoints",
+];
+
+/// The server's log filter for `spec` (`BROWSEROS_LOG`; `info` when unset or invalid), with
+/// each unscrubbed log site turned off. A developer who wants one back names its target in
+/// `BROWSEROS_LOG`, which is then left as written, for example
+/// `BROWSEROS_LOG=debug,rig_core::providers::openai::wire::chat::finish=warn`. The guarantee
+/// holds at the default level and at debug; `trace` is a raw developer level, where the AWS SDK
+/// logs the signed request it sends.
+pub fn log_filter(spec: Option<&str>) -> tracing_subscriber::EnvFilter {
+    use tracing_subscriber::EnvFilter;
+    let spec = spec
+        .filter(|spec| EnvFilter::try_new(spec).is_ok())
+        .unwrap_or("info");
+    let directives: Vec<String> = std::iter::once(spec.to_owned())
+        .chain(
+            UNSCRUBBED_LOG_SITES
+                .iter()
+                .filter(|target| !spec.contains(*target))
+                .map(|target| format!("{target}=off")),
+        )
+        .filter(|directive| !directive.is_empty())
+        .collect();
+    EnvFilter::new(directives.join(","))
+}
 
 /// A resolved provider, ready to step. Built per turn; holds request-scoped credentials.
 pub struct Model {
@@ -377,6 +420,13 @@ impl Fold {
             }
             Some(_) => FinishReason::Other,
             None => return Err(errors::disconnected()),
+        };
+        // Rig keeps a reply that failed after it began (a call the stream never finished, a
+        // refusal) with `error` set, and leaves it out of the next step's history. Its calls must
+        // not run: their results would answer nothing the provider is shown.
+        let finish = match finish {
+            FinishReason::ToolCalls if response.error.is_some() => FinishReason::Error,
+            finish => finish,
         };
         let mut calls = Vec::new();
         let mut replay = Vec::new();

@@ -29,7 +29,7 @@ pub(super) fn model(
 }
 
 /// `endpoint` replaces the regional AWS endpoint, for a loopback fake in tests.
-fn model_at(
+pub(super) fn model_at(
     provider: &ProviderConfig,
     endpoint: Option<&str>,
 ) -> Result<(DynModel<Completion>, HeaderMap), ChatError> {
@@ -178,8 +178,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::model::Models;
     use crate::model::fake_provider::{FakeProvider, Reply};
+    use crate::model::{Models, event_stream};
     use crate::store::{ProviderKind, Secret, Store};
     use crate::turn::ChatErrorCode;
 
@@ -291,94 +291,6 @@ mod tests {
         Ok(())
     }
 
-    /// One AWS event-stream frame: prelude, headers, JSON payload, each with its CRC32.
-    fn frame(event: &str, payload: &serde_json::Value) -> Vec<u8> {
-        fn crc32(bytes: &[u8]) -> u32 {
-            let mut crc = !0u32;
-            for byte in bytes {
-                crc ^= u32::from(*byte);
-                for _ in 0..8 {
-                    crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
-                }
-            }
-            !crc
-        }
-        let mut headers = Vec::new();
-        for (name, value) in [
-            (":message-type", "event"),
-            (":event-type", event),
-            (":content-type", "application/json"),
-        ] {
-            headers.push(name.len() as u8);
-            headers.extend_from_slice(name.as_bytes());
-            headers.push(7);
-            headers.extend_from_slice(&(value.len() as u16).to_be_bytes());
-            headers.extend_from_slice(value.as_bytes());
-        }
-        let data = payload.to_string().into_bytes();
-        let total = (16 + headers.len() + data.len()) as u32;
-        let mut message = total.to_be_bytes().to_vec();
-        message.extend_from_slice(&(headers.len() as u32).to_be_bytes());
-        let prelude = crc32(&message);
-        message.extend_from_slice(&prelude.to_be_bytes());
-        message.extend(headers);
-        message.extend(data);
-        let checksum = crc32(&message);
-        message.extend_from_slice(&checksum.to_be_bytes());
-        message
-    }
-
-    /// A loopback ConverseStream: records each request and plays the next reply.
-    async fn fake_bedrock(
-        replies: Vec<Vec<(&'static str, serde_json::Value)>>,
-    ) -> anyhow::Result<(
-        String,
-        std::sync::Arc<std::sync::Mutex<Vec<(http::HeaderMap, serde_json::Value)>>>,
-        tokio::task::JoinHandle<()>,
-    )> {
-        use axum::extract::State;
-        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(http::HeaderMap, serde_json::Value)>>>;
-        type Queue = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>>;
-        let seen: Seen = Default::default();
-        let queue: Queue = std::sync::Arc::new(std::sync::Mutex::new(
-            replies
-                .into_iter()
-                .map(|events| {
-                    events
-                        .iter()
-                        .flat_map(|(event, payload)| frame(event, payload))
-                        .collect()
-                })
-                .collect(),
-        ));
-        let app = axum::Router::new()
-            .fallback(
-                |State((seen, queue)): State<(Seen, Queue)>,
-                 headers: http::HeaderMap,
-                 body: axum::body::Bytes| async move {
-                    let json = serde_json::from_slice(&body).unwrap_or_default();
-                    if let Ok(mut seen) = seen.lock() {
-                        seen.push((headers, json));
-                    }
-                    let reply = queue.lock().ok().and_then(|mut queue| queue.pop_front());
-                    (
-                        [(
-                            http::header::CONTENT_TYPE,
-                            "application/vnd.amazon.eventstream",
-                        )],
-                        reply.unwrap_or_default(),
-                    )
-                },
-            )
-            .with_state((seen.clone(), queue));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let base = format!("http://{}", listener.local_addr()?);
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        Ok((base, seen, server))
-    }
-
     #[tokio::test]
     async fn signed_reasoning_and_tool_input_survive_the_follow_up() -> anyhow::Result<()> {
         use crate::model::route::{Route, Wire};
@@ -388,7 +300,7 @@ mod tests {
         use crate::turn::{FinishReason, TurnEvent};
         use serde_json::json;
 
-        let (base, seen, server) = fake_bedrock(vec![
+        let (base, seen, server) = event_stream::serve(vec![
             vec![
                 ("messageStart", json!({"role": "assistant"})),
                 ("contentBlockDelta", json!({"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "thinking"}}})),

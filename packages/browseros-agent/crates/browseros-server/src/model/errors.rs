@@ -97,9 +97,13 @@ pub(super) fn upstream(
     secrets: &HeaderMap,
 ) -> ChatError {
     let body_json = serde_json::from_str::<Value>(body).ok();
-    let outer = body_json
-        .as_ref()
-        .and_then(|value| value.get("error").or(Some(value)));
+    // A Responses stream wraps its failure in the response: `{"response": {"error": ...}}`.
+    let outer = body_json.as_ref().and_then(|value| {
+        value
+            .get("error")
+            .or_else(|| value.pointer("/response/error"))
+            .or(Some(value))
+    });
     let raw = outer.and_then(|error| error.pointer("/metadata/raw"));
     let parsed_raw = raw
         .and_then(Value::as_str)

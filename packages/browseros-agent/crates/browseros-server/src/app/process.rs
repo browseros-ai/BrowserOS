@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 
 use tokio::net::TcpListener;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
 
 use super::launch::{Launch, LaunchEnv, read_install_id};
 use super::report::Reporter;
@@ -352,9 +352,12 @@ async fn forward_signals(shutdown: Shutdown) {
 /// `tracing` to stderr and to a daily file in the execution directory, filtered by
 /// `BROWSEROS_LOG` (default `info`), and a panic hook that writes the panic to the same folder
 /// and reports its location before the process dies. The returned guard flushes the file when dropped.
+///
+/// The filter always turns off the model library's log sites that write a provider's raw text,
+/// whatever `BROWSEROS_LOG` says (`model::log_filter`, which also says how to turn one back on).
 fn install_logging(execution: &Path, reporter: Reporter) -> Option<WorkerGuard> {
-    let filter =
-        || EnvFilter::try_from_env("BROWSEROS_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let spec = std::env::var("BROWSEROS_LOG").ok();
+    let filter = || crate::model::log_filter(spec.as_deref());
     let stderr = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_filter(filter());

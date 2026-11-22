@@ -174,3 +174,49 @@ fn turns(input: &Value) -> Vec<Value> {
     }
     turns
 }
+
+#[tokio::test]
+async fn a_streamed_unknown_model_opens_provider_settings_with_its_name() -> anyhow::Result<()> {
+    use browseros_server::turn::ChatErrorCode;
+    let fake = FakeProvider::new(vec![Reply::events(&[
+        json!({"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}),
+        json!({"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"model_not_found","message":"The 'fixture-model' model is not supported."}}}),
+    ])])
+    .await?;
+    let (_dir, models) = models().await?;
+    let config = provider(
+        ProviderKind::Openai,
+        format!("{}/v1", fake.base),
+        Credentials::ApiKey(Secret::new("fixture-key")),
+    );
+    let Err(error) = models.test(config).await else {
+        anyhow::bail!("expected a model configuration error");
+    };
+    assert_eq!(error.code, ChatErrorCode::ProviderConfig);
+    assert!(error.message.contains("fixture-model"), "{}", error.message);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_call_the_stream_never_finished_does_not_run() -> anyhow::Result<()> {
+    let fake = FakeProvider::new(vec![Reply::events(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"run","arguments":""}}),
+        json!({"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"code\":\"1\"}"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":3,"output_tokens":2}}}),
+    ])])
+    .await?;
+    let (_dir, models) = models().await?;
+    let config = provider(
+        ProviderKind::Openai,
+        format!("{}/v1", fake.base),
+        Credentials::ApiKey(Secret::new("fixture-key")),
+    );
+    let model = models.resolve(config, Uuid::new_v4()).await?;
+    let turn = model.step(&request(&[]), &mut Vec::new()).await?;
+    assert!(
+        turn.tool_calls().is_empty(),
+        "an unfinished call never runs"
+    );
+    assert_ne!(turn.finish(), FinishReason::ToolCalls);
+    Ok(())
+}

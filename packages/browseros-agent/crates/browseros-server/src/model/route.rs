@@ -14,6 +14,7 @@ use std::time::Duration;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use reqwest_rig as reqwest;
 use rig_core::DynModel;
+use rig_core::catalog::{Catalog, ModelFacts};
 use rig_core::http_client::{
     self, Bytes, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
 };
@@ -22,6 +23,7 @@ use rig_core::providers::anthropic::AnthropicConfig;
 use rig_core::providers::chatgpt;
 use rig_core::providers::openai::OpenAIConfig;
 use rig_core::providers::openai::wire::{self as openai, Auth};
+use rig_core::providers::registry::ProviderId;
 use rig_core::wasm_compat::WasmCompatSend;
 use rig_reqwest::ReqwestClient;
 use serde_json::{Map, Value, json};
@@ -164,11 +166,13 @@ impl Route {
                 let url = endpoint(base(provider, "https://api.openai.com/v1/"), "responses")?;
                 let config = OpenAIConfig::new(key).with_auth(Auth::Bearer);
                 let (headers, secrets) = headers(provider, &[(AUTHORIZATION, key)], Vec::new())?;
-                let model = config
+                let mut model = config
                     .connect(clients.pinned(url.clone(), headers))
-                    .responses(&provider.model)
-                    .erase();
-                Ok(Self::http(model, Wire::Responses, url, secrets))
+                    .responses(&provider.model);
+                if let Some(facts) = image_facts(provider, "openai") {
+                    model.wire = model.wire.with_facts(facts);
+                }
+                Ok(Self::http(model.erase(), Wire::Responses, url, secrets))
             }
             Anthropic => {
                 let key = api_key(provider)?;
@@ -227,11 +231,18 @@ impl Route {
             ),
         ];
         let (headers, secrets) = headers(provider, &owned, extras)?;
-        let model = config
+        let mut model = config
             .connect(clients.pinned(session.url.clone(), headers))
-            .responses(&provider.model)
-            .erase();
-        Ok(Self::http(model, Wire::ChatGpt, session.url, secrets))
+            .responses(&provider.model);
+        if let Some(facts) = image_facts(provider, "openai") {
+            model.wire = model.wire.with_facts(facts);
+        }
+        Ok(Self::http(
+            model.erase(),
+            Wire::ChatGpt,
+            session.url,
+            secrets,
+        ))
     }
 
     fn http(model: DynModel<Completion>, wire: Wire, url: Url, secrets: HeaderMap) -> Self {
@@ -330,11 +341,43 @@ fn chat(provider: &ProviderConfig, clients: &Clients) -> Result<Route, ChatError
         }
     };
     let (headers, secrets) = headers(provider, &owned, Vec::new())?;
-    let model = config
+    let mut model = config
         .connect(clients.pinned(url.clone(), headers))
-        .chat(&provider.model)
-        .erase();
-    Ok(Route::http(model, Wire::Chat(provider.kind), url, secrets))
+        .chat(&provider.model);
+    if let Some(facts) = image_facts(provider, dialect.name) {
+        model.wire = model.wire.with_facts(facts);
+    }
+    Ok(Route::http(
+        model.erase(),
+        Wire::Chat(provider.kind),
+        url,
+        secrets,
+    ))
+}
+
+/// On the OpenAI-family wires Rig omits a picture for a model its catalogue or vendor naming rule
+/// lists as text-only. The row decides instead: the loop attaches pictures only when the row says
+/// its model reads them, so such a row gets facts for its model that say so. The model's
+/// catalogue entry, when it has one, is otherwise kept as it is (reasoning, limits), and every
+/// other model still answers from the catalogue. (Anthropic Messages and Bedrock's Claude never
+/// omit a picture.)
+fn image_facts(provider: &ProviderConfig, vendor: &str) -> Option<ModelFacts> {
+    if !provider.supports_images {
+        return None;
+    }
+    let catalog = Catalog::builtin();
+    // A declared vendor answers whichever vendor name the wire asks its question under.
+    let declared = ProviderId::declare("browseros").ok()?;
+    let mut spec = ProviderId::catalog(vendor)
+        .and_then(|vendor| catalog.get(vendor, &provider.model))
+        .map_or_else(
+            || rig_core::catalog::ModelSpec::new(declared, &provider.model),
+            |found| found.spec.clone(),
+        );
+    spec.id.clone_from(&provider.model);
+    spec.provider = declared;
+    spec.input.image = true;
+    Some(ModelFacts::new(spec).with_catalog(catalog))
 }
 
 /// The JSON a step adds to Rig's body (`additional_params`, merged at the top level) and its
