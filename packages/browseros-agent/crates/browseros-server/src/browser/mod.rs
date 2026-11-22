@@ -15,6 +15,7 @@
 //! see `Tool`, `Scope`, `ToolOutput` and `Picture` only.
 
 mod armed;
+mod loopback;
 mod mcp;
 #[cfg(unix)]
 mod neo;
@@ -23,6 +24,8 @@ mod scripted;
 
 #[cfg(feature = "test-support")]
 pub use scripted::{RecordedCall, ScriptedBrowser, ScriptedReply};
+
+pub(crate) use loopback::loopback_no_proxy;
 
 use std::sync::Arc;
 
