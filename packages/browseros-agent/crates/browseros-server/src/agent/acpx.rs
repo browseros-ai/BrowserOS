@@ -397,25 +397,7 @@ impl Session<'_> {
     }
 
     async fn ensure(&self, model: Option<&str>) -> Result<bool, Failure> {
-        let servers = self
-            .locator
-            .mcp_url
-            .iter()
-            .map(|url| {
-                json!({
-                    "type": "http", "name": "browseros", "url": url, "headers": [],
-                })
-            })
-            .collect::<Vec<_>>();
-        tokio::fs::create_dir_all(&self.dir)
-            .await
-            .map_err(Failure::io)?;
-        tokio::fs::write(
-            self.dir.join("mcp.json"),
-            json!({"mcpServers": servers}).to_string(),
-        )
-        .await
-        .map_err(Failure::io)?;
+        write_mcp_config(&self.dir, self.locator.mcp_url.as_deref()).map_err(Failure::io)?;
         // Register before the first CLI call. Dropping the CLI on cancellation does
         // not kill a queue owner that detached while the command was running.
         self.sessions.routes().insert(
@@ -691,6 +673,40 @@ async fn read_locator(path: &Path) -> Result<Option<Locator>, Failure> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Failure::io(error)),
     }
+}
+
+/// Writes the `mcp.json` acpx passes to the agent into the session folder. The file holds the
+/// armed `/mcp/{task}` URL, whose task id is the key to this turn's browser scope, so on Unix
+/// the folder is made 0700 (an older install's folder too) and the file replaced whole by a
+/// 0600 one: no other local user can read it, and a crash leaves no half-written file.
+fn write_mcp_config(dir: &Path, mcp_url: Option<&str>) -> io::Result<()> {
+    let servers = mcp_url
+        .iter()
+        .map(|url| {
+            json!({
+                "type": "http", "name": "browseros", "url": url, "headers": [],
+            })
+        })
+        .collect::<Vec<_>>();
+    let config = json!({"mcpServers": servers}).to_string();
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        let mut file = tempfile::Builder::new()
+            .prefix("mcp-")
+            .suffix(".json")
+            .permissions(std::fs::Permissions::from_mode(0o600))
+            .tempfile_in(dir)?;
+        file.write_all(config.as_bytes())?;
+        file.persist(dir.join("mcp.json"))
+            .map_err(|error| error.error)?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(dir.join("mcp.json"), config)?;
+    Ok(())
 }
 
 fn save_locator(path: &Path, locator: &Locator) -> Result<(), Failure> {
@@ -1316,5 +1332,62 @@ fn omit_media(value: &mut Value) {
             text.clear()
         }
         _ => {}
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    const URL: &str = "http://127.0.0.1:9100/mcp/0e0e0e0e-0000-4000-8000-000000000001";
+
+    fn mode(path: &Path) -> io::Result<u32> {
+        Ok(std::fs::metadata(path)?.permissions().mode() & 0o777)
+    }
+
+    fn read_config(dir: &Path) -> anyhow::Result<Value> {
+        Ok(serde_json::from_slice(&std::fs::read(
+            dir.join("mcp.json"),
+        )?)?)
+    }
+
+    #[test]
+    fn mcp_config_is_private_to_the_user() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let dir = state.path().join("sessions").join("conversation");
+        write_mcp_config(&dir, Some(URL))?;
+
+        assert_eq!(mode(&dir)?, 0o700);
+        assert_eq!(mode(&dir.join("mcp.json"))?, 0o600);
+        assert_eq!(
+            read_config(&dir)?,
+            json!({"mcpServers": [
+                {"type": "http", "name": "browseros", "url": URL, "headers": []}
+            ]})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_older_world_readable_mcp_config_is_replaced_private() -> anyhow::Result<()> {
+        let state = tempfile::tempdir()?;
+        let dir = state.path().join("conversation");
+        std::fs::create_dir(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::write(dir.join("mcp.json"), r#"{"mcpServers":[{"url":"old"}]}"#)?;
+        std::fs::set_permissions(dir.join("mcp.json"), std::fs::Permissions::from_mode(0o644))?;
+
+        write_mcp_config(&dir, None)?;
+
+        assert_eq!(mode(&dir)?, 0o700);
+        assert_eq!(mode(&dir.join("mcp.json"))?, 0o600);
+        assert_eq!(read_config(&dir)?, json!({"mcpServers": []}));
+        let names = std::fs::read_dir(&dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
+        assert_eq!(names, vec![std::ffi::OsString::from("mcp.json")]);
+        Ok(())
     }
 }
