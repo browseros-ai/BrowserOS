@@ -1,9 +1,5 @@
 //! Drives the connection-test route through the real router and provider transport.
 
-#[allow(
-    dead_code,
-    reason = "the route fixture does not need to create its own model"
-)]
 #[path = "support/fake_provider.rs"]
 mod fake_provider;
 mod support;

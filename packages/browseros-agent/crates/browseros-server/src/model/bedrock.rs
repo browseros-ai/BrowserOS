@@ -1,35 +1,40 @@
-//! Bedrock ConverseStream uses an SDK client scoped to the resolved turn. Indexed deltas
-//! produce the same turn events as the HTTP wires and reconstruct the SDK message for replay.
+//! Bedrock ConverseStream through `rig-bedrock`, on an AWS SDK client built from the row alone:
+//! its key, secret, optional session token and region. There is no environment, profile or
+//! instance-metadata lookup, and the SDK never retries (`Model::step` decides). Rig encodes the
+//! conversation and decodes the event stream; the server keeps the credential scope, the header
+//! rules and the error cards.
 
-use std::collections::BTreeMap;
-
-use aws::error::{BuildError, ProvideErrorMetadata};
-use aws::types::{
-    ContentBlock, ContentBlockDelta, ContentBlockStart, ConversationRole, ConverseStreamOutput,
-    ImageBlock, ImageFormat, ImageSource, InferenceConfiguration, Message, ReasoningContentBlock,
-    ReasoningContentBlockDelta, ReasoningTextBlock, StopReason, SystemContentBlock, Tool,
-    ToolConfiguration, ToolInputSchema, ToolResultBlock, ToolResultContentBlock, ToolSpecification,
-    ToolUseBlock, ToolUseBlockStart,
-};
+use aws::config::interceptors::BeforeTransmitInterceptorContextMut;
+use aws::config::retry::RetryConfig;
+use aws::config::{ConfigBag, Intercept, RuntimeComponents};
+use aws::error::BoxError;
 use aws_sdk_bedrockruntime as aws;
-use aws_smithy_types::{Blob, Document, Number, retry::RetryConfig};
 use http::header::{HeaderMap, HeaderName};
-use serde_json::{Value, json};
+use rig_bedrock::client::BedrockRuntime;
+use rig_core::DynModel;
+use rig_core::error::{ErrorReport, ProviderError};
+use rig_core::operation::Completion;
+use serde_json::json;
 
-use super::{AssistantTurn, ModelMessage, NativeOutput, Reasoning, StepRequest, Usage};
-use super::{errors, headers, tool_call, tool_input, tool_started};
+use super::errors;
 use crate::store::{Credentials, ProviderConfig};
-use crate::turn::{ChatError, EventSink, FinishReason, TurnEvent};
+use crate::turn::ChatError;
 
-pub(super) struct Endpoint {
-    client: aws::Client,
-    headers: HeaderMap,
-    secrets: HeaderMap,
+/// The row's model on a client scoped to the row. Also returns every credential and custom
+/// header value, for scrubbing error text.
+pub(super) fn model(
+    provider: &ProviderConfig,
+) -> Result<(DynModel<Completion>, HeaderMap), ChatError> {
+    model_at(provider, None)
 }
 
-pub(super) fn endpoint(provider: &ProviderConfig) -> Result<Endpoint, ChatError> {
+/// `endpoint` replaces the regional AWS endpoint, for a loopback fake in tests.
+fn model_at(
+    provider: &ProviderConfig,
+    endpoint: Option<&str>,
+) -> Result<(DynModel<Completion>, HeaderMap), ChatError> {
     let (config, mut secrets) = config(&provider.credentials)?;
-    let headers = headers(&provider.headers)?;
+    let headers = super::headers(&provider.headers)?;
     for (name, value) in &headers {
         // The SDK signs these headers itself. A custom value must never change the signed
         // destination or replace the session credentials assigned to this turn.
@@ -40,11 +45,44 @@ pub(super) fn endpoint(provider: &ProviderConfig) -> Result<Endpoint, ChatError>
         }
         secrets.append(name.clone(), value.clone());
     }
-    Ok(Endpoint {
-        client: aws::Client::from_conf(config),
-        headers,
-        secrets,
-    })
+    let mut config = config.to_builder();
+    if let Some(endpoint) = endpoint {
+        config = config.endpoint_url(endpoint);
+    }
+    if !headers.is_empty() {
+        config = config.interceptor(Headers(headers));
+    }
+    let config = config.build();
+    let model = BedrockRuntime::from(aws::Client::from_conf(config))
+        .completion(&provider.model)
+        .erase();
+    Ok((model, secrets))
+}
+
+/// The row's custom headers on every request of its client. Rig builds the SDK call itself, so
+/// they ride on the client's configuration, added before signing like the SDK's own.
+#[derive(Debug)]
+struct Headers(HeaderMap);
+
+impl Intercept for Headers {
+    fn name(&self) -> &'static str {
+        "browseros::ProviderHeaders"
+    }
+
+    fn modify_before_signing(
+        &self,
+        context: &mut BeforeTransmitInterceptorContextMut<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let headers = context.request_mut().headers_mut();
+        for (name, value) in &self.0 {
+            if let Ok(value) = value.to_str() {
+                headers.insert(name.as_str().to_owned(), value.to_owned());
+            }
+        }
+        Ok(())
+    }
 }
 
 fn config(credentials: &Credentials) -> Result<(aws::Config, HeaderMap), ChatError> {
@@ -106,386 +144,44 @@ fn missing_credentials() -> ChatError {
     errors::config("AWS Bedrock requires an access key ID, secret access key, and region.")
 }
 
-fn build_error(_: BuildError) -> ChatError {
-    errors::protocol("The Bedrock message was missing a required field.")
-}
-
-fn aws_request(
-    client: &aws::Client,
-    model: &str,
-    request: &StepRequest<'_>,
-    reasoning: &Reasoning,
-) -> Result<aws::operation::converse_stream::builders::ConverseStreamFluentBuilder, ChatError> {
-    let mut call = client
-        .converse_stream()
-        .model_id(model)
-        .set_messages(Some(messages(request.messages)?));
-    if !request.system.is_empty() {
-        call = call.system(SystemContentBlock::Text(request.system.into()));
-    }
-    if !request.tools.is_empty() {
-        let tools = request
-            .tools
-            .iter()
-            .map(|tool| {
-                ToolSpecification::builder()
-                    .name(&tool.name)
-                    .description(&tool.description)
-                    .input_schema(ToolInputSchema::Json(document(&tool.input_schema)))
-                    .build()
-                    .map(Tool::ToolSpec)
-                    .map_err(build_error)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        call = call.tool_config(
-            ToolConfiguration::builder()
-                .set_tools(Some(tools))
-                .build()
-                .map_err(build_error)?,
-        );
-    }
-    if let Some((_, model)) = model.split_once("anthropic.")
-        && let Some((fields, max_tokens)) =
-            super::anthropic::thinking_fields(model, request.effort, reasoning)
-    {
-        call = call.additional_model_request_fields(document(&Value::Object(fields)));
-        call = call.inference_config(
-            InferenceConfiguration::builder()
-                .max_tokens(max_tokens)
-                .build(),
-        );
-    }
-    Ok(call)
-}
-
-fn messages(history: &[ModelMessage]) -> Result<Vec<Message>, ChatError> {
-    let mut messages = Vec::new();
-    let mut user = Vec::new();
-    for message in history {
-        match message {
-            ModelMessage::User { text, images } => {
-                if !text.is_empty() {
-                    user.push(ContentBlock::Text(text.clone()));
-                }
-                for image in images {
-                    let format = match image.media_type.as_str() {
-                        "image/png" => ImageFormat::Png,
-                        "image/jpeg" => ImageFormat::Jpeg,
-                        "image/webp" => ImageFormat::Webp,
-                        "image/gif" => ImageFormat::Gif,
-                        _ => {
-                            return Err(errors::config(
-                                "Bedrock accepts PNG, JPEG, WebP, and GIF images.",
-                            ));
-                        }
-                    };
-                    user.push(ContentBlock::Image(
-                        ImageBlock::builder()
-                            .format(format)
-                            .source(ImageSource::Bytes(Blob::new(image.bytes.clone())))
-                            .build()
-                            .map_err(build_error)?,
-                    ));
-                }
-            }
-            ModelMessage::ToolResult { id, text } => user.push(ContentBlock::ToolResult(
-                ToolResultBlock::builder()
-                    .tool_use_id(&id.0)
-                    .content(ToolResultContentBlock::Text(text.clone()))
-                    .build()
-                    .map_err(build_error)?,
-            )),
-            ModelMessage::Assistant(turn) => {
-                flush_user(&mut messages, &mut user)?;
-                messages.push(match &turn.native {
-                    NativeOutput::Bedrock(message) => message.as_ref().clone(),
-                    _ => Message::builder()
-                        .role(ConversationRole::Assistant)
-                        .content(ContentBlock::Text(turn.text.clone()))
-                        .build()
-                        .map_err(build_error)?,
-                });
-            }
-        }
-    }
-    flush_user(&mut messages, &mut user)?;
-    Ok(messages)
-}
-
-fn flush_user(messages: &mut Vec<Message>, user: &mut Vec<ContentBlock>) -> Result<(), ChatError> {
-    if !user.is_empty() {
-        // Keep parallel results together when the agent inserted pictures between them.
-        user.sort_by_key(|block| !matches!(block, ContentBlock::ToolResult(_)));
-        messages.push(
-            Message::builder()
-                .role(ConversationRole::User)
-                .set_content(Some(std::mem::take(user)))
-                .build()
-                .map_err(build_error)?,
-        );
-    }
-    Ok(())
-}
-
-fn document(value: &Value) -> Document {
-    match value {
-        Value::Null => Document::Null,
-        Value::Bool(value) => Document::Bool(*value),
-        Value::String(value) => Document::String(value.clone()),
-        Value::Array(values) => Document::Array(values.iter().map(document).collect()),
-        Value::Object(values) => Document::Object(
-            values
-                .iter()
-                .map(|(key, value)| (key.clone(), document(value)))
-                .collect(),
-        ),
-        Value::Number(value) => Document::Number(
-            value
-                .as_u64()
-                .map(Number::PosInt)
-                .or_else(|| value.as_i64().map(Number::NegInt))
-                .unwrap_or_else(|| Number::Float(value.as_f64().unwrap_or_default())),
-        ),
-    }
-}
-
-pub(super) async fn step(
-    endpoint: &Endpoint,
-    model: &str,
-    request: &StepRequest<'_>,
-    reasoning: &Reasoning,
-    sink: &mut dyn EventSink,
-) -> Result<AssistantTurn, ChatError> {
-    let headers = endpoint.headers.clone();
-    let mut response = aws_request(&endpoint.client, model, request, reasoning)?
-        .customize()
-        .mutate_request(move |request| {
-            for (name, value) in &headers {
-                if let Ok(value) = value.to_str() {
-                    request
-                        .headers_mut()
-                        .insert(name.to_string(), value.to_owned());
-                }
-            }
-        })
-        .send()
-        .await
-        .map_err(|error| {
-            let status = error
-                .raw_response()
-                .map(|response| response.status().as_u16());
-            let retry = error
-                .raw_response()
-                .and_then(|response| response.headers().get("retry-after"))
-                .and_then(|value| value.parse().ok());
-            aws_error(error.as_service_error(), status, retry, &endpoint.secrets)
-        })?;
-    let mut output = Output::default();
-    while let Some(event) = response
-        .stream
-        .recv()
-        .await
-        .map_err(|error| aws_error(error.as_service_error(), None, None, &endpoint.secrets))?
-    {
-        output.event(event, sink).await?;
-    }
-    output.complete()
-}
-
-fn aws_error(
-    service: Option<&impl ProvideErrorMetadata>,
-    status: Option<u16>,
-    retry: Option<u64>,
-    secrets: &HeaderMap,
-) -> ChatError {
-    let Some(service) = service else {
-        return match status {
-            Some(status) => errors::upstream(Some(status), retry, "", secrets),
-            None => errors::disconnected(),
-        };
+/// A Bedrock failure as an error card. Rig reports a service exception by its type (and the HTTP
+/// status when there was one, which a stream exception lacks), so the type picks the status the
+/// card is chosen by.
+pub(super) fn error(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
+    let message = match error {
+        ProviderError::ProviderResponse(_) => None,
+        ProviderError::Provider(message) => Some(message.as_str()),
+        // Rig cannot tell a refused connection from a timeout here: the SDK drops the cause.
+        _ => return errors::disconnected(),
     };
-    let status = status.or_else(|| match service.code() {
-        Some("AccessDeniedException" | "UnrecognizedClientException" | "ExpiredTokenException") => {
+    let report = ErrorReport::from(error);
+    let code = report.code.as_deref();
+    let status = report.http_status.or_else(|| match code? {
+        "AccessDeniedException" | "UnrecognizedClientException" | "ExpiredTokenException" => {
             Some(403)
         }
-        Some("ThrottlingException" | "ServiceQuotaExceededException") => Some(429),
-        Some(
-            "ServiceUnavailableException" | "InternalServerException" | "ModelStreamErrorException",
-        ) => Some(503),
-        Some("ResourceNotFoundException") => Some(404),
+        "ThrottlingException" | "ServiceQuotaExceededException" => Some(429),
+        "ServiceUnavailableException" | "InternalServerException" | "ModelStreamErrorException" => {
+            Some(503)
+        }
+        "ResourceNotFoundException" => Some(404),
         _ => None,
     });
-    let body = json!({"error":{"code":service.code(),"message":service.message()}}).to_string();
-    errors::upstream(status, retry, &body, secrets)
-}
-
-/// Smithy gives text blocks no start event. Tool blocks start with their identity; reasoning
-/// blocks may deliver text and signature independently or a redacted byte string.
-#[derive(Default)]
-struct Block {
-    text: String,
-    thinking: String,
-    signature: String,
-    redacted: Option<Vec<u8>>,
-    tool: Option<ToolUseBlockStart>,
-    arguments: String,
-}
-
-#[derive(Default)]
-struct Output {
-    blocks: BTreeMap<i32, Block>,
-    text: String,
-    finish: Option<FinishReason>,
-    usage: Option<Usage>,
-}
-
-impl Output {
-    async fn event(
-        &mut self,
-        event: ConverseStreamOutput,
-        sink: &mut dyn EventSink,
-    ) -> Result<(), ChatError> {
-        match event {
-            ConverseStreamOutput::ContentBlockStart(event) => {
-                if let Some(ContentBlockStart::ToolUse(tool)) = event.start {
-                    let block = self.blocks.entry(event.content_block_index).or_default();
-                    if block.tool.is_some() {
-                        return Err(errors::protocol(
-                            "Bedrock started the same tool block twice.",
-                        ));
-                    }
-                    tool_started(sink, &tool.tool_use_id, &tool.name).await;
-                    block.tool = Some(tool);
-                }
-            }
-            ConverseStreamOutput::ContentBlockDelta(event) => {
-                let block = self.blocks.entry(event.content_block_index).or_default();
-                match event.delta {
-                    Some(ContentBlockDelta::Text(text)) if !text.is_empty() => {
-                        block.text.push_str(&text);
-                        self.text.push_str(&text);
-                        sink.emit(TurnEvent::Text(text)).await;
-                    }
-                    Some(ContentBlockDelta::ToolUse(tool)) => block.arguments.push_str(&tool.input),
-                    Some(ContentBlockDelta::ReasoningContent(delta)) => match delta {
-                        ReasoningContentBlockDelta::Text(text) if !text.is_empty() => {
-                            block.thinking.push_str(&text);
-                            sink.emit(TurnEvent::Reasoning(text)).await;
-                        }
-                        ReasoningContentBlockDelta::Signature(signature) => {
-                            block.signature.push_str(&signature)
-                        }
-                        ReasoningContentBlockDelta::RedactedContent(blob) => block
-                            .redacted
-                            .get_or_insert_with(Vec::new)
-                            .extend(blob.into_inner()),
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-            ConverseStreamOutput::MessageStop(event) => {
-                self.finish = Some(match event.stop_reason {
-                    StopReason::EndTurn | StopReason::StopSequence => FinishReason::Stop,
-                    StopReason::ToolUse => FinishReason::ToolCalls,
-                    StopReason::MaxTokens | StopReason::ModelContextWindowExceeded => {
-                        FinishReason::Length
-                    }
-                    StopReason::ContentFiltered | StopReason::GuardrailIntervened => {
-                        FinishReason::ContentFilter
-                    }
-                    StopReason::MalformedModelOutput | StopReason::MalformedToolUse => {
-                        FinishReason::Error
-                    }
-                    _ => FinishReason::Other,
-                });
-            }
-            ConverseStreamOutput::Metadata(event) => {
-                if let Some(usage) = event.usage {
-                    self.usage = u64::try_from(usage.input_tokens)
-                        .ok()
-                        .zip(u64::try_from(usage.output_tokens).ok())
-                        .map(|(input_tokens, output_tokens)| Usage {
-                            input_tokens,
-                            output_tokens,
-                        });
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn complete(self) -> Result<AssistantTurn, ChatError> {
-        let finish = self.finish.ok_or_else(errors::disconnected)?;
-        let mut content = Vec::new();
-        let mut calls = Vec::new();
-        for block in self.blocks.into_values() {
-            if let Some(tool) = block.tool {
-                if finish != FinishReason::ToolCalls {
-                    continue;
-                }
-                let input = tool_input(&Value::String(block.arguments))?;
-                calls.push(tool_call(
-                    &json!(tool.tool_use_id),
-                    &json!(tool.name),
-                    input.clone(),
-                )?);
-                content.push(ContentBlock::ToolUse(
-                    ToolUseBlock::builder()
-                        .tool_use_id(tool.tool_use_id)
-                        .name(tool.name)
-                        .set_type(tool.r#type)
-                        .input(document(&input))
-                        .build()
-                        .map_err(build_error)?,
-                ));
-            } else if let Some(redacted) = block.redacted {
-                content.push(ContentBlock::ReasoningContent(
-                    ReasoningContentBlock::RedactedContent(Blob::new(redacted)),
-                ));
-            } else if !block.thinking.is_empty() || !block.signature.is_empty() {
-                let reasoning = ReasoningTextBlock::builder()
-                    .text(block.thinking)
-                    .set_signature((!block.signature.is_empty()).then_some(block.signature))
-                    .build()
-                    .map_err(build_error)?;
-                content.push(ContentBlock::ReasoningContent(
-                    ReasoningContentBlock::ReasoningText(reasoning),
-                ));
-            } else if !block.text.is_empty() {
-                content.push(ContentBlock::Text(block.text));
-            }
-        }
-        let message = Message::builder()
-            .role(ConversationRole::Assistant)
-            .set_content(Some(content))
-            .build()
-            .map_err(build_error)?;
-        Ok(AssistantTurn {
-            text: self.text,
-            calls,
-            finish,
-            usage: self.usage,
-            native: NativeOutput::Bedrock(Box::new(message)),
-        })
-    }
+    let message = message.or_else(|| report.provider_response_body());
+    let body = json!({"error": {"code": code, "message": message}}).to_string();
+    errors::upstream(status, None, &body, secrets)
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Context;
-    use aws::types::{
-        ContentBlockDeltaEvent, ContentBlockStartEvent, ConverseStreamMetadataEvent,
-        MessageStopEvent, TokenUsage, ToolUseBlockDelta,
-    };
     use uuid::Uuid;
 
     use super::*;
+    use crate::model::Models;
     use crate::model::fake_provider::{FakeProvider, Reply};
-    use crate::model::{Effort, Models, ToolSpec};
     use crate::store::{ProviderKind, Secret, Store};
-    use crate::turn::{ChatErrorCode, ToolCallId};
+    use crate::turn::ChatErrorCode;
 
     fn credentials(key: &str, token: Option<&str>, region: &str) -> Credentials {
         Credentials::Aws {
@@ -595,73 +291,177 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn sdk_events_keep_signed_reasoning_and_tool_input_in_the_follow_up() -> anyhow::Result<()>
-    {
-        let mut output = Output::default();
-        let mut visible = Vec::new();
-        let delta = |index, delta| -> Result<_, BuildError> {
-            Ok(ConverseStreamOutput::ContentBlockDelta(
-                ContentBlockDeltaEvent::builder()
-                    .content_block_index(index)
-                    .delta(delta)
-                    .build()?,
-            ))
-        };
-        for event in [
-            delta(
-                0,
-                ContentBlockDelta::ReasoningContent(ReasoningContentBlockDelta::Text(
-                    "thinking".into(),
-                )),
-            )?,
-            delta(
-                0,
-                ContentBlockDelta::ReasoningContent(ReasoningContentBlockDelta::Signature(
-                    "opaque-signature".into(),
-                )),
-            )?,
-            ConverseStreamOutput::ContentBlockStart(
-                ContentBlockStartEvent::builder()
-                    .content_block_index(1)
-                    .start(ContentBlockStart::ToolUse(
-                        ToolUseBlockStart::builder()
-                            .tool_use_id("tool-1")
-                            .name("run")
-                            .build()?,
-                    ))
-                    .build()?,
-            ),
-            delta(
-                1,
-                ContentBlockDelta::ToolUse(
-                    ToolUseBlockDelta::builder().input("{\"code\":").build()?,
-                ),
-            )?,
-            delta(
-                1,
-                ContentBlockDelta::ToolUse(ToolUseBlockDelta::builder().input("\"1+1\"}").build()?),
-            )?,
-            ConverseStreamOutput::MessageStop(
-                MessageStopEvent::builder()
-                    .stop_reason(StopReason::ToolUse)
-                    .build()?,
-            ),
-            ConverseStreamOutput::Metadata(
-                ConverseStreamMetadataEvent::builder()
-                    .usage(
-                        TokenUsage::builder()
-                            .input_tokens(14)
-                            .output_tokens(8)
-                            .total_tokens(22)
-                            .build()?,
-                    )
-                    .build(),
-            ),
-        ] {
-            output.event(event, &mut visible).await?;
+    /// One AWS event-stream frame: prelude, headers, JSON payload, each with its CRC32.
+    fn frame(event: &str, payload: &serde_json::Value) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+                }
+            }
+            !crc
         }
-        let turn = output.complete()?;
+        let mut headers = Vec::new();
+        for (name, value) in [
+            (":message-type", "event"),
+            (":event-type", event),
+            (":content-type", "application/json"),
+        ] {
+            headers.push(name.len() as u8);
+            headers.extend_from_slice(name.as_bytes());
+            headers.push(7);
+            headers.extend_from_slice(&(value.len() as u16).to_be_bytes());
+            headers.extend_from_slice(value.as_bytes());
+        }
+        let data = payload.to_string().into_bytes();
+        let total = (16 + headers.len() + data.len()) as u32;
+        let mut message = total.to_be_bytes().to_vec();
+        message.extend_from_slice(&(headers.len() as u32).to_be_bytes());
+        let prelude = crc32(&message);
+        message.extend_from_slice(&prelude.to_be_bytes());
+        message.extend(headers);
+        message.extend(data);
+        let checksum = crc32(&message);
+        message.extend_from_slice(&checksum.to_be_bytes());
+        message
+    }
+
+    /// A loopback ConverseStream: records each request and plays the next reply.
+    async fn fake_bedrock(
+        replies: Vec<Vec<(&'static str, serde_json::Value)>>,
+    ) -> anyhow::Result<(
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<(http::HeaderMap, serde_json::Value)>>>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        use axum::extract::State;
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(http::HeaderMap, serde_json::Value)>>>;
+        type Queue = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>>;
+        let seen: Seen = Default::default();
+        let queue: Queue = std::sync::Arc::new(std::sync::Mutex::new(
+            replies
+                .into_iter()
+                .map(|events| {
+                    events
+                        .iter()
+                        .flat_map(|(event, payload)| frame(event, payload))
+                        .collect()
+                })
+                .collect(),
+        ));
+        let app = axum::Router::new()
+            .fallback(
+                |State((seen, queue)): State<(Seen, Queue)>,
+                 headers: http::HeaderMap,
+                 body: axum::body::Bytes| async move {
+                    let json = serde_json::from_slice(&body).unwrap_or_default();
+                    if let Ok(mut seen) = seen.lock() {
+                        seen.push((headers, json));
+                    }
+                    let reply = queue.lock().ok().and_then(|mut queue| queue.pop_front());
+                    (
+                        [(
+                            http::header::CONTENT_TYPE,
+                            "application/vnd.amazon.eventstream",
+                        )],
+                        reply.unwrap_or_default(),
+                    )
+                },
+            )
+            .with_state((seen.clone(), queue));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok((base, seen, server))
+    }
+
+    #[tokio::test]
+    async fn signed_reasoning_and_tool_input_survive_the_follow_up() -> anyhow::Result<()> {
+        use crate::model::route::{Route, Wire};
+        use crate::model::{
+            Backend, Effort, Image, Model, ModelMessage, Reasoning, StepRequest, ToolSpec, Usage,
+        };
+        use crate::turn::{FinishReason, TurnEvent};
+        use serde_json::json;
+
+        let (base, seen, server) = fake_bedrock(vec![
+            vec![
+                ("messageStart", json!({"role": "assistant"})),
+                ("contentBlockDelta", json!({"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "thinking"}}})),
+                ("contentBlockDelta", json!({"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "opaque-signature"}}})),
+                ("contentBlockStop", json!({"contentBlockIndex": 0})),
+                ("contentBlockStart", json!({"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tool-1", "name": "run"}}})),
+                ("contentBlockDelta", json!({"contentBlockIndex": 1, "delta": {"toolUse": {"input": "{\"code\":"}}})),
+                ("contentBlockDelta", json!({"contentBlockIndex": 1, "delta": {"toolUse": {"input": "\"1+1\"}"}}})),
+                ("contentBlockStop", json!({"contentBlockIndex": 1})),
+                ("messageStop", json!({"stopReason": "tool_use"})),
+                ("metadata", json!({"usage": {"inputTokens": 14, "outputTokens": 8, "totalTokens": 22}, "metrics": {"latencyMs": 1}})),
+            ],
+            vec![
+                ("messageStart", json!({"role": "assistant"})),
+                ("contentBlockDelta", json!({"contentBlockIndex": 0, "delta": {"text": "Two"}})),
+                ("contentBlockStop", json!({"contentBlockIndex": 0})),
+                ("messageStop", json!({"stopReason": "end_turn"})),
+                ("metadata", json!({"usage": {"inputTokens": 30, "outputTokens": 1, "totalTokens": 31}, "metrics": {"latencyMs": 1}})),
+            ],
+        ])
+        .await?;
+        let provider = ProviderConfig {
+            id: "fixture".into(),
+            kind: ProviderKind::Bedrock,
+            model: "anthropic.claude-sonnet-4-5-v1:0".into(),
+            base_url: None,
+            headers: vec![("x-conversation".into(), "fixture-conversation".into())],
+            context_window: 8000,
+            supports_images: true,
+            reasoning_effort: Some("max".into()),
+            reasoning_summary: None,
+            resource_name: None,
+            credentials: credentials("fixture-key", None, "us-east-1"),
+        };
+        let (rig, secrets) = model_at(&provider, Some(&base))?;
+        let model = Model {
+            route: Backend::Rig(Box::new(Route {
+                model: rig,
+                wire: Wire::Bedrock,
+                url: None,
+                secrets,
+            })),
+            name: provider.model.clone(),
+            window: provider.context_window,
+            supports_images: true,
+            kind: Some(ProviderKind::Bedrock),
+            reasoning: Reasoning {
+                effort: provider.reasoning_effort.clone(),
+                summary: None,
+            },
+        };
+        let tools = [ToolSpec {
+            name: "run".into(),
+            description: "Evaluate code".into(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let question = || ModelMessage::User {
+            text: "What is 1+1?".into(),
+            images: vec![],
+        };
+        let mut events = Vec::new();
+        let first = [question()];
+        let turn = model
+            .step(
+                &StepRequest {
+                    system: "Help",
+                    messages: &first,
+                    tools: &tools,
+                    effort: Some(Effort::High),
+                },
+                &mut events,
+            )
+            .await?;
         assert_eq!(turn.finish(), FinishReason::ToolCalls);
         assert_eq!(
             turn.usage(),
@@ -670,74 +470,72 @@ mod tests {
                 output_tokens: 8
             })
         );
-        assert_eq!(turn.tool_calls()[0].input, json!({"code":"1+1"}));
+        let call = turn.tool_calls()[0].clone();
+        assert_eq!(call.input, json!({"code": "1+1"}));
         assert!(
-            matches!(&visible[..], [TurnEvent::Reasoning(text), TurnEvent::ToolStarted { id, .. }] if text == "thinking" && id.0 == "tool-1")
+            matches!(&events[..], [TurnEvent::Reasoning(text), TurnEvent::ToolStarted { id, .. }]
+            if text == "thinking" && *id == call.id)
         );
 
-        let (config, _) = config(&credentials("fixture-key", None, "us-east-1"))?;
-        let client = aws::Client::from_conf(config);
-        let messages = [
-            ModelMessage::User {
-                text: "What is 1+1?".into(),
-                images: vec![],
-            },
+        let follow_up = [
+            question(),
             ModelMessage::Assistant(turn),
             ModelMessage::ToolResult {
-                id: ToolCallId("tool-1".into()),
+                id: call.id.clone(),
                 text: "2".into(),
             },
+            ModelMessage::User {
+                text: "Attached image from the tool result:".into(),
+                images: vec![Image {
+                    media_type: "image/png".into(),
+                    bytes: vec![1, 2, 3],
+                }],
+            },
         ];
-        let tools = [ToolSpec {
-            name: "run".into(),
-            description: "Evaluate code".into(),
-            input_schema: json!({"type":"object"}),
-        }];
-        let request = StepRequest {
-            system: "Help",
-            messages: &messages,
-            tools: &tools,
-            effort: Some(Effort::High),
-        };
-        let reasoning = Reasoning {
-            effort: Some("max".into()),
-            summary: None,
-        };
-        let older_model = aws_request(
-            &client,
-            "anthropic.claude-sonnet-4-5-v1:0",
-            &request,
-            &reasoning,
-        )?;
-        let input = older_model.as_input();
-        let messages = input.get_messages().as_ref().context("Converse input")?;
-        assert!(
-            matches!(messages[1].content(), [ContentBlock::ReasoningContent(ReasoningContentBlock::ReasoningText(thinking)), ContentBlock::ToolUse(tool)]
-            if thinking.signature() == Some("opaque-signature") && tool.tool_use_id() == "tool-1")
-        );
-        assert!(
-            matches!(messages[2].content(), [ContentBlock::ToolResult(result)] if result.tool_use_id() == "tool-1")
-        );
+        let turn = model
+            .step(
+                &StepRequest {
+                    system: "Help",
+                    messages: &follow_up,
+                    tools: &tools,
+                    effort: Some(Effort::High),
+                },
+                &mut events,
+            )
+            .await?;
+        assert_eq!(turn.finish(), FinishReason::Stop);
+        assert_eq!(events.last(), Some(&TurnEvent::Text("Two".into())));
+        server.abort();
+
+        let seen = seen.lock().map_err(|_| anyhow::anyhow!("capture lock"))?;
+        assert_eq!(seen.len(), 2);
+        for (headers, body) in seen.iter() {
+            assert_eq!(headers["x-conversation"], "fixture-conversation");
+            let authorization = headers["authorization"].to_str()?;
+            assert!(authorization.contains("Credential=fixture-key/"));
+            assert!(
+                authorization.contains("x-conversation"),
+                "the custom header is signed"
+            );
+            assert_eq!(
+                body["additionalModelRequestFields"],
+                json!({"thinking": {"type": "enabled", "budget_tokens": 32000}})
+            );
+            assert_eq!(body["inferenceConfig"]["maxTokens"], 36_096);
+        }
+        let messages = seen[1].1["messages"].as_array().context("messages")?;
         assert_eq!(
-            input.get_additional_model_request_fields(),
-            &Some(document(
-                &json!({"thinking":{"type":"enabled","budget_tokens":32000}})
-            ))
+            messages[1]["content"],
+            json!([
+                {"reasoningContent": {"reasoningText": {"text": "thinking", "signature": "opaque-signature"}}},
+                {"toolUse": {"toolUseId": "tool-1", "name": "run", "input": {"code": "1+1"}}}
+            ]),
+            "signed reasoning and the call replay with the provider's own id"
         );
-        let current_model = aws_request(
-            &client,
-            "us.anthropic.claude-opus-4-7",
-            &request,
-            &reasoning,
-        )?;
-        assert_eq!(
-            current_model
-                .as_input()
-                .get_additional_model_request_fields(),
-            &Some(document(
-                &json!({"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"max"}})
-            )),
-        );
+        let user = messages[2]["content"].as_array().context("user content")?;
+        assert_eq!(user[0]["toolResult"]["toolUseId"], "tool-1");
+        assert_eq!(user[1]["text"], "Attached image from the tool result:");
+        assert_eq!(user[2]["image"]["format"], "png");
         Ok(())
     }
 }

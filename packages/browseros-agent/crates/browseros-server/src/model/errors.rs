@@ -1,11 +1,15 @@
-//! Converts transport and upstream failures into the panel's common envelope. Only scrubbed
-//! provider text leaves the model layer, including when a service echoes its request headers.
+//! Converts transport and upstream failures into the panel's common envelope. Rig reports a
+//! failure as a structured `ProviderError`; the cards, their wording and the retry rule are the
+//! server's. Only scrubbed provider text leaves the model layer, including when a service
+//! echoes its request headers.
 
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime};
 
 use http::HeaderMap;
 use regex::Regex;
+use rig_core::error::{ErrorReport, ProviderError};
+use rig_core::http_client;
 use serde_json::Value;
 use url::Url;
 
@@ -48,18 +52,42 @@ pub(super) fn protocol(message: &'static str) -> ChatError {
     error
 }
 
-pub(super) fn stream(event: &Value, secrets: &HeaderMap) -> ChatError {
-    let error = event.get("error").unwrap_or(event);
-    let status = error
-        .get("code")
-        .or_else(|| error.get("status"))
-        .and_then(|value| {
-            value
-                .as_u64()
-                .and_then(|n| u16::try_from(n).ok())
-                .or_else(|| value.as_str()?.parse().ok())
-        });
-    upstream(status, None, &event.to_string(), secrets)
+/// A Rig failure on an HTTP wire. `url` is the destination, for the "could not connect" card,
+/// which names only its host.
+pub(super) fn provider(error: &ProviderError, url: Option<&Url>, secrets: &HeaderMap) -> ChatError {
+    match error {
+        ProviderError::Http(transport) => match transport.as_ref() {
+            http_client::Error::Transient(source)
+                if source
+                    .downcast_ref::<reqwest_rig::Error>()
+                    .is_some_and(reqwest_rig::Error::is_connect) =>
+            {
+                url.map_or_else(disconnected, connect)
+            }
+            _ => disconnected(),
+        },
+        // The stream ended before the provider's terminal event, or went silent for Rig's idle
+        // limit (five minutes).
+        ProviderError::Truncated | ProviderError::Stalled(_) => disconnected(),
+        ProviderError::ProviderResponse(_) | ProviderError::Relayed(_) => report(error, secrets),
+        _ => protocol("The provider sent a response the server could not read."),
+    }
+}
+
+/// A provider's own refusal, by its status and body: an HTTP error reply, or an error event in
+/// the stream (whose numeric code Rig reads as the status).
+pub(super) fn report(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
+    let report = ErrorReport::from(error);
+    let retry_after = report
+        .retry_after(SystemTime::now())
+        .map(|delay| delay.as_millis().div_ceil(1_000))
+        .and_then(|seconds| u64::try_from(seconds).ok());
+    upstream(
+        report.http_status,
+        retry_after,
+        report.provider_response_body().unwrap_or_default(),
+        secrets,
+    )
 }
 
 pub(super) fn upstream(
@@ -244,30 +272,6 @@ fn scrub(text: &str, secrets: &HeaderMap) -> String {
         text = regex.replace_all(&text, "[redacted]").into_owned();
     }
     text.chars().take(20_000).collect()
-}
-
-pub(super) fn retry_after(headers: &HeaderMap) -> Option<u64> {
-    let seconds = headers.get("retry-after").and_then(|value| {
-        let value = value.to_str().ok()?;
-        value.parse().ok().or_else(|| {
-            // Parse the IMF-fixdate format without turning on any new Cargo features.
-            retry_date(value).map(|date| {
-                date.duration_since(SystemTime::now())
-                    .unwrap_or_default()
-                    .as_secs()
-            })
-        })
-    });
-    seconds.or_else(|| {
-        let ms: u64 = headers.get("retry-after-ms")?.to_str().ok()?.parse().ok()?;
-        Some(ms.div_ceil(1_000))
-    })
-}
-
-fn retry_date(value: &str) -> Option<SystemTime> {
-    aws_smithy_types::DateTime::from_str(value, aws_smithy_types::date_time::Format::HttpDate)
-        .ok()
-        .and_then(|value| SystemTime::try_from(value).ok())
 }
 
 pub(super) fn retry_delay(error: &ChatError, attempt: u32) -> Option<Duration> {

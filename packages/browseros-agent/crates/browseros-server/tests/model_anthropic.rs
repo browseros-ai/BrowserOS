@@ -1,4 +1,5 @@
-//! Hand-authored from the Claude Messages streaming guide's text, tool and thinking events.
+//! What the server guarantees on Anthropic Messages, through Rig. Streams are hand-authored
+//! from the Claude Messages streaming guide's text, tool and thinking events.
 
 #[path = "support/fake_provider.rs"]
 mod fake_provider;
@@ -56,8 +57,9 @@ async fn signed_and_redacted_thinking_replay_with_the_tool_result() -> anyhow::R
     assert_eq!(turn.usage().context("usage")?.input_tokens, 15);
     assert_eq!(turn.usage().context("usage")?.output_tokens, 17);
     assert_eq!(turn.tool_calls()[0].input, json!({"code":"1+1"}));
+    let call_id = turn.tool_calls()[0].id.clone();
     assert!(
-        matches!(&events[..], [TurnEvent::Reasoning(text), TurnEvent::ToolStarted { id, .. }] if text == "Checking." && id.0 == "toolu_1")
+        matches!(&events[..], [TurnEvent::Reasoning(text), TurnEvent::ToolStarted { id, .. }] if text == "Checking." && *id == call_id)
     );
     let result = ModelMessage::ToolResult {
         id: turn.tool_calls()[0].id.clone(),
@@ -93,7 +95,7 @@ async fn signed_and_redacted_thinking_replay_with_the_tool_result() -> anyhow::R
         json!([
             {"role":"assistant","content":[thinking, redacted, tool]},
             {"role":"user","content":[
-                {"type":"tool_result","tool_use_id":"toolu_1","content":"2"},
+                {"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"2"}]},
                 {"type":"text","text":"Attached image from the tool result:"},
                 {"type":"image","source":{"type":"base64","media_type":"image/png","data":"AQID"}}
             ]}

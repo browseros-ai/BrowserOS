@@ -1,4 +1,5 @@
-//! Hand-authored from OpenAI's Responses streaming events and the reasoning continuation docs.
+//! What the server guarantees on the OpenAI Responses wire, through Rig. Streams are
+//! hand-authored from OpenAI's Responses streaming events and the reasoning continuation docs.
 
 #[path = "support/fake_provider.rs"]
 mod fake_provider;
@@ -7,8 +8,8 @@ use anyhow::Context;
 use browseros_server::model::{AssistantTurn, Image, ModelMessage};
 use browseros_server::store::{Credentials, ProviderKind, Secret};
 use browseros_server::turn::{FinishReason, TurnEvent};
-use fake_provider::{FakeProvider, Reply, models, provider, request};
-use serde_json::json;
+use fake_provider::{FakeProvider, Reply, models, parts, provider, request};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -48,18 +49,18 @@ async fn adjacent_users_send_one_input_with_text_and_pictures_in_order() -> anyh
         .lock()
         .map_err(|_| anyhow::anyhow!("capture lock"))?;
     assert_eq!(
-        calls[0].body["input"],
-        json!([
-            {"role":"user","content":[{"type":"input_text","text":"earlier\n\nnow"}]},
-            {"role":"assistant","content":"an answer"},
-            {"role":"user","content":[
-                {"type":"input_text","text":"first photo"},
-                {"type":"input_image","image_url":"data:image/png;base64,AQ==","detail":"auto"},
-                {"type":"input_text","text":"\n\nsecond photo"},
-                {"type":"input_image","image_url":"data:image/png;base64,Ag==","detail":"auto"}
-            ]},
-            {"role":"assistant","content":"another answer"}
-        ])
+        turns(&calls[0].body["input"]),
+        [
+            json!({"role":"user","content":[{"text":"earlier\n\nnow"}]}),
+            json!({"role":"assistant","content":[{"text":"an answer"}]}),
+            json!({"role":"user","content":[
+                {"text":"first photo"},
+                {"image":"data:image/png;base64,AQ=="},
+                {"text":"\n\nsecond photo"},
+                {"image":"data:image/png;base64,Ag=="}
+            ]}),
+            json!({"role":"assistant","content":[{"text":"another answer"}]}),
+        ]
     );
     Ok(())
 }
@@ -70,11 +71,12 @@ async fn responses_replays_the_completed_encrypted_item_and_tool_call() -> anyho
     let call = json!({"type":"function_call","id":"fc_1","call_id":"call_1","name":"run","arguments":"{\"code\":\"1+1\"}","status":"completed"});
     let fake = FakeProvider::new(vec![
         Reply::events(&[
-            json!({"type":"response.reasoning_summary_text.delta","delta":"Checking state"}),
+            json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}),
+            json!({"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_1","summary_index":0,"delta":"Checking state"}),
             json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
             json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"run","arguments":""}}),
-            json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"code\":\"1+"}),
-            json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"1\"}"}),
+            json!({"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_1","delta":"{\"code\":\"1+"}),
+            json!({"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_1","delta":"1\"}"}),
             json!({"type":"response.output_item.done","output_index":1,"item":call}),
             json!({"type":"response.completed","response":{"status":"completed","output":[reasoning, call],"usage":{"input_tokens":16,"output_tokens":7}}}),
         ]),
@@ -97,9 +99,10 @@ async fn responses_replays_the_completed_encrypted_item_and_tool_call() -> anyho
     assert_eq!(turn.finish(), FinishReason::ToolCalls);
     assert_eq!(turn.usage().context("usage")?.output_tokens, 7);
     assert_eq!(turn.tool_calls()[0].input, json!({"code":"1+1"}));
+    let call_id = turn.tool_calls()[0].id.clone();
     assert!(
         matches!(&events[..], [TurnEvent::Reasoning(text), TurnEvent::ToolStarted { id, .. }]
-        if text == "Checking state" && id.0 == "call_1")
+        if text == "Checking state" && *id == call_id)
     );
     let result = ModelMessage::ToolResult {
         id: turn.tool_calls()[0].id.clone(),
@@ -136,17 +139,38 @@ async fn responses_replays_the_completed_encrypted_item_and_tool_call() -> anyho
         json!(["reasoning.encrypted_content"])
     );
     assert!(calls[1].body.get("reasoning").is_none());
+    let input = calls[1].body["input"].as_array().context("input")?;
+    assert_eq!(input[0], reasoning, "encrypted reasoning replays verbatim");
+    assert_eq!(input[1], call, "the function call replays verbatim");
+    assert_eq!(input[2]["type"], "function_call_output");
+    assert_eq!(input[2]["call_id"], "call_1", "the provider's call id");
+    assert_eq!(input[2]["output"], "2");
     assert_eq!(
-        calls[1].body["input"],
-        json!([
-            reasoning,
-            call,
-            {"type":"function_call_output","call_id":"call_1","output":"2"},
-            {"role":"user","content":[
-                {"type":"input_text","text":"Attached image from the tool result:"},
-                {"type":"input_image","image_url":"data:image/png;base64,AQ==","detail":"auto"}
-            ]}
-        ])
+        turns(&Value::Array(input[3..].to_vec())),
+        [json!({"role":"user","content":[
+            {"text":"Attached image from the tool result:"},
+            {"image":"data:image/png;base64,AQ=="}
+        ]})]
     );
     Ok(())
+}
+
+/// Responses input as turns: Rig sends each user part as its own message item, so consecutive
+/// user items are read back as one user turn.
+fn turns(input: &Value) -> Vec<Value> {
+    let mut turns: Vec<Value> = Vec::new();
+    for item in input.as_array().into_iter().flatten() {
+        let item = parts(item);
+        match turns.last_mut() {
+            Some(last) if last["role"] == "user" && item["role"] == "user" => {
+                if let (Some(into), Some(from)) =
+                    (last["content"].as_array_mut(), item["content"].as_array())
+                {
+                    into.extend(from.iter().cloned());
+                }
+            }
+            _ => turns.push(item),
+        }
+    }
+    turns
 }
