@@ -337,6 +337,12 @@ fn launch_json(launch: &EngineLaunch, port: u16) -> io::Result<Value> {
 /// A desktop browser's settings, merged over whatever the file holds (design 3.5): every run
 /// carries a task yet must see the person's tabs; the idle-tab janitor cannot be turned off, so
 /// it waits its longest; and no automatic pictures of the person's pages go to disk.
+///
+/// The engine's trace keeps metadata only (`trace.values = off`): no run's code or result, no
+/// operation's arguments, results or error text. The server keeps its own history and never
+/// reads the trace, and an incognito turn must not leave its scripts and the page text they
+/// returned on disk. Replies to the server are unchanged. Page addresses and titles and run
+/// metadata are still recorded: the engine has no setting for those.
 fn write_settings(path: &Path) -> io::Result<()> {
     let mut settings = match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice::<serde_json::Map<String, Value>>(&bytes)
@@ -351,6 +357,7 @@ fn write_settings(path: &Path) -> io::Result<()> {
         ("tabs", "scope", json!("browser")),
         ("tabs", "idleCloseSeconds", json!(86_400)),
         ("trace", "screenshots", json!("off")),
+        ("trace", "values", json!("off")),
     ] {
         let section = settings.entry(section).or_insert_with(|| json!({}));
         if !section.is_object() {
@@ -458,12 +465,34 @@ mod tests {
             written,
             json!({
                 "tabs": { "scope": "browser", "idleCloseSeconds": 86400 },
-                "trace": { "screenshots": "off" },
+                "trace": { "screenshots": "off", "values": "off" },
                 "files": { "readDirs": ["/x"] }
             })
         );
         let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        Ok(())
+    }
+
+    #[test]
+    fn settings_turn_trace_values_off_and_keep_the_other_trace_keys() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"trace":{"values":"on","retentionSeconds":7200,"valueBytes":4096}}"#,
+        )?;
+        write_settings(&path)?;
+        let written: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        assert_eq!(
+            written["trace"],
+            json!({
+                "values": "off",
+                "screenshots": "off",
+                "retentionSeconds": 7200,
+                "valueBytes": 4096
+            })
+        );
         Ok(())
     }
 
