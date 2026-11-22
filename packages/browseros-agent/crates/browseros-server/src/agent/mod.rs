@@ -8,7 +8,7 @@
 //! ```
 //!
 //! A turn starts from the stored transcript every time (design rule 3): nothing is kept in
-//! memory between turns, except what acpx keeps in its own session store.
+//! memory between turns for replay. acpx owns its native session history.
 
 mod acpx;
 mod context;
@@ -43,6 +43,7 @@ struct Inner {
     store: Store,
     runtime: AgentRuntime,
     acpx_sessions: acpx::Sessions,
+    model_rejections: probe::ModelRejections,
 }
 
 /// Where the bundled Bun is and where agent state goes.
@@ -63,6 +64,7 @@ impl Agent {
                 store,
                 runtime,
                 acpx_sessions: acpx::Sessions::default(),
+                model_rejections: probe::ModelRejections::default(),
             }),
         }
     }
@@ -70,7 +72,11 @@ impl Agent {
     /// Models and reasoning levels a coding agent advertises. A probe that cannot run
     /// returns a result with `error` set, never an `Err`: the dialog must still open.
     pub async fn probe(&self, kind: AgentKind, timeout: std::time::Duration) -> AgentProbe {
-        probe::probe(&self.inner.runtime, kind, timeout).await
+        let mut report = probe::probe(&self.inner.runtime, kind, timeout).await;
+        self.inner
+            .model_rejections
+            .annotate(kind.into(), &mut report.models);
+        report
     }
 
     /// Retire this server's acpx owners after conversations stop admitting and running turns.

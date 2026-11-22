@@ -1,8 +1,10 @@
 //! Discovers settings from the same pinned adapter used by acpx. The probe owns a transient
 //! ACP connection and never tries to authenticate or reuse a conversation session.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -31,6 +33,41 @@ pub struct ProbeModel {
     pub id: String,
     pub name: Option<String>,
     pub description: Option<String>,
+}
+
+/// Refusals seen during this server process, keyed by adapter because the probe has
+/// no saved agent ID. Sign-in or workspace changes can make these advisories stale.
+#[derive(Default)]
+pub(super) struct ModelRejections(Mutex<HashMap<Adapter, HashSet<String>>>);
+
+impl ModelRejections {
+    fn lock(&self) -> MutexGuard<'_, HashMap<Adapter, HashSet<String>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn record(&self, adapter: Adapter, model: &str) {
+        self.lock().entry(adapter).or_default().insert(model.into());
+    }
+
+    pub(super) fn clear(&self, adapter: Adapter, model: &str) {
+        if let Some(rejected) = self.lock().get_mut(&adapter) {
+            rejected.remove(model);
+        }
+    }
+
+    pub(super) fn annotate(&self, adapter: Adapter, models: &mut [ProbeModel]) {
+        if let Some(rejected) = self.lock().get(&adapter) {
+            for model in models
+                .iter_mut()
+                .filter(|model| rejected.contains(&model.id))
+            {
+                model.description = Some(format!(
+                    "This model was previously refused by {}. Choose Agent default or another model if you still use the same sign-in.",
+                    adapter.name()
+                ));
+            }
+        }
+    }
 }
 
 /// The reasoning levels an agent offers, and its default.

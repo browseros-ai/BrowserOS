@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"fixture","prompt":[{"type":"text","text":"Exact owner prompt"}]}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Warning: Model metadata for `gpt-6.1-terra` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\n\n"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-6.1-terra' model is not supported when using Codex with a ChatGPT account.\",\"code\":\"model_not_found\"}}\n\n"}}}}
+{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn","usage":null,"_meta":{"quota":{"token_count":null,"model_usage":[]}}}}

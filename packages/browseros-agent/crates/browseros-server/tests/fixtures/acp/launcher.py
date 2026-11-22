@@ -43,6 +43,8 @@ if "--agent" not in args:
                     {"modelId":"fixture[high]", "name":"Fixture (high)"},
                 ],
             }}
+            if (fixtures / "probe-include-refused").exists():
+                result["models"]["availableModels"].append({"modelId":"gpt-6.1-terra"})
         send({"jsonrpc":"2.0", "id":request["id"], "result":result})
     sys.exit()
 
@@ -53,7 +55,9 @@ home = Path(os.environ["HOME"])
 after_globals = args[args.index("--suppress-reads")+1:]
 if after_globals[0] == "--append-system-prompt":
     after_globals = after_globals[2:]
+model = None
 if after_globals[0].startswith("--model="):
+    model = after_globals[0].removeprefix("--model=")
     after_globals = after_globals[1:]
 operation = after_globals[0]
 record(operation=operation, args=after_globals, cwd=args[args.index("--cwd")+1],
@@ -63,6 +67,12 @@ if operation == "sessions":
     marker = home / "record"
     if action == "ensure":
         assert args[args.index("--ttl") + 1] == "120", "expected a 120-second owner idle timeout"
+        if model == "claude-invalid-f11-example":
+            print((fixtures / "claude-model-rejected.ndjson").read_text(), end="", flush=True)
+            sys.exit(1)
+        if model == "gpt-6.1-terra" and not (fixtures / "probe-include-refused").exists():
+            print((fixtures / "codex-model-unadvertised.ndjson").read_text(), end="", flush=True)
+            sys.exit(1)
         send({"action":"session_ensured", "created":not marker.exists()})
         marker.touch()
     elif action == "close":
@@ -100,12 +110,36 @@ elif operation == "prompt":
         if "fail incognito close" in prompt:
             (fixtures / "incognito-owner.pid").write_text(str(owner.pid))
             (home / "fail-close").touch()
-    fixture = "auth" if "claude-agent-acp@" in command else (
-        "cancel" if "cancel this turn" in prompt else "success"
-    )
+    service_errors = {
+        "legacy service failure": ("The upstream service could not complete this request.", None),
+        "legacy quota failure": ("The upstream usage limit was reached.", "usageLimitExceeded"),
+        "legacy authentication failure": ("The upstream service rejected the credentials.", "unauthorized"),
+    }
+    service_error = next((error for marker, error in service_errors.items() if marker in prompt), None)
+    quoted_diagnostic = "quote a diagnostic" in prompt
+    if "claude-agent-acp@" in command:
+        fixture = "auth"
+    elif service_error or quoted_diagnostic or "add sensodyne toothpaste" in prompt:
+        fixture = "codex-model-rejected"
+    elif "cancel this turn" in prompt:
+        fixture = "cancel"
+    else:
+        fixture = "success"
     for line in (fixtures / (fixture + ".ndjson")).read_text().splitlines():
         message = json.loads(line)
+        if fixture == "codex-model-rejected" and message.get("method") == "session/update":
+            update = message["params"]["update"]
+            if quoted_diagnostic:
+                update["messageId"] = "assistant-answer"
+            if service_error and update["content"]["text"].startswith("{"):
+                update["content"]["text"] = service_error[0] + "\n\n"
         reply = message.get("result", {})
+        if service_error and service_error[1] and reply.get("stopReason") == "end_turn":
+            message.pop("result")
+            message["error"] = {
+                "code": -32603, "message": "Internal error",
+                "data": {"message": service_error[0], "codexErrorInfo": service_error[1]},
+            }
         if reply.get("stopReason") == "cancelled" and fixture == "cancel":
             while not (home / "cancelled").exists():
                 time.sleep(.01)

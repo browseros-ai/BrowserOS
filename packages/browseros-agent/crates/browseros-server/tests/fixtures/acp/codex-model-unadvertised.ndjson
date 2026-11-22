@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Cannot apply --model \"gpt-6.1-terra\": the ACP agent did not advertise that model. Available models: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna.","data":{"origin":"cli"}}}
