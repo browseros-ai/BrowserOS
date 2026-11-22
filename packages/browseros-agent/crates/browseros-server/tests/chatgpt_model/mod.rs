@@ -183,6 +183,23 @@ impl Fixture {
         Ok(self.router.clone().oneshot(request).await?)
     }
 
+    /// `GET` with a loopback `Host` and exactly these other headers.
+    async fn get_with(&self, path: &str, headers: &[(&str, &str)]) -> anyhow::Result<Response> {
+        let mut request = Request::get(path).header(header::HOST, "127.0.0.1:9200");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        Ok(self
+            .router
+            .clone()
+            .oneshot(request.body(Body::empty())?)
+            .await?)
+    }
+
+    async fn listening(&self) -> bool {
+        self.sign_in().inner.session.lock().await.is_some()
+    }
+
     async fn start(&self) -> anyhow::Result<Url> {
         let response = self.send(Method::GET, START).await?;
         assert_eq!(response.status(), StatusCode::FOUND);
@@ -682,6 +699,91 @@ async fn the_private_listener_hands_off_and_expires_abandoned_sign_ins() -> anyh
     );
     assert!(first.sign_in().inner.session.lock().await.is_none());
     assert_port_released(port).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_page_cannot_begin_a_sign_in_and_the_extension_can() -> anyhow::Result<()> {
+    let ephemeral = || OAuthEndpoints {
+        callback_port: 0,
+        ..Default::default()
+    };
+    let fixture = Fixture::new(ephemeral(), false).await?;
+    // What BrowserOS 0.51 sends, measured at the server, for a page's image, no-cors fetch and
+    // link: no `Origin` on any of them.
+    let from_page: [&[(&str, &str)]; 3] = [
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("sec-fetch-mode", "no-cors"),
+            ("sec-fetch-dest", "image"),
+        ],
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("sec-fetch-mode", "no-cors"),
+            ("sec-fetch-dest", "empty"),
+        ],
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-dest", "document"),
+        ],
+    ];
+    for headers in from_page {
+        let response = fixture.get_with(START, headers).await?;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{headers:?}");
+        assert!(
+            !fixture.listening().await,
+            "{headers:?} opened the listener"
+        );
+    }
+
+    // The extension's settings page pressing Add ChatGPT, as measured: a CORS `fetch` with no
+    // `Origin`.
+    let extension = fixture
+        .get_with(
+            START,
+            &[
+                ("sec-fetch-site", "none"),
+                ("sec-fetch-mode", "cors"),
+                ("sec-fetch-dest", "empty"),
+            ],
+        )
+        .await?;
+    assert_eq!(extension.status(), StatusCode::FOUND);
+    assert!(fixture.listening().await);
+
+    // A native caller sends no fetch metadata at all.
+    let native = Fixture::new(ephemeral(), false).await?;
+    assert_eq!(
+        native.get_with(START, &[]).await?.status(),
+        StatusCode::FOUND
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn pending_sign_ins_are_capped_and_the_oldest_is_dropped() -> anyhow::Result<()> {
+    let fixture = Fixture::new(
+        OAuthEndpoints {
+            callback_port: 0,
+            ..Default::default()
+        },
+        false,
+    )
+    .await?;
+    let mut states = Vec::new();
+    for _ in 0..MAX_PENDING + 2 {
+        states.push(parameter(&fixture.start().await?, "state")?);
+    }
+    let session = fixture.sign_in().inner.session.lock().await;
+    let pending: Vec<&String> = session
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("the listener closed"))?
+        .pending
+        .iter()
+        .map(|(state, _)| state)
+        .collect();
+    assert_eq!(pending, states.iter().skip(2).collect::<Vec<_>>());
     Ok(())
 }
 

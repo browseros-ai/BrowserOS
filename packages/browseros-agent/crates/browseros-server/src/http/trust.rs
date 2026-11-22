@@ -1,16 +1,19 @@
-//! The one trust rule (design section 4.3), applied by one middleware to every contract route.
-//! The system routes are outside it because the browser's own C++ calls them, and the private
-//! MCP endpoint applies its own, stricter rule in `browser`.
+//! The trust rules (design section 4.3). One middleware, `guard`, covers every contract route.
+//! The system routes get the narrower `loopback_only` and `supervisor_only`, because the browser's
+//! own C++ calls them with no `Origin`. The private MCP endpoint applies its own rule in `browser`.
 //!
 //! There are no tokens, cookies or accounts. What keeps a web page out:
 //!
 //! 1. The listener is `127.0.0.1` only (in `app`).
-//! 2. `Host` must name `127.0.0.1` or `localhost`, which stops a page that points its own domain
-//!    at loopback (DNS rebinding).
+//! 2. `Host` must name `127.0.0.1` or `localhost`, on every route. This stops a page that points
+//!    its own domain at loopback (DNS rebinding).
 //! 3. A request that carries `Origin` must carry an allowed one: the extension's, or one listed
 //!    in `BROWSEROS_TRUSTED_ORIGINS`.
 //! 4. A request with no `Origin` may only read (`GET`, `HEAD`, `OPTIONS`): a page cannot read such
-//!    a response, and a local program could read the SQLite file anyway.
+//!    a response, and a local program could read the SQLite file anyway. The one `GET` that
+//!    changes state, sign-in start, also refuses what `page_can_send_without_origin` describes.
+//! 5. Shutdown serves the browser itself and native callers only (`supervisor_only`): nothing a
+//!    web page can make the browser send reaches it.
 
 use std::sync::Arc;
 
@@ -24,6 +27,10 @@ use crate::app::Launch;
 
 /// The extension's fixed origin, from its packaged key.
 pub const EXTENSION_ORIGIN: &str = "chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk";
+
+// Fetch metadata. Chromium sends these to every potentially trustworthy URL, loopback included.
+const SEC_FETCH_SITE: &str = "sec-fetch-site";
+const SEC_FETCH_MODE: &str = "sec-fetch-mode";
 
 /// Origins from `BROWSEROS_TRUSTED_ORIGINS` (comma separated), normalised to what a browser
 /// sends. An entry that is not an origin is dropped with a warning.
@@ -79,6 +86,50 @@ pub(super) async fn guard(
         }
         Some(_) => ApiError::forbidden().into_response(),
     }
+}
+
+/// The rule for the system routes the browser polls: `Host` only. Health and status must answer
+/// the browser's C++, which sends no `Origin`, and they hold nothing but liveness, update
+/// readiness and the version.
+pub(super) async fn loopback_only(request: Request, next: Next) -> Response {
+    if !loopback_host(request.headers()) {
+        return ApiError::forbidden().into_response();
+    }
+    next.run(request).await
+}
+
+/// Shutdown's rule: a loopback `Host`, no `Origin`, and a `Sec-Fetch-Site` that is absent or
+/// `none`. Every `POST` a web page makes carries `Origin`, and its `Sec-Fetch-Site` names the
+/// page's relation to the server (`cross-site`, `same-site`, `same-origin`). `none` means the
+/// browser itself started the request: BrowserOS's C++ supervisor sends it (measured on its
+/// health poll), as would the older supervisor that calls shutdown and builds its request the
+/// same way. Refusing that supervisor would not keep the server up: it answers any status but
+/// 200 with SIGKILL. `curl` sends no fetch metadata. Without this rule any web page could stop
+/// the server, and a shipped browser does not start it again after a clean exit.
+///
+/// The private MCP endpoint refuses every `Sec-Fetch-Site`, `none` included: only our own coding
+/// agent calls it, and that is not a browser.
+pub(super) async fn supervisor_only(request: Request, next: Next) -> Response {
+    let headers = request.headers();
+    let from_page = headers.contains_key(header::ORIGIN)
+        || headers
+            .get(SEC_FETCH_SITE)
+            .is_some_and(|site| site.as_bytes() != b"none");
+    if !loopback_host(headers) || from_page {
+        return ApiError::forbidden().into_response();
+    }
+    next.run(request).await
+}
+
+/// True for a request a web page can make the browser send without `Origin`: an image, a link, a
+/// form `GET`, a no-cors fetch. All of them carry a `Sec-Fetch-Mode` other than `cors`. A page's
+/// CORS-mode request always carries `Origin`, which `guard` checks, so a `GET` that changes state
+/// can refuse these and still serve the extension's `fetch` (mode `cors`) and native callers
+/// (no `Sec-Fetch-Mode` at all).
+pub(super) fn page_can_send_without_origin(headers: &HeaderMap) -> bool {
+    headers
+        .get(SEC_FETCH_MODE)
+        .is_some_and(|mode| mode.as_bytes() != b"cors")
 }
 
 fn is_read(method: &Method) -> bool {

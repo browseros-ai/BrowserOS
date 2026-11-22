@@ -68,7 +68,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer, then exit 0. Also served at `/shutdown` for BrowserOS 0.46.x. */
+        /**
+         * Answer, then exit 0. Also served at `/shutdown` for BrowserOS 0.46.x.
+         * @description For the browser itself and native callers only: a request that carries `Origin`, or a
+         *     `Sec-Fetch-Site` other than `none`, is one a web page sent, and is refused.
+         */
         post: operations["shutdown"];
         delete?: never;
         options?: never;
@@ -403,6 +407,10 @@ export interface paths {
          * @description Opens the callback listener on `127.0.0.1:1455` for as long as a sign-in is pending and
          *     redirects to OpenAI's authorize page. The extension follows the redirect and opens the final
          *     URL in a tab.
+         *
+         *     A browser must send it as a CORS fetch (`Sec-Fetch-Mode: cors`), as the extension's `fetch`
+         *     does. An image, a link or a no-cors fetch, which a web page can send without `Origin`, is
+         *     refused with `403`.
          */
         get: operations["startSignIn"];
         put?: never;
@@ -990,6 +998,15 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+            /** @description `Host` does not name loopback. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
         };
     };
     getStatus: {
@@ -1008,6 +1025,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Status"];
+                };
+            };
+            /** @description `Host` does not name loopback. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };
@@ -1030,6 +1056,15 @@ export interface operations {
                     "application/json": components["schemas"]["Diagnostics"];
                 };
             };
+            /** @description `Host` does not name loopback. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
         };
     };
     shutdown: {
@@ -1048,6 +1083,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShutdownResult"];
+                };
+            };
+            /** @description A web page sent it (it carries `Origin`, or a `Sec-Fetch-Site` other than `none`), or `Host` does not name loopback. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

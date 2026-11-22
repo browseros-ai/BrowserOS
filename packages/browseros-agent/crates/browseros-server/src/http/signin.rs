@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -10,6 +10,7 @@ use utoipa_axum::routes;
 use super::ApiError;
 use super::dto;
 use super::extract::PathParams;
+use super::trust;
 use crate::app::App;
 use crate::model::SignInError;
 
@@ -25,6 +26,10 @@ pub(super) fn routes() -> OpenApiRouter<App> {
 /// Opens the callback listener on `127.0.0.1:1455` for as long as a sign-in is pending and
 /// redirects to OpenAI's authorize page. The extension follows the redirect and opens the final
 /// URL in a tab.
+///
+/// A browser must send it as a CORS fetch (`Sec-Fetch-Mode: cors`), as the extension's `fetch`
+/// does. An image, a link or a no-cors fetch, which a web page can send without `Origin`, is
+/// refused with `403`.
 #[utoipa::path(
     get,
     path = "/oauth/{provider}/start",
@@ -41,8 +46,14 @@ pub(super) fn routes() -> OpenApiRouter<App> {
 )]
 async fn start_sign_in(
     State(app): State<App>,
+    headers: HeaderMap,
     PathParams(_path): PathParams<dto::SignInPath>,
 ) -> Result<Response, ApiError> {
+    // `trust::guard` lets a `GET` with no `Origin` through because a page cannot read the answer.
+    // This one opens port 1455 and adds a pending sign-in, so a page must not be able to send it.
+    if trust::page_can_send_without_origin(&headers) {
+        return Err(ApiError::forbidden());
+    }
     let authorize = app.models.sign_in().start().await?;
     Ok((StatusCode::FOUND, [(header::LOCATION, authorize.as_str())]).into_response())
 }

@@ -41,6 +41,114 @@ async fn the_system_routes_answer_without_an_origin() -> TestResult {
     Ok(())
 }
 
+/// A request to a system route with these headers; `host` is always sent.
+fn system_request(
+    method: Method,
+    path: &str,
+    host: &str,
+    headers: &[(&str, &str)],
+) -> Request<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, host);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    request.body(Body::empty()).unwrap_or_default()
+}
+
+// Fetch metadata as BrowserOS 0.51 sends it, measured at the server: its C++ supervisor's
+// health poll, and the extension's own `fetch` (no `Origin` on a `GET`).
+const SUPERVISOR: &[(&str, &str)] = &[
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "no-cors"),
+    ("sec-fetch-dest", "empty"),
+];
+const EXTENSION_FETCH: &[(&str, &str)] = &[
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "cors"),
+    ("sec-fetch-dest", "empty"),
+];
+
+#[tokio::test]
+async fn shutdown_refuses_anything_a_web_page_sends() -> TestResult {
+    // A page's form POST and no-cors fetch carry `Origin` and a `Sec-Fetch-Site` naming the
+    // page's relation to the server. The extension's own `Origin` is refused too.
+    let refused: [(&str, &[(&str, &str)]); 6] = [
+        ("127.0.0.1:9200", &[("origin", "https://evil.example")]),
+        ("127.0.0.1:9200", &[("origin", support::EXTENSION_ORIGIN)]),
+        ("127.0.0.1:9200", &[("sec-fetch-site", "cross-site")]),
+        ("127.0.0.1:9200", &[("sec-fetch-site", "same-site")]),
+        ("127.0.0.1:9200", &[("sec-fetch-site", "same-origin")]),
+        ("rebind.example:9200", &[]),
+    ];
+    // The browser's own supervisor, and a caller with no fetch metadata at all (curl).
+    for admitted in [SUPERVISOR, &[][..]] {
+        for path in ["/system/shutdown", "/shutdown"] {
+            let server = TestServer::start().await?;
+            for (host, headers) in refused {
+                let response = server
+                    .send(system_request(Method::POST, path, host, headers))
+                    .await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::FORBIDDEN,
+                    "{path} {host} {headers:?}"
+                );
+                assert_eq!(body_json(response).await, json!({ "error": "Forbidden" }));
+                assert!(
+                    !server.app.shutdown.token().is_cancelled(),
+                    "{path} {host} {headers:?} must not stop the server"
+                );
+            }
+            let response = server
+                .send(system_request(
+                    Method::POST,
+                    path,
+                    "127.0.0.1:9200",
+                    admitted,
+                ))
+                .await;
+            assert_eq!(response.status(), StatusCode::OK, "{path} {admitted:?}");
+            assert_eq!(body_json(response).await, json!({ "status": "ok" }));
+            assert!(
+                server.app.shutdown.token().is_cancelled(),
+                "{path} {admitted:?} stops the server"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_system_routes_refuse_a_foreign_host_and_keep_answering_the_browser() -> TestResult {
+    let server = TestServer::start().await?;
+    for path in [
+        "/system/health",
+        "/health",
+        "/status",
+        "/system/diagnostics",
+    ] {
+        let rebinding = server
+            .send(system_request(
+                Method::GET,
+                path,
+                "rebind.example:9200",
+                &[],
+            ))
+            .await;
+        assert_eq!(rebinding.status(), StatusCode::FORBIDDEN, "{path}");
+        for headers in [SUPERVISOR, EXTENSION_FETCH, &[][..]] {
+            let browser = server
+                .send(system_request(Method::GET, path, "127.0.0.1:9200", headers))
+                .await;
+            assert_eq!(browser.status(), StatusCode::OK, "{path} {headers:?}");
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn the_trust_rule_refuses_pages_and_writes_without_an_origin() -> TestResult {
     let server = TestServer::start().await?;
@@ -307,13 +415,10 @@ fn the_document_has_every_route_and_lists_the_trust_refusal() -> Result<(), serd
                 continue;
             }
             operations += 1;
-            let system = operation["tags"]
-                .as_array()
-                .is_some_and(|tags| tags.contains(&json!("system")));
-            assert_eq!(
+            // The system routes list their own 403 (the Host check, and shutdown's native rule).
+            assert!(
                 operation["responses"]["403"].is_object(),
-                !system,
-                "{method} {} lists 403 exactly when it is behind the trust rule",
+                "{method} {} lists the trust refusal",
                 operation["operationId"]
             );
         }
