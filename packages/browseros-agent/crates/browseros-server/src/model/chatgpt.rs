@@ -1,7 +1,7 @@
 //! Owns the ChatGPT sign-in, including the private OAuth callback listener and token rotation.
 //! The rest of the model layer receives a configured endpoint for the shared Responses wire.
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -32,6 +32,9 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CALLBACK_PORT: u16 = 1455;
 const CALLBACK_PATH: &str = "/auth/callback";
 const FLOW_TTL: Duration = Duration::from_secs(5 * 60);
+/// Pending sign-ins kept at once. Each start adds one; past this many the oldest is dropped, so
+/// repeated starts cannot grow the queue and the person's latest attempt always completes.
+const MAX_PENDING: usize = 4;
 const REFRESH_BUFFER_MS: i64 = 5 * 60 * 1000;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -76,7 +79,8 @@ struct CallbackListener {
     id: Uuid,
     port: u16,
     stop: CancellationToken,
-    pending: HashMap<String, PendingFlow>,
+    /// `(state, flow)`, oldest first. Never longer than `MAX_PENDING`, so a scan is the lookup.
+    pending: VecDeque<(String, PendingFlow)>,
 }
 
 impl CallbackListener {
@@ -85,13 +89,17 @@ impl CallbackListener {
         let verifier = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         let expires = Instant::now() + inner.endpoints.flow_ttl;
         let authorize = authorize_url(authorize, self.port, &state, &verifier);
-        self.pending.insert(
+        // The dropped flow's timer still fires later and finds nothing to take.
+        if self.pending.len() >= MAX_PENDING {
+            self.pending.pop_front();
+        }
+        self.pending.push_back((
             state.clone(),
             PendingFlow {
                 verifier: Secret::new(verifier),
                 expires,
             },
-        );
+        ));
 
         let inner = Arc::downgrade(inner);
         let id = self.id;
@@ -351,7 +359,7 @@ async fn start_listener(inner: &Arc<SignInInner>) -> Result<CallbackListener, Si
         id,
         port,
         stop,
-        pending: HashMap::new(),
+        pending: VecDeque::new(),
     })
 }
 
@@ -413,7 +421,13 @@ fn take_flow(
     state: &str,
 ) -> Option<PendingFlow> {
     let binding = listener.as_mut().filter(|binding| binding.id == id)?;
-    let flow = binding.pending.remove(state);
+    let flow = binding
+        .pending
+        .iter()
+        .position(|(pending, _)| pending == state)
+        .and_then(|index| binding.pending.remove(index))
+        .map(|(_, flow)| flow);
+    // The listener is open only while a sign-in is pending.
     if binding.pending.is_empty() {
         *listener = None;
     }

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BrowserOS server API",
-    "description": "The contract between the BrowserOS extension and its local server. Generated from the server's Rust handlers and wire types; do not edit by hand.\n\nTrust model, for every route except the `system` tag: the server binds `127.0.0.1` only; the `Host` header must name loopback; a request that carries an `Origin` header must carry the extension's origin (or one listed in `BROWSEROS_TRUSTED_ORIGINS`); a request with no `Origin` may only use `GET`, `HEAD` or `OPTIONS`. A refused request gets `403 {\"error\":\"Forbidden\"}`. A preflight `OPTIONS` from an allowed origin is answered by the trust layer itself (`204`, methods `GET, POST, PUT, DELETE, OPTIONS`, headers `Content-Type, Accept`).\n\nTimes are epoch milliseconds. Ids are strings.",
+    "description": "The contract between the BrowserOS extension and its local server. Generated from the server's Rust handlers and wire types; do not edit by hand.\n\nTrust model, for every route except the `system` tag: the server binds `127.0.0.1` only; the `Host` header must name loopback; a request that carries an `Origin` header must carry the extension's origin (or one listed in `BROWSEROS_TRUSTED_ORIGINS`); a request with no `Origin` may only use `GET`, `HEAD` or `OPTIONS`. A refused request gets `403 {\"error\":\"Forbidden\"}`. A preflight `OPTIONS` from an allowed origin is answered by the trust layer itself (`204`, methods `GET, POST, PUT, DELETE, OPTIONS`, headers `Content-Type, Accept`).\n\nThe `system` routes check only that `Host` names loopback, because the browser's own code calls them without an `Origin`. Shutdown also refuses any request that carries `Origin`, or a `Sec-Fetch-Site` other than `none`: that is anything a web page can make the browser send.\n\nTimes are epoch milliseconds. Ids are strings.",
     "license": {
       "name": "AGPL-3.0-or-later",
       "identifier": "AGPL-3.0-or-later"
@@ -40,6 +40,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "`Host` does not name loopback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -58,6 +68,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`Host` does not name loopback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -82,6 +102,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "`Host` does not name loopback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
           }
         }
       }
@@ -92,6 +122,7 @@
           "system"
         ],
         "summary": "Answer, then exit 0. Also served at `/shutdown` for BrowserOS 0.46.x.",
+        "description": "For the browser itself and native callers only: a request that carries `Origin`, or a\n`Sec-Fetch-Site` other than `none`, is one a web page sent, and is refused.",
         "operationId": "shutdown",
         "responses": {
           "200": {
@@ -100,6 +131,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ShutdownResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A web page sent it (it carries `Origin`, or a `Sec-Fetch-Site` other than `none`), or `Host` does not name loopback.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -1211,7 +1252,7 @@
           "signin"
         ],
         "summary": "Begin \"Sign in with ChatGPT\".",
-        "description": "Opens the callback listener on `127.0.0.1:1455` for as long as a sign-in is pending and\nredirects to OpenAI's authorize page. The extension follows the redirect and opens the final\nURL in a tab.",
+        "description": "Opens the callback listener on `127.0.0.1:1455` for as long as a sign-in is pending and\nredirects to OpenAI's authorize page. The extension follows the redirect and opens the final\nURL in a tab.\n\nA browser must send it as a CORS fetch (`Sec-Fetch-Mode: cors`), as the extension's `fetch`\ndoes. An image, a link or a no-cors fetch, which a web page can send without `Origin`, is\nrefused with `403`.",
         "operationId": "startSignIn",
         "parameters": [
           {
@@ -3335,7 +3376,7 @@
     },
     {
       "name": "system",
-      "description": "The browser's supervisor contract and diagnostics. No origin check."
+      "description": "The browser's supervisor contract and diagnostics. No origin check; `Host` must name loopback, and shutdown refuses anything a web page sends."
     }
   ]
 }

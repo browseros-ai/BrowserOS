@@ -4,7 +4,8 @@
 //!
 //! ```text
 //!   127.0.0.1:<port>
-//!     ├─ system routes        /system/health, /status, …   no origin check: the browser's C++ calls them
+//!     ├─ system routes        /system/health, /status, …   `trust::loopback_only`: the browser's C++ calls them
+//!     ├─ shutdown             /system/shutdown, /shutdown   `trust::supervisor_only`: nothing a page sends
 //!     ├─ contract routes      /chat, /providers, …          behind `trust::guard` (design section 4.3)
 //!     └─ /mcp                 the private MCP endpoint      NOT behind `trust::guard`: `browser`
 //!                                                           refuses `Origin` / `Sec-Fetch-Site`
@@ -131,7 +132,10 @@ impl IntoResponse for ApiError {
             `Origin` may only use `GET`, `HEAD` or `OPTIONS`. A refused request gets \
             `403 {\"error\":\"Forbidden\"}`. A preflight `OPTIONS` from an allowed origin is \
             answered by the trust layer itself (`204`, methods `GET, POST, PUT, DELETE, OPTIONS`, \
-            headers `Content-Type, Accept`).\n\nTimes are epoch milliseconds. Ids are strings."
+            headers `Content-Type, Accept`).\n\n\
+            The `system` routes check only that `Host` names loopback, because the browser's own code \
+            calls them without an `Origin`. Shutdown also refuses any request that carries `Origin`, or a \
+            `Sec-Fetch-Site` other than `none`: that is anything a web page can make the browser send.\n\nTimes are epoch milliseconds. Ids are strings."
     ),
     servers((url = "http://127.0.0.1:{port}", description = "The local server. The port comes from the browser pref `browseros.server.mcp_port`.",
         variables(("port" = (default = "9200", description = "The server port"))))),
@@ -141,7 +145,7 @@ impl IntoResponse for ApiError {
         (name = "providers", description = "LLM providers, the selected target, connection test."),
         (name = "agents", description = "Coding agents run through acpx (Claude Code, Codex)."),
         (name = "signin", description = "Sign in with ChatGPT."),
-        (name = "system", description = "The browser's supervisor contract and diagnostics. No origin check."),
+        (name = "system", description = "The browser's supervisor contract and diagnostics. No origin check; `Host` must name loopback, and shutdown refuses anything a web page sends."),
     )
 )]
 struct ApiDoc;
@@ -198,13 +202,21 @@ fn contract_routes() -> OpenApiRouter<App> {
         .merge(signin::routes())
 }
 
-/// Three routers merged:
-///   system routes    -> no origin check (the browser's C++ calls them)
+/// Four routers merged:
+///   system routes    -> `trust::loopback_only` (the browser's C++ calls them with no `Origin`)
+///   shutdown         -> `trust::supervisor_only` (no `Origin`; `Sec-Fetch-Site` absent or `none`)
 ///   contract routes  -> under `trust::guard` (DESIGN 4.3 rules 1 to 4)
 ///   browser.mcp_router(), nested at `/mcp` -> NOT under `trust::guard`. Its own rule: refuse
 ///     any request with `Origin` or `Sec-Fetch-Site`; the task in the path must be armed.
+///
+/// `route_layer`, not `layer`: a rule wraps only the routes it names, so an unknown path keeps
+/// its plain 404.
 pub fn router(app: App) -> axum::Router {
     let (system, _) = system::routes().split_for_parts();
+    let (shutdown, _) = system::shutdown_routes().split_for_parts();
+    let system = system
+        .route_layer(axum::middleware::from_fn(trust::loopback_only))
+        .merge(shutdown.route_layer(axum::middleware::from_fn(trust::supervisor_only)));
     let (contract, _) = contract_routes().split_for_parts();
     let contract = contract.layer(axum::middleware::from_fn_with_state(
         app.launch.clone(),
@@ -221,6 +233,7 @@ pub fn router(app: App) -> axum::Router {
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let (_, mut document) = OpenApiRouter::<App>::with_openapi(ApiDoc::openapi())
         .merge(system::routes())
+        .merge(system::shutdown_routes())
         .merge(contract_routes())
         .split_for_parts();
     // After the merge: a modifier on `ApiDoc` would run before the routes are in the document.
