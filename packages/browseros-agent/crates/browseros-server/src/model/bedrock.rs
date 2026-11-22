@@ -151,8 +151,9 @@ pub(super) fn error(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
     let message = match error {
         ProviderError::ProviderResponse(_) => None,
         ProviderError::Provider(message) => Some(message.as_str()),
-        // Rig cannot tell a refused connection from a timeout here: the SDK drops the cause.
-        _ => return errors::disconnected(),
+        // A transport failure or an unreadable reply, as on the HTTP wires. Rig cannot tell a
+        // refused connection from a timeout here: the SDK drops the cause.
+        _ => return errors::provider(error, None, secrets),
     };
     let report = ErrorReport::from(error);
     let code = report.code.as_deref();
@@ -169,7 +170,8 @@ pub(super) fn error(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
     });
     let message = message.or_else(|| report.provider_response_body());
     let body = json!({"error": {"code": code, "message": message}}).to_string();
-    errors::upstream(status, None, &body, secrets)
+    // rig-bedrock keeps no response headers, so a delay comes only from the body's hints.
+    errors::upstream(status, errors::retry_after(&report), &body, secrets)
 }
 
 #[cfg(test)]
@@ -449,5 +451,22 @@ mod tests {
         assert_eq!(user[1]["text"], "Attached image from the tool result:");
         assert_eq!(user[2]["image"]["format"], "png");
         Ok(())
+    }
+
+    #[test]
+    fn a_throttle_keeps_the_delay_bedrock_asked_for() {
+        let throttled = ProviderError::from_http_response(
+            http::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"message":"Too many requests, please try again in 2s."}"#,
+        );
+        let card = error(&throttled, &HeaderMap::new());
+        assert_eq!(card.code, ChatErrorCode::RateLimited);
+        assert_eq!(card.retry_after_seconds, Some(2));
+        let unreadable = ProviderError::Response("not a Converse reply".into());
+        assert_eq!(
+            error(&unreadable, &HeaderMap::new()).code,
+            ChatErrorCode::Unknown,
+            "an unreadable reply is not a dropped connection"
+        );
     }
 }

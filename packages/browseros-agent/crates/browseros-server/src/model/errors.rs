@@ -78,16 +78,21 @@ pub(super) fn provider(error: &ProviderError, url: Option<&Url>, secrets: &Heade
 /// the stream (whose numeric code Rig reads as the status).
 pub(super) fn report(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
     let report = ErrorReport::from(error);
-    let retry_after = report
-        .retry_after(SystemTime::now())
-        .map(|delay| delay.as_millis().div_ceil(1_000))
-        .and_then(|seconds| u64::try_from(seconds).ok());
     upstream(
         report.http_status,
-        retry_after,
+        retry_after(&report),
         report.provider_response_body().unwrap_or_default(),
         secrets,
     )
+}
+
+/// The delay a provider asked for, in whole seconds: its `retry-after-ms` or `retry-after`
+/// header (seconds or an HTTP date), or a hint in the body ("try again in 1.5s").
+pub(super) fn retry_after(report: &ErrorReport) -> Option<u64> {
+    report
+        .retry_after(SystemTime::now())
+        .map(|delay| delay.as_millis().div_ceil(1_000))
+        .and_then(|seconds| u64::try_from(seconds).ok())
 }
 
 pub(super) fn upstream(
