@@ -4,7 +4,9 @@ name = "browseros-server"
 # version is strictly higher than the bundled one.
 version = "0.1.0"
 edition.workspace = true
-rust-version.workspace = true
+# Rig 0.47 declares Rust 1.97.1. Only this crate needs it; the rest of the workspace keeps the
+# workspace floor.
+rust-version = "1.97.1"
 license.workspace = true
 repository.workspace = true
 description = "The BrowserOS agent server: chat, providers, coding agents and history for the extension"
@@ -63,11 +65,20 @@ uuid.workspace = true
 utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "preserve_order", "preserve_path_order"] }
 utoipa-axum = "0.3.0"
 
-# Model calls (`model`). The provider wires (OpenAI Chat Completions and Responses, Anthropic
-# Messages, Gemini, the ChatGPT backend) are spoken directly over the workspace reqwest, which
-# needs `stream` for a streamed response body; the TLS features stay the workspace's. An LLM
-# crate is deliberately absent: genai 0.7.5 turns on serde_json/preserve_order, which changes
-# serde_json for every crate in a build, neo-server included (tests/feature_guard.rs).
+# Model calls (`model`) go through Rig: one library speaks the Chat Completions, Responses,
+# ChatGPT, Anthropic Messages and Bedrock wires. Rig leaves serde_json's features as they are
+# (tests/feature_guard.rs); genai 0.7.5, tried first, turned on preserve_order for every crate
+# in a build.
+#
+# Rig's HTTP transport runs on a reqwest 0.13 client the server builds itself (`model::http`),
+# so the provider keeps the redirect, retry and proxy rules it had. Rig's own `rustls` feature is
+# left off on purpose: it turns on reqwest's `system-proxy`, which reaches the one hyper-util in
+# the build and would make every reqwest client in this binary, 0.12 included, start reading the
+# macOS and Windows proxy settings. Rustls alone comes from the reqwest line below.
+rig-core = { version = "=0.47.0", default-features = false, features = ["reqwest"] }
+rig-reqwest = { version = "=0.47.0", default-features = false }
+rig-bedrock = "=0.47.0"
+reqwest-rig = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["rustls"] }
 eventsource-stream = "0.2"
 # AWS Bedrock through ConverseStream, with the row's key, secret and session token scoped to one
 # request. These releases keep the workspace's Rust 1.94 floor; later ones declare 1.94.1. Only
