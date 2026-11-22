@@ -243,10 +243,10 @@ impl Transcript {
         }
     }
 
-    /// Closes open blocks (`text-end`, `reasoning-end`; `finish-step` does not close them), gives
-    /// every call without a result a `tool-output-error`, then writes the one terminal chunk:
-    /// `finish`, `abort`, or `error` with the envelope as `errorText`. Nothing can be applied
-    /// afterwards, and a second call does nothing.
+    /// Closes open blocks (`text-end`, `reasoning-end`; `finish-step` does not close them), seals
+    /// unresolved calls with `tool-output-error`, then writes the one terminal chunk: `finish`,
+    /// `abort`, or `error` with the envelope as `errorText`. Nothing can be applied afterwards,
+    /// and a second call does nothing.
     pub fn finish(&mut self, end: &TurnEnd) {
         if self.finished {
             return;
@@ -256,21 +256,20 @@ impl Transcript {
             TurnEnd::Stopped => STOPPED,
             TurnEnd::Done(_) | TurnEnd::Failed(_) => INTERRUPTED,
         };
-        let unresolved: Vec<(usize, &'static str)> = self
-            .message
-            .parts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, part)| match part {
-                UiPart::Tool(tool) => match tool.outcome {
-                    ToolOutcome::InputStreaming => Some((index, NOT_RUN)),
-                    ToolOutcome::InputAvailable => Some((index, running)),
-                    ToolOutcome::Output(_) | ToolOutcome::Error(_) => None,
-                },
-                _ => None,
-            })
-            .collect();
-        for (index, error) in unresolved {
+        for index in 0..self.message.parts.len() {
+            let UiPart::Tool(tool) = &mut self.message.parts[index] else {
+                continue;
+            };
+            let error = match tool.outcome {
+                ToolOutcome::InputStreaming => {
+                    // The TypeScript fallback needs input on every stored tool call. The AI
+                    // SDK's error chunk preserves the existing input, so supply it first.
+                    Self::write_tool_input(&mut self.frames, tool, Value::Object(Map::new()));
+                    NOT_RUN
+                }
+                ToolOutcome::InputAvailable => running,
+                ToolOutcome::Output(_) | ToolOutcome::Error(_) => continue,
+            };
             self.resolve(index, Err(error.to_owned()));
         }
         match end {
@@ -296,7 +295,7 @@ impl Transcript {
     /// The message as it must be stored if the turn ended now:
     ///   open text or reasoning          -> state Done
     ///   a call with input and no result -> Error("Interrupted")   (Error("Stopped") after a stop)
-    ///   a call that only `ToolStarted`  -> Error("Not run"), input None
+    ///   a call that only `ToolStarted`  -> Error("Not run"), input {}
     /// `None` while the message has no display content. A `step-start` part alone is not
     /// content (the SDK adds one before anything else), nor is empty text: a turn that fails
     /// before it says anything must store nothing. Every database write uses this, so a crash
@@ -319,7 +318,7 @@ impl Transcript {
                 UiPart::Tool(tool) => match tool.outcome {
                     ToolOutcome::InputStreaming => {
                         tool.outcome = ToolOutcome::Error(NOT_RUN.to_owned());
-                        tool.input = None;
+                        tool.input = Some(Value::Object(Map::new()));
                     }
                     ToolOutcome::InputAvailable => {
                         tool.outcome = ToolOutcome::Error(INTERRUPTED.to_owned());
@@ -482,17 +481,23 @@ impl Transcript {
         if matches!(tool.outcome, ToolOutcome::Output(_) | ToolOutcome::Error(_)) {
             return Checkpoint::None;
         }
-        tool.input = Some(input);
+        Self::write_tool_input(&mut self.frames, tool, input);
         tool.outcome = ToolOutcome::InputAvailable;
+        Checkpoint::Persist
+    }
+
+    /// Records input in both the message and the stream. Only the backend's real input event
+    /// marks a call as about to run and requests a checkpoint.
+    fn write_tool_input(frames: &mut Vec<Frame>, tool: &mut ToolPart, input: Value) {
         let chunk = serde_json::to_string(&Chunk::ToolInputAvailable {
             tool_call_id: &tool.id.0,
             tool_name: &tool.name,
-            input: tool.input.as_ref().unwrap_or(&Value::Null),
+            input: &input,
             flags: AgentFlags::of(tool.owner),
         })
         .unwrap_or_default();
-        self.frames.push(Frame(Arc::from(chunk)));
-        Checkpoint::Persist
+        tool.input = Some(input);
+        frames.push(Frame(Arc::from(chunk)));
     }
 
     /// A call's result. Only a call that exists and has no result yet takes one: the client's
@@ -635,7 +640,35 @@ mod tests {
     }
 
     #[test]
-    fn a_checkpoint_mid_call_stores_the_call_as_interrupted() -> Result<(), serde_json::Error> {
+    fn stop_during_input_seals_an_empty_object() -> Result<(), serde_json::Error> {
+        let mut transcript = Transcript::new(MessageId("m".into()));
+        transcript.apply(started("c"));
+        let before_stop = transcript.frames(0).len();
+        transcript.finish(&TurnEnd::Stopped);
+
+        let sealed = serde_json::to_value(transcript.sealed())?;
+        assert_eq!(
+            sealed["parts"],
+            json!([
+                { "type": "tool-run", "toolCallId": "c", "state": "output-error",
+                  "input": {}, "errorText": "Not run" },
+            ])
+        );
+        assert_eq!(
+            chunks(&transcript)[before_stop..],
+            [
+                json!({ "type": "tool-input-available", "toolCallId": "c", "toolName": "run",
+                        "input": {} }),
+                json!({ "type": "tool-output-error", "toolCallId": "c", "errorText": "Not run" }),
+                json!({ "type": "abort" }),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_checkpoint_and_stop_keep_running_and_queued_calls_distinct()
+    -> Result<(), serde_json::Error> {
         let mut transcript = Transcript::new(MessageId("m".into()));
         for event in [
             TurnEvent::StepStart,
@@ -646,17 +679,32 @@ mod tests {
         ] {
             transcript.apply(event);
         }
-        let sealed = serde_json::to_value(transcript.sealed())?;
+        let checkpoint = serde_json::to_value(transcript.sealed())?;
+        let expected = json!([
+            { "type": "step-start" },
+            { "type": "text", "text": "Checking", "state": "done" },
+            { "type": "tool-run", "toolCallId": "c1", "state": "output-error",
+              "input": { "code": "1" }, "errorText": "Interrupted" },
+            { "type": "tool-run", "toolCallId": "c2", "state": "output-error",
+              "input": {}, "errorText": "Not run" },
+        ]);
+        assert_eq!(checkpoint["parts"], expected);
+
+        let before_stop = transcript.frames(0).len();
+        transcript.finish(&TurnEnd::Stopped);
+        let stopped = serde_json::to_value(transcript.sealed())?;
+        let mut expected = expected;
+        expected[2]["errorText"] = json!("Stopped");
+        assert_eq!(stopped["parts"], expected);
         assert_eq!(
-            sealed["parts"],
-            json!([
-                { "type": "step-start" },
-                { "type": "text", "text": "Checking", "state": "done" },
-                { "type": "tool-run", "toolCallId": "c1", "state": "output-error",
-                  "input": { "code": "1" }, "errorText": "Interrupted" },
-                { "type": "tool-run", "toolCallId": "c2", "state": "output-error",
-                  "errorText": "Not run" },
-            ])
+            chunks(&transcript)[before_stop..],
+            [
+                json!({ "type": "tool-output-error", "toolCallId": "c1", "errorText": "Stopped" }),
+                json!({ "type": "tool-input-available", "toolCallId": "c2", "toolName": "run",
+                        "input": {} }),
+                json!({ "type": "tool-output-error", "toolCallId": "c2", "errorText": "Not run" }),
+                json!({ "type": "abort" }),
+            ]
         );
         Ok(())
     }
