@@ -70,7 +70,7 @@ utoipa-axum = "0.3.0"
 # (tests/feature_guard.rs); genai 0.7.5, tried first, turned on preserve_order for every crate
 # in a build.
 #
-# Rig's HTTP transport runs on a reqwest 0.13 client the server builds itself (`model::http`),
+# Rig's HTTP transport runs on a reqwest 0.13 client the server builds itself (`model::route`),
 # so the provider keeps the redirect, retry and proxy rules it had. Rig's own `rustls` feature is
 # left off on purpose: it turns on reqwest's `system-proxy`, which reaches the one hyper-util in
 # the build and would make every reqwest client in this binary, 0.12 included, start reading the
@@ -79,17 +79,11 @@ rig-core = { version = "=0.47.0", default-features = false, features = ["reqwest
 rig-reqwest = { version = "=0.47.0", default-features = false }
 rig-bedrock = "=0.47.0"
 reqwest-rig = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["rustls"] }
-eventsource-stream = "0.2"
-# AWS Bedrock through ConverseStream, with the row's key, secret and session token scoped to one
-# request. These releases keep the workspace's Rust 1.94 floor; later ones declare 1.94.1. Only
-# the current HTTPS client (hyper 1, rustls 0.23) and the tokio runtime: the default features
-# add a legacy rustls 0.21 stack and the SSO and credential-process chains, which a
-# request-scoped key never uses.
-aws-config = { version = "=1.8.18", default-features = false, features = ["rt-tokio", "default-https-client"] }
+# The AWS SDK client a Bedrock row's calls go through, built from the row's key, secret, session
+# token and region alone (`model::bedrock`). Only the current HTTPS client (hyper 1, rustls 0.23)
+# and the tokio runtime: the default features add a legacy rustls 0.21 stack and the SSO and
+# credential-process chains, which a request-scoped key never uses.
 aws-sdk-bedrockruntime = { version = "=1.135.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
-# `Document`, the JSON value a Bedrock tool schema and tool input are written in; the runtime
-# crate does not re-export it.
-aws-smithy-types = "1.5"
 
 [target.'cfg(unix)'.dependencies]
 # The browser engine child (`browseros_server __neo-engine`), whose body is neo-server's own main.
