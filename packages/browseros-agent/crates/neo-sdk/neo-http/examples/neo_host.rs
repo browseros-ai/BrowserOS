@@ -61,7 +61,9 @@ use axum::{Json, Router};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, PageJs, TabId};
-use neo_http::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, host_service};
+use neo_http::{
+    HostAuth, HostToken, NeoScreen, PeerRule, Service, ServiceInputs, Settings, host_service,
+};
 use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
@@ -218,6 +220,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tab_owner: Arc::new(|_| None),
         tab_task: Arc::new(|_| None),
         tab_opener: Arc::new(|_| None),
+        // Run against the image's Xvnc, as the app in hosted mode is.
+        screen: NeoScreen::Own,
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),

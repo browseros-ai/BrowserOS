@@ -43,7 +43,7 @@ use crate::dispatch::{
     PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError,
     RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
 };
-use crate::host::{FilledTabs, HostHolds, TakeoverLock};
+use crate::host::{AgentFront, FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
@@ -143,8 +143,13 @@ impl Harness {
         });
         let live = settings.clone();
         let file_access = Arc::new(FileAccess::new(move || live.read_dirs(), Vec::new()));
-        let playwright =
-            PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default(), file_access, None);
+        let playwright = PlaywrightFacade::start(
+            Arc::clone(&link),
+            hosted,
+            Arc::new(AgentFront::new(settings.clone())),
+            file_access,
+            None,
+        );
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             script_cdp: SCRIPT_CDP,
@@ -2699,7 +2704,9 @@ impl Method for EnvProbe {
         let env = OpCtxEnv::new(
             op,
             false,
-            Arc::default(),
+            Arc::new(AgentFront::new(Settings::defaults(
+                SettingsDefaults::default(),
+            ))),
             Arc::new(FileAccess::new(|| vec!["/".into()], Vec::new())),
         );
         let shares_the_runs_state = Arc::ptr_eq(env.run_state(), &op.run().slot::<RunState>());
@@ -3894,7 +3901,9 @@ impl Method for InFlightClose {
         let env = OpCtxEnv::new(
             op,
             false,
-            Arc::default(),
+            Arc::new(AgentFront::new(Settings::defaults(
+                SettingsDefaults::default(),
+            ))),
             Arc::new(FileAccess::new(|| vec!["/".into()], Vec::new())),
         );
         let value = self
@@ -4197,7 +4206,9 @@ impl Method for InFlightPayload {
         let env = OpCtxEnv::new(
             op,
             false,
-            Arc::default(),
+            Arc::new(AgentFront::new(Settings::defaults(
+                SettingsDefaults::default(),
+            ))),
             Arc::new(FileAccess::new(|| vec!["/".into()], Vec::new())),
         );
         let result = self
@@ -6435,7 +6446,9 @@ async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Resul
         let facade = PlaywrightFacade::start(
             Arc::clone(&link),
             false,
-            Arc::default(),
+            Arc::new(AgentFront::new(Settings::defaults(
+                SettingsDefaults::default(),
+            ))),
             file_access,
             Some(filled),
         );
@@ -6493,7 +6506,9 @@ async fn pictures_follow_the_setting_while_filled_tabs_are_restored() -> Result<
     let facade = PlaywrightFacade::start(
         link,
         false,
-        Arc::default(),
+        Arc::new(AgentFront::new(Settings::defaults(
+            SettingsDefaults::default(),
+        ))),
         Arc::new(FileAccess::new(Vec::new, Vec::new())),
         Some(filled),
     );

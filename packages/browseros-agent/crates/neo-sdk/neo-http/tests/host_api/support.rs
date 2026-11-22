@@ -13,7 +13,9 @@ use axum::response::Response;
 use browseros_core::TabId;
 use browseros_core::viewport::Viewports;
 use futures_util::StreamExt;
-use neo_http::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, Settings, host_router};
+use neo_http::{
+    HostAuth, HostToken, NeoScreen, PeerInfo, Service, ServiceInputs, Settings, host_router,
+};
 use neo_screencast::CaptureTransport;
 use neo_screencast::testing::{ScriptedCdp, ScriptedTransport};
 use neo_takeover::ScreenSize;
@@ -185,6 +187,8 @@ struct Boot {
     settings: Option<Settings>,
     /// The screen's size when the service starts.
     screen: ScreenSize,
+    /// Whose screen it is, which decides whether the service puts it home as it starts.
+    neo_screen: NeoScreen,
     /// The window's state when the service starts.
     window: &'static str,
     /// What the live views capture over, when not the scripted capture connection.
@@ -241,10 +245,14 @@ pub(crate) async fn harness_with_manual_clock() -> Result<ClockedHarness, BoxErr
 }
 
 /// A service started over what a Neo restart in the middle of a fit leaves: the screen at the
-/// owner's phone size and the window fullscreen.
-pub(crate) async fn harness_after_a_crash_mid_fit(screen: ScreenSize) -> Result<Harness, BoxError> {
+/// owner's phone size and the window fullscreen, on `neo_screen`.
+pub(crate) async fn harness_after_a_crash_mid_fit(
+    screen: ScreenSize,
+    neo_screen: NeoScreen,
+) -> Result<Harness, BoxError> {
     let boot = Boot {
         screen,
+        neo_screen,
         window: "fullscreen",
         ..Boot::default()
     };
@@ -270,6 +278,7 @@ impl Default for Boot {
             writer: WriterConfig::default(),
             settings: None,
             screen: HOME_SCREEN,
+            neo_screen: NeoScreen::Own,
             window: "maximized",
             capture_transport: None,
         }
@@ -282,6 +291,7 @@ async fn start(
         writer,
         settings,
         screen,
+        neo_screen,
         window,
         capture_transport,
     }: Boot,
@@ -336,17 +346,24 @@ async fn start(
                 })
             },
             tab_opener: Arc::new(|_| None),
+            screen: neo_screen,
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );
-    // The service puts the screen home in the background as it starts. Waiting for that keeps
-    // a test's own resizes, and its scripted refusals, the only ones after it.
-    watchdog("initial Xvnc resize readiness", READINESS_WATCHDOG, async {
-        while xvnc.resizes().is_empty() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+    // On its own screen the service puts the screen home in the background as it starts.
+    // Waiting for that keeps a test's own resizes, and its scripted refusals, the only ones after
+    // it. On a screen that is not Neo's there is no such resize to wait for.
+    match neo_screen {
+        NeoScreen::Own => {
+            watchdog("initial Xvnc resize readiness", READINESS_WATCHDOG, async {
+                while xvnc.resizes().is_empty() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await?;
         }
-    })
-    .await?;
+        NeoScreen::NotNeos => {}
+    }
     Ok(Harness {
         dir,
         sink,

@@ -3,6 +3,7 @@
 //!
 //! ```text
 //!  neo-playwright op ─ input lock / capture ─▶ OpEnv::bring_forward(tab) ─▶ AgentFront
+//!    the host's tabs.bringForward is off (a browser a person uses) ─▶ stays behind
 //!    armed (the host API runs: an owner, views)  ─▶ neo_takeover::Front::bring_forward(tab, task)
 //!        owner holds the screen, or a view watches another tab or task ─▶ stays behind
 //!        else, under the front turn: already active, or Browser.activateTab (a move followers read)
@@ -11,14 +12,15 @@
 //!        Browser.getTabInfo ─ not active ─▶ Browser.activateTab
 //! ```
 //!
-//! Only the SDK reaches this: desktop's server never runs neo-playwright, and its rule that an
-//! agent never switches the user's tab stands. Nothing here fails or refuses an op: a tab that
-//! stays behind is as slow as before on Linux, and its cross-site frames stay unfocused after
-//! `focus()` (`toBeFocused()` fails there), which is what real Playwright sees on such a tab too.
+//! A desktop host keeps its rule that an agent never switches the user's tab by setting
+//! `tabs.bringForward` to `off`. Nothing here fails or refuses an op: a tab that stays behind is
+//! as slow as before on Linux, and its cross-site frames stay unfocused after `focus()`
+//! (`toBeFocused()` fails there), which is what real Playwright sees on such a tab too.
 
 use std::sync::Arc;
 
 use browseros_core::{BrowserView, TabId};
+use neo_http::Settings;
 use neo_takeover::{Forward, Front};
 use neo_trace::TaskId;
 use serde_json::{Value, json};
@@ -29,21 +31,33 @@ use tracing::debug;
 /// the service's [`Front`] when the host API starts, together with the takeover lock, so with an
 /// owner around every move goes through the one front turn and the screen rule; until then it
 /// moves nothing, since an owner may arrive the moment the API serves. A process with no host
-/// API at all ([`AgentFront::without_host`]) activates directly.
-#[derive(Default)]
+/// API at all ([`AgentFront::without_host`]) activates directly. Before either, the host's
+/// `tabs.bringForward` can keep every agent tab behind.
 pub(crate) struct AgentFront {
     front: SetOnce<Front>,
     /// No host API will ever arm this process: there is no owner's screen or view to respect.
     without_host: bool,
+    /// The host's settings, whose `tabs.bringForward` is read at each move.
+    settings: Settings,
 }
 
 impl AgentFront {
+    /// For the app, which arms it once its host API starts.
+    pub(crate) fn new(settings: Settings) -> Self {
+        Self {
+            front: SetOnce::new(),
+            without_host: false,
+            settings,
+        }
+    }
+
     /// For a process that serves no host API (the hosted sidecar, the spec harness).
     #[cfg(feature = "hosted-run")]
-    pub(crate) fn without_host() -> Self {
+    pub(crate) fn without_host(settings: Settings) -> Self {
         Self {
             front: SetOnce::new(),
             without_host: true,
+            settings,
         }
     }
 
@@ -53,10 +67,11 @@ impl AgentFront {
         let _ = self.front.set(front);
     }
 
-    /// Makes `tab` its window's active tab if nothing of the owner's says otherwise. Never fails:
-    /// what happened is logged.
+    /// Makes `tab` its window's active tab unless the host's `tabs.bringForward` or something of
+    /// the owner's says otherwise. Never fails: what happened is logged.
     // TODO(remove): without this a background agent tab breaks three things, two of them on
-    // Linux only, where no display draws such a tab (SS-054, LH-001):
+    // Linux only, where no display draws such a tab (SS-054, LH-001). A host that cannot have its
+    // window's tab switched sets `tabs.bringForward` to `off` and takes all three:
     // - Input and frames (Linux): the focus emulation core gives the tab keeps it rendering
     //   frames that viz throttles to one BeginFrame a second (ThrottleUndrawnFrames), so every
     //   mouse move waits ~1 s for its ack.
@@ -87,14 +102,20 @@ impl AgentFront {
         tab: TabId,
         task: Option<TaskId>,
     ) {
-        let outcome = match self.front.get() {
-            Some(front) => front
-                .bring_forward(tab, task)
-                .await
-                .map(|forward| describe(&forward))
-                .map_err(|error| error.to_string()),
-            None if self.without_host => activate(&view, tab).await,
-            None => Ok("stays behind: the host API is not serving yet"),
+        // Checked before the owner's rules: on a person's desktop the window's active tab is the
+        // page they are looking at, and an activation would hide it behind the agent's tab.
+        let outcome = if self.settings.brings_tabs_forward() {
+            match self.front.get() {
+                Some(front) => front
+                    .bring_forward(tab, task)
+                    .await
+                    .map(|forward| describe(&forward))
+                    .map_err(|error| error.to_string()),
+                None if self.without_host => activate(&view, tab).await,
+                None => Ok("stays behind: the host API is not serving yet"),
+            }
+        } else {
+            Ok("stays behind: the host's tabs.bringForward is off")
         };
         match outcome {
             Ok(what) => debug!(tab = tab.0, what, "agent tab forward"),
@@ -129,5 +150,37 @@ fn describe(forward: &Forward) -> &'static str {
         Forward::Brought => "brought",
         Forward::OwnerHasScreen(_) => "stays behind: the owner holds the screen",
         Forward::ViewerElsewhere => "stays behind: a viewer watches another tab",
+    }
+}
+
+#[cfg(all(test, feature = "hosted-run"))]
+mod tests {
+    use std::sync::Arc;
+
+    use super::AgentFront;
+    use crate::test_rig::{TestError, TestRig};
+
+    /// `tabs.bringForward` decides before anything else: for a tab that is not its window's
+    /// active one, `on` (the default) activates it and `off` sends no activation at all.
+    #[tokio::test]
+    async fn a_tab_comes_forward_only_while_the_hosts_setting_is_on() -> Result<(), TestError> {
+        for (patch, activations) in [(None, 1), (Some(r#"{"tabs":{"bringForward":"off"}}"#), 0)] {
+            let rig = TestRig::new().await?;
+            if let Some(patch) = patch {
+                rig.settings.patch(patch.as_bytes()).await?;
+            }
+            // The fake's tabs are never their window's active tab.
+            let tab = rig.fake.open_tab("https://example.test/", "Agent");
+            let view = rig.link.view().ok_or("the link is up")?.view;
+            Arc::new(AgentFront::without_host(rig.settings.clone()))
+                .bring_forward(view, tab, None)
+                .await;
+            assert_eq!(
+                rig.fake.count("Browser.activateTab"),
+                activations,
+                "{patch:?}: `off` keeps the window's active tab, the page a person looks at"
+            );
+        }
+        Ok(())
     }
 }

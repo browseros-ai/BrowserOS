@@ -47,7 +47,8 @@ pub(crate) struct EnvConfig {
     pub(crate) ignored_trace_value_bytes: bool,
 }
 
-/// Whether Chromium runs in hosted mode, where popups open as tabs Neo can drive.
+/// Whether Chromium runs in hosted mode, where popups open as tabs Neo can drive. Outside hosted
+/// mode the start leaves Xvnc and the windows alone (`NeoScreen::NotNeos`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum HostedMode {
     /// `BROWSERCLAW_HOSTED_MODE=1`, Chromium's exact opt-in.

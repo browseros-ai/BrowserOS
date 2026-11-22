@@ -10,7 +10,7 @@ use axum::Router;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
-use neo_http::Settings;
+use neo_http::{NeoScreen, Settings};
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
     TraceSink, TraceStore, WriterConfig,
@@ -245,6 +245,11 @@ impl App {
                 sink: trace.clone(),
                 screenshots,
                 xvnc: config.env.xvnc,
+                screen: match &config.env.hosted_mode {
+                    HostedMode::On => NeoScreen::Own,
+                    // A desktop or a developer's machine, whose screen and windows are a person's.
+                    HostedMode::Off { .. } => NeoScreen::NotNeos,
+                },
                 cdp_port: config.launch.cdp_port,
                 settings_file: config.env.settings_file(),
                 settings_defaults: config.settings_defaults(),
@@ -271,7 +276,7 @@ impl App {
             holder_notes,
         ));
         // Armed by the host API with the owner's screen and views, beside the takeover lock.
-        let front = Arc::new(AgentFront::default());
+        let front = Arc::new(AgentFront::new(settings.clone()));
         // Read back before the facade starts, which marks its tabs before any op runs.
         let filled = FilledTabs::open(&config.env.trace_dir()).await;
         tokio::spawn(forget_closed_filled_tabs(
