@@ -125,16 +125,26 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
     ),  # Release artifact downloads/uploads.
     SecretSpec(
         "BROWSEROS_CONFIG_URL",
-        ("release-browseros.yml", "release-server.yml"),
-    ),  # BrowserOS server inline production config URL.
+        ("build-browseros.yml", "release-browseros.yml", "release-windows.yml"),
+    ),  # Browser build lanes still pass it; the Rust server does not read it.
     SecretSpec(
         "POSTHOG_API_KEY",
-        ("release-browseros.yml", "release-server.yml", "release-extensions.yml"),
-    ),  # Server and extension release analytics key.
+        (
+            "build-browseros.yml",
+            "release-browseros.yml",
+            "release-extensions.yml",
+            "release-windows.yml",
+        ),
+    ),  # Extension release analytics key; browser build lanes still pass it.
     SecretSpec(
         "SENTRY_DSN",
-        ("release-browseros.yml", "release-server.yml"),
-    ),  # BrowserOS server inline Sentry DSN.
+        (
+            "build-browseros.yml",
+            "release-browseros.yml",
+            "release-server.yml",
+            "release-windows.yml",
+        ),
+    ),  # Embedded in the BrowserOS server as BROWSEROS_SENTRY_DSN; optional.
     SecretSpec(
         "ESIGNER_USERNAME",
         (
@@ -263,6 +273,8 @@ KNOWN_EXTERNAL_SECRETS = frozenset(
 KNOWN_OPTIONAL_SECRETS = frozenset(
     {
         "ESIGNER_CREDENTIAL_ID",
+        # A server built without it ships and reports nothing to Sentry.
+        "SENTRY_DSN",
         "VITE_CLAW_POSTHOG_HOST",
     }
 )

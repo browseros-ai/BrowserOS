@@ -226,9 +226,17 @@ uv run browseros build \
   --chromium-src /path/to/chromium/src
 ```
 
-Chrome, Bun, and the product's build-time secrets must be available. BrowserOS
-neo additionally needs the native Rust toolchain. Source mode does not bump
-versions, commit, push, or open a PR.
+Chrome, Bun, and the product's build-time secrets must be available. Both
+products build their server with Cargo on a host that matches the target OS.
+Install Rust 1.98.0 with rustup and the target's triple (for example,
+`rustup target add x86_64-unknown-linux-gnu`). The build then stages the files
+in the product's resource manifest under
+`packages/browseros-agent/scripts/build/config/`, the same manifest the
+release packager stages. BrowserOS downloads its vendored Bun from R2, so it
+needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` with read
+access. `BROWSEROS_SENTRY_DSN` is optional. When it is set, Cargo embeds it in
+the BrowserOS server at compile time. Source mode
+does not bump versions, commit, push, or open a PR.
 
 ## Publication boundary
 
@@ -251,8 +259,9 @@ browser appcast. Inspect the browser draft before promotion.
 ## Required configuration
 
 Component publication and browser uploads use the `R2_*` secrets. BrowserOS
-server builds need `BROWSEROS_CONFIG_URL`, `POSTHOG_API_KEY`, and `SENTRY_DSN`;
-BrowserOS neo server builds need `CLAW_POSTHOG_KEY`. Extension builds need the
+server builds need no build-time secret: the workflows pass the optional
+`SENTRY_DSN` secret to Cargo as `BROWSEROS_SENTRY_DSN`, and a build without it
+reports nothing to Sentry. BrowserOS neo server builds need `CLAW_POSTHOG_KEY`. Extension builds need the
 matching signing key and build-time secrets.
 
 Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses

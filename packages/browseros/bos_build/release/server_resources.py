@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Target-aware local server resource providers."""
+"""Build a product's server from the checkout into its local resource folder.
+
+Source-mode browser builds call this in place of downloading the published
+server zip: Cargo compiles the bundle's binary for one target, then the
+product's resource manifest (the file the release packager in
+``packages/browseros-agent/packages/build-server-tools`` stages) adds the files
+that ship beside it, and ``artifact-metadata.json`` records each file's digest.
+"""
 
 import hashlib
 import json
@@ -10,11 +17,27 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import AbstractSet, Callable, Mapping, Optional
+from typing import AbstractSet, Callable, Literal, Mapping, Optional, Union, cast, get_args
 
+from ..lib.env import EnvConfig
+from ..lib.r2 import download_from_r2
 from ..products.resource_sources import source_resources_for_product
 from ..products.server_binaries import ServerBundle, server_bundles_for_product
-from .components import normalize_component_version, read_component_version
+from .components import (
+    component_for_source,
+    normalize_component_version,
+    read_component_version,
+)
+
+TargetOs = Literal["linux", "macos", "windows"]
+TargetArch = Literal["arm64", "x64"]
+_TARGET_OS_VALUES = frozenset(get_args(TargetOs))
+_TARGET_ARCH_VALUES = frozenset(get_args(TargetArch))
+
+# Manifest R2 keys are relative to the vendor prefix. This mirrors
+# defaultR2DownloadPrefix in scripts/build/server/descriptor.ts; change both
+# together or source builds and release zips stage different files.
+VENDOR_R2_PREFIX = "artifacts/vendor"
 
 
 @dataclass(frozen=True)
@@ -22,8 +45,8 @@ class ServerTarget:
     """One concrete server build target."""
 
     id: str
-    os: str
-    arch: str
+    os: TargetOs
+    arch: TargetArch
     cargo_triple: str
 
 
@@ -67,9 +90,46 @@ TARGETS: Mapping[str, ServerTarget] = {
 }
 
 
+@dataclass(frozen=True)
+class R2Source:
+    """A manifest file fetched from R2, keyed under ``VENDOR_R2_PREFIX``."""
+
+    key: str
+
+
+@dataclass(frozen=True)
+class LocalSource:
+    """A manifest file copied from the checkout, relative to the agent root."""
+
+    path: str
+
+
+@dataclass(frozen=True)
+class ResourceRule:
+    """One entry of a server resource manifest.
+
+    The schema is build-server-tools' ``src/manifest.ts``. A rule applies to a
+    target when its ``os`` and ``arch`` lists are absent or name the target.
+    """
+
+    name: str
+    source: Union[R2Source, LocalSource]
+    destination: str
+    os: Optional[tuple[TargetOs, ...]] = None
+    arch: Optional[tuple[TargetArch, ...]] = None
+    executable: bool = False
+
+    def applies_to(self, target: ServerTarget) -> bool:
+        return (self.os is None or target.os in self.os) and (
+            self.arch is None or target.arch in self.arch
+        )
+
+
 RunCommand = Callable[[tuple[str, ...], Path, Mapping[str, str]], None]
 Which = Callable[[str], Optional[str]]
 RustTargets = Callable[[], AbstractSet[str]]
+DownloadR2 = Callable[[str, Path], bool]
+R2Configured = Callable[[], bool]
 
 
 def _default_run(
@@ -86,6 +146,10 @@ def _default_rust_targets() -> AbstractSet[str]:
         check=True,
     )
     return frozenset(result.stdout.splitlines())
+
+
+def _default_r2_configured() -> bool:
+    return EnvConfig().has_r2_config()
 
 
 def _host_platform() -> str:
@@ -112,31 +176,113 @@ def _server_bundle(product: str) -> ServerBundle:
     return bundles[0]
 
 
+def _string_list(
+    item: Mapping[str, object], field: str, allowed: AbstractSet[str], name: str
+) -> Optional[tuple[str, ...]]:
+    values = item.get(field)
+    if values is None:
+        return None
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) for value in values
+    ):
+        raise ValueError(f"Resource rule {name} {field} must be a list of strings")
+    invalid = [value for value in values if value not in allowed]
+    if invalid:
+        raise ValueError(
+            f"Resource rule {name} has invalid {field} value(s): {', '.join(invalid)}"
+        )
+    return tuple(values)
+
+
+def _parse_rule(raw: object) -> ResourceRule:
+    if not isinstance(raw, dict):
+        raise ValueError("Resource manifest contains an invalid rule entry")
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Resource rule is missing name")
+    source = raw.get("source")
+    if not isinstance(source, dict):
+        raise ValueError(f"Resource rule {name} source must be an object")
+    kind, key, local_path = source.get("type"), source.get("key"), source.get("path")
+    parsed_source: Union[R2Source, LocalSource]
+    if kind == "r2" and isinstance(key, str) and key:
+        parsed_source = R2Source(key)
+    elif kind == "local" and isinstance(local_path, str) and local_path:
+        parsed_source = LocalSource(local_path)
+    else:
+        raise ValueError(f"Resource rule {name} has an invalid {kind} source")
+    # No manifest copies directories; only build-server-tools implements it.
+    if raw.get("recursive") is True:
+        raise ValueError(f"Resource rule {name} uses unsupported recursive copy")
+    destination = raw.get("destination")
+    if not isinstance(destination, str) or not destination:
+        raise ValueError(f"Resource rule {name} is missing destination")
+    path = PurePosixPath(destination)
+    if (
+        "\\" in destination
+        or path.is_absolute()
+        or ".." in path.parts
+        or path == PurePosixPath(".")
+    ):
+        raise ValueError(f"Resource rule {name} destination is unsafe: {destination}")
+    return ResourceRule(
+        name=name,
+        source=parsed_source,
+        destination=path.as_posix(),
+        os=cast(
+            Optional[tuple[TargetOs, ...]],
+            _string_list(raw, "os", _TARGET_OS_VALUES, name),
+        ),
+        arch=cast(
+            Optional[tuple[TargetArch, ...]],
+            _string_list(raw, "arch", _TARGET_ARCH_VALUES, name),
+        ),
+        executable=raw.get("executable") is True,
+    )
+
+
+def load_resource_manifest(path: Path) -> tuple[ResourceRule, ...]:
+    """Parse a server resource manifest, rejecting what the packager rejects."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Server resource manifest is unreadable: {path}") from exc
+    if not isinstance(document, dict) or not isinstance(
+        document.get("resources"), list
+    ):
+        raise ValueError(f"Server resource manifest is missing resources: {path}")
+    return tuple(_parse_rule(entry) for entry in document["resources"])
+
+
+def target_resource_rules(
+    product: str, target: ServerTarget, agent_root: Path
+) -> tuple[ResourceRule, ...]:
+    """Return the product's manifest rules that apply to one target, in order."""
+    bundle = _server_bundle(product)
+    rules = load_resource_manifest(agent_root / bundle.resource_manifest)
+    return tuple(rule for rule in rules if rule.applies_to(target))
+
+
 def server_build_command(
     product: str,
     target_id: str,
     agent_root: Path,
     cargo_target_dir: Path,
 ) -> tuple[tuple[str, ...], Path]:
-    """Return the source builder command and its expected output."""
+    """Return the Cargo command for one target and the binary it produces."""
     try:
         target = TARGETS[target_id]
     except KeyError as exc:
         raise ValueError(f"Unknown server target {target_id}") from exc
     bundle = _server_bundle(product)
-    if bundle.source_builder == "bun":
-        return (
-            (
-                "bun",
-                "scripts/build/server.ts",
-                f"--target={target.id}",
-                "--no-upload",
-            ),
-            agent_root / "dist/prod/server" / target.id,
-        )
+    # The package name comes from the component's manifest in this checkout,
+    # so a crate rename only touches the component registry.
+    package = component_for_source(
+        agent_root.parent.parent, bundle.source_component
+    ).package_name
     suffix = ".exe" if target.os == "windows" else ""
     binary = cargo_target_dir / target.cargo_triple / "release" / (
-        f"browseros-claw-server-rs{suffix}"
+        f"{bundle.cargo_binary_name}{suffix}"
     )
     return (
         (
@@ -145,9 +291,9 @@ def server_build_command(
             "--release",
             "--locked",
             "-p",
-            "claw-server",
+            package,
             "--bin",
-            "browseros-claw-server-rs",
+            bundle.cargo_binary_name,
             "--target",
             target.cargo_triple,
             "--manifest-path",
@@ -209,8 +355,13 @@ def validate_server_resources(
     target: str,
     version: str,
     source_sha: str,
+    agent_root: Path,
 ) -> ServerResourceResult:
-    """Validate a staged server resource directory and its provenance."""
+    """Validate a staged server resource directory and its provenance.
+
+    Every file the product's resource manifest places for this target must be
+    declared, so a folder staged without (say) the vendored Bun fails here.
+    """
     target_spec = TARGETS.get(target)
     if target_spec is None:
         raise ValueError(f"Unknown server target {target}")
@@ -246,11 +397,19 @@ def validate_server_resources(
         runtime = destination.joinpath(*PurePosixPath(runtime_path).parts)
         if not runtime.stat().st_mode & 0o100:
             raise ValueError(f"Server runtime is not executable: {runtime_path}")
-    if product == "browserclaw":
-        if "resources/skills/browserclaw/SKILL.md" not in declared:
-            raise ValueError("BrowserOS neo server artifact is missing its skill")
-        if any("browseros-claw-server-rs" in path for path in declared):
-            raise ValueError("BrowserOS neo staged the legacy -rs runtime name")
+    for rule in target_resource_rules(product, target_spec, agent_root):
+        if rule.destination not in declared:
+            raise ValueError(
+                f"Server artifact is missing {rule.name}: {rule.destination}"
+            )
+    # Chromium launches only runtime_binary_name; a file still carrying the
+    # Cargo binary name means staging skipped the rename.
+    if bundle.cargo_binary_name != bundle.runtime_binary_name and any(
+        bundle.cargo_binary_name in path for path in declared
+    ):
+        raise ValueError(
+            f"Server artifact staged the Cargo binary name {bundle.cargo_binary_name}"
+        )
     return ServerResourceResult(
         product=product,
         target=target,
@@ -272,6 +431,8 @@ class ServerResourceBuilder:
         run: RunCommand = _default_run,
         which: Which = shutil.which,
         rust_targets: RustTargets = _default_rust_targets,
+        download_r2: DownloadR2 = download_from_r2,
+        r2_configured: R2Configured = _default_r2_configured,
         cargo_target_dir: Optional[Path] = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
@@ -281,34 +442,42 @@ class ServerResourceBuilder:
         self.run = run
         self.which = which
         self.rust_targets = rust_targets
+        self.download_r2 = download_r2
+        self.r2_configured = r2_configured
         self.cargo_target_dir = (
             cargo_target_dir or self.agent_root / "target"
         ).resolve()
 
-    def _preflight(self, product: str, target: ServerTarget) -> ServerBundle:
+    def _preflight(
+        self, product: str, target: ServerTarget
+    ) -> tuple[ServerBundle, tuple[ResourceRule, ...]]:
         bundle = _server_bundle(product)
-        tool = "bun" if bundle.source_builder == "bun" else "cargo"
-        if bundle.source_builder == "cargo" and self.host_platform != target.os:
+        if self.host_platform != target.os:
             raise RuntimeError(
-                f"BrowserOS neo target {target.id} requires host {target.os}; "
+                f"{bundle.name} target {target.id} requires host {target.os}; "
                 f"current host is {self.host_platform}"
             )
-        if self.which(tool) is None:
-            action = "install Bun" if tool == "bun" else "install Rust and Cargo"
-            raise RuntimeError(f"Cannot build {target.id}: {action}")
-        if bundle.source_builder == "cargo":
-            if self.which("rustup") is None:
-                raise RuntimeError(f"Cannot build {target.id}: install Rust with rustup")
-            try:
-                installed_targets = self.rust_targets()
-            except (OSError, subprocess.CalledProcessError) as exc:
-                raise RuntimeError("Could not query installed Rust targets") from exc
-            if target.cargo_triple not in installed_targets:
-                raise RuntimeError(
-                    f"Cannot build {target.id}: run rustup target add "
-                    f"{target.cargo_triple}"
-                )
-        return bundle
+        if self.which("cargo") is None:
+            raise RuntimeError(f"Cannot build {target.id}: install Rust and Cargo")
+        if self.which("rustup") is None:
+            raise RuntimeError(f"Cannot build {target.id}: install Rust with rustup")
+        try:
+            installed_targets = self.rust_targets()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError("Could not query installed Rust targets") from exc
+        if target.cargo_triple not in installed_targets:
+            raise RuntimeError(
+                f"Cannot build {target.id}: run rustup target add "
+                f"{target.cargo_triple}"
+            )
+        rules = target_resource_rules(product, target, self.agent_root)
+        remote = [rule.name for rule in rules if isinstance(rule.source, R2Source)]
+        if remote and not self.r2_configured():
+            raise RuntimeError(
+                f"Cannot build {target.id}: R2 access is needed for {', '.join(remote)}; "
+                "set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY"
+            )
+        return bundle, rules
 
     def preflight(self, *, product: str, target: str) -> None:
         """Validate host and tool support for one server target."""
@@ -333,14 +502,13 @@ class ServerResourceBuilder:
             target_spec = TARGETS[target]
         except KeyError as exc:
             raise ValueError(f"Unknown server target {target}") from exc
-        bundle = self._preflight(product, target_spec)
+        bundle, rules = self._preflight(product, target_spec)
         source = source_resources_for_product(product)
         normalized_version = normalize_component_version(
             source.server_component, version
         )
         source_version = read_component_version(
-            self.agent_root.parent.parent,
-            source.server_component,
+            self.repo_root, source.server_component
         )
         if source_version != normalized_version:
             raise ValueError(
@@ -354,66 +522,38 @@ class ServerResourceBuilder:
         command, artifact = server_build_command(
             product, target, self.agent_root, self.cargo_target_dir
         )
-        environment = {**os.environ, "CARGO_TARGET_DIR": str(self.cargo_target_dir)}
+        # The inherited environment carries compile-time values such as the
+        # optional BROWSEROS_SENTRY_DSN, which the server embeds at build time.
+        environment = {
+            **os.environ,
+            **bundle.cargo_env,
+            "CARGO_TARGET_DIR": str(self.cargo_target_dir),
+        }
         self.run(command, self.agent_root, environment)
-        if bundle.source_builder == "bun":
-            self._stage_bun(
-                artifact,
-                destination,
-                bundle,
-                target_spec,
-                normalized_version,
-                source_sha,
-            )
-        else:
-            self._stage_rust(
-                artifact,
-                destination,
-                bundle,
-                target_spec,
-                normalized_version,
-                source_sha,
-            )
+        self._stage(
+            artifact,
+            destination,
+            bundle,
+            rules,
+            target_spec,
+            normalized_version,
+            source_sha,
+        )
         return validate_server_resources(
             destination,
             product=product,
             target=target,
             version=normalized_version,
             source_sha=source_sha,
+            agent_root=self.agent_root,
         )
 
-    def _stage_bun(
+    def _stage(
         self,
         artifact: Path,
         destination: Path,
         bundle: ServerBundle,
-        target: ServerTarget,
-        version: str,
-        source_sha: str,
-    ) -> None:
-        if not artifact.is_dir():
-            raise FileNotFoundError(f"Bun server build did not produce {artifact}")
-        document = _read_metadata(artifact)
-        if document.get("version") != version or document.get("target") != target.id:
-            raise ValueError("Bun server artifact identity does not match the request")
-        shutil.copytree(artifact, destination)
-        suffix = ".exe" if target.os == "windows" else ""
-        runtime = destination / "resources/bin" / f"{bundle.runtime_binary_name}{suffix}"
-        if not runtime.is_file():
-            raise FileNotFoundError(f"Bun server artifact is missing {runtime}")
-        if target.os != "windows":
-            runtime.chmod(runtime.stat().st_mode | 0o755)
-        document["sourceSha"] = source_sha
-        (destination / "artifact-metadata.json").write_text(
-            json.dumps(document, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-
-    def _stage_rust(
-        self,
-        artifact: Path,
-        destination: Path,
-        bundle: ServerBundle,
+        rules: tuple[ResourceRule, ...],
         target: ServerTarget,
         version: str,
         source_sha: str,
@@ -426,13 +566,24 @@ class ServerResourceBuilder:
         shutil.copy2(artifact, runtime)
         if target.os != "windows":
             runtime.chmod(0o755)
-        skill_source = self.agent_root / "resources/skills/browserclaw/SKILL.md"
-        if not skill_source.is_file():
-            raise FileNotFoundError(f"BrowserOS neo skill is missing: {skill_source}")
-        skill = destination / "resources/skills/browserclaw/SKILL.md"
-        skill.parent.mkdir(parents=True)
-        shutil.copy2(skill_source, skill)
-        files = [runtime, skill]
+        files = [runtime]
+        for rule in rules:
+            path = destination.joinpath(*PurePosixPath(rule.destination).parts)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(rule.source, R2Source):
+                key = f"{VENDOR_R2_PREFIX}/{rule.source.key}"
+                if not self.download_r2(key, path):
+                    raise RuntimeError(f"Could not download {rule.name} from R2: {key}")
+            else:
+                source = self.agent_root / rule.source.path
+                if not source.is_file():
+                    raise FileNotFoundError(f"{rule.name} is missing: {source}")
+                shutil.copy2(source, path)
+            if rule.executable and target.os != "windows":
+                path.chmod(0o755)
+            files.append(path)
+        # File order feeds manifest_sha256, which the lane manifest records as
+        # server evidence: the binary comes first, then rules in manifest order.
         document = {
             "version": version,
             "target": target.id,

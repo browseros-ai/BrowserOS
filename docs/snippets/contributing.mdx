@@ -23,13 +23,12 @@ Most contributors work on the Agent since it's much easier to set up.
 
 ## Path 1: Agent Development
 
-The Agent is a monorepo with 3 components:
+The Agent is a monorepo with 2 components:
 
 | Component | Path | What it does |
 |-----------|------|--------------|
 | **Agent UI** | `apps/app` | Chrome extension — chat interface, settings, side panel |
-| **Server** | `apps/server` | Bun server — agent loop, MCP tools, API endpoints |
-| **Controller** | `apps/controller-ext` | Chrome extension — bridges `chrome.*` APIs to the server |
+| **Server** | `crates/browseros-server` | Rust server — chat, model providers, coding agents, history, and the OpenAPI contract the extension calls |
 
 ### Architecture
 
@@ -42,39 +41,33 @@ The Agent is a monorepo with 3 components:
 git clone https://github.com/YOUR-USERNAME/BrowserOS.git
 cd BrowserOS/packages/browseros-agent
 
-# Install dependencies
+# Install dependencies (Bun is pinned in package.json's packageManager)
 bun install
 
-# Copy environment files
-cp apps/server/.env.example apps/server/.env.development
-cp apps/app/.env.example apps/app/.env.development
+# The server is Rust: install the toolchain with rustup (https://rustup.rs)
+rustup toolchain install stable
+
+# Copy the root environment file (one file for the extension and the server)
+cp .env.development.example .env.development
 ```
 
 ### Running Locally
 
 ```bash
-# Terminal 1: Start the server
-bun run start:server
-
-# Terminal 2: Start the agent extension (dev mode)
-bun run start:agent
+# Starts BrowserOS with the agent extension and the Rust server, rebuilding on change
+bun run dev:watch
 ```
 
-Then load the extension in BrowserOS:
-1. Go to `chrome://extensions/`
-2. Enable **Developer mode**
-3. Click **Load unpacked** and select the `apps/app/dist/` folder
+`dev:watch` also needs [Go](https://go.dev/dl/), which builds the dev launcher, and BrowserOS installed at `/Applications/BrowserOS.app`, the app it launches, so this loop runs on macOS. The first run compiles the server with Cargo, which takes a few minutes; later runs rebuild only what changed.
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| `bun run start:server` | Start the server |
-| `bun run start:agent` | Start agent extension (dev mode) |
-| `bun run build:server` | Build server for production |
+| `bun run dev:watch` | Start BrowserOS, the extension, and the server together |
+| `bun run start:agent` | Start only the agent extension (dev mode) |
+| `cargo test -p browseros-server` | Run the server's tests |
 | `bun run build:agent` | Build agent extension |
-| `bun run build:ext` | Build controller extension |
-| `bun run test` | Run tests |
 | `bun run lint` | Check with Biome |
 | `bun run typecheck` | TypeScript check |
 

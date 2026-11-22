@@ -280,21 +280,17 @@ jobs:
         # Prepare once and copy every product before either build applies patches.
         run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}" "${{ steps.inputs.outputs.products }}"
 
-      - name: Setup Bun
+      # Source mode compiles the BrowserOS server with Cargo through bos_build.
+      # 1.98.0 is the toolchain test.yml checks the server with. This runner
+      # is persistent, so the pin is the job's RUSTUP_TOOLCHAIN, not the
+      # machine-wide `rustup default` the neo step below also writes.
+      - name: Setup BrowserOS server toolchain
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
-        # Pinned literally rather than read from package.json: this job builds
-        # from the persistent tree at BROWSEROS_REPO_PATH and never checks out
-        # into GITHUB_WORKSPACE, which is where setup-bun resolves a version
-        # file from. A workspace-relative path finds nothing and Bun silently
-        # falls back to latest. Keep in sync with packageManager.
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-
-      - name: Install BrowserOS server dependencies
-        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
-        working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros-agent
-        run: bun ci
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup target add --toolchain 1.98.0 aarch64-apple-darwin x86_64-apple-darwin
+          echo "RUSTUP_TOOLCHAIN=1.98.0" >> "$GITHUB_ENV"
 
       - name: Setup BrowserOS neo server toolchain
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browserclaw'
@@ -366,6 +362,7 @@ jobs:
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browserclaw' && inputs.server_version || '' }}
           ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
           BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+          BROWSEROS_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension_version && format('{0}/updates/extensions/bundled-manifest.xml', steps.inputs.outputs.browseros_repo) || '' }}
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
           CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}

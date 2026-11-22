@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from bos_build.browseros import app
 from bos_build.cli.release_component import _manifest_allocations
 from bos_build.release.component_release import StandaloneReleaseRecord
+from bos_build.release.components import COMPONENTS
 from bos_build.release.extensions.manifests import render_update_manifest
 
 
@@ -142,23 +143,14 @@ class ComponentReleaseCliTest(unittest.TestCase):
     def test_stamp_updates_only_selected_component_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            manifest = root / "packages/browseros-agent/apps/server/package.json"
-            lockfile = root / "packages/browseros-agent/bun.lock"
+            manifest = root / COMPONENTS["server"].manifest_path
+            lockfile = root / COMPONENTS["server"].lockfile_path
             manifest.parent.mkdir(parents=True)
             manifest.write_text(
-                json.dumps({"name": "@browseros/server", "version": "0.0.127"})
-                + "\n"
+                '[package]\nname = "browseros-server"\nversion = "0.1.0"\n'
             )
-            lockfile.parent.mkdir(parents=True, exist_ok=True)
             lockfile.write_text(
-                "{\n"
-                '  "workspaces": {\n'
-                '    "apps/server": {\n'
-                '      "name": "@browseros/server",\n'
-                '      "version": "0.0.127",\n'
-                "    },\n"
-                "  },\n"
-                "}\n"
+                '[[package]]\nname = "browseros-server"\nversion = "0.1.0"\n'
             )
             result = runner.invoke(
                 app,
@@ -169,15 +161,15 @@ class ComponentReleaseCliTest(unittest.TestCase):
                     "--component",
                     "server",
                     "--version",
-                    "0.0.128",
+                    "0.1.1",
                     "--repo-root",
                     str(root),
                 ],
             )
 
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertEqual(json.loads(manifest.read_text())["version"], "0.0.128")
-            self.assertIn('"version": "0.0.128"', lockfile.read_text())
+            self.assertIn('version = "0.1.1"', manifest.read_text())
+            self.assertIn('version = "0.1.1"', lockfile.read_text())
 
     def test_read_decodes_semver_safe_chrome_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

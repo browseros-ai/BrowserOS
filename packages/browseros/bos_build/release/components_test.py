@@ -2,12 +2,15 @@
 """Component version planning and stamping tests."""
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from bos_build.release.components import (
+    COMPONENTS,
     AllocationRecord,
+    component_for_source,
     read_component_version,
     components_for_candidate,
     resolve_candidate_versions,
@@ -296,17 +299,17 @@ class ComponentStampingTest(unittest.TestCase):
                 '      "name": "@browseros/app",\n'
                 '      "version": "0.0.100",\n'
                 "    },\n"
-                '    "apps/server": {\n'
-                '      "name": "@browseros/server",\n'
+                '    "apps/claw-app": {\n'
+                '      "name": "@browseros/claw-app",\n'
                 '      "version": "0.0.127",\n'
                 "    },\n"
                 "  },\n"
                 "}\n"
             )
 
-            before_server = (
-                '    "apps/server": {\n'
-                '      "name": "@browseros/server",\n'
+            before_neighbour = (
+                '    "apps/claw-app": {\n'
+                '      "name": "@browseros/claw-app",\n'
                 '      "version": "0.0.127",\n'
                 "    },"
             )
@@ -315,7 +318,7 @@ class ComponentStampingTest(unittest.TestCase):
             self.assertEqual(changed, (app, lock))
             self.assertEqual(json.loads(app.read_text())["version"], "0.0.101")
             self.assertIn('"version": "0.0.101"', lock.read_text())
-            self.assertIn(before_server, lock.read_text())
+            self.assertIn(before_neighbour, lock.read_text())
             self.assertEqual(read_component_version(root, "agent"), "0.0.101.0")
 
     def test_chrome_build_component_uses_semver_build_metadata(self) -> None:
@@ -367,6 +370,115 @@ class ComponentStampingTest(unittest.TestCase):
                 'name = "claw-server"\nversion = "0.0.18"',
                 lock.read_text(),
             )
+
+    def test_server_component_stamps_its_crate_and_cargo_lock_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cargo = root / COMPONENTS["server"].manifest_path
+            lock = root / COMPONENTS["server"].lockfile_path
+            cargo.parent.mkdir(parents=True)
+            cargo.write_text(
+                '[package]\nname = "browseros-server"\nversion = "0.1.0"\n'
+                'edition.workspace = true\n'
+            )
+            lock.write_text(
+                '[[package]]\nname = "browseros-server"\nversion = "0.1.0"\n\n'
+                '[[package]]\nname = "claw-server"\nversion = "0.1.0"\n'
+            )
+
+            self.assertEqual(stamp_component(root, "server", "0.1.1"), (cargo, lock))
+            self.assertEqual(read_component_version(root, "server"), "0.1.1")
+            self.assertIn(
+                'name = "browseros-server"\nversion = "0.1.1"', lock.read_text()
+            )
+            self.assertIn('name = "claw-server"\nversion = "0.1.0"', lock.read_text())
+
+
+class ComponentSourceTest(unittest.TestCase):
+    def _git(self, root: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def _commit(self, root: Path, message: str) -> str:
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", message)
+        return self._git(root, "rev-parse", "HEAD")
+
+    def test_server_resolves_the_layout_present_at_each_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._git(root, "init", "-q", "-b", "main")
+            self._git(root, "config", "user.name", "Component Test")
+            self._git(root, "config", "user.email", "component@example.invalid")
+            agent = root / "packages/browseros-agent"
+            package = agent / "apps/server/package.json"
+            package.parent.mkdir(parents=True)
+            package.write_text('{"name": "@browseros/server", "version": "0.0.168"}\n')
+            (agent / "bun.lock").write_text(
+                '{\n  "workspaces": {\n    "apps/server": {\n'
+                '      "name": "@browseros/server",\n'
+                '      "version": "0.0.168",\n    },\n  },\n}\n'
+            )
+            typescript = self._commit(root, "TypeScript server")
+            crate = root / COMPONENTS["server"].manifest_path
+            crate.parent.mkdir(parents=True)
+            crate.write_text('[package]\nname = "browseros-server"\nversion = "0.1.0"\n')
+            (agent / "Cargo.lock").write_text(
+                '[[package]]\nname = "browseros-server"\nversion = "0.1.0"\n'
+            )
+            both = self._commit(root, "Rust server beside TypeScript")
+            package.unlink()
+            rust = self._commit(root, "retire TypeScript server")
+
+            legacy = component_for_source(root, "server", ref=typescript)
+            self.assertEqual(
+                (
+                    legacy.manifest_path.as_posix(),
+                    legacy.lockfile_path.as_posix(),
+                    legacy.package_name,
+                    legacy.workspace_path,
+                ),
+                (
+                    "packages/browseros-agent/apps/server/package.json",
+                    "packages/browseros-agent/bun.lock",
+                    "@browseros/server",
+                    "apps/server",
+                ),
+            )
+            for ref in (both, rust, None):
+                with self.subTest(ref=ref):
+                    current = component_for_source(root, "server", ref=ref)
+                    self.assertEqual(
+                        (
+                            current.manifest_path.as_posix(),
+                            current.lockfile_path.as_posix(),
+                            current.package_name,
+                        ),
+                        (
+                            "packages/browseros-agent/crates/browseros-server/Cargo.toml",
+                            "packages/browseros-agent/Cargo.lock",
+                            "browseros-server",
+                        ),
+                    )
+            self.assertEqual(read_component_version(root, "server"), "0.1.0")
+
+    def test_server_checkout_without_the_crate_stamps_the_bun_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package = root / "packages/browseros-agent/apps/server/package.json"
+            lock = root / "packages/browseros-agent/bun.lock"
+            package.parent.mkdir(parents=True)
+            package.write_text('{"name": "@browseros/server", "version": "0.0.168"}\n')
+            lock.write_text(
+                '{\n  "workspaces": {\n    "apps/server": {\n'
+                '      "name": "@browseros/server",\n'
+                '      "version": "0.0.168",\n    },\n  },\n}\n'
+            )
+
+            self.assertEqual(stamp_component(root, "server", "0.0.169"), (package, lock))
+            self.assertEqual(json.loads(package.read_text())["version"], "0.0.169")
+            self.assertIn('"version": "0.0.169"', lock.read_text())
 
 
 if __name__ == "__main__":

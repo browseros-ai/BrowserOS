@@ -299,11 +299,11 @@ workflow for normal publication.
 ## Servers and nightlies
 
 Server and onboarding bundles version independently of the browser, each from
-its own package file:
+its own manifest and lockfile:
 
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
-| BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
+| BrowserOS agent server | `packages/browseros-agent/crates/browseros-server/Cargo.toml` and `Cargo.lock` | `release-server.yml` | `agent-server/v*` |
 | BrowserClaw server | `.../apps/claw-server/Cargo.toml` | `release-claw-server.yml` | `claw-server/v*` |
 | BrowserOS onboarding | `.../apps/app-onboard/package.json` | `release-app-onboard.yml` | `app-onboard/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
@@ -313,6 +313,12 @@ published under the historical `claw-server-rust/prod-resources` key. The source
 package is `claw-server`; release records still use the `claw-server-rust` ID.
 Packaging
 normalizes the binary name to `browseros-claw-server` for browser compatibility.
+
+The BrowserOS server was a Bun package (`apps/server/package.json` in
+`bun.lock`) before it moved to the `browseros-server` crate. It keeps the
+`server` release ID and `agent-server/v*` tags. Release tooling reads the old
+manifest and lockfile at commits made before the move.
+`release/components.py` is the one place that names either layout.
 
 One dispatch-only family workflow builds both signed macOS nightlies on the
 self-hosted Mac and publishes the `nightly-browseros` and
