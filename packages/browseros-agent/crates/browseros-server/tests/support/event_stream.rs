@@ -60,24 +60,49 @@ fn crc32(bytes: &[u8]) -> u32 {
 /// What the loopback ConverseStream saw: each request's headers and JSON body.
 pub type Seen = std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, serde_json::Value)>>>;
 
+/// One reply of the loopback ConverseStream: its status, headers and body.
+pub struct Answer {
+    pub status: axum::http::StatusCode,
+    pub headers: Vec<(&'static str, &'static str)>,
+    pub body: Vec<u8>,
+}
+
+impl Answer {
+    /// A successful stream of `events`.
+    pub fn events(events: &[(&'static str, serde_json::Value)]) -> Self {
+        Self {
+            status: axum::http::StatusCode::OK,
+            headers: vec![("content-type", "application/vnd.amazon.eventstream")],
+            body: events
+                .iter()
+                .flat_map(|(kind, payload)| event(kind, payload))
+                .collect(),
+        }
+    }
+}
+
 /// A loopback ConverseStream: records each request and plays the next reply's events.
 pub async fn serve(
     replies: Vec<Vec<(&'static str, serde_json::Value)>>,
 ) -> anyhow::Result<(String, Seen, tokio::task::JoinHandle<()>)> {
-    use axum::extract::State;
-    type Queue = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>>;
-    let seen: Seen = Seen::default();
-    let queue: Queue = std::sync::Arc::new(std::sync::Mutex::new(
+    serve_answers(
         replies
-            .into_iter()
-            .map(|events| {
-                events
-                    .iter()
-                    .flat_map(|(kind, payload)| event(kind, payload))
-                    .collect()
-            })
+            .iter()
+            .map(|events| Answer::events(events))
             .collect(),
-    ));
+    )
+    .await
+}
+
+/// A loopback ConverseStream that plays `answers` in order, recording each request.
+pub async fn serve_answers(
+    answers: Vec<Answer>,
+) -> anyhow::Result<(String, Seen, tokio::task::JoinHandle<()>)> {
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    type Queue = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Answer>>>;
+    let seen: Seen = Seen::default();
+    let queue: Queue = std::sync::Arc::new(std::sync::Mutex::new(answers.into()));
     let app = axum::Router::new()
         .fallback(
             |State((seen, queue)): State<(Seen, Queue)>,
@@ -88,13 +113,24 @@ pub async fn serve(
                     seen.push((headers, json));
                 }
                 let reply = queue.lock().ok().and_then(|mut queue| queue.pop_front());
-                (
-                    [(
-                        axum::http::header::CONTENT_TYPE,
-                        "application/vnd.amazon.eventstream",
-                    )],
-                    reply.unwrap_or_default(),
-                )
+                let Some(Answer {
+                    status,
+                    headers,
+                    body,
+                }) = reply
+                else {
+                    return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                };
+                let mut response = (status, body).into_response();
+                for (name, value) in headers {
+                    if let (Ok(name), Ok(value)) = (
+                        axum::http::HeaderName::try_from(name),
+                        axum::http::HeaderValue::try_from(value),
+                    ) {
+                        response.headers_mut().insert(name, value);
+                    }
+                }
+                response
             },
         )
         .with_state((seen.clone(), queue));

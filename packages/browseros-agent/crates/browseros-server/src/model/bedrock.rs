@@ -4,7 +4,11 @@
 //! conversation and decodes the event stream; the server keeps the credential scope, the header
 //! rules and the error cards.
 
-use aws::config::interceptors::BeforeTransmitInterceptorContextMut;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use aws::config::interceptors::{
+    BeforeDeserializationInterceptorContextRef, BeforeTransmitInterceptorContextMut,
+};
 use aws::config::retry::RetryConfig;
 use aws::config::{ConfigBag, Intercept, RuntimeComponents};
 use aws::error::BoxError;
@@ -21,10 +25,10 @@ use crate::store::{Credentials, ProviderConfig};
 use crate::turn::ChatError;
 
 /// The row's model on a client scoped to the row. Also returns every credential and custom
-/// header value, for scrubbing error text.
+/// header value, for scrubbing error text, and the client's record of the last `Retry-After`.
 pub(super) fn model(
     provider: &ProviderConfig,
-) -> Result<(DynModel<Completion>, HeaderMap), ChatError> {
+) -> Result<(DynModel<Completion>, HeaderMap, RetryAfter), ChatError> {
     model_at(provider, None)
 }
 
@@ -32,7 +36,7 @@ pub(super) fn model(
 pub(super) fn model_at(
     provider: &ProviderConfig,
     endpoint: Option<&str>,
-) -> Result<(DynModel<Completion>, HeaderMap), ChatError> {
+) -> Result<(DynModel<Completion>, HeaderMap, RetryAfter), ChatError> {
     let (config, mut secrets) = config(&provider.credentials)?;
     let headers = super::headers(&provider.headers)?;
     for (name, value) in &headers {
@@ -52,11 +56,48 @@ pub(super) fn model_at(
     if !headers.is_empty() {
         config = config.interceptor(Headers(headers));
     }
-    let config = config.build();
+    let retry_after = RetryAfter::default();
+    let config = config.interceptor(retry_after.clone()).build();
+    // Rig's own five-minute idle limit is off, as on every route (`route::Route`).
     let model = BedrockRuntime::from(aws::Client::from_conf(config))
         .completion(&provider.model)
+        .with_idle_timeout(None)
         .erase();
-    Ok((model, secrets))
+    Ok((model, secrets, retry_after))
+}
+
+/// The `Retry-After` seconds of the client's last response. rig-bedrock keeps a failed reply's
+/// status and body but not its headers, so the client records the header itself, before the SDK
+/// reads the reply. One client serves one turn, whose calls run one after another.
+#[derive(Clone, Debug, Default)]
+pub(super) struct RetryAfter(Arc<Mutex<Option<u64>>>);
+
+impl RetryAfter {
+    /// The recorded delay, cleared so it cannot describe a later reply.
+    pub(super) fn take(&self) -> Option<u64> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+
+impl Intercept for RetryAfter {
+    fn name(&self) -> &'static str {
+        "browseros::RetryAfter"
+    }
+
+    fn read_before_deserialization(
+        &self,
+        context: &BeforeDeserializationInterceptorContextRef<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        let seconds = context
+            .response()
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.trim().parse().ok());
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = seconds;
+        Ok(())
+    }
 }
 
 /// The row's custom headers on every request of its client. Rig builds the SDK call itself, so
@@ -146,14 +187,19 @@ fn missing_credentials() -> ChatError {
 
 /// A Bedrock failure as an error card. Rig reports a service exception by its type (and the HTTP
 /// status when there was one, which a stream exception lacks), so the type picks the status the
-/// card is chosen by.
-pub(super) fn error(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
+/// card is chosen by. `retry_after` is the reply's `Retry-After` header (`RetryAfter`), which
+/// wins over a hint in its body.
+pub(super) fn error(
+    error: &ProviderError,
+    secrets: &HeaderMap,
+    retry_after: Option<u64>,
+) -> ChatError {
     let message = match error {
         ProviderError::ProviderResponse(_) => None,
         ProviderError::Provider(message) => Some(message.as_str()),
         // A transport failure or an unreadable reply, as on the HTTP wires. Rig cannot tell a
         // refused connection from a timeout here: the SDK drops the cause.
-        _ => return errors::provider(error, None, secrets),
+        _ => return errors::provider(error, None, false, secrets),
     };
     let report = ErrorReport::from(error);
     let code = report.code.as_deref();
@@ -170,8 +216,8 @@ pub(super) fn error(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
     });
     let message = message.or_else(|| report.provider_response_body());
     let body = json!({"error": {"code": code, "message": message}}).to_string();
-    // rig-bedrock keeps no response headers, so a delay comes only from the body's hints.
-    errors::upstream(status, errors::retry_after(&report), &body, secrets)
+    let retry_after = retry_after.or_else(|| errors::retry_after(&report));
+    errors::upstream(status, retry_after, &body, secrets)
 }
 
 #[cfg(test)]
@@ -295,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn signed_reasoning_and_tool_input_survive_the_follow_up() -> anyhow::Result<()> {
-        use crate::model::route::{Route, Wire};
+        use crate::model::route::{Route, Trust, Wire};
         use crate::model::{
             Backend, Effort, Image, Model, ModelMessage, Reasoning, StepRequest, ToolSpec, Usage,
         };
@@ -337,13 +383,15 @@ mod tests {
             resource_name: None,
             credentials: credentials("fixture-key", None, "us-east-1"),
         };
-        let (rig, secrets) = model_at(&provider, Some(&base))?;
+        let (rig, secrets, retry_after) = model_at(&provider, Some(&base))?;
         let model = Model {
             route: Backend::Rig(Box::new(Route {
                 model: rig,
                 wire: Wire::Bedrock,
                 url: None,
                 secrets,
+                trust: Trust::System,
+                retry_after: Some(retry_after),
             })),
             name: provider.model.clone(),
             window: provider.context_window,
@@ -459,14 +507,114 @@ mod tests {
             http::StatusCode::TOO_MANY_REQUESTS,
             r#"{"message":"Too many requests, please try again in 2s."}"#,
         );
-        let card = error(&throttled, &HeaderMap::new());
+        let card = error(&throttled, &HeaderMap::new(), None);
         assert_eq!(card.code, ChatErrorCode::RateLimited);
         assert_eq!(card.retry_after_seconds, Some(2));
         let unreadable = ProviderError::Response("not a Converse reply".into());
         assert_eq!(
-            error(&unreadable, &HeaderMap::new()).code,
+            error(&unreadable, &HeaderMap::new(), None).code,
             ChatErrorCode::Unknown,
             "an unreadable reply is not a dropped connection"
         );
+    }
+
+    /// A Bedrock model on a client pointed at `base`, as `Route::new` builds it.
+    fn model_on(base: &str) -> anyhow::Result<crate::model::Model> {
+        use crate::model::route::{Route, Trust, Wire};
+        use crate::model::{Backend, Model, Reasoning};
+        let provider = ProviderConfig {
+            id: "fixture".into(),
+            kind: ProviderKind::Bedrock,
+            model: "amazon.nova-lite-v1:0".into(),
+            base_url: None,
+            headers: vec![],
+            context_window: 8000,
+            supports_images: false,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            resource_name: None,
+            credentials: credentials("fixture-key", None, "us-east-1"),
+        };
+        let (model, secrets, retry_after) = model_at(&provider, Some(base))?;
+        Ok(Model {
+            route: Backend::Rig(Box::new(Route {
+                model,
+                wire: Wire::Bedrock,
+                url: None,
+                secrets,
+                trust: Trust::System,
+                retry_after: Some(retry_after),
+            })),
+            name: provider.model,
+            window: 8000,
+            supports_images: false,
+            kind: Some(ProviderKind::Bedrock),
+            reasoning: Reasoning::default(),
+        })
+    }
+
+    fn throttled(retry_after: &'static str) -> event_stream::Answer {
+        event_stream::Answer {
+            status: http::StatusCode::TOO_MANY_REQUESTS,
+            headers: vec![
+                ("content-type", "application/json"),
+                ("x-amzn-errortype", "ThrottlingException"),
+                ("retry-after", retry_after),
+            ],
+            // No delay in the body: only the header says how long to wait.
+            body: br#"{"message":"Too many requests."}"#.to_vec(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_throttle_retries_after_the_header_alone_says_so() -> anyhow::Result<()> {
+        use crate::model::{ModelMessage, StepRequest};
+        use serde_json::json;
+        let messages = [ModelMessage::User {
+            text: "Hello".into(),
+            images: vec![],
+        }];
+        let request = StepRequest {
+            system: "",
+            messages: &messages,
+            tools: &[],
+            effort: None,
+        };
+
+        let (base, seen, server) = event_stream::serve_answers(vec![
+            throttled("0"),
+            event_stream::Answer::events(&[
+                ("messageStart", json!({"role": "assistant"})),
+                ("contentBlockDelta", json!({"contentBlockIndex": 0, "delta": {"text": "ok"}})),
+                ("contentBlockStop", json!({"contentBlockIndex": 0})),
+                ("messageStop", json!({"stopReason": "end_turn"})),
+                ("metadata", json!({"usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}, "metrics": {"latencyMs": 1}})),
+            ]),
+        ])
+        .await?;
+        model_on(&base)?.step(&request, &mut Vec::new()).await?;
+        assert_eq!(
+            seen.lock()
+                .map_err(|_| anyhow::anyhow!("capture lock"))?
+                .len(),
+            2,
+            "a short header delay retries before any output"
+        );
+        server.abort();
+
+        let (base, seen, server) = event_stream::serve_answers(vec![throttled("9")]).await?;
+        let Err(error) = model_on(&base)?.step(&request, &mut Vec::new()).await else {
+            anyhow::bail!("a long throttle must end the step");
+        };
+        assert_eq!(error.code, ChatErrorCode::RateLimited);
+        assert_eq!(error.retry_after_seconds, Some(9));
+        assert_eq!(
+            seen.lock()
+                .map_err(|_| anyhow::anyhow!("capture lock"))?
+                .len(),
+            1
+        );
+        server.abort();
+        Ok(())
     }
 }

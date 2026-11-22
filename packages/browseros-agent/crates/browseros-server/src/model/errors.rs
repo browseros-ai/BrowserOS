@@ -46,6 +46,71 @@ fn connection_error(message: impl Into<String>) -> ChatError {
     error
 }
 
+/// The TLS handshake refused the provider's certificate. Retrying cannot help: the card says
+/// what to change on this computer instead.
+fn certificate(
+    url: Option<&Url>,
+    reason: &rustls::CertificateError,
+    store_missing: bool,
+) -> ChatError {
+    let provider = url.and_then(Url::host_str).map_or_else(
+        || "the provider".to_owned(),
+        |host| format!("the provider at {host}"),
+    );
+    use rustls::CertificateError::*;
+    let message = match reason {
+        _ if store_missing => format!(
+            "This computer has no trusted certificate authorities, so the certificate of \
+             {provider} cannot be verified. On Linux, install the system's CA certificates \
+             (the ca-certificates package), then restart BrowserOS."
+        ),
+        Expired | ExpiredContext { .. } | NotValidYet | NotValidYetContext { .. } => format!(
+            "The certificate of {provider} has expired or is not valid yet. Check this \
+             computer's date and time."
+        ),
+        NotValidForName | NotValidForNameContext { .. } => format!(
+            "The certificate of {provider} is for a different name. Check the provider's base \
+             URL."
+        ),
+        Revoked => format!("The certificate of {provider} has been revoked."),
+        // An unknown or untrusted authority: webpki and Windows say `UnknownIssuer`, macOS
+        // reports its own trust result as `Other`.
+        _ => format!(
+            "The certificate of {provider} is not signed by an authority this computer trusts. \
+             If the provider uses a private certificate authority, add it to the system's \
+             certificate store; on Linux, check that the system's CA certificates are installed."
+        ),
+    };
+    let mut error = connection_error(message);
+    error.title = "Certificate not trusted".into();
+    error.retryable = false;
+    error
+}
+
+/// The certificate error a TLS handshake ended with, anywhere in a transport error's chain. An
+/// `io::Error` hides the error it wraps from `source()`, so each one is opened as well.
+fn certificate_error<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a rustls::CertificateError> {
+    let mut next = Some(error);
+    while let Some(error) = next {
+        if let Some(rustls::Error::InvalidCertificate(reason)) =
+            error.downcast_ref::<rustls::Error>()
+        {
+            return Some(reason);
+        }
+        if let Some(inner) = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            && let Some(reason) = certificate_error(inner)
+        {
+            return Some(reason);
+        }
+        next = error.source();
+    }
+    None
+}
+
 pub(super) fn protocol(message: &'static str) -> ChatError {
     let mut error = ChatError::new(ChatErrorCode::Unknown, "Invalid model response", message);
     error.retryable = false;
@@ -53,16 +118,27 @@ pub(super) fn protocol(message: &'static str) -> ChatError {
 }
 
 /// A Rig failure on an HTTP wire. `url` is the destination, for the "could not connect" card,
-/// which names only its host.
-pub(super) fn provider(error: &ProviderError, url: Option<&Url>, secrets: &HeaderMap) -> ChatError {
+/// which names only its host. `store_missing` says the clients were built without the system's
+/// certificate store (`route::Trust::Missing`).
+pub(super) fn provider(
+    error: &ProviderError,
+    url: Option<&Url>,
+    store_missing: bool,
+    secrets: &HeaderMap,
+) -> ChatError {
     match error {
         ProviderError::Http(transport) => match transport.as_ref() {
-            http_client::Error::Transient(source)
-                if source
+            http_client::Error::Transient(source) => {
+                if let Some(reason) = certificate_error(source.as_ref()) {
+                    certificate(url, reason, store_missing)
+                } else if source
                     .downcast_ref::<reqwest_rig::Error>()
-                    .is_some_and(reqwest_rig::Error::is_connect) =>
-            {
-                url.map_or_else(disconnected, connect)
+                    .is_some_and(reqwest_rig::Error::is_connect)
+                {
+                    url.map_or_else(disconnected, connect)
+                } else {
+                    disconnected()
+                }
             }
             _ => disconnected(),
         },
@@ -284,6 +360,10 @@ fn scrub(text: &str, secrets: &HeaderMap) -> String {
 }
 
 pub(super) fn retry_delay(error: &ChatError, attempt: u32) -> Option<Duration> {
+    // A card marked not retryable (a refused certificate) says retrying cannot help.
+    if !error.retryable {
+        return None;
+    }
     match error.code {
         ChatErrorCode::RateLimited => error
             .retry_after_seconds

@@ -39,23 +39,53 @@ use crate::turn::ChatError;
 /// `Model::step`'s call, which knows whether any output reached the turn). The remote one uses
 /// the proxy environment variables exactly as the server's reqwest 0.12 client did; the local one
 /// never uses a proxy, because a model server on this machine is never behind one.
+///
+/// Certificates are checked against the operating system's trust store. On a machine without
+/// one (Linux with no CA certificates installed) the clients are built with no trusted authority
+/// at all: a provider on plain HTTP still works, and an HTTPS one fails with a card that says
+/// what to install, not with a dropped connection.
 #[derive(Clone)]
 pub(super) struct Clients {
     remote: ReqwestClient,
     local: ReqwestClient,
+    trust: Trust,
+}
+
+/// Whether the operating system's certificate store could be loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Trust {
+    System,
+    /// No store: every HTTPS certificate fails verification until one is installed.
+    Missing,
 }
 
 impl Clients {
     pub(super) fn new() -> Result<Self, reqwest::Error> {
+        Self::build(Trust::System).or_else(|error| {
+            tracing::warn!(
+                %error,
+                "the system's certificate store could not be loaded; HTTPS providers will fail \
+                 until its CA certificates are installed"
+            );
+            Self::build(Trust::Missing)
+        })
+    }
+
+    pub(super) fn build(trust: Trust) -> Result<Self, reqwest::Error> {
         let builder = || {
-            reqwest::Client::builder()
+            let builder = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .retry(reqwest::retry::never())
-                .connect_timeout(Duration::from_secs(15))
+                .connect_timeout(Duration::from_secs(15));
+            match trust {
+                Trust::System => builder,
+                Trust::Missing => builder.tls_certs_only(std::iter::empty()),
+            }
         };
         Ok(Self {
             remote: ReqwestClient::from(builder().build()?),
             local: ReqwestClient::from(builder().no_proxy().build()?),
+            trust,
         })
     }
 
@@ -147,11 +177,18 @@ pub(super) enum Wire {
 
 /// A resolved provider: the Rig model, its wire, and every credential and custom header value it
 /// may send, so error text can be scrubbed of them.
+///
+/// Every model is built with Rig's stream idle limit off (`with_idle_timeout(None)`): Rig would
+/// fail a stream that sends no event for five minutes, and the server never had such a limit. A
+/// model call is bounded by the turn's own deadline, as before.
 pub(super) struct Route {
     pub model: DynModel<Completion>,
     pub wire: Wire,
     pub url: Option<Url>,
     pub secrets: HeaderMap,
+    pub trust: Trust,
+    /// Bedrock's `Retry-After` header, which rig-bedrock does not keep.
+    pub retry_after: Option<bedrock::RetryAfter>,
 }
 
 impl Route {
@@ -168,11 +205,18 @@ impl Route {
                 let (headers, secrets) = headers(provider, &[(AUTHORIZATION, key)], Vec::new())?;
                 let mut model = config
                     .connect(clients.pinned(url.clone(), headers))
-                    .responses(&provider.model);
+                    .responses(&provider.model)
+                    .with_idle_timeout(None);
                 if let Some(facts) = image_facts(provider, "openai") {
                     model.wire = model.wire.with_facts(facts);
                 }
-                Ok(Self::http(model.erase(), Wire::Responses, url, secrets))
+                Ok(Self::http(
+                    model.erase(),
+                    Wire::Responses,
+                    url,
+                    secrets,
+                    clients,
+                ))
             }
             Anthropic => {
                 let key = api_key(provider)?;
@@ -185,16 +229,19 @@ impl Route {
                 let model = AnthropicConfig::new(key)
                     .connect(clients.pinned(url.clone(), headers))
                     .completion(&provider.model)
+                    .with_idle_timeout(None)
                     .erase();
-                Ok(Self::http(model, Wire::Anthropic, url, secrets))
+                Ok(Self::http(model, Wire::Anthropic, url, secrets, clients))
             }
             Bedrock => {
-                let (model, secrets) = bedrock::model(provider)?;
+                let (model, secrets, retry_after) = bedrock::model(provider)?;
                 Ok(Self {
                     model,
                     wire: Wire::Bedrock,
                     url: None,
                     secrets,
+                    trust: clients.trust,
+                    retry_after: Some(retry_after),
                 })
             }
             ChatgptPro => Err(errors::config(
@@ -233,7 +280,8 @@ impl Route {
         let (headers, secrets) = headers(provider, &owned, extras)?;
         let mut model = config
             .connect(clients.pinned(session.url.clone(), headers))
-            .responses(&provider.model);
+            .responses(&provider.model)
+            .with_idle_timeout(None);
         if let Some(facts) = image_facts(provider, "openai") {
             model.wire = model.wire.with_facts(facts);
         }
@@ -242,23 +290,37 @@ impl Route {
             Wire::ChatGpt,
             session.url,
             secrets,
+            clients,
         ))
     }
 
-    fn http(model: DynModel<Completion>, wire: Wire, url: Url, secrets: HeaderMap) -> Self {
+    fn http(
+        model: DynModel<Completion>,
+        wire: Wire,
+        url: Url,
+        secrets: HeaderMap,
+        clients: &Clients,
+    ) -> Self {
         Self {
             model,
             wire,
             url: Some(url),
             secrets,
+            trust: clients.trust,
+            retry_after: None,
         }
     }
 
     /// A Rig failure as the panel's error card, scrubbed of this route's secrets.
     pub(super) fn error(&self, error: &rig_core::ProviderError) -> ChatError {
-        match self.wire {
-            Wire::Bedrock => bedrock::error(error, &self.secrets),
-            _ => errors::provider(error, self.url.as_ref(), &self.secrets),
+        match &self.retry_after {
+            Some(retry_after) => bedrock::error(error, &self.secrets, retry_after.take()),
+            None => errors::provider(
+                error,
+                self.url.as_ref(),
+                self.trust == Trust::Missing,
+                &self.secrets,
+            ),
         }
     }
 }
@@ -343,7 +405,8 @@ fn chat(provider: &ProviderConfig, clients: &Clients) -> Result<Route, ChatError
     let (headers, secrets) = headers(provider, &owned, Vec::new())?;
     let mut model = config
         .connect(clients.pinned(url.clone(), headers))
-        .chat(&provider.model);
+        .chat(&provider.model)
+        .with_idle_timeout(None);
     if let Some(facts) = image_facts(provider, dialect.name) {
         model.wire = model.wire.with_facts(facts);
     }
@@ -352,6 +415,7 @@ fn chat(provider: &ProviderConfig, clients: &Clients) -> Result<Route, ChatError
         Wire::Chat(provider.kind),
         url,
         secrets,
+        clients,
     ))
 }
 

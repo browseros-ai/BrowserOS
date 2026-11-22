@@ -35,6 +35,14 @@ mod event_stream;
 #[path = "../../tests/model_logs/mod.rs"]
 mod logs;
 
+#[cfg(test)]
+#[path = "../../tests/support/tls.rs"]
+mod tls;
+
+#[cfg(test)]
+#[path = "../../tests/model_trust/mod.rs"]
+mod trust;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -182,34 +190,46 @@ impl Models {
 /// The literal a provider row's header value may hold, replaced by the conversation id.
 const CONVERSATION_ID_PLACEHOLDER: &str = "{{conversationId}}";
 
-/// Log sites in the model libraries that write a credential or a provider's own text before the
-/// server scrubs it (`errors`): a provider can echo the request's credential in an error. Every
-/// filter the server installs turns them off. On an upgrade of Rig or the AWS SDK, re-read their
-/// log sites; `tests/model_logs` is the gate.
-const UNSCRUBBED_LOG_SITES: &[&str] = &[
-    // Rig's Chat Completions decoder warns with an error event's message, as the provider sent it.
-    "rig_core::providers::openai::wire::chat::finish",
+/// Log targets turned off in every filter the server installs, because they can write a
+/// credential or a provider's own text before the server scrubs it (`errors`). Rig is off as a
+/// whole: its crates log provider-sent strings (event types, call ids, finish reasons, error
+/// messages) at several sites, and an upgrade can add more. `tests/model_logs` holds this list to
+/// the `rig-*` crates in Cargo.lock and drives the known sites; it is the gate on an upgrade.
+const UNSCRUBBED_LOG_TARGETS: &[&str] = &[
+    "rig_core",
+    "rig_bedrock",
+    "rig_http",
+    "rig_reqwest",
     // The AWS SDK's endpoint resolution, at debug, prints the request's credentials with the
     // access key id in clear.
     "aws_smithy_runtime::client::orchestrator::endpoints",
 ];
 
-/// The server's log filter for `spec` (`BROWSEROS_LOG`; `info` when unset or invalid), with
-/// each unscrubbed log site turned off. A developer who wants one back names its target in
-/// `BROWSEROS_LOG`, which is then left as written, for example
-/// `BROWSEROS_LOG=debug,rig_core::providers::openai::wire::chat::finish=warn`. The guarantee
-/// holds at the default level and at debug; `trace` is a raw developer level, where the AWS SDK
-/// logs the signed request it sends.
+/// The server's log filter for `spec` (`BROWSEROS_LOG`; `info` when unset or invalid), with each
+/// unscrubbed target turned off. A developer who wants some of it back names a target in
+/// `BROWSEROS_LOG`: a more specific one wins over these (`BROWSEROS_LOG=info,rig_core::driver=warn`)
+/// and the same one is left as written (`BROWSEROS_LOG=debug,rig_core=debug`). The guarantee holds
+/// at the default level and at debug; `trace` is a raw developer level, where the AWS SDK logs the
+/// signed request it sends.
 pub fn log_filter(spec: Option<&str>) -> tracing_subscriber::EnvFilter {
     use tracing_subscriber::EnvFilter;
     let spec = spec
         .filter(|spec| EnvFilter::try_new(spec).is_ok())
         .unwrap_or("info");
+    // The targets `spec` names itself: a directive is `target=level`, `target[span]=level`, or a
+    // bare level, which names none.
+    let named: Vec<&str> = spec
+        .split(',')
+        .filter_map(|directive| {
+            let target = directive.split(['=', '[']).next()?.trim();
+            directive.contains('=').then_some(target)
+        })
+        .collect();
     let directives: Vec<String> = std::iter::once(spec.to_owned())
         .chain(
-            UNSCRUBBED_LOG_SITES
+            UNSCRUBBED_LOG_TARGETS
                 .iter()
-                .filter(|target| !spec.contains(*target))
+                .filter(|target| !named.contains(target))
                 .map(|target| format!("{target}=off")),
         )
         .filter(|directive| !directive.is_empty())

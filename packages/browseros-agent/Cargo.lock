@@ -801,6 +801,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "aws-sdk-bedrockruntime",
  "axum",
  "base64 0.22.1",
@@ -819,6 +820,7 @@ dependencies = [
  "rig-core",
  "rig-reqwest",
  "rmcp",
+ "rustls",
  "sea-orm",
  "sea-orm-migration",
  "sentry",
@@ -829,6 +831,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tower",
  "tracing",

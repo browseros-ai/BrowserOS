@@ -76,11 +76,14 @@ utoipa-axum = "0.3.0"
 # the build and would make every reqwest client in this binary, 0.12 included, start reading the
 # macOS and Windows proxy settings. Rustls alone comes from the reqwest line below.
 # Exact versions: on an upgrade of Rig or the AWS SDK, re-read their log sites for any that write
-# provider or request text (`model::UNSCRUBBED_LOG_SITES`); tests/model_logs is the gate.
+# provider or request text (`model::UNSCRUBBED_LOG_TARGETS`); tests/model_logs is the gate.
 rig-core = { version = "=0.47.0", default-features = false, features = ["reqwest"] }
 rig-reqwest = { version = "=0.47.0", default-features = false }
 rig-bedrock = "=0.47.0"
 reqwest-rig = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["rustls"] }
+# rustls's own certificate error, so a provider whose certificate cannot be verified gets a card
+# that says so (`model::errors`). The TLS stack itself comes from reqwest above.
+rustls = { version = "0.23", default-features = false }
 # The AWS SDK client a Bedrock row's calls go through, built from the row's key, secret, session
 # token and region alone (`model::bedrock`). Only the current HTTPS client (hyper 1, rustls 0.23)
 # and the tokio runtime: the default features add a legacy rustls 0.21 stack and the SSO and
@@ -97,6 +100,10 @@ browseros-server = { path = ".", features = ["test-support"] }
 # Only for tests/dependency_boundaries.rs, which parses src/ to enforce the module layering.
 syn = { version = "2", features = ["full", "visit"] }
 tokio = { workspace = true, features = ["test-util"] }
+# A loopback HTTPS provider with a certificate nothing trusts (tests/model_tls.rs): the key and
+# the self-signed certificate are made when the test runs, so no key is committed.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
+tokio-rustls = { version = "0.26", default-features = false }
 
 [lints]
 workspace = true

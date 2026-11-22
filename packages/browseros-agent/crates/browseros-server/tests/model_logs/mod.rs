@@ -1,7 +1,8 @@
 //! No credential a provider echoes back reaches the server's log. Each wire's real Rig decoder
-//! reads the error shapes a provider can echo a credential in (an error event in the stream, a
-//! 401 body, a 500 that repeats the start of the request) while the server's log layer, built
-//! with `log_filter` as `app` builds it, captures every line at the default level and at debug.
+//! reads the shapes a provider can put a credential in (an error event in the stream, a 401 body,
+//! a 500 that repeats the start of the request, an event type Rig does not model, a tool call id
+//! used twice, a finish reason Rig does not know) while the server's log layer, built with
+//! `log_filter` as `app` builds it, captures every line at the default level and at debug.
 //!
 //! This is the gate on a Rig upgrade: a renamed target or a new log site that writes provider
 //! text fails here, not in a person's log file.
@@ -19,7 +20,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
 use super::chatgpt::Session;
-use super::route::{Clients, Route, Wire};
+use super::route::{Clients, Route, Trust, Wire};
 use super::{
     Backend, Model, ModelMessage, Models, Reasoning, StepRequest, event_stream, log_filter,
 };
@@ -71,12 +72,22 @@ enum Shape {
     StreamError,
     Unauthorized,
     EchoedRequest,
+    /// An event whose type is the seeded value (the tagged wires: Responses, ChatGPT, Anthropic,
+    /// Bedrock).
+    UnknownEvent,
+    /// Two tool calls with the seeded value as their one id.
+    DuplicateCall,
+    /// A finish reason that is the seeded value.
+    UnknownFinish,
 }
 
-const SHAPES: [Shape; 3] = [
+const SHAPES: [Shape; 6] = [
     Shape::StreamError,
     Shape::Unauthorized,
     Shape::EchoedRequest,
+    Shape::UnknownEvent,
+    Shape::DuplicateCall,
+    Shape::UnknownFinish,
 ];
 const WIRES: [Wire; 5] = [
     Wire::Chat(ProviderKind::OpenaiCompatible),
@@ -86,8 +97,161 @@ const WIRES: [Wire; 5] = [
     Wire::Bedrock,
 ];
 
-/// What a provider on `wire` answers with for `shape`, echoing the seeded values.
-fn reply(wire: Wire, shape: Shape) -> (StatusCode, &'static str, Vec<u8>) {
+type Answer = (StatusCode, &'static str, Vec<u8>);
+
+/// What a provider on `wire` answers with for `shape`, or `None` where the wire has no such
+/// shape (Chat Completions events carry no type).
+fn reply(wire: Wire, shape: Shape) -> Option<Answer> {
+    match shape {
+        Shape::StreamError | Shape::Unauthorized | Shape::EchoedRequest => Some(echo(wire, shape)),
+        Shape::UnknownEvent => unknown_event(wire),
+        Shape::DuplicateCall => Some(duplicate_call(wire)),
+        Shape::UnknownFinish => Some(unknown_finish(wire)),
+    }
+}
+
+fn sse(events: &[serde_json::Value]) -> Answer {
+    let mut body = String::new();
+    for event in events {
+        body.push_str(&format!("data: {event}\n\n"));
+    }
+    (StatusCode::OK, "text/event-stream", body.into_bytes())
+}
+
+fn converse(frames: Vec<Vec<u8>>) -> Answer {
+    (
+        StatusCode::OK,
+        "application/vnd.amazon.eventstream",
+        frames.concat(),
+    )
+}
+
+fn unknown_event(wire: Wire) -> Option<Answer> {
+    Some(match wire {
+        Wire::Chat(_) => return None,
+        Wire::Responses | Wire::ChatGpt => sse(&[
+            json!({"type": KEY, "detail": HEADER}),
+            json!({"type":"response.output_text.delta","delta":"ok"}),
+            json!({"type":"response.completed","response":{"status":"completed","output":[]}}),
+        ]),
+        Wire::Anthropic => sse(&[
+            json!({"type":"message_start","message":{"role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}),
+            json!({"type": KEY, "detail": HEADER}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ]),
+        Wire::Bedrock => converse(vec![
+            event_stream::event("messageStart", &json!({"role": "assistant"})),
+            event_stream::event(KEY, &json!({"detail": HEADER})),
+            event_stream::event(
+                "contentBlockDelta",
+                &json!({"contentBlockIndex": 0, "delta": {"text": "ok"}}),
+            ),
+            event_stream::event("contentBlockStop", &json!({"contentBlockIndex": 0})),
+            event_stream::event("messageStop", &json!({"stopReason": "end_turn"})),
+            event_stream::event(
+                "metadata",
+                &json!({"usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}, "metrics": {"latencyMs": 1}}),
+            ),
+        ]),
+    })
+}
+
+fn duplicate_call(wire: Wire) -> Answer {
+    match wire {
+        Wire::Chat(_) => sse(&[
+            json!({"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[
+                {"index":0,"id":KEY,"type":"function","function":{"name":"run","arguments":"{}"}},
+                {"index":1,"id":KEY,"type":"function","function":{"name":"run","arguments":"{}"}}
+            ]},"finish_reason":"tool_calls"}]}),
+        ]),
+        Wire::Responses | Wire::ChatGpt => {
+            let call = |id: &str| json!({"type":"function_call","id":id,"call_id":KEY,"name":"run","arguments":"{}","status":"completed"});
+            sse(&[
+                json!({"type":"response.output_item.added","output_index":0,"item":call("fc_1")}),
+                json!({"type":"response.output_item.done","output_index":0,"item":call("fc_1")}),
+                json!({"type":"response.output_item.added","output_index":1,"item":call("fc_2")}),
+                json!({"type":"response.output_item.done","output_index":1,"item":call("fc_2")}),
+                json!({"type":"response.completed","response":{"status":"completed","output":[call("fc_1"),call("fc_2")]}}),
+            ])
+        }
+        Wire::Anthropic => sse(&[
+            json!({"type":"message_start","message":{"role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":KEY,"name":"run","input":{}}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":KEY,"name":"run","input":{}}}),
+            json!({"type":"content_block_stop","index":1}),
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ]),
+        Wire::Bedrock => {
+            let call = |index: i32| {
+                [
+                    event_stream::event(
+                        "contentBlockStart",
+                        &json!({"contentBlockIndex": index, "start": {"toolUse": {"toolUseId": KEY, "name": "run"}}}),
+                    ),
+                    event_stream::event(
+                        "contentBlockDelta",
+                        &json!({"contentBlockIndex": index, "delta": {"toolUse": {"input": "{}"}}}),
+                    ),
+                    event_stream::event("contentBlockStop", &json!({"contentBlockIndex": index})),
+                ]
+            };
+            let mut frames = vec![event_stream::event(
+                "messageStart",
+                &json!({"role": "assistant"}),
+            )];
+            frames.extend(call(0));
+            frames.extend(call(1));
+            frames.push(event_stream::event(
+                "messageStop",
+                &json!({"stopReason": "tool_use"}),
+            ));
+            frames.push(event_stream::event("metadata", &json!({"usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}, "metrics": {"latencyMs": 1}})));
+            converse(frames)
+        }
+    }
+}
+
+fn unknown_finish(wire: Wire) -> Answer {
+    match wire {
+        Wire::Chat(_) => {
+            sse(&[json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":KEY}]})])
+        }
+        Wire::Responses | Wire::ChatGpt => sse(&[
+            json!({"type":"response.output_text.delta","delta":"ok"}),
+            json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":KEY},"output":[]}}),
+        ]),
+        Wire::Anthropic => sse(&[
+            json!({"type":"message_start","message":{"role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":KEY},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ]),
+        Wire::Bedrock => converse(vec![
+            event_stream::event("messageStart", &json!({"role": "assistant"})),
+            event_stream::event(
+                "contentBlockDelta",
+                &json!({"contentBlockIndex": 0, "delta": {"text": "ok"}}),
+            ),
+            event_stream::event("contentBlockStop", &json!({"contentBlockIndex": 0})),
+            event_stream::event("messageStop", &json!({"stopReason": KEY})),
+            event_stream::event(
+                "metadata",
+                &json!({"usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}, "metrics": {"latencyMs": 1}}),
+            ),
+        ]),
+    }
+}
+
+/// The shapes that echo a credential in an error.
+fn echo(wire: Wire, shape: Shape) -> Answer {
     let echoed = format!(
         "POST /v1 HTTP/1.1\r\nauthorization: Bearer {KEY}\r\nx-api-key: {KEY}\r\n\
          x-amz-security-token: {TOKEN}\r\nauthorization: AWS4-HMAC-SHA256 Credential={KEY_ID}/\r\n\
@@ -102,11 +266,6 @@ fn reply(wire: Wire, shape: Shape) -> (StatusCode, &'static str, Vec<u8>) {
         (StatusCode::OK, "text/event-stream", body.into_bytes())
     };
     match (wire, shape) {
-        (_, Shape::EchoedRequest) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "text/plain",
-            echoed.into_bytes(),
-        ),
         (Wire::Bedrock, Shape::StreamError) => (
             StatusCode::OK,
             "application/vnd.amazon.eventstream",
@@ -147,6 +306,13 @@ fn reply(wire: Wire, shape: Shape) -> (StatusCode, &'static str, Vec<u8>) {
             json!({"error":{"message":message,"type":"invalid_request_error","code":"invalid_api_key"}})
                 .to_string()
                 .into_bytes(),
+        ),
+        // `reply` sends only the three echo shapes here; this is the 500 that repeats the start
+        // of the request.
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "text/plain",
+            echoed.into_bytes(),
         ),
     }
 }
@@ -236,13 +402,15 @@ async fn model(models: &Models, wire: Wire, base: &str) -> anyhow::Result<Model>
                 session_token: Some(Secret::new(TOKEN)),
                 region: "us-east-1".into(),
             };
-            let (model, secrets) = super::bedrock::model_at(&row, Some(base))?;
+            let (model, secrets, retry_after) = super::bedrock::model_at(&row, Some(base))?;
             wrap(
                 Route {
                     model,
                     wire: Wire::Bedrock,
                     url: None,
                     secrets,
+                    trust: Trust::System,
+                    retry_after: Some(retry_after),
                 },
                 ProviderKind::Bedrock,
             )
@@ -252,7 +420,7 @@ async fn model(models: &Models, wire: Wire, base: &str) -> anyhow::Result<Model>
 
 /// Runs every wire and shape with a subscriber whose layer uses `filter`, and returns what it
 /// logged.
-async fn logged(filter: tracing_subscriber::EnvFilter) -> anyhow::Result<String> {
+async fn logged(filter: tracing_subscriber::EnvFilter, shapes: &[Shape]) -> anyhow::Result<String> {
     let capture = Capture::default();
     let layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
@@ -272,13 +440,17 @@ async fn logged(filter: tracing_subscriber::EnvFilter) -> anyhow::Result<String>
         effort: None,
     };
     for wire in WIRES {
-        for shape in SHAPES {
-            let (base, server) = provider(reply(wire, shape)).await?;
+        for &shape in shapes {
+            let Some(answer) = reply(wire, shape) else {
+                continue;
+            };
+            let (base, server) = provider(answer).await?;
             let model = model(&models, wire, &base).await?;
             let result = model.step(&request, &mut Vec::new()).await;
             server.abort();
+            // A provider-sent type, id or finish reason need not fail the step.
             let Err(error) = result else {
-                anyhow::bail!("{shape:?} on {:?} did not fail", wire_name(wire));
+                continue;
             };
             // The card is scrubbed of what this route sent; the Bedrock values are not secrets
             // of an HTTP route, which never had them.
@@ -312,7 +484,7 @@ fn wire_name(wire: Wire) -> &'static str {
 #[tokio::test]
 async fn no_echoed_credential_reaches_the_log_at_info_or_debug() -> anyhow::Result<()> {
     for spec in [None, Some("debug")] {
-        let text = logged(log_filter(spec)).await?;
+        let text = logged(log_filter(spec), &SHAPES).await?;
         assert!(!text.is_empty(), "the layer captured nothing at {spec:?}");
         for secret in SECRETS {
             let leaked: Vec<_> = text.lines().filter(|line| line.contains(secret)).collect();
@@ -327,19 +499,53 @@ async fn no_echoed_credential_reaches_the_log_at_info_or_debug() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn the_capture_sees_the_leak_the_filter_turns_off() -> anyhow::Result<()> {
-    let unfiltered = logged(tracing_subscriber::EnvFilter::new("debug")).await?;
-    assert!(
-        unfiltered.lines().any(|line| line.contains(KEY)),
-        "without the server's filter, Rig's stream-error warning carries the echoed key"
-    );
-    let opted_in = logged(log_filter(Some(
-        "info,rig_core::providers::openai::wire::chat::finish=warn",
-    )))
+async fn the_capture_sees_each_leak_the_filter_turns_off() -> anyhow::Result<()> {
+    // Without the server's filter, each of these reaches the log through some wire's decoder:
+    // Rig logs a stream error's message, an unmodelled event's type, a reused call id and an
+    // unknown finish reason as the provider sent them.
+    for shape in [
+        Shape::StreamError,
+        Shape::UnknownEvent,
+        Shape::DuplicateCall,
+        Shape::UnknownFinish,
+    ] {
+        let unfiltered = logged(tracing_subscriber::EnvFilter::new("debug"), &[shape]).await?;
+        assert!(
+            unfiltered.lines().any(|line| line.contains(KEY)),
+            "without the filter, {shape:?} logs the seeded value"
+        );
+    }
+    let opted_in = logged(
+        log_filter(Some(
+            "info,rig_core::providers::openai::wire::chat::finish=warn",
+        )),
+        &[Shape::StreamError],
+    )
     .await?;
     assert!(
         opted_in.lines().any(|line| line.contains(KEY)),
-        "a developer who names the target gets the line back"
+        "a developer who names a target gets its lines back"
     );
+    Ok(())
+}
+
+#[test]
+fn every_rig_crate_in_the_lockfile_is_turned_off() -> anyhow::Result<()> {
+    let lockfile =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))?;
+    let rig: Vec<String> = lockfile
+        .lines()
+        .filter_map(|line| line.strip_prefix("name = \""))
+        .filter_map(|name| name.strip_suffix('"'))
+        .filter(|name| name.starts_with("rig-"))
+        .map(|name| name.replace('-', "_"))
+        .collect();
+    assert!(!rig.is_empty(), "the lockfile names no rig crate");
+    for name in rig {
+        assert!(
+            super::UNSCRUBBED_LOG_TARGETS.contains(&name.as_str()),
+            "{name} is in Cargo.lock but its logs are not turned off (UNSCRUBBED_LOG_TARGETS)"
+        );
+    }
     Ok(())
 }
