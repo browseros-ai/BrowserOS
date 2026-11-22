@@ -23,6 +23,17 @@ use serde_json::{Value, json};
 use support::{EXTENSION_ORIGIN, TestServer, body_json};
 use tokio_util::sync::CancellationToken;
 
+/// Nothing listens on the discard port, so a call sent to this proxy fails to connect.
+const CLOSED_PROXY: &str = "http://127.0.0.1:9";
+const PROXY_VARS: [&str; 6] = [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
 struct Fixture {
     server: TestServer,
     runtime: AgentRuntime,
@@ -102,6 +113,14 @@ impl Fixture {
     }
 
     async fn serve(&self) -> Result<(tokio::process::Child, String, PathBuf)> {
+        self.serve_with(&[]).await
+    }
+
+    /// `serve`, with the server's proxy variables exactly `proxy_env` and none inherited.
+    async fn serve_with(
+        &self,
+        proxy_env: &[(&str, &str)],
+    ) -> Result<(tokio::process::Child, String, PathBuf)> {
         let root = self.server.state_dir();
         let resources = root.join("resources");
         let bun = resources.join("bin/third_party/bun");
@@ -120,7 +139,12 @@ impl Fixture {
             })
             .to_string(),
         )?;
-        let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_browseros_server"))
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_browseros_server"));
+        for var in PROXY_VARS.into_iter().chain(["NO_PROXY", "no_proxy"]) {
+            command.env_remove(var);
+        }
+        let child = command
+            .envs(proxy_env.iter().copied())
             .arg("--config")
             .arg(&config)
             .env("BROWSEROS_DIR", &state)
@@ -265,6 +289,48 @@ async fn create_fixture_agent(client: &reqwest::Client, base: &str) -> Result<Va
         .json()
         .await?;
     Ok(response["agent"]["id"].clone())
+}
+
+/// The coding agent reaches the private MCP endpoint on 127.0.0.1 and its model over the
+/// person's proxy, so acpx keeps every proxy variable and gets loopback in both `no_proxy`s.
+#[tokio::test]
+async fn acpx_keeps_the_proxy_and_bypasses_it_for_loopback() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let mut env = vec![("no_proxy", " .corp.example , 127.0.0.1")];
+    env.extend(PROXY_VARS.map(|var| (var, CLOSED_PROXY)));
+    let (mut child, base, _) = fixture.serve_with(&env).await?;
+    let client = reqwest::Client::new();
+    let agent_id = create_fixture_agent(&client, &base).await?;
+    client
+        .post(format!("{base}/chat"))
+        .header("Origin", EXTENSION_ORIGIN)
+        .json(&json!({
+            "conversationId": uuid::Uuid::new_v4(),
+            "target": {"type":"codex", "agentId":agent_id},
+            "message": "read the fixture",
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    shutdown_server(&client, &base, &mut child).await?;
+
+    let no_proxy = ".corp.example,127.0.0.1,localhost,::1";
+    let mut expected = json!({ "NO_PROXY": no_proxy, "no_proxy": no_proxy });
+    for var in PROXY_VARS {
+        expected[var] = json!(CLOSED_PROXY);
+    }
+    let calls: Vec<Value> = fixture
+        .calls()?
+        .into_iter()
+        .filter(|call| call.get("operation").is_some())
+        .collect();
+    assert!(calls.iter().any(|call| call["operation"] == "prompt"));
+    for call in &calls {
+        assert_eq!(call["proxy_env"], expected, "{}", call["args"]);
+    }
+    Ok(())
 }
 
 #[tokio::test]
