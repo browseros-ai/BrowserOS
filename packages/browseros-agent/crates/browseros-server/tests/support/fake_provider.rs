@@ -1,5 +1,8 @@
 //! A loopback HTTP peer that captures model requests and replays documented provider events.
 
+// Each model test file includes this module and uses part of it.
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -120,6 +123,17 @@ pub fn provider(
     }
 }
 
+/// The browser's `run`, as the agent loop offers it on every step of a turn. Rig sends a call
+/// to a tool the request does not offer back as text, so a replayed call needs its tool.
+static TOOLS: std::sync::LazyLock<[browseros_server::model::ToolSpec; 1]> =
+    std::sync::LazyLock::new(|| {
+        [browseros_server::model::ToolSpec {
+            name: "run".into(),
+            description: "Run a script in the browser.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }]
+    });
+
 /// Both continuation calls use this same request shape, as does the production agent loop.
 pub fn request(
     messages: &[browseros_server::model::ModelMessage],
@@ -127,7 +141,26 @@ pub fn request(
     browseros_server::model::StepRequest {
         system: "Use the tools when needed.",
         messages,
-        tools: &[],
+        tools: &*TOOLS,
         effort: Some(browseros_server::model::Effort::Medium),
     }
+}
+
+/// A wire message reduced to what the server guarantees about it: its role and, in order, its
+/// text and the data URL of each picture. Rig owns the rest of each wire's encoding.
+pub fn parts(message: &Value) -> Value {
+    let content = match &message["content"] {
+        Value::String(text) => vec![serde_json::json!({"text": text})],
+        Value::Array(parts) => parts
+            .iter()
+            .map(|part| match part["type"].as_str() {
+                Some("image_url") => serde_json::json!({"image": part["image_url"]["url"]}),
+                Some("input_image") => serde_json::json!({"image": part["image_url"]}),
+                Some("image") => serde_json::json!({"image": part["source"]["data"]}),
+                _ => serde_json::json!({"text": part["text"]}),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    serde_json::json!({"role": message["role"], "content": content})
 }

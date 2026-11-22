@@ -1,11 +1,15 @@
-//! Converts transport and upstream failures into the panel's common envelope. Only scrubbed
-//! provider text leaves the model layer, including when a service echoes its request headers.
+//! Converts transport and upstream failures into the panel's common envelope. Rig reports a
+//! failure as a structured `ProviderError`; the cards, their wording and the retry rule are the
+//! server's. Only scrubbed provider text leaves the model layer, including when a service
+//! echoes its request headers.
 
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime};
 
 use http::HeaderMap;
 use regex::Regex;
+use rig_core::error::{ErrorReport, ProviderError};
+use rig_core::http_client;
 use serde_json::Value;
 use url::Url;
 
@@ -42,24 +46,129 @@ fn connection_error(message: impl Into<String>) -> ChatError {
     error
 }
 
+/// The TLS handshake refused the provider's certificate. Retrying cannot help: the card says
+/// what to change on this computer instead.
+fn certificate(
+    url: Option<&Url>,
+    reason: &rustls::CertificateError,
+    store_missing: bool,
+) -> ChatError {
+    let provider = url.and_then(Url::host_str).map_or_else(
+        || "the provider".to_owned(),
+        |host| format!("the provider at {host}"),
+    );
+    use rustls::CertificateError::*;
+    let message = match reason {
+        _ if store_missing => format!(
+            "This computer has no trusted certificate authorities, so the certificate of \
+             {provider} cannot be verified. On Linux, install the system's CA certificates \
+             (the ca-certificates package), then restart BrowserOS."
+        ),
+        Expired | ExpiredContext { .. } | NotValidYet | NotValidYetContext { .. } => format!(
+            "The certificate of {provider} has expired or is not valid yet. Check this \
+             computer's date and time."
+        ),
+        NotValidForName | NotValidForNameContext { .. } => format!(
+            "The certificate of {provider} is for a different name. Check the provider's base \
+             URL."
+        ),
+        Revoked => format!("The certificate of {provider} has been revoked."),
+        // An unknown or untrusted authority: webpki and Windows say `UnknownIssuer`, macOS
+        // reports its own trust result as `Other`.
+        _ => format!(
+            "The certificate of {provider} is not signed by an authority this computer trusts. \
+             If the provider uses a private certificate authority, add it to the system's \
+             certificate store; on Linux, check that the system's CA certificates are installed."
+        ),
+    };
+    let mut error = connection_error(message);
+    error.title = "Certificate not trusted".into();
+    error.retryable = false;
+    error
+}
+
+/// The certificate error a TLS handshake ended with, anywhere in a transport error's chain. An
+/// `io::Error` hides the error it wraps from `source()`, so each one is opened as well.
+fn certificate_error<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a rustls::CertificateError> {
+    let mut next = Some(error);
+    while let Some(error) = next {
+        if let Some(rustls::Error::InvalidCertificate(reason)) =
+            error.downcast_ref::<rustls::Error>()
+        {
+            return Some(reason);
+        }
+        if let Some(inner) = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            && let Some(reason) = certificate_error(inner)
+        {
+            return Some(reason);
+        }
+        next = error.source();
+    }
+    None
+}
+
 pub(super) fn protocol(message: &'static str) -> ChatError {
     let mut error = ChatError::new(ChatErrorCode::Unknown, "Invalid model response", message);
     error.retryable = false;
     error
 }
 
-pub(super) fn stream(event: &Value, secrets: &HeaderMap) -> ChatError {
-    let error = event.get("error").unwrap_or(event);
-    let status = error
-        .get("code")
-        .or_else(|| error.get("status"))
-        .and_then(|value| {
-            value
-                .as_u64()
-                .and_then(|n| u16::try_from(n).ok())
-                .or_else(|| value.as_str()?.parse().ok())
-        });
-    upstream(status, None, &event.to_string(), secrets)
+/// A Rig failure on an HTTP wire. `url` is the destination, for the "could not connect" card,
+/// which names only its host. `store_missing` says the clients were built without the system's
+/// certificate store (`route::Trust::Missing`).
+pub(super) fn provider(
+    error: &ProviderError,
+    url: Option<&Url>,
+    store_missing: bool,
+    secrets: &HeaderMap,
+) -> ChatError {
+    match error {
+        ProviderError::Http(transport) => match transport.as_ref() {
+            http_client::Error::Transient(source) => {
+                if let Some(reason) = certificate_error(source.as_ref()) {
+                    certificate(url, reason, store_missing)
+                } else if source
+                    .downcast_ref::<reqwest_rig::Error>()
+                    .is_some_and(reqwest_rig::Error::is_connect)
+                {
+                    url.map_or_else(disconnected, connect)
+                } else {
+                    disconnected()
+                }
+            }
+            _ => disconnected(),
+        },
+        // The stream ended before the provider's terminal event, or went silent for Rig's idle
+        // limit (five minutes).
+        ProviderError::Truncated | ProviderError::Stalled(_) => disconnected(),
+        ProviderError::ProviderResponse(_) | ProviderError::Relayed(_) => report(error, secrets),
+        _ => protocol("The provider sent a response the server could not read."),
+    }
+}
+
+/// A provider's own refusal, by its status and body: an HTTP error reply, or an error event in
+/// the stream (whose numeric code Rig reads as the status).
+pub(super) fn report(error: &ProviderError, secrets: &HeaderMap) -> ChatError {
+    let report = ErrorReport::from(error);
+    upstream(
+        report.http_status,
+        retry_after(&report),
+        report.provider_response_body().unwrap_or_default(),
+        secrets,
+    )
+}
+
+/// The delay a provider asked for, in whole seconds: its `retry-after-ms` or `retry-after`
+/// header (seconds or an HTTP date), or a hint in the body ("try again in 1.5s").
+pub(super) fn retry_after(report: &ErrorReport) -> Option<u64> {
+    report
+        .retry_after(SystemTime::now())
+        .map(|delay| delay.as_millis().div_ceil(1_000))
+        .and_then(|seconds| u64::try_from(seconds).ok())
 }
 
 pub(super) fn upstream(
@@ -69,9 +178,13 @@ pub(super) fn upstream(
     secrets: &HeaderMap,
 ) -> ChatError {
     let body_json = serde_json::from_str::<Value>(body).ok();
-    let outer = body_json
-        .as_ref()
-        .and_then(|value| value.get("error").or(Some(value)));
+    // A Responses stream wraps its failure in the response: `{"response": {"error": ...}}`.
+    let outer = body_json.as_ref().and_then(|value| {
+        value
+            .get("error")
+            .or_else(|| value.pointer("/response/error"))
+            .or(Some(value))
+    });
     let raw = outer.and_then(|error| error.pointer("/metadata/raw"));
     let parsed_raw = raw
         .and_then(Value::as_str)
@@ -246,31 +359,11 @@ fn scrub(text: &str, secrets: &HeaderMap) -> String {
     text.chars().take(20_000).collect()
 }
 
-pub(super) fn retry_after(headers: &HeaderMap) -> Option<u64> {
-    let seconds = headers.get("retry-after").and_then(|value| {
-        let value = value.to_str().ok()?;
-        value.parse().ok().or_else(|| {
-            // Parse the IMF-fixdate format without turning on any new Cargo features.
-            retry_date(value).map(|date| {
-                date.duration_since(SystemTime::now())
-                    .unwrap_or_default()
-                    .as_secs()
-            })
-        })
-    });
-    seconds.or_else(|| {
-        let ms: u64 = headers.get("retry-after-ms")?.to_str().ok()?.parse().ok()?;
-        Some(ms.div_ceil(1_000))
-    })
-}
-
-fn retry_date(value: &str) -> Option<SystemTime> {
-    aws_smithy_types::DateTime::from_str(value, aws_smithy_types::date_time::Format::HttpDate)
-        .ok()
-        .and_then(|value| SystemTime::try_from(value).ok())
-}
-
 pub(super) fn retry_delay(error: &ChatError, attempt: u32) -> Option<Duration> {
+    // A card marked not retryable (a refused certificate) says retrying cannot help.
+    if !error.retryable {
+        return None;
+    }
     match error.code {
         ChatErrorCode::RateLimited => error
             .retry_after_seconds

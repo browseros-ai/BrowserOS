@@ -1,4 +1,5 @@
-//! Hand-authored streams from the OpenAI Chat Completions streaming grammar, with extensions
+//! What the server guarantees on the Chat Completions wire (eight row types), through Rig.
+//! Streams are hand-authored from the OpenAI Chat Completions streaming grammar, with extensions
 //! from the Gemini OpenAI compatibility, OpenRouter reasoning-details and Kimi chat documentation.
 
 #[path = "support/fake_provider.rs"]
@@ -8,7 +9,7 @@ use anyhow::Context;
 use browseros_server::model::{AssistantTurn, Image, ModelMessage};
 use browseros_server::store::{Credentials, ProviderKind, Secret};
 use browseros_server::turn::{FinishReason, TurnEvent};
-use fake_provider::{FakeProvider, Reply, models, provider, request};
+use fake_provider::{FakeProvider, Reply, models, parts, provider, request};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -55,17 +56,21 @@ async fn adjacent_users_send_one_message_with_text_and_pictures_in_order() -> an
         .as_array()
         .context("wire messages")?;
     assert_eq!(
-        messages[1..],
+        messages[1]["content"], "earlier\n\nnow",
+        "two questions are one plain-text message"
+    );
+    assert_eq!(
+        messages[1..].iter().map(parts).collect::<Vec<_>>(),
         [
-            json!({"role":"user","content":"earlier\n\nnow"}),
-            json!({"role":"assistant","content":"an answer"}),
+            json!({"role":"user","content":[{"text":"earlier\n\nnow"}]}),
+            json!({"role":"assistant","content":[{"text":"an answer"}]}),
             json!({"role":"user","content":[
-                {"type":"text","text":"first photo"},
-                {"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}},
-                {"type":"text","text":"\n\nsecond photo"},
-                {"type":"image_url","image_url":{"url":"data:image/png;base64,Ag=="}}
+                {"text":"first photo"},
+                {"image":"data:image/png;base64,AQ=="},
+                {"text":"\n\nsecond photo"},
+                {"image":"data:image/png;base64,Ag=="}
             ]}),
-            json!({"role":"assistant","content":"another answer"}),
+            json!({"role":"assistant","content":[{"text":"another answer"}]}),
         ]
     );
     Ok(())
@@ -132,23 +137,31 @@ async fn all_results_follow_the_assistant_before_pictures_labelled_by_call() -> 
         assert_eq!(messages[2]["tool_call_id"], "first");
         assert_eq!(messages[3]["tool_call_id"], "second");
         let mut expected = vec![
-            json!({"type":"text","text":format!("Tool call first: {capture}")}),
-            json!({"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}),
+            json!({"text":format!("Tool call first: {capture}")}),
+            json!({"image":"data:image/png;base64,AQ=="}),
         ];
         if both_picture_sets {
             expected.extend([
-                json!({"type":"text","text":format!("\n\nTool call second: {capture}")}),
-                json!({"type":"image_url","image_url":{"url":"data:image/png;base64,Ag=="}}),
+                json!({"text":format!("\n\nTool call second: {capture}")}),
+                json!({"image":"data:image/png;base64,Ag=="}),
             ]);
         }
-        assert_eq!(messages[4]["content"], Value::Array(expected));
+        assert_eq!(parts(&messages[4])["content"], Value::Array(expected));
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn pictures_after_one_tool_result_keep_their_message() -> anyhow::Result<()> {
-    let fake = FakeProvider::new(vec![finished()]).await?;
+    let fake = FakeProvider::new(vec![
+        Reply::events(&[
+            json!({"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[
+            {"index":0,"id":"one","type":"function","function":{"name":"run","arguments":"{}"}}
+        ]},"finish_reason":"tool_calls"}]}),
+        ]),
+        finished(),
+    ])
+    .await?;
     let (_dir, models) = models().await?;
     let config = provider(
         ProviderKind::OpenaiCompatible,
@@ -156,9 +169,12 @@ async fn pictures_after_one_tool_result_keep_their_message() -> anyhow::Result<(
         Credentials::None,
     );
     let model = models.resolve(config, Uuid::new_v4()).await?;
+    let turn = model.step(&request(&[]), &mut Vec::new()).await?;
+    let id = turn.tool_calls()[0].id.clone();
     let messages = [
+        ModelMessage::Assistant(turn),
         ModelMessage::ToolResult {
-            id: browseros_server::turn::ToolCallId("one".into()),
+            id,
             text: "done".into(),
         },
         ModelMessage::User {
@@ -174,13 +190,15 @@ async fn pictures_after_one_tool_result_keep_their_message() -> anyhow::Result<(
         .calls
         .lock()
         .map_err(|_| anyhow::anyhow!("capture lock"))?;
-    assert_eq!(calls[0].body["messages"][1]["tool_call_id"], "one");
+    let messages = &calls[1].body["messages"];
+    assert_eq!(messages[2]["tool_call_id"], "one");
     assert_eq!(
-        calls[0].body["messages"][2],
+        parts(&messages[3]),
         json!({"role":"user","content":[
-            {"type":"text","text":"Attached image from the tool result:"},
-            {"type":"image_url","image_url":{"url":"data:image/png;base64,AQ=="}}
-        ]})
+            {"text":"Attached image from the tool result:"},
+            {"image":"data:image/png;base64,AQ=="}
+        ]}),
+        "a single call's picture is not labelled"
     );
     Ok(())
 }
@@ -226,15 +244,21 @@ async fn tool_deltas_and_provider_extensions_survive_follow_up() -> anyhow::Resu
         let turn = model.step(&request(&[]), &mut events).await?;
         assert_eq!(turn.finish(), FinishReason::ToolCalls);
         assert_eq!(turn.usage().context("usage")?.input_tokens, 12);
-        assert_eq!(turn.tool_calls()[0].id.0, "first");
-        assert_eq!(turn.tool_calls()[1].input, json!({"tab":2}));
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, TurnEvent::ToolStarted { .. }))
-                .count(),
-            2
-        );
+        let started: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                TurnEvent::ToolStarted { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let finished: Vec<_> = turn
+            .tool_calls()
+            .iter()
+            .map(|call| call.id.clone())
+            .collect();
+        assert_eq!(started, finished, "each card's id is its finished call's");
+        let inputs: Vec<_> = turn.tool_calls().iter().map(|call| &call.input).collect();
+        assert!(inputs.contains(&&json!({"tab":2})) && inputs.contains(&&json!({})));
         assert!(
             !events
                 .iter()
@@ -260,7 +284,12 @@ async fn tool_deltas_and_provider_extensions_survive_follow_up() -> anyhow::Resu
             calls[0].headers["x-conversation"],
             format!("id={conversation}")
         );
-        let replay = &calls[1].body["messages"][1];
+        let messages = calls[1].body["messages"].as_array().context("messages")?;
+        let replay = &messages[1];
+        let second = replay["tool_calls"]
+            .as_array()
+            .and_then(|calls| calls.iter().find(|call| call["id"] == "second"))
+            .context("the provider's own call id replays")?;
         let mut expected = json!({"id":"second","type":"function","function":{"name":"run","arguments":"{\"tab\":2}"}});
         if kind == ProviderKind::Google {
             expected["extra_content"] = signature.clone();
@@ -273,9 +302,12 @@ async fn tool_deltas_and_provider_extensions_survive_follow_up() -> anyhow::Resu
             assert_eq!(replay["reasoning_content"], "Kimi is thinking");
             assert_eq!(events[0], TurnEvent::Reasoning("Kimi is thinking".into()));
         }
-        assert_eq!(replay["tool_calls"][1], expected);
-        assert_eq!(calls[1].body["messages"][3]["tool_call_id"], "second");
-        assert_eq!(calls[1].body["messages"][3]["content"], "result");
+        assert_eq!(second, &expected);
+        let result = messages
+            .iter()
+            .find(|message| message["tool_call_id"] == "second")
+            .context("the result answers the provider's call id")?;
+        assert_eq!(result["content"], "result");
     }
     Ok(())
 }
@@ -541,7 +573,7 @@ async fn a_content_filter_finishes_without_running_tools() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn refusal_is_visible_and_retains_its_native_field() -> anyhow::Result<()> {
+async fn a_refusal_is_visible_text_and_replays_as_the_answer() -> anyhow::Result<()> {
     let fake = FakeProvider::new(vec![
         Reply::events(&[
             json!({"choices":[{"index":0,"delta":{"refusal":"I cannot "}}]}),
@@ -580,7 +612,46 @@ async fn refusal_is_visible_and_retains_its_native_field() -> anyhow::Result<()>
         .map_err(|_| anyhow::anyhow!("capture lock"))?;
     assert_eq!(
         calls[1].body["messages"][1],
-        json!({"role":"assistant","content":null,"refusal":"I cannot do that."})
+        json!({"role":"assistant","content":"I cannot do that."})
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_row_decides_whether_its_model_sees_pictures() -> anyhow::Result<()> {
+    let responses = Reply::events(&[
+        json!({"type":"response.output_text.delta","delta":"ok"}),
+        json!({"type":"response.completed","response":{"status":"completed"}}),
+    ]);
+    let fake = FakeProvider::new(vec![finished(), responses]).await?;
+    let (_dir, models) = models().await?;
+    let picture = [ModelMessage::User {
+        text: "What is this?".into(),
+        images: vec![Image {
+            media_type: "image/png".into(),
+            bytes: vec![1],
+        }],
+    }];
+    // A model Rig's catalogue lists as text-only, on a row that says it reads images.
+    for kind in [ProviderKind::OpenaiCompatible, ProviderKind::Openai] {
+        let mut config = provider(
+            kind,
+            format!("{}/v1", fake.base),
+            Credentials::ApiKey(Secret::new("fixture-key")),
+        );
+        config.model = "gpt-3.5-turbo".into();
+        let model = models.resolve(config, Uuid::new_v4()).await?;
+        model.step(&request(&picture), &mut Vec::new()).await?;
+    }
+    let calls = fake
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("capture lock"))?;
+    let chat = calls[0].body["messages"].to_string();
+    let responses = calls[1].body["input"].to_string();
+    for body in [chat, responses] {
+        assert!(body.contains("data:image/png;base64,AQ=="), "{body}");
+        assert!(!body.contains("image omitted"), "{body}");
+    }
     Ok(())
 }

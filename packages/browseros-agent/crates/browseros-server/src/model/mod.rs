@@ -1,51 +1,60 @@
 //! `model`: one model call per agent step, for every provider type. The server owns the
-//! loop (`agent`); this module owns everything about talking to a model once: the provider
-//! wires, credentials, reasoning options, retries before first output, and turning provider
-//! errors into the extension's `ChatError`.
+//! loop (`agent`); this module owns everything about talking to a model once: which provider a
+//! row reaches and with which credential, reasoning options, retries before first output, and
+//! turning provider errors into the extension's `ChatError`.
 //!
 //! ```text
 //!   Models::resolve(ProviderConfig, conversation) ──▶ Model ──step(request, sink)──▶ AssistantTurn
-//!                                                      │      streams Text / Reasoning / ToolStarted;
-//!                                                      │      the finished calls are returned, and
-//!                                                      │      the loop emits ToolInput as it runs each
-//!                                                      └─ chat · responses · anthropic · Bedrock · scripted
+//!                          │                            │   streams Text / Reasoning / ToolStarted;
+//!                  route::Route (Rig model)              │   the finished calls are returned, and
+//!                  or the scripted model                 │   the loop emits ToolInput as it runs each
+//!                                                        └─ history ──▶ Rig ──▶ stream fold ──▶ sink
 //! ```
 //!
-//! Three wires are written by hand over one shared `reqwest` client (OpenAI Chat Completions,
-//! OpenAI Responses, Anthropic Messages) and Bedrock goes through the AWS SDK; no model library
-//! is used, because the one picked (genai) changed `serde_json` for every crate in the build
-//! (CORRECTIONS-2). Provider wire types never leave this module (design rule 4).
+//! Rig (`rig-core`, `rig-bedrock`) speaks the provider wires: Chat Completions for eight row
+//! types, OpenAI Responses, the ChatGPT backend, Anthropic Messages and Bedrock ConverseStream.
+//! The server keeps what is its own: the row's URL and headers (`route`), the sign-in
+//! (`chatgpt`), the error cards and retry rule (`errors`), and the order the loop's context is
+//! sent in (`history`). Rig types never leave this module (design rule 4).
 
-mod anthropic;
 mod bedrock;
-mod chat;
-// The sign-in's skeleton temporarily expects endpoint() to be unused until dispatch exists.
-#[allow(
-    unfulfilled_lint_expectations,
-    reason = "the sign-in implementation lands separately"
-)]
 mod chatgpt;
 mod errors;
-mod responses;
+mod route;
 mod scripted;
-mod sse;
 
 #[cfg(test)]
 #[path = "../../tests/support/fake_provider.rs"]
-#[allow(
-    dead_code,
-    reason = "some fixture helpers are used only by the integration tests"
-)]
 mod fake_provider;
 
+#[cfg(test)]
+#[path = "../../tests/support/event_stream.rs"]
+mod event_stream;
+
+#[cfg(test)]
+#[path = "../../tests/model_logs/mod.rs"]
+mod logs;
+
+#[cfg(test)]
+#[path = "../../tests/support/tls.rs"]
+mod tls;
+
+#[cfg(test)]
+#[path = "../../tests/model_trust/mod.rs"]
+mod trust;
+
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use base64::Engine;
-use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
-use responses::{ResponsesDialect, ResponsesEndpoint};
-use serde_json::Value;
-use url::Url;
+use futures_util::StreamExt;
+use http::header::{HeaderMap, HeaderName, HeaderValue};
+use rig_core::completion::{self as rig, CompletionRequest, ToolDefinition};
+use rig_core::message::{
+    AssistantContent, AssistantMessage, CallId, ImageMediaType, Message, ToolName,
+    ToolResultContent, UserContent,
+};
+use rig_core::streaming::{Item, PartKind, StreamEvent};
 
 pub use chatgpt::{SignIn, SignInError, SignInStatus};
 pub use scripted::{Script, ScriptedCall, ScriptedError, ScriptedStep, ScriptedUsage};
@@ -54,12 +63,13 @@ use crate::store::{Credentials, ProviderConfig, ProviderKind, Store};
 use crate::turn::{
     ChatError, ConversationId, EventSink, FinishReason, ToolCallId, ToolOwner, TurnEvent,
 };
+use route::{Clients, Route};
 
 /// The model side of the server. HTTP connection pooling is shared, while the route and
 /// credentials are resolved per turn.
 #[derive(Clone)]
 pub struct Models {
-    http: Result<reqwest::Client, Arc<reqwest::Error>>,
+    http: Result<Clients, Arc<reqwest_rig::Error>>,
     sign_in: Arc<SignIn>,
     /// `Some` when `BROWSEROS_USE_MOCK_LLM` is on: every provider resolves to this script.
     script: Option<Arc<Script>>,
@@ -68,14 +78,7 @@ pub struct Models {
 impl Models {
     pub fn new(store: Store, install_id: Option<String>) -> Self {
         Self {
-            // Redirects could carry a saved custom credential to a different destination.
-            // Retries belong to Model, which knows whether any output reached the turn.
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .connect_timeout(std::time::Duration::from_secs(15))
-                .build()
-                .map_err(Arc::new),
+            http: Clients::new().map_err(Arc::new),
             sign_in: Arc::new(SignIn::new(store, install_id)),
             script: None,
         }
@@ -109,82 +112,25 @@ impl Models {
                 provider.supports_images,
             ));
         }
-        let kind = provider.kind;
-        let http = self.http.clone().map_err(|_| errors::disconnected())?;
-        let route = match kind {
-            ProviderKind::Google
-            | ProviderKind::Openrouter
-            | ProviderKind::Fireworks
-            | ProviderKind::Azure
-            | ProviderKind::OpenaiCompatible
-            | ProviderKind::Ollama
-            | ProviderKind::Lmstudio
-            | ProviderKind::Moonshot => {
-                let endpoint = chat::endpoint(&provider)?;
-                Route::Chat {
-                    http,
-                    endpoint,
-                    model: provider.model,
-                }
-            }
-            ProviderKind::Openai => {
-                let base = provider
-                    .base_url
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or("https://api.openai.com/v1/");
-                let url = endpoint(base, "responses")?;
-                let mut headers = provider.headers.clone();
-                // The configured API key owns the Authorization header for this route.
-                headers.push((
-                    "authorization".into(),
-                    format!("Bearer {}", api_key(&provider)?),
-                ));
-                let endpoint = ResponsesEndpoint {
-                    url,
-                    headers,
-                    dialect: ResponsesDialect::OpenAi,
-                };
-                Route::Responses {
-                    http,
-                    endpoint,
-                    model: provider.model,
-                }
-            }
+        let clients = self.http.as_ref().map_err(|_| errors::disconnected())?;
+        let route = match provider.kind {
             ProviderKind::ChatgptPro => {
                 if !matches!(provider.credentials, Credentials::SignIn) {
                     return Err(errors::config(
                         "ChatGPT Pro requires signing in to ChatGPT.",
                     ));
                 }
-                let mut endpoint = self.sign_in.endpoint().await?;
-                let mut headers = provider.headers;
-                headers.extend(endpoint.headers);
-                endpoint.headers = headers;
-                Route::Responses {
-                    http,
-                    endpoint,
-                    model: provider.model,
-                }
+                let session = self.sign_in.session().await?;
+                Route::chatgpt(&provider, session, clients)?
             }
-            ProviderKind::Anthropic => {
-                let endpoint = anthropic::endpoint(&provider)?;
-                Route::Anthropic {
-                    http,
-                    endpoint,
-                    model: provider.model,
-                }
-            }
-            ProviderKind::Bedrock => Route::Bedrock {
-                endpoint: bedrock::endpoint(&provider)?,
-                model: provider.model,
-            },
+            _ => Route::new(&provider, clients)?,
         };
         Ok(Model {
-            route,
+            route: Backend::Rig(Box::new(route)),
+            name: provider.model,
             window: provider.context_window,
             supports_images: provider.supports_images,
-            kind: Some(kind),
+            kind: Some(provider.kind),
             reasoning: Reasoning {
                 effort: provider.reasoning_effort,
                 summary: provider.reasoning_summary,
@@ -244,36 +190,66 @@ impl Models {
 /// The literal a provider row's header value may hold, replaced by the conversation id.
 const CONVERSATION_ID_PLACEHOLDER: &str = "{{conversationId}}";
 
+/// Log targets turned off in every filter the server installs, because they can write a
+/// credential or a provider's own text before the server scrubs it (`errors`). Rig is off as a
+/// whole: its crates log provider-sent strings (event types, call ids, finish reasons, error
+/// messages) at several sites, and an upgrade can add more. `tests/model_logs` holds this list to
+/// the `rig-*` crates in Cargo.lock and drives the known sites; it is the gate on an upgrade.
+const UNSCRUBBED_LOG_TARGETS: &[&str] = &[
+    "rig_core",
+    "rig_bedrock",
+    "rig_http",
+    "rig_reqwest",
+    // The AWS SDK's endpoint resolution, at debug, prints the request's credentials with the
+    // access key id in clear.
+    "aws_smithy_runtime::client::orchestrator::endpoints",
+];
+
+/// The server's log filter for `spec` (`BROWSEROS_LOG`; `info` when unset or invalid), with each
+/// unscrubbed target turned off. A developer who wants some of it back names a target in
+/// `BROWSEROS_LOG`: a more specific one wins over these (`BROWSEROS_LOG=info,rig_core::driver=warn`)
+/// and the same one is left as written (`BROWSEROS_LOG=debug,rig_core=debug`). The guarantee holds
+/// at the default level and at debug; `trace` is a raw developer level, where the AWS SDK logs the
+/// signed request it sends.
+pub fn log_filter(spec: Option<&str>) -> tracing_subscriber::EnvFilter {
+    use tracing_subscriber::EnvFilter;
+    let spec = spec
+        .filter(|spec| EnvFilter::try_new(spec).is_ok())
+        .unwrap_or("info");
+    // The targets `spec` names itself: a directive is `target=level`, `target[span]=level`, or a
+    // bare level, which names none.
+    let named: Vec<&str> = spec
+        .split(',')
+        .filter_map(|directive| {
+            let target = directive.split(['=', '[']).next()?.trim();
+            directive.contains('=').then_some(target)
+        })
+        .collect();
+    let directives: Vec<String> = std::iter::once(spec.to_owned())
+        .chain(
+            UNSCRUBBED_LOG_TARGETS
+                .iter()
+                .filter(|target| !named.contains(target))
+                .map(|target| format!("{target}=off")),
+        )
+        .filter(|directive| !directive.is_empty())
+        .collect();
+    EnvFilter::new(directives.join(","))
+}
+
 /// A resolved provider, ready to step. Built per turn; holds request-scoped credentials.
 pub struct Model {
-    route: Route,
+    route: Backend,
+    /// The row's model id.
+    name: String,
     window: usize,
     supports_images: bool,
     kind: Option<ProviderKind>,
     reasoning: Reasoning,
 }
 
-/// Which wire a resolved model speaks. The route owns its request-scoped authentication.
-enum Route {
-    Chat {
-        http: reqwest::Client,
-        endpoint: chat::Endpoint,
-        model: String,
-    },
-    Responses {
-        http: reqwest::Client,
-        endpoint: ResponsesEndpoint,
-        model: String,
-    },
-    Anthropic {
-        http: reqwest::Client,
-        endpoint: anthropic::Endpoint,
-        model: String,
-    },
-    Bedrock {
-        endpoint: bedrock::Endpoint,
-        model: String,
-    },
+enum Backend {
+    Rig(Box<Route>),
     Scripted {
         script: Script,
         /// The next step to play: one `step` call plays one scripted step.
@@ -285,10 +261,11 @@ impl Model {
     /// A model that plays `script`, one step per `step` call, whatever the request says.
     pub fn scripted(script: Script, window: usize, supports_images: bool) -> Self {
         Self {
-            route: Route::Scripted {
+            route: Backend::Scripted {
                 script,
                 next: AtomicUsize::new(0),
             },
+            name: String::new(),
             window,
             supports_images,
             kind: None,
@@ -299,13 +276,14 @@ impl Model {
     /// One provider call. Streams `Text`, `Reasoning` and, when a call first appears in the
     /// response, `ToolStarted`. It never emits `ToolInput` or `ToolDone`: the finished calls
     /// are returned in `AssistantTurn::tool_calls()` and the loop runs them.
-    /// Cancellation: the caller drops this future and the HTTPS stream closes.
+    /// Cancellation: the caller drops this future, which drops Rig's stream and closes the
+    /// HTTPS connection (or the Bedrock event stream).
     pub async fn step(
         &self,
         request: &StepRequest<'_>,
         sink: &mut dyn EventSink,
     ) -> Result<AssistantTurn, ChatError> {
-        if matches!(self.route, Route::Scripted { .. }) {
+        if matches!(self.route, Backend::Scripted { .. }) {
             return self.step_once(request, sink).await;
         }
         let mut sink = ObservedSink {
@@ -330,39 +308,8 @@ impl Model {
         sink: &mut dyn EventSink,
     ) -> Result<AssistantTurn, ChatError> {
         let result = match &self.route {
-            Route::Chat {
-                http,
-                endpoint,
-                model,
-            } => chat::step(http, endpoint, model, request, &self.reasoning, sink).await,
-            Route::Responses {
-                http,
-                endpoint,
-                model,
-            } => {
-                if self.reasoning.effort.is_none() && self.reasoning.summary.is_none() {
-                    responses::step(http, endpoint, model, request, sink).await
-                } else {
-                    responses::step_configured(
-                        http,
-                        endpoint,
-                        model,
-                        request,
-                        &self.reasoning,
-                        sink,
-                    )
-                    .await
-                }
-            }
-            Route::Anthropic {
-                http,
-                endpoint,
-                model,
-            } => anthropic::step(http, endpoint, model, request, &self.reasoning, sink).await,
-            Route::Bedrock { endpoint, model } => {
-                bedrock::step(endpoint, model, request, &self.reasoning, sink).await
-            }
-            Route::Scripted { script, next } => scripted::step(script, next, sink).await,
+            Backend::Rig(route) => self.call(route, request, sink).await,
+            Backend::Scripted { script, next } => scripted::step(script, next, sink).await,
         };
         result.map_err(|mut error| {
             if let Some(kind) = self.kind {
@@ -370,6 +317,54 @@ impl Model {
             }
             error
         })
+    }
+
+    /// One streamed Rig call, folded into the sink and an `AssistantTurn`.
+    async fn call(
+        &self,
+        route: &Route,
+        request: &StepRequest<'_>,
+        sink: &mut dyn EventSink,
+    ) -> Result<AssistantTurn, ChatError> {
+        let mut messages = Vec::with_capacity(request.messages.len() + 1);
+        let system = route.wire.system(request.system);
+        if !system.is_empty() {
+            messages.push(Message::system(system));
+        }
+        messages.extend(history(request.messages));
+        let tools = request
+            .tools
+            .iter()
+            .map(|tool| {
+                let name = ToolName::new(&tool.name)
+                    .map_err(|_| errors::protocol("A tool has no name."))?;
+                Ok(ToolDefinition::new(
+                    name,
+                    &tool.description,
+                    tool.input_schema.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, ChatError>>()?;
+        let options = route
+            .wire
+            .options(&self.name, request.effort, &self.reasoning);
+        let call = CompletionRequest::from(messages)
+            .tools(tools)
+            .additional_params(options.params)
+            .max_tokens(options.max_tokens);
+
+        let mut stream = route
+            .model
+            .stream(call)
+            .map_err(|error| route.error(&error))?;
+        let mut fold = Fold::default();
+        while let Some(item) = stream.next().await {
+            if let Item::Event(event) = item.map_err(|error| route.error(&error))? {
+                fold.event(event, sink).await;
+            }
+        }
+        let response = stream.finish().await.map_err(|error| route.error(&error))?;
+        fold.complete(response, sink).await
     }
 
     /// The context window from the provider row; compaction's budget.
@@ -380,6 +375,287 @@ impl Model {
     pub fn supports_images(&self) -> bool {
         self.supports_images
     }
+}
+
+/// Rig's stream events as the panel's. Rig names a call when its part starts but gives the
+/// provider's call id only when it ends, so the server issues its own id at the start: the
+/// `ToolStarted` card and the finished call carry the same id, and the Rig call keeps the
+/// provider's for the next step's tool result. The response's `choice` is in the order parts
+/// ended, not started, so the finished calls are matched by the provider's id, not position.
+#[derive(Default)]
+struct Fold {
+    text: String,
+    /// Part index → the id issued when that tool call started.
+    started: BTreeMap<usize, ToolCallId>,
+    /// The provider's call id → the id issued for it, once its part ended.
+    ended: BTreeMap<CallId, ToolCallId>,
+}
+
+impl Fold {
+    async fn event(&mut self, event: StreamEvent, sink: &mut dyn EventSink) {
+        match event {
+            StreamEvent::Start {
+                part,
+                kind: PartKind::ToolCall,
+                name: Some(name),
+            } => {
+                let id = self.started.entry(part.index()).or_insert_with(new_call_id);
+                tool_started(sink, id, name.as_str()).await;
+            }
+            StreamEvent::Text { text, .. } if !text.is_empty() => {
+                self.text.push_str(&text);
+                sink.emit(TurnEvent::Text(text)).await;
+            }
+            StreamEvent::Reasoning { text, .. } if !text.is_empty() => {
+                sink.emit(TurnEvent::Reasoning(text)).await;
+            }
+            StreamEvent::End {
+                part,
+                content: AssistantContent::ToolCall(call),
+            } => {
+                if let Some(id) = self.started.remove(&part.index()) {
+                    self.ended.insert(call.id, id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn complete(
+        mut self,
+        response: rig::CompletionResponse,
+        sink: &mut dyn EventSink,
+    ) -> Result<AssistantTurn, ChatError> {
+        let finish = match response.finish_reason() {
+            Some(rig::FinishReason::Stop) => FinishReason::Stop,
+            Some(rig::FinishReason::ToolCalls) => FinishReason::ToolCalls,
+            Some(rig::FinishReason::Length) => FinishReason::Length,
+            Some(rig::FinishReason::ContentFilter) => FinishReason::ContentFilter,
+            // Chat Completions reports `error`; Bedrock `malformed_model_output` and
+            // `malformed_tool_use`.
+            Some(rig::FinishReason::Other(reason))
+                if reason == "error" || reason.starts_with("malformed") =>
+            {
+                FinishReason::Error
+            }
+            Some(_) => FinishReason::Other,
+            None => return Err(errors::disconnected()),
+        };
+        // Rig keeps a reply that failed after it began (a call the stream never finished, a
+        // refusal) with `error` set, and leaves it out of the next step's history. Its calls must
+        // not run: their results would answer nothing the provider is shown.
+        let finish = match finish {
+            FinishReason::ToolCalls if response.error.is_some() => FinishReason::Error,
+            finish => finish,
+        };
+        let mut calls = Vec::new();
+        let mut replay = Vec::new();
+        // A response cut off or filtered mid-call runs nothing; its cards are sealed "Not run".
+        if finish == FinishReason::ToolCalls {
+            for call in response.tool_calls() {
+                if call.function.invalid_arguments.is_some() {
+                    return Err(errors::protocol(
+                        "A tool call arrived without complete JSON arguments.",
+                    ));
+                }
+                let id = match self.ended.remove(&call.id) {
+                    Some(id) => id,
+                    None => {
+                        let id = new_call_id();
+                        tool_started(sink, &id, call.function.name.as_str()).await;
+                        id
+                    }
+                };
+                calls.push(ToolCall {
+                    id: id.clone(),
+                    name: call.function.name.as_str().into(),
+                    input: call.function.arguments_value(),
+                });
+                replay.push(RigCall {
+                    id,
+                    call: call.id.clone(),
+                    name: call.function.name.clone(),
+                });
+            }
+        }
+        let usage = response
+            .usage
+            .input_tokens
+            .zip(response.usage.output_tokens)
+            .map(|(input_tokens, output_tokens)| Usage {
+                input_tokens,
+                output_tokens,
+            });
+        let native = match response.message() {
+            Some(Message::Assistant(message)) => Some(Box::new(Native {
+                message,
+                calls: replay,
+            })),
+            _ => None,
+        };
+        Ok(AssistantTurn {
+            text: self.text,
+            calls,
+            finish,
+            usage,
+            native,
+        })
+    }
+}
+
+fn new_call_id() -> ToolCallId {
+    ToolCallId(format!("call_{}", uuid::Uuid::new_v4().simple()))
+}
+
+async fn tool_started(sink: &mut dyn EventSink, id: &ToolCallId, name: &str) {
+    sink.emit(TurnEvent::ToolStarted {
+        id: id.clone(),
+        name: name.into(),
+        owner: ToolOwner::Server,
+    })
+    .await;
+}
+
+/// The loop's context as Rig messages, in the order every wire accepts:
+///
+/// - neighbouring user messages are one message, their texts joined by a blank line and each
+///   picture after its own text (compaction drops questions independently, so they are joined
+///   here, at the last moment);
+/// - every tool result of a step follows its assistant message before any picture, and when
+///   several calls shared the step each picture is named with its call ("Tool call <id>: ").
+///
+/// The loop places each picture message right after its own result; Rig then sends the results
+/// as the wire's tool results and the pictures as the user message after them.
+fn history(messages: &[ModelMessage]) -> Vec<Message> {
+    // Server call id → the Rig call, for the assistant turns seen so far.
+    let mut known: BTreeMap<&str, &RigCall> = BTreeMap::new();
+    let mut out = Vec::new();
+    let mut rest = messages;
+    while let Some((message, tail)) = rest.split_first() {
+        match message {
+            ModelMessage::Assistant(turn) => {
+                rest = tail;
+                if let Some(native) = &turn.native {
+                    known.extend(native.calls.iter().map(|call| (call.id.0.as_str(), call)));
+                    out.push(Message::Assistant(native.message.clone()));
+                } else if !turn.text.is_empty() {
+                    out.push(Message::assistant(&turn.text));
+                }
+            }
+            ModelMessage::ToolResult { .. } => {
+                let (results, pictures, tail) = tool_step(rest);
+                rest = tail;
+                let labelled = results.len() > 1;
+                let results: Vec<_> = results
+                    .into_iter()
+                    .filter_map(|(id, text)| {
+                        // Rig drops a result that answers no call it was given; so does this.
+                        let call = known.get(id.0.as_str())?;
+                        Some(UserContent::tool_result(
+                            call.call.clone(),
+                            call.name.clone(),
+                            vec![ToolResultContent::text(text)],
+                        ))
+                    })
+                    .collect();
+                if !results.is_empty() {
+                    out.push(Message::User { content: results });
+                }
+                let pictures: Vec<_> = pictures
+                    .into_iter()
+                    .map(|(id, text, images)| {
+                        let label = labelled.then(|| {
+                            known
+                                .get(id.0.as_str())
+                                .map_or_else(|| id.0.clone(), |call| call.call.wire().into_owned())
+                        });
+                        (label, text, images)
+                    })
+                    .collect();
+                if let Some(user) = user(pictures.iter().map(|(label, text, images)| {
+                    (label.as_deref(), text.as_str(), images.as_slice())
+                })) {
+                    out.push(user);
+                }
+            }
+            ModelMessage::User { .. } => {
+                let run = rest
+                    .iter()
+                    .take_while(|message| matches!(message, ModelMessage::User { .. }))
+                    .count();
+                let (users, tail) = rest.split_at(run);
+                rest = tail;
+                if let Some(user) = user(users.iter().filter_map(|message| match message {
+                    ModelMessage::User { text, images } => {
+                        Some((None, text.as_str(), images.as_slice()))
+                    }
+                    _ => None,
+                })) {
+                    out.push(user);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A step's results, each with the picture message the loop placed right after it.
+type Results<'a> = Vec<(&'a ToolCallId, &'a str)>;
+type Pictures<'a> = Vec<(&'a ToolCallId, &'a String, &'a Vec<Image>)>;
+
+fn tool_step(messages: &[ModelMessage]) -> (Results<'_>, Pictures<'_>, &[ModelMessage]) {
+    let mut results = Vec::new();
+    let mut pictures = Vec::new();
+    let mut rest = messages;
+    while let Some((ModelMessage::ToolResult { id, text }, tail)) = rest.split_first() {
+        results.push((id, text.as_str()));
+        rest = tail;
+        if let Some((ModelMessage::User { text, images }, tail)) = rest.split_first() {
+            pictures.push((id, text, images));
+            rest = tail;
+        }
+    }
+    (results, pictures, rest)
+}
+
+/// One user message from consecutive parts: `(call label, text, pictures)`.
+fn user<'a>(
+    parts: impl IntoIterator<Item = (Option<&'a str>, &'a str, &'a [Image])>,
+) -> Option<Message> {
+    let mut content = Vec::new();
+    let mut text = String::new();
+    for (index, (label, part, images)) in parts.into_iter().enumerate() {
+        if index > 0 {
+            text.push_str("\n\n");
+        }
+        if let Some(label) = label {
+            text.push_str("Tool call ");
+            text.push_str(label);
+            text.push_str(": ");
+        }
+        text.push_str(part);
+        if !images.is_empty() {
+            content.push(UserContent::text(std::mem::take(&mut text)));
+            content.extend(images.iter().map(|image| {
+                UserContent::image_raw(image.bytes.clone(), media_type(&image.media_type), None)
+            }));
+        }
+    }
+    if !text.is_empty() {
+        content.push(UserContent::text(text));
+    }
+    (!content.is_empty()).then_some(Message::User { content })
+}
+
+/// Rig sniffs the type from the bytes when the media type is not one it names.
+fn media_type(mime: &str) -> Option<ImageMediaType> {
+    Some(match mime {
+        "image/png" => ImageMediaType::PNG,
+        "image/jpeg" | "image/jpg" => ImageMediaType::JPEG,
+        "image/gif" => ImageMediaType::GIF,
+        "image/webp" => ImageMediaType::WEBP,
+        _ => return None,
+    })
 }
 
 /// Whether the provider has emitted anything the user can see. Replaying a partially
@@ -428,39 +704,8 @@ impl Reasoning {
     }
 }
 
-/// The token budgets used by Claude models that implement manual extended thinking.
-fn thinking_budget(effort: &str) -> i32 {
-    match effort {
-        "minimal" => 1024,
-        "low" => 4096,
-        "high" => 24_576,
-        "xhigh" | "max" => 32_000,
-        _ => 8192,
-    }
-}
-
-fn endpoint(base: &str, operation: &str) -> Result<Url, ChatError> {
-    let mut url =
-        Url::parse(base).map_err(|_| errors::config("Enter a valid provider base URL."))?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(errors::config(
-            "Enter an HTTP or HTTPS base URL without credentials or a fragment.",
-        ));
-    }
-    {
-        let mut path = url
-            .path_segments_mut()
-            .map_err(|_| errors::config("Enter a valid provider base URL."))?;
-        path.pop_if_empty().extend(operation.split('/'));
-    }
-    Ok(url)
-}
-
+/// The row's custom headers, validated. Values are marked sensitive so error text is scrubbed
+/// of them.
 fn headers(custom: &[(String, String)]) -> Result<HeaderMap, ChatError> {
     let mut headers = HeaderMap::new();
     for (name, value) in custom {
@@ -491,72 +736,6 @@ fn set_header(
     value.set_sensitive(sensitive);
     headers.insert(name, value);
     Ok(())
-}
-
-fn api_key(provider: &ProviderConfig) -> Result<&str, ChatError> {
-    match &provider.credentials {
-        Credentials::ApiKey(key) if !key.expose().trim().is_empty() => Ok(key.expose()),
-        _ => Err(errors::config(format!(
-            "{} requires an API key.",
-            provider.kind.as_str()
-        ))),
-    }
-}
-
-fn bearer(headers: &mut HeaderMap, key: &str) -> Result<(), ChatError> {
-    set_header(headers, AUTHORIZATION, &format!("Bearer {key}"), true)
-}
-
-fn tool_call(id: &Value, name: &Value, input: Value) -> Result<ToolCall, ChatError> {
-    let id = id
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| errors::protocol("A tool call arrived without an id."))?;
-    let name = name
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| errors::protocol("A tool call arrived without a function name."))?;
-    if !input.is_object() {
-        return Err(errors::protocol(
-            "A tool call's input must be a JSON object.",
-        ));
-    }
-    Ok(ToolCall {
-        id: ToolCallId(id.into()),
-        name: name.into(),
-        input,
-    })
-}
-
-fn tool_input(arguments: &Value) -> Result<Value, ChatError> {
-    arguments
-        .as_str()
-        .and_then(|input| serde_json::from_str(input).ok())
-        .ok_or_else(|| errors::protocol("A tool call arrived without complete JSON arguments."))
-}
-
-async fn tool_started(sink: &mut dyn EventSink, id: &str, name: &str) {
-    sink.emit(TurnEvent::ToolStarted {
-        id: ToolCallId(id.into()),
-        name: name.into(),
-        owner: ToolOwner::Server,
-    })
-    .await;
-}
-
-fn data_url(image: &Image) -> String {
-    format!(
-        "data:{};base64,{}",
-        image.media_type,
-        base64::engine::general_purpose::STANDARD.encode(&image.bytes)
-    )
-}
-
-fn usage(input: &Value, output: &Value) -> Option<Usage> {
-    Some(Usage {
-        input_tokens: input.as_u64()?,
-        output_tokens: output.as_u64()?,
-    })
 }
 
 /// One model call's input. Borrowed from the loop, which owns the messages for the turn.
@@ -613,22 +792,24 @@ pub struct AssistantTurn {
     calls: Vec<ToolCall>,
     finish: FinishReason,
     usage: Option<Usage>,
-    /// The provider's own assistant output, sent back untouched on the next step of the turn.
-    native: NativeOutput,
+    /// `None` for earlier turns loaded from SQLite and for the scripted model. Boxed: Rig's
+    /// message is large and most turns in a context are text.
+    native: Option<Box<Native>>,
 }
 
-/// What a provider returned for its turn, in its own shape: raw JSON for the hand-written wires
-/// (so unknown fields such as signatures survive), the SDK's message for Bedrock.
-enum NativeOutput {
-    /// Earlier turns loaded from SQLite, and the scripted model: nothing to send back.
-    None,
-    /// The exact assistant message reconstructed from Chat Completions deltas.
-    Chat(Value),
-    /// Completed Responses output items, including encrypted reasoning.
-    Responses(Vec<Value>),
-    /// Complete Anthropic content blocks, including signed thinking.
-    Anthropic(Vec<Value>),
-    Bedrock(Box<aws_sdk_bedrockruntime::types::Message>),
+/// What a provider returned for its turn, kept for the next step of the same turn.
+struct Native {
+    /// Rig's assistant message: each block holds the provider item it was decoded from, so
+    /// signatures, encrypted reasoning and provider extensions replay to the same model.
+    message: AssistantMessage,
+    /// The server's id of each call → Rig's, for the tool results that answer them.
+    calls: Vec<RigCall>,
+}
+
+struct RigCall {
+    id: ToolCallId,
+    call: CallId,
+    name: ToolName,
 }
 
 /// Token counts a provider reported for one call.
@@ -656,7 +837,7 @@ impl AssistantTurn {
             calls,
             finish,
             usage,
-            native: NativeOutput::None,
+            native: None,
         }
     }
 

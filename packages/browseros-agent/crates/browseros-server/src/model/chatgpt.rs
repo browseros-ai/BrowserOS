@@ -1,5 +1,6 @@
 //! Owns the ChatGPT sign-in, including the private OAuth callback listener and token rotation.
-//! The rest of the model layer receives a configured endpoint for the shared Responses wire.
+//! A turn receives a `Session` (the backend's address and the current access credential); the
+//! model layer's ChatGPT route speaks the Codex Responses dialect through Rig with it.
 
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -23,7 +24,6 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
 
-use super::responses::{ResponsesDialect, ResponsesEndpoint};
 use crate::store::{Secret, Store, StoreError, TokenRow};
 use crate::turn::{ChatError, ChatErrorCode};
 
@@ -151,6 +151,14 @@ pub enum SignInError {
     Failed(String),
 }
 
+/// What one ChatGPT turn needs from the sign-in: the Codex backend's Responses URL and the
+/// current access token, with the account id the backend routes on when the token names one.
+pub(super) struct Session {
+    pub url: Url,
+    pub access: Secret,
+    pub account_id: Option<String>,
+}
+
 /// Whether tokens are stored for this install.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignInStatus {
@@ -231,8 +239,8 @@ impl SignIn {
     }
 
     /// Gets the credentials for a turn, refreshing once under the same lock used for callbacks
-    /// and sign-out. The Codex Responses request and its body rules live in the shared wire.
-    pub(super) async fn endpoint(&self) -> Result<ResponsesEndpoint, ChatError> {
+    /// and sign-out. The Codex request and its body rules are Rig's ChatGPT dialect.
+    pub(super) async fn session(&self) -> Result<Session, ChatError> {
         let install_id = self
             .inner
             .install_id()
@@ -247,7 +255,7 @@ impl SignIn {
             .map_err(|error| token_store_error(&error))?
             .ok_or_else(|| auth_failed("Please sign in to ChatGPT."))?;
         if row.expires_at == 0 || row.expires_at > now_ms().saturating_add(REFRESH_BUFFER_MS) {
-            return self.inner.responses_endpoint(&row);
+            return self.inner.session(&row);
         }
 
         // A stopped turn can drop its waiter. The exchange must still commit any rotated
@@ -269,29 +277,18 @@ impl SignInInner {
         self.install_id.as_deref().ok_or(SignInError::NoInstallId)
     }
 
-    fn responses_endpoint(&self, row: &TokenRow) -> Result<ResponsesEndpoint, ChatError> {
+    fn session(&self, row: &TokenRow) -> Result<Session, ChatError> {
         let url = Url::parse(&self.endpoints.responses).map_err(|_| {
             chat_error(
                 ChatErrorCode::ProviderConfig,
                 "The ChatGPT Responses URL is invalid.",
             )
         })?;
-        let mut headers = vec![
-            (
-                "Authorization".into(),
-                format!("Bearer {}", row.access.expose()),
-            ),
-            ("originator".into(), "browseros".into()),
-            ("OpenAI-Beta".into(), "responses=experimental".into()),
-        ];
-        // The old server omitted this header for tokens without an account claim.
-        if let Some(account_id) = row.account_id.as_ref().filter(|id| !id.is_empty()) {
-            headers.push(("ChatGPT-Account-Id".into(), account_id.clone()));
-        }
-        Ok(ResponsesEndpoint {
+        Ok(Session {
             url,
-            headers,
-            dialect: ResponsesDialect::ChatGptCodex,
+            access: row.access.clone(),
+            // The old server omitted the account header for tokens without an account claim.
+            account_id: row.account_id.clone().filter(|id| !id.is_empty()),
         })
     }
 
@@ -682,7 +679,7 @@ async fn refresh(
     inner: Arc<SignInInner>,
     _guard: OwnedMutexGuard<Option<CallbackListener>>,
     row: TokenRow,
-) -> Result<ResponsesEndpoint, ChatError> {
+) -> Result<Session, ChatError> {
     let install_id = inner
         .install_id()
         .map_err(|_| auth_failed("Could not read the BrowserOS installation id."))?;
@@ -691,12 +688,12 @@ async fn refresh(
         Ok(response) => {
             let row = response.into_row(Some(row));
             // Persist the pair before another turn can try to use the old refresh token.
-            let endpoint = inner.responses_endpoint(&row);
+            let session = inner.session(&row);
             tokens
                 .put(install_id, PROVIDER, row)
                 .await
                 .map_err(|error| token_store_error(&error))?;
-            endpoint
+            session
         }
         Err(ExchangeError::Refused) => {
             tokens

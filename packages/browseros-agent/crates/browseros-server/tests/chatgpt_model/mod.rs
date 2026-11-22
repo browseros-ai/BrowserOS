@@ -1,5 +1,5 @@
 //! Drives the extension router and the actual loopback callback against a fake token service.
-//! Endpoint assertions live here because the Responses endpoint is internal to the model layer.
+//! Session assertions live here because the session is internal to the model layer.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Barrier;
@@ -294,24 +294,13 @@ fn fake_bearer() -> String {
     )
 }
 
-fn assert_endpoint(endpoint: &ResponsesEndpoint, bearer: &str, account: Option<&str>) {
+fn assert_session(session: &Session, bearer: &str, account: Option<&str>) {
     assert_eq!(
-        endpoint.url.as_str(),
+        session.url.as_str(),
         "https://chatgpt.com/backend-api/codex/responses"
     );
-    assert!(matches!(endpoint.dialect, ResponsesDialect::ChatGptCodex));
-    let mut headers = BTreeMap::from([
-        ("Authorization".into(), format!("Bearer {bearer}")),
-        ("originator".into(), "browseros".into()),
-        ("OpenAI-Beta".into(), "responses=experimental".into()),
-    ]);
-    if let Some(account) = account {
-        headers.insert("ChatGPT-Account-Id".into(), account.into());
-    }
-    assert_eq!(
-        endpoint.headers.iter().cloned().collect::<BTreeMap<_, _>>(),
-        headers
-    );
+    assert_eq!(session.access.expose(), bearer);
+    assert_eq!(session.account_id.as_deref(), account);
 }
 
 #[tokio::test]
@@ -384,8 +373,8 @@ async fn redirect_and_loopback_callback_commit_the_pkce_grant() -> anyhow::Resul
             "authenticated": true, "provider": "chatgpt-pro", "email": "signed-in@example.test"
         })
     );
-    assert_endpoint(
-        &fixture.sign_in().endpoint().await?,
+    assert_session(
+        &fixture.sign_in().session().await?,
         &bearer,
         Some("account-1"),
     );
@@ -433,8 +422,7 @@ async fn closing_the_callback_tab_does_not_lose_an_exchanged_grant() -> anyhow::
 }
 
 #[tokio::test]
-async fn a_signed_in_model_streams_a_turn_through_the_shared_responses_wire() -> anyhow::Result<()>
-{
+async fn a_signed_in_model_streams_a_turn_through_the_codex_dialect() -> anyhow::Result<()> {
     let bearer = fake_bearer();
     let upstream = FakeUpstream::start([(
         StatusCode::OK,
@@ -524,9 +512,9 @@ async fn a_legacy_row_refreshes_once_for_two_turns_and_keeps_missing_claims() ->
             "authenticated": true, "provider": "chatgpt-pro", "email": "old@example.test"
         })
     );
-    let (one, two) = tokio::join!(fixture.sign_in().endpoint(), fixture.sign_in().endpoint());
-    assert_endpoint(&one?, "refreshed-access", Some("legacy-account"));
-    assert_endpoint(&two?, "refreshed-access", Some("legacy-account"));
+    let (one, two) = tokio::join!(fixture.sign_in().session(), fixture.sign_in().session());
+    assert_session(&one?, "refreshed-access", Some("legacy-account"));
+    assert_session(&two?, "refreshed-access", Some("legacy-account"));
 
     let forms = upstream.forms().await;
     assert_eq!(
@@ -566,7 +554,7 @@ async fn refused_refresh_clears_the_row_and_returns_auth_failed() -> anyhow::Res
     .await?;
     let fixture = Fixture::new(upstream.endpoints()?, false).await?;
     fixture.seed_legacy(now_ms() - 1, None).await?;
-    let result = fixture.sign_in().endpoint().await;
+    let result = fixture.sign_in().session().await;
     let Err(error) = result else {
         anyhow::bail!("the fake refused the refresh")
     };
