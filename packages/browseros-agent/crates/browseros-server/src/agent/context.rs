@@ -802,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_current_user_message_is_wrapped() {
+    fn only_the_current_user_message_is_wrapped() -> TestResult {
         let history = vec![
             message(Role::User, "first"),
             message(Role::Assistant, "an answer"),
@@ -818,19 +818,19 @@ mod tests {
             ..turn_context()
         };
         let (projected, current) = project(&history, &context);
-        assert_eq!(
-            projected,
-            vec![
-                Projected::User("first".into()),
-                Projected::Assistant("an answer".into()),
-                Projected::User(
-                    "## Browser Context\n**Active Tab:** Tab 5 - \"Docs\" (https://docs.example/)\
-                     \n\n---\n\n<USER_QUERY>\nsecond\n</USER_QUERY>"
-                        .into()
-                ),
-            ]
-        );
+        let [first, answer, Projected::User(wrapped)] = projected.as_slice() else {
+            return Err("expected two earlier messages and the wrapped current one".into());
+        };
+        assert_eq!(first, &Projected::User("first".into()));
+        assert_eq!(answer, &Projected::Assistant("an answer".into()));
+        assert!(wrapped.starts_with("[UNTRUSTED_PAGE_CONTENT nonce="));
+        assert!(wrapped.contains(
+            "**Active Tab:** Tab 5 - \"Docs\" (https://docs.example/)\n\
+             [END_UNTRUSTED_PAGE_CONTENT nonce="
+        ));
+        assert!(wrapped.ends_with("]\n\n<USER_QUERY>\nsecond\n</USER_QUERY>"));
         assert_eq!(current, Some(2));
+        Ok(())
     }
 
     #[tokio::test]
