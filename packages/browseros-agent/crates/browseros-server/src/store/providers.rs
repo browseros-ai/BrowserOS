@@ -126,6 +126,11 @@ pub struct ProviderRow {
 /// column is an `Edit` (absent keeps, `null` clears); a column with a default is an `Option`
 /// (absent keeps on update, takes the default on insert). A save never moves the default row
 /// and never rewrites `created_at` of an existing row.
+///
+/// A secret (`api_key`, `access_key_id`, `secret_access_key`, `session_token`) set to a
+/// non-blank value is written. A kept or blank one keeps the stored value only while the
+/// provider's address stays the same: a save that changes the type, or the base URL, resource
+/// name or region that type sends its key to, clears every secret it does not bring anew.
 #[derive(Clone)]
 pub struct ProviderEdit {
     pub kind: ProviderKind,
@@ -306,8 +311,37 @@ impl Providers<'_> {
     }
 
     /// Upsert by the extension's id while preserving the row and its foreign key references.
+    /// Repointing a saved provider clears the secrets the save does not bring (see
+    /// `ProviderEdit`), so a stored key is never sent to an address the caller chose; the
+    /// connection test (`ProviderDraft::resolve`) refuses the same thing.
     pub async fn save(&self, id: &str, edit: ProviderEdit) -> Result<ProviderRow, StoreError> {
         let now = now_ms();
+        // The address is read in the upsert's transaction, so the row compared is the row
+        // overwritten. An insert, or an id held by a coding agent (refused below), has no
+        // address to compare.
+        let tx = self.0.db().begin().await?;
+        let stored = Entity::find_by_id(id)
+            .filter(Column::Kind.eq(LLM))
+            .into_partial_model::<StoredAddress>()
+            .one(&tx)
+            .await?;
+        let moved = stored.is_some_and(|row| {
+            let before = ProviderKind::parse(&row.provider_type).map(|kind| {
+                address(
+                    kind,
+                    row.base_url.as_deref(),
+                    row.resource_name.as_deref(),
+                    row.region.as_deref(),
+                )
+            });
+            let after = address(
+                edit.kind,
+                applied(&edit.base_url, row.base_url.as_deref()),
+                applied(&edit.resource_name, row.resource_name.as_deref()),
+                applied(&edit.region, row.region.as_deref()),
+            );
+            before != Some(after)
+        });
         let headers = match edit.headers {
             Edit::Keep => Edit::Keep,
             Edit::Clear => Edit::Clear,
@@ -333,10 +367,10 @@ impl Providers<'_> {
             temperature: edit
                 .temperature
                 .map_or(ActiveValue::NotSet, ActiveValue::Set),
-            api_key: credential_edit(edit.api_key),
-            access_key_id: credential_edit(edit.access_key_id),
-            secret_access_key: credential_edit(edit.secret_access_key),
-            session_token: credential_edit(edit.session_token),
+            api_key: credential_edit(edit.api_key, moved),
+            access_key_id: credential_edit(edit.access_key_id, moved),
+            secret_access_key: credential_edit(edit.secret_access_key, moved),
+            session_token: credential_edit(edit.session_token, moved),
             resource_name: nullable_edit(edit.resource_name),
             region: nullable_edit(edit.region),
             reasoning_effort: nullable_edit(edit.reasoning_effort),
@@ -375,7 +409,6 @@ impl Providers<'_> {
 
         // Keep the upsert and the public readback on the same connection. RETURNING the
         // entire entity would select credentials and a second transaction could race a delete.
-        let tx = self.0.db().begin().await?;
         let written = Entity::insert(model)
             .on_conflict(conflict)
             .exec_without_returning(&tx)
@@ -488,12 +521,67 @@ fn read_secret(value: Option<String>) -> Option<Secret> {
     value.filter(|value| !value.is_empty()).map(Secret::new)
 }
 
-fn credential_edit(edit: SecretEdit) -> ActiveValue<Option<String>> {
+/// The columns of a saved row that decide where its secrets go, read without the secrets.
+#[derive(DerivePartialModel, FromQueryResult)]
+#[sea_orm(entity = "Entity")]
+struct StoredAddress {
+    #[sea_orm(from_col = "type")]
+    provider_type: String,
+    base_url: Option<String>,
+    resource_name: Option<String>,
+    region: Option<String>,
+}
+
+/// Where a provider sends its secrets: its type and the fields that type builds its endpoint
+/// from, a blank field counting as none (as `model` reads it). Every type is listed so a new
+/// one must say where its key goes. A type without a base URL calls its own default endpoint,
+/// so a change of type is a change of address.
+#[derive(PartialEq, Eq)]
+struct Address<'a>(ProviderKind, [Option<&'a str>; 2]);
+
+fn address<'a>(
+    kind: ProviderKind,
+    base_url: Option<&'a str>,
+    resource_name: Option<&'a str>,
+    region: Option<&'a str>,
+) -> Address<'a> {
+    let given = |value: Option<&'a str>| value.filter(|value| !value.trim().is_empty());
+    let fields = match kind {
+        ProviderKind::Bedrock => [given(region), None],
+        ProviderKind::Azure => [given(base_url), given(resource_name)],
+        ProviderKind::ChatgptPro => [None, None],
+        ProviderKind::Anthropic
+        | ProviderKind::Openai
+        | ProviderKind::Google
+        | ProviderKind::Openrouter
+        | ProviderKind::Fireworks
+        | ProviderKind::OpenaiCompatible
+        | ProviderKind::Ollama
+        | ProviderKind::Lmstudio
+        | ProviderKind::Moonshot => [given(base_url), None],
+    };
+    Address(kind, fields)
+}
+
+/// A column's value once `edit` is applied to the stored one.
+fn applied<'a>(edit: &'a Edit<String>, stored: Option<&'a str>) -> Option<&'a str> {
+    match edit {
+        Edit::Keep => stored,
+        Edit::Clear => None,
+        Edit::Set(value) => Some(value),
+    }
+}
+
+/// A non-blank secret is written and `null` clears. Absent or blank keeps the stored secret,
+/// unless the provider's address `moved`: then it is cleared, because keeping it would send a
+/// saved key to an address the caller chose.
+fn credential_edit(edit: SecretEdit, moved: bool) -> ActiveValue<Option<String>> {
     match edit {
         Edit::Set(value) if !value.expose().is_empty() => {
             ActiveValue::Set(Some(value.expose().to_owned()))
         }
         Edit::Clear => ActiveValue::Set(None),
+        Edit::Keep | Edit::Set(_) if moved => ActiveValue::Set(None),
         Edit::Keep | Edit::Set(_) => ActiveValue::NotSet,
     }
 }
