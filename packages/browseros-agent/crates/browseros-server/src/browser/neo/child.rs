@@ -29,7 +29,7 @@ use super::engine_main::EXIT_PORT_IN_USE;
 use super::host::Host;
 use super::wire::Wire;
 use super::{Connection, EngineLaunch, Link, NeoEngine};
-use crate::browser::Tool;
+use crate::browser::{Tool, loopback_no_proxy};
 
 /// From spawn to a real `run`. Probe p1 measured 30 ms to 2.4 s against a running browser.
 const READY_WITHIN: Duration = Duration::from_secs(30);
@@ -301,6 +301,8 @@ async fn spawn(launch: &EngineLaunch) -> io::Result<Spawned> {
         .env("CLAW_HOST_TCP", format!("127.0.0.1:{host_port}"))
         .env("CLAW_HOST_TOKEN_FILE", &token_path)
         .env("CLAW_HOST_SOCKET", host_dir.path().join("h.sock"))
+        // CDP discovery is loopback HTTP through a client that follows the proxy variables.
+        .envs(loopback_no_proxy())
         // A developer's shell may point these at another browser's profile or folder; the
         // engine derives the profile from `directories.execution` instead.
         .env_remove("CLAW_PROFILE_DIR")

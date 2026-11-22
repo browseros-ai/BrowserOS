@@ -60,8 +60,11 @@ if after_globals[0].startswith("--model="):
     model = after_globals[0].removeprefix("--model=")
     after_globals = after_globals[1:]
 operation = after_globals[0]
+proxy_env = {name: os.environ.get(name) for name in (
+    "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+    "NO_PROXY", "no_proxy")}
 record(operation=operation, args=after_globals, cwd=args[args.index("--cwd")+1],
-       adapter=command, mcp=config, pid=os.getpid())
+       adapter=command, mcp=config, pid=os.getpid(), proxy_env=proxy_env)
 if operation == "sessions":
     action = after_globals[1]
     marker = home / "record"

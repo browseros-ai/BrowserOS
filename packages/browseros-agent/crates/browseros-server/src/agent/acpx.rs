@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 use self::failure::{Failure, error_response};
 use super::AgentRuntime;
-use crate::browser::{Armed, Scope, ToolOutput};
+use crate::browser::{Armed, Scope, ToolOutput, loopback_no_proxy};
 use crate::store::AgentRow;
 use crate::turn::{
     AgentKind, ChatError, ChatErrorCode, ConversationId, EventSink, FinishReason, Role, ToolCallId,
@@ -135,7 +135,7 @@ pub(super) fn absolute_runtime(runtime: &AgentRuntime) -> io::Result<AgentRuntim
 
 fn package_command(runtime: &AgentRuntime, package: &str, bin: &str) -> Command {
     let cache = runtime.state_dir.join("cache");
-    if let Some(bun) = &runtime.bun {
+    let mut command = if let Some(bun) = &runtime.bun {
         let mut command = Command::new(bun);
         command
             .args(["x", "--bun", "--silent", "--package", package, bin])
@@ -147,7 +147,11 @@ fn package_command(runtime: &AgentRuntime, package: &str, bin: &str) -> Command 
             .args(["--yes", "--package", package, bin])
             .env("npm_config_cache", cache.join("npm"));
         command
-    }
+    };
+    // acpx hands its environment to the adapter, whose MCP client calls the armed URL on
+    // 127.0.0.1; the package fetch and the agent's model calls keep the person's proxy.
+    command.envs(loopback_no_proxy());
+    command
 }
 
 /// npm and Bun can wrap the CLI in another process. Own that process group so a timeout
