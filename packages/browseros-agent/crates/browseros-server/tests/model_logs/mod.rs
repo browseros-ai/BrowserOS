@@ -421,6 +421,22 @@ async fn model(models: &Models, wire: Wire, base: &str) -> anyhow::Result<Model>
 /// Runs every wire and shape with a subscriber whose layer uses `filter`, and returns what it
 /// logged.
 async fn logged(filter: tracing_subscriber::EnvFilter, shapes: &[Shape]) -> anyhow::Result<String> {
+    logged_on(filter, &WIRES, shapes).await
+}
+
+/// The HTTP wires: every wire but Bedrock, whose SDK logs its signed request at trace.
+const HTTP_WIRES: [Wire; 4] = [
+    Wire::Chat(ProviderKind::OpenaiCompatible),
+    Wire::Responses,
+    Wire::ChatGpt,
+    Wire::Anthropic,
+];
+
+async fn logged_on(
+    filter: tracing_subscriber::EnvFilter,
+    wires: &[Wire],
+    shapes: &[Shape],
+) -> anyhow::Result<String> {
     let capture = Capture::default();
     let layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
@@ -439,7 +455,7 @@ async fn logged(filter: tracing_subscriber::EnvFilter, shapes: &[Shape]) -> anyh
         tools: &[],
         effort: None,
     };
-    for wire in WIRES {
+    for &wire in wires {
         for &shape in shapes {
             let Some(answer) = reply(wire, shape) else {
                 continue;
@@ -530,7 +546,13 @@ async fn the_capture_sees_each_leak_the_filter_turns_off() -> anyhow::Result<()>
 }
 
 #[test]
-fn every_rig_crate_in_the_lockfile_is_turned_off() -> anyhow::Result<()> {
+fn every_rig_crate_in_the_lockfile_and_every_target_it_names_is_turned_off() -> anyhow::Result<()> {
+    let muted = |target: &str| {
+        // A filter target matches every target it is a prefix of (tracing-subscriber's rule).
+        super::UNSCRUBBED_LOG_TARGETS
+            .iter()
+            .any(|off| target.starts_with(off))
+    };
     let lockfile =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))?;
     let rig: Vec<String> = lockfile
@@ -541,11 +563,103 @@ fn every_rig_crate_in_the_lockfile_is_turned_off() -> anyhow::Result<()> {
         .map(|name| name.replace('-', "_"))
         .collect();
     assert!(!rig.is_empty(), "the lockfile names no rig crate");
-    for name in rig {
+    for name in &rig {
         assert!(
-            super::UNSCRUBBED_LOG_TARGETS.contains(&name.as_str()),
+            muted(name),
             "{name} is in Cargo.lock but its logs are not turned off (UNSCRUBBED_LOG_TARGETS)"
         );
     }
+
+    // Rig also names targets of its own outside its module paths, `rig::streaming` among them.
+    // Read every one its locked sources name, so a new one after an upgrade fails here.
+    let metadata = std::process::Command::new(env!("CARGO"))
+        // The host's graph, as tests/feature_guard.rs reads it: a cache filled by a host build
+        // holds no other platform's sources.
+        .args(["metadata", "--format-version", "1", "--locked", "--offline"])
+        .args(["--filter-platform", "host-tuple"])
+        .arg("--manifest-path")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .output()?;
+    anyhow::ensure!(
+        metadata.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&metadata.stdout)?;
+    let named = regex::Regex::new(r#"(?:\btarget\s*[:=]\s*|\bemit!\()"([^"]+)""#)?;
+    let mut targets = std::collections::BTreeSet::new();
+    let mut sources = vec![];
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        if package["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("rig-"))
+            && let Some(manifest) = package["manifest_path"].as_str()
+            && let Some(root) = std::path::Path::new(manifest).parent()
+        {
+            sources.push(root.join("src"));
+        }
+    }
+    while let Some(path) = sources.pop() {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(&path)? {
+                sources.push(entry?.path());
+            }
+            continue;
+        }
+        // Rig's own tests name targets that never run in this build.
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let test_only = name.ends_with("tests.rs")
+            || path
+                .components()
+                .any(|part| matches!(part.as_os_str().to_str(), Some("tests" | "test_utils")));
+        if !name.ends_with(".rs") || test_only {
+            continue;
+        }
+        for line in std::fs::read_to_string(&path)?.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            targets.extend(named.captures_iter(line).map(|found| found[1].to_owned()));
+        }
+    }
+    for expected in ["rig::completions", "rig::streaming"] {
+        assert!(
+            targets.contains(expected),
+            "the scan of Rig's sources did not find {expected}"
+        );
+    }
+    for target in &targets {
+        assert!(
+            muted(target),
+            "Rig logs under {target} and it is not turned off (UNSCRUBBED_LOG_TARGETS)"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rig_writes_no_raw_json_at_trace() -> anyhow::Result<()> {
+    // At trace, `rig::completions` and `rig::streaming` carry a request's and a reply's JSON. The
+    // AWS SDK's own trace output is out of scope (see `log_filter`), so the HTTP wires are run.
+    let rig_lines = |text: &str| {
+        text.lines()
+            .filter(|line| line.contains(" rig::completions:") || line.contains(" rig::streaming:"))
+            .count()
+    };
+    let only_crates = tracing_subscriber::EnvFilter::new(
+        "trace,rig_core=off,rig_bedrock=off,rig_http=off,rig_reqwest=off",
+    );
+    let unfiltered = logged_on(only_crates, &HTTP_WIRES, &[Shape::UnknownFinish]).await?;
+    assert!(
+        rig_lines(&unfiltered) > 0,
+        "muting Rig's crates alone leaves its raw JSON in the log"
+    );
+    let filtered = logged_on(
+        log_filter(Some("trace")),
+        &HTTP_WIRES,
+        &[Shape::UnknownFinish],
+    )
+    .await?;
+    assert_eq!(rig_lines(&filtered), 0, "{filtered}");
     Ok(())
 }
