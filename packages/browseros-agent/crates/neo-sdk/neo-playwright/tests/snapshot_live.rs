@@ -686,6 +686,24 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
     loaded(&live, &page).await?;
     let run = Arc::new(RunState::default());
     let b1 = cache_responsive_frame(&live, &page, &run).await?;
+    let frame_ids = |frames: &Value| -> Vec<String> {
+        frames
+            .get("frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|frame| frame.get("id").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    };
+    let before = frame_ids(
+        &live
+            .invoke_in_run(
+                Arc::clone(&run),
+                "page.frames",
+                json!({ "call": {}, "page": page.brand() }),
+            )
+            .await??,
+    );
     let hung = server.url("hang.localtest.me", "/nest/hang-early.html");
     live.main_world(
         &page,
@@ -695,7 +713,9 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
         ),
     )
     .await?;
-    // Until the list holds the hung child and answers not whole: its seed never landed.
+    // Until the list holds the hung child and answers not whole: its seed never landed. The child
+    // shows only by its id: its renderer never answers its session's `Page.enable`, so no event of
+    // its own gives it a URL.
     time::timeout(Duration::from_secs(10), async {
         loop {
             let frames = live
@@ -705,17 +725,7 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
                     json!({ "call": {}, "page": page.brand() }),
                 )
                 .await??;
-            let listed = frames
-                .get("frames")
-                .and_then(Value::as_array)
-                .is_some_and(|frames| {
-                    frames.iter().any(|frame| {
-                        frame
-                            .get("url")
-                            .and_then(Value::as_str)
-                            .is_some_and(|url| url.contains("hang-early"))
-                    })
-                });
+            let listed = frame_ids(&frames).iter().any(|id| !before.contains(id));
             if listed && frames.get("incomplete") == Some(&json!(true)) {
                 return TestResult::Ok(());
             }
