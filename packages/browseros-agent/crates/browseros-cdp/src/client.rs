@@ -29,7 +29,7 @@ use tokio::{
 use tokio_tungstenite::{
     WebSocketStream, client_async_with_config,
     tungstenite::{
-        Message,
+        Message, Utf8Bytes,
         client::IntoClientRequest,
         protocol::{CloseFrame, WebSocketConfig},
     },
@@ -648,9 +648,9 @@ async fn reader_loop(inner: Arc<Inner>, mut reader: WsReader) {
             break ConnectionLoss::Ended;
         };
         match message {
-            Ok(Message::Text(text)) => handle_text_message(&inner, text.as_str()).await,
-            Ok(Message::Binary(bytes)) => match std::str::from_utf8(&bytes) {
-                Ok(text) => handle_text_message(&inner, text).await,
+            Ok(Message::Text(text)) => handle_text_message(&inner, &text).await,
+            Ok(Message::Binary(bytes)) => match Utf8Bytes::try_from(bytes) {
+                Ok(text) => handle_text_message(&inner, &text).await,
                 Err(err) => debug!("ignoring non-utf8 CDP binary frame: {err}"),
             },
             Ok(Message::Close(frame)) => break closed(frame),
@@ -686,7 +686,7 @@ fn closed(frame: Option<CloseFrame>) -> ConnectionLoss {
 /// This runs on the reader loop, so every other reply and event on the connection waits while
 /// it does. A reply's result is handed over as the browser's text and decoded by its caller
 /// ([`RawReply`]); an event's params are parsed here and move into the event whole.
-async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
+async fn handle_text_message(inner: &Arc<Inner>, text: &Utf8Bytes) {
     let event = match inbound::read(text) {
         Ok(Inbound::Reply { id, outcome }) => {
             if let Some(pending) = inner.pending.lock().await.remove(&id) {

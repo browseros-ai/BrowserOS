@@ -3,6 +3,8 @@
 use crate::{CdpError, inbound};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, error::Category, value::RawValue};
+use std::fmt;
+use tokio_tungstenite::tungstenite::{Bytes, Utf8Bytes};
 use tracing::warn;
 
 /// JSON-RPC's "Parse error", the code Chromium gives a command it cannot parse; here the client
@@ -14,22 +16,44 @@ pub(crate) const UNREADABLE_REPLY: i64 = -32700;
 /// One reader loop serves every tab on a connection, and it handles one message at a time. A
 /// page's DOM capture is tens of megabytes of JSON and several times that as a [`Value`], and
 /// while the loop built that tree, every other tab's replies and events waited behind it. So the
-/// loop only copies a reply's result out of its message, and the caller decodes the text in its
-/// own task, straight into its own type ([`Self::decode`]) with no `Value` in between.
-#[derive(Debug, Clone)]
-pub struct RawReply(Box<RawValue>);
+/// loop only checks that the result is JSON and hands over its text, which shares the WebSocket
+/// message's buffer rather than copying it. The caller decodes the text in its own task, straight
+/// into its own type ([`Self::decode`]) with no `Value` in between.
+#[derive(Clone)]
+pub struct RawReply(Utf8Bytes);
+
+/// Only the size: the text is page content, and can be megabytes.
+impl fmt::Debug for RawReply {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawReply")
+            .field("bytes", &self.0.len())
+            .finish()
+    }
+}
 
 impl RawReply {
-    /// The text of a member the reader found in a message. It is copied: the message's buffer is
-    /// the socket reader's, and it is gone once the reader moves on.
-    pub(crate) fn copied(text: &RawValue) -> Self {
-        Self(text.to_owned())
+    /// The `member` the reader found in `message`. When the member lies inside the message, the
+    /// reply is a slice of the message's buffer and nothing is copied; one parsed from other text
+    /// (the repaired copy of a message with a lone UTF-16 half) is copied.
+    pub(crate) fn member_of(message: &Utf8Bytes, member: &RawValue) -> Self {
+        let text = member.get();
+        let shared = text
+            .as_ptr()
+            .addr()
+            .checked_sub(message.as_ptr().addr())
+            .filter(|start| start + text.len() <= message.len())
+            .and_then(|start| {
+                let slice = Bytes::from(message.clone()).slice(start..start + text.len());
+                // A member's ends are JSON punctuation, so the slice is UTF-8; checking it is
+                // the only way to say so without `unsafe`.
+                Utf8Bytes::try_from(slice).ok()
+            });
+        Self(shared.unwrap_or_else(|| Utf8Bytes::from(text)))
     }
 
     /// The result of a reply that carries none, which has always read as `{}`.
     pub(crate) fn empty() -> Self {
-        // `{}` is JSON, so the fallback is never taken.
-        Self(RawValue::from_string("{}".to_owned()).unwrap_or_else(|_| RawValue::NULL.to_owned()))
+        Self(Utf8Bytes::from_static("{}"))
     }
 
     /// A reply encoded from a parsed `value`, for a transport that answers with one.
@@ -38,8 +62,8 @@ impl RawReply {
     ///
     /// [`CdpError::Json`] when serde cannot encode the value.
     pub fn from_value(value: &Value) -> Result<Self, CdpError> {
-        serde_json::value::to_raw_value(value)
-            .map(Self)
+        serde_json::to_string(value)
+            .map(|text| Self(Utf8Bytes::from(text)))
             .map_err(CdpError::from)
     }
 
@@ -48,12 +72,11 @@ impl RawReply {
     /// [`Self::into_json`].
     #[must_use]
     pub fn get(&self) -> &str {
-        self.0.get()
+        self.0.as_str()
     }
 
     /// Decodes the reply into `T`, in the caller's task. A lone UTF-16 half reads as U+FFFD, as
-    /// in every message the reader parses; the repair is tried only after a plain decode failed,
-    /// so a reply without one is read in one pass.
+    /// in every message the reader parses, with the same repair ([`inbound::with_repair`]).
     ///
     /// # Errors
     ///
@@ -61,27 +84,15 @@ impl RawReply {
     /// even repaired (nesting past its recursion limit): the error such a reply always failed its
     /// request with. [`CdpError::Json`] when the text is JSON but not a `T`.
     pub fn decode<T: DeserializeOwned>(&self) -> Result<T, CdpError> {
-        let text = self.0.get();
-        let error = match serde_json::from_str(text) {
-            Ok(value) => return Ok(value),
-            Err(error) => error,
-        };
-        let error = match inbound::well_formed(text) {
-            Some(repaired) => match serde_json::from_str(&repaired) {
-                Ok(value) => return Ok(value),
-                Err(error) => error,
-            },
-            None => error,
-        };
-        Err(match error.classify() {
-            Category::Data => CdpError::from(error),
-            Category::Syntax | Category::Eof | Category::Io => {
-                // The text is page content and can be megabytes, so only its size is logged.
-                warn!(bytes = text.len(), "CDP reply could not be read: {error}");
-                CdpError::Protocol {
-                    code: UNREADABLE_REPLY,
-                    message: format!("the browser's reply could not be read: {error}"),
-                }
+        let text = self.get();
+        inbound::with_repair(text, |text| serde_json::from_str(text)).map_err(|error| {
+            if error.classify() == Category::Data {
+                return CdpError::from(error);
+            }
+            warn!(bytes = text.len(), "CDP reply could not be read: {error}");
+            CdpError::Protocol {
+                code: UNREADABLE_REPLY,
+                message: format!("the browser's reply could not be read: {error}"),
             }
         })
     }
@@ -90,10 +101,7 @@ impl RawReply {
     /// reader can read it. Nothing else is rewritten, and nothing is parsed.
     #[must_use]
     pub fn into_json(self) -> String {
-        match inbound::well_formed(self.0.get()) {
-            Some(repaired) => repaired,
-            None => Box::<str>::from(self.0).into_string(),
-        }
+        inbound::well_formed(self.get()).unwrap_or_else(|| self.get().to_owned())
     }
 }
 

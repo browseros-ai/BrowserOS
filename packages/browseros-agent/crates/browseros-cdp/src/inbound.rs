@@ -1,10 +1,10 @@
 //! Reads one text message from the browser, for the client's reader loop.
 //!
 //! The loop serves every tab on the connection and handles one message at a time, so it does as
-//! little per message as it can. A reply's `result` is not parsed: it is copied out of the
-//! message as the text the browser wrote ([`RawReply`]), and the caller decodes it in its own
-//! task. An event is parsed here, since the loop routes it by method and hands its params to every
-//! reader.
+//! little per message as it can. A reply's `result` is not parsed: serde checks it is JSON, and
+//! it is handed over as the text the browser wrote, a slice of the message's buffer
+//! ([`RawReply`]). The caller decodes it in its own task. An event is parsed here, since the
+//! loop routes it by method and hands its params to every reader.
 //!
 //! Chromium writes every non-ASCII UTF-16 unit of a string as a `\uXXXX` escape, and page text
 //! can hold half of a surrogate pair: a string cut in the middle of an emoji. serde refuses such
@@ -17,6 +17,7 @@
 use crate::{CdpError, CdpEvent, RawReply, SessionId};
 use serde::{Deserialize, Deserializer, de::IgnoredAny};
 use serde_json::{Value, json, value::RawValue};
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 
 /// One message from the browser, routed.
 #[derive(Debug)]
@@ -50,34 +51,40 @@ pub(crate) struct Unreadable<'a> {
     pub(crate) envelope: Envelope<'a>,
 }
 
-/// Parses `text`, repairing lone UTF-16 halves only when the plain parse fails, so a message
-/// without one costs exactly one pass.
-pub(crate) fn read(text: &str) -> Result<Inbound, Unreadable<'_>> {
-    let error = match parse(text) {
-        Ok(inbound) => return Ok(inbound),
-        Err(error) => error,
-    };
-    let error = match well_formed(text) {
-        Some(repaired) => match parse(&repaired) {
-            Ok(inbound) => return Ok(inbound),
-            Err(error) => error,
-        },
-        None => error,
-    };
-    Err(Unreadable {
+/// Parses and routes one message ([`with_repair`]).
+pub(crate) fn read(message: &Utf8Bytes) -> Result<Inbound, Unreadable<'_>> {
+    with_repair(message, |text| parse(message, text)).map_err(|error| Unreadable {
         error,
-        envelope: envelope(text),
+        envelope: envelope(message),
     })
 }
 
-fn parse(text: &str) -> Result<Inbound, serde_json::Error> {
+/// Runs `parse` on `text`, and once more on its repaired copy ([`well_formed`]) only when the
+/// first parse failed and there is a lone UTF-16 half to repair: text without one is read in one
+/// pass. The reader's messages and its callers' replies go through this one rule.
+pub(crate) fn with_repair<T>(
+    text: &str,
+    parse: impl Fn(&str) -> Result<T, serde_json::Error>,
+) -> Result<T, serde_json::Error> {
+    let error = match parse(text) {
+        Ok(parsed) => return Ok(parsed),
+        Err(error) => error,
+    };
+    match well_formed(text) {
+        Some(repaired) => parse(&repaired),
+        None => Err(error),
+    }
+}
+
+/// Parses `text`, which is `message` or its repaired copy.
+fn parse(message: &Utf8Bytes, text: &str) -> Result<Inbound, serde_json::Error> {
     // serde reads a struct from an array as well, by position; a message that is not an object is
     // neither a reply nor an event, and is only checked to be JSON.
     if text
         .trim_start_matches([' ', '\t', '\n', '\r'])
         .starts_with('{')
     {
-        serde_json::from_str::<Members<'_>>(text).map(Members::route)
+        serde_json::from_str::<Members<'_>>(text).map(|members| members.route(message))
     } else {
         serde_json::from_str::<IgnoredAny>(text).map(|_| Inbound::Neither)
     }
@@ -114,11 +121,13 @@ where
 
 impl Members<'_> {
     /// A message with a numeric id is a reply, one with a string method an event.
-    fn route(self) -> Inbound {
+    fn route(self, message: &Utf8Bytes) -> Inbound {
         if let Some(id) = self.id.as_ref().and_then(Value::as_u64) {
             let outcome = match self.error {
                 Some(error) => Err(protocol_error(&error)),
-                None => Ok(self.result.map_or_else(RawReply::empty, RawReply::copied)),
+                None => Ok(self.result.map_or_else(RawReply::empty, |result| {
+                    RawReply::member_of(message, result)
+                })),
             };
             return Inbound::Reply { id, outcome };
         }
@@ -277,9 +286,11 @@ mod tests {
     use super::{Envelope, Inbound, envelope, read, well_formed};
     use crate::{CdpError, CdpEvent, RawReply, alloc_count, raw_reply::UNREADABLE_REPLY};
     use serde_json::{Value, json};
+    use tokio_tungstenite::tungstenite::Utf8Bytes;
 
     fn read_ok(text: &str) -> Inbound {
-        read(text).unwrap_or_else(|unreadable| panic!("{text} unreadable: {unreadable:?}"))
+        let message = Utf8Bytes::from(text);
+        read(&message).unwrap_or_else(|unreadable| panic!("{text} unreadable: {unreadable:?}"))
     }
 
     fn reply(text: &str) -> (u64, Result<RawReply, CdpError>) {
@@ -343,21 +354,26 @@ mod tests {
         );
     }
 
-    /// The loop's whole cost for a reply is checking its text is JSON and copying the result
-    /// out: on the thread that reads it, it allocates the copy and almost nothing else. The
-    /// same text parsed into a `Value`, as the loop once did, allocates many times its size,
-    /// for a tree every other message on the connection waited behind.
+    /// The loop's whole cost for a reply is checking its text is JSON: the result it hands over
+    /// is a slice of the message's buffer, so on the thread that reads it, it allocates nothing
+    /// the size of the result. The same text parsed into a `Value`, as the loop once did,
+    /// allocates many times its size, for a tree every other message on the connection waited
+    /// behind.
     #[test]
     fn tests_that_a_replys_result_is_kept_as_the_browsers_text_and_not_built() {
         let rows: Vec<String> = (0..20_000)
             .map(|row| format!(r#"[{row}, {{"z":{row},"a":"\u00e9"}}]"#))
             .collect();
         let written = format!("[{}]", rows.join(",  "));
-        let message = format!(r#"{{"id":41,"result":{written},"sessionId":"S"}}"#);
+        let message = Utf8Bytes::from(format!(r#"{{"id":41,"result":{written},"sessionId":"S"}}"#));
 
         let before = alloc_count::allocated();
-        let (id, outcome) = reply(&message);
+        let routed = read(&message);
         let on_loop = alloc_count::allocated() - before;
+        let (id, outcome) = match routed {
+            Ok(Inbound::Reply { id, outcome }) => (id, outcome),
+            other => panic!("not a reply: {other:?}"),
+        };
         let kept = outcome.unwrap_or_else(|err| panic!("reply: {err}"));
         assert_eq!(id, 41);
         assert_eq!(
@@ -366,7 +382,7 @@ mod tests {
             "spacing, key order and escapes are the browser's"
         );
         assert!(
-            on_loop <= written.len() + 4096,
+            on_loop < 4096,
             "the reader allocated {on_loop} bytes for a {} byte result",
             written.len()
         );
@@ -385,6 +401,11 @@ mod tests {
     #[test]
     fn tests_that_routing_reads_each_member_as_a_lookup_in_the_message_did() {
         assert_eq!(result(r#"{"id":5,"result":null}"#).get(), "null");
+        assert_eq!(
+            result(r#"{"id":4,"result":{"a" : 1},"sessionId":"\ud83d"}"#).get(),
+            r#"{"a" : 1}"#,
+            "a message read only once repaired hands over its result from the repaired copy"
+        );
         assert_eq!(result(r#"{"id":5}"#).get(), "{}");
         assert!(matches!(
             reply(r#"{"id":5,"error":{"code":-32000,"message":"No session with given id"}}"#).1,
@@ -412,7 +433,9 @@ mod tests {
     #[test]
     fn tests_that_an_unreadable_message_still_names_its_reply_or_event() {
         let deep = format!("{}0{}", "[".repeat(200), "]".repeat(200));
-        let event = format!(r#"{{ "method" : "Runtime.consoleAPICalled", "params":{deep}}}"#);
+        let event = Utf8Bytes::from(format!(
+            r#"{{ "method" : "Runtime.consoleAPICalled", "params":{deep}}}"#
+        ));
         let unreadable = read(&event)
             .err()
             .unwrap_or_else(|| panic!("past serde's limit"));
@@ -422,8 +445,8 @@ mod tests {
         );
         assert!(unreadable.error.to_string().contains("recursion limit"));
 
-        let broken = r#"{"id":17,"result":{"value":tru},"sessionId":"S"}"#;
-        let unreadable = read(broken).err().unwrap_or_else(|| panic!("not JSON"));
+        let broken = Utf8Bytes::from_static(r#"{"id":17,"result":{"value":tru},"sessionId":"S"}"#);
+        let unreadable = read(&broken).err().unwrap_or_else(|| panic!("not JSON"));
         assert_eq!(unreadable.envelope, Envelope::Reply(17));
 
         assert_eq!(

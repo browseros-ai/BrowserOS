@@ -622,9 +622,9 @@ async fn an_event_is_either_counted_before_a_subscription_or_received_by_it() {
     let client = browser.connect().await;
     let event = r#"{"method":"Test.ping","params":{}}"#;
     let start = client.events_broadcast();
-    handle_text_message(&client.inner, event).await;
+    handle_text_message(&client.inner, &Utf8Bytes::from(event)).await;
     let (mut events, before) = client.events_counted();
-    handle_text_message(&client.inner, event).await;
+    handle_text_message(&client.inner, &Utf8Bytes::from(event)).await;
     assert_eq!(before, start + 1);
     assert_eq!(client.events_broadcast(), start + 2);
     let mut received = 0;
@@ -766,8 +766,12 @@ async fn streams_and_broadcast_readers_make_no_copy_of_a_megabyte_event() {
     let mut readers: Vec<_> = (0..20).map(|_| client.events()).collect();
     let mut streams: Vec<EventStream> = (0..20).map(|_| client.on_event("Test.small")).collect();
     let large = json!({ "method": "Test.large", "params": { "text": "x".repeat(MIB) } });
-    handle_text_message(&client.inner, &large.to_string()).await;
-    handle_text_message(&client.inner, r#"{"method":"Test.small","params":{}}"#).await;
+    handle_text_message(&client.inner, &Utf8Bytes::from(large.to_string())).await;
+    handle_text_message(
+        &client.inner,
+        &Utf8Bytes::from_static(r#"{"method":"Test.small","params":{}}"#),
+    )
+    .await;
 
     let before = alloc_count::allocated();
     for reader in &mut readers {
@@ -828,10 +832,11 @@ async fn pending(client: &CdpClient, id: u64) -> oneshot::Receiver<Result<RawRep
     receiver
 }
 
-/// The reader loop's whole work on a large reply is a copy of its result: it builds no tree, so
-/// the next message, another session's reply, is handled while the first is still undecoded.
-/// The decode runs where the caller awaits it, and is what allocates the tree. On the loop, it
-/// would hold up every message behind it for as long as it took.
+/// The reader loop's whole work on a large reply is checking it is JSON: it hands over a slice of
+/// the message and builds no tree, so the next message, another session's reply, is handled
+/// while the first is still undecoded. The decode runs where the caller awaits it, and is what
+/// allocates the tree. On the loop, it would hold up every message behind it for as long as it
+/// took.
 #[tokio::test]
 async fn the_reader_hands_a_large_reply_over_as_text_and_its_caller_decodes_it() {
     let browser = LoopbackBrowser::start().await;
@@ -840,20 +845,22 @@ async fn the_reader_hands_a_large_reply_over_as_text_and_its_caller_decodes_it()
     let mut first = pending(&client, 9_001).await;
     let mut other = pending(&client, 9_002).await;
 
-    let message = format!(r#"{{"id":9001,"result":{large},"sessionId":"tab-a"}}"#);
+    let message = Utf8Bytes::from(format!(
+        r#"{{"id":9001,"result":{large},"sessionId":"tab-a"}}"#
+    ));
 
     let before = alloc_count::allocated();
     handle_text_message(&client.inner, &message).await;
     let on_loop = alloc_count::allocated() - before;
     assert!(
-        on_loop <= large.len() + 4096,
+        on_loop < 4096,
         "the reader allocated {on_loop} bytes for a {} byte result",
         large.len()
     );
 
     handle_text_message(
         &client.inner,
-        r#"{"id":9002,"result":{"value":1},"sessionId":"tab-b"}"#,
+        &Utf8Bytes::from_static(r#"{"id":9002,"result":{"value":1},"sessionId":"tab-b"}"#),
     )
     .await;
     let small = other
