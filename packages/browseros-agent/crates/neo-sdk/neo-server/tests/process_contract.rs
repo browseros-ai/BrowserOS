@@ -274,7 +274,11 @@ async fn check_config_reads_the_environment_alone_and_names_what_it_refuses() ->
         .wait_with_output()
         .await?;
     assert_eq!(
-        (output.status.code(), output.stdout.as_slice(), output.stderr.as_slice()),
+        (
+            output.status.code(),
+            output.stdout.as_slice(),
+            output.stderr.as_slice()
+        ),
         (Some(0), &b""[..], &b""[..]),
         "an environment Neo can start with passes silently: {}",
         String::from_utf8_lossy(&output.stderr)
