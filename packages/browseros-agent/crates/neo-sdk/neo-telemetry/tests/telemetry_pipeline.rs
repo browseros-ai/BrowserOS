@@ -790,6 +790,43 @@ fn drive_every_hook_with_hostile_text(telemetry: &Telemetry) {
     }
 }
 
+/// Each family's label names, sorted, as the scrape writes them.
+fn label_names() -> BTreeMap<&'static str, Vec<&'static str>> {
+    BTreeMap::from([
+        ("neo_runs_total", vec!["neo_error_owner", "neo_run_status"]),
+        ("neo_run_active", vec![]),
+        ("neo_run_duration_seconds", vec!["neo_run_status"]),
+        (
+            "neo_operations_total",
+            vec!["neo_error_owner", "neo_op_name", "neo_op_outcome"],
+        ),
+        (
+            "neo_operation_duration_seconds",
+            vec!["neo_op_name", "neo_op_outcome"],
+        ),
+        ("neo_errors_total", vec!["error_type", "neo_error_owner"]),
+        ("neo_tab_count", vec!["neo_tab_origin"]),
+        ("neo_tab_opened_total", vec!["neo_tab_origin"]),
+        (
+            "neo_tab_closed_total",
+            vec!["neo_tab_close_reason", "neo_tab_origin"],
+        ),
+        (
+            "neo_tab_duration_seconds",
+            vec!["neo_tab_close_reason", "neo_tab_origin"],
+        ),
+        ("neo_renderer_crashes_total", vec![]),
+        ("neo_navigations_total", vec!["http_response_status_code"]),
+        ("neo_navigation_errors_total", vec!["error_type"]),
+        (
+            "neo_captcha_solves_total",
+            vec!["neo_captcha_family", "neo_captcha_verdict"],
+        ),
+        ("neo_captcha_reasons_total", vec!["neo_captcha_reason"]),
+        ("neo_captcha_spend_total", vec!["neo_captcha_provider"]),
+    ])
+}
+
 /// Every sample whose label names are not exactly its family's, or whose label value is outside
 /// the contract's closed set for that label.
 fn label_violations(metrics: &Exposition) -> Vec<String> {
@@ -839,39 +876,7 @@ fn label_violations(metrics: &Exposition) -> Vec<String> {
             vec!["capsolver", "2captcha", "unknown"],
         ),
     ]);
-    let keys: BTreeMap<&str, Vec<&str>> = BTreeMap::from([
-        ("neo_runs_total", vec!["neo_error_owner", "neo_run_status"]),
-        ("neo_run_active", vec![]),
-        ("neo_run_duration_seconds", vec!["neo_run_status"]),
-        (
-            "neo_operations_total",
-            vec!["neo_error_owner", "neo_op_name", "neo_op_outcome"],
-        ),
-        (
-            "neo_operation_duration_seconds",
-            vec!["neo_op_name", "neo_op_outcome"],
-        ),
-        ("neo_errors_total", vec!["error_type", "neo_error_owner"]),
-        ("neo_tab_count", vec!["neo_tab_origin"]),
-        ("neo_tab_opened_total", vec!["neo_tab_origin"]),
-        (
-            "neo_tab_closed_total",
-            vec!["neo_tab_close_reason", "neo_tab_origin"],
-        ),
-        (
-            "neo_tab_duration_seconds",
-            vec!["neo_tab_close_reason", "neo_tab_origin"],
-        ),
-        ("neo_renderer_crashes_total", vec![]),
-        ("neo_navigations_total", vec!["http_response_status_code"]),
-        ("neo_navigation_errors_total", vec!["error_type"]),
-        (
-            "neo_captcha_solves_total",
-            vec!["neo_captcha_family", "neo_captcha_verdict"],
-        ),
-        ("neo_captcha_reasons_total", vec!["neo_captcha_reason"]),
-        ("neo_captcha_spend_total", vec!["neo_captcha_provider"]),
-    ]);
+    let keys = label_names();
     // A navigation whose document had no HTTP status is counted without
     // `http_response_status_code`.
     let optional = BTreeSet::from(["neo_navigations_total"]);
