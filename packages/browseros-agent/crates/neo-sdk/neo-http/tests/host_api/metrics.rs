@@ -19,7 +19,7 @@ const PROMETHEUS_TEXT: &str = "text/plain; version=0.0.4; charset=utf-8";
 /// A scrape as the telemetry renders one: `# HELP` and `# TYPE` lines, a counter and a
 /// histogram, with UTF-8 beyond ASCII in a help text.
 const EXPOSITION: &str = "\
-# HELP neo_runs_total Runs Neo admitted, by how they ended — ok, error, cancelled or timeout.
+# HELP neo_runs_total Runs Neo admitted, by how they ended → ok, error, cancelled or timeout.
 # TYPE neo_runs_total counter
 neo_runs_total{status=\"ok\",error_owner=\"none\"} 3
 # HELP neo_run_duration_seconds How long each run took.

@@ -1,8 +1,8 @@
 /**
  * One run's spans, folded into the two shapes the page reads: Neo's run record (`NeoRunRecord`,
  * the same type `GET /v1/runs/{id}` gives, so every reader of `run.neo` works unchanged) and the
- * waterfall (`RunTrace`). Pure and deterministic: folding more spans of a run gives a superset —
- * an operation never disappears and none appears twice — which is what keeps the op table from
+ * waterfall (`RunTrace`). Pure and deterministic: folding more spans of a run gives a superset
+ * (an operation never disappears and none appears twice), which is what keeps the op table from
  * flickering as spans arrive.
  *
  * Spans carry no arguments, results, notes, kind, effect or screenshots; the record says where it
@@ -125,7 +125,8 @@ function traceSpan(span: NeoSpan, depth: number, start: number): TraceSpan {
     startOffsetMs: ms(span.startMs - start),
     durationMs: ms(span.endMs - span.startMs),
     depth,
-    // D11: only an operation that failed; Neo marks a cancelled op's span ERROR as well.
+    // Only an operation that failed, read from its outcome: an earlier Neo marked a cancelled
+    // op's span ERROR too.
     error: span.kind === 'op' && span.outcome === 'error',
     attributes: span.attributes,
   }

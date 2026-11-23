@@ -547,7 +547,7 @@ export interface TraceSpan {
   depth: number
   /**
    * A `neo.op` whose `neo.op.outcome` is `error`: what a trace's "failed" counts. A cancelled op
-   * is not a failure (decision D11), whatever its OTel status says, and `neo.run` is never one:
+   * is not a failure, whatever its OTel status says, and `neo.run` is never one:
    * the run's own status is the run's.
    */
   error: boolean

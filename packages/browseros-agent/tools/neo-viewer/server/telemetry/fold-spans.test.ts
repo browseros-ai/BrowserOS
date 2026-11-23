@@ -164,7 +164,7 @@ describe('buildTrace', () => {
     expect(trace?.spans[0]).toMatchObject({ name: 'neo.run', opId: null })
   })
 
-  test("a trace's failed spans are the operations whose outcome is error: a cancelled op is not one (D11), nor the run", () => {
+  test("a trace's failed spans are the operations whose outcome is error: a cancelled op is not one, nor the run", () => {
     const store = new SpanStore()
     const traces = fixtureTraces(RUN)
     const spans = traces.resourceSpans[0]?.scopeSpans[0]?.spans ?? []

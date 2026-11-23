@@ -1,7 +1,7 @@
 /**
  * Neo's run records made from its spans: the viewer's record source when it has no host API
  * (`joinNeoRuns(store, telemetry.records)`). A read finds the run's spans by `neo.run.id` (the
- * reply's `neoRunId`), or — for a run with no reply — by the `neo.run` span whose parent is the
+ * reply's `neoRunId`), or, for a run with no reply, by the `neo.run` span whose parent is the
  * span id the viewer minted for it, then waits until `neo.run` arrives (the run is whole) and
  * returns `foldSpans` of what it has.
  *

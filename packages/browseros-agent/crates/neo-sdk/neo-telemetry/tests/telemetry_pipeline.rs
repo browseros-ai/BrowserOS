@@ -1366,7 +1366,7 @@ fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Erro
                 && span.attributes.get("neo.op.outcome") == Some(&text("cancelled"))
                 && span.status == SpanStatus::Unset
         }),
-        "each cut op's span keeps the error that cut it, and is no error span itself (D11)"
+        "each cut op's span keeps the error that cut it, and is no error span itself"
     );
     Ok(())
 }

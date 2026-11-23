@@ -21,7 +21,7 @@
 //! Counting holds by construction: a tab enters `open` only where `TabFact::Opened` is produced
 //! and leaves only where its one close is decided, in the same locked step, and its origin never
 //! changes once it is born. A close is `TabFact::Closed` at once, except one nobody asked for,
-//! which waits up to [`PENDING_CLOSE`] to be told apart from a browser exit (decision D13); its
+//! which waits up to [`PENDING_CLOSE`] to be told apart from a browser exit; its
 //! tab leaves the gauge at once all the same. So per origin `opened − closed == open + pending`
 //! for this process, `opened − closed == open` once pending closes settle, the gauge is a map
 //! count that cannot go negative, and a tab closes at most once: a second close finds no entry. Facts are sent after the lock is released, so two threads' facts may reach the
@@ -52,7 +52,7 @@ const OPENER_HOPS: usize = 16;
 /// stayed, and closed for another reason.
 const ASKED_CLOSE_LAPSE: Duration = Duration::from_secs(10);
 
-/// How long a close nobody asked for waits before it counts as `user` (decision D13). `docker stop`
+/// How long a close nobody asked for waits before it counts as `user`. `docker stop`
 /// quits the browser before Neo's server hears of it, so a browser exit first shows as tabs
 /// closing on their own: if the socket drops or Neo begins its own shutdown within this wait, the
 /// close counts as `shutdown`.
@@ -114,15 +114,16 @@ impl TabLife {
     }
 
     /// Neo began its own shutdown (SIGTERM): from now on a tab that closes with no intent of
-    /// Neo's counts as `shutdown`, not `user` (decision D12), and so does every close still
-    /// pending (D13). Called again right before the final telemetry flush, so none is lost.
+    /// Neo's went with that shutdown, not with its user, so it counts as `shutdown`, as does
+    /// every close still pending. Called again right before the final telemetry flush, so none
+    /// is lost.
     pub(crate) fn shutting_down(&self) {
         let facts = self.lock().shutting_down();
         self.emit(facts);
     }
 
     /// The tab watch found the browser socket dropped or replaced: the closes still pending were
-    /// the browser exiting, and count as `shutdown` (decision D13).
+    /// the browser exiting, and count as `shutdown`.
     pub(crate) fn socket_dropped(&self) {
         let facts = self.lock().socket_dropped();
         self.emit(facts);
@@ -197,7 +198,7 @@ impl TabLife {
 }
 
 /// The gauge's read, on whichever thread collects (a scrape's handler, the exporter's thread).
-/// It cannot panic, so it needs no `catch_unwind` (decision D9, STYLE.md G16): a weak upgrade, a
+/// It cannot panic, so it needs no `catch_unwind` (STYLE.md G16): a weak upgrade, a
 /// lock whose poison is ignored as everywhere in the registry, and a saturating count. A ledger
 /// already dropped reads as no tabs.
 fn open_counts_of(life: &Weak<TabLife>) -> OpenTabCounts {
@@ -384,7 +385,7 @@ struct TabLedger {
     step: u64,
     /// Neo began its own shutdown: from then on a close nobody asked for is the shutdown's.
     shutting_down: bool,
-    /// Closes nobody asked for, waiting to be told apart from a browser exit (decision D13).
+    /// Closes nobody asked for, waiting to be told apart from a browser exit.
     pending: Vec<PendingClose>,
 }
 
@@ -398,10 +399,10 @@ struct PendingClose {
 
 /// A born tab.
 struct Life {
-    /// Frozen at birth (decision D7, revised): the blank tab Neo makes its own at attach is born
-    /// `neo` (its intent comes before the first listing), one it adopts later keeps the origin it
-    /// was born with, and a Neo tab the owner browsed in stays `neo`. The registry's own origin
-    /// is janitor and sight policy.
+    /// Frozen at birth, so a tab's open and close count under one origin: the blank tab Neo makes
+    /// its own at attach is born `neo` (its intent comes before the first listing), one it adopts
+    /// later keeps the origin it was born with, and a Neo tab the owner browsed in stays `neo`.
+    /// The registry's own origin is janitor and sight policy.
     origin: TabOrigin,
     opened_at: Instant,
     /// The last listing that showed it, or that found its page target alive while leaving it
@@ -464,7 +465,7 @@ enum Gone {
     /// The tab went while its browser stayed and Neo ran on.
     Tab,
     /// A shutdown: its browser went (it exited or restarted while Neo was not connected), or Neo
-    /// itself is shutting down (decision D12).
+    /// itself is shutting down.
     Shutdown,
 }
 
@@ -687,7 +688,7 @@ impl TabLedger {
     }
 
     /// The only way out of `open`, and it decides the tab's one close, at `now`: a `Closed` with
-    /// its one reason, or, for a close nobody asked for, a pending one (decision D13).
+    /// its one reason, or, for a close nobody asked for, a pending one.
     fn close(
         &mut self,
         tab: TabId,
@@ -995,13 +996,13 @@ const fn popup_origin(opener: TabOrigin) -> TabOrigin {
     }
 }
 
-/// The one rule for a close's reason (the owner's decisions D5 and D6, 2026-11-20):
+/// The one rule for a close's reason; the first case that holds decides it:
 ///
 /// 1. its renderer crashed and was not seen back → `crash`, unless the earliest live intent was
 ///    taken before the crash: that close was already under way when the renderer died;
 /// 2. else the earliest live intent → `script` or `janitor`;
-/// 3. else `shutdown` when its browser went (it exited or restarted) or Neo is shutting down
-///    (D12), otherwise `user`.
+/// 3. else `shutdown` when its browser went (it exited or restarted) or Neo is shutting down,
+///    otherwise `user`.
 ///
 /// Pure, so one table test covers every combination.
 fn close_reason(crashed: Option<Step>, intents: &[Intent], gone: Gone) -> CloseReason {
@@ -1656,7 +1657,7 @@ mod tests {
             .ledger
             .intend_close(TabId(2), IntentReason::Script, None);
         book.crashed(3);
-        // SIGTERM: Neo begins its own shutdown (decision D12).
+        // SIGTERM: Neo begins its own shutdown.
         assert_eq!(book.shutting_down(), [], "nothing pending yet");
         assert_eq!(
             book.listed(9, Gap::None, &[], &[1, 2, 3]),
@@ -1672,7 +1673,7 @@ mod tests {
     #[test]
     fn the_blank_tab_neo_makes_its_own_at_attach_is_born_neo() {
         let mut book = Book::new();
-        // Taken before the link's first listing, as the app takes it (decision D7, revised).
+        // Taken before the link's first listing, as the app takes it.
         let attach = book.ledger.expect_open(OpenFor::Neo);
         assert_eq!(
             book.listed(0, Gap::Socket, &[tab(1), tab(2)], &[]),
@@ -1709,7 +1710,7 @@ mod tests {
         assert_eq!(
             book.listed(10, Gap::None, &[], &[1, 2, 3]),
             [],
-            "closes nobody asked for wait (decision D13)"
+            "closes nobody asked for wait to be told apart from a browser exit"
         );
         assert_eq!(
             book.counts(),

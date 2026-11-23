@@ -100,7 +100,7 @@ pub(crate) struct NeoTab {
     /// The open intent taken before the browser link's first listing
     /// ([`NeoTab::set_attach_intent`]): the first ensure of [`NeoTab::follow`] claims it with the
     /// tab it makes Neo's, adopted or opened, so tab telemetry counts that tab born `neo`
-    /// (decision D7, revised). Dropped unclaimed when that ensure makes none.
+    /// rather than `found`. Dropped unclaimed when that ensure makes none.
     attach: Mutex<Option<OpenIntent>>,
 }
 

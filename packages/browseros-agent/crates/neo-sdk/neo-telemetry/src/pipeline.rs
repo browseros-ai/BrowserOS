@@ -17,7 +17,7 @@
 //! `internal_error`, and in-flight comes down all the same.
 //!
 //! `neo_errors_total` counts each failure once, where it is attributed (wire-contract.md). An op
-//! counts only when it failed on its own (outcome `error`, decision D10): a cancelled op was cut
+//! counts only when it failed on its own (outcome `error`): a cancelled op was cut
 //! short by what stopped its run (the deadline, the caller leaving, shutdown, the script returning
 //! first), and the run's end counts that once, however many ops it cut. Every counted run keeps
 //! the codes its failed ops reported ([`RunErrors`]), shared with its ops through
@@ -392,8 +392,8 @@ impl Pipeline {
             took,
         );
         if let Some(error) = op.error {
-            // A cancelled op's failure is what stopped its run, which the run's end counts once
-            // (D10): it stays on the op's span and its `status="cancelled"` count only. An
+            // A cancelled op's failure is what stopped its run, which the run's end counts once,
+            // so it stays on the op's span and its `status="cancelled"` count only. An
             // internal run has no end that could count a failure again: its ops' always count.
             let failed = match op.outcome {
                 OpOutcome::Error => true,

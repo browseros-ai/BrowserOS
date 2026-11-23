@@ -102,7 +102,7 @@ impl Spans {
 
     /// Records one settled op's `neo.op`, from `took` ago until now: a child of its run's span
     /// (`run`), or a root for an op of an internal run. Status `ERROR` only when the op failed on
-    /// its own (outcome `error`, decision D11).
+    /// its own (outcome `error`), not when its run's end cut it short.
     pub(crate) fn op_settled(&self, run: Option<&SpanContext>, op: &OpSettled<'_>, took: Duration) {
         let end = SystemTime::now();
         let start = end.checked_sub(took).unwrap_or(end);

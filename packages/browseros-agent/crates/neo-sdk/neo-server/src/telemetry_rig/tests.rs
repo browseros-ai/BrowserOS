@@ -417,7 +417,7 @@ fn both_doors_tell_the_same_story_over_json() -> Result<(), TestError> {
     on_neo_runtime(both_doors_tell_the_same_story(Wire::JsonTcp))
 }
 
-/// Decision D7, revised, on the whole app (e2e F3): the launch tab of a fresh browser is the blank
+/// On the whole app: the launch tab of a fresh browser is the blank
 /// tab Neo adopts at attach, and the scrape counts it born `neo`, not `found`, since the app takes
 /// Neo's open intent before the link's first listing.
 async fn the_launch_tab_neo_adopts_is_counted_neo() -> Result<(), TestError> {

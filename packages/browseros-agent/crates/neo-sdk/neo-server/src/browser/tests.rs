@@ -469,7 +469,7 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
     assert!(fake.close_tab(popup), "closed while no socket hears of it");
     fake.reconnect();
     eventually(Duration::from_secs(5), found(1)).await?;
-    // A close nobody asked for waits two seconds (decision D13); the socket stays up meanwhile,
+    // A close nobody asked for waits two seconds; the socket stays up meanwhile,
     // so it is the user's. A drop within the wait would have made it the shutdown's.
     let user = r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#;
     eventually(Duration::from_secs(5), || {
@@ -575,7 +575,7 @@ async fn after_a_lag_the_watch_still_knows_a_tab_on_an_excluded_page() -> Result
         "the fake had both tabs"
     );
     eventually(Duration::from_secs(5), found(3)).await?;
-    // The owner's two closes count once their wait is over (decision D13).
+    // The owner's two closes count once their wait is over.
     let expected = [
         r#"neo_tabs_closed_total{close_reason="user",origin="found"} 2"#,
         r#"neo_tabs_opened_total{origin="found"} 5"#,
@@ -593,7 +593,7 @@ async fn after_a_lag_the_watch_still_knows_a_tab_on_an_excluded_page() -> Result
     Ok(())
 }
 
-/// Decision D13 through the real watch: tabs that close and then lose their socket within the
+/// Through the real watch: tabs that close and then lose their socket within the
 /// two-second wait were the browser exiting (`docker stop` quits the browser before Neo hears of
 /// it), so they count as `shutdown`. The gauge drops at once all the same.
 #[tokio::test(start_paused = true)]

@@ -1,6 +1,6 @@
 /**
  * The scrape door: `GET /v1/metrics` on Neo's host API (bearer token added by `hostFetch`), every
- * 2 s while a host API is configured. Silent by design — a dev tool must not fill the terminal
+ * 2 s while a host API is configured. Silent by design: a dev tool must not fill the terminal
  * because the image is old or still starting:
  * - 200: the text goes to `onText`;
  * - 404: an image older than telemetry; the poller stops for the life of the process;

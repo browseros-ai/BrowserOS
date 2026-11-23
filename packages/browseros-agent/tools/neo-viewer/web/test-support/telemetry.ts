@@ -136,7 +136,7 @@ export function metricsView(): MetricsView {
  * The fixture's trace for one run: `neo.run`, then its eight operations (seq 7 failed, 5 nested in
  * 4, the script's on lines 1-7). With `internal`, Neo's own work for the run as a real Neo sends it
  * (wire-contract: no source line): the `events.next` long-poll, cancelled when the run ends and
- * marked ERROR as Neo did before decision D11, `page.frames` and `events.listen` per open tab, and
+ * marked ERROR as an earlier Neo did, `page.frames` and `events.listen` per open tab, and
  * the task's page opening; the spans come in draw order, siblings by start.
  */
 export function runTrace(
@@ -197,7 +197,7 @@ export function runTrace(
     startOffsetMs: start,
     durationMs: end - start,
     depth,
-    // As the server reads OTel status: a cancelled op was ERROR before D11.
+    // As the server reads OTel status: an earlier Neo marked a cancelled op ERROR.
     error: outcome !== 'ok',
     attributes: {
       'neo.op.name': name,

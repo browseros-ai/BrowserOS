@@ -132,7 +132,7 @@ describe("a run's trace", () => {
   })
 })
 
-describe("Neo's own work in a trace (e2e F4, decision D11)", () => {
+describe("Neo's own work in a trace", () => {
   const withInternal = runTrace('neo-run', { internal: true })
   const byId = (id: string) => {
     const found = withInternal.spans.find((span) => span.spanId === id)
@@ -141,7 +141,7 @@ describe("Neo's own work in a trace (e2e F4, decision D11)", () => {
   }
 
   it('takes how a span ended from what Neo says on it, never its status', () => {
-    // events.next ends cancelled in every run, and Neo marked that ERROR before D11.
+    // events.next ends cancelled in every run, and an earlier Neo marked that ERROR.
     expect(byId('span-10').error).toBe(true)
     expect(spanEnd(byId('span-10'))).toBe('cancelled')
     expect(spanEnd(byId('span-7'))).toBe('failed')

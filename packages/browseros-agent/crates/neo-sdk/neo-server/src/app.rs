@@ -138,7 +138,7 @@ pub struct App {
     /// The process's telemetry, whose pending spans and metrics are flushed at shutdown.
     telemetry: Telemetry,
     /// Told when Neo's own shutdown begins and again before the final flush, so a tab that closes
-    /// with no intent then, or one whose close still waits, counts as `shutdown` (D12, D13).
+    /// with no intent then, or one whose close still waits, counts as `shutdown`, not `user`.
     tabs: Arc<TabRegistry>,
     #[cfg(feature = "test-support")]
     store: TraceStore,
@@ -258,7 +258,7 @@ impl App {
         let telemetry = Telemetry::new(&config.env.telemetry)?;
         let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
         // Before the link's first listing, so tab telemetry counts the blank tab Neo makes its
-        // own at attach born `neo` (decision D7, revised): `NeoTab::follow` claims it.
+        // own at attach born `neo`: `NeoTab::follow` claims it.
         let attach = tabs.life().expect_open(OpenFor::Neo);
         let host = HostApi::bind(
             &config.env.host_api,
@@ -439,7 +439,7 @@ impl App {
                     _ = interrupt => info!("SIGINT: stopping"),
                 }
                 // Before the runs stop: from here a tab that closes with no intent, or one whose
-                // close still waits, closed for Neo's shutdown (decisions D12, D13).
+                // close still waits, closed for Neo's shutdown.
                 tabs.life().shutting_down();
                 shutdown.cancel();
             }
@@ -451,7 +451,7 @@ impl App {
                 warn!("requests still open after the shutdown budget; exiting anyway");
             }
         }
-        // Closes still waiting count as `shutdown` before the flush takes the last metrics (D13).
+        // Closes still waiting count as `shutdown` before the flush takes the last metrics.
         tabs.life().shutting_down();
         // All three in one budget, at once: the tab holders' last changes need no sync, only a
         // write, and telemetry gives up on a collector that does not answer.

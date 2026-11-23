@@ -1422,7 +1422,7 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
         Scrape::of(&telemetry)
             .map(|scrape| scrape.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]))
     };
-    // The owner's close counts once its two-second wait is over (decision D13).
+    // The owner's close counts once its two-second wait is over.
     within(async {
         while !counts().is_ok_and(|lines| lines == expected) {
             time::sleep(Duration::from_millis(20)).await;
@@ -6135,7 +6135,7 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
     Ok(())
 }
 
-/// Decision D7, revised: the blank tab Neo makes its own at attach is born `neo` in tab
+/// The blank tab Neo makes its own at attach is born `neo` in tab
 /// telemetry. The app takes the open intent before the link's first listing, `follow` claims it
 /// with the blank tab it adopts, and a tab held meanwhile is born `found`.
 #[tokio::test]
