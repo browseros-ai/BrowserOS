@@ -9,6 +9,7 @@
 
 import type { Skill } from '@browseros/claw-api'
 import {
+  HARNESSES,
   type Harness,
   isUserFacingHarness,
 } from '@/components/harness/harness.types'
@@ -20,8 +21,10 @@ import { worksInAgents } from './skills.helpers'
 
 export interface SkillsScreenData {
   skills: Skill[]
-  /** The connected agents the skills work in; empty hides the line about them. */
+  /** The connected agents the skills work in, shown after a copy. */
   agents: Harness[]
+  /** Every connected agent, for the empty state's "works in" line. */
+  connected: Harness[]
   /** A free plan where ultrafast is on sale hears that ultrafast runs skills in seconds. */
   nudge: boolean
   isLoading: boolean
@@ -39,6 +42,7 @@ export function useSkillsScreenData(): SkillsScreenData {
   return {
     skills,
     agents: worksInAgents(skills, connected),
+    connected: HARNESSES.filter((harness) => connected.includes(harness)),
     nudge: showsUltrafastNudge(plan.data),
     isLoading: query.isPending,
     isError: query.isError,

@@ -5,8 +5,9 @@
  */
 
 import type { Skill } from '@browseros/claw-api'
-import { Pencil, Trash2 } from 'lucide-react'
+import { ArrowUpRight, Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
+import { useNavigate } from 'react-router'
 import { RowMenu } from '@/components/actions/RowMenu'
 import { cn } from '@/lib/utils'
 import { useSkill } from '@/modules/api/skills.hooks'
@@ -18,6 +19,8 @@ interface SkillActionsProps {
   /** The skill's file, when the page already has it. */
   body?: string
   onDeleted?: () => void
+  /** Adds Open first, for a card where a click copies instead of opening the skill. */
+  withOpen?: boolean
   /**
    * Styles the menu button only. The dialogs render in place (the edit one
    * does not portal), so hiding a wrapper around this component hides them too.
@@ -25,15 +28,23 @@ interface SkillActionsProps {
   menuClassName?: string
 }
 
-/** Edit and Delete behind one button, so the row leads with Copy. */
+/** Edit and Delete (and Open, on a card) behind one button, so the row leads with Copy. */
 export function SkillActions({
   skill,
   body,
   onDeleted,
+  withOpen = false,
   menuClassName,
 }: SkillActionsProps) {
+  const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const openAction = {
+    id: 'open',
+    label: 'Open',
+    icon: <ArrowUpRight className="size-4" />,
+    onClick: () => navigate(`/skills/${encodeURIComponent(skill.name)}`),
+  }
 
   return (
     <>
@@ -41,6 +52,7 @@ export function SkillActions({
         <RowMenu
           label={skill.description}
           actions={[
+            ...(withOpen ? [openAction] : []),
             {
               id: 'edit',
               label: 'Edit',

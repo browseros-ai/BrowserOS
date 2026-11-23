@@ -32,6 +32,7 @@ const api = await import('@/modules/api/client')
 let features: string[]
 let available: boolean
 let skills: Skill[]
+let clipboard: string[]
 
 const plan = (): Plan => ({
   available,
@@ -106,7 +107,9 @@ mock.module('@/components/motion/center-morph-modal', () => ({
   },
 }))
 mock.module('@/components/skills/SkillActions', () => ({
-  SkillActions: () => null,
+  SkillActions: ({ skill }: { skill: Skill }) => (
+    <button type="button">More for {skill.description}</button>
+  ),
 }))
 mock.module('@/components/skills/SkillFormDialog', () => ({
   SkillFormDialog: () => null,
@@ -174,7 +177,15 @@ beforeEach(async () => {
   )
   define('window', dom.window)
   define('document', dom.document)
-  define('navigator', dom.window.navigator)
+  clipboard = []
+  define('navigator', {
+    userAgent: 'test',
+    clipboard: {
+      writeText: async (value: string) => {
+        clipboard.push(value)
+      },
+    },
+  })
   define('HTMLElement', dom.window.HTMLElement)
   define('Node', dom.window.Node)
   define('Event', dom.window.Event)
@@ -208,6 +219,7 @@ async function mount() {
         <MemoryRouter initialEntries={['/skills']}>
           <Routes>
             <Route path="/skills" element={<Skills />} />
+            <Route path="/skills/:name" element={<p>A skill page</p>} />
             <Route path="/pro" element={<p>ultrafast page</p>} />
           </Routes>
         </MemoryRouter>
@@ -281,5 +293,116 @@ describe('the Skills list without the speed line', () => {
     await mount()
 
     expect(text()).not.toContain('normal speed')
+  })
+})
+
+/** Types into the search box, which reads what was typed from each input event. */
+async function typeInto(input: Element, value: string) {
+  await act(async () => {
+    ;(input as HTMLInputElement).value = value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+function card(title: string): Element | undefined {
+  return [...container.querySelectorAll('button[aria-label]')].find(
+    (candidate) =>
+      candidate.getAttribute('aria-label') === `Copy skill: ${title}`,
+  )
+}
+
+describe('copying a skill from the list', () => {
+  it('tests that clicking a card copies its phrase and says to paste it', async () => {
+    features = ['claw.ultrafast']
+    await mount()
+    expect(text()).not.toContain('Paste it into your agent')
+
+    await click(card('Skill number 2'))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(clipboard).toEqual(['use the neo-skill-2 skill'])
+    expect(text()).toContain('Paste it into your agent')
+  })
+
+  it('tests that Details links to the skill and the menu does not copy', async () => {
+    await mount()
+    await click(buttons('More for Skill number 1')[0])
+    expect(clipboard).toEqual([])
+
+    const details = container.querySelector('a[href="/skills/neo-skill-1"]')
+    expect(details?.textContent?.trim()).toBe('Details')
+  })
+
+  it('tests that a long list can be searched by title, name or site', async () => {
+    skills = [
+      ...many(22),
+      skill(23, {
+        description: 'Hacker News top 10',
+        site: 'news.ycombinator.com',
+      }),
+      skill(24, {
+        description: 'Read the top stories',
+        site: 'news.google.com',
+      }),
+    ]
+    await mount()
+    expect(text()).toContain('24 skills')
+
+    const search = container.querySelector('input[type="search"]')
+    if (!search) throw new Error('no search box')
+    await typeInto(search, 'news')
+    expect(text()).toContain('2 of 24 skills')
+    expect(card('Hacker News top 10')).toBeDefined()
+    expect(card('Skill number 1')).toBeUndefined()
+  })
+
+  it('tests that a short list has no search', async () => {
+    skills = many(3)
+    await mount()
+    expect(container.querySelector('input[type="search"]')).toBeNull()
+  })
+
+  it('tests that no skills shows what a skill is and how to save one', async () => {
+    skills = []
+    features = ['claw.ultrafast']
+    await mount()
+
+    expect(text()).toContain('No skills yet')
+    expect(text()).toContain('Then tell it')
+    expect(buttons('Make one by hand')).toHaveLength(1)
+    await click(
+      container.querySelector(
+        'button[aria-label="Copy save this as a skill in neo"]',
+      ) ?? undefined,
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(clipboard).toEqual(['save this as a skill in neo'])
+    expect(text()).toContain('Copied. Paste it after your next task')
+  })
+
+  it('tests that a free plan shows no ultrafast marks on its skills', async () => {
+    skills = [
+      skill(1, {
+        origin: 'history',
+        runCount: 4,
+        ultrafast: {
+          status: 'verified',
+          flowVersion: 1,
+          writeApproved: false,
+          p50Ms: 1800,
+          locked: true,
+        },
+      }),
+    ]
+    await mount()
+
+    expect(text()).toContain('4 runs')
+    const marks = [...container.querySelectorAll('li span')].filter(
+      (span) => (span.textContent ?? '').trim() === 'ultrafast',
+    )
+    expect(marks).toHaveLength(0)
   })
 })

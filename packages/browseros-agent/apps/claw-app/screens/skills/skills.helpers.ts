@@ -167,12 +167,14 @@ export interface UltrafastMark {
 /**
  * How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill.
  * `afterFirstRun` marks a skill made from a task that has not run yet: it has no flow, but its
- * first run in an agent makes it ultrafast, so it says so.
+ * first run in an agent makes it ultrafast, so it says so. A plan without ultrafast (`locked`)
+ * shows no mark at all, since every skill then runs the normal way.
  */
 export function ultrafastMark(
   ultrafast: SkillUltrafast | undefined,
   afterFirstRun = false,
 ): UltrafastMark | null {
+  if (ultrafast?.locked === true) return null
   switch (ultrafast?.status) {
     case 'verified':
       return { dim: false, word: null, tone: 'muted' }
@@ -492,4 +494,56 @@ export function chosenLine(
     return `You chose this in chat${who} ${day}`
   }
   return `You chose this in BrowserOS ${day}`
+}
+
+/** What a skill card says under its phrase: a choice to make, or its speed and runs. */
+export interface CardStats {
+  /** A write skill that still needs "with or without your agent" says so instead of stats. */
+  choice: 'Choose how it runs' | 'Asks again' | null
+  /** "1.8 s", only when its runs really go the fast way. */
+  speed: string | null
+  /** "32 runs", "1 run", or "Not used yet" for a skill with no ultrafast word to show. */
+  uses: string | null
+}
+
+/** "1.8 s" from a median in milliseconds, the short form for a card. */
+function shortSpeed(p50Ms: number): string {
+  return `${Math.max(0.1, Math.round(p50Ms / 100) / 10)} s`
+}
+
+export function cardStats(skill: Skill): CardStats {
+  const state = runsChoice(skill.ultrafast, [])?.state
+  if (state === 'choose') {
+    return { choice: 'Choose how it runs', speed: null, uses: null }
+  }
+  if (state === 'reask')
+    return { choice: 'Asks again', speed: null, uses: null }
+  const p50Ms = skill.ultrafast?.p50Ms
+  const fast =
+    skill.ultrafast?.status === 'verified' && runsByItself(skill) && p50Ms
+  const marked = ultrafastMark(skill.ultrafast, awaitsFirstRun(skill)) !== null
+  return {
+    choice: null,
+    speed: fast ? shortSpeed(p50Ms) : null,
+    uses:
+      skill.runCount > 0
+        ? skill.runCount === 1
+          ? '1 run'
+          : `${skill.runCount} runs`
+        : marked
+          ? null
+          : 'Not used yet',
+  }
+}
+
+/** Whether a skill matches what someone typed in the search: its title, name or site. */
+export function matchesQuery(
+  skill: Pick<Skill, 'name' | 'description' | 'site'>,
+  query: string,
+): boolean {
+  const words = query.trim().toLowerCase()
+  if (!words) return true
+  return [skill.description, skill.name, skill.site ?? ''].some((field) =>
+    field.toLowerCase().includes(words),
+  )
 }

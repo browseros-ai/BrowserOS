@@ -2,10 +2,12 @@ import { describe, expect, it } from 'bun:test'
 import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
   awaitsFirstRun,
+  cardStats,
   chosenLine,
   durationLabel,
   firstRunLearning,
   healthLine,
+  matchesQuery,
   neoName,
   parseSkillBody,
   runModeCounts,
@@ -551,5 +553,105 @@ describe('runsByItself', () => {
         }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('cardStats', () => {
+  const skill = (patch: Partial<Skill>): Skill => ({
+    name: 'neo-hn',
+    description: 'Hacker News top 10',
+    origin: 'agent',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...patch,
+  })
+
+  it('shows speed and runs for a skill that runs the fast way', () => {
+    expect(
+      cardStats(
+        skill({
+          runCount: 32,
+          ultrafast: ultrafast({ status: 'verified', p50Ms: 1830 }),
+        }),
+      ),
+    ).toEqual({ choice: null, speed: '1.8 s', uses: '32 runs' })
+  })
+
+  it('shows runs only for a skill that runs with the agent or on a plan without ultrafast', () => {
+    const always = ultrafast({
+      status: 'verified',
+      effects: 'write',
+      p50Ms: 900,
+      runs: writeRuns({ alwaysWithAgent: 'order' }),
+    })
+    expect(cardStats(skill({ runCount: 1, ultrafast: always }))).toEqual({
+      choice: null,
+      speed: null,
+      uses: '1 run',
+    })
+    expect(
+      cardStats(
+        skill({
+          runCount: 3,
+          ultrafast: ultrafast({
+            status: 'verified',
+            p50Ms: 900,
+            locked: true,
+          }),
+        }),
+      ),
+    ).toEqual({ choice: null, speed: null, uses: '3 runs' })
+  })
+
+  it('asks for a choice a write skill still needs', () => {
+    const choose = ultrafast({
+      status: 'verified',
+      effects: 'write',
+      runs: writeRuns({}),
+    })
+    expect(cardStats(skill({ ultrafast: choose })).choice).toBe(
+      'Choose how it runs',
+    )
+    const reask = ultrafast({
+      status: 'verified',
+      effects: 'write',
+      runs: writeRuns({ reask: true }),
+    })
+    expect(cardStats(skill({ ultrafast: reask })).choice).toBe('Asks again')
+  })
+
+  it('says not used yet only when no ultrafast word fills the line', () => {
+    expect(cardStats(skill({})).uses).toBe('Not used yet')
+    expect(
+      cardStats(skill({ ultrafast: ultrafast({ status: 'pending' }) })).uses,
+    ).toBeNull()
+  })
+})
+
+describe('matchesQuery', () => {
+  const hn = {
+    name: 'neo-hn-front-page',
+    description: 'Hacker News top 10',
+    site: 'news.ycombinator.com',
+  }
+
+  it('matches the title, the name or the site, in any case', () => {
+    expect(matchesQuery(hn, 'hacker')).toBe(true)
+    expect(matchesQuery(hn, 'FRONT-PAGE')).toBe(true)
+    expect(matchesQuery(hn, 'ycombinator')).toBe(true)
+    expect(matchesQuery(hn, 'flipkart')).toBe(false)
+    expect(matchesQuery(hn, '  ')).toBe(true)
+  })
+})
+
+describe('ultrafastMark on a plan without ultrafast', () => {
+  it('shows no mark once the plan is off', () => {
+    expect(
+      ultrafastMark(ultrafast({ status: 'verified', locked: true })),
+    ).toBeNull()
   })
 })
