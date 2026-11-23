@@ -35,6 +35,8 @@ interface SpanBase {
   /** Epoch ms, microsecond precision. */
   startMs: number
   endMs: number
+  /** End minus start in integer nanoseconds before epoch conversion loses low bits. */
+  durationMs: number
   /** The OTel span name: `neo.run`, or an operation's name as its metric label has it. */
   spanName: string
   /** OTel status `ERROR`. */
@@ -134,8 +136,11 @@ function decodeSpan(raw: unknown, resource: Attributes): NeoSpan | null {
       ? null
       : hexId(parent, HEX_SPAN)
   if (parentSpanId === undefined) return null
-  const startMs = nanosToMs(raw.startTimeUnixNano)
-  const endMs = Math.max(startMs, nanosToMs(raw.endTimeUnixNano))
+  const startNanos = nanos(raw.startTimeUnixNano)
+  const rawEndNanos = nanos(raw.endTimeUnixNano)
+  const endNanos = rawEndNanos < startNanos ? startNanos : rawEndNanos
+  const startMs = nanosToMs(startNanos)
+  const endMs = nanosToMs(endNanos)
   const status = isObject(raw.status) ? raw.status : {}
   const failed = status.code === 2 || status.code === 'STATUS_CODE_ERROR'
   const message = typeof status.message === 'string' ? clip(status.message) : ''
@@ -146,6 +151,7 @@ function decodeSpan(raw: unknown, resource: Attributes): NeoSpan | null {
     parentSpanId,
     startMs,
     endMs,
+    durationMs: Number(endNanos - startNanos) / 1e6,
     spanName: typeof raw.name === 'string' ? clip(raw.name) : '',
     failed,
     attributes,
@@ -432,14 +438,18 @@ function double(value: unknown): number | undefined {
 }
 
 /**
- * Unix nanoseconds (a decimal string, as OTLP JSON sends a fixed64) → epoch ms with microsecond
- * precision. Nanoseconds since 1970 pass 2^53, so a string is cut in BigInt before it is a number.
+ * Preserve integer timestamps through duration subtraction. Numeric exporters have already
+ * lost epoch low bits; decimal strings retain every nanosecond until the display conversion.
  */
-function nanosToMs(value: unknown): number {
-  if (typeof value === 'string' && /^\d+$/.test(value))
-    return Number(BigInt(value) / 1_000n) / 1_000
-  if (typeof value === 'number' && Number.isFinite(value)) return value / 1e6
-  return 0
+function nanos(value: unknown): bigint {
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value)
+  if (typeof value === 'number' && Number.isFinite(value))
+    return BigInt(Math.trunc(value))
+  return 0n
+}
+
+function nanosToMs(value: bigint): number {
+  return Number(value / 1_000n) / 1_000
 }
 
 /** OTLP JSON ids are hex (not base64, as plain proto3 JSON would have them); all-zero is invalid. */

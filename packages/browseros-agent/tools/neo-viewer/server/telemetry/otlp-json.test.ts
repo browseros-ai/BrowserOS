@@ -96,6 +96,11 @@ describe('OTLP JSON spans', () => {
     expect(span({ parentSpanId: '0000000000000000' })?.parentSpanId).toBeNull()
     // Without its status attribute, a run's status follows its OTel status.
     expect(span({ status: { code: 2 } })).toMatchObject({ status: 'error' })
+    // Epoch doubles cannot distinguish these endpoints, but their integer difference is 1 ns.
+    expect(span({ endTimeUnixNano: '1763650000123456790' })?.durationMs).toBe(
+      0.000001,
+    )
+    expect(span({ endTimeUnixNano: '1763650000123456788' })?.durationMs).toBe(0)
   })
 
   test('attribute values: ints as numbers (strings past 2^53), doubles, bools, arrays and maps as JSON; long strings cut', () => {

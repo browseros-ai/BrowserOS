@@ -54,9 +54,9 @@ export function useMetrics(
 }
 
 /**
- * After a run ends, how long its trace may still grow: Neo exports a span about half a second
- * after it ends. A trace read once this is over is final, so a run from before telemetry (or
- * whose spans never came) costs no request per health change.
+ * How long Runs polls for missing spans after a run ends. Neo normally exports a span about
+ * half a second after it ends; this snapshot policy bounds recurring reads for old runs.
+ * The live explorer bypasses it because exports and retries can arrive later.
  */
 export const TRACE_WAIT_MS = 30_000
 
@@ -124,9 +124,8 @@ export function traceMayGrow(
 }
 
 /**
- * A read nothing can outgrow: the trace is complete, or it was read after the run's wait was
- * over. A partial read made earlier is never final, however long ago it was made: the trace is
- * read again the next time it is shown.
+ * A read the Runs panels stop polling: the root span has arrived, or the read was made after
+ * the run's wait. An earlier partial read is refreshed when next shown, however old it is.
  */
 function settled(run: RunSummary, read: TraceRead | undefined): boolean {
   if (!read) return false
@@ -148,34 +147,63 @@ function later(
 /**
  * One run's trace while `open`: `undefined` until the first read answers, null when no span of
  * the run has arrived. Read when shown, and again whenever `rev` moves, until a read is final
- * (`settled`): the trace is complete (`neo.run` has arrived, so it never changes), or it was read
- * after the run's wait was over.
+ * (`settled`): neo.run has arrived, or it was read after the run's wait was over. The explorer
+ * uses the live read below to follow exports beyond that snapshot policy.
  */
 export function useRunTrace(
   run: RunSummary,
   open: boolean,
   rev: number | undefined,
 ): RunTrace | null | undefined {
+  return useRunTraceRead(run, open, rev).trace
+}
+
+/** A trace read keeps its last data visible while a refresh is pending or has failed. */
+export type RunTraceRead =
+  | { kind: 'loading'; trace: RunTrace | null | undefined }
+  | { kind: 'ready'; trace: RunTrace | null }
+  | { kind: 'failed'; trace: RunTrace | null | undefined }
+
+/**
+ * The explorer follows every revision, including late exports and replacements after neo.run.
+ * Runs retain their settled-cache policy; only callers choosing `live` pay for ongoing reads.
+ * Read status lets navigation wait for the requested span, then fall back after a failed read.
+ */
+export function useRunTraceRead(
+  run: RunSummary,
+  open: boolean,
+  rev: number | undefined,
+  refresh: 'until-settled' | 'live' = 'until-settled',
+): RunTraceRead {
   const key = traceKey(run)
-  const [own, setOwn] = useState<{ key: string; read: TraceRead } | null>(null)
+  const request = `${key}#${rev ?? ''}#${run.status}`
+  const [own, setOwn] = useState<{
+    key: string
+    request: string
+    read: TraceRead | undefined
+  } | null>(null)
   const latest = later(
     own?.key === key ? own.read : undefined,
     readTraces.get(key),
   )
-  const done = settled(run, latest)
+  const done = refresh === 'until-settled' && settled(run, latest)
   // biome-ignore lint/correctness/useExhaustiveDependencies: `rev` and the run's status are the triggers: spans may have arrived.
   useEffect(() => {
     if (!open || done) return
     let current = true
     void readTrace(run, rev).then((trace) => {
-      if (!current || trace === undefined) return
-      const read = { trace, at: Date.now() }
-      rememberTrace(run, read)
-      setOwn({ key, read })
+      if (!current) return
+      const read = trace === undefined ? undefined : { trace, at: Date.now() }
+      if (read) rememberTrace(run, read)
+      setOwn({ key, request, read })
     })
     return () => {
       current = false
     }
-  }, [key, open, rev, run.status, done])
-  return latest?.trace
+  }, [key, open, rev, run.status, done, request])
+  if (done && latest) return { kind: 'ready', trace: latest.trace }
+  if (own?.request !== request) return { kind: 'loading', trace: latest?.trace }
+  return own.read
+    ? { kind: 'ready', trace: latest?.trace ?? null }
+    : { kind: 'failed', trace: latest?.trace }
 }

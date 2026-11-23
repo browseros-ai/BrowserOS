@@ -43,7 +43,7 @@ export function foldSpans(spans: RunSpans): NeoRunRecord {
     effect: '',
     site: op.site,
     startOffsetMs: ms(op.startMs - startedAt),
-    durationMs: ms(op.endMs - op.startMs),
+    durationMs: op.durationMs,
     tabId: op.tabId,
     args: null,
     argsTruncated: false,
@@ -61,7 +61,7 @@ export function foldSpans(spans: RunSpans): NeoRunRecord {
     effects: null,
     startedAt,
     endedAt: run ? run.endMs : null,
-    durationMs: run ? ms(run.endMs - run.startMs) : null,
+    durationMs: run?.durationMs ?? null,
     complete: run !== null,
     tabs: [
       ...new Set(ops.flatMap((op) => (op.tabId === null ? [] : [op.tabId]))),
@@ -124,7 +124,7 @@ function traceSpan(span: NeoSpan, depth: number, start: number): TraceSpan {
     label: span.kind === 'run' ? span.neoRunId : span.name || span.opId,
     opId: span.kind === 'op' ? span.opId : null,
     startOffsetMs: ms(span.startMs - start),
-    durationMs: ms(span.endMs - span.startMs),
+    durationMs: span.durationMs,
     depth,
     // Only an operation that failed, read from its outcome: an earlier Neo marked a cancelled
     // op's span ERROR too.

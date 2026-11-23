@@ -159,6 +159,69 @@ describe("an open run's methods", () => {
     )
   })
 
+  it('reveals a selected folded call and a nested internal call when its record arrives', async () => {
+    const run = runSummary(36, { code })
+    const nested = operation(12, 'frame.waitForLoadState', {
+      parentId: fill.id,
+    })
+    const render = (detail: RunDetail | null, selectedOperationId: string) => (
+      <RunBlock
+        run={run}
+        formatted={formatCode(run.code)}
+        detail={detail}
+        selected
+        selectedOperationId={selectedOperationId}
+        onSelect={() => {}}
+        onOpenFull={() => {}}
+      />
+    )
+    const detail = detailWith(run, record([fill, ...loop, nested]))
+    await dom.render(render(null, 'neo-run.10'))
+    expect(dom.container.querySelector('[data-operation="10"]')).toBeNull()
+    await dom.render(render(detail, 'neo-run.10'))
+    expect(
+      dom.container
+        .querySelector('[data-operation="10"]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('true')
+    expect(dom.container.textContent).not.toContain('more calls on this line')
+    await dom.render(render(detail, nested.id))
+    expect(
+      dom.container
+        .querySelector('[data-operation="12"]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('true')
+    expect(methods()).toContain('frame.waitForLoadState, inside op 5')
+    const internal = button(/not on a line/)
+    await dom.interact(() => fire(internal, 'click'))
+    expect(internal.getAttribute('aria-expanded')).toBe('false')
+    expect(dom.container.querySelector('[data-operation="12"]')).toBeNull()
+    await dom.render(render(detail, nested.id))
+    expect(internal.getAttribute('aria-expanded')).toBe('false')
+    await dom.render(render(detail, 'neo-run.10'))
+    await dom.render(render(detail, nested.id))
+    expect(internal.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('keeps the rest of a long line folded when its selected call is already visible', async () => {
+    const run = runSummary(37, { code })
+    await dom.render(
+      <RunBlock
+        run={run}
+        formatted={formatCode(run.code)}
+        detail={detailWith(run, record(loop))}
+        selected
+        selectedOperationId="neo-run.6"
+        onSelect={() => {}}
+        onOpenFull={() => {}}
+      />,
+    )
+    expect(dom.container.querySelector('[data-operation="10"]')).toBeNull()
+    expect(dom.container.textContent).toContain(
+      '2 more calls on this line: show',
+    )
+  })
+
   it("selects a method: its arguments and outcome open under it, its result's size points right", async () => {
     const run = runSummary(3, { code })
     await show(run, detailWith(run, record([fill, failedClick], 100)))

@@ -12,6 +12,7 @@
  *   GET  /api/runs/:runId       RunResponse         one run in full; `?wait=neo` first waits (about 3 s at
  *                                                   most) for Neo's record of a run that just ended
  *   GET  /api/runs/:runId/trace RunTraceResponse    the run's OpenTelemetry spans, for the waterfall
+ *   GET  /api/traces            TracesResponse      bounded search of recorded spans joined to current runs
  *   GET  /api/metrics           MetricsResponse     Neo's metrics from the active source (scrape or push)
  *   POST /api/clear             RunsResponse        starts an empty log (the previous is kept once)
  *   POST /api/export            ExportResponse      writes every run since the last Clear to a new folder
@@ -29,6 +30,7 @@ export const apiRoutes = {
   run: (runId: string, options: { waitForNeo?: boolean } = {}) =>
     `/api/runs/${encodeURIComponent(runId)}${options.waitForNeo ? '?wait=neo' : ''}`,
   runTrace: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/trace`,
+  traces: '/api/traces',
   metrics: '/api/metrics',
   clear: '/api/clear',
   export: '/api/export',
@@ -534,6 +536,52 @@ export interface MetricFamily {
 export interface RunTraceResponse {
   /** Null when no span of the run has arrived (an older image, push off, or not yet). */
   trace: RunTrace | null
+}
+
+/** Filters over actual recorded operation spans; minMs is exclusive, maxMs inclusive. */
+export interface TraceSearchQuery {
+  /** Case-insensitive partial W3C trace id, at most 32 hex characters. */
+  traceId: string
+  /** Exact, case-sensitive canonical span name, also used by Metrics; empty means any method. */
+  method: string
+  minMs: number | null
+  maxMs: number | null
+  /** Number of run slices returned, 1–200. */
+  limit: number
+  /** Validated continuation boundary in immutable viewer arrival order. */
+  cursor: Pick<TraceRunSummary, 'sentAt' | 'id'> | null
+}
+
+export type TraceRunSummary = Pick<
+  RunSummary,
+  'id' | 'seq' | 'sentAt' | 'status'
+>
+
+/** One viewer run's slice of a trace; several rows may share a caller's W3C trace id. */
+export interface TraceSearchResult {
+  run: TraceRunSummary
+  traceId: string
+  /** Epoch ms of the first retained span. */
+  startedAt: number
+  /** First retained span start through last end, in ms. */
+  durationMs: number
+  spanCount: number
+  /** Failed operations, using the same outcome rule as the waterfall. */
+  errorCount: number
+  /** Earliest operation satisfying every method/time filter; null for trace-id-only browsing. */
+  matchedSpan: Pick<
+    TraceSpan,
+    'spanId' | 'name' | 'label' | 'durationMs'
+  > | null
+}
+
+/** Current viewer runs with retained spans only; Clear immediately removes their search rows. */
+export interface TracesResponse {
+  traces: TraceSearchResult[]
+  /** More matching run slices exist than the requested limit. */
+  truncated: boolean
+  /** Opaque continuation token, preserving the current filters; null on the final page. */
+  nextCursor: string | null
 }
 
 /** One run's spans, found by Neo's run id (`neo.run.id`), never by trace id alone. */
