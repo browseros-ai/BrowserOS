@@ -74,12 +74,44 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::aria_node::AriaNode;
     use crate::judges::{Bundles, CaseFile, Generator, NEO_CASES, count, first_difference, seed};
     use crate::snapshot::Snapshot;
+    use crate::split_mix64::SplitMix64;
 
     use super::cover_block;
 
     const GATE_TREES: usize = 300;
+
+    /// A draw below `count` from the cover-only stream.
+    fn below(random: &mut SplitMix64, count: u64) -> usize {
+        usize::try_from(random.next().unwrap_or(0) % count).unwrap_or(0)
+    }
+
+    /// The cover-only draw: one more paragraph, now and then, whose one text runs from plain
+    /// letters into characters outside the BMP, at any place in the tree. The shared generator's
+    /// trees reach the cut often but seldom with a character across it; this puts the cut inside
+    /// a character about as often as between two. Its own stream, so the generator's trees for
+    /// a seed stay the ones every other differential draws.
+    fn with_astral_text(
+        mut tree: Vec<AriaNode>,
+        random: &mut SplitMix64,
+    ) -> Result<Vec<AriaNode>, serde_json::Error> {
+        if below(random, 4) == 0 {
+            let text = format!(
+                "{}{}",
+                "a".repeat(below(random, 1_500)),
+                "\u{1f600}".repeat(1 + below(random, 400))
+            );
+            let paragraph = serde_json::from_value(json!({
+                "role": "paragraph",
+                "children": [text],
+            }))?;
+            let at = below(random, tree.len() as u64 + 1);
+            tree.insert(at, paragraph);
+        }
+        Ok(tree)
+    }
 
     #[test]
     fn tests_that_the_covered_block_prints_every_committed_case() -> Result<(), Box<dyn Error>> {
@@ -181,13 +213,23 @@ mod tests {
         Ok(())
     }
 
+    /// Seeded random trees as covers, against today's block in QuickJS. It prints how many
+    /// blocks were cut and how many cuts fell inside a character, so a long run shows that it
+    /// reached the cut's two edges and not only whole blocks.
     #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the counts are the evidence a long run's reader pastes"
+    )]
     fn tests_that_the_covered_block_is_todays_on_generated_trees() -> Result<(), Box<dyn Error>> {
         let seed = seed()?;
         let bundles = Bundles::new()?;
         let mut generator = Generator::new(seed);
-        for index in 0..count("NEO_SNAPSHOT_DIFFERENTIAL_TREES", GATE_TREES)? {
-            let tree = generator.snapshot().tree;
+        let mut random = SplitMix64(seed ^ 0xc0e2);
+        let trees = count("NEO_SNAPSHOT_DIFFERENTIAL_TREES", GATE_TREES)?;
+        let (mut cut, mut inside) = (0, 0);
+        for index in 0..trees {
+            let tree = with_astral_text(generator.snapshot().tree, &mut random)?;
             let todays = bundles
                 .todays_answer(
                     &json!({ "cover": {} }),
@@ -198,12 +240,22 @@ mod tests {
                 )?
                 .text;
             let json = serde_json::to_string(&tree)?;
+            let block = cover_block(tree);
             assert_eq!(
-                cover_block(tree),
-                todays,
+                block, todays,
                 "seed {seed:#x}, tree {index} prints today's covered block: {json}"
             );
+            if let Some(block) = &block
+                && block.ends_with("\n    … (the rest of its snapshot is cut)")
+            {
+                cut += 1;
+                inside += usize::from(block.contains("\u{fffd}…\n    … (the rest"));
+            }
         }
+        println!(
+            "covered block, seed {seed:#x}: {trees} generated trees as today's renderer prints \
+             them; {cut} cut, {inside} of them inside a character"
+        );
         Ok(())
     }
 }
