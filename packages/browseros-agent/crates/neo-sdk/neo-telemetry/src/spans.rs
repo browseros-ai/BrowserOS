@@ -42,8 +42,10 @@ const TASK_ID: Key = Key::from_static_str("neo.task.id");
 const RUN_STATUS: Key = Key::from_static_str("neo.run.status");
 const OP_NAME: Key = Key::from_static_str("neo.op.name");
 const OP_ID: Key = Key::from_static_str("neo.op.id");
-const SITE_LINE: Key = Key::from_static_str("neo.op.site.line");
-const SITE_COLUMN: Key = Key::from_static_str("neo.op.site.column");
+// The registry's keys for a source position: the op's call site in the script. The script is
+// no file, so there is no `code.file.path` beside them.
+const SITE_LINE: Key = Key::from_static_str("code.line.number");
+const SITE_COLUMN: Key = Key::from_static_str("code.column.number");
 const TAB_ID: Key = Key::from_static_str("neo.tab.id");
 const OP_OUTCOME: Key = Key::from_static_str("neo.op.outcome");
 const OP_DELIVERY: Key = Key::from_static_str("neo.op.delivery");

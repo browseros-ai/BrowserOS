@@ -82,7 +82,7 @@ export function isInternalSpan(span: TraceSpan): boolean {
   return (
     span.type === 'op' &&
     span.depth <= 1 &&
-    span.attributes['neo.op.site.line'] === undefined
+    span.attributes['code.line.number'] === undefined
   )
 }
 

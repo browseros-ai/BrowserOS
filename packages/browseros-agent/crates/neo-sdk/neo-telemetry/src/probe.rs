@@ -71,7 +71,7 @@ pub enum CapturedKind {
 pub enum SpanValue {
     /// A string attribute, such as `neo.op.name`.
     Str(String),
-    /// An integer attribute, such as `neo.op.site.line` or `neo.tab.id`.
+    /// An integer attribute, such as `code.line.number` or `neo.tab.id`.
     Int(i64),
 }
 

@@ -109,7 +109,7 @@ export function fixtureTraces(
       string('neo.op.id', `${run.neoRunId}.${op.seq}`),
       ...(op.line === null
         ? []
-        : [int('neo.op.site.line', op.line), int('neo.op.site.column', 7)]),
+        : [int('code.line.number', op.line), int('code.column.number', 7)]),
       int('neo.tab.id', TAB_ID),
       string('neo.op.outcome', op.error ? 'error' : 'ok'),
       string('neo.op.delivery', op.error ? 'not_sent' : 'done'),

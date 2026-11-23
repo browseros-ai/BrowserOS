@@ -113,13 +113,13 @@ describe("a run's trace", () => {
   it('lists attributes as sent, keys aligned, errors and site detail marked', () => {
     const lines = attributeLines({
       'neo.op.name': 'locator.click',
-      'neo.op.site.line': 6,
+      'code.line.number': 6,
       'neo.error.code': 'no_match',
       'url.domain': 'example.com',
     })
     expect(lines.map(lineText)).toEqual([
       'neo.op.name       "locator.click"',
-      'neo.op.site.line  6',
+      'code.line.number  6',
       'neo.error.code    "no_match"',
       'url.domain        "example.com"',
     ])

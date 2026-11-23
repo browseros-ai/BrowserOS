@@ -8,9 +8,9 @@ use crate::label::{Delivery, ErrorLabel, OpOutcome};
 /// Where in the script an op was called (`run:LINE:COL`). A plain data bag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpSite {
-    /// The line, from 1 (`neo.op.site.line`).
+    /// The line, from 1 (`code.line.number`).
     pub line: u32,
-    /// The column, from 1 (`neo.op.site.column`).
+    /// The column, from 1 (`code.column.number`).
     pub column: u32,
 }
 

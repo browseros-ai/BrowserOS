@@ -211,7 +211,7 @@ export function runTrace(
       'neo.op.id': `${neoRunId}.${seq}`,
       ...(line === null
         ? {}
-        : { 'neo.op.site.line': line, 'neo.op.site.column': 7 }),
+        : { 'code.line.number': line, 'code.column.number': 7 }),
       'neo.op.outcome': outcome,
       ...(outcome === 'error'
         ? { 'neo.error.owner': 'script', 'neo.error.code': 'no_match' }

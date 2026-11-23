@@ -445,8 +445,8 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
             );
             assert_eq!(
                 (
-                    int(span, "neo.op.site.line"),
-                    int(span, "neo.op.site.column")
+                    int(span, "code.line.number"),
+                    int(span, "code.column.number")
                 ),
                 (
                     row.site.map(|site| i64::from(site.line)),
@@ -642,7 +642,7 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
             (
                 text(op, "neo.op.name"),
                 text(op, "neo.op.id"),
-                int(op, "neo.op.site.line"),
+                int(op, "code.line.number"),
                 text(op, "neo.op.outcome"),
                 text(op, "neo.error.code"),
             ),

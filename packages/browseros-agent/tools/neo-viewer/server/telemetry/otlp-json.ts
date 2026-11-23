@@ -180,8 +180,8 @@ function opSpan(base: SpanBase, error: SpanError | null): OpSpan | null {
   const dot = opId ? opId.lastIndexOf('.') : -1
   const seq = opId ? Number(opId.slice(dot + 1)) : Number.NaN
   if (!opId || dot <= 0 || !Number.isInteger(seq) || seq < 1) return null
-  const line = attributes['neo.op.site.line']
-  const column = attributes['neo.op.site.column']
+  const line = attributes['code.line.number']
+  const column = attributes['code.column.number']
   return {
     ...base,
     kind: 'op',
