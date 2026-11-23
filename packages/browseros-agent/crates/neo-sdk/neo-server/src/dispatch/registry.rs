@@ -104,7 +104,7 @@ impl Registry {
         listed
     }
 
-    /// Every registered name, hidden methods included: the `op` label values telemetry interns
+    /// Every registered name, hidden methods included: the `neo.op.name` values telemetry interns
     /// against (`neo_telemetry::Vocabulary`). Not [`Registry::listed`], which drops hidden ones.
     pub(crate) fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.methods.keys().copied()

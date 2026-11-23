@@ -82,12 +82,12 @@ const STOP_MARGIN: Duration = Duration::from_millis(50);
 #[derive(Debug)]
 pub(crate) struct Pipeline {
     instruments: Instruments,
-    /// The server's op names and error codes, bound once. Until then every `op` and
-    /// `error_code` label is `unknown`.
+    /// The server's op names and error codes, bound once. Until then every `neo.op.name` and
+    /// `error.type` value is `unknown`.
     vocabulary: OnceLock<Vocabulary>,
     /// `None` when no span leaves the process (trace push off): then no span is ever started.
     spans: Option<Spans>,
-    /// Where `neo_tabs_open` reads the live counts.
+    /// Where `neo_tab_count` reads the live counts.
     open_tabs: Arc<OpenTabs>,
     /// The scrape's handle on the meter provider's manual reader.
     scrape: ScrapeReader,
@@ -330,7 +330,7 @@ impl Pipeline {
         }
     }
 
-    /// `neo_runs_in_flight` +1 and the `neo.run` span starts.
+    /// `neo_run_active` +1 and the `neo.run` span starts.
     pub(crate) fn run_started(&self, facts: &RunFacts<'_>) -> PipelineRun {
         self.instruments.run_started();
         let span = self
@@ -350,7 +350,7 @@ impl Pipeline {
         }
     }
 
-    /// `neo_runs_in_flight` -1, `neo_runs_total`, `neo_run_duration_seconds`,
+    /// `neo_run_active` -1, `neo_runs_total`, `neo_run_duration_seconds`,
     /// `neo_errors_total` for a failure none of its ops reported, and the span ends.
     pub(crate) fn run_ended(&self, run: PipelineRun, verdict: Option<RunVerdict>) {
         let PipelineRun {
@@ -373,7 +373,7 @@ impl Pipeline {
         }
     }
 
-    /// A call refused before it became a run: `neo_runs_total{status="error"}` and
+    /// A call refused before it became a run: `neo_runs_total{neo_run_status="error"}` and
     /// `neo_errors_total`; no span, no in-flight, no duration.
     pub(crate) fn run_refused(&self, error: ErrorLabel) {
         self.instruments.run_refused(error);
@@ -426,12 +426,12 @@ impl Pipeline {
         }
     }
 
-    /// `neo_tabs_opened_total`.
+    /// `neo_tab_opened_total`.
     pub(crate) fn tab_opened(&self, origin: TabOrigin) {
         self.instruments.tab_opened(origin);
     }
 
-    /// `neo_tabs_closed_total` and `neo_tab_lifetime_seconds`.
+    /// `neo_tab_closed_total` and `neo_tab_duration_seconds`.
     pub(crate) fn tab_closed(&self, origin: TabOrigin, reason: CloseReason, lifetime: Duration) {
         self.instruments.tab_closed(origin, reason, lifetime);
     }
@@ -446,12 +446,12 @@ impl Pipeline {
         self.instruments.navigated(navigation);
     }
 
-    /// `neo_captcha_solves_total`, `neo_captcha_reasons_total` and `neo_captcha_spend_usd_total`.
+    /// `neo_captcha_solves_total`, `neo_captcha_reasons_total` and `neo_captcha_spend_total`.
     pub(crate) fn captcha_solved(&self, solve: CaptchaSolve) {
         self.instruments.captcha_solved(solve);
     }
 
-    /// The source `neo_tabs_open`'s callback reads at each collection.
+    /// The source `neo_tab_count`'s callback reads at each collection.
     pub(crate) fn set_open_tabs(&self, source: OpenTabsSource) {
         self.open_tabs.set(source);
     }

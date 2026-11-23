@@ -86,7 +86,7 @@ impl RunTelemetry {
     }
 
     /// Records one CAPTCHA solve that returned an outcome: `neo_captcha_solves_total`,
-    /// `neo_captcha_reasons_total` and its cost in `neo_captcha_spend_usd_total`. Recorded for
+    /// `neo_captcha_reasons_total` and its cost in `neo_captcha_spend_total`. Recorded for
     /// an internal run's ops too.
     #[cfg_attr(
         not(feature = "otel"),

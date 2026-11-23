@@ -21,17 +21,17 @@ const PROMETHEUS_TEXT: &str = "text/plain; version=0.0.4; charset=utf-8";
 const EXPOSITION: &str = "\
 # HELP neo_runs_total Runs Neo admitted, by how they ended → ok, error, cancelled or timeout.
 # TYPE neo_runs_total counter
-neo_runs_total{status=\"ok\",error_owner=\"none\"} 3
+neo_runs_total{neo_run_status=\"ok\",neo_error_owner=\"none\"} 3
 # HELP neo_run_duration_seconds How long each run took.
 # TYPE neo_run_duration_seconds histogram
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"0.5\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"+Inf\"} 3
-neo_run_duration_seconds_sum{status=\"ok\"} 4.25
-neo_run_duration_seconds_count{status=\"ok\"} 3
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"0.5\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"+Inf\"} 3
+neo_run_duration_seconds_sum{neo_run_status=\"ok\"} 4.25
+neo_run_duration_seconds_count{neo_run_status=\"ok\"} 3
 ";
 
 /// A later scrape, after the numbers moved.
-const LATER: &str = "# TYPE neo_runs_in_flight gauge\nneo_runs_in_flight 1\n";
+const LATER: &str = "# TYPE neo_run_active gauge\nneo_run_active 1\n";
 
 /// The app's telemetry as `ServiceInputs::metrics` reaches it: the text a test set (empty, as a
 /// telemetry that recorded nothing renders), and how many times the service asked for it.

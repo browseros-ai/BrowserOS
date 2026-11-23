@@ -45,7 +45,7 @@ pub struct RunVerdict {
 
 /// One run's telemetry, owned by the run's own guard (the server's `RunGuard`, through its
 /// `RunStart`) from the run's start to its settlement. For a counted run ([`crate::Telemetry::start_run`]) it holds the
-/// run in `neo_runs_in_flight` while it lives, and ending it records the run's metrics and ends
+/// run in `neo_run_active` while it lives, and ending it records the run's metrics and ends
 /// its `neo.run` span, exactly once. An internal run's span ([`crate::Telemetry::internal_run`])
 /// records nothing itself; its ops still count.
 ///

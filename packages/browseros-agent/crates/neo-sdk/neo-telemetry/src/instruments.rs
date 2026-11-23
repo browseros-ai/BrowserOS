@@ -1,7 +1,7 @@
 //! Neo's 16 instruments, as one catalog (wire-contract.md, "Metrics"): the 11 foundational ones,
 //! then navigation and CAPTCHA.
 //!
-//! [`CATALOG`] is the one list of families: both names, help, kind, unit and buckets.
+//! [`CATALOG`] is the one list of families: name, help, kind, unit and buckets.
 //! [`Instruments::new`] takes each instrument's OpenTelemetry name, help, unit and buckets from its
 //! entry: the counters and the histograms through one helper each, the in-flight up-down counter,
 //! the open-tabs observable up-down counter and the f64 spend counter written out, as their
@@ -9,10 +9,11 @@
 //! Prometheus renderer (`prometheus.rs`) walks the same list for its `# HELP` / `# TYPE` lines and
 //! family order, so the pull door and the OTLP push door cannot drift apart.
 //!
-//! Each door names things its own way. The OTLP door uses OpenTelemetry's metric naming: dotted
-//! names with no unit and no `_total` (an exporter derives both), namespaced attribute keys, and
-//! the registry's `error.type` for an error code. The scrape keeps the Prometheus names and label
-//! names it has always served: [`MetricSpec::name`] and [`Label::scrape`] are what it renders.
+//! One set of names, OpenTelemetry's metric naming: dotted names with no unit and no `_total`,
+//! namespaced attribute keys, and the registry's `error.type` for an error code. The OTLP door
+//! sends them as they are; the scrape renders the Prometheus names OpenTelemetry's compatibility
+//! rules derive from them (`prometheus::family_name`), the same ones a collector or Prometheus'
+//! own OTLP receiver would give a push, so both doors agree.
 //!
 //! Labels are closed by the record methods' signatures: each takes only the closed label enums
 //! ([`crate::label`]) and the two vocabulary tokens [`OpLabel`] and [`CodeLabel`], which only a
@@ -38,7 +39,7 @@ use crate::{CaptchaSolve, Navigated, OpenTabCounts, OpenTabsSource, Vocabulary};
 pub(crate) enum Kind {
     /// A monotonic total; its name ends in `_total`.
     Counter,
-    /// A value read as it is now (`neo_runs_in_flight`, `neo_tabs_open`).
+    /// A value read as it is now: an up-down counter (`neo.run.active`, `neo.tab.count`).
     Gauge,
     /// A distribution in explicit buckets: `_bucket`, `_sum`, `_count`.
     Histogram,
@@ -55,20 +56,19 @@ impl Kind {
     }
 }
 
-/// One metric family, under the name each door gives it. A plain data bag.
+/// One metric family. A plain data bag.
 #[derive(Debug)]
 pub(crate) struct MetricSpec {
-    /// The Prometheus family name the scrape serves.
-    pub(crate) name: &'static str,
-    /// The instrument's OpenTelemetry name, which the OTLP door sends.
+    /// The instrument's OpenTelemetry name: the OTLP door sends it, the scrape derives its
+    /// Prometheus name from it.
     pub(crate) otel: &'static str,
     /// The `# HELP` text and the OTLP description.
     pub(crate) help: &'static str,
     /// How Prometheus types it.
     pub(crate) kind: Kind,
     /// The OTLP unit, in UCUM as semantic conventions ask: `s` for the durations, a `{thing}`
-    /// annotation for a count of things. Prometheus text reads a duration's unit from its
-    /// name's suffix instead, and an annotation is no unit there.
+    /// annotation for a count of things. The scrape name carries a duration's unit as its
+    /// `_seconds` suffix; an annotation adds nothing there.
     pub(crate) unit: &'static str,
     /// Bucket upper bounds in seconds, strictly increasing; empty for a non-histogram.
     pub(crate) buckets: &'static [f64],
@@ -90,7 +90,6 @@ const TAB_BUCKETS: &[f64] = &[
 ];
 
 const RUNS_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_runs_total",
     otel: "neo.runs",
     help: "Runs that ended, and calls refused before they became a run, by status and by who \
            must fix the failure.",
@@ -99,7 +98,6 @@ const RUNS_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const RUNS_IN_FLIGHT: MetricSpec = MetricSpec {
-    name: "neo_runs_in_flight",
     otel: "neo.run.active",
     help: "Runs admitted and not yet ended.",
     kind: Kind::Gauge,
@@ -107,7 +105,6 @@ const RUNS_IN_FLIGHT: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const RUN_DURATION: MetricSpec = MetricSpec {
-    name: "neo_run_duration_seconds",
     otel: "neo.run.duration",
     help: "How long each run took, from admission to its end, by status.",
     kind: Kind::Histogram,
@@ -115,7 +112,6 @@ const RUN_DURATION: MetricSpec = MetricSpec {
     buckets: RUN_BUCKETS,
 };
 const OPERATIONS_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_operations_total",
     otel: "neo.operations",
     help: "Operations settled, by op (unregistered names count as unknown), status and who must \
            fix the failure.",
@@ -124,7 +120,6 @@ const OPERATIONS_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const OPERATION_DURATION: MetricSpec = MetricSpec {
-    name: "neo_operation_duration_seconds",
     otel: "neo.operation.duration",
     help: "How long each operation took, by op and status.",
     kind: Kind::Histogram,
@@ -132,7 +127,6 @@ const OPERATION_DURATION: MetricSpec = MetricSpec {
     buckets: OP_BUCKETS,
 };
 const ERRORS_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_errors_total",
     otel: "neo.errors",
     help: "Failures by who must fix them and their code, each counted once where it is \
            attributed.",
@@ -141,7 +135,6 @@ const ERRORS_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const TABS_OPEN: MetricSpec = MetricSpec {
-    name: "neo_tabs_open",
     otel: "neo.tab.count",
     help: "Tabs open now, by who opened them.",
     kind: Kind::Gauge,
@@ -149,7 +142,6 @@ const TABS_OPEN: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const TABS_OPENED_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_tabs_opened_total",
     otel: "neo.tab.opened",
     help: "Tabs Neo registered, by who opened them.",
     kind: Kind::Counter,
@@ -157,7 +149,6 @@ const TABS_OPENED_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const TABS_CLOSED_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_tabs_closed_total",
     otel: "neo.tab.closed",
     help: "Tabs closed, by who opened them and why they closed.",
     kind: Kind::Counter,
@@ -165,7 +156,6 @@ const TABS_CLOSED_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const TAB_LIFETIME: MetricSpec = MetricSpec {
-    name: "neo_tab_lifetime_seconds",
     otel: "neo.tab.duration",
     help: "How long each closed tab was open, by who opened it and why it closed.",
     kind: Kind::Histogram,
@@ -173,7 +163,6 @@ const TAB_LIFETIME: MetricSpec = MetricSpec {
     buckets: TAB_BUCKETS,
 };
 const RENDERER_CRASHES_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_renderer_crashes_total",
     otel: "neo.renderer.crashes",
     help: "Renderer crashes, whether or not an op was using the tab.",
     kind: Kind::Counter,
@@ -181,7 +170,6 @@ const RENDERER_CRASHES_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const NAVIGATIONS_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_navigations_total",
     otel: "neo.navigations",
     help: "Navigations sent to the browser that ended, by the HTTP status their document \
            arrived with, when one was read.",
@@ -190,7 +178,6 @@ const NAVIGATIONS_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const NAVIGATION_ERRORS_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_navigation_errors_total",
     otel: "neo.navigation.errors",
     help: "Navigations that failed on the network, by the browser's net error.",
     kind: Kind::Counter,
@@ -198,7 +185,6 @@ const NAVIGATION_ERRORS_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const CAPTCHA_SOLVES_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_captcha_solves_total",
     otel: "neo.captcha.solves",
     help: "CAPTCHA solves that returned an outcome, by the CAPTCHA found and how the solve ended.",
     kind: Kind::Counter,
@@ -206,7 +192,6 @@ const CAPTCHA_SOLVES_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const CAPTCHA_REASONS_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_captcha_reasons_total",
     otel: "neo.captcha.reasons",
     help: "CAPTCHA solves that returned an outcome, by why the solve ended as it did.",
     kind: Kind::Counter,
@@ -214,7 +199,6 @@ const CAPTCHA_REASONS_TOTAL: MetricSpec = MetricSpec {
     buckets: &[],
 };
 const CAPTCHA_SPEND_USD_TOTAL: MetricSpec = MetricSpec {
-    name: "neo_captcha_spend_usd_total",
     otel: "neo.captcha.spend",
     help: "US dollars CAPTCHA providers charged, by the provider each solve booked it to.",
     kind: Kind::Counter,
@@ -242,14 +226,12 @@ pub(crate) const CATALOG: [&MetricSpec; 16] = [
     &CAPTCHA_SPEND_USD_TOTAL,
 ];
 
-/// One attribute the instruments set: its OpenTelemetry key, and the label name the scrape
-/// renders it under. A plain data bag.
+/// One attribute the instruments set, by its OpenTelemetry key. The scrape renders it under the
+/// label name the key translates to (`neo.op.name` is `neo_op_name`). A plain data bag.
 #[derive(Debug)]
 pub(crate) struct Label {
-    /// The attribute key, as the OTLP door sends it.
+    /// The attribute key.
     pub(crate) otel: &'static str,
-    /// The Prometheus label name.
-    pub(crate) scrape: &'static str,
 }
 
 impl Label {
@@ -263,54 +245,41 @@ impl Label {
 // error, and `http.response.status_code` its key for the status an HTTP response carried.
 const RUN_STATUS: Label = Label {
     otel: "neo.run.status",
-    scrape: "status",
 };
 const OP_OUTCOME: Label = Label {
     otel: "neo.op.outcome",
-    scrape: "status",
 };
 const OP_NAME: Label = Label {
     otel: "neo.op.name",
-    scrape: "op",
 };
 const ERROR_OWNER: Label = Label {
     otel: "neo.error.owner",
-    scrape: "error_owner",
 };
-const ERROR_TYPE: Label = Label {
-    otel: "error.type",
-    scrape: "error_code",
-};
+const ERROR_TYPE: Label = Label { otel: "error.type" };
 const ORIGIN: Label = Label {
     otel: "neo.tab.origin",
-    scrape: "origin",
 };
 const CLOSE_REASON: Label = Label {
     otel: "neo.tab.close_reason",
-    scrape: "close_reason",
 };
 const HTTP_STATUS: Label = Label {
     otel: "http.response.status_code",
-    scrape: "status_code",
 };
 const CAPTCHA_FAMILY: Label = Label {
     otel: "neo.captcha.family",
-    scrape: "family",
 };
 const CAPTCHA_VERDICT: Label = Label {
     otel: "neo.captcha.verdict",
-    scrape: "verdict",
 };
 const CAPTCHA_REASON: Label = Label {
     otel: "neo.captcha.reason",
-    scrape: "reason",
 };
 const CAPTCHA_PROVIDER: Label = Label {
     otel: "neo.captcha.provider",
-    scrape: "provider",
 };
 
 /// Every attribute the instruments set.
+#[cfg(test)]
 pub(crate) const LABELS: [&Label; 12] = [
     &RUN_STATUS,
     &OP_OUTCOME,
@@ -326,18 +295,10 @@ pub(crate) const LABELS: [&Label; 12] = [
     &CAPTCHA_PROVIDER,
 ];
 
-/// The scrape's label name for the attribute `key`, or `None` for a key the instruments never set.
-pub(crate) fn scrape_label(key: &str) -> Option<&'static str> {
-    LABELS
-        .iter()
-        .find(|label| label.otel == key)
-        .map(|label| label.scrape)
-}
-
-/// Every `origin` the open-tabs gauge reports, so each one shows a value, `0` included.
+/// Every origin the open-tabs gauge reports, so each one shows a value, `0` included.
 const ORIGINS: [TabOrigin; 3] = [TabOrigin::Agent, TabOrigin::Found, TabOrigin::Neo];
 
-/// An `op` label value: a name from the bound [`Vocabulary`], or `unknown`. Minted only by
+/// A `neo.op.name` value: a name from the bound [`Vocabulary`], or `unknown`. Minted only by
 /// [`OpLabel::of`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OpLabel(&'static str);
@@ -355,7 +316,7 @@ impl OpLabel {
     }
 }
 
-/// An `error_code` label value: one of Neo's codes from the bound [`Vocabulary`], or `unknown`.
+/// An `error.type` value for one of Neo's codes: one of Neo's codes from the bound [`Vocabulary`], or `unknown`.
 /// Minted only by [`CodeLabel::of`], so a code built at run time cannot open a series.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CodeLabel(&'static str);
@@ -369,7 +330,7 @@ impl CodeLabel {
     }
 }
 
-/// Where `neo_tabs_open` reads the live counts: the source the tab registry set, once set.
+/// Where `neo.tab.count` reads the live counts: the source the tab registry set, once set.
 ///
 /// Read by the gauge's callback on whichever thread collects (a scrape's handler, the periodic
 /// exporter's own thread), written by [`crate::Telemetry::set_open_tabs`].
@@ -433,7 +394,7 @@ pub(crate) struct Instruments {
 }
 
 impl Instruments {
-    /// Builds every instrument on `meter`, and registers `neo_tabs_open`'s callback over
+    /// Builds every instrument on `meter`, and registers `neo.tab.count`'s callback over
     /// `open_tabs`. The two unlabelled series start at zero, so a scrape shows them from the
     /// start instead of after the first run or crash.
     pub(crate) fn new(meter: &Meter, open_tabs: Arc<OpenTabs>) -> Self {
@@ -487,13 +448,12 @@ impl Instruments {
         instruments
     }
 
-    /// A counted run was admitted: `neo_runs_in_flight` +1.
+    /// A counted run was admitted: `neo.run.active` +1.
     pub(crate) fn run_started(&self) {
         self.runs_in_flight.add(1, &[]);
     }
 
-    /// A counted run ended: `neo_runs_in_flight` -1, `neo_runs_total` and
-    /// `neo_run_duration_seconds`.
+    /// A counted run ended: `neo.run.active` -1, `neo.runs` and `neo.run.duration`.
     pub(crate) fn run_ended(&self, status: RunStatus, error: Option<ErrorLabel>, took: Duration) {
         self.runs_in_flight.add(-1, &[]);
         self.run_counted(status, error);
@@ -503,7 +463,7 @@ impl Instruments {
         );
     }
 
-    /// A call refused before it became a run: `neo_runs_total{status="error"}` alone.
+    /// A call refused before it became a run: `neo.runs` with status `error` alone.
     pub(crate) fn run_refused(&self, error: ErrorLabel) {
         self.run_counted(RunStatus::Error, Some(error));
     }
@@ -518,8 +478,8 @@ impl Instruments {
         );
     }
 
-    /// An op settled: `neo_operations_total` and `neo_operation_duration_seconds`. No
-    /// `error_code` here: codes go on `neo_errors_total` alone, so ops never multiply by codes.
+    /// An op settled: `neo.operations` and `neo.operation.duration`. No `error.type` here:
+    /// codes go on `neo.errors` alone, so ops never multiply by codes.
     pub(crate) fn op_settled(
         &self,
         op: OpLabel,
@@ -541,7 +501,7 @@ impl Instruments {
         );
     }
 
-    /// One failure, counted where it is attributed: `neo_errors_total`.
+    /// One failure, counted where it is attributed: `neo.errors`.
     pub(crate) fn error_counted(&self, owner: ErrorOwner, code: CodeLabel) {
         self.errors_total.add(
             1,
@@ -552,13 +512,13 @@ impl Instruments {
         );
     }
 
-    /// `neo_tabs_opened_total`.
+    /// `neo.tab.opened`.
     pub(crate) fn tab_opened(&self, origin: TabOrigin) {
         self.tabs_opened_total
             .add(1, &[KeyValue::new(ORIGIN.key(), origin.as_str())]);
     }
 
-    /// `neo_tabs_closed_total` and `neo_tab_lifetime_seconds`.
+    /// `neo.tab.closed` and `neo.tab.duration`.
     pub(crate) fn tab_closed(&self, origin: TabOrigin, reason: CloseReason, lifetime: Duration) {
         let labels = [
             KeyValue::new(ORIGIN.key(), origin.as_str()),
@@ -568,13 +528,13 @@ impl Instruments {
         self.tab_lifetime.record(lifetime.as_secs_f64(), &labels);
     }
 
-    /// `neo_renderer_crashes_total`.
+    /// `neo.renderer.crashes`.
     pub(crate) fn renderer_crashed(&self) {
         self.renderer_crashes_total.add(1, &[]);
     }
 
-    /// `neo_navigations_total`, with `status_code` only when the document had one, and
-    /// `neo_navigation_errors_total` when the network refused it.
+    /// `neo.navigations`, with `http.response.status_code` only when the document had one, and
+    /// `neo.navigation.errors` when the network refused it.
     pub(crate) fn navigated(&self, navigation: Navigated) {
         match navigation.status {
             Some(status) => self
@@ -588,8 +548,8 @@ impl Instruments {
         }
     }
 
-    /// `neo_captcha_solves_total`, `neo_captcha_reasons_total` and, for a finite cost above 0,
-    /// `neo_captcha_spend_usd_total`.
+    /// `neo.captcha.solves`, `neo.captcha.reasons` and, for a finite cost above 0,
+    /// `neo.captcha.spend`.
     pub(crate) fn captcha_solved(&self, solve: CaptchaSolve) {
         self.captcha_solves_total.add(
             1,
@@ -646,11 +606,12 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::prometheus::{family_name, label_name};
 
     /// wire-contract.md's table, row by row: scrape name, OTLP name, kind, unit.
     const WIRE_CONTRACT: [(&str, &str, Kind, &str); 16] = [
         ("neo_runs_total", "neo.runs", Kind::Counter, "{run}"),
-        ("neo_runs_in_flight", "neo.run.active", Kind::Gauge, "{run}"),
+        ("neo_run_active", "neo.run.active", Kind::Gauge, "{run}"),
         (
             "neo_run_duration_seconds",
             "neo.run.duration",
@@ -670,21 +631,21 @@ mod tests {
             "s",
         ),
         ("neo_errors_total", "neo.errors", Kind::Counter, "{error}"),
-        ("neo_tabs_open", "neo.tab.count", Kind::Gauge, "{tab}"),
+        ("neo_tab_count", "neo.tab.count", Kind::Gauge, "{tab}"),
         (
-            "neo_tabs_opened_total",
+            "neo_tab_opened_total",
             "neo.tab.opened",
             Kind::Counter,
             "{tab}",
         ),
         (
-            "neo_tabs_closed_total",
+            "neo_tab_closed_total",
             "neo.tab.closed",
             Kind::Counter,
             "{tab}",
         ),
         (
-            "neo_tab_lifetime_seconds",
+            "neo_tab_duration_seconds",
             "neo.tab.duration",
             Kind::Histogram,
             "s",
@@ -720,7 +681,7 @@ mod tests {
             "{solve}",
         ),
         (
-            "neo_captcha_spend_usd_total",
+            "neo_captcha_spend_total",
             "neo.captcha.spend",
             Kind::Counter,
             "{USD}",
@@ -729,14 +690,18 @@ mod tests {
 
     #[test]
     fn the_catalog_is_the_wire_contract_in_its_order() {
-        let catalog: Vec<(&str, &str, Kind, &str)> = CATALOG
+        let catalog: Vec<(String, &str, Kind, &str)> = CATALOG
             .iter()
-            .map(|spec| (spec.name, spec.otel, spec.kind, spec.unit))
+            .map(|spec| (family_name(spec), spec.otel, spec.kind, spec.unit))
+            .collect();
+        let contract: Vec<(String, &str, Kind, &str)> = WIRE_CONTRACT
+            .iter()
+            .map(|&(name, otel, kind, unit)| (name.to_owned(), otel, kind, unit))
             .collect();
         assert_eq!(
-            catalog,
-            WIRE_CONTRACT.to_vec(),
-            "both doors take names, kinds and units from this list, so it must be the contract's"
+            catalog, contract,
+            "both doors take names, kinds and units from this list, so it must be the contract's, \
+             and each scrape name is the one OpenTelemetry's Prometheus rules derive"
         );
     }
 
@@ -789,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn the_host_api_contract_gives_each_family_and_label_its_otlp_name()
+    fn the_host_api_contract_names_each_family_and_label_under_both_spellings()
     -> Result<(), Box<dyn Error>> {
         let spec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-sdk-api/openapi.yaml");
         let yaml = fs::read_to_string(spec)?;
@@ -801,79 +766,45 @@ mod tests {
             .flat_map(str::split_whitespace)
             .collect();
         let route = route.join(" ");
-        let (_, push) = route
-            .split_once("An OTLP push carries")
-            .ok_or("/v1/metrics says what a push names differently")?;
         for spec in CATALOG {
-            let pair = format!("`{}` is `{}`", spec.name, spec.otel);
-            assert!(push.contains(&pair), "openapi.yaml says {pair}");
+            let pair = format!("`{}` (`{}`)", family_name(spec), spec.otel);
+            assert!(route.contains(&pair), "openapi.yaml lists {pair}");
         }
         for label in LABELS {
-            let key = format!("`{}`", label.otel);
-            assert!(
-                push.contains(&key),
-                "openapi.yaml names the key {key} for `{}`",
-                label.scrape
-            );
+            let pair = format!("`{}` (`{}`)", label_name(label.otel), label.otel);
+            assert!(route.contains(&pair), "openapi.yaml lists the label {pair}");
         }
         Ok(())
     }
 
     #[test]
-    fn every_attribute_key_is_namespaced_and_maps_to_its_scrape_label() {
+    fn every_attribute_key_is_namespaced_and_distinct_once_translated() {
+        let mut names: Vec<String> = LABELS
+            .iter()
+            .map(|label| label_name(label.otel).into_owned())
+            .collect();
         for label in LABELS {
             assert!(
                 dotted(label.otel, &["neo", "error", "http"]),
                 "{}: a namespaced attribute key",
                 label.otel
             );
-            assert_eq!(
-                scrape_label(label.otel),
-                Some(label.scrape),
-                "{}: the scrape renders it under its own label name",
-                label.otel
-            );
         }
+        names.sort_unstable();
+        names.dedup();
         assert_eq!(
-            scrape_label("error.type"),
-            Some("error_code"),
-            "the registry's `error.type` carries the code the scrape calls `error_code`"
-        );
-        assert_eq!(
-            scrape_label("http.response.status_code"),
-            Some("status_code"),
-            "and its `http.response.status_code` the status the scrape calls `status_code`"
-        );
-        assert_eq!(
-            scrape_label("otel.metric.overflow"),
-            None,
-            "not one of ours"
+            names.len(),
+            LABELS.len(),
+            "no two keys meet under one label name"
         );
     }
 
     #[test]
-    fn counters_end_in_total_once_and_only_histograms_have_buckets() {
+    fn units_and_buckets_fit_the_kind() {
         for spec in CATALOG {
-            let totals = spec.name.matches("_total").count();
-            match spec.kind {
-                Kind::Counter => assert!(
-                    totals == 1 && spec.name.ends_with("_total"),
-                    "{}: a counter's name ends in `_total`, exactly once",
-                    spec.name
-                ),
-                Kind::Gauge | Kind::Histogram => assert_eq!(
-                    totals, 0,
-                    "{}: only a counter's name carries `_total`",
-                    spec.name
-                ),
-            }
             match spec.kind {
                 Kind::Histogram => {
-                    assert!(
-                        spec.name.ends_with("_seconds") && spec.unit == "s",
-                        "{}: a duration is in seconds, in its name and its unit",
-                        spec.name
-                    );
+                    assert_eq!(spec.unit, "s", "{}: a duration is in seconds", spec.otel);
                     assert!(
                         !spec.buckets.is_empty()
                             && spec.buckets.windows(2).all(|pair| pair[0] < pair[1])
@@ -882,26 +813,26 @@ mod tests {
                                 .iter()
                                 .all(|bound| bound.is_finite() && *bound > 0.0),
                         "{}: buckets are positive, finite and strictly increasing",
-                        spec.name
+                        spec.otel
                     );
                 }
                 Kind::Counter | Kind::Gauge => {
                     assert!(
                         spec.buckets.is_empty(),
                         "{}: only a histogram has buckets",
-                        spec.name
+                        spec.otel
                     );
                     assert!(
                         spec.unit.starts_with('{') && spec.unit.ends_with('}'),
                         "{}: a count of things has a UCUM annotation as its unit",
-                        spec.name
+                        spec.otel
                     );
                 }
             }
             assert!(
                 spec.help.ends_with('.') && !spec.help.contains('\n'),
                 "{}: help is one sentence on one line",
-                spec.name
+                spec.otel
             );
         }
     }

@@ -1,6 +1,6 @@
 //! How an operation ended, as its metrics and its span say it.
 
-/// How an op ended: the `status` label of `neo_operations_total` and
+/// How an op ended: the `neo.op.outcome` of `neo_operations_total` and
 /// `neo_operation_duration_seconds`, and the span's `neo.op.outcome`. Mirrors
 /// `neo_trace::Outcome`, the `outcome` of an operation on `GET /v1/runs/{id}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

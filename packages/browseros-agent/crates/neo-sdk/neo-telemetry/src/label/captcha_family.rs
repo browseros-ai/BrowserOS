@@ -1,6 +1,6 @@
 //! Which kind of CAPTCHA a solve met, as a label.
 
-/// The CAPTCHA a solve found: the `family` label of `neo_captcha_solves_total`. Mirrors
+/// The CAPTCHA a solve found: the `neo.captcha.family` of `neo_captcha_solves_total`. Mirrors
 /// neo-captcha's `CaptchaKind`, plus [`CaptchaFamily::None`] for a page with none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CaptchaFamily {

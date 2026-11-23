@@ -1,6 +1,6 @@
 //! Whose behaviour must change to fix a failure, as a label.
 
-/// Who must change to fix a failure: the `error_owner` label of `neo_runs_total`,
+/// Who must change to fix a failure: the `neo.error.owner` of `neo_runs_total`,
 /// `neo_operations_total` and `neo_errors_total`, and the spans' `neo.error.owner`. Mirrors
 /// `neo_trace::ErrorOwner`. A run or op that did not fail carries [`ErrorOwner::NONE`] on its
 /// metrics (and no attribute on its span): there is no `None` variant, so a failure always has
@@ -18,7 +18,7 @@ pub enum ErrorOwner {
 }
 
 impl ErrorOwner {
-    /// The `error_owner` label of a run or op that did not fail.
+    /// The `neo.error.owner` of a run or op that did not fail.
     pub const NONE: &'static str = "none";
 
     /// The wire spelling.

@@ -39,10 +39,10 @@ impl Scrape {
         Self::parse(&telemetry.render_prometheus())
     }
 
-    /// `neo_tabs_open` by origin, as `(agent, found, neo)`; a series not served reads as 0.
+    /// `neo_tab_count` by origin, as `(agent, found, neo)`; a series not served reads as 0.
     pub(crate) fn open_tabs(&self) -> (u64, u64, u64) {
         let open = |origin| {
-            self.whole("neo_tabs_open", &[("origin", origin)])
+            self.whole("neo_tab_count", &[("neo_tab_origin", origin)])
                 .unwrap_or(0)
         };
         (open("agent"), open("found"), open("neo"))

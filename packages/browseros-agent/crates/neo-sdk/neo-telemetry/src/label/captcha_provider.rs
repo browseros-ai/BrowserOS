@@ -1,7 +1,7 @@
 //! Who was paid for a CAPTCHA solve, as a label.
 
-/// The provider a solve's spend is booked to: the `provider` label of
-/// `neo_captcha_spend_usd_total`, spelled as the script's `provider` field.
+/// The provider a solve's spend is booked to: the `neo.captcha.provider` of
+/// `neo_captcha_spend_total`, spelled as the script's `provider` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CaptchaProvider {
     /// `CapSolver`.

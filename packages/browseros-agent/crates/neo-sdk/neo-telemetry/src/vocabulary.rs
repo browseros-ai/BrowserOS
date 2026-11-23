@@ -1,5 +1,5 @@
-//! Neo's own tables of op names and error codes: the only values the `op` and `error_code`
-//! metric labels may take.
+//! Neo's own tables of op names and error codes: the only values the `neo.op.name`
+//! and `error.type` metric attributes may take.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -32,14 +32,14 @@ impl Vocabulary {
         }
     }
 
-    /// The `op` label for `name`: the registered name itself, or `unknown` (always a label,
+    /// The `neo.op.name` value for `name`: the registered name itself, or `unknown` (always a label,
     /// listed or not: it is the door's own name for a call with no method).
     #[must_use]
     pub fn op_label(&self, name: &str) -> &'static str {
         self.ops.get(name).copied().unwrap_or(Self::UNKNOWN)
     }
 
-    /// The `error_code` label for `code`: one of Neo's codes, or `unknown`.
+    /// The `error.type` value for `code`: one of Neo's codes, or `unknown`.
     #[must_use]
     pub fn error_code_label(&self, code: &str) -> &'static str {
         self.error_codes.get(code).copied().unwrap_or(Self::UNKNOWN)

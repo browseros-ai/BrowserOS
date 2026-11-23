@@ -427,8 +427,8 @@ async fn a_popup_that_opened_and_closed_between_two_listings_leaves_no_announcem
 /// The tab metrics `telemetry` serves, as `name{labels} value` lines (the gauge left out).
 fn tab_counts(telemetry: &Telemetry) -> Result<Vec<String>, Box<dyn Error>> {
     Ok(Scrape::of(telemetry)?.lines_of(&[
-        "neo_tabs_opened_total",
-        "neo_tabs_closed_total",
+        "neo_tab_opened_total",
+        "neo_tab_closed_total",
         "neo_renderer_crashes_total",
     ]))
 }
@@ -471,7 +471,7 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
     eventually(Duration::from_secs(5), found(1)).await?;
     // A close nobody asked for waits two seconds; the socket stays up meanwhile,
     // so it is the user's. A drop within the wait would have made it the shutdown's.
-    let user = r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#;
+    let user = r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 1"#;
     eventually(Duration::from_secs(5), || {
         tab_counts(&telemetry).is_ok_and(|counts| counts.iter().any(|line| line == user))
     })
@@ -481,7 +481,8 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
     fake.drop_connection();
     assert!(fake.replace_target(before), "the fake had the tab");
     fake.reconnect();
-    let shutdown = r#"neo_tabs_closed_total{close_reason="shutdown",origin="found"} 1"#;
+    let shutdown =
+        r#"neo_tab_closed_total{neo_tab_close_reason="shutdown",neo_tab_origin="found"} 1"#;
     eventually(Duration::from_secs(5), || {
         tab_counts(&telemetry).is_ok_and(|counts| counts.iter().any(|line| line == shutdown))
     })
@@ -492,10 +493,10 @@ async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), 
         tab_counts(&telemetry)?,
         [
             "neo_renderer_crashes_total 1",
-            r#"neo_tabs_closed_total{close_reason="crash",origin="found"} 1"#,
+            r#"neo_tab_closed_total{neo_tab_close_reason="crash",neo_tab_origin="found"} 1"#,
             shutdown,
-            r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#,
-            r#"neo_tabs_opened_total{origin="found"} 4"#,
+            r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 1"#,
+            r#"neo_tab_opened_total{neo_tab_origin="found"} 4"#,
         ],
         "three tabs found, each closed once (the crashed one as crash, the one gone while Neo \
          was away as the user's, the restarted browser's as shutdown), the reborn tab found \
@@ -577,8 +578,8 @@ async fn after_a_lag_the_watch_still_knows_a_tab_on_an_excluded_page() -> Result
     eventually(Duration::from_secs(5), found(3)).await?;
     // The owner's two closes count once their wait is over.
     let expected = [
-        r#"neo_tabs_closed_total{close_reason="user",origin="found"} 2"#,
-        r#"neo_tabs_opened_total{origin="found"} 5"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 2"#,
+        r#"neo_tab_opened_total{neo_tab_origin="found"} 5"#,
     ];
     eventually(Duration::from_secs(5), || {
         tab_counts(&telemetry).is_ok_and(|counts| counts == expected)
@@ -616,13 +617,13 @@ async fn closes_followed_by_a_socket_drop_count_as_shutdown() -> Result<(), Box<
     eventually(Duration::from_secs(5), found(0)).await?;
     assert_eq!(
         tab_counts(&telemetry)?,
-        [r#"neo_tabs_opened_total{origin="found"} 2"#],
+        [r#"neo_tab_opened_total{neo_tab_origin="found"} 2"#],
         "the closes wait for their reason"
     );
     fake.drop_connection();
     let expected = [
-        r#"neo_tabs_closed_total{close_reason="shutdown",origin="found"} 2"#,
-        r#"neo_tabs_opened_total{origin="found"} 2"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="shutdown",neo_tab_origin="found"} 2"#,
+        r#"neo_tab_opened_total{neo_tab_origin="found"} 2"#,
     ];
     eventually(Duration::from_secs(5), || {
         tab_counts(&telemetry).is_ok_and(|counts| counts == expected)

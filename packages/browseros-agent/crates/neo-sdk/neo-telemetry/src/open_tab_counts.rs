@@ -1,4 +1,4 @@
-//! The live open-tab counts the `neo_tabs_open` gauge reads at each scrape or push.
+//! The live open-tab counts the `neo_tab_count` gauge reads at each scrape or push.
 
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ pub struct OpenTabCounts {
 }
 
 impl OpenTabCounts {
-    /// The count for one `origin` label value.
+    /// The count for one `neo.tab.origin` value.
     #[must_use]
     pub const fn of(&self, origin: TabOrigin) -> u64 {
         match origin {

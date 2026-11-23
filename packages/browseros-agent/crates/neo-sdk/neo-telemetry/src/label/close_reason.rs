@@ -1,7 +1,7 @@
 //! Why a tab closed, as a label.
 
-/// Why a tab closed: the `close_reason` label of `neo_tabs_closed_total` and
-/// `neo_tab_lifetime_seconds`. Exactly one per close, so no close is counted twice.
+/// Why a tab closed: the `neo.tab.close_reason` of `neo_tab_closed_total` and
+/// `neo_tab_duration_seconds`. Exactly one per close, so no close is counted twice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CloseReason {
     /// A script closed it (`page.close`).

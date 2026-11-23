@@ -1,6 +1,6 @@
 //! How a tab came to be open, as a label.
 
-/// Who opened a tab: the `origin` label of the tab metrics. Mirrors the server's own tab
+/// Who opened a tab: the `neo.tab.origin` of the tab metrics. Mirrors the server's own tab
 /// registry origin (`browser/tab_registry.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TabOrigin {

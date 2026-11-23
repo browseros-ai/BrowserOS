@@ -18,7 +18,7 @@ fn the_contract_lists_what_a_first_scrape_writes() -> Result<(), Box<dyn Error>>
     );
     assert_eq!(
         samples(&exposition),
-        ["neo_runs_in_flight 0", "neo_renderer_crashes_total 0"],
+        ["neo_run_active 0", "neo_renderer_crashes_total 0"],
         "before Neo records anything only the two unlabelled series have a value, both zero: the \
          body is never empty"
     );
@@ -32,9 +32,9 @@ fn the_contract_lists_what_a_first_scrape_writes() -> Result<(), Box<dyn Error>>
     let origins = telemetry
         .render_prometheus()
         .lines()
-        .filter(|line| line.starts_with("neo_tabs_open{"))
+        .filter(|line| line.starts_with("neo_tab_count{"))
         .count();
-    assert_eq!(origins, 3, "`neo_tabs_open` has a series for each origin");
+    assert_eq!(origins, 3, "`neo_tab_count` has a series for each origin");
     Ok(())
 }
 
@@ -59,19 +59,20 @@ fn contract() -> Result<String, Box<dyn Error>> {
     Ok(route.join(" "))
 }
 
-/// The families the contract lists, in its order: the `neo_` names quoted in its list.
+/// The families the contract lists, in its order: each quoted name followed by its OpenTelemetry
+/// name in parentheses.
 fn listed(route: &str) -> Result<Vec<&str>, Box<dyn Error>> {
     let (_, list) = route
-        .split_once("The families, with their labels:")
+        .split_once("with their labels:")
         .ok_or("the /v1/metrics description lists its families")?;
     let (list, _) = list
         .split_once("Every one has")
         .ok_or("the list is followed by what a first scrape holds")?;
-    Ok(list
-        .split('`')
-        .skip(1)
-        .step_by(2)
-        .filter(|quoted| quoted.starts_with("neo_"))
+    let pieces: Vec<&str> = list.split("` (`").collect();
+    Ok(pieces
+        .iter()
+        .take(pieces.len().saturating_sub(1))
+        .filter_map(|piece| piece.rsplit('`').next())
         .collect())
 }
 

@@ -165,7 +165,7 @@ pub(crate) struct RunGuard {
     tabs: Arc<TabRegistry>,
     /// The run's telemetry, taken together with `run`: both of the guard's ends finish it once,
     /// beside `run_ended`, with the verdict read from the same end ([`telemetry_verdict()`]). It
-    /// holds the run in `neo_runs_in_flight`, so the count comes down on every path, a panic's
+    /// holds the run in `neo_run_active`, so the count comes down on every path, a panic's
     /// included.
     telemetry: Option<RunSpan>,
 }

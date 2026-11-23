@@ -22,7 +22,7 @@
 //!  NeoTab ── Neo's one blank tab (TabOrigin::Neo), kept open on every watch start and after
 //!            each close of it, so no other close ends the browser (the sidecar only)
 //!  TabLife ── tab telemetry's ledger, owned by TabRegistry: every listed tab by birth origin
-//!             (the neo_tabs_open gauge), each open and close once with one reason, each
+//!             (the neo_tab_count gauge), each open and close once with one reason, each
 //!             renderer crash; fed only by tab_watch, told of Neo's own opens and closes first
 //!             by intents (the newPage and page.close wrappers, the janitor, NeoTab)
 //! ```

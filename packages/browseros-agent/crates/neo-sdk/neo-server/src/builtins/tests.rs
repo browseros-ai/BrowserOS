@@ -650,7 +650,7 @@ async fn net_error_navigation(values: Values) -> Result<(), Box<dyn Error>> {
     assert_eq!(
         Scrape::of(&telemetry)?.lines_of(&["neo_navigations_total", "neo_navigation_errors_total"]),
         [
-            r#"neo_navigation_errors_total{error_code="name_not_resolved"} 1"#,
+            r#"neo_navigation_errors_total{error_type="name_not_resolved"} 1"#,
             "neo_navigations_total 1",
         ],
         "{values:?}: one navigation sent, the one the network refused"
@@ -1455,7 +1455,7 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     Ok(())
 }
 
-/// Waits until `done` holds for `neo_tabs_open`, as `(agent, found, neo)` in a scrape.
+/// Waits until `done` holds for `neo_tab_count`, as `(agent, found, neo)` in a scrape.
 async fn tabs_until(
     telemetry: &Telemetry,
     done: impl Fn((u64, u64, u64)) -> bool,
@@ -1512,15 +1512,15 @@ async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), 
     tabs_until(&telemetry, |(_, found, _)| found == 0).await?;
 
     let expected = [
-        r#"neo_tabs_closed_total{close_reason="janitor",origin="agent"} 1"#,
-        r#"neo_tabs_closed_total{close_reason="script",origin="agent"} 1"#,
-        r#"neo_tabs_closed_total{close_reason="user",origin="found"} 1"#,
-        r#"neo_tabs_opened_total{origin="agent"} 2"#,
-        r#"neo_tabs_opened_total{origin="found"} 1"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="janitor",neo_tab_origin="agent"} 1"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="script",neo_tab_origin="agent"} 1"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 1"#,
+        r#"neo_tab_opened_total{neo_tab_origin="agent"} 2"#,
+        r#"neo_tab_opened_total{neo_tab_origin="found"} 1"#,
     ];
     let counts = || {
         Scrape::of(&telemetry)
-            .map(|scrape| scrape.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]))
+            .map(|scrape| scrape.lines_of(&["neo_tab_opened_total", "neo_tab_closed_total"]))
     };
     // The owner's close counts once its two-second wait is over.
     within(async {
@@ -2743,7 +2743,7 @@ async fn a_solve_that_returned_an_outcome_is_counted_and_a_refused_one_is_not()
     const SOLVES: [&str; 3] = [
         "neo_captcha_solves_total",
         "neo_captcha_reasons_total",
-        "neo_captcha_spend_usd_total",
+        "neo_captcha_spend_total",
     ];
     let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
     let keyless = Harness::new().await?;
@@ -2779,8 +2779,8 @@ async fn a_solve_that_returned_an_outcome_is_counted_and_a_refused_one_is_not()
     assert_eq!(
         Scrape::of(&telemetry)?.lines_of(&SOLVES),
         [
-            r#"neo_captcha_reasons_total{reason="browser_error"} 1"#,
-            r#"neo_captcha_solves_total{family="none",verdict="failed"} 1"#,
+            r#"neo_captcha_reasons_total{neo_captcha_reason="browser_error"} 1"#,
+            r#"neo_captcha_solves_total{neo_captcha_family="none",neo_captcha_verdict="failed"} 1"#,
         ],
         "the fake browser's empty frame tree fails detection before any CAPTCHA or provider"
     );
@@ -6322,10 +6322,10 @@ async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn 
         "adopted, not opened"
     );
     assert_eq!(
-        Scrape::of(&telemetry)?.lines_of(&["neo_tabs_opened_total", "neo_tabs_closed_total"]),
+        Scrape::of(&telemetry)?.lines_of(&["neo_tab_opened_total", "neo_tab_closed_total"]),
         [
-            r#"neo_tabs_opened_total{origin="found"} 1"#,
-            r#"neo_tabs_opened_total{origin="neo"} 1"#,
+            r#"neo_tab_opened_total{neo_tab_origin="found"} 1"#,
+            r#"neo_tab_opened_total{neo_tab_origin="neo"} 1"#,
         ],
         "Neo's tab born neo, the owner's found, each once"
     );

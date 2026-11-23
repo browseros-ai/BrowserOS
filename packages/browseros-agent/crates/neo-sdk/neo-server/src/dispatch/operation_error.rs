@@ -376,7 +376,7 @@ error_codes! {
 }
 
 impl ErrorCode {
-    /// Every code, in declaration order: the `error_code` label values telemetry interns
+    /// Every code, in declaration order: the `error.type` values telemetry interns
     /// against (`neo_telemetry::Vocabulary`).
     pub(crate) fn all() -> impl Iterator<Item = Self> {
         Self::KNOWN.iter().copied()

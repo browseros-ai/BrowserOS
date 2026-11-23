@@ -355,44 +355,55 @@ async fn assert_scraped(wire: Wire, neo: &Neo) -> Result<(), TestError> {
     let expected: [(&str, Labels<'_>, u64); 9] = [
         (
             "neo_runs_total",
-            &[("status", "ok"), ("error_owner", "none")],
+            &[("neo_run_status", "ok"), ("neo_error_owner", "none")],
             1,
         ),
         (
             "neo_runs_total",
-            &[("status", "error"), ("error_owner", "script")],
+            &[("neo_run_status", "error"), ("neo_error_owner", "script")],
             1,
         ),
-        ("neo_run_duration_seconds_count", &[("status", "ok")], 1),
-        ("neo_run_duration_seconds_count", &[("status", "error")], 1),
+        (
+            "neo_run_duration_seconds_count",
+            &[("neo_run_status", "ok")],
+            1,
+        ),
+        (
+            "neo_run_duration_seconds_count",
+            &[("neo_run_status", "error")],
+            1,
+        ),
         (
             "neo_operations_total",
             &[
-                ("op", "unknown"),
-                ("status", "error"),
-                ("error_owner", "script"),
+                ("neo_op_name", "unknown"),
+                ("neo_op_outcome", "error"),
+                ("neo_error_owner", "script"),
             ],
             1,
         ),
         (
             "neo_operation_duration_seconds_count",
-            &[("op", "unknown"), ("status", "error")],
+            &[("neo_op_name", "unknown"), ("neo_op_outcome", "error")],
             1,
         ),
         (
             "neo_errors_total",
             &[
-                ("error_owner", "script"),
-                ("error_code", "method_unavailable"),
+                ("neo_error_owner", "script"),
+                ("error_type", "method_unavailable"),
             ],
             1,
         ),
         (
             "neo_errors_total",
-            &[("error_owner", "script"), ("error_code", "script_error")],
+            &[
+                ("neo_error_owner", "script"),
+                ("error_type", "script_error"),
+            ],
             1,
         ),
-        ("neo_runs_in_flight", &[], 0),
+        ("neo_run_active", &[], 0),
     ];
     for (name, labels, value) in expected {
         assert_eq!(
@@ -430,13 +441,13 @@ async fn the_launch_tab_neo_adopts_is_counted_neo() -> Result<(), TestError> {
     let opened = || async {
         let reply = neo.metrics(Some(TOKEN)).await?;
         Ok::<Vec<String>, TestError>(
-            Scrape::parse(&reply.body)?.lines_of(&["neo_tabs_opened_total", "neo_tabs_open"]),
+            Scrape::parse(&reply.body)?.lines_of(&["neo_tab_opened_total", "neo_tab_count"]),
         )
     };
     // Sorted as `lines_of` sorts them.
     let expected = [
-        r#"neo_tabs_opened_total{origin="neo"} 1"#.to_owned(),
-        r#"neo_tabs_open{origin="neo"} 1"#.to_owned(),
+        r#"neo_tab_count{neo_tab_origin="neo"} 1"#.to_owned(),
+        r#"neo_tab_opened_total{neo_tab_origin="neo"} 1"#.to_owned(),
     ];
     within(PATIENCE, async {
         while opened().await.ok().as_deref() != Some(&expected[..]) {

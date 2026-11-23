@@ -311,13 +311,16 @@ mod tests {
         );
         assert_eq!(scrape.lines_of(&["neo_captcha_reasons_total"]).len(), 22);
         assert_eq!(
-            scrape.lines_of(&["neo_captcha_spend_usd_total"]),
-            [r#"neo_captcha_spend_usd_total{provider="capsolver"} 0.0025"#]
+            scrape.lines_of(&["neo_captcha_spend_total"]),
+            [r#"neo_captcha_spend_total{neo_captcha_provider="capsolver"} 0.0025"#]
         );
         assert_eq!(
             scrape.whole(
                 "neo_captcha_solves_total",
-                &[("family", "perimeterx"), ("verdict", "unsupported")]
+                &[
+                    ("neo_captcha_family", "perimeterx"),
+                    ("neo_captcha_verdict", "unsupported")
+                ]
             ),
             Some(23),
             "`PerimeterX` under its own name, never folded into `unknown`"

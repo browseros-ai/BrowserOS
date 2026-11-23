@@ -1,6 +1,6 @@
 //! How a CAPTCHA solve ended, as a label.
 
-/// How a solve ended: the `verdict` label of `neo_captcha_solves_total`. Mirrors neo-captcha's
+/// How a solve ended: the `neo.captcha.verdict` of `neo_captcha_solves_total`. Mirrors neo-captcha's
 /// `SolveStatus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CaptchaVerdict {

@@ -203,10 +203,10 @@ mod tests {
             Scrape::of(&telemetry)?
                 .lines_of(&["neo_navigations_total", "neo_navigation_errors_total"]),
             [
-                r#"neo_navigation_errors_total{error_code="connection_refused"} 1"#,
+                r#"neo_navigation_errors_total{error_type="connection_refused"} 1"#,
                 "neo_navigations_total 1",
-                r#"neo_navigations_total{status_code="200"} 1"#,
-                r#"neo_navigations_total{status_code="404"} 1"#,
+                r#"neo_navigations_total{http_response_status_code="200"} 1"#,
+                r#"neo_navigations_total{http_response_status_code="404"} 1"#,
             ],
             "a 404 goto is a navigation like any other; the refused one is also an error"
         );

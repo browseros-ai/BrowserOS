@@ -200,7 +200,7 @@ fn assert_ended_once(
         span.status
     );
     assert_eq!(
-        Scrape::of(telemetry)?.whole("neo_runs_in_flight", &[]),
+        Scrape::of(telemetry)?.whole("neo_run_active", &[]),
         Some(0),
         "run {}: in-flight comes back to zero on every path",
         run.id
@@ -254,8 +254,8 @@ fn a_run_joins_its_callers_trace_and_ends_ok_once() -> Result<(), TestError> {
         assert_eq!(
             Scrape::of(&telemetry)?.lines_of(RUN_METRICS),
             [
-                r#"neo_run_duration_seconds_count{status="ok"} 1"#,
-                r#"neo_runs_total{error_owner="none",status="ok"} 1"#,
+                r#"neo_run_duration_seconds_count{neo_run_status="ok"} 1"#,
+                r#"neo_runs_total{neo_error_owner="none",neo_run_status="ok"} 1"#,
             ],
             "one ok run, one duration, no error"
         );
@@ -287,9 +287,9 @@ fn a_run_that_throws_ends_with_the_scripts_error_counted_once() -> Result<(), Te
         assert_eq!(
             Scrape::of(&telemetry)?.lines_of(RUN_METRICS),
             [
-                r#"neo_errors_total{error_code="script_error",error_owner="script"} 1"#,
-                r#"neo_run_duration_seconds_count{status="error"} 1"#,
-                r#"neo_runs_total{error_owner="script",status="error"} 1"#,
+                r#"neo_errors_total{error_type="script_error",neo_error_owner="script"} 1"#,
+                r#"neo_run_duration_seconds_count{neo_run_status="error"} 1"#,
+                r#"neo_runs_total{neo_error_owner="script",neo_run_status="error"} 1"#,
             ],
             "the failed run and its one error, which no op had reported"
         );
@@ -307,7 +307,7 @@ fn a_run_whose_caller_left_is_in_flight_until_it_ends_cancelled() -> Result<(), 
         let leaving = caller(&service, request(code, meta(None, Some("task-left"))?)?);
         until_status(&rig, "task-left", RunStatus::Running).await?;
         assert_eq!(
-            Scrape::of(&telemetry)?.whole("neo_runs_in_flight", &[]),
+            Scrape::of(&telemetry)?.whole("neo_run_active", &[]),
             Some(1),
             "a running run is in flight"
         );
@@ -370,8 +370,8 @@ fn a_run_whose_task_panicked_ends_once_as_neos_failure() -> Result<(), TestError
         assert_eq!(
             Scrape::of(&telemetry)?.lines_of(&["neo_runs_total"]),
             [
-                r#"neo_runs_total{error_owner="neo",status="error"} 1"#,
-                r#"neo_runs_total{error_owner="none",status="ok"} 1"#,
+                r#"neo_runs_total{neo_error_owner="neo",neo_run_status="error"} 1"#,
+                r#"neo_runs_total{neo_error_owner="none",neo_run_status="ok"} 1"#,
             ],
             "the panic is counted as Neo's failure, and the next run as itself"
         );
@@ -493,14 +493,14 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
         assert_eq!(
             Scrape::of(&telemetry)?.lines_of(&["neo_operations_total", "neo_errors_total"]),
             [
-                r#"neo_errors_total{error_code="cdp_error",error_owner="website"} 1"#,
-                r#"neo_errors_total{error_code="method_unavailable",error_owner="script"} 1"#,
-                r#"neo_operations_total{error_owner="none",op="context.newPage",status="ok"} 1"#,
-                r#"neo_operations_total{error_owner="none",op="test.echo",status="ok"} 1"#,
-                r#"neo_operations_total{error_owner="none",op="test.touch",status="ok"} 1"#,
-                r#"neo_operations_total{error_owner="script",op="test.hang",status="cancelled"} 1"#,
-                r#"neo_operations_total{error_owner="script",op="unknown",status="error"} 1"#,
-                r#"neo_operations_total{error_owner="website",op="test.fail",status="error"} 1"#,
+                r#"neo_errors_total{error_type="cdp_error",neo_error_owner="website"} 1"#,
+                r#"neo_errors_total{error_type="method_unavailable",neo_error_owner="script"} 1"#,
+                r#"neo_operations_total{neo_error_owner="none",neo_op_name="context.newPage",neo_op_outcome="ok"} 1"#,
+                r#"neo_operations_total{neo_error_owner="none",neo_op_name="test.echo",neo_op_outcome="ok"} 1"#,
+                r#"neo_operations_total{neo_error_owner="none",neo_op_name="test.touch",neo_op_outcome="ok"} 1"#,
+                r#"neo_operations_total{neo_error_owner="script",neo_op_name="test.hang",neo_op_outcome="cancelled"} 1"#,
+                r#"neo_operations_total{neo_error_owner="script",neo_op_name="unknown",neo_op_outcome="error"} 1"#,
+                r#"neo_operations_total{neo_error_owner="website",neo_op_name="test.fail",neo_op_outcome="error"} 1"#,
             ],
             "registered ops count under their names (the lazy page's newPage among them), the \
              unregistered one as unknown (its span keeps the raw name), each failed op's error \
@@ -547,8 +547,8 @@ fn housekeeping_ops_keep_their_spans_and_leave_the_op_metrics() -> Result<(), Te
                 "neo_errors_total",
             ]),
             [
-                r#"neo_operation_duration_seconds_count{op="test.echo",status="ok"} 1"#,
-                r#"neo_operations_total{error_owner="none",op="test.echo",status="ok"} 1"#,
+                r#"neo_operation_duration_seconds_count{neo_op_name="test.echo",neo_op_outcome="ok"} 1"#,
+                r#"neo_operations_total{neo_error_owner="none",neo_op_name="test.echo",neo_op_outcome="ok"} 1"#,
             ],
             "only the script's op counts: housekeeping grows with open tabs, not with its work"
         );
@@ -584,8 +584,8 @@ fn a_timeout_with_ops_in_flight_counts_one_error() -> Result<(), TestError> {
         assert_eq!(
             Scrape::of(&telemetry)?.lines_of(&["neo_errors_total", "neo_operations_total"]),
             [
-                r#"neo_errors_total{error_code="run_timeout",error_owner="neo"} 1"#,
-                r#"neo_operations_total{error_owner="neo",op="test.hang",status="cancelled"} 2"#,
+                r#"neo_errors_total{error_type="run_timeout",neo_error_owner="neo"} 1"#,
+                r#"neo_operations_total{neo_error_owner="neo",neo_op_name="test.hang",neo_op_outcome="cancelled"} 2"#,
             ],
             "two cut ops, one timeout"
         );
@@ -613,7 +613,7 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
             },
         );
         assert_eq!(
-            Scrape::of(&telemetry)?.whole("neo_runs_in_flight", &[]),
+            Scrape::of(&telemetry)?.whole("neo_run_active", &[]),
             Some(1),
             "the run is in flight"
         );
@@ -658,11 +658,11 @@ fn an_op_cut_by_a_crash_still_reports_under_its_run() -> Result<(), TestError> {
         let scrape = Scrape::of(&telemetry)?;
         assert_eq!(
             scrape.lines_of(&["neo_errors_total"]),
-            [r#"neo_errors_total{error_code="internal_error",error_owner="neo"} 1"#],
+            [r#"neo_errors_total{error_type="internal_error",neo_error_owner="neo"} 1"#],
             "the crash is one failure, whether the run or its cut op reported it first"
         );
         assert_eq!(
-            scrape.whole("neo_runs_in_flight", &[]),
+            scrape.whole("neo_run_active", &[]),
             Some(0),
             "the crash left no run in flight"
         );
@@ -700,16 +700,16 @@ fn a_refused_call_is_counted_once_and_never_becomes_a_span() -> Result<(), TestE
         assert_eq!(
             scrape.lines_of(RUN_METRICS),
             [
-                r#"neo_errors_total{error_code="browser_unavailable",error_owner="neo"} 1"#,
-                r#"neo_errors_total{error_code="invalid_meta",error_owner="host"} 1"#,
-                r#"neo_runs_total{error_owner="host",status="error"} 1"#,
-                r#"neo_runs_total{error_owner="neo",status="error"} 1"#,
+                r#"neo_errors_total{error_type="browser_unavailable",neo_error_owner="neo"} 1"#,
+                r#"neo_errors_total{error_type="invalid_meta",neo_error_owner="host"} 1"#,
+                r#"neo_runs_total{neo_error_owner="host",neo_run_status="error"} 1"#,
+                r#"neo_runs_total{neo_error_owner="neo",neo_run_status="error"} 1"#,
             ],
             "each refusal is a failed run and one error, with the error its record carries, and \
              no duration"
         );
         assert_eq!(
-            scrape.whole("neo_runs_in_flight", &[]),
+            scrape.whole("neo_run_active", &[]),
             Some(0),
             "a refusal is never in flight"
         );
@@ -749,12 +749,12 @@ fn a_refused_duplicate_is_counted_as_a_failed_run_with_no_span() -> Result<(), T
         assert_eq!(
             scrape.lines_of(RUN_METRICS),
             [
-                r#"neo_errors_total{error_code="duplicate_request",error_owner="host"} 1"#,
-                r#"neo_runs_total{error_owner="host",status="error"} 1"#,
+                r#"neo_errors_total{error_type="duplicate_request",neo_error_owner="host"} 1"#,
+                r#"neo_runs_total{neo_error_owner="host",neo_run_status="error"} 1"#,
             ],
             "the duplicate is counted once, as the host's failure, with no duration"
         );
-        assert_eq!(scrape.whole("neo_runs_in_flight", &[]), Some(0));
+        assert_eq!(scrape.whole("neo_run_active", &[]), Some(0));
         Ok(())
     })
 }

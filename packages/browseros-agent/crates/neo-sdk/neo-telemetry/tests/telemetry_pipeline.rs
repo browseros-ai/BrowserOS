@@ -302,103 +302,115 @@ struct Expected {
 const EXPECTED: [Expected; 26] = [
     Expected {
         series: "neo_runs_total",
-        labels: &[("status", "error"), ("error_owner", "website")],
+        labels: &[("neo_run_status", "error"), ("neo_error_owner", "website")],
         value: "1",
     },
     Expected {
         series: "neo_runs_total",
-        labels: &[("status", "error"), ("error_owner", "neo")],
+        labels: &[("neo_run_status", "error"), ("neo_error_owner", "neo")],
         value: "1",
     },
     Expected {
-        series: "neo_runs_in_flight",
+        series: "neo_run_active",
         labels: &[],
         value: "1",
     },
     Expected {
         series: "neo_run_duration_seconds_count",
-        labels: &[("status", "error")],
+        labels: &[("neo_run_status", "error")],
         value: "1",
     },
     Expected {
         series: "neo_operations_total",
         labels: &[
-            ("op", "page.goto"),
-            ("status", "ok"),
-            ("error_owner", "none"),
+            ("neo_op_name", "page.goto"),
+            ("neo_op_outcome", "ok"),
+            ("neo_error_owner", "none"),
         ],
         value: "1",
     },
     Expected {
         series: "neo_operations_total",
         labels: &[
-            ("op", "locator.click"),
-            ("status", "error"),
-            ("error_owner", "website"),
+            ("neo_op_name", "locator.click"),
+            ("neo_op_outcome", "error"),
+            ("neo_error_owner", "website"),
         ],
         value: "1",
     },
     Expected {
         series: "neo_operation_duration_seconds_count",
-        labels: &[("op", "page.goto"), ("status", "ok")],
+        labels: &[("neo_op_name", "page.goto"), ("neo_op_outcome", "ok")],
         value: "1",
     },
     Expected {
         series: "neo_operation_duration_seconds_count",
-        labels: &[("op", "locator.click"), ("status", "error")],
+        labels: &[
+            ("neo_op_name", "locator.click"),
+            ("neo_op_outcome", "error"),
+        ],
         value: "1",
     },
     Expected {
         series: "neo_errors_total",
-        labels: &[("error_owner", "website"), ("error_code", "no_match")],
+        labels: &[("neo_error_owner", "website"), ("error_type", "no_match")],
         value: "1",
     },
     Expected {
         series: "neo_errors_total",
         labels: &[
-            ("error_owner", "neo"),
-            ("error_code", "browser_unavailable"),
+            ("neo_error_owner", "neo"),
+            ("error_type", "browser_unavailable"),
         ],
         value: "1",
     },
     Expected {
-        series: "neo_tabs_open",
-        labels: &[("origin", "agent")],
+        series: "neo_tab_count",
+        labels: &[("neo_tab_origin", "agent")],
         value: "0",
     },
     Expected {
-        series: "neo_tabs_open",
-        labels: &[("origin", "found")],
+        series: "neo_tab_count",
+        labels: &[("neo_tab_origin", "found")],
         value: "1",
     },
     Expected {
-        series: "neo_tabs_open",
-        labels: &[("origin", "neo")],
+        series: "neo_tab_count",
+        labels: &[("neo_tab_origin", "neo")],
         value: "1",
     },
     Expected {
-        series: "neo_tabs_opened_total",
-        labels: &[("origin", "agent")],
+        series: "neo_tab_opened_total",
+        labels: &[("neo_tab_origin", "agent")],
         value: "1",
     },
     Expected {
-        series: "neo_tabs_opened_total",
-        labels: &[("origin", "found")],
+        series: "neo_tab_opened_total",
+        labels: &[("neo_tab_origin", "found")],
         value: "1",
     },
     Expected {
-        series: "neo_tabs_closed_total",
-        labels: &[("origin", "agent"), ("close_reason", "janitor")],
+        series: "neo_tab_closed_total",
+        labels: &[
+            ("neo_tab_origin", "agent"),
+            ("neo_tab_close_reason", "janitor"),
+        ],
         value: "1",
     },
     Expected {
-        series: "neo_tab_lifetime_seconds_sum",
-        labels: &[("origin", "agent"), ("close_reason", "janitor")],
+        series: "neo_tab_duration_seconds_sum",
+        labels: &[
+            ("neo_tab_origin", "agent"),
+            ("neo_tab_close_reason", "janitor"),
+        ],
         value: "90",
     },
     Expected {
-        series: "neo_tab_lifetime_seconds_count",
-        labels: &[("origin", "agent"), ("close_reason", "janitor")],
+        series: "neo_tab_duration_seconds_count",
+        labels: &[
+            ("neo_tab_origin", "agent"),
+            ("neo_tab_close_reason", "janitor"),
+        ],
         value: "1",
     },
     Expected {
@@ -408,12 +420,12 @@ const EXPECTED: [Expected; 26] = [
     },
     Expected {
         series: "neo_navigations_total",
-        labels: &[("status_code", "200")],
+        labels: &[("http_response_status_code", "200")],
         value: "1",
     },
     Expected {
         series: "neo_navigations_total",
-        labels: &[("status_code", "404")],
+        labels: &[("http_response_status_code", "404")],
         value: "2",
     },
     Expected {
@@ -423,22 +435,25 @@ const EXPECTED: [Expected; 26] = [
     },
     Expected {
         series: "neo_navigation_errors_total",
-        labels: &[("error_code", "name_not_resolved")],
+        labels: &[("error_type", "name_not_resolved")],
         value: "1",
     },
     Expected {
         series: "neo_captcha_solves_total",
-        labels: &[("family", "perimeterx"), ("verdict", "unsupported")],
+        labels: &[
+            ("neo_captcha_family", "perimeterx"),
+            ("neo_captcha_verdict", "unsupported"),
+        ],
         value: "1",
     },
     Expected {
         series: "neo_captcha_reasons_total",
-        labels: &[("reason", "unsupported_type")],
+        labels: &[("neo_captcha_reason", "unsupported_type")],
         value: "1",
     },
     Expected {
-        series: "neo_captcha_spend_usd_total",
-        labels: &[("provider", "capsolver")],
+        series: "neo_captcha_spend_total",
+        labels: &[("neo_captcha_provider", "capsolver")],
         value: "0.0035",
     },
 ];
@@ -519,20 +534,20 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
         vec![
             ("neo_captcha_reasons_total", "counter"),
             ("neo_captcha_solves_total", "counter"),
-            ("neo_captcha_spend_usd_total", "counter"),
+            ("neo_captcha_spend_total", "counter"),
             ("neo_errors_total", "counter"),
             ("neo_navigation_errors_total", "counter"),
             ("neo_navigations_total", "counter"),
             ("neo_operation_duration_seconds", "histogram"),
             ("neo_operations_total", "counter"),
             ("neo_renderer_crashes_total", "counter"),
+            ("neo_run_active", "gauge"),
             ("neo_run_duration_seconds", "histogram"),
-            ("neo_runs_in_flight", "gauge"),
             ("neo_runs_total", "counter"),
-            ("neo_tab_lifetime_seconds", "histogram"),
-            ("neo_tabs_closed_total", "counter"),
-            ("neo_tabs_open", "gauge"),
-            ("neo_tabs_opened_total", "counter"),
+            ("neo_tab_closed_total", "counter"),
+            ("neo_tab_count", "gauge"),
+            ("neo_tab_duration_seconds", "histogram"),
+            ("neo_tab_opened_total", "counter"),
         ],
         "all 16 families, each with the type wire-contract.md gives it"
     );
@@ -564,7 +579,7 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
         "a navigation that arrived, whatever its status, is no network error"
     );
     assert_eq!(
-        metrics.named("neo_captcha_spend_usd_total").len(),
+        metrics.named("neo_captcha_spend_total").len(),
         1,
         "a free solve books no spend"
     );
@@ -596,7 +611,7 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
     let ops: BTreeSet<&str> = metrics
         .named("neo_operations_total")
         .iter()
-        .filter_map(|sample| sample.labels.get("op").map(String::as_str))
+        .filter_map(|sample| sample.labels.get("neo_op_name").map(String::as_str))
         .collect();
     assert_eq!(
         ops,
@@ -607,9 +622,9 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
         metrics.value(
             "neo_operations_total",
             &[
-                ("op", "unknown"),
-                ("status", "error"),
-                ("error_owner", "script")
+                ("neo_op_name", "unknown"),
+                ("neo_op_outcome", "error"),
+                ("neo_error_owner", "script")
             ]
         ),
         Some("3"),
@@ -618,7 +633,7 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "script"), ("error_code", "unknown")]
+            &[("neo_error_owner", "script"), ("error_type", "unknown")]
         ),
         Some("3"),
         "a code outside Neo's table counts as unknown"
@@ -787,52 +802,78 @@ fn label_violations(metrics: &Exposition) -> Vec<String> {
         .collect();
     let statuses: Vec<String> = (100..=599).map(|code: u16| code.to_string()).collect();
     let allowed: BTreeMap<&str, Vec<&str>> = BTreeMap::from([
-        ("status", vec!["ok", "error", "cancelled", "timeout"]),
         (
-            "error_owner",
+            "neo_run_status",
+            vec!["ok", "error", "cancelled", "timeout"],
+        ),
+        ("neo_op_outcome", vec!["ok", "error", "cancelled"]),
+        (
+            "neo_error_owner",
             vec!["website", "script", "neo", "host", "none"],
         ),
-        ("error_code", codes),
-        ("op", ops),
-        ("origin", vec!["agent", "found", "neo"]),
+        ("error_type", codes),
+        ("neo_op_name", ops),
+        ("neo_tab_origin", vec!["agent", "found", "neo"]),
         (
-            "close_reason",
+            "neo_tab_close_reason",
             vec!["script", "janitor", "user", "crash", "shutdown"],
         ),
-        ("status_code", statuses.iter().map(String::as_str).collect()),
         (
-            "family",
+            "http_response_status_code",
+            statuses.iter().map(String::as_str).collect(),
+        ),
+        (
+            "neo_captcha_family",
             CaptchaFamily::ALL.map(CaptchaFamily::as_str).to_vec(),
         ),
         (
-            "verdict",
+            "neo_captcha_verdict",
             CaptchaVerdict::ALL.map(CaptchaVerdict::as_str).to_vec(),
         ),
         (
-            "reason",
+            "neo_captcha_reason",
             CaptchaReason::ALL.map(CaptchaReason::as_str).to_vec(),
         ),
-        ("provider", vec!["capsolver", "2captcha", "unknown"]),
+        (
+            "neo_captcha_provider",
+            vec!["capsolver", "2captcha", "unknown"],
+        ),
     ]);
     let keys: BTreeMap<&str, Vec<&str>> = BTreeMap::from([
-        ("neo_runs_total", vec!["error_owner", "status"]),
-        ("neo_runs_in_flight", vec![]),
-        ("neo_run_duration_seconds", vec!["status"]),
-        ("neo_operations_total", vec!["error_owner", "op", "status"]),
-        ("neo_operation_duration_seconds", vec!["op", "status"]),
-        ("neo_errors_total", vec!["error_code", "error_owner"]),
-        ("neo_tabs_open", vec!["origin"]),
-        ("neo_tabs_opened_total", vec!["origin"]),
-        ("neo_tabs_closed_total", vec!["close_reason", "origin"]),
-        ("neo_tab_lifetime_seconds", vec!["close_reason", "origin"]),
+        ("neo_runs_total", vec!["neo_error_owner", "neo_run_status"]),
+        ("neo_run_active", vec![]),
+        ("neo_run_duration_seconds", vec!["neo_run_status"]),
+        (
+            "neo_operations_total",
+            vec!["neo_error_owner", "neo_op_name", "neo_op_outcome"],
+        ),
+        (
+            "neo_operation_duration_seconds",
+            vec!["neo_op_name", "neo_op_outcome"],
+        ),
+        ("neo_errors_total", vec!["error_type", "neo_error_owner"]),
+        ("neo_tab_count", vec!["neo_tab_origin"]),
+        ("neo_tab_opened_total", vec!["neo_tab_origin"]),
+        (
+            "neo_tab_closed_total",
+            vec!["neo_tab_close_reason", "neo_tab_origin"],
+        ),
+        (
+            "neo_tab_duration_seconds",
+            vec!["neo_tab_close_reason", "neo_tab_origin"],
+        ),
         ("neo_renderer_crashes_total", vec![]),
-        ("neo_navigations_total", vec!["status_code"]),
-        ("neo_navigation_errors_total", vec!["error_code"]),
-        ("neo_captcha_solves_total", vec!["family", "verdict"]),
-        ("neo_captcha_reasons_total", vec!["reason"]),
-        ("neo_captcha_spend_usd_total", vec!["provider"]),
+        ("neo_navigations_total", vec!["http_response_status_code"]),
+        ("neo_navigation_errors_total", vec!["error_type"]),
+        (
+            "neo_captcha_solves_total",
+            vec!["neo_captcha_family", "neo_captcha_verdict"],
+        ),
+        ("neo_captcha_reasons_total", vec!["neo_captcha_reason"]),
+        ("neo_captcha_spend_total", vec!["neo_captcha_provider"]),
     ]);
-    // A navigation whose document had no HTTP status is counted without `status_code`.
+    // A navigation whose document had no HTTP status is counted without
+    // `http_response_status_code`.
     let optional = BTreeSet::from(["neo_navigations_total"]);
     let mut violations = Vec::new();
     for sample in &metrics.samples {
@@ -892,7 +933,7 @@ fn no_label_outside_the_closed_sets_reaches_the_exposition() -> Result<(), Box<d
         ("neo_navigation_errors_total", NetError::ALL.len()),
         ("neo_captcha_solves_total", 11 * 7),
         ("neo_captcha_reasons_total", 22),
-        ("neo_captcha_spend_usd_total", 3),
+        ("neo_captcha_spend_total", 3),
     ] {
         let series = metrics.named(family).len();
         assert!(
@@ -911,16 +952,19 @@ fn no_label_outside_the_closed_sets_reaches_the_exposition() -> Result<(), Box<d
         "0 to 99 and 600 to 1000, and the 27 network failures, carry no status"
     );
     assert_eq!(
-        metrics.value("neo_navigation_errors_total", &[("error_code", "_OTHER")]),
+        metrics.value("neo_navigation_errors_total", &[("error_type", "_OTHER")]),
         Some("6"),
         "five texts no listed error matches whole, and the listed `_OTHER` itself"
     );
     let spent: Vec<(&str, &str)> = metrics
-        .named("neo_captcha_spend_usd_total")
+        .named("neo_captcha_spend_total")
         .iter()
         .map(|sample| {
             (
-                sample.labels.get("provider").map_or("", String::as_str),
+                sample
+                    .labels
+                    .get("neo_captcha_provider")
+                    .map_or("", String::as_str),
                 sample.value.as_str(),
             )
         })
@@ -934,46 +978,64 @@ fn no_label_outside_the_closed_sets_reaches_the_exposition() -> Result<(), Box<d
     Ok(())
 }
 
-/// Every sample line's name and label names the scrape served before the push door took
-/// OpenTelemetry's names, after every hook ran: the scrape must keep them exactly. The
-/// navigation and CAPTCHA families follow the same rule from their first release.
+/// Every sample line's name and label names after every hook ran: the Prometheus names
+/// OpenTelemetry's compatibility rules derive from the OTLP names and keys, the ones a collector
+/// or Prometheus' own OTLP receiver gives a push.
 const SCRAPE_SHAPES: [(&str, &[&str]); 23] = [
-    ("neo_captcha_reasons_total", &["reason"]),
-    ("neo_captcha_solves_total", &["family", "verdict"]),
-    ("neo_captcha_spend_usd_total", &["provider"]),
-    ("neo_errors_total", &["error_code", "error_owner"]),
-    ("neo_navigation_errors_total", &["error_code"]),
+    ("neo_captcha_reasons_total", &["neo_captcha_reason"]),
+    (
+        "neo_captcha_solves_total",
+        &["neo_captcha_family", "neo_captcha_verdict"],
+    ),
+    ("neo_captcha_spend_total", &["neo_captcha_provider"]),
+    ("neo_errors_total", &["error_type", "neo_error_owner"]),
+    ("neo_navigation_errors_total", &["error_type"]),
     ("neo_navigations_total", &[]),
-    ("neo_navigations_total", &["status_code"]),
+    ("neo_navigations_total", &["http_response_status_code"]),
     (
         "neo_operation_duration_seconds_bucket",
-        &["le", "op", "status"],
+        &["le", "neo_op_name", "neo_op_outcome"],
     ),
-    ("neo_operation_duration_seconds_count", &["op", "status"]),
-    ("neo_operation_duration_seconds_sum", &["op", "status"]),
-    ("neo_operations_total", &["error_owner", "op", "status"]),
+    (
+        "neo_operation_duration_seconds_count",
+        &["neo_op_name", "neo_op_outcome"],
+    ),
+    (
+        "neo_operation_duration_seconds_sum",
+        &["neo_op_name", "neo_op_outcome"],
+    ),
+    (
+        "neo_operations_total",
+        &["neo_error_owner", "neo_op_name", "neo_op_outcome"],
+    ),
     ("neo_renderer_crashes_total", &[]),
-    ("neo_run_duration_seconds_bucket", &["le", "status"]),
-    ("neo_run_duration_seconds_count", &["status"]),
-    ("neo_run_duration_seconds_sum", &["status"]),
-    ("neo_runs_in_flight", &[]),
-    ("neo_runs_total", &["error_owner", "status"]),
+    ("neo_run_active", &[]),
+    ("neo_run_duration_seconds_bucket", &["le", "neo_run_status"]),
+    ("neo_run_duration_seconds_count", &["neo_run_status"]),
+    ("neo_run_duration_seconds_sum", &["neo_run_status"]),
+    ("neo_runs_total", &["neo_error_owner", "neo_run_status"]),
     (
-        "neo_tab_lifetime_seconds_bucket",
-        &["close_reason", "le", "origin"],
+        "neo_tab_closed_total",
+        &["neo_tab_close_reason", "neo_tab_origin"],
+    ),
+    ("neo_tab_count", &["neo_tab_origin"]),
+    (
+        "neo_tab_duration_seconds_bucket",
+        &["le", "neo_tab_close_reason", "neo_tab_origin"],
     ),
     (
-        "neo_tab_lifetime_seconds_count",
-        &["close_reason", "origin"],
+        "neo_tab_duration_seconds_count",
+        &["neo_tab_close_reason", "neo_tab_origin"],
     ),
-    ("neo_tab_lifetime_seconds_sum", &["close_reason", "origin"]),
-    ("neo_tabs_closed_total", &["close_reason", "origin"]),
-    ("neo_tabs_open", &["origin"]),
-    ("neo_tabs_opened_total", &["origin"]),
+    (
+        "neo_tab_duration_seconds_sum",
+        &["neo_tab_close_reason", "neo_tab_origin"],
+    ),
+    ("neo_tab_opened_total", &["neo_tab_origin"]),
 ];
 
 #[test]
-fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetrys()
+fn the_scrape_serves_the_prometheus_names_opentelemetry_derives_from_the_otlp_ones()
 -> Result<(), Box<dyn Error>> {
     let (telemetry, _probe) = live(SiteDetail::Url);
     drive_every_hook_with_hostile_text(&telemetry);
@@ -1001,27 +1063,27 @@ fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetr
         .collect();
     assert_eq!(
         shapes, expected,
-        "every sample name and label name is the scrape's, as it always was"
+        "every sample name and label name is the derived one"
     );
     assert_eq!(
         metrics.help.iter().map(String::as_str).collect::<Vec<_>>(),
         vec![
             "neo_captcha_reasons_total",
             "neo_captcha_solves_total",
-            "neo_captcha_spend_usd_total",
+            "neo_captcha_spend_total",
             "neo_errors_total",
             "neo_navigation_errors_total",
             "neo_navigations_total",
             "neo_operation_duration_seconds",
             "neo_operations_total",
             "neo_renderer_crashes_total",
+            "neo_run_active",
             "neo_run_duration_seconds",
-            "neo_runs_in_flight",
             "neo_runs_total",
-            "neo_tab_lifetime_seconds",
-            "neo_tabs_closed_total",
-            "neo_tabs_open",
-            "neo_tabs_opened_total",
+            "neo_tab_closed_total",
+            "neo_tab_count",
+            "neo_tab_duration_seconds",
+            "neo_tab_opened_total",
         ],
         "the 16 family names, in `# HELP` and `# TYPE` alike"
     );
@@ -1045,7 +1107,7 @@ fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetr
     ] {
         assert!(
             !text.contains(otel),
-            "`{otel}` is the OTLP door's spelling and never reaches the scrape"
+            "`{otel}` is the OTLP door's spelling; the scrape carries its translation"
         );
     }
     Ok(())
@@ -1070,7 +1132,7 @@ fn histograms_are_cumulative_and_end_in_inf_equal_to_count() -> Result<(), Box<d
     }
     sweep.finish(OK);
     let metrics = scrape(&telemetry)?;
-    for family in ["neo_operation_duration_seconds", "neo_tab_lifetime_seconds"] {
+    for family in ["neo_operation_duration_seconds", "neo_tab_duration_seconds"] {
         let buckets = metrics.named(&format!("{family}_bucket"));
         let mut bounds = Vec::new();
         let mut counts = Vec::new();
@@ -1117,25 +1179,28 @@ fn histograms_are_cumulative_and_end_in_inf_equal_to_count() -> Result<(), Box<d
     assert_eq!(
         metrics.value(
             "neo_operation_duration_seconds_count",
-            &[("op", "page.goto"), ("status", "ok")]
+            &[("neo_op_name", "page.goto"), ("neo_op_outcome", "ok")]
         ),
         Some("8"),
         "every op observation is counted"
     );
     assert_eq!(
         metrics.value(
-            "neo_tab_lifetime_seconds_sum",
-            &[("origin", "agent"), ("close_reason", "user")]
+            "neo_tab_duration_seconds_sum",
+            &[
+                ("neo_tab_origin", "agent"),
+                ("neo_tab_close_reason", "user")
+            ]
         ),
         Some("204031"),
         "the sum is the lifetimes given"
     );
     assert_eq!(
         metrics.value(
-            "neo_tab_lifetime_seconds_bucket",
+            "neo_tab_duration_seconds_bucket",
             &[
-                ("origin", "agent"),
-                ("close_reason", "user"),
+                ("neo_tab_origin", "agent"),
+                ("neo_tab_close_reason", "user"),
                 ("le", "86400")
             ]
         ),
@@ -1150,9 +1215,9 @@ fn in_flight_returns_to_zero_after_finish_drop_and_panic() -> Result<(), Box<dyn
     let (telemetry, _probe) = live(SiteDetail::None);
     let in_flight = |telemetry: &Telemetry| -> Result<String, String> {
         scrape(telemetry)?
-            .value("neo_runs_in_flight", &[])
+            .value("neo_run_active", &[])
             .map(str::to_owned)
-            .ok_or_else(|| "no neo_runs_in_flight sample".to_owned())
+            .ok_or_else(|| "no neo_run_active sample".to_owned())
     };
     assert_eq!(
         in_flight(&telemetry)?,
@@ -1190,7 +1255,7 @@ fn in_flight_returns_to_zero_after_finish_drop_and_panic() -> Result<(), Box<dyn
     assert_eq!(
         metrics.value(
             "neo_runs_total",
-            &[("status", "error"), ("error_owner", "neo")]
+            &[("neo_run_status", "error"), ("neo_error_owner", "neo")]
         ),
         Some("2"),
         "a dropped run and a panicked one end as Neo's own failure"
@@ -1198,7 +1263,7 @@ fn in_flight_returns_to_zero_after_finish_drop_and_panic() -> Result<(), Box<dyn
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "neo"), ("error_code", "internal_error")]
+            &[("neo_error_owner", "neo"), ("error_type", "internal_error")]
         ),
         Some("2"),
         "each counted once, as internal_error"
@@ -1210,7 +1275,7 @@ fn in_flight_returns_to_zero_after_finish_drop_and_panic() -> Result<(), Box<dyn
 fn the_open_tabs_gauge_reads_the_live_source_at_each_scrape() -> Result<(), Box<dyn Error>> {
     let (telemetry, _probe) = live(SiteDetail::None);
     assert!(
-        scrape(&telemetry)?.named("neo_tabs_open").is_empty(),
+        scrape(&telemetry)?.named("neo_tab_count").is_empty(),
         "with no source registered the gauge reports nothing, not a made-up zero"
     );
     let agent_tabs = Arc::new(AtomicU64::new(3));
@@ -1222,7 +1287,7 @@ fn the_open_tabs_gauge_reads_the_live_source_at_each_scrape() -> Result<(), Box<
     }));
     let open = |metrics: &Exposition, origin: &str| {
         metrics
-            .value("neo_tabs_open", &[("origin", origin)])
+            .value("neo_tab_count", &[("neo_tab_origin", origin)])
             .map(str::to_owned)
     };
     let first = scrape(&telemetry)?;
@@ -1488,7 +1553,7 @@ fn an_internal_runs_ops_count_and_their_spans_are_roots() -> Result<(), Box<dyn 
         "Neo's own runs leave the run metrics alone"
     );
     assert_eq!(
-        metrics.value("neo_runs_in_flight", &[]),
+        metrics.value("neo_run_active", &[]),
         Some("0"),
         "and are never in flight"
     );
@@ -1496,9 +1561,9 @@ fn an_internal_runs_ops_count_and_their_spans_are_roots() -> Result<(), Box<dyn 
         metrics.value(
             "neo_operations_total",
             &[
-                ("op", "page.close"),
-                ("status", "error"),
-                ("error_owner", "neo")
+                ("neo_op_name", "page.close"),
+                ("neo_op_outcome", "error"),
+                ("neo_error_owner", "neo")
             ]
         ),
         Some("1"),
@@ -1507,7 +1572,7 @@ fn an_internal_runs_ops_count_and_their_spans_are_roots() -> Result<(), Box<dyn 
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "neo"), ("error_code", "internal_error")]
+            &[("neo_error_owner", "neo"), ("error_type", "internal_error")]
         ),
         Some("1"),
         "and so do their failures"
@@ -1553,7 +1618,7 @@ fn neo_internal_ops_leave_every_op_metric_and_keep_their_spans() -> Result<(), B
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "website"), ("error_code", "no_match")]
+            &[("neo_error_owner", "website"), ("error_type", "no_match")]
         ),
         Some("1"),
         "the internal op's failure is not counted, so the run that ended on it counts it once"
@@ -1561,7 +1626,7 @@ fn neo_internal_ops_leave_every_op_metric_and_keep_their_spans() -> Result<(), B
     assert_eq!(
         metrics.value(
             "neo_runs_total",
-            &[("status", "error"), ("error_owner", "website")]
+            &[("neo_run_status", "error"), ("neo_error_owner", "website")]
         ),
         Some("1"),
         "the run itself is counted as usual"
@@ -1598,7 +1663,7 @@ fn an_unsampled_caller_trace_keeps_its_metrics_but_exports_no_span() -> Result<(
     assert_eq!(
         scrape(&telemetry)?.value(
             "neo_runs_total",
-            &[("status", "ok"), ("error_owner", "none")]
+            &[("neo_run_status", "ok"), ("neo_error_owner", "none")]
         ),
         Some("1"),
         "sampling never touches the metrics"
@@ -1647,7 +1712,7 @@ fn each_failure_counts_once_where_it_is_attributed() -> Result<(), Box<dyn Error
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "website"), ("error_code", "no_match")]
+            &[("neo_error_owner", "website"), ("error_type", "no_match")]
         ),
         Some("3"),
         "every op failure counts, the late one too; run-a's own end repeats its op's and adds none"
@@ -1655,7 +1720,7 @@ fn each_failure_counts_once_where_it_is_attributed() -> Result<(), Box<dyn Error
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "script"), ("error_code", "run_timeout")]
+            &[("neo_error_owner", "script"), ("error_type", "run_timeout")]
         ),
         Some("2"),
         "run-b's and run-c's timeouts are their own; the op aborted by run-c's adds none"
@@ -1686,9 +1751,9 @@ fn an_op_that_settles_after_its_run_ended_still_counts_and_nests() -> Result<(),
         metrics.value(
             "neo_operations_total",
             &[
-                ("op", "page.goto"),
-                ("status", "cancelled"),
-                ("error_owner", "neo")
+                ("neo_op_name", "page.goto"),
+                ("neo_op_outcome", "cancelled"),
+                ("neo_error_owner", "neo")
             ]
         ),
         Some("1"),
@@ -1697,13 +1762,13 @@ fn an_op_that_settles_after_its_run_ended_still_counts_and_nests() -> Result<(),
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "neo"), ("error_code", "internal_error")]
+            &[("neo_error_owner", "neo"), ("error_type", "internal_error")]
         ),
         Some("1"),
         "the crash is one failure: the run's end counted it and the op it cut short adds none"
     );
     assert_eq!(
-        metrics.value("neo_runs_in_flight", &[]),
+        metrics.value("neo_run_active", &[]),
         Some("0"),
         "a late op never touches in-flight"
     );
@@ -1753,7 +1818,7 @@ fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Erro
     assert_eq!(
         metrics.value(
             "neo_errors_total",
-            &[("error_owner", "neo"), ("error_code", "run_timeout")]
+            &[("neo_error_owner", "neo"), ("error_type", "run_timeout")]
         ),
         Some("1"),
         "the deadline is one failure, counted at the run, not once per op it cut"
@@ -1767,9 +1832,9 @@ fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Erro
         metrics.value(
             "neo_operations_total",
             &[
-                ("op", "locator.click"),
-                ("status", "cancelled"),
-                ("error_owner", "neo")
+                ("neo_op_name", "locator.click"),
+                ("neo_op_outcome", "cancelled"),
+                ("neo_error_owner", "neo")
             ]
         ),
         Some("3"),

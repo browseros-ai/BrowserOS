@@ -88,8 +88,8 @@ impl Telemetry {
 
     /// Binds Neo's own op names and error codes, from the server's tables (its method registry
     /// and its `ErrorCode` list), exactly once at startup: after the registry is built and before
-    /// the door that runs it, so before any op or run can exist. The `op` and `error_code`
-    /// labels intern against it; until it is bound, and for anything outside it, they read
+    /// the door that runs it, so before any op or run can exist. The `neo.op.name` and `error.type`
+    /// values intern against it; until it is bound, and for anything outside it, they read
     /// `unknown`. A call of its own, not a constructor argument, because the tab registry and
     /// the host API need the handle before the registry exists. The first call wins.
     pub fn bind_vocabulary(&self, vocabulary: Vocabulary) {
@@ -100,7 +100,7 @@ impl Telemetry {
         }
     }
 
-    /// Starts a counted run (an agent's `run` call): `neo_runs_in_flight` goes up now and comes
+    /// Starts a counted run (an agent's `run` call): `neo_run_active` goes up now and comes
     /// down exactly once, when the returned span is finished or dropped.
     pub fn start_run(&self, facts: RunFacts<'_>) -> RunSpan {
         match &self.backend {
@@ -120,7 +120,7 @@ impl Telemetry {
     }
 
     /// A call refused before it became a run (browser unavailable, a duplicate `requestId`, bad
-    /// arguments): counted in `neo_runs_total{status="error"}` and `neo_errors_total`, as
+    /// arguments): counted in `neo_runs_total{neo_run_status="error"}` and `neo_errors_total`, as
     /// `/v1/runs` records it; no span, no in-flight, no duration.
     pub fn run_refused(&self, error: ErrorLabel) {
         match &self.backend {
@@ -130,7 +130,7 @@ impl Telemetry {
         }
     }
 
-    /// A tab opened (`neo_tabs_opened_total`).
+    /// A tab opened (`neo_tab_opened_total`).
     pub fn tab_opened(&self, origin: TabOrigin) {
         match &self.backend {
             Backend::Noop => {}
@@ -139,7 +139,7 @@ impl Telemetry {
         }
     }
 
-    /// A tab closed after `lifetime` open (`neo_tabs_closed_total`, `neo_tab_lifetime_seconds`).
+    /// A tab closed after `lifetime` open (`neo_tab_closed_total`, `neo_tab_duration_seconds`).
     /// Called once per close, with the one reason that applies.
     pub fn tab_closed(&self, origin: TabOrigin, reason: CloseReason, lifetime: Duration) {
         match &self.backend {
@@ -158,7 +158,7 @@ impl Telemetry {
         }
     }
 
-    /// Where `neo_tabs_open` reads the live counts at each collection. Set once, at startup; a
+    /// Where `neo_tab_count` reads the live counts at each collection. Set once, at startup; a
     /// later call replaces it. Until it is set the gauge reports nothing.
     pub fn set_open_tabs(&self, source: OpenTabsSource) {
         match &self.backend {

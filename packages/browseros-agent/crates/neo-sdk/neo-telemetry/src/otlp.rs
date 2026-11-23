@@ -854,12 +854,12 @@ mod tests {
         let counter = providers
             .meters
             .meter("neo-telemetry")
-            .u64_counter("neo_operations_total")
+            .u64_counter("neo.operations")
             .build();
         let start = Instant::now();
         for _ in 0..ENDED {
             tracer.start("page.goto").end();
-            counter.add(1, &[KeyValue::new("status", "ok")]);
+            counter.add(1, &[KeyValue::new("neo.op.outcome", "ok")]);
         }
         let spent = start.elapsed();
         assert!(

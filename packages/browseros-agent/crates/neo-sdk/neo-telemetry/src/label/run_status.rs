@@ -1,6 +1,6 @@
 //! How a run ended, as its metrics and its `neo.run` span say it.
 
-/// How a finished run ended: the `status` label of `neo_runs_total` and
+/// How a finished run ended: the `neo.run.status` of `neo_runs_total` and
 /// `neo_run_duration_seconds`, and the span's `neo.run.status`.
 ///
 /// The finished half of `GET /v1/runs`' status vocabulary (`neo_trace::RunStatus`): `running`

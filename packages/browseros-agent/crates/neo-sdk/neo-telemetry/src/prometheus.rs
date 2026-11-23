@@ -11,9 +11,10 @@
 //! consumer sees the whole catalog from the first scrape.
 //!
 //! The instruments carry OpenTelemetry names and attribute keys (`neo.run.duration`,
-//! `neo.run.status`), which the OTLP door sends as they are. This text keeps the scrape's own
-//! names (`neo_run_duration_seconds`, `status`), looked up in the catalog, so a dashboard or alert
-//! built on the scrape never sees a rename.
+//! `neo.run.status`), which the OTLP door sends as they are. This text derives its names from them
+//! by OpenTelemetry's Prometheus compatibility rules (`neo_run_duration_seconds`,
+//! `neo_run_status`), the translation a collector's Prometheus exporter and Prometheus' own OTLP
+//! receiver apply to a push, so a dashboard reads the same names whichever door fed it.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -22,7 +23,7 @@ use std::fmt::{Display, Write as _};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, Metric, MetricData, ResourceMetrics};
 
-use crate::instruments::{CATALOG, MetricSpec, scrape_label};
+use crate::instruments::{CATALOG, Kind, MetricSpec};
 
 /// The exposition being written: one family at a time, in catalog order.
 #[derive(Debug, Default)]
@@ -54,7 +55,8 @@ impl Prometheus {
     }
 
     fn family(&mut self, spec: &MetricSpec, data: Option<&AggregatedMetrics>) {
-        let name = spec.name;
+        let name = family_name(spec);
+        let name = name.as_str();
         let _ = writeln!(self.text, "# HELP {name} {}", escape_help(spec.help));
         let _ = writeln!(self.text, "# TYPE {name} {}", spec.kind.as_str());
         let mut series: Vec<Series> = match data {
@@ -108,6 +110,115 @@ impl Prometheus {
     }
 }
 
+/// A family's Prometheus name, derived from its OpenTelemetry name as OpenTelemetry's Prometheus
+/// compatibility rules (and Prometheus' own OTLP receiver) derive it: the unit's word follows the
+/// name unless it already ends with it (`s` is `seconds`; an annotation such as `{run}` names what
+/// is counted and adds nothing), a counter (a monotonic sum) ends in `_total`, every character the
+/// format does not allow becomes `_`, and runs of `_` are one. An up-down counter is a gauge, so
+/// it gets no `_total`.
+pub(crate) fn family_name(spec: &MetricSpec) -> String {
+    let mut name = spec.otel.to_owned();
+    if let Some(word) = unit_word(spec.unit)
+        && !name.ends_with(&format!("_{word}"))
+    {
+        name.push('_');
+        name.push_str(&word);
+    }
+    if spec.kind == Kind::Counter && !name.ends_with("_total") {
+        name.push_str("_total");
+    }
+    sanitized(&name, |character| {
+        character.is_ascii_alphanumeric() || matches!(character, '_' | ':')
+    })
+}
+
+/// The words a UCUM unit adds to a name (`s` is `seconds`, `By/s` is `bytes_per_second`), or
+/// `None` for a unit that adds nothing: none, or only an annotation in braces such as `{run}`.
+fn unit_word(unit: &str) -> Option<String> {
+    let unit = without_annotations(unit);
+    let (main, per) = unit.split_once('/').unwrap_or((&unit, ""));
+    let word = |part: &str| unit_name(part).unwrap_or(part).to_owned();
+    match (main.is_empty(), per.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(word(main)),
+        (true, false) => Some(format!("per_{}", per_unit_name(per))),
+        (false, false) => Some(format!("{}_per_{}", word(main), per_unit_name(per))),
+    }
+}
+
+/// `unit` without its `{...}` annotations.
+fn without_annotations(unit: &str) -> String {
+    let mut out = String::with_capacity(unit.len());
+    let mut depth = 0_usize;
+    for character in unit.chars() {
+        match character {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            other if depth == 0 => out.push(other),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The spec's table of UCUM units Prometheus spells out.
+fn unit_name(unit: &str) -> Option<&'static str> {
+    Some(match unit {
+        "d" => "days",
+        "h" => "hours",
+        "min" => "minutes",
+        "s" => "seconds",
+        "ms" => "milliseconds",
+        "us" => "microseconds",
+        "ns" => "nanoseconds",
+        "By" => "bytes",
+        "KiBy" => "kibibytes",
+        "MiBy" => "mebibytes",
+        "GiBy" => "gibibytes",
+        "TiBy" => "tebibytes",
+        "kBy" => "kilobytes",
+        "MBy" => "megabytes",
+        "GBy" => "gigabytes",
+        "TBy" => "terabytes",
+        "m" => "meters",
+        "V" => "volts",
+        "A" => "amperes",
+        "J" => "joules",
+        "W" => "watts",
+        "g" => "grams",
+        "Cel" => "celsius",
+        "Hz" => "hertz",
+        "%" => "percent",
+        _ => return None,
+    })
+}
+
+/// A rate's time unit in the singular, as Prometheus spells it after `per_`.
+fn per_unit_name(unit: &str) -> &str {
+    match unit {
+        "s" => "second",
+        "m" => "minute",
+        "h" => "hour",
+        "d" => "day",
+        "w" => "week",
+        "mo" => "month",
+        "y" => "year",
+        other => unit_name(other).unwrap_or(other),
+    }
+}
+
+/// `text` with every character `allowed` rejects as `_`, and runs of `_` as one.
+fn sanitized(text: &str, allowed: impl Fn(char) -> bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        let character = if allowed(character) { character } else { '_' };
+        if !(character == '_' && out.ends_with('_')) {
+            out.push(character);
+        }
+    }
+    out
+}
+
 /// A counter's or a gauge's one line.
 fn sample<'a, T: Display>(
     name: &str,
@@ -133,29 +244,28 @@ fn label_pairs<'a>(attributes: impl Iterator<Item = &'a KeyValue>) -> Vec<(Cow<'
     pairs
 }
 
-/// A label name as the text format allows it, `[a-zA-Z_][a-zA-Z0-9_]*`: the scrape's own name for
-/// an attribute the instruments set, else the key with every other character an underscore. The
-/// fallback keeps the text well-formed should the SDK add a key of its own, such as the
-/// `otel.metric.overflow` series it opens past its cardinality limit (2000 per metric, far above
-/// the closed label sets).
-fn label_name(key: &str) -> Cow<'_, str> {
-    if let Some(label) = scrape_label(key) {
-        return Cow::Borrowed(label);
-    }
+/// A label name as the text format allows it, `[a-zA-Z_][a-zA-Z0-9_]*`, translated from an
+/// attribute key by the same compatibility rules as the family names: every other character is
+/// `_` (`neo.op.name` is `neo_op_name`), runs of `_` are one, and a key that starts with a digit
+/// gets a `key_` prefix, as Prometheus' OTLP receiver spells it. Any key works, so an attribute
+/// the SDK adds on its own, such as the `otel.metric.overflow` series it opens past its
+/// cardinality limit (2000 per metric, far above the closed label sets), keeps the text
+/// well-formed.
+pub(crate) fn label_name(key: &str) -> Cow<'_, str> {
     let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_';
     let leading_digit = key.starts_with(|character: char| character.is_ascii_digit());
-    if !key.is_empty() && !leading_digit && key.chars().all(allowed) {
+    if !key.is_empty() && !leading_digit && !key.contains("__") && key.chars().all(allowed) {
         return Cow::Borrowed(key);
     }
-    let mut name = String::with_capacity(key.len() + 1);
-    if key.is_empty() || leading_digit {
-        name.push('_');
+    if key.is_empty() {
+        return Cow::Borrowed("_");
     }
-    name.extend(
-        key.chars()
-            .map(|character| if allowed(character) { character } else { '_' }),
-    );
-    Cow::Owned(name)
+    let name = sanitized(key, allowed);
+    Cow::Owned(if leading_digit {
+        format!("key_{name}")
+    } else {
+        name
+    })
 }
 
 /// `{name="value",…}`, or nothing for a series without labels.
@@ -253,7 +363,7 @@ mod tests {
             .filter_map(|line| line.strip_prefix("# HELP "))
             .filter_map(|line| line.split(' ').next())
             .collect();
-        let catalog: Vec<&str> = CATALOG.iter().map(|spec| spec.name).collect();
+        let catalog: Vec<String> = CATALOG.iter().map(|spec| family_name(spec)).collect();
         assert_eq!(
             help, catalog,
             "every family is listed, in catalog order, before any data"
@@ -261,112 +371,112 @@ mod tests {
         let samples: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).collect();
         assert_eq!(
             samples,
-            vec!["neo_runs_in_flight 0", "neo_renderer_crashes_total 0"],
+            vec!["neo_run_active 0", "neo_renderer_crashes_total 0"],
             "only the unlabelled series exist before anything happened; no source, no tab gauge"
         );
         Ok(())
     }
 
     /// The exposition `renders_the_golden_exposition` records: one of each kind, in catalog order.
-    /// A navigation without a status is a series without `status_code`, and the f64 spend
+    /// A navigation without a status is a series without `http_response_status_code`, and the f64 spend
     /// counter renders as the shortest decimal that reads back.
     const GOLDEN: &str = "\
 # HELP neo_runs_total Runs that ended, and calls refused before they became a run, by status and by who must fix the failure.
 # TYPE neo_runs_total counter
-neo_runs_total{error_owner=\"none\",status=\"ok\"} 1
-# HELP neo_runs_in_flight Runs admitted and not yet ended.
-# TYPE neo_runs_in_flight gauge
-neo_runs_in_flight 1
+neo_runs_total{neo_error_owner=\"none\",neo_run_status=\"ok\"} 1
+# HELP neo_run_active Runs admitted and not yet ended.
+# TYPE neo_run_active gauge
+neo_run_active 1
 # HELP neo_run_duration_seconds How long each run took, from admission to its end, by status.
 # TYPE neo_run_duration_seconds histogram
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"0.1\"} 0
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"0.25\"} 0
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"0.5\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"1\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"2.5\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"5\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"10\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"30\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"60\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"120\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"300\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"600\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"900\"} 1
-neo_run_duration_seconds_bucket{status=\"ok\",le=\"+Inf\"} 1
-neo_run_duration_seconds_sum{status=\"ok\"} 0.3
-neo_run_duration_seconds_count{status=\"ok\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"0.1\"} 0
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"0.25\"} 0
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"0.5\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"1\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"2.5\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"5\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"10\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"30\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"60\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"120\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"300\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"600\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"900\"} 1
+neo_run_duration_seconds_bucket{neo_run_status=\"ok\",le=\"+Inf\"} 1
+neo_run_duration_seconds_sum{neo_run_status=\"ok\"} 0.3
+neo_run_duration_seconds_count{neo_run_status=\"ok\"} 1
 # HELP neo_operations_total Operations settled, by op (unregistered names count as unknown), status and who must fix the failure.
 # TYPE neo_operations_total counter
-neo_operations_total{error_owner=\"website\",op=\"page.goto\",status=\"error\"} 1
+neo_operations_total{neo_error_owner=\"website\",neo_op_name=\"page.goto\",neo_op_outcome=\"error\"} 1
 # HELP neo_operation_duration_seconds How long each operation took, by op and status.
 # TYPE neo_operation_duration_seconds histogram
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.005\"} 0
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.01\"} 0
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.025\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.05\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.1\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.25\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"0.5\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"1\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"2.5\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"5\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"10\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"30\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"60\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"120\"} 1
-neo_operation_duration_seconds_bucket{op=\"page.goto\",status=\"error\",le=\"+Inf\"} 1
-neo_operation_duration_seconds_sum{op=\"page.goto\",status=\"error\"} 0.02
-neo_operation_duration_seconds_count{op=\"page.goto\",status=\"error\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.005\"} 0
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.01\"} 0
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.025\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.05\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.1\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.25\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"0.5\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"1\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"2.5\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"5\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"10\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"30\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"60\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"120\"} 1
+neo_operation_duration_seconds_bucket{neo_op_name=\"page.goto\",neo_op_outcome=\"error\",le=\"+Inf\"} 1
+neo_operation_duration_seconds_sum{neo_op_name=\"page.goto\",neo_op_outcome=\"error\"} 0.02
+neo_operation_duration_seconds_count{neo_op_name=\"page.goto\",neo_op_outcome=\"error\"} 1
 # HELP neo_errors_total Failures by who must fix them and their code, each counted once where it is attributed.
 # TYPE neo_errors_total counter
-neo_errors_total{error_code=\"no_match\",error_owner=\"website\"} 1
-# HELP neo_tabs_open Tabs open now, by who opened them.
-# TYPE neo_tabs_open gauge
-neo_tabs_open{origin=\"agent\"} 2
-neo_tabs_open{origin=\"found\"} 0
-neo_tabs_open{origin=\"neo\"} 1
-# HELP neo_tabs_opened_total Tabs Neo registered, by who opened them.
-# TYPE neo_tabs_opened_total counter
-neo_tabs_opened_total{origin=\"agent\"} 1
-# HELP neo_tabs_closed_total Tabs closed, by who opened them and why they closed.
-# TYPE neo_tabs_closed_total counter
-neo_tabs_closed_total{close_reason=\"script\",origin=\"agent\"} 1
-# HELP neo_tab_lifetime_seconds How long each closed tab was open, by who opened it and why it closed.
-# TYPE neo_tab_lifetime_seconds histogram
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"1\"} 0
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"10\"} 0
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"30\"} 0
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"60\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"300\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"900\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"1800\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"3600\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"7200\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"14400\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"43200\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"86400\"} 1
-neo_tab_lifetime_seconds_bucket{close_reason=\"script\",origin=\"agent\",le=\"+Inf\"} 1
-neo_tab_lifetime_seconds_sum{close_reason=\"script\",origin=\"agent\"} 45
-neo_tab_lifetime_seconds_count{close_reason=\"script\",origin=\"agent\"} 1
+neo_errors_total{error_type=\"no_match\",neo_error_owner=\"website\"} 1
+# HELP neo_tab_count Tabs open now, by who opened them.
+# TYPE neo_tab_count gauge
+neo_tab_count{neo_tab_origin=\"agent\"} 2
+neo_tab_count{neo_tab_origin=\"found\"} 0
+neo_tab_count{neo_tab_origin=\"neo\"} 1
+# HELP neo_tab_opened_total Tabs Neo registered, by who opened them.
+# TYPE neo_tab_opened_total counter
+neo_tab_opened_total{neo_tab_origin=\"agent\"} 1
+# HELP neo_tab_closed_total Tabs closed, by who opened them and why they closed.
+# TYPE neo_tab_closed_total counter
+neo_tab_closed_total{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\"} 1
+# HELP neo_tab_duration_seconds How long each closed tab was open, by who opened it and why it closed.
+# TYPE neo_tab_duration_seconds histogram
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"1\"} 0
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"10\"} 0
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"30\"} 0
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"60\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"300\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"900\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"1800\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"3600\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"7200\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"14400\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"43200\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"86400\"} 1
+neo_tab_duration_seconds_bucket{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\",le=\"+Inf\"} 1
+neo_tab_duration_seconds_sum{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\"} 45
+neo_tab_duration_seconds_count{neo_tab_close_reason=\"script\",neo_tab_origin=\"agent\"} 1
 # HELP neo_renderer_crashes_total Renderer crashes, whether or not an op was using the tab.
 # TYPE neo_renderer_crashes_total counter
 neo_renderer_crashes_total 1
 # HELP neo_navigations_total Navigations sent to the browser that ended, by the HTTP status their document arrived with, when one was read.
 # TYPE neo_navigations_total counter
 neo_navigations_total 1
-neo_navigations_total{status_code=\"404\"} 1
+neo_navigations_total{http_response_status_code=\"404\"} 1
 # HELP neo_navigation_errors_total Navigations that failed on the network, by the browser's net error.
 # TYPE neo_navigation_errors_total counter
-neo_navigation_errors_total{error_code=\"name_not_resolved\"} 1
+neo_navigation_errors_total{error_type=\"name_not_resolved\"} 1
 # HELP neo_captcha_solves_total CAPTCHA solves that returned an outcome, by the CAPTCHA found and how the solve ended.
 # TYPE neo_captcha_solves_total counter
-neo_captcha_solves_total{family=\"turnstile\",verdict=\"solved\"} 1
+neo_captcha_solves_total{neo_captcha_family=\"turnstile\",neo_captcha_verdict=\"solved\"} 1
 # HELP neo_captcha_reasons_total CAPTCHA solves that returned an outcome, by why the solve ended as it did.
 # TYPE neo_captcha_reasons_total counter
-neo_captcha_reasons_total{reason=\"token_accepted\"} 1
-# HELP neo_captcha_spend_usd_total US dollars CAPTCHA providers charged, by the provider each solve booked it to.
-# TYPE neo_captcha_spend_usd_total counter
-neo_captcha_spend_usd_total{provider=\"2captcha\"} 0.003
+neo_captcha_reasons_total{neo_captcha_reason=\"token_accepted\"} 1
+# HELP neo_captcha_spend_total US dollars CAPTCHA providers charged, by the provider each solve booked it to.
+# TYPE neo_captcha_spend_total counter
+neo_captcha_spend_total{neo_captcha_provider=\"2captcha\"} 0.003
 ";
 
     #[test]
@@ -447,15 +557,17 @@ neo_captcha_spend_usd_total{provider=\"2captcha\"} 0.003
         assert_eq!(
             runs,
             vec![
-                "neo_runs_total{error_owner=\"none\",status=\"error\"} 1",
-                "neo_runs_total{error_owner=\"none\",status=\"ok\"} 3",
-                "neo_runs_total{error_owner=\"none\",status=\"timeout\"} 1",
+                "neo_runs_total{neo_error_owner=\"none\",neo_run_status=\"error\"} 1",
+                "neo_runs_total{neo_error_owner=\"none\",neo_run_status=\"ok\"} 3",
+                "neo_runs_total{neo_error_owner=\"none\",neo_run_status=\"timeout\"} 1",
             ],
             "series sort by their label text, whatever order they were recorded in"
         );
         let ok_buckets: Vec<u64> = text
             .lines()
-            .filter(|line| line.starts_with("neo_run_duration_seconds_bucket{status=\"ok\""))
+            .filter(|line| {
+                line.starts_with("neo_run_duration_seconds_bucket{neo_run_status=\"ok\"")
+            })
             .filter_map(|line| line.rsplit(' ').next())
             .map(str::parse)
             .collect::<Result<_, _>>()?;
@@ -469,43 +581,82 @@ neo_captcha_spend_usd_total{provider=\"2captcha\"} 0.003
             "`+Inf` holds every observation of the series"
         );
         assert!(
-            text.contains("neo_run_duration_seconds_bucket{status=\"timeout\",le=\"900\"} 0\n")
-                && text.contains(
-                    "neo_run_duration_seconds_bucket{status=\"timeout\",le=\"+Inf\"} 1\n"
-                ),
+            text.contains(
+                "neo_run_duration_seconds_bucket{neo_run_status=\"timeout\",le=\"900\"} 0\n"
+            ) && text.contains(
+                "neo_run_duration_seconds_bucket{neo_run_status=\"timeout\",le=\"+Inf\"} 1\n"
+            ),
             "a run longer than the last bound counts only in `+Inf`"
         );
         Ok(())
     }
 
     #[test]
-    fn every_label_name_is_one_the_text_format_accepts() {
+    fn every_label_name_is_the_attribute_key_translated() {
         for (key, name) in [
-            ("neo.run.status", "status"),
-            ("neo.op.outcome", "status"),
-            ("neo.error.owner", "error_owner"),
-            ("error.type", "error_code"),
-            ("neo.op.name", "op"),
-            ("http.response.status_code", "status_code"),
-            ("neo.captcha.family", "family"),
+            ("neo.run.status", "neo_run_status"),
+            ("neo.op.outcome", "neo_op_outcome"),
+            ("neo.error.owner", "neo_error_owner"),
+            ("error.type", "error_type"),
+            ("neo.op.name", "neo_op_name"),
+            ("http.response.status_code", "http_response_status_code"),
+            ("neo.tab.close_reason", "neo_tab_close_reason"),
+            ("neo.captcha.family", "neo_captcha_family"),
         ] {
-            assert_eq!(
-                label_name(key),
-                name,
-                "an attribute renders as the scrape's label"
-            );
+            assert_eq!(label_name(key), name, "{key}: dots become underscores");
         }
         assert_eq!(
             label_name("otel.metric.overflow"),
             "otel_metric_overflow",
             "the SDK's own overflow label would otherwise break the exposition"
         );
+        assert_eq!(label_name("a..b__c"), "a_b_c", "a run of `_` is one");
         assert_eq!(
             label_name("9lives"),
-            "_9lives",
+            "key_9lives",
             "a name never starts with a digit"
         );
+        assert_eq!(label_name("plain"), "plain", "a valid name is kept");
         assert_eq!(label_name(""), "_", "a name is never empty");
+    }
+
+    #[test]
+    fn family_names_follow_the_compatibility_rules() {
+        let spec = |otel, kind, unit| MetricSpec {
+            otel,
+            help: "",
+            kind,
+            unit,
+            buckets: &[],
+        };
+        for (otel, kind, unit, name) in [
+            ("neo.runs", Kind::Counter, "{run}", "neo_runs_total"),
+            ("neo.run.active", Kind::Gauge, "{run}", "neo_run_active"),
+            (
+                "neo.run.duration",
+                Kind::Histogram,
+                "s",
+                "neo_run_duration_seconds",
+            ),
+            (
+                "neo.captcha.spend",
+                Kind::Counter,
+                "{USD}",
+                "neo_captcha_spend_total",
+            ),
+            ("a.b_total", Kind::Counter, "{thing}", "a_b_total"),
+            ("a.wait_seconds", Kind::Histogram, "s", "a_wait_seconds"),
+            ("a.size", Kind::Gauge, "By", "a_size_bytes"),
+            ("a.io", Kind::Counter, "By/s", "a_io_bytes_per_second_total"),
+            ("a.odd", Kind::Gauge, "{x}m{y}", "a_odd_meters"),
+            ("a-b..c", Kind::Gauge, "", "a_b_c"),
+        ] {
+            assert_eq!(
+                family_name(&spec(otel, kind, unit)),
+                name,
+                "{otel} ({unit}): unit word, then `_total` for a counter, never twice"
+            );
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Why a CAPTCHA solve ended as it did, as a label.
 
-/// Why a solve ended: the `reason` label of `neo_captcha_reasons_total`. Mirrors neo-captcha's
+/// Why a solve ended: the `neo.captcha.reason` of `neo_captcha_reasons_total`. Mirrors neo-captcha's
 /// `SolveReason`, spelled as the script's `reason` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CaptchaReason {

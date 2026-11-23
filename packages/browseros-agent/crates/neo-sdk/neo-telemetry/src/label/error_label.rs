@@ -14,7 +14,7 @@ pub struct ErrorLabel {
 }
 
 impl ErrorLabel {
-    /// The `error_owner` label value for an optional failure: its owner, or `none`.
+    /// The `neo.error.owner` value for an optional failure: its owner, or `none`.
     #[must_use]
     pub const fn owner_label(error: Option<Self>) -> &'static str {
         match error {

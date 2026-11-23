@@ -1,14 +1,14 @@
 //! The tab ledger: which tabs are open, by the origin each was born with; when each opened, why
 //! it closed and after how long; which renderers crashed. The one place that decides Neo's tab
-//! telemetry (`neo_tabs_open`, `neo_tabs_opened_total`, `neo_tabs_closed_total`,
-//! `neo_tab_lifetime_seconds`, `neo_renderer_crashes_total`).
+//! telemetry (`neo_tab_count`, `neo_tab_opened_total`, `neo_tab_closed_total`,
+//! `neo_tab_duration_seconds`, `neo_renderer_crashes_total`).
 //!
 //! ```text
 //!  tab_watch (the only writer of browser facts) ── listed / crashed / recovered ───┐
 //!  page.close wrapper, janitor ── intend_close ─▶ CloseIntent ──────────────────────┤
 //!  newPage wrapper, NeoTab     ── expect_open  ─▶ OpenIntent ── claim ──────────────┼─▶ TabLife
 //!                                                                                   │   Mutex<TabLedger>, pure
-//!  neo_tabs_open, on the collecting thread ◀── open_counts ─────────────────────────┤     → Vec<TabFact>
+//!  neo_tab_count, on the collecting thread ◀── open_counts ─────────────────────────┤     → Vec<TabFact>
 //!  the facade's tab hooks ◀── each TabFact, once the lock is released ◀─────────────┘
 //! ```
 //!
@@ -70,7 +70,7 @@ pub(crate) struct TabLife {
 }
 
 impl TabLife {
-    /// The ledger for `telemetry`, registered as its `neo_tabs_open` source. Built with the tab
+    /// The ledger for `telemetry`, registered as its `neo_tab_count` source. Built with the tab
     /// registry, before the browser link starts, so no tab event comes before it can count it.
     #[must_use]
     pub(crate) fn new(telemetry: Telemetry) -> Arc<Self> {
@@ -351,9 +351,9 @@ pub(crate) enum Gap {
 /// What the ledger decided, for the shell to send to telemetry once its lock is released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TabFact {
-    /// A tab was born (`neo_tabs_opened_total`).
+    /// A tab was born (`neo_tab_opened_total`).
     Opened { origin: TabOrigin },
-    /// A tab closed, once (`neo_tabs_closed_total`, `neo_tab_lifetime_seconds`).
+    /// A tab closed, once (`neo_tab_closed_total`, `neo_tab_duration_seconds`).
     Closed {
         origin: TabOrigin,
         reason: CloseReason,
@@ -2132,7 +2132,7 @@ mod tests {
 
     /// The shell over the live pipeline (`Telemetry::in_memory`), through the registry that owns
     /// it, read as the host API's scrape reads it: the registry registers the ledger as the
-    /// gauge's source, `neo_tabs_open` is the ledger's own map at every scrape, and each fact
+    /// gauge's source, `neo_tab_count` is the ledger's own map at every scrape, and each fact
     /// becomes exactly one count, once the ledger's lock is released.
     #[test]
     fn the_ledger_s_facts_are_the_live_tab_metrics() -> Result<(), TestError> {
@@ -2140,7 +2140,7 @@ mod tests {
         let tabs = TabRegistry::new_with_telemetry(telemetry.clone());
         let life = tabs.life();
         assert_eq!(
-            Scrape::of(&telemetry)?.whole("neo_tabs_open", &[("origin", "found")]),
+            Scrape::of(&telemetry)?.whole("neo_tab_count", &[("neo_tab_origin", "found")]),
             Some(0),
             "the registry registers its ledger as the gauge's source"
         );
@@ -2181,19 +2181,19 @@ mod tests {
         assert_eq!(scrape.open_tabs(), (0, 1, 0), "one tab left open");
         assert_eq!(
             scrape.lines_of(&[
-                "neo_tabs_opened_total",
-                "neo_tabs_closed_total",
-                "neo_tab_lifetime_seconds_sum",
+                "neo_tab_opened_total",
+                "neo_tab_closed_total",
+                "neo_tab_duration_seconds_sum",
                 "neo_renderer_crashes_total",
             ]),
             [
                 "neo_renderer_crashes_total 1",
-                r#"neo_tab_lifetime_seconds_sum{close_reason="crash",origin="found"} 5"#,
-                r#"neo_tab_lifetime_seconds_sum{close_reason="script",origin="agent"} 4"#,
-                r#"neo_tabs_closed_total{close_reason="crash",origin="found"} 1"#,
-                r#"neo_tabs_closed_total{close_reason="script",origin="agent"} 1"#,
-                r#"neo_tabs_opened_total{origin="agent"} 1"#,
-                r#"neo_tabs_opened_total{origin="found"} 2"#,
+                r#"neo_tab_closed_total{neo_tab_close_reason="crash",neo_tab_origin="found"} 1"#,
+                r#"neo_tab_closed_total{neo_tab_close_reason="script",neo_tab_origin="agent"} 1"#,
+                r#"neo_tab_duration_seconds_sum{neo_tab_close_reason="crash",neo_tab_origin="found"} 5"#,
+                r#"neo_tab_duration_seconds_sum{neo_tab_close_reason="script",neo_tab_origin="agent"} 4"#,
+                r#"neo_tab_opened_total{neo_tab_origin="agent"} 1"#,
+                r#"neo_tab_opened_total{neo_tab_origin="found"} 2"#,
             ],
             "each fact counted once: births by frozen origin, one close each with its one \
              reason and lifetime, one crash"

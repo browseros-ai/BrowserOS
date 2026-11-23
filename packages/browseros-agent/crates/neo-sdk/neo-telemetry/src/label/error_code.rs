@@ -1,6 +1,6 @@
 //! A failure's stable code, as a label.
 
-/// A failure's stable `snake_case` code: the `error_code` label of `neo_errors_total` and the
+/// A failure's stable `snake_case` code: the `error.type` of `neo_errors_total` and the
 /// spans' `neo.error.code`.
 ///
 /// It holds a `&'static str` on purpose: the server's codes are compile-time constants (its
