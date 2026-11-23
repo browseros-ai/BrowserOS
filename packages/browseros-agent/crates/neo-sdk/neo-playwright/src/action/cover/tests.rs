@@ -548,44 +548,10 @@ fn tests_that_every_on_top_form_comes_back_as_no_longer_on_top() -> Result<(), B
             },
         ),
     ];
-    let tree: Vec<AriaNode> = serde_json::from_value(
-        json!([{ "role": "main", "ref": "e1", "children": ["Two mugs left."] }]),
-    )?;
-    let passed = Passed::default();
     for (form, note) in &forms {
         let line = on_top_line(note);
-        let covered = Snapshot {
-            tree: tree.clone(),
-            layers: vec![Layer {
-                r#ref: note.reference.to_owned(),
-                line: line.clone(),
-                whole_view: note.whole_view,
-            }],
-            ..Snapshot::default()
-        };
-        let page = render(&covered, Call::Page(&passed));
-        let kept = page.pending().ok_or("a whole page keeps its text")?;
-        assert!(
-            kept.text.starts_with(&line),
-            "{form}: the page opens with the layer's words"
-        );
-        let baseline = Baseline {
-            text: kept.text.to_owned(),
-            form: kept.form,
-        };
-        let uncovered = Snapshot {
-            tree: tree.clone(),
-            ..Snapshot::default()
-        };
-        let delta = render(
-            &uncovered,
-            Call::Delta {
-                passed: &passed,
-                earlier: Earlier::Text(&baseline),
-            },
-        );
         assert_eq!(
-            delta.text(),
+            delta_after_the_layer_went(&line, note)?,
             format!(
                 "# no change since your last snapshot of this tab\n# no longer on top: {}",
                 node_named(note.role, note.name, note.reference, NAME_CHARS)
@@ -595,6 +561,46 @@ fn tests_that_every_on_top_form_comes_back_as_no_longer_on_top() -> Result<(), B
         );
     }
     Ok(())
+}
+
+/// A page under the layer `line` words, kept as the tab's baseline the way a whole-page snapshot
+/// keeps it, then the delta of the same page once the layer is gone.
+fn delta_after_the_layer_went(line: &str, note: &OnTopNote<'_>) -> Result<String, Box<dyn Error>> {
+    let tree: Vec<AriaNode> = serde_json::from_value(
+        json!([{ "role": "main", "ref": "e1", "children": ["Two mugs left."] }]),
+    )?;
+    let passed = Passed::default();
+    let covered = Snapshot {
+        tree: tree.clone(),
+        layers: vec![Layer {
+            r#ref: note.reference.to_owned(),
+            line: line.to_owned(),
+            whole_view: note.whole_view,
+        }],
+        ..Snapshot::default()
+    };
+    let page = render(&covered, Call::Page(&passed));
+    let kept = page.pending().ok_or("a whole page keeps its text")?;
+    assert!(
+        kept.text.starts_with(line),
+        "the page opens with the layer's words"
+    );
+    let baseline = Baseline {
+        text: kept.text.to_owned(),
+        form: kept.form,
+    };
+    let uncovered = Snapshot {
+        tree,
+        ..Snapshot::default()
+    };
+    let delta = render(
+        &uncovered,
+        Call::Delta {
+            passed: &passed,
+            earlier: Earlier::Text(&baseline),
+        },
+    );
+    Ok(delta.into_text())
 }
 
 /// Covered-click C: a press may go through a wrapper only as the cover that stood four checks and

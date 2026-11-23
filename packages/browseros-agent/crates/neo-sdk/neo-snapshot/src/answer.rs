@@ -37,8 +37,8 @@ pub struct Pending<'a> {
     /// The form `text` was rendered in, which a later delta renders the new page in.
     pub form: Form,
     /// What the call returned when that is not `text` itself. `None` for a whole page, whose
-    /// answer is its own baseline; a delta's answer for a delta, which the run's reply must show
-    /// for `text` to become the baseline.
+    /// answer is its own baseline. For a delta, its answer: the run's reply must show it for
+    /// `text` to become the baseline.
     pub returned: Option<&'a str>,
 }
 

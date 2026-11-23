@@ -383,7 +383,7 @@ impl Case {
 
 impl Pending {
     /// The text and its form, as a tab's store keeps them.
-    pub(crate) fn baseline(&self) -> Result<Baseline, String> {
+    fn baseline(&self) -> Result<Baseline, String> {
         Ok(Baseline {
             text: self.text.clone(),
             form: self.form()?,
