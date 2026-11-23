@@ -337,13 +337,20 @@ impl Generator {
         }
     }
 
-    /// A snapshot for `mode: 'full'`: [`Generator::snapshot`]'s, and in one of four a page long
-    /// enough to pass the default cap of 32,000 units, three or four paragraphs of about 12,000
-    /// placed among its nodes, so that the cut falls inside it and the kept blocks and sections
-    /// after the paragraphs print past the cut or are offered.
+    /// A snapshot for `mode: 'full'`: [`Generator::snapshot`]'s; now and then a page that prints
+    /// no line, whose text is its head lines alone with no blank line after them; and in one of
+    /// four of the rest a page long enough to pass the default cap of 32,000 units, three or four
+    /// paragraphs of about 12,000 placed among its nodes, so that the cut falls inside it and the
+    /// kept blocks and sections after the paragraphs print past the cut or are offered.
     pub(crate) fn full_snapshot(&mut self) -> Snapshot {
         let mut snapshot = self.snapshot();
-        if self.chance(25) {
+        if self.chance(6) {
+            // Every line the cap holds comes from these three; the layers and the unfinished
+            // check stay, and print outside it.
+            snapshot.tree.clear();
+            snapshot.partial.clear();
+            snapshot.closed_roots = None;
+        } else if self.chance(25) {
             for _ in 0..3 + self.below(2) {
                 let at = self.below(snapshot.tree.len() + 1);
                 let paragraph = self.long_paragraph();
