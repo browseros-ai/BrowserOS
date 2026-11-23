@@ -8,7 +8,7 @@
  *              the crate's differential calls on seeded random trees beside the Rust
  */
 
-import { setCoverRenderer, shapeCovered } from '../../src/prelude/cover'
+import { shapeCovered } from '../../src/prelude/cover'
 import { renderFullSnapshot, renderSnapshot } from '../../src/prelude/snapshot'
 import { renderDelta, renderUncompared } from '../../src/prelude/snapshot-delta'
 import {
@@ -19,6 +19,7 @@ import {
 import type { AriaNodeJSON } from '../../src/prelude/vendored'
 import type { SnapshotBaseline, SnapshotResult } from '../../src/prelude/wire'
 import type { Call } from './model'
+import { snapshotLines } from './snapshot-lines'
 
 /** The text a script receives (the block for a cover, null for none) and, for a whole page in Neo's format, what it keeps. */
 export type Answer = { text: string | null; pending?: SnapshotBaseline }
@@ -29,15 +30,13 @@ const COVER_HEAD =
 const COVER_TAIL = '\n  Its controls: button "Accept" [ref=e10]'
 
 /**
- * The block the prelude puts under a covered click's "On top" line, or null for none: read back
- * from today's own placement (cover.ts `shapeCovered`) on a message of known shape.
+ * The block a script reads under a covered click's "On top" line, or null for none: the lines
+ * the prelude rendered and cut before Rust did (snapshot-lines.ts), placed by the prelude's own
+ * placement (cover.ts `shapeCovered`) as Rust's `block`, and read back from a message of known
+ * shape. Rust sends no `block` when there is nothing to print.
  */
 function coverBlock(json: AriaNodeJSON[] | null): string | null {
-  // The prelude's entry (src/prelude/index.ts) gives cover.ts this same renderer.
-  setCoverRenderer(
-    (tree) =>
-      renderSnapshotV1({ json: tree, partial: [] }, withDefaults({})).text,
-  )
+  const lines = snapshotLines(json)
   const error = new Error(COVER_HEAD + COVER_TAIL)
   Reflect.set(error, 'cover', {
     ref: 'e9',
@@ -45,7 +44,7 @@ function coverBlock(json: AriaNodeJSON[] | null): string | null {
     name: 'Cookies',
     kind: 'dialog',
     controls: [],
-    snapshot: json,
+    ...(lines === '' ? {} : { block: lines }),
   })
   shapeCovered(error)
   if (error.message === COVER_HEAD + COVER_TAIL) return null

@@ -1,11 +1,12 @@
-//! The covered click's block, ported from the TypeScript prelude's `cover.ts` (`snapshotLines`).
-//! A pointer action whose element is covered fails with an error that names the cover under an
+//! The covered click's block, ported from the prelude's `snapshotLines`, which now lives on as
+//! this port's test oracle in neo-playwright-js `scripts/snapshot-cases/snapshot-lines.ts`. A
+//! pointer action whose element is covered fails with an error that names the cover under an
 //! "On top" line; the block is the cover's own snapshot printed under that line, so the agent
 //! reads the cover's refs as its own `ariaSnapshot()` would print them.
 //!
 //! ```text
-//!  neo-playwright action/cover.rs: the cover's tree ─▶ cover_block ─▶ the error's cover, beside
-//!  Rust's message; the prelude places the block under "On top" with today's placement, unchanged
+//!  neo-playwright action/cover.rs: the cover's tree ─▶ cover_block ─▶ the error's cover as
+//!  `block`, beside Rust's message ─▶ the prelude's `shapeCovered` places it under "On top"
 //! ```
 //!
 //! The block never goes into Rust's message: the operation's record keeps its message without it,
@@ -21,17 +22,24 @@ use crate::snapshot::Snapshot;
 /// its newline.
 const BLOCK_UNITS: usize = 1_500;
 
-/// The lines under a covered click's "On top" line: the cover's tree in Neo's default format with
-/// every default, without the lines blank after JavaScript's trim, four spaces before each line,
-/// at most 1,500 units. The first line that would pass the limit is cut to the room left, when
-/// there is any, and ends in `…`; then `    … (the rest of its snapshot is cut)`. `None` when
-/// nothing is left to print.
+/// The lines a covered click's error prints under its "On top" line: the cover's tree in Neo's
+/// default format with every default (a script's own `ariaSnapshot()`), `None` when that prints
+/// nothing after the blank lines are dropped.
 ///
-/// The cut is JavaScript's own `slice`: inside a character it keeps half of it, which a Rust
-/// string cannot hold, so the half is U+FFFD, the character every reader outside the script
-/// engine receives for it today. A tree that does not decode never reaches here: the caller has
-/// no block to place, as the TypeScript printed none when its renderer threw.
-pub(crate) fn cover_block(tree: Vec<AriaNode>) -> Option<String> {
+/// - Each line carries four spaces before it and is joined by `\n`, with no newline before the
+///   first or after the last. The placement under "On top" is the caller's; a test of the
+///   acceptance suite finds the block by this shape.
+/// - At most 1,500 UTF-16 units of the snapshot, each line counted with its newline. The first
+///   line that would pass the limit is cut to the room left, when there is any, and ends in `…`;
+///   then the last line is `    … (the rest of its snapshot is cut)`.
+/// - Where the cut falls inside a character, the half kept is U+FFFD: JavaScript's `slice` keeps
+///   half of it, which a Rust string cannot hold, and U+FFFD is what every reader outside the
+///   script engine received for it when the prelude cut the block.
+///
+/// It cannot fail. A tree that does not decode as [`AriaNode`]s is the caller's to leave out, as
+/// the prelude printed no block when its renderer threw.
+#[must_use]
+pub fn cover_block(tree: Vec<AriaNode>) -> Option<String> {
     let snapshot = Snapshot {
         tree,
         ..Snapshot::default()
@@ -62,6 +70,7 @@ pub(crate) fn cover_block(tree: Vec<AriaNode>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::{env, fs};
 
     use serde_json::json;
 
@@ -106,6 +115,66 @@ mod tests {
         assert!(
             differing.is_empty(),
             "{} of {judged} covered blocks differ from the committed text:\n{}",
+            differing.len(),
+            differing.join("\n")
+        );
+        Ok(())
+    }
+
+    /// Every tree of the private sets (real pages' content, kept on one Mac and never in the
+    /// repository or on the pool): the block Rust prints for it as the cover's tree, beside the
+    /// block today's renderer prints in QuickJS. Without `NEO_SNAPSHOT_PRIVATE_CASES` it passes
+    /// and says it was skipped; nothing it prints holds a page's text.
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the counts are the evidence a reviewer pastes; a silent skip must not read as a \
+                  pass"
+    )]
+    fn tests_that_the_covered_block_is_todays_on_every_private_tree() -> Result<(), Box<dyn Error>>
+    {
+        let Some(folders) = env::var_os("NEO_SNAPSHOT_PRIVATE_CASES") else {
+            println!(
+                "private sets, covered block: SKIPPED (NEO_SNAPSHOT_PRIVATE_CASES names no folder)"
+            );
+            return Ok(());
+        };
+        let bundles = Bundles::new()?;
+        let (mut judged, mut identical, mut printed) = (0, 0, 0);
+        let mut differing = Vec::new();
+        for file in &CaseFile::private_files(&folders)? {
+            let shown = file.file_name().unwrap_or_default().to_string_lossy();
+            let cases: CaseFile = serde_json::from_str(&fs::read_to_string(file)?)?;
+            for (index, name) in cases.snapshot_names().enumerate() {
+                let snapshot = cases.snapshot(name)?;
+                let todays = bundles
+                    .todays_answer(&json!({ "cover": {} }), &snapshot)?
+                    .text;
+                let block = cover_block(snapshot.tree);
+                judged += 1;
+                printed += usize::from(block.is_some());
+                if block == todays {
+                    identical += 1;
+                } else {
+                    differing.push(format!(
+                        "{shown}: tree {index}: {:?} bytes printed, {:?} by today's renderer",
+                        block.as_deref().map(str::len),
+                        todays.as_deref().map(str::len)
+                    ));
+                }
+            }
+        }
+        println!(
+            "private sets, covered block: {identical} of {judged} trees print today's block \
+             ({printed} with a block)"
+        );
+        assert!(
+            judged > 0,
+            "the named folders hold no tree, which proves nothing"
+        );
+        assert!(
+            differing.is_empty(),
+            "{} differences:\n{}",
             differing.len(),
             differing.join("\n")
         );

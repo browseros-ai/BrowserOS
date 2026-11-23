@@ -458,8 +458,9 @@ pub(crate) struct CoverFacts {
     #[ts(type = "string")]
     pub(crate) markup: PageText,
     /// Its own snapshot (`ariaSnapshotJSON` in `default` mode, which mints no ref and moves
-    /// nothing the agent's own snapshots depend on), which the prelude renders and cuts. `null`
-    /// for a cover that holds the control: its snapshot would be the page's.
+    /// nothing the agent's own snapshots depend on), which Rust prints as the covered block
+    /// where it writes the error's cover (action/cover.rs). `null` for a cover that holds the
+    /// control: its snapshot would be the page's.
     #[ts(type = "unknown")]
     pub(crate) snapshot: Value,
     /// Only when that snapshot holds no words: what the cover draws as text, cut at 300

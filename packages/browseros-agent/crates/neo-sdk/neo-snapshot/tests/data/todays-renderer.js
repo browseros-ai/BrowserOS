@@ -10,51 +10,17 @@
 (function () {
 'use strict';
 // crates/neo-sdk/neo-playwright-js/src/prelude/cover.ts
-var SNAPSHOT_CHARS = 1500;
-var renderSnapshot;
-function setCoverRenderer(render) {
-  renderSnapshot = render;
-}
 var ON_TOP = `
   On top: `;
 function shapeCovered(error) {
   const cover = Reflect.get(error, "cover");
   if (typeof cover !== "object" || cover === null)
     return;
-  const snapshot = Reflect.get(cover, "snapshot");
-  const lines = snapshotLines(snapshot);
-  if (lines !== "")
-    error.message = underOnTop(error.message, lines);
-  const { snapshot: _left, ...kept } = cover;
+  const block = Reflect.get(cover, "block");
+  if (typeof block === "string" && block !== "")
+    error.message = underOnTop(error.message, block);
+  const { block: _left, ...kept } = cover;
   Reflect.set(error, "cover", kept);
-}
-function snapshotLines(snapshot) {
-  if (typeof snapshot !== "object" || snapshot === null || !renderSnapshot)
-    return "";
-  let text;
-  try {
-    text = renderSnapshot(snapshot);
-  } catch {
-    return "";
-  }
-  const kept = [];
-  let used = 0;
-  for (const line of text.split(`
-`)) {
-    if (line.trim() === "")
-      continue;
-    if (used + line.length + 1 > SNAPSHOT_CHARS) {
-      const room = SNAPSHOT_CHARS - used - 1;
-      if (room > 0)
-        kept.push(`    ${line.slice(0, room)}…`);
-      kept.push("    … (the rest of its snapshot is cut)");
-      break;
-    }
-    used += line.length + 1;
-    kept.push(`    ${line}`);
-  }
-  return kept.join(`
-`);
 }
 function underOnTop(message, lines) {
   const at = message.indexOf(ON_TOP);
@@ -1452,7 +1418,7 @@ function yamlLines(result, keepFallback) {
   }
   return [...lines, ...unplaced];
 }
-function renderSnapshot2(result) {
+function renderSnapshot(result) {
   return yamlLines(result, true).map((line) => line.text).join(`
 `);
 }
@@ -1755,13 +1721,44 @@ function withoutReadHeads(text) {
 `);
 }
 
+// crates/neo-sdk/neo-playwright-js/scripts/snapshot-cases/snapshot-lines.ts
+var SNAPSHOT_CHARS = 1500;
+function snapshotLines(snapshot) {
+  if (typeof snapshot !== "object" || snapshot === null)
+    return "";
+  let text;
+  try {
+    text = renderSnapshotV1({ json: snapshot, partial: [] }, withDefaults({})).text;
+  } catch {
+    return "";
+  }
+  const kept = [];
+  let used = 0;
+  for (const line of text.split(`
+`)) {
+    if (line.trim() === "")
+      continue;
+    if (used + line.length + 1 > SNAPSHOT_CHARS) {
+      const room = SNAPSHOT_CHARS - used - 1;
+      if (room > 0)
+        kept.push(`    ${line.slice(0, room)}…`);
+      kept.push("    … (the rest of its snapshot is cut)");
+      break;
+    }
+    used += line.length + 1;
+    kept.push(`    ${line}`);
+  }
+  return kept.join(`
+`);
+}
+
 // crates/neo-sdk/neo-playwright-js/scripts/snapshot-cases/answer.ts
 var COVER_HEAD = `locator.click: the element is covered
   On top: dialog "Cookies" [ref=e9]`;
 var COVER_TAIL = `
   Its controls: button "Accept" [ref=e10]`;
 function coverBlock(json) {
-  setCoverRenderer((tree) => renderSnapshotV1({ json: tree, partial: [] }, withDefaults({})).text);
+  const lines = snapshotLines(json);
   const error = new Error(COVER_HEAD + COVER_TAIL);
   Reflect.set(error, "cover", {
     ref: "e9",
@@ -1769,7 +1766,7 @@ function coverBlock(json) {
     name: "Cookies",
     kind: "dialog",
     controls: [],
-    snapshot: json
+    ...lines === "" ? {} : { block: lines }
   });
   shapeCovered(error);
   if (error.message === COVER_HEAD + COVER_TAIL)
@@ -1782,7 +1779,7 @@ function todaysAnswer(call, result) {
   if (result === null)
     throw new Error("only a cover may have no snapshot");
   if ("playwright" in call)
-    return { text: renderSnapshot2(result) };
+    return { text: renderSnapshot(result) };
   if ("full" in call)
     return {
       text: renderFullSnapshot(result, call.full.maxTokens ?? DEFAULT_MAX_TOKENS)
