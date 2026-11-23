@@ -282,28 +282,58 @@ export function fixturePrometheus(step = 0): string {
   return renderPrometheus(fixtureFamilies(step))
 }
 
-/** Each family's OTLP unit, as Neo's catalog sets it. */
-const UNITS: Record<string, string> = {
-  neo_runs_total: '{run}',
-  neo_runs_in_flight: '{run}',
-  neo_run_duration_seconds: 's',
-  neo_operations_total: '{operation}',
-  neo_operation_duration_seconds: 's',
-  neo_errors_total: '{error}',
-  neo_tabs_open: '{tab}',
-  neo_tabs_opened_total: '{tab}',
-  neo_tabs_closed_total: '{tab}',
-  neo_tab_lifetime_seconds: 's',
-  neo_renderer_crashes_total: '{crash}',
+/** Each family as Neo's catalog pushes it: its OpenTelemetry name and unit. */
+const PUSHED: Record<string, { name: string; unit: string }> = {
+  neo_runs_total: { name: 'neo.runs', unit: '{run}' },
+  neo_runs_in_flight: { name: 'neo.run.active', unit: '{run}' },
+  neo_run_duration_seconds: { name: 'neo.run.duration', unit: 's' },
+  neo_operations_total: { name: 'neo.operations', unit: '{operation}' },
+  neo_operation_duration_seconds: {
+    name: 'neo.operation.duration',
+    unit: 's',
+  },
+  neo_errors_total: { name: 'neo.errors', unit: '{error}' },
+  neo_tabs_open: { name: 'neo.tab.count', unit: '{tab}' },
+  neo_tabs_opened_total: { name: 'neo.tab.opened', unit: '{tab}' },
+  neo_tabs_closed_total: { name: 'neo.tab.closed', unit: '{tab}' },
+  neo_tab_lifetime_seconds: { name: 'neo.tab.duration', unit: 's' },
+  neo_renderer_crashes_total: { name: 'neo.renderer.crashes', unit: '{crash}' },
 }
 
-/** The families as an `ExportMetricsServiceRequest` (cumulative temporality). */
+/** A scrape label as Neo pushes it: the attribute key its spans use for the same value. */
+function pushedKey(family: string, label: string): string {
+  if (label === 'status')
+    return family.startsWith('neo_operation')
+      ? 'neo.op.outcome'
+      : 'neo.run.status'
+  const keys: Record<string, string> = {
+    op: 'neo.op.name',
+    error_owner: 'neo.error.owner',
+    error_code: 'error.type',
+    origin: 'neo.tab.origin',
+    close_reason: 'neo.tab.close_reason',
+  }
+  return keys[label] ?? label
+}
+
+/**
+ * The families as Neo pushes them: an `ExportMetricsServiceRequest` (cumulative temporality) under
+ * OpenTelemetry's metric names and attribute keys.
+ */
 export function fixtureMetrics(step = 0, at = Date.now()) {
   const time = nanos(at)
   const start = nanos(at - 60_000)
   const metrics = fixtureFamilies(step).map((family) => {
-    const unit = UNITS[family.name] ?? ''
-    const head = { name: family.name, description: family.help ?? '', unit }
+    const pushed = PUSHED[family.name]
+    const head = {
+      name: pushed?.name ?? family.name,
+      description: family.help ?? '',
+      unit: pushed?.unit ?? '',
+    }
+    const attributes = (labels: Record<string, string>) =>
+      Object.entries(labels).map(([label, value]) =>
+        string(pushedKey(family.name, label), value),
+      )
     if (family.kind === 'histogram')
       return {
         ...head,
@@ -343,7 +373,7 @@ export function fixtureMetrics(step = 0, at = Date.now()) {
           dataPoints: points,
         },
       }
-    // Neo's two gauges (`neo_runs_in_flight`, `neo_tabs_open`) are up-down counters, as their
+    // Neo's two gauges (`neo.run.active`, `neo.tab.count`) are up-down counters, as their
     // values add up across processes: a non-monotonic sum on the wire.
     return {
       ...head,
@@ -391,10 +421,6 @@ const RESOURCE = [
   string('telemetry.sdk.name', 'opentelemetry'),
   string('telemetry.sdk.language', 'rust'),
 ]
-
-function attributes(labels: Record<string, string>) {
-  return Object.entries(labels).map(([key, value]) => string(key, value))
-}
 
 function string(key: string, value: string) {
   return { key, value: { stringValue: value } }

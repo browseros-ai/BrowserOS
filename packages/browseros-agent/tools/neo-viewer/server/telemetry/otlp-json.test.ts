@@ -258,6 +258,55 @@ describe('OTLP JSON metrics', () => {
     expect(items).toEqual(fixtureFamilies(3))
   })
 
+  test("Neo's OpenTelemetry names and keys are filed under the scrape's; anything else as sent", () => {
+    const counter = (name: string, keys: string[]) => ({
+      name,
+      sum: {
+        isMonotonic: true,
+        dataPoints: [
+          {
+            asInt: '1',
+            attributes: keys.map((key) => ({
+              key,
+              value: { stringValue: 'x' },
+            })),
+          },
+        ],
+      },
+    })
+    const { items } = decodeMetrics({
+      resourceMetrics: [
+        {
+          scopeMetrics: [
+            {
+              metrics: [
+                counter('neo.operations', [
+                  'neo.op.name',
+                  'neo.op.outcome',
+                  'neo.error.owner',
+                ]),
+                counter('neo.errors', ['neo.error.owner', 'error.type']),
+                counter('neo.runs', ['neo.run.status', 'neo.error.owner']),
+                counter('other.requests', ['error.type']),
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    expect(
+      items.map((family) => [
+        family.name,
+        Object.keys(family.series[0]?.labels ?? {}),
+      ]),
+    ).toEqual([
+      ['neo_operations_total', ['op', 'status', 'error_owner']],
+      ['neo_errors_total', ['error_owner', 'error_code']],
+      ['neo_runs_total', ['status', 'error_owner']],
+      ['other.requests', ['error.type']],
+    ])
+  })
+
   test('counters, UpDownCounters and gauges; asInt as text, asDouble with NaN', () => {
     const { items, rejected } = decodeMetrics({
       resourceMetrics: [

@@ -115,6 +115,41 @@ describe('the scrape door', () => {
 })
 
 describe('health', () => {
+  test('push only (no host API, as with --upstream): the health bar and Health view read OpenTelemetry names', async () => {
+    const telemetry = start({ emitEveryMs: 10 })
+    await push(telemetry, 1)
+    const health = await until(() => telemetry.health())
+    expect(health).toMatchObject({
+      source: 'push',
+      runsInFlight: 1,
+      tabsOpen: 3,
+    })
+    const view = telemetry.metrics()
+    expect(view?.source).toBe('push')
+    expect(view?.runs).toMatchObject({
+      total: 5,
+      inFlight: 1,
+      byStatus: { ok: 4, error: 1 },
+      duration: { count: 5 },
+    })
+    expect(
+      view?.operations.find((row) => row.op === 'locator.click'),
+    ).toMatchObject({ total: 9, errors: 5, duration: { count: 9 } })
+    expect(view?.errors).toEqual([
+      { owner: 'script', code: 'no_match', count: 5 },
+      { owner: 'website', code: 'navigation_failed', count: 1 },
+    ])
+    expect(view?.tabs).toMatchObject({
+      openByOrigin: { agent: 2, found: 1 },
+      openedByOrigin: { agent: 4, found: 1 },
+      closedByReason: { script: 2, janitor: 0 },
+      lifetime: { count: 2 },
+    })
+    expect(view?.families.map((family) => family.name)).toContain(
+      'neo_tab_lifetime_seconds',
+    )
+  })
+
   test('the scrape wins while live; when it goes quiet the push takes over, and with both quiet the numbers go', async () => {
     let scraping = true
     const neo = host(() =>

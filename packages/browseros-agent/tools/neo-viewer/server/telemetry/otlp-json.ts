@@ -15,6 +15,7 @@
  */
 
 import type { MetricFamily } from '../../shared/api'
+import { asScraped } from './otlp-names'
 
 /** A span attribute as the viewer keeps it: scalars as sent; arrays and maps as JSON text. */
 export type Attribute = string | number | boolean
@@ -215,7 +216,11 @@ function tabIdOf(value: Attribute | undefined): number | null {
   return null
 }
 
-/** `ExportMetricsServiceRequest` → metric families, one per name. */
+/**
+ * `ExportMetricsServiceRequest` → metric families, one per name. Neo's metrics arrive under
+ * OpenTelemetry's names and are filed under the scrape's (`otlp-names.ts`), so both doors give
+ * one model.
+ */
 export function decodeMetrics(body: unknown): Decoded<MetricFamily> {
   const byName = new Map<string, MetricFamily>()
   let rejected = 0
@@ -228,11 +233,12 @@ export function decodeMetrics(body: unknown): Decoded<MetricFamily> {
         const decoded = decodeMetric(raw)
         rejected += decoded.rejected
         if (!decoded.family) continue
-        const known = byName.get(decoded.family.name)
-        if (known && known.kind === decoded.family.kind)
-          known.series.push(...decoded.family.series)
-        else if (!known) byName.set(decoded.family.name, decoded.family)
-        else rejected += decoded.family.series.length
+        const family = asScraped(decoded.family)
+        const known = byName.get(family.name)
+        if (known && known.kind === family.kind)
+          known.series.push(...family.series)
+        else if (!known) byName.set(family.name, family)
+        else rejected += family.series.length
       }
     }
   }
@@ -255,8 +261,8 @@ function decodeMetric(raw: unknown): {
     series: [],
   }
   if (isObject(raw.sum) || isObject(raw.gauge)) {
-    // A monotonic sum is a counter; an up-down counter (`neo_runs_in_flight`, `neo_tabs_open`)
-    // is a gauge, as Prometheus renders it.
+    // A monotonic sum is a counter; an up-down counter (`neo.run.active`, `neo.tab.count`) is
+    // a gauge, as Prometheus renders it.
     family.kind =
       isObject(raw.sum) && raw.sum.isMonotonic === true ? 'counter' : 'gauge'
     const data = (isObject(raw.sum) ? raw.sum : raw.gauge) as Json

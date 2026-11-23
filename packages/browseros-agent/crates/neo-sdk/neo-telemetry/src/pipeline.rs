@@ -561,11 +561,13 @@ fn stopped(reason: String) -> TelemetryError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::error::Error;
     use std::future;
     use std::sync::mpsc;
 
-    use opentelemetry::{Context, Key};
+    use opentelemetry::{Context, Key, KeyValue};
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
     use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
     use opentelemetry_sdk::trace::SpanData;
 
@@ -740,8 +742,62 @@ mod tests {
         Ok(())
     }
 
+    /// What the push door sends for each family: OpenTelemetry name, unit and attribute keys.
+    const PUSHED: [(&str, &str, &[&str]); 11] = [
+        ("neo.errors", "{error}", &["error.type", "neo.error.owner"]),
+        (
+            "neo.operation.duration",
+            "s",
+            &["neo.op.name", "neo.op.outcome"],
+        ),
+        (
+            "neo.operations",
+            "{operation}",
+            &["neo.error.owner", "neo.op.name", "neo.op.outcome"],
+        ),
+        ("neo.renderer.crashes", "{crash}", &[]),
+        ("neo.run.active", "{run}", &[]),
+        ("neo.run.duration", "s", &["neo.run.status"]),
+        ("neo.runs", "{run}", &["neo.error.owner", "neo.run.status"]),
+        (
+            "neo.tab.closed",
+            "{tab}",
+            &["neo.tab.close_reason", "neo.tab.origin"],
+        ),
+        ("neo.tab.count", "{tab}", &["neo.tab.origin"]),
+        (
+            "neo.tab.duration",
+            "s",
+            &["neo.tab.close_reason", "neo.tab.origin"],
+        ),
+        ("neo.tab.opened", "{tab}", &["neo.tab.origin"]),
+    ];
+
+    /// Every attribute key a metric's data points carry.
+    fn keys_of(data: &AggregatedMetrics) -> BTreeSet<String> {
+        fn keys<'a>(attributes: impl Iterator<Item = &'a KeyValue>) -> Vec<String> {
+            attributes.map(|kv| kv.key.as_str().to_owned()).collect()
+        }
+        match data {
+            AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+                .data_points()
+                .flat_map(|point| keys(point.attributes()))
+                .collect(),
+            AggregatedMetrics::I64(MetricData::Sum(sum)) => sum
+                .data_points()
+                .flat_map(|point| keys(point.attributes()))
+                .collect(),
+            AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+                .data_points()
+                .flat_map(|point| keys(point.attributes()))
+                .collect(),
+            _ => BTreeSet::new(),
+        }
+    }
+
     #[test]
-    fn every_instrument_the_push_door_exports_carries_its_unit() -> Result<(), Box<dyn Error>> {
+    fn the_push_door_sends_opentelemetry_names_units_and_attribute_keys()
+    -> Result<(), Box<dyn Error>> {
         let pipeline = Pipeline::start(&TelemetryConfig::default())?;
         pipeline.set_open_tabs(Arc::new(OpenTabCounts::default));
         pipeline.run_refused(ErrorLabel {
@@ -777,19 +833,44 @@ mod tests {
             Duration::from_secs(3),
         );
         pipeline.renderer_crashed();
+        // The scrape reader reads the meter provider the OTLP reader exports, so what it collects
+        // is what a push sends.
         let mut collected = ResourceMetrics::default();
         pipeline.scrape.collect(&mut collected)?;
-        let mut units: Vec<(&str, &str)> = Vec::new();
+        let mut pushed: Vec<(&str, &str, BTreeSet<String>)> = Vec::new();
         for scope in collected.scope_metrics() {
-            units.extend(scope.metrics().map(|metric| (metric.name(), metric.unit())));
+            pushed.extend(
+                scope
+                    .metrics()
+                    .map(|metric| (metric.name(), metric.unit(), keys_of(metric.data()))),
+            );
         }
-        units.sort_unstable();
+        pushed.sort_unstable();
+        let expected: Vec<(&str, &str, BTreeSet<String>)> = PUSHED
+            .iter()
+            .map(|(name, unit, keys)| {
+                (
+                    *name,
+                    *unit,
+                    keys.iter().map(|key| (*key).to_owned()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pushed, expected,
+            "each family goes out under its OpenTelemetry name, with its UCUM unit and \
+             namespaced attribute keys"
+        );
         let mut catalog: Vec<(&str, &str)> =
-            CATALOG.iter().map(|spec| (spec.name, spec.unit)).collect();
+            CATALOG.iter().map(|spec| (spec.otel, spec.unit)).collect();
         catalog.sort_unstable();
         assert_eq!(
-            units, catalog,
-            "each family goes out with its UCUM unit: seconds, or a {{thing}} for a count"
+            pushed
+                .iter()
+                .map(|(name, unit, _)| (*name, *unit))
+                .collect::<Vec<_>>(),
+            catalog,
+            "and the catalog is where those names and units come from"
         );
         Ok(())
     }

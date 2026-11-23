@@ -418,16 +418,16 @@ mod tests {
             })
         }
 
-        /// One `neo.run` span and `neo_runs_total` +3, as a finished run records them.
+        /// One `neo.run` span and `neo.runs` +3, as a finished run records them.
         fn record_a_run(&self) {
             let mut span = self.tracers.tracer("neo-telemetry").start("neo.run");
             span.set_attribute(KeyValue::new("neo.run.id", "run-1"));
             span.end();
             self.meters
                 .meter("neo-telemetry")
-                .u64_counter("neo_runs_total")
+                .u64_counter("neo.runs")
                 .build()
-                .add(3, &[KeyValue::new("status", "ok")]);
+                .add(3, &[KeyValue::new("neo.run.status", "ok")]);
         }
 
         /// What the pipeline's shutdown does: arm the transport's deadline, then shut both
@@ -517,8 +517,8 @@ mod tests {
             .iter()
             .flat_map(|resource| &resource.scope_metrics)
             .flat_map(|scope| &scope.metrics)
-            .find(|metric| metric.name == "neo_runs_total")
-            .ok_or("neo_runs_total must arrive")?;
+            .find(|metric| metric.name == "neo.runs")
+            .ok_or("neo.runs must arrive")?;
         let Some(metric::Data::Sum(sum)) = &metric.data else {
             return Err("a counter arrives as a sum".into());
         };
@@ -570,12 +570,8 @@ mod tests {
         let json: Json = serde_json::from_slice(&body)?;
         let metric = json["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
             .as_array()
-            .and_then(|metrics| {
-                metrics
-                    .iter()
-                    .find(|metric| metric["name"] == "neo_runs_total")
-            })
-            .ok_or("neo_runs_total must arrive")?;
+            .and_then(|metrics| metrics.iter().find(|metric| metric["name"] == "neo.runs"))
+            .ok_or("neo.runs must arrive")?;
         assert_eq!(
             metric["sum"]["aggregationTemporality"], 2,
             "cumulative, as an integer"

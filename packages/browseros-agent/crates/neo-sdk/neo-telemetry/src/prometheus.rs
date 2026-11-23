@@ -9,6 +9,11 @@
 //! Deterministic: families in catalog order, series sorted by their label text, labels sorted by
 //! name. Every family gets its `# HELP` / `# TYPE` lines even before it has a sample, so a
 //! consumer sees the whole catalog from the first scrape.
+//!
+//! The instruments carry OpenTelemetry names and attribute keys (`neo.run.duration`,
+//! `neo.run.status`), which the OTLP door sends as they are. This text keeps the scrape's own
+//! names (`neo_run_duration_seconds`, `status`), looked up in the catalog, so a dashboard or alert
+//! built on the scrape never sees a rename.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -17,7 +22,7 @@ use std::fmt::{Display, Write as _};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, Metric, MetricData, ResourceMetrics};
 
-use crate::instruments::{CATALOG, MetricSpec};
+use crate::instruments::{CATALOG, MetricSpec, scrape_label};
 
 /// The exposition being written: one family at a time, in catalog order.
 #[derive(Debug, Default)]
@@ -43,7 +48,7 @@ impl Prometheus {
         }
         let mut exposition = Self::default();
         for spec in CATALOG {
-            exposition.family(spec, metrics.get(spec.name).map(|metric| metric.data()));
+            exposition.family(spec, metrics.get(spec.otel).map(|metric| metric.data()));
         }
         exposition.text
     }
@@ -124,11 +129,15 @@ fn label_pairs<'a>(attributes: impl Iterator<Item = &'a KeyValue>) -> Vec<(Cow<'
     pairs
 }
 
-/// A label name as the text format allows it, `[a-zA-Z_][a-zA-Z0-9_]*`. The catalog's names
-/// already are; this keeps the text well-formed should the SDK add one of its own, such as the
+/// A label name as the text format allows it, `[a-zA-Z_][a-zA-Z0-9_]*`: the scrape's own name for
+/// an attribute the instruments set, else the key with every other character an underscore. The
+/// fallback keeps the text well-formed should the SDK add a key of its own, such as the
 /// `otel.metric.overflow` series it opens past its cardinality limit (2000 per metric, far above
 /// the closed label sets).
 fn label_name(key: &str) -> Cow<'_, str> {
+    if let Some(label) = scrape_label(key) {
+        return Cow::Borrowed(label);
+    }
     let allowed = |character: char| character.is_ascii_alphanumeric() || character == '_';
     let leading_digit = key.starts_with(|character: char| character.is_ascii_digit());
     if !key.is_empty() && !leading_digit && key.chars().all(allowed) {
@@ -431,8 +440,18 @@ neo_renderer_crashes_total 1
 
     #[test]
     fn every_label_name_is_one_the_text_format_accepts() {
-        for name in ["status", "error_owner", "op"] {
-            assert_eq!(label_name(name), name, "the catalog's names pass unchanged");
+        for (key, name) in [
+            ("neo.run.status", "status"),
+            ("neo.op.outcome", "status"),
+            ("neo.error.owner", "error_owner"),
+            ("error.type", "error_code"),
+            ("neo.op.name", "op"),
+        ] {
+            assert_eq!(
+                label_name(key),
+                name,
+                "an attribute renders as the scrape's label"
+            );
         }
         assert_eq!(
             label_name("otel.metric.overflow"),

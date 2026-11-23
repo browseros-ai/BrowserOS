@@ -1,11 +1,16 @@
 //! The 11 foundational instruments, as one catalog (wire-contract.md, "Metrics").
 //!
-//! [`CATALOG`] is the one list of families: name, help, kind, unit and buckets. [`Instruments::new`]
-//! takes each instrument's name, help, unit and buckets from its entry: the counters and the
-//! histograms through one helper each, the in-flight up-down counter and the open-tabs observable
-//! up-down counter written out, as their builders differ. The Prometheus renderer (`prometheus.rs`) walks the same
-//! list for its `# HELP` / `# TYPE` lines and family order, so the pull door and the OTLP push
-//! door cannot drift apart.
+//! [`CATALOG`] is the one list of families: both names, help, kind, unit and buckets.
+//! [`Instruments::new`] takes each instrument's OpenTelemetry name, help, unit and buckets from its
+//! entry: the counters and the histograms through one helper each, the in-flight up-down counter
+//! and the open-tabs observable up-down counter written out, as their builders differ. The
+//! Prometheus renderer (`prometheus.rs`) walks the same list for its `# HELP` / `# TYPE` lines and
+//! family order, so the pull door and the OTLP push door cannot drift apart.
+//!
+//! Each door names things its own way. The OTLP door uses OpenTelemetry's metric naming: dotted
+//! names with no unit and no `_total` (an exporter derives both), namespaced attribute keys, and
+//! the registry's `error.type` for an error code. The scrape keeps the Prometheus names and label
+//! names it has always served: [`MetricSpec::name`] and [`Label::scrape`] are what it renders.
 //!
 //! Labels are closed by the record methods' signatures: each takes only the closed label enums
 //! ([`crate::label`]) and the two vocabulary tokens [`OpLabel`] and [`CodeLabel`], which only a
@@ -47,12 +52,13 @@ impl Kind {
     }
 }
 
-/// One metric family as both doors name it: the Prometheus family and the OTLP metric share the
-/// name. A plain data bag.
+/// One metric family, under the name each door gives it. A plain data bag.
 #[derive(Debug)]
 pub(crate) struct MetricSpec {
-    /// The family name, in both doors.
+    /// The Prometheus family name the scrape serves.
     pub(crate) name: &'static str,
+    /// The instrument's OpenTelemetry name, which the OTLP door sends.
+    pub(crate) otel: &'static str,
     /// The `# HELP` text and the OTLP description.
     pub(crate) help: &'static str,
     /// How Prometheus types it.
@@ -82,6 +88,7 @@ const TAB_BUCKETS: &[f64] = &[
 
 const RUNS_TOTAL: MetricSpec = MetricSpec {
     name: "neo_runs_total",
+    otel: "neo.runs",
     help: "Runs that ended, and calls refused before they became a run, by status and by who \
            must fix the failure.",
     kind: Kind::Counter,
@@ -90,6 +97,7 @@ const RUNS_TOTAL: MetricSpec = MetricSpec {
 };
 const RUNS_IN_FLIGHT: MetricSpec = MetricSpec {
     name: "neo_runs_in_flight",
+    otel: "neo.run.active",
     help: "Runs admitted and not yet ended.",
     kind: Kind::Gauge,
     unit: "{run}",
@@ -97,6 +105,7 @@ const RUNS_IN_FLIGHT: MetricSpec = MetricSpec {
 };
 const RUN_DURATION: MetricSpec = MetricSpec {
     name: "neo_run_duration_seconds",
+    otel: "neo.run.duration",
     help: "How long each run took, from admission to its end, by status.",
     kind: Kind::Histogram,
     unit: "s",
@@ -104,6 +113,7 @@ const RUN_DURATION: MetricSpec = MetricSpec {
 };
 const OPERATIONS_TOTAL: MetricSpec = MetricSpec {
     name: "neo_operations_total",
+    otel: "neo.operations",
     help: "Operations settled, by op (unregistered names count as unknown), status and who must \
            fix the failure.",
     kind: Kind::Counter,
@@ -112,6 +122,7 @@ const OPERATIONS_TOTAL: MetricSpec = MetricSpec {
 };
 const OPERATION_DURATION: MetricSpec = MetricSpec {
     name: "neo_operation_duration_seconds",
+    otel: "neo.operation.duration",
     help: "How long each operation took, by op and status.",
     kind: Kind::Histogram,
     unit: "s",
@@ -119,6 +130,7 @@ const OPERATION_DURATION: MetricSpec = MetricSpec {
 };
 const ERRORS_TOTAL: MetricSpec = MetricSpec {
     name: "neo_errors_total",
+    otel: "neo.errors",
     help: "Failures by who must fix them and their code, each counted once where it is \
            attributed.",
     kind: Kind::Counter,
@@ -127,6 +139,7 @@ const ERRORS_TOTAL: MetricSpec = MetricSpec {
 };
 const TABS_OPEN: MetricSpec = MetricSpec {
     name: "neo_tabs_open",
+    otel: "neo.tab.count",
     help: "Tabs open now, by who opened them.",
     kind: Kind::Gauge,
     unit: "{tab}",
@@ -134,6 +147,7 @@ const TABS_OPEN: MetricSpec = MetricSpec {
 };
 const TABS_OPENED_TOTAL: MetricSpec = MetricSpec {
     name: "neo_tabs_opened_total",
+    otel: "neo.tab.opened",
     help: "Tabs Neo registered, by who opened them.",
     kind: Kind::Counter,
     unit: "{tab}",
@@ -141,6 +155,7 @@ const TABS_OPENED_TOTAL: MetricSpec = MetricSpec {
 };
 const TABS_CLOSED_TOTAL: MetricSpec = MetricSpec {
     name: "neo_tabs_closed_total",
+    otel: "neo.tab.closed",
     help: "Tabs closed, by who opened them and why they closed.",
     kind: Kind::Counter,
     unit: "{tab}",
@@ -148,6 +163,7 @@ const TABS_CLOSED_TOTAL: MetricSpec = MetricSpec {
 };
 const TAB_LIFETIME: MetricSpec = MetricSpec {
     name: "neo_tab_lifetime_seconds",
+    otel: "neo.tab.duration",
     help: "How long each closed tab was open, by who opened it and why it closed.",
     kind: Kind::Histogram,
     unit: "s",
@@ -155,6 +171,7 @@ const TAB_LIFETIME: MetricSpec = MetricSpec {
 };
 const RENDERER_CRASHES_TOTAL: MetricSpec = MetricSpec {
     name: "neo_renderer_crashes_total",
+    otel: "neo.renderer.crashes",
     help: "Renderer crashes, whether or not an op was using the tab.",
     kind: Kind::Counter,
     unit: "{crash}",
@@ -176,12 +193,71 @@ pub(crate) const CATALOG: [&MetricSpec; 11] = [
     &RENDERER_CRASHES_TOTAL,
 ];
 
-const STATUS: Key = Key::from_static_str("status");
-const ERROR_OWNER: Key = Key::from_static_str("error_owner");
-const ERROR_CODE: Key = Key::from_static_str("error_code");
-const OP: Key = Key::from_static_str("op");
-const ORIGIN: Key = Key::from_static_str("origin");
-const CLOSE_REASON: Key = Key::from_static_str("close_reason");
+/// One attribute the instruments set: its OpenTelemetry key, and the label name the scrape
+/// renders it under. A plain data bag.
+#[derive(Debug)]
+pub(crate) struct Label {
+    /// The attribute key, as the OTLP door sends it.
+    pub(crate) otel: &'static str,
+    /// The Prometheus label name.
+    pub(crate) scrape: &'static str,
+}
+
+impl Label {
+    const fn key(&self) -> Key {
+        Key::from_static_str(self.otel)
+    }
+}
+
+// The span attributes' keys where a span carries the same value, so a metric and a trace are
+// filtered alike; `error.type` is the registry's key for a failure's class.
+const RUN_STATUS: Label = Label {
+    otel: "neo.run.status",
+    scrape: "status",
+};
+const OP_OUTCOME: Label = Label {
+    otel: "neo.op.outcome",
+    scrape: "status",
+};
+const OP_NAME: Label = Label {
+    otel: "neo.op.name",
+    scrape: "op",
+};
+const ERROR_OWNER: Label = Label {
+    otel: "neo.error.owner",
+    scrape: "error_owner",
+};
+const ERROR_TYPE: Label = Label {
+    otel: "error.type",
+    scrape: "error_code",
+};
+const ORIGIN: Label = Label {
+    otel: "neo.tab.origin",
+    scrape: "origin",
+};
+const CLOSE_REASON: Label = Label {
+    otel: "neo.tab.close_reason",
+    scrape: "close_reason",
+};
+
+/// Every attribute the instruments set.
+pub(crate) const LABELS: [&Label; 7] = [
+    &RUN_STATUS,
+    &OP_OUTCOME,
+    &OP_NAME,
+    &ERROR_OWNER,
+    &ERROR_TYPE,
+    &ORIGIN,
+    &CLOSE_REASON,
+];
+
+/// The scrape's label name for the attribute `key`, or `None` for a key the instruments never set.
+pub(crate) fn scrape_label(key: &str) -> Option<&'static str> {
+    LABELS
+        .iter()
+        .find(|label| label.otel == key)
+        .map(|label| label.scrape)
+}
 
 /// Every `origin` the open-tabs gauge reports, so each one shows a value, `0` included.
 const ORIGINS: [TabOrigin; 3] = [TabOrigin::Agent, TabOrigin::Found, TabOrigin::Neo];
@@ -284,7 +360,7 @@ impl Instruments {
         let instruments = Self {
             runs_total: counter(meter, &RUNS_TOTAL),
             runs_in_flight: meter
-                .i64_up_down_counter(RUNS_IN_FLIGHT.name)
+                .i64_up_down_counter(RUNS_IN_FLIGHT.otel)
                 .with_description(RUNS_IN_FLIGHT.help)
                 .with_unit(RUNS_IN_FLIGHT.unit)
                 .build(),
@@ -306,7 +382,7 @@ impl Instruments {
         // The callback is not wrapped in `catch_unwind` (STYLE.md G16): the tab registry's source
         // is a lock and a count that cannot panic.
         meter
-            .i64_observable_up_down_counter(TABS_OPEN.name)
+            .i64_observable_up_down_counter(TABS_OPEN.otel)
             .with_description(TABS_OPEN.help)
             .with_unit(TABS_OPEN.unit)
             .with_callback(move |observer| {
@@ -315,7 +391,7 @@ impl Instruments {
                 };
                 for origin in ORIGINS {
                     let open = i64::try_from(counts.of(origin)).unwrap_or(i64::MAX);
-                    observer.observe(open, &[KeyValue::new(ORIGIN, origin.as_str())]);
+                    observer.observe(open, &[KeyValue::new(ORIGIN.key(), origin.as_str())]);
                 }
             })
             .build();
@@ -334,7 +410,7 @@ impl Instruments {
         self.run_counted(status, error);
         self.run_duration.record(
             took.as_secs_f64(),
-            &[KeyValue::new(STATUS, status.as_str())],
+            &[KeyValue::new(RUN_STATUS.key(), status.as_str())],
         );
     }
 
@@ -347,8 +423,8 @@ impl Instruments {
         self.runs_total.add(
             1,
             &[
-                KeyValue::new(STATUS, status.as_str()),
-                KeyValue::new(ERROR_OWNER, ErrorLabel::owner_label(error)),
+                KeyValue::new(RUN_STATUS.key(), status.as_str()),
+                KeyValue::new(ERROR_OWNER.key(), ErrorLabel::owner_label(error)),
             ],
         );
     }
@@ -362,8 +438,8 @@ impl Instruments {
         error: Option<ErrorLabel>,
         took: Duration,
     ) {
-        let op = KeyValue::new(OP, op.0);
-        let status = KeyValue::new(STATUS, outcome.as_str());
+        let op = KeyValue::new(OP_NAME.key(), op.0);
+        let status = KeyValue::new(OP_OUTCOME.key(), outcome.as_str());
         self.operation_duration
             .record(took.as_secs_f64(), &[op.clone(), status.clone()]);
         self.operations_total.add(
@@ -371,7 +447,7 @@ impl Instruments {
             &[
                 op,
                 status,
-                KeyValue::new(ERROR_OWNER, ErrorLabel::owner_label(error)),
+                KeyValue::new(ERROR_OWNER.key(), ErrorLabel::owner_label(error)),
             ],
         );
     }
@@ -381,8 +457,8 @@ impl Instruments {
         self.errors_total.add(
             1,
             &[
-                KeyValue::new(ERROR_OWNER, owner.as_str()),
-                KeyValue::new(ERROR_CODE, code.0),
+                KeyValue::new(ERROR_OWNER.key(), owner.as_str()),
+                KeyValue::new(ERROR_TYPE.key(), code.0),
             ],
         );
     }
@@ -390,14 +466,14 @@ impl Instruments {
     /// `neo_tabs_opened_total`.
     pub(crate) fn tab_opened(&self, origin: TabOrigin) {
         self.tabs_opened_total
-            .add(1, &[KeyValue::new(ORIGIN, origin.as_str())]);
+            .add(1, &[KeyValue::new(ORIGIN.key(), origin.as_str())]);
     }
 
     /// `neo_tabs_closed_total` and `neo_tab_lifetime_seconds`.
     pub(crate) fn tab_closed(&self, origin: TabOrigin, reason: CloseReason, lifetime: Duration) {
         let labels = [
-            KeyValue::new(ORIGIN, origin.as_str()),
-            KeyValue::new(CLOSE_REASON, reason.as_str()),
+            KeyValue::new(ORIGIN.key(), origin.as_str()),
+            KeyValue::new(CLOSE_REASON.key(), reason.as_str()),
         ];
         self.tabs_closed_total.add(1, &labels);
         self.tab_lifetime.record(lifetime.as_secs_f64(), &labels);
@@ -411,7 +487,7 @@ impl Instruments {
 
 fn counter(meter: &Meter, spec: &MetricSpec) -> Counter<u64> {
     meter
-        .u64_counter(spec.name)
+        .u64_counter(spec.otel)
         .with_description(spec.help)
         .with_unit(spec.unit)
         .build()
@@ -419,7 +495,7 @@ fn counter(meter: &Meter, spec: &MetricSpec) -> Counter<u64> {
 
 fn histogram(meter: &Meter, spec: &MetricSpec) -> Histogram<f64> {
     meter
-        .f64_histogram(spec.name)
+        .f64_histogram(spec.otel)
         .with_description(spec.help)
         .with_unit(spec.unit)
         .with_boundaries(spec.buckets.to_vec())
@@ -428,33 +504,177 @@ fn histogram(meter: &Meter, spec: &MetricSpec) -> Histogram<f64> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+    use std::fs;
+    use std::path::Path;
+
     use super::*;
 
-    /// wire-contract.md's table, row by row: name, kind, unit.
-    const WIRE_CONTRACT: [(&str, Kind, &str); 11] = [
-        ("neo_runs_total", Kind::Counter, "{run}"),
-        ("neo_runs_in_flight", Kind::Gauge, "{run}"),
-        ("neo_run_duration_seconds", Kind::Histogram, "s"),
-        ("neo_operations_total", Kind::Counter, "{operation}"),
-        ("neo_operation_duration_seconds", Kind::Histogram, "s"),
-        ("neo_errors_total", Kind::Counter, "{error}"),
-        ("neo_tabs_open", Kind::Gauge, "{tab}"),
-        ("neo_tabs_opened_total", Kind::Counter, "{tab}"),
-        ("neo_tabs_closed_total", Kind::Counter, "{tab}"),
-        ("neo_tab_lifetime_seconds", Kind::Histogram, "s"),
-        ("neo_renderer_crashes_total", Kind::Counter, "{crash}"),
+    /// wire-contract.md's table, row by row: scrape name, OTLP name, kind, unit.
+    const WIRE_CONTRACT: [(&str, &str, Kind, &str); 11] = [
+        ("neo_runs_total", "neo.runs", Kind::Counter, "{run}"),
+        ("neo_runs_in_flight", "neo.run.active", Kind::Gauge, "{run}"),
+        (
+            "neo_run_duration_seconds",
+            "neo.run.duration",
+            Kind::Histogram,
+            "s",
+        ),
+        (
+            "neo_operations_total",
+            "neo.operations",
+            Kind::Counter,
+            "{operation}",
+        ),
+        (
+            "neo_operation_duration_seconds",
+            "neo.operation.duration",
+            Kind::Histogram,
+            "s",
+        ),
+        ("neo_errors_total", "neo.errors", Kind::Counter, "{error}"),
+        ("neo_tabs_open", "neo.tab.count", Kind::Gauge, "{tab}"),
+        (
+            "neo_tabs_opened_total",
+            "neo.tab.opened",
+            Kind::Counter,
+            "{tab}",
+        ),
+        (
+            "neo_tabs_closed_total",
+            "neo.tab.closed",
+            Kind::Counter,
+            "{tab}",
+        ),
+        (
+            "neo_tab_lifetime_seconds",
+            "neo.tab.duration",
+            Kind::Histogram,
+            "s",
+        ),
+        (
+            "neo_renderer_crashes_total",
+            "neo.renderer.crashes",
+            Kind::Counter,
+            "{crash}",
+        ),
     ];
 
     #[test]
     fn the_catalog_is_the_wire_contract_in_its_order() {
-        let catalog: Vec<(&str, Kind, &str)> = CATALOG
+        let catalog: Vec<(&str, &str, Kind, &str)> = CATALOG
             .iter()
-            .map(|spec| (spec.name, spec.kind, spec.unit))
+            .map(|spec| (spec.name, spec.otel, spec.kind, spec.unit))
             .collect();
         assert_eq!(
             catalog,
             WIRE_CONTRACT.to_vec(),
             "both doors take names, kinds and units from this list, so it must be the contract's"
+        );
+    }
+
+    /// A dotted name of lowercase `snake_case` segments under `neo` (or the registry's `error`).
+    fn dotted(name: &str, namespaces: &[&str]) -> bool {
+        let segments: Vec<&str> = name.split('.').collect();
+        segments.len() >= 2
+            && namespaces.contains(&segments[0])
+            && segments.iter().all(|segment| {
+                !segment.is_empty()
+                    && !segment.starts_with('_')
+                    && !segment.ends_with('_')
+                    && segment
+                        .chars()
+                        .all(|character| character.is_ascii_lowercase() || character == '_')
+            })
+    }
+
+    #[test]
+    fn otlp_names_follow_opentelemetry_metric_naming() {
+        let mut names: Vec<&str> = CATALOG.iter().map(|spec| spec.otel).collect();
+        for spec in CATALOG {
+            let name = spec.otel;
+            assert!(
+                dotted(name, &["neo"]),
+                "{name}: dotted lowercase segments under `neo`"
+            );
+            assert!(
+                !name
+                    .split(['.', '_'])
+                    .any(|word| matches!(word, "total" | "seconds")),
+                "{name}: no unit and no `_total` in the name: the exporter derives them"
+            );
+            let leaf = name.rsplit('.').next().unwrap_or(name);
+            match spec.kind {
+                // An up-down counter is never pluralized: `.count` for the things the namespace
+                // names, `.active` for the ones in progress.
+                Kind::Gauge => assert!(
+                    matches!(leaf, "count" | "active"),
+                    "{name}: an up-down counter ends in `.count` or `.active`"
+                ),
+                Kind::Histogram => assert_eq!(leaf, "duration", "{name}: a time is a `.duration`"),
+                Kind::Counter => {}
+            }
+        }
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), CATALOG.len(), "every OTLP name is its own");
+    }
+
+    #[test]
+    fn the_host_api_contract_gives_each_family_and_label_its_otlp_name()
+    -> Result<(), Box<dyn Error>> {
+        let spec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-sdk-api/openapi.yaml");
+        let yaml = fs::read_to_string(spec)?;
+        let route: Vec<&str> = yaml
+            .lines()
+            .skip_while(|line| *line != "  /v1/metrics:")
+            .skip(1)
+            .take_while(|line| line.is_empty() || line.starts_with("   "))
+            .flat_map(str::split_whitespace)
+            .collect();
+        let route = route.join(" ");
+        let (_, push) = route
+            .split_once("An OTLP push carries")
+            .ok_or("/v1/metrics says what a push names differently")?;
+        for spec in CATALOG {
+            let pair = format!("`{}` is `{}`", spec.name, spec.otel);
+            assert!(push.contains(&pair), "openapi.yaml says {pair}");
+        }
+        for label in LABELS {
+            let key = format!("`{}`", label.otel);
+            assert!(
+                push.contains(&key),
+                "openapi.yaml names the key {key} for `{}`",
+                label.scrape
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_attribute_key_is_namespaced_and_maps_to_its_scrape_label() {
+        for label in LABELS {
+            assert!(
+                dotted(label.otel, &["neo", "error"]),
+                "{}: a namespaced attribute key",
+                label.otel
+            );
+            assert_eq!(
+                scrape_label(label.otel),
+                Some(label.scrape),
+                "{}: the scrape renders it under its own label name",
+                label.otel
+            );
+        }
+        assert_eq!(
+            scrape_label("error.type"),
+            Some("error_code"),
+            "the registry's `error.type` carries the code the scrape calls `error_code`"
+        );
+        assert_eq!(
+            scrape_label("otel.metric.overflow"),
+            None,
+            "not one of ours"
         );
     }
 

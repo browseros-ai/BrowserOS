@@ -1272,9 +1272,9 @@ paths:
         Prometheus text exposition format 0.0.4: `# HELP` and `# TYPE` lines, a counter's name
         ending in `_total`, and a histogram as `_bucket{le="…"}` (`+Inf` included), `_sum` and
         `_count`. Neo renders it at each request from the same meter provider it pushes OTLP
-        from when push is on, so a scrape and a push agree. It is served whenever this listener
-        is, with no setting and no parameter, and never on the agent's MCP port. A server older
-        than this route answers 404.
+        from when push is on, so a scrape and a push agree on every number. It is served
+        whenever this listener is, with no setting and no parameter, and never on the agent's
+        MCP port. A server older than this route answers 404.
 
         The families, with their labels: `neo_runs_total` (`status`, `error_owner`),
         `neo_runs_in_flight`, `neo_run_duration_seconds` (`status`), `neo_operations_total`
@@ -1300,6 +1300,20 @@ paths:
         `shutdown`. No URL, title, tab, run or task id is ever a label. Neo chooses the bucket
         boundaries: read them from the data. Parse the text with a parser that also accepts
         OpenMetrics extras (`# EOF`, `# UNIT`, exemplars).
+
+        An OTLP push carries the same numbers under OpenTelemetry's metric names, which hold no
+        unit and no `_total`, and with namespaced attribute keys; this route keeps the names
+        above. `neo_runs_total` is `neo.runs`, `neo_runs_in_flight` is `neo.run.active`,
+        `neo_run_duration_seconds` is `neo.run.duration`, `neo_operations_total` is
+        `neo.operations`, `neo_operation_duration_seconds` is `neo.operation.duration`,
+        `neo_errors_total` is `neo.errors`, `neo_tabs_open` is `neo.tab.count`,
+        `neo_tabs_opened_total` is `neo.tab.opened`, `neo_tabs_closed_total` is
+        `neo.tab.closed`, `neo_tab_lifetime_seconds` is `neo.tab.duration` and
+        `neo_renderer_crashes_total` is `neo.renderer.crashes`. The label `status` is
+        `neo.run.status` on the run families and `neo.op.outcome` on the operation families,
+        `error_owner` is `neo.error.owner`, `error_code` is the registry's `error.type`, `op` is
+        `neo.op.name`, `origin` is `neo.tab.origin` and `close_reason` is
+        `neo.tab.close_reason`: the keys Neo's spans use for the same values.
       responses:
         '200':
           description: The metrics as of this request.

@@ -721,6 +721,108 @@ fn no_label_outside_the_closed_sets_reaches_the_exposition() -> Result<(), Box<d
     Ok(())
 }
 
+/// Every sample line's name and label names the scrape served before the push door took
+/// OpenTelemetry's names, after every hook ran: the scrape must keep them exactly.
+const SCRAPE_SHAPES: [(&str, &[&str]); 17] = [
+    ("neo_errors_total", &["error_code", "error_owner"]),
+    (
+        "neo_operation_duration_seconds_bucket",
+        &["le", "op", "status"],
+    ),
+    ("neo_operation_duration_seconds_count", &["op", "status"]),
+    ("neo_operation_duration_seconds_sum", &["op", "status"]),
+    ("neo_operations_total", &["error_owner", "op", "status"]),
+    ("neo_renderer_crashes_total", &[]),
+    ("neo_run_duration_seconds_bucket", &["le", "status"]),
+    ("neo_run_duration_seconds_count", &["status"]),
+    ("neo_run_duration_seconds_sum", &["status"]),
+    ("neo_runs_in_flight", &[]),
+    ("neo_runs_total", &["error_owner", "status"]),
+    (
+        "neo_tab_lifetime_seconds_bucket",
+        &["close_reason", "le", "origin"],
+    ),
+    (
+        "neo_tab_lifetime_seconds_count",
+        &["close_reason", "origin"],
+    ),
+    ("neo_tab_lifetime_seconds_sum", &["close_reason", "origin"]),
+    ("neo_tabs_closed_total", &["close_reason", "origin"]),
+    ("neo_tabs_open", &["origin"]),
+    ("neo_tabs_opened_total", &["origin"]),
+];
+
+#[test]
+fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetrys()
+-> Result<(), Box<dyn Error>> {
+    let (telemetry, _probe) = live(SiteDetail::Url);
+    drive_every_hook_with_hostile_text(&telemetry);
+    telemetry.renderer_crashed();
+    telemetry.set_open_tabs(Arc::new(|| OpenTabCounts {
+        agent: 1,
+        found: 1,
+        neo: 1,
+    }));
+    let text = telemetry.render_prometheus();
+    let metrics = Exposition::parse(&text)?;
+    let shapes: BTreeSet<(String, Vec<String>)> = metrics
+        .samples
+        .iter()
+        .map(|sample| (sample.name.clone(), sample.labels.keys().cloned().collect()))
+        .collect();
+    let expected: BTreeSet<(String, Vec<String>)> = SCRAPE_SHAPES
+        .iter()
+        .map(|(name, labels)| {
+            (
+                (*name).to_owned(),
+                labels.iter().map(|label| (*label).to_owned()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shapes, expected,
+        "every sample name and label name is the scrape's, as it always was"
+    );
+    assert_eq!(
+        metrics.help.iter().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            "neo_errors_total",
+            "neo_operation_duration_seconds",
+            "neo_operations_total",
+            "neo_renderer_crashes_total",
+            "neo_run_duration_seconds",
+            "neo_runs_in_flight",
+            "neo_runs_total",
+            "neo_tab_lifetime_seconds",
+            "neo_tabs_closed_total",
+            "neo_tabs_open",
+            "neo_tabs_opened_total",
+        ],
+        "the 11 family names, in `# HELP` and `# TYPE` alike"
+    );
+    assert!(
+        metrics.types.keys().eq(metrics.help.iter()),
+        "each family's `# TYPE` line names it as its `# HELP` does"
+    );
+    for otel in [
+        "neo.runs",
+        "neo.run.",
+        "neo.operation",
+        "neo.errors",
+        "neo.tab.",
+        "neo.renderer",
+        "neo.op.",
+        "neo.error.owner",
+        "error.type",
+    ] {
+        assert!(
+            !text.contains(otel),
+            "`{otel}` is the OTLP door's spelling and never reaches the scrape"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn histograms_are_cumulative_and_end_in_inf_equal_to_count() -> Result<(), Box<dyn Error>> {
     let (telemetry, _probe) = live(SiteDetail::None);
