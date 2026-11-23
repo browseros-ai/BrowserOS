@@ -1,53 +1,13 @@
-//! Telemetry's navigation and CAPTCHA labels, read from what an op's leaf returned.
+//! A CAPTCHA solve's outcome as telemetry counts it: the family it found, how and why it ended,
+//! and what it cost.
 //!
-//! The one place where neo-playwright's navigation reply and failure, and neo-captcha's solve
-//! outcome, become `neo_telemetry::label`s. Each reads the live result the op is about to
-//! answer with, never the trace, so the `trace` settings change no number. Every match over a
-//! crate's enum is exhaustive (STYLE.md P8): a new kind, status, reason or provider fails the
-//! build here instead of reaching a metric under a guessed label.
+//! It reads the outcome the solver returned, never the trace, so the `trace` settings change no
+//! number. Every match over neo-captcha's enums is exhaustive (STYLE.md P8): a new kind, status,
+//! reason or provider fails the build here instead of reaching a metric under a guessed label.
 
 use neo_captcha::types::{CaptchaKind, ProviderName, SolveOutcome, SolveReason, SolveStatus};
-use neo_playwright::{NetFailure, PlaywrightError};
-use neo_telemetry::label::{
-    CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, HttpStatus, NetError,
-};
-use neo_telemetry::{CaptchaSolve, CaptchaSpend, Navigated};
-use serde_json::Value;
-
-/// The ops that navigate a page's document, each counted once as a navigation.
-const NAVIGATIONS: [&str; 4] = ["page.goto", "page.reload", "page.goBack", "page.goForward"];
-
-/// The navigation `op` ran, as telemetry counts it, or `None` for an op that navigates nothing.
-/// Its status is the reply's `response.status`, when it is an HTTP one; its error, the network
-/// failure the crate kept apart from its message. The op's own outcome is not read: a goto
-/// answered 404 is still an `ok` op.
-#[must_use]
-pub(super) fn navigated(op: &str, result: &Result<Value, PlaywrightError>) -> Option<Navigated> {
-    if !NAVIGATIONS.contains(&op) {
-        return None;
-    }
-    Some(match result {
-        Ok(reply) => Navigated {
-            status: reply
-                .pointer("/response/status")
-                .and_then(Value::as_u64)
-                .and_then(|code| u16::try_from(code).ok())
-                .and_then(HttpStatus::new),
-            error: None,
-        },
-        Err(error) => Navigated {
-            status: None,
-            error: error.net_failure().map(net_error),
-        },
-    })
-}
-
-fn net_error(failure: &NetFailure) -> NetError {
-    match failure {
-        NetFailure::Named(text) => NetError::of_chromium(text),
-        NetFailure::ErrorPage => NetError::Other,
-    }
-}
+use neo_telemetry::label::{CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict};
+use neo_telemetry::{CaptchaSolve, CaptchaSpend};
 
 /// A solve's outcome, as telemetry counts it.
 #[must_use]
@@ -134,17 +94,14 @@ mod tests {
     use neo_captcha::types::{
         Attempts, CaptchaKind, ProviderName, SolveMethod, SolveOutcome, SolveReason, SolveStatus,
     };
-    use neo_playwright::{ErrorCode, NetFailure, PlaywrightError};
     use neo_telemetry::label::{
-        CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, HttpStatus, NetError,
-        RunStatus,
+        CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, RunStatus,
     };
     use neo_telemetry::{
-        CaptchaSpend, Navigated, RunFacts, RunTelemetry, RunVerdict, Telemetry, TelemetryConfig,
+        CaptchaSpend, RunFacts, RunTelemetry, RunVerdict, Telemetry, TelemetryConfig,
     };
-    use serde_json::{Value, json};
 
-    use super::{captcha_solve, family, navigated, provider, reason, verdict};
+    use super::{captcha_solve, family, provider, reason, verdict};
     use crate::telemetry_rig::Scrape;
 
     const KINDS: [CaptchaKind; 10] = [
@@ -234,158 +191,6 @@ mod tests {
             task_id: None,
             parent: None,
         })
-    }
-
-    /// A navigation op's reply, as neo-playwright serializes it.
-    fn reply(status: &Value) -> Value {
-        json!({
-            "response": {
-                "url": "https://example.com/",
-                "status": status,
-                "statusText": "",
-                "httpVersion": "HTTP/1.1",
-                "ok": false,
-                "headers": {},
-            },
-            "url": "https://example.com/",
-            "frameSnapshotAttempted": true,
-        })
-    }
-
-    fn failed(code: ErrorCode, net: Option<NetFailure>) -> Result<Value, PlaywrightError> {
-        let error = PlaywrightError::new(code, "page.goto: failed".to_owned());
-        Err(match net {
-            Some(net) => error.with_net_failure(net),
-            None => error,
-        })
-    }
-
-    #[test]
-    fn only_the_four_navigation_ops_are_navigations() {
-        for op in ["page.goto", "page.reload", "page.goBack", "page.goForward"] {
-            assert!(
-                navigated(op, &Ok(reply(&json!(200)))).is_some(),
-                "{op} navigates"
-            );
-        }
-        for op in [
-            "page.waitForNavigation",
-            "page.waitForURL",
-            "page.evaluate",
-            "page.title",
-            "neo.solveCaptcha",
-        ] {
-            assert_eq!(
-                navigated(op, &Ok(reply(&json!(200)))),
-                None,
-                "{op} may see a navigation, but none of its own"
-            );
-        }
-    }
-
-    #[test]
-    fn a_status_is_an_http_one_or_none() {
-        for (status, expected) in [
-            (json!(200), HttpStatus::new(200)),
-            (json!(404), HttpStatus::new(404)),
-            (json!(599), HttpStatus::new(599)),
-            (json!(0), None),
-            (json!(99), None),
-            (json!(600), None),
-            (json!(70_000), None),
-            (json!(-1), None),
-            (json!("404"), None),
-            (Value::Null, None),
-        ] {
-            assert_eq!(
-                navigated("page.goto", &Ok(reply(&status))),
-                Some(Navigated {
-                    status: expected,
-                    error: None
-                }),
-                "a reply with status {status}"
-            );
-        }
-        assert_eq!(
-            navigated("page.goBack", &Ok(json!({ "response": null, "url": null }))),
-            Some(Navigated {
-                status: None,
-                error: None
-            }),
-            "a same-document step reads no response"
-        );
-    }
-
-    #[test]
-    fn only_a_network_failure_is_a_net_error() {
-        let cases = [
-            (
-                failed(
-                    ErrorCode::NavigationFailed,
-                    Some(NetFailure::Named("net::ERR_NAME_NOT_RESOLVED".into())),
-                ),
-                Some(NetError::NameNotResolved),
-            ),
-            (
-                failed(
-                    ErrorCode::NavigationFailed,
-                    Some(NetFailure::Named("net::ERR_QUIC_PROTOCOL_ERROR".into())),
-                ),
-                Some(NetError::Other),
-            ),
-            (
-                failed(ErrorCode::NavigationFailed, Some(NetFailure::ErrorPage)),
-                Some(NetError::Other),
-            ),
-            (failed(ErrorCode::NavigationFailed, None), None),
-            (failed(ErrorCode::WaitTimeout, None), None),
-            (failed(ErrorCode::TargetCrashed, None), None),
-        ];
-        for (result, error) in cases {
-            assert_eq!(
-                navigated("page.reload", &result),
-                Some(Navigated {
-                    status: None,
-                    error
-                }),
-                "{result:?}"
-            );
-        }
-    }
-
-    /// What the mapping hands over, through the live pipeline to the scrape: a 404 goto and a
-    /// net error are both navigations, and only the second is a navigation error.
-    #[test]
-    fn navigations_reach_the_scrape_under_their_closed_labels() -> Result<(), Box<dyn Error>> {
-        let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
-        let run = counted_run(&telemetry);
-        for result in [
-            Ok(reply(&json!(404))),
-            Ok(reply(&json!(200))),
-            failed(
-                ErrorCode::NavigationFailed,
-                Some(NetFailure::Named("net::ERR_CONNECTION_REFUSED".into())),
-            ),
-        ] {
-            let navigation = navigated("page.goto", &result).ok_or("a goto navigates")?;
-            run.ops().navigated(navigation);
-        }
-        run.finish(RunVerdict {
-            status: RunStatus::Ok,
-            error: None,
-        });
-        assert_eq!(
-            Scrape::of(&telemetry)?
-                .lines_of(&["neo_navigations_total", "neo_navigation_errors_total"]),
-            [
-                r#"neo_navigation_errors_total{error_code="connection_refused"} 1"#,
-                "neo_navigations_total 1",
-                r#"neo_navigations_total{status_code="200"} 1"#,
-                r#"neo_navigations_total{status_code="404"} 1"#,
-            ],
-            "a 404 goto is a navigation like any other; the refused one is also an error"
-        );
-        Ok(())
     }
 
     #[test]

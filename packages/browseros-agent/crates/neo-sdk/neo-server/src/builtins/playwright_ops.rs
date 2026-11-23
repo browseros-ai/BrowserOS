@@ -35,8 +35,8 @@ use serde_json::{Map, Value, json};
 
 use super::PlaywrightFacade;
 use super::event_release::EventRelease;
+use super::navigated;
 use super::op_marks::{self, Hold, OpMarks};
-use super::telemetry_labels;
 use crate::browser::{IntentReason, NeoTab, OpenFor, OpenIntent, PageRef, Sight};
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
@@ -298,7 +298,7 @@ impl Method for PlaywrightOp {
         // Only a navigation the browser was sent: a refusal before it navigated nothing, and the
         // run's stop returned above.
         if env.sent()
-            && let Some(navigation) = telemetry_labels::navigated(self.spec.name, &result)
+            && let Some(navigation) = navigated::navigated(self.spec.name, &result)
         {
             op.run().telemetry().navigated(navigation);
         }

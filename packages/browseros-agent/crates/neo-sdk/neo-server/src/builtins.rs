@@ -29,9 +29,11 @@
 
 mod builtin_set;
 mod captcha_claims;
+mod captcha_solve;
 mod event_release;
 mod host_fill;
 mod keep_downloads;
+mod navigated;
 mod neo_cdp;
 mod neo_tasks;
 mod op_marks;
@@ -39,7 +41,6 @@ mod playwright_facade;
 mod playwright_ops;
 mod solve_captcha;
 mod tab_janitor;
-mod telemetry_labels;
 #[cfg(test)]
 mod tests;
 

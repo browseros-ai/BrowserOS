@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::captcha_claims::{self, CaptchaClaims};
-use super::telemetry_labels;
+use super::captcha_solve;
 use crate::dispatch::{
     ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageTarget,
     RegistryBuilder, RegistryError,
@@ -138,7 +138,7 @@ impl Method for SolveCaptcha {
         // the solver may have paid for it.
         op.run()
             .telemetry()
-            .captcha_solved(telemetry_labels::captcha_solve(&outcome));
+            .captcha_solved(captcha_solve::captcha_solve(&outcome));
         for event in &outcome.events {
             op.note(event_line(event));
         }
