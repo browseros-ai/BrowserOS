@@ -185,4 +185,63 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.classList.contains('light')).toBe(true)
     expect(getCachedBrowserScheme()).toBe('light')
   })
+
+  it('follows the OS when Appearance Mode becomes Device over a stale dark cache', async () => {
+    // Match browser + Mode Dark caches dark. Switching Mode to Device flips
+    // prefers-color-scheme with the tab still visible — no visibility event.
+    // Trusting the cache keeps dark and never attaches an OS listener.
+    globals.localStorage?.setItem(THEME_STORAGE_KEY, 'system')
+
+    let darkMatches = true
+    const mediaListeners = new Set<(event: { matches: boolean }) => void>()
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        get matches() {
+          return query.includes('dark') ? darkMatches : !darkMatches
+        },
+        media: query,
+        addEventListener: (
+          _type: string,
+          listener: (event: { matches: boolean }) => void,
+        ) => {
+          mediaListeners.add(listener)
+        },
+        removeEventListener: (
+          _type: string,
+          listener: (event: { matches: boolean }) => void,
+        ) => {
+          mediaListeners.delete(listener)
+        },
+        addListener: (listener: (event: { matches: boolean }) => void) => {
+          mediaListeners.add(listener)
+        },
+        removeListener: (listener: (event: { matches: boolean }) => void) => {
+          mediaListeners.delete(listener)
+        },
+        dispatchEvent: () => true,
+        onchange: null,
+      }),
+    })
+
+    await mount()
+    expect(resolved()).toBe('dark')
+    expect(getCachedBrowserScheme()).toBe('dark')
+
+    // kSystem — Appearance Mode Device; OS is now light.
+    prefValue = 0
+    darkMatches = false
+    await act(async () => {
+      for (const listener of mediaListeners) {
+        listener({ matches: false })
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(resolved()).toBe('light')
+    expect(document.documentElement.classList.contains('light')).toBe(true)
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(getCachedBrowserScheme()).toBeNull()
+  })
 })
