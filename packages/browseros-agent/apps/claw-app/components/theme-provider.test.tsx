@@ -244,4 +244,41 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.classList.contains('dark')).toBe(false)
     expect(getCachedBrowserScheme()).toBeNull()
   })
+
+  it('follows a prefers-color-scheme flip that never fires a change event', async () => {
+    // Fedora Default/Dark updates matchMedia.matches. The change event
+    // often does not fire, so a listener-only sync leaves the painted class.
+    globals.localStorage?.setItem(THEME_STORAGE_KEY, 'system')
+    prefValue = 0
+    let darkMatches = true
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        get matches() {
+          return query.includes('dark') ? darkMatches : !darkMatches
+        },
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => true,
+        onchange: null,
+      }),
+    })
+
+    await mount()
+    expect(resolved()).toBe('dark')
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+
+    darkMatches = false
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    })
+
+    expect(resolved()).toBe('light')
+    expect(document.documentElement.classList.contains('light')).toBe(true)
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+  })
 })
