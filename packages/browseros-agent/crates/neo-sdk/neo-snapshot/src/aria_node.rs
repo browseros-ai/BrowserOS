@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, mem};
 
 use serde::de::value::MapAccessDeserializer;
 use serde::de::{self, MapAccess, Unexpected, Visitor};
@@ -17,10 +17,10 @@ use serde_json::Number;
 /// derived parts quote the value they could not read, which may be page text, so a reader of
 /// untrusted text reports a fixed message of its own instead.
 ///
-/// Depth: the derived decode, encode and drop recurse once per level. They rely on the producer's
-/// bound: today's reader refuses a reply deeper than 297 levels of JSON (neo-playwright's
-/// `MAX_VALUE_DEPTH`), about 147 levels of the tree, stitched frames included. Code that walks a
-/// tree for its text keeps its own stack instead, as the TypeScript renderer does.
+/// Depth: the derived decode, encode, clone, comparison and `Debug` recurse once per level, so
+/// they rely on the producer keeping a tree to [`MAX_TREE_DEPTH`] levels. The drop does not
+/// recurse (see its `Drop`), and code that walks a tree for its text keeps its own stack, as the
+/// TypeScript renderer does, so a deeper tree built in code can be printed and dropped.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AriaNode {
@@ -110,6 +110,21 @@ pub struct AriaNode {
     pub children: Vec<AriaChild>,
 }
 
+/// The deepest tree, in levels, that every producer of [`AriaNode`] keeps to: a top-level node is
+/// level 1. Decoding, writing, cloning and comparing a tree recurse once per level and rely on it.
+///
+/// It is the bound that always holds, not the reader's exact rule. neo-playwright refuses a probe
+/// reply, and a frame stitched under its iframe, past 297 levels of JSON (its `MAX_VALUE_DEPTH`,
+/// what Chromium returns of a page's value). After the reply's object and its array, a level is a
+/// node and its `children` array, and the deepest node may hold a `box`: 147 levels fit whatever
+/// the nodes hold. A 148th fits only when its nodes hold neither a box nor any child, text
+/// included, since a `children` array of strings is a level of JSON too. neo-playwright checks
+/// at compile time that its bound admits exactly this many.
+///
+/// A producer that builds the tree without a reply in between, and must refuse the pages the
+/// reader refuses, measures the levels of JSON its tree would have, as the reader does.
+pub const MAX_TREE_DEPTH: usize = 147;
+
 /// One entry of a node's `children`: a run of text or a node, in document order.
 ///
 /// Decoding is written by hand. serde's `untagged` derive buffers each child into its private
@@ -169,6 +184,21 @@ pub struct NodeBox {
     pub width: Number,
     /// The height, in CSS pixels.
     pub height: Number,
+}
+
+/// Drops a tree with a stack of its own: each node's children move onto one list before the node
+/// goes, so no node is dropped while it still holds a child. The derived drop recursed once per
+/// level, which a tree deeper than [`MAX_TREE_DEPTH`] (a case built in code, or a producer's bug)
+/// could take past the thread's stack, ending the whole process rather than one call.
+impl Drop for AriaNode {
+    fn drop(&mut self) {
+        let mut pending = mem::take(&mut self.children);
+        while let Some(child) = pending.pop() {
+            if let AriaChild::Node(mut node) = child {
+                pending.append(&mut node.children);
+            }
+        }
+    }
 }
 
 /// An optional field that is there, read as the field's own type, so a `null` is refused like any
@@ -378,8 +408,8 @@ mod tests {
                 Some(Invalid::Spelling)
             )
         );
-        assert_eq!(node.level.and_then(|level| level.as_u64()), Some(3));
-        let node_box = node.r#box.ok_or("the box is read")?;
+        assert_eq!(node.level.as_ref().and_then(Number::as_u64), Some(3));
+        let node_box = node.r#box.as_ref().ok_or("the box is read")?;
         assert_eq!(
             [&node_box.x, &node_box.y, &node_box.width, &node_box.height].map(Number::as_u64),
             [Some(1), Some(2), Some(3), Some(4)]
@@ -504,14 +534,9 @@ mod tests {
             [AriaChild::Text("now \"here\"\u{a0}".to_owned())]
         );
         assert_eq!(strong.text.as_deref(), Some("!"));
-        assert_eq!(
-            AriaNode {
-                children: Vec::new(),
-                ..direct.clone()
-            },
-            bare,
-            "nothing but the children was read"
-        );
+        let mut without_children = direct.clone();
+        without_children.children.clear();
+        assert_eq!(without_children, bare, "nothing but the children was read");
         // The same text through a `Value`, and through a tagged reply's buffer, reads the same.
         let from_value: AriaNode = serde_json::from_value(serde_json::from_str(&text)?)?;
         assert_eq!(from_value, direct, "read from a serde_json::Value");
@@ -522,6 +547,21 @@ mod tests {
             [direct],
             "read from a tagged reply's buffered content"
         );
+        Ok(())
+    }
+
+    /// The derived drop recursed once per level, and a stack overflow ends the whole process.
+    /// A hundred thousand levels is far past a test thread's stack at a few frames a level.
+    #[test]
+    fn tests_that_a_tree_deeper_than_any_stack_drops() -> Result<(), Box<dyn Error>> {
+        let link: AriaNode = serde_json::from_str(r#"{"role":"generic","name":"level"}"#)?;
+        let mut tree: AriaNode = serde_json::from_str(r#"{"role":"button","name":"Deep"}"#)?;
+        for _ in 1..100_000 {
+            let mut parent = link.clone();
+            parent.children.push(AriaChild::Node(Box::new(tree)));
+            tree = parent;
+        }
+        drop(tree);
         Ok(())
     }
 
