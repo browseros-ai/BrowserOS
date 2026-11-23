@@ -38,7 +38,7 @@ describe('the waterfall', () => {
       'page.title, 8 ms',
     ])
     expect(markup).toContain(
-      'style="padding-left:20px" title="neo.op frame.waitForLoadState"',
+      'style="padding-left:20px" title="frame.waitForLoadState"',
     )
     expect(markup).toContain('style="padding-left:0px" title="neo.run neo-run"')
   })
@@ -83,7 +83,7 @@ describe('the waterfall', () => {
     const text = renderToStaticMarkup(<SpanAttributes span={failed} />)
       .replace(/<[^>]+>/g, '')
       .replaceAll('&quot;', '"')
-    expect(text).toContain('locator.clickneo.op, span span-7')
+    expect(text).toContain('locator.clickspan span-7')
     expect(text).toMatch(/neo\.error\.code +"no_match"/)
   })
 })
@@ -237,7 +237,7 @@ describe("the run's own row", () => {
     const failedRun = {
       ...trace,
       spans: trace.spans.map((span) =>
-        span.name === 'neo.run'
+        span.type === 'run'
           ? {
               ...span,
               attributes: { ...span.attributes, 'neo.run.status': 'error' },

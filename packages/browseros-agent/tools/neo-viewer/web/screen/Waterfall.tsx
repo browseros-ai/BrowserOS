@@ -1,5 +1,5 @@
 /**
- * A run's OpenTelemetry spans as a waterfall: `neo.run` first, its `neo.op` children under it (an
+ * A run's OpenTelemetry spans as a waterfall: `neo.run` first, its operations' spans under it (an
  * op that ran inside another one step further in), each a bar on the run's own time axis with its
  * duration, red when it failed; and the selected span's attributes exactly as Neo emitted them,
  * which is how a developer checks what leaves Neo, redaction included. Drawn in the sidebar's
@@ -118,7 +118,7 @@ function SpanRow({
   onSelect: () => void
 }) {
   const bar = spanBar(span, durationMs)
-  const run = span.name === 'neo.run'
+  const run = span.type === 'run'
   const end = spanEnd(span)
   // The run's own span is the track its operations sit on: light, only tinted when picked, and
   // never red (its status shows on its dot); an operation is red when Neo says it failed.
@@ -145,7 +145,9 @@ function SpanRow({
       <span
         className={`${name} shrink-0 truncate pr-2 ${run ? 'font-semibold text-black' : selected ? 'text-black' : quiet ? 'text-ink-3' : 'text-ink'}`}
         style={{ paddingLeft: `${Math.max(0, span.depth) * 10}px` }}
-        title={`${span.name} ${span.label}`}
+        title={
+          span.name === span.label ? span.name : `${span.name} ${span.label}`
+        }
       >
         {spanName(span)}
       </span>
@@ -204,7 +206,8 @@ export function SpanAttributes({ span }: { span: TraceSpan }) {
           {spanName(span)}
         </h3>
         <span className="shrink-0 text-[11px] text-ink-2 leading-[14px]">
-          {span.name}, span <span className="font-code">{span.spanId}</span>
+          {span.name === spanName(span) ? '' : `${span.name}, `}span{' '}
+          <span className="font-code">{span.spanId}</span>
         </span>
       </div>
       <div className="overflow-auto rounded-[5px] bg-panel">

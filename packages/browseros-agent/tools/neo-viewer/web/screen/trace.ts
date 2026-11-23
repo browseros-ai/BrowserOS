@@ -43,7 +43,7 @@ export interface TraceFact {
  */
 export function traceFacts(trace: RunTrace): TraceFact[] {
   const failed = trace.spans.filter(
-    (span) => span.name === 'neo.op' && spanEnd(span) === 'failed',
+    (span) => span.type === 'op' && spanEnd(span) === 'failed',
   ).length
   return [
     { text: plural(trace.spans.length, 'span'), tone: 'plain' },
@@ -62,7 +62,7 @@ export function traceFacts(trace: RunTrace): TraceFact[] {
  * error or a timeout reads `failed`), shown on its dot only: only operations count as failed.
  */
 export function spanEnd(span: TraceSpan): 'ok' | 'failed' | 'cancelled' {
-  if (span.name === 'neo.run') {
+  if (span.type === 'run') {
     const status = span.attributes['neo.run.status']
     if (status === undefined || status === 'ok') return 'ok'
     return status === 'cancelled' ? 'cancelled' : 'failed'
@@ -80,7 +80,7 @@ export function spanEnd(span: TraceSpan): 'ok' | 'failed' | 'cancelled' {
  */
 export function isInternalSpan(span: TraceSpan): boolean {
   return (
-    span.name === 'neo.op' &&
+    span.type === 'op' &&
     span.depth <= 1 &&
     span.attributes['neo.op.site.line'] === undefined
   )
@@ -121,7 +121,7 @@ export function namesWithCounts(spans: TraceSpan[]): string {
 
 /** What a span's row is called: `neo.run`, or the op's name. */
 export function spanName(span: TraceSpan): string {
-  return span.name === 'neo.run' ? 'neo.run' : span.label
+  return span.type === 'run' ? span.name : span.label
 }
 
 /** A span's bar as shares (0..1) of the trace's time: where it starts and how long it lasts. */

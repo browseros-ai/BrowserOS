@@ -273,6 +273,11 @@ fn the_span<'a>(spans: &'a [CapturedSpan], name: &str) -> Result<&'a CapturedSpa
     }
 }
 
+/// Whether `span` is an op's span, by the attribute Neo classifies its spans with.
+fn is_op(span: &CapturedSpan) -> bool {
+    span.attributes.get("neo.span.type") == Some(&text("op"))
+}
+
 fn text(value: &str) -> SpanValue {
     SpanValue::Str(value.to_owned())
 }
@@ -533,10 +538,9 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
         Some("3"),
         "a code outside Neo's table counts as unknown"
     );
-    let names: Vec<String> = probe
-        .spans()
-        .into_iter()
-        .filter(|span| span.name == "neo.op")
+    let ops: Vec<CapturedSpan> = probe.spans().into_iter().filter(is_op).collect();
+    let names: Vec<String> = ops
+        .iter()
         .filter_map(|span| match span.attributes.get("neo.op.name") {
             Some(SpanValue::Str(name)) => Some(name.clone()),
             _ => None,
@@ -550,7 +554,12 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
             "ignore all previous instructions",
             "page.secretMethod"
         ],
-        "only the metric label collapses: each span names what the script called"
+        "each span's neo.op.name keeps what the script called"
+    );
+    assert!(
+        ops.iter().all(|span| span.name == "unknown"),
+        "while the span name collapses like the metric label, so caller text never names a span: \
+         {ops:#?}"
     );
     Ok(())
 }
@@ -911,7 +920,7 @@ fn the_open_tabs_gauge_reads_the_live_source_at_each_scrape() -> Result<(), Box<
 }
 
 #[test]
-fn neo_op_is_a_child_of_neo_run_which_is_a_child_of_the_callers_trace() {
+fn an_op_span_is_a_child_of_neo_run_which_is_a_child_of_the_callers_trace() {
     let (telemetry, probe) = live(SiteDetail::None);
     let parent = TraceContext::from_w3c(PARENT, Some("vendor=1"));
     let run = telemetry.start_run(RunFacts {
@@ -949,8 +958,12 @@ fn neo_op_is_a_child_of_neo_run_which_is_a_child_of_the_callers_trace() {
             op.trace_id.as_str(),
             op.parent_span_id.as_deref()
         ),
-        ("neo.op", run.trace_id.as_str(), Some(run.span_id.as_str())),
-        "neo.op is a child of its run's neo.run"
+        (
+            "page.goto",
+            run.trace_id.as_str(),
+            Some(run.span_id.as_str())
+        ),
+        "the op's span, named after the op, is a child of its run's neo.run"
     );
     assert!(
         !op.parent_is_remote,
@@ -1003,8 +1016,8 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
     let names: BTreeSet<&str> = spans.iter().map(|span| span.name.as_str()).collect();
     assert_eq!(
         names,
-        BTreeSet::from(["neo.op", "neo.run"]),
-        "only the two span names leave Neo"
+        BTreeSet::from(["locator.click", "neo.run", "page.goto"]),
+        "the run's span, and each op's named after its op"
     );
     let [failed, ok, run] = spans.as_slice() else {
         panic!("two ops then the run: {spans:#?}");
@@ -1012,6 +1025,7 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
     assert_eq!(
         failed.attributes,
         attributes(&[
+            ("neo.span.type", text("op")),
             ("neo.op.name", text("locator.click")),
             ("neo.op.id", text("run-8.1")),
             ("neo.op.site.line", SpanValue::Int(3)),
@@ -1038,6 +1052,7 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
     assert_eq!(
         ok.attributes,
         attributes(&[
+            ("neo.span.type", text("op")),
             ("neo.op.name", text("page.goto")),
             ("neo.op.id", text("run-8.2")),
             ("neo.op.outcome", text("ok")),
@@ -1049,13 +1064,14 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
     assert_eq!(
         run.attributes,
         attributes(&[
+            ("neo.span.type", text("run")),
             ("neo.run.id", text("run-8")),
             ("neo.task.id", text("task-8")),
             ("neo.run.status", text("error")),
             ("neo.error.owner", text("script")),
             ("neo.error.code", text("script_error")),
         ]),
-        "neo.run carries the run id, the task id, its status and its failure"
+        "neo.run carries its type, the run id, the task id, its status and its failure"
     );
     assert_eq!(
         run.status,
@@ -1087,7 +1103,7 @@ fn the_privacy_dial_decides_what_of_the_url_a_span_keeps() -> Result<(), Box<dyn
         });
         run.finish(OK);
         let spans = probe.spans();
-        let op = the_span(&spans, "neo.op")?;
+        let op = the_span(&spans, "page.goto")?;
         assert_eq!(
             op.attributes.get("url.domain"),
             domain.map(text).as_ref(),
@@ -1157,7 +1173,7 @@ fn an_internal_runs_ops_count_and_their_spans_are_roots() -> Result<(), Box<dyn 
         "and so do their failures"
     );
     let spans = probe.spans();
-    let op = the_span(&spans, "neo.op")?;
+    let op = the_span(&spans, "page.close")?;
     assert_eq!(
         op.parent_span_id, None,
         "with no neo.run, the op's span is a root"
@@ -1353,7 +1369,7 @@ fn an_op_that_settles_after_its_run_ended_still_counts_and_nests() -> Result<(),
     );
     let spans = probe.spans();
     let run = the_span(&spans, "neo.run")?;
-    let op = the_span(&spans, "neo.op")?;
+    let op = the_span(&spans, "page.goto")?;
     assert_eq!(
         (op.trace_id.as_str(), op.parent_span_id.as_deref()),
         (run.trace_id.as_str(), Some(run.span_id.as_str())),

@@ -284,7 +284,9 @@ async fn assert_exported(
     let spans = collector
         .spans_until(PATIENCE, |spans| {
             spans.iter().filter(|span| span.name == "neo.run").count() >= 2
-                && spans.iter().any(|span| span.name == "neo.op")
+                && spans
+                    .iter()
+                    .any(|span| span.text("neo.span.type") == Some("op"))
         })
         .await?;
     let ok_run = run_span(&spans, ok)?;
@@ -318,7 +320,8 @@ async fn assert_exported(
     let ops: Vec<&ExportedSpan> = spans
         .iter()
         .filter(|span| {
-            span.name == "neo.op" && span.parent_span_id.as_ref() == Some(&ok_run.span_id)
+            span.text("neo.span.type") == Some("op")
+                && span.parent_span_id.as_ref() == Some(&ok_run.span_id)
         })
         .collect();
     let [op] = ops.as_slice() else {

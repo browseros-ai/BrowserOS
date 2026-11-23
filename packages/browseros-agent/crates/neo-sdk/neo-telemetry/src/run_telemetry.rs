@@ -5,7 +5,7 @@ use crate::backend::Backend;
 use crate::pipeline::PipelineParent;
 
 /// A run as its ops see it: the handle it records through and, for a counted run, the run's
-/// span context and shared per-run state, so each op's `neo.op` span is a child of the run's
+/// span context and shared per-run state, so each op's span is a child of the run's
 /// `neo.run`. Taken from [`crate::RunSpan::ops`] when the run starts and kept with the run's
 /// state, so the door's one settle reaches it for every op of the run, in any task: the door
 /// holds no telemetry handle of its own. Cheap to clone, and holds no gauge, so it may outlive
@@ -35,7 +35,7 @@ impl RunTelemetry {
 
     /// Records one settled op: `neo_operations_total`, `neo_operation_duration_seconds`,
     /// `neo_errors_total` when it failed on its own (outcome `error`; a cancelled op's error is
-    /// what stopped its run, which the run's end counts once), and its `neo.op` span, built now
+    /// what stopped its run, which the run's end counts once), and its span, built now
     /// with `op.started` as its start; an [`crate::OpCounting::Internal`] op gets its span alone.
     /// The door calls it exactly once per op, from its one settle, on every path (answered,
     /// refused, stopped, aborted, panicked).

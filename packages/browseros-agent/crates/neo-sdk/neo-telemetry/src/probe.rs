@@ -26,7 +26,7 @@ pub struct Probe {
 /// One ended span, as an OTLP exporter would have sent it. A plain data bag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapturedSpan {
-    /// `neo.run` or `neo.op`.
+    /// `neo.run`, or an op span's op name (`page.goto`, `unknown`).
     pub name: String,
     /// The trace it belongs to, as 32 lowercase hex digits (a `traceparent`'s spelling).
     pub trace_id: String,

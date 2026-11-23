@@ -7,7 +7,9 @@
  * names accepted too), doubles may be the strings `NaN`, `Infinity`, `-Infinity`. Nothing here
  * depends on a protobuf library; the viewer refuses protobuf bodies before they get here.
  *
- * Only `neo.run` and `neo.op` leave Neo (wire-contract.md "Spans"). Anything else, or a Neo span
+ * Neo sends two kinds of span (wire-contract.md "Spans"): `neo.run`, and one per operation named
+ * after it (`page.goto`, `unknown`). A span says which it is in `neo.span.type` (`run` or `op`),
+ * never by its name, which for an operation is any method Neo serves. Anything else, or a Neo span
  * missing the id that names its run, is counted as rejected and dropped: the viewer files every
  * span under `neo.run.id`, and a span it cannot file has nowhere to go.
  */
@@ -32,6 +34,8 @@ interface SpanBase {
   /** Epoch ms, microsecond precision. */
   startMs: number
   endMs: number
+  /** The OTel span name: `neo.run`, or an operation's name as its metric label has it. */
+  spanName: string
   /** OTel status `ERROR`. */
   failed: boolean
   attributes: Attributes
@@ -50,7 +54,7 @@ export interface RunSpan extends SpanBase {
   error: SpanError | null
 }
 
-/** `neo.op`: one per dispatched operation, a child of its run's `neo.run`. */
+/** One per dispatched operation (`neo.span.type` `op`), a child of its run's `neo.run`. */
 export interface OpSpan extends SpanBase {
   kind: 'op'
   /** `neo.op.id`: `<neoRunId>.<seq>`, as `/v1/runs/{id}` numbers operations. */
@@ -141,48 +145,58 @@ function decodeSpan(raw: unknown, resource: Attributes): NeoSpan | null {
     parentSpanId,
     startMs,
     endMs,
+    spanName: typeof raw.name === 'string' ? clip(raw.name) : '',
     failed,
     attributes,
     resource,
   }
   const error = spanError(attributes, message)
-  if (raw.name === 'neo.run') {
-    const neoRunId = text(attributes['neo.run.id'])
-    if (!neoRunId) return null
-    return {
-      ...base,
-      kind: 'run',
-      neoRunId,
-      status: text(attributes['neo.run.status']) ?? (failed ? 'error' : 'ok'),
-      taskId: text(attributes['neo.task.id']),
-      error,
-    }
-  }
-  if (raw.name === 'neo.op') {
-    const opId = text(attributes['neo.op.id'])
-    const dot = opId ? opId.lastIndexOf('.') : -1
-    const seq = opId ? Number(opId.slice(dot + 1)) : Number.NaN
-    if (!opId || dot <= 0 || !Number.isInteger(seq) || seq < 1) return null
-    const line = attributes['neo.op.site.line']
-    const column = attributes['neo.op.site.column']
-    return {
-      ...base,
-      kind: 'op',
-      opId,
-      neoRunId: opId.slice(0, dot),
-      seq,
-      name: text(attributes['neo.op.name']) ?? '',
-      site:
-        typeof line === 'number' && typeof column === 'number'
-          ? { line, column }
-          : null,
-      tabId: tabIdOf(attributes['neo.tab.id']),
-      outcome: text(attributes['neo.op.outcome']) ?? (failed ? 'error' : 'ok'),
-      delivery: text(attributes['neo.op.delivery']),
-      error,
-    }
-  }
+  const type = attributes['neo.span.type']
+  if (type === 'run') return runSpan(base, error)
+  if (type === 'op') return opSpan(base, error)
   return null
+}
+
+/** A span typed `run`, or null without the run id that files it. */
+function runSpan(base: SpanBase, error: SpanError | null): RunSpan | null {
+  const { attributes, failed } = base
+  const neoRunId = text(attributes['neo.run.id'])
+  if (!neoRunId) return null
+  return {
+    ...base,
+    kind: 'run',
+    neoRunId,
+    status: text(attributes['neo.run.status']) ?? (failed ? 'error' : 'ok'),
+    taskId: text(attributes['neo.task.id']),
+    error,
+  }
+}
+
+/** A span typed `op`, or null without an op id (`<neoRunId>.<seq>`) that files it. */
+function opSpan(base: SpanBase, error: SpanError | null): OpSpan | null {
+  const { attributes, failed } = base
+  const opId = text(attributes['neo.op.id'])
+  const dot = opId ? opId.lastIndexOf('.') : -1
+  const seq = opId ? Number(opId.slice(dot + 1)) : Number.NaN
+  if (!opId || dot <= 0 || !Number.isInteger(seq) || seq < 1) return null
+  const line = attributes['neo.op.site.line']
+  const column = attributes['neo.op.site.column']
+  return {
+    ...base,
+    kind: 'op',
+    opId,
+    neoRunId: opId.slice(0, dot),
+    seq,
+    name: text(attributes['neo.op.name']) ?? '',
+    site:
+      typeof line === 'number' && typeof column === 'number'
+        ? { line, column }
+        : null,
+    tabId: tabIdOf(attributes['neo.tab.id']),
+    outcome: text(attributes['neo.op.outcome']) ?? (failed ? 'error' : 'ok'),
+    delivery: text(attributes['neo.op.delivery']),
+    error,
+  }
 }
 
 /** `neo.error.owner` and `neo.error.code`, set together on a failed run or operation. */

@@ -16,7 +16,7 @@ const RUN = {
 }
 
 describe('OTLP JSON spans', () => {
-  test("the fixture's neo.run and eight neo.op spans decode as Neo sent them", () => {
+  test("the fixture's neo.run and eight operation spans decode as Neo sent them", () => {
     const { items, rejected } = decodeSpans(fixtureTraces(RUN))
     expect(rejected).toBe(0)
     expect(items).toHaveLength(9)
@@ -35,6 +35,7 @@ describe('OTLP JSON spans', () => {
     const failed = items.find((span) => span.kind === 'op' && span.seq === 7)
     expect(failed).toMatchObject({
       kind: 'op',
+      spanName: 'locator.click',
       opId: `${RUN.neoRunId}.7`,
       neoRunId: RUN.neoRunId,
       name: 'locator.click',
@@ -75,6 +76,7 @@ describe('OTLP JSON spans', () => {
                     // A number, as some encoders send it (it cannot keep nanoseconds).
                     endTimeUnixNano: 1763650000124456400,
                     attributes: [
+                      { key: 'neo.span.type', value: { stringValue: 'run' } },
                       { key: 'neo.run.id', value: { stringValue: 'r1' } },
                     ],
                     ...extra,
@@ -108,6 +110,7 @@ describe('OTLP JSON spans', () => {
                   spanId: 'aaaaaaaaaaaaaaaa',
                   name: 'neo.run',
                   attributes: [
+                    { key: 'neo.span.type', value: { stringValue: 'run' } },
                     { key: 'neo.run.id', value: { stringValue: 'r1' } },
                     { key: 'i', value: { intValue: '42' } },
                     { key: 'big', value: { intValue: '9007199254740993' } },
@@ -163,6 +166,7 @@ describe('OTLP JSON spans', () => {
                   name: 'neo.run',
                   status: { code: 2, message: 'm'.repeat(10_000) },
                   attributes: [
+                    { key: 'neo.span.type', value: { stringValue: 'run' } },
                     { key: 'neo.run.id', value: { stringValue: 'r1' } },
                     { key: 'k'.repeat(257), value: { stringValue: 'dropped' } },
                     { key: 'k'.repeat(256), value: { stringValue: 'kept' } },
@@ -178,6 +182,7 @@ describe('OTLP JSON spans', () => {
     })
     const span = items[0]
     expect(Object.keys(span?.attributes ?? {})).toEqual([
+      'neo.span.type',
       'neo.run.id',
       'k'.repeat(256),
       'neo.error.owner',
@@ -193,6 +198,11 @@ describe('OTLP JSON spans', () => {
       startTimeUnixNano: '1',
       endTimeUnixNano: '2',
     }
+    const typed = (type: string) => ({
+      key: 'neo.span.type',
+      value: { stringValue: type },
+    })
+    const runId = { key: 'neo.run.id', value: { stringValue: 'r1' } }
     const { items, rejected } = decodeSpans({
       resourceSpans: [
         {
@@ -200,16 +210,29 @@ describe('OTLP JSON spans', () => {
             {
               spans: [
                 { ...base, name: 'http.request' },
-                { ...base, name: 'neo.run' },
+                // Named like Neo's run span, but a span is classified by its type, never its name.
+                { ...base, name: 'neo.run', attributes: [runId] },
+                { ...base, name: 'neo.run', attributes: [typed('run')] },
                 {
                   ...base,
-                  name: 'neo.op',
+                  name: 'page.goto',
                   attributes: [
+                    typed('op'),
                     { key: 'neo.op.id', value: { stringValue: 'no-seq' } },
                   ],
                 },
-                { ...base, traceId: '0'.repeat(32), name: 'neo.run' },
-                { ...base, spanId: 'xyz', name: 'neo.run' },
+                {
+                  ...base,
+                  traceId: '0'.repeat(32),
+                  name: 'neo.run',
+                  attributes: [typed('run'), runId],
+                },
+                {
+                  ...base,
+                  spanId: 'xyz',
+                  name: 'neo.run',
+                  attributes: [typed('run'), runId],
+                },
                 'not a span',
               ],
             },
@@ -218,7 +241,7 @@ describe('OTLP JSON spans', () => {
       ],
     })
     expect(items).toEqual([])
-    expect(rejected).toBe(6)
+    expect(rejected).toBe(7)
   })
 
   test('a body that is not an export request at all', () => {

@@ -2,7 +2,7 @@
 
 use crate::TelemetryError;
 
-/// How much of a page's address a `neo.op` span may carry (`CLAW_TELEMETRY_SITE_DETAIL`). Spans
+/// How much of a page's address an op span may carry (`CLAW_TELEMETRY_SITE_DETAIL`). Spans
 /// only: no metric ever carries a URL or a host, whatever this says.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SiteDetail {

@@ -196,6 +196,11 @@ impl OpLabel {
     pub(crate) fn of(vocabulary: Option<&Vocabulary>, name: &str) -> Self {
         Self(vocabulary.map_or(Vocabulary::UNKNOWN, |vocabulary| vocabulary.op_label(name)))
     }
+
+    /// The label's text, which is also the op's span name.
+    pub(crate) const fn as_str(self) -> &'static str {
+        self.0
+    }
 }
 
 /// An `error_code` label value: one of Neo's codes from the bound [`Vocabulary`], or `unknown`.

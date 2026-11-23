@@ -143,7 +143,7 @@ function partial(
       [`rejected${what}`]: String(rejected),
       errorMessage:
         what === 'Spans'
-          ? 'only neo.run and neo.op spans that name their run are kept; a run keeps at most 2000'
+          ? 'only neo.run and operation spans (neo.span.type) that name their run are kept; a run keeps at most 2000'
           : 'data points without a value were dropped',
     },
   }

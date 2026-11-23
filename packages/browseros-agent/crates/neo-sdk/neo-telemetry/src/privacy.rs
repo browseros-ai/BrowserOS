@@ -1,5 +1,5 @@
 //! The span privacy dial (`CLAW_TELEMETRY_SITE_DETAIL`, [`SiteDetail`]): what of an op's page
-//! address its `neo.op` span may keep. Spans only: no metric ever sees a URL, whatever the dial
+//! address its span may keep. Spans only: no metric ever sees a URL, whatever the dial
 //! says.
 //!
 //! `none` (the default) keeps nothing. `host` keeps `url.domain`. `url` adds `url.full`, with
@@ -16,7 +16,7 @@ use crate::SiteDetail;
 /// name a page that does not exist.
 const FULL_MAX_BYTES: usize = 2048;
 
-/// The dial as the `neo.op` span applies it.
+/// The dial as an op span applies it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Privacy {
     detail: SiteDetail,

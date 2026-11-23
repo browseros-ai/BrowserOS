@@ -2,10 +2,10 @@
 //! (`Telemetry::in_memory`) as a collector and the host API's scrape would read it, beside the
 //! trace store: each run ends once as one `neo.run` span carrying the end `/v1/runs` records
 //! (ok, error, cancelled, timeout, a panic), counted in the run metrics with in-flight back at
-//! zero; each op is one `neo.op` span under its run with the values of its record, counted
-//! under its registered name or `unknown`; each failure counts once; a refused call is counted
-//! without becoming a span; and the site-detail dial decides what of a page's address a span
-//! keeps.
+//! zero; each op is one span under its run, named after it, with the values of its record,
+//! counted under its registered name or `unknown`; each failure counts once; a refused call is
+//! counted without becoming a span; and the site-detail dial decides what of a page's address a
+//! span keeps.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -128,12 +128,16 @@ fn run_span(probe: &Probe, id: RunId) -> Result<CapturedSpan, TestError> {
     }
 }
 
-/// The `neo.op` spans whose parent is `run`.
+/// The op spans whose parent is `run`, told from other spans by `neo.span.type`, as a reader
+/// tells them.
 fn op_spans(probe: &Probe, run: &CapturedSpan) -> Vec<CapturedSpan> {
     probe
         .spans()
         .into_iter()
-        .filter(|span| span.name == "neo.op" && span.parent_span_id.as_ref() == Some(&run.span_id))
+        .filter(|span| {
+            text(span, "neo.span.type") == Some("op")
+                && span.parent_span_id.as_ref() == Some(&run.span_id)
+        })
         .collect()
 }
 
@@ -405,6 +409,7 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
             .ok_or("the run is on the record")?;
         let run = run_span(&probe, reply.id)?;
         let ops = op_spans(&probe, &run);
+        let registered: Vec<&str> = rig.dispatcher.registry().names().collect();
         assert_eq!(
             ops.len(),
             detail.operations.len(),
@@ -428,6 +433,15 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
                 text(span, "neo.op.name"),
                 Some(row.name.as_str()),
                 "{op}: named as the script wrote it, as its record names it"
+            );
+            let label = if registered.contains(&row.name.as_str()) {
+                row.name.as_str()
+            } else {
+                "unknown"
+            };
+            assert_eq!(
+                span.name, label,
+                "{op}: the span name is the op's metric label, so a script's text never names one"
             );
             assert_eq!(
                 (

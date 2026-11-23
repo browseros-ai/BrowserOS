@@ -749,7 +749,7 @@ mod tests {
         let tracer = providers.tracers.tracer("neo-telemetry");
         let start = Instant::now();
         for _ in 0..ENDED {
-            tracer.start("neo.op").end();
+            tracer.start("page.goto").end();
         }
         let spent = start.elapsed();
         assert!(
@@ -841,7 +841,7 @@ mod tests {
             .build();
         let start = Instant::now();
         for _ in 0..ENDED {
-            tracer.start("neo.op").end();
+            tracer.start("page.goto").end();
             counter.add(1, &[KeyValue::new("status", "ok")]);
         }
         let spent = start.elapsed();

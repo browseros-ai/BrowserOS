@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Hosted BrowserOS Neo's telemetry: bounded OpenTelemetry metrics and the neo.run / neo.op spans, as Prometheus text for the host API and opt-in OTLP/HTTP push; a no-op until built from config"
+description = "Hosted BrowserOS Neo's telemetry: bounded OpenTelemetry metrics and the neo.run and per-op spans, as Prometheus text for the host API and opt-in OTLP/HTTP push; a no-op until built from config"
 
 # Neo server's lint table and clippy.toml, restated verbatim (the owner's rule for this crate):
 # check.sh then gives it claw-sdk's lint set, Google's rustfmt options and the forbidden-dependency

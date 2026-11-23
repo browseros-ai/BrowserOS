@@ -108,6 +108,7 @@ describe('foldSpans', () => {
       status: unknown
     }
     span.attributes = [
+      { key: 'neo.span.type', value: { stringValue: 'run' } },
       { key: 'neo.run.id', value: { stringValue: 'r1' } },
       { key: 'neo.run.status', value: { stringValue: 'timeout' } },
       { key: 'neo.error.owner', value: { stringValue: 'script' } },
@@ -156,12 +157,17 @@ describe('buildTrace', () => {
       ['page.title', 1, 1212, false],
     ])
     expect(trace?.spans[5]).toMatchObject({
-      name: 'neo.op',
+      type: 'op',
+      name: 'frame.waitForLoadState',
       opId: 'r1.5',
       parentSpanId: fixtureSpanId('r1', 4),
       attributes: { 'neo.op.name': 'frame.waitForLoadState', 'neo.tab.id': 7 },
     })
-    expect(trace?.spans[0]).toMatchObject({ name: 'neo.run', opId: null })
+    expect(trace?.spans[0]).toMatchObject({
+      type: 'run',
+      name: 'neo.run',
+      opId: null,
+    })
   })
 
   test("a trace's failed spans are the operations whose outcome is error: a cancelled op is not one, nor the run", () => {

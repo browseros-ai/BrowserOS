@@ -1,4 +1,4 @@
-//! How an operation ended, as its metrics and its `neo.op` span say it.
+//! How an operation ended, as its metrics and its span say it.
 
 /// How an op ended: the `status` label of `neo_operations_total` and
 /// `neo_operation_duration_seconds`, and the span's `neo.op.outcome`. Mirrors

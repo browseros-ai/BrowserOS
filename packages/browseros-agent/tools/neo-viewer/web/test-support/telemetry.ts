@@ -1,8 +1,8 @@
 /**
  * Neo's telemetry as the API serves it, for the screen's tests: health, the Health view's
  * metrics, and one run's trace. Shaped after the server's fixture (`server/telemetry/fixtures.ts`:
- * a `neo.run` and eight `neo.op`, one nested, one failed), written out here so the page's tests
- * read only the API's types.
+ * a `neo.run` and eight operation spans, one nested, one failed), written out here so the page's
+ * tests read only the API's types.
  */
 
 import type {
@@ -150,6 +150,7 @@ export function runTrace(
   const run: TraceSpan = {
     spanId: 'span-run',
     parentSpanId: 'span-viewer',
+    type: 'run',
     name: 'neo.run',
     label: neoRunId,
     opId: null,
@@ -157,7 +158,11 @@ export function runTrace(
     durationMs: 1230,
     depth: 0,
     error: false,
-    attributes: { 'neo.run.id': neoRunId, 'neo.run.status': 'ok' },
+    attributes: {
+      'neo.span.type': 'run',
+      'neo.run.id': neoRunId,
+      'neo.run.status': 'ok',
+    },
   }
   type Op = [number, string, number, number, number, number | null, string]
   const script: Op[] = [
@@ -191,7 +196,8 @@ export function runTrace(
   ]: Op): TraceSpan => ({
     spanId: `span-${seq}`,
     parentSpanId: depth === 2 ? 'span-4' : 'span-run',
-    name: 'neo.op',
+    type: 'op',
+    name,
     label: name,
     opId: `${neoRunId}.${seq}`,
     startOffsetMs: start,
@@ -200,6 +206,7 @@ export function runTrace(
     // As the server reads OTel status: an earlier Neo marked a cancelled op ERROR.
     error: outcome !== 'ok',
     attributes: {
+      'neo.span.type': 'op',
       'neo.op.name': name,
       'neo.op.id': `${neoRunId}.${seq}`,
       ...(line === null

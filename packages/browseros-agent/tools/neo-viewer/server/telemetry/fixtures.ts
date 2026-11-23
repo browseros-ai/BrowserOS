@@ -1,7 +1,7 @@
 /**
  * Neo's telemetry for one realistic run, as Neo emits it (wire-contract.md): a `neo.run` span and
- * eight `neo.op` spans (one nested in another, one failed), the 11 metrics as Prometheus text and
- * as OTLP JSON, and the matching `GET /v1/runs/{id}` record. The tests and the feeder
+ * eight operation spans, each named after its op (one nested in another, one failed), the 11
+ * metrics as Prometheus text and as OTLP JSON, and the matching `GET /v1/runs/{id}` record. The tests and the feeder
  * (`feed-fixture.ts`) both use it, so what the page is built against is what the tests check.
  *
  * Span ids derive from the run id and the op's seq, so sending the same run twice is an
@@ -99,11 +99,12 @@ export function fixtureTraces(
     parentSpanId: op.parent
       ? fixtureSpanId(run.neoRunId, op.parent)
       : runSpanId,
-    name: 'neo.op',
+    name: op.name,
     kind: 1,
     startTimeUnixNano: nanos(run.startMs + op.start),
     endTimeUnixNano: nanos(run.startMs + op.end),
     attributes: [
+      string('neo.span.type', 'op'),
       string('neo.op.name', op.name),
       string('neo.op.id', `${run.neoRunId}.${op.seq}`),
       ...(op.line === null
@@ -134,6 +135,7 @@ export function fixtureTraces(
             startTimeUnixNano: nanos(run.startMs),
             endTimeUnixNano: nanos(run.startMs + FIXTURE_RUN_MS),
             attributes: [
+              string('neo.span.type', 'run'),
               string('neo.run.id', run.neoRunId),
               string('neo.run.status', 'ok'),
             ],

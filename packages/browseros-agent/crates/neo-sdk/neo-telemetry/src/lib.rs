@@ -1,5 +1,6 @@
-//! Neo's telemetry: bounded OpenTelemetry metrics and the `neo.run` / `neo.op` spans, read by the
-//! host API's Prometheus scrape and, when configured, pushed over OTLP/HTTP.
+//! Neo's telemetry: bounded OpenTelemetry metrics and its spans (`neo.run`, and one per op named
+//! after the op), read by the host API's Prometheus scrape and, when configured, pushed over
+//! OTLP/HTTP.
 //!
 //! ```text
 //!  run service ─ start_run(RunFacts) ─▶ RunSpan ─┐ moved into the run's RunGuard, which

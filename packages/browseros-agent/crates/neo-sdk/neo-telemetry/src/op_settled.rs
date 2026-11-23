@@ -14,7 +14,7 @@ pub struct OpSite {
     pub column: u32,
 }
 
-/// Whether a settled op counts on the op metrics. Every op keeps its `neo.op` span either way.
+/// Whether a settled op counts on the op metrics. Every op keeps its span either way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCounting {
     /// The script's op, or one Neo ran for it (a child op, the run's lazy page): counted on

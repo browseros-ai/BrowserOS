@@ -1,4 +1,4 @@
-//! Whether an op's side effect happened, as its `neo.op` span says it.
+//! Whether an op's side effect happened, as its span says it.
 
 /// Whether an op's side effect happened, as far as Neo can know: the span's `neo.op.delivery`.
 /// Mirrors `neo_trace::Delivery`, the `delivery` of an operation on `GET /v1/runs/{id}`. Never a

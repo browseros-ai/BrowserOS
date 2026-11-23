@@ -202,6 +202,7 @@ describe('no host API (--upstream): spans fill the op table', () => {
     expect(trace).toMatchObject({ traceId, complete: true })
     expect(trace?.spans).toHaveLength(9)
     expect(trace?.spans[0]).toMatchObject({
+      type: 'run',
       name: 'neo.run',
       parentSpanId: spanId,
     })

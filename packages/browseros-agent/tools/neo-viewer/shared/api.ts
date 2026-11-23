@@ -213,7 +213,7 @@ export interface NeoRunRecord {
   values?: string
   /**
    * Who made this record. Absent (every record before telemetry) or `host`: Neo's
-   * `GET /v1/runs/{id}`. `spans`: folded from Neo's OpenTelemetry `neo.run` / `neo.op` spans, the
+   * `GET /v1/runs/{id}`. `spans`: folded from Neo's OpenTelemetry `neo.run` and operation spans, the
    * viewer's only record of a run when it has no host API (`--upstream`). Spans carry no
    * arguments, results, notes, kind, effect or screenshots, so those operations have none
    * (`args: null`, `kind: ''`, …): say so once rather than per field.
@@ -410,7 +410,7 @@ export interface TelemetryHealth {
   /** Epoch ms of the active source's latest sample; "N s ago" is the page's to work out. */
   observedAt: number | null
   source: 'scrape' | 'push' | null
-  /** A `neo.run` or `neo.op` span has arrived since the viewer started: runs have traces. */
+  /** A `neo.run` or operation span has arrived since the viewer started: runs have traces. */
   spansSeen: boolean
   /** Live gauges: runs Neo is running now, tabs open now. */
   runsInFlight: number | null
@@ -535,8 +535,11 @@ export interface RunTrace {
 export interface TraceSpan {
   spanId: string
   parentSpanId: string | null
-  name: 'neo.run' | 'neo.op'
-  /** A `neo.op`'s `neo.op.name`, or the `neo.run`'s run id. */
+  /** `neo.span.type`: the run's own span, or one of its operations. */
+  type: 'run' | 'op'
+  /** The span's name as Neo sent it: `neo.run`, or an operation's (`page.goto`, `unknown`). */
+  name: string
+  /** An operation's `neo.op.name` (what the script called), or the `neo.run`'s run id. */
   label: string
   /** `neo.op.id` (= `NeoOperation.id`): links the span to its method row; null on `neo.run`. */
   opId: string | null
@@ -546,7 +549,7 @@ export interface TraceSpan {
   /** 0 for `neo.run`, 1 for its operations, deeper for an operation inside another. */
   depth: number
   /**
-   * A `neo.op` whose `neo.op.outcome` is `error`: what a trace's "failed" counts. A cancelled op
+   * An operation whose `neo.op.outcome` is `error`: what a trace's "failed" counts. A cancelled op
    * is not a failure, whatever its OTel status says, and `neo.run` is never one:
    * the run's own status is the run's.
    */

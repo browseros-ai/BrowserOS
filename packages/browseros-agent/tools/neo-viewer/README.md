@@ -180,8 +180,8 @@ The page at `/` (the approved design, "Viewer C v2"):
   **What the model read**: the selected run's whole reply, exactly as the agent got it,
   formatted (keys aligned, a snapshot line by line) or raw. Until you click a row it follows the
   newest run. Drag the handle between the runs and the sidebar to resize it. **Trace** shows the
-  run's OpenTelemetry waterfall there: `neo.run`, its `neo.op` spans under it (one that ran inside
-  another a step further in), each a bar on the run's time with its duration, red when it
+  run's OpenTelemetry waterfall there: `neo.run`, its operations' spans under it (one that ran
+  inside another a step further in), each a bar on the run's time with its duration, red when it
   failed (as Neo says it: `neo.op.outcome` `error`; a cancelled op is not a failure). Neo's own
   work for the run (operations with no source line: `page.frames`, `events.listen`, the
   `events.next` long-poll, opening the task's page) folds under one quiet **Neo internal** row
@@ -345,9 +345,10 @@ the display, takeovers). `bun run neo:viewer` configures it with the container i
 
 ## Neo's telemetry
 
-Neo emits OpenTelemetry (wire-contract: 11 metrics, `neo.run` and `neo.op` spans); the viewer reads
-both of its doors with no protobuf library (`server/telemetry/`, one module behind
-`startTelemetry`):
+Neo emits OpenTelemetry (wire-contract: 11 metrics, a `neo.run` span per run and a span per
+operation, named after the operation: `page.goto`, or `unknown` for a name Neo does not serve). The
+viewer tells the two apart by `neo.span.type` (`run` or `op`), never by name, and reads both of
+Neo's doors with no protobuf library (`server/telemetry/`, one module behind `startTelemetry`):
 
 - **Push**: `POST /otlp/v1/traces` and `/otlp/v1/metrics`, OTLP/HTTP JSON, plain or gzip. The viewer
   stays on 127.0.0.1; its own container reaches it as `host.docker.internal`, because Docker Desktop
@@ -373,16 +374,16 @@ both of its doors with no protobuf library (`server/telemetry/`, one module behi
   under **Neo internal**.
 - **Which ops**: a run's op table is `RunDetail.neo`, from one source chosen at start. With a host
   API, Neo's `/v1/runs/{id}`, as before, and spans are only the run's trace. Without one
-  (`--upstream`), the record is folded from the run's `neo.run`/`neo.op` spans (`source: 'spans'`;
-  spans carry no args, results or notes), so the Calls column, method rows, Copy, export and a
-  restart work the same. Spans are filed by Neo's run id (`neo.run.id`, the reply's `_meta` id),
+  (`--upstream`), the record is folded from the run's `neo.run` and operation spans
+  (`source: 'spans'`; spans carry no args, results or notes), so the Calls column, method rows,
+  Copy, export and a restart work the same. Spans are filed by Neo's run id (`neo.run.id`, the reply's `_meta` id),
   never by trace id, which a caller may reuse; a run with no reply (cancelled) is found by the span
   id the viewer minted for it.
 - **Older images**: no spans, no metrics: everything above stays empty and the page is as before.
 
 `bun server/telemetry/feed-fixture.ts serve` starts a stand-in Neo (MCP and host API) and
 `… feed --viewer <url>` sends one run through a viewer and then, as Neo would, its spans (eight
-`neo.op`, one failed) and the 11 metrics: telemetry to build the page against before Neo emits any.
+operations, one failed) and the 11 metrics: telemetry to build the page against before Neo emits any.
 
 ## How the live screen works
 

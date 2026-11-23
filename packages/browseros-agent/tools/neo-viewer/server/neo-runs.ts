@@ -9,7 +9,7 @@
  * starts, and never changes, so a run's op table never switches source or shows an op twice:
  * - a host API: `hostApiRecords()`, `GET /v1/runs/{id}?wait=10` (args, results, notes and all);
  * - none (`--upstream` without a host token): the telemetry module's records, folded from Neo's
- *   `neo.run` / `neo.op` spans (`server/telemetry/`).
+ *   `neo.run` and operation spans (`server/telemetry/`).
  * Both give the same `NeoRunRecord`, attached by the store's one writer, `attachNeoRun`, and kept
  * in the log. A run whose record cannot be read (an older image, the image stopped) keeps none.
  */

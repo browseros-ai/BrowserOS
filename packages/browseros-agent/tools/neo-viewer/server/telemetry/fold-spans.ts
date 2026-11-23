@@ -119,7 +119,8 @@ function traceSpan(span: NeoSpan, depth: number, start: number): TraceSpan {
   return {
     spanId: span.spanId,
     parentSpanId: span.parentSpanId,
-    name: span.kind === 'run' ? 'neo.run' : 'neo.op',
+    type: span.kind,
+    name: span.spanName,
     label: span.kind === 'run' ? span.neoRunId : span.name || span.opId,
     opId: span.kind === 'op' ? span.opId : null,
     startOffsetMs: ms(span.startMs - start),

@@ -93,6 +93,7 @@ describe('OTLP/HTTP JSON in', () => {
     traces.resourceSpans[0]?.scopeSpans[0]?.spans.push({
       ...(traces.resourceSpans[0]?.scopeSpans[0]?.spans[0] as object),
       name: 'http.request',
+      attributes: [],
     } as never)
     const response = await post(`${url}/otlp/v1/traces`, JSON.stringify(traces))
     expect(response.status).toBe(200)
