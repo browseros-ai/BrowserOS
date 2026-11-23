@@ -21,17 +21,22 @@ mod live_browser;
 #[path = "support/live_run.rs"]
 #[expect(
     dead_code,
-    reason = "these scripts reach pages through the runner, not live_run's direct helpers"
+    reason = "most scripts reach pages through the runner; only the comparison row uses a few \
+              of live_run's direct helpers"
 )]
 mod live_run;
 #[path = "support/locator.rs"]
 mod locator;
 
+use std::collections::BTreeSet;
+use std::error::Error;
+use std::mem;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use browseros_core::{PageId, TabId};
-use fixture_server::{FixtureServer, nest_pages};
+use browseros_cdp::{CdpClient, ConnectOptions};
+use browseros_core::{CdpConnection, PageId, ProtocolSession, SessionId, TabId, TargetId};
+use fixture_server::{FixtureServer, Page, nest_pages};
 use js_runner::OpHost;
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use live_run::LiveRun;
@@ -507,4 +512,357 @@ async fn tests_that_frames_attached_after_load_are_listed_after_wait_for_timeout
         "listed after the wait, and not before it"
     );
     Ok(())
+}
+
+/// How long the target watcher's frame list may take to agree with the browser's own tree after
+/// a change: the change's frame events, or a new frame session's attach and its seed read, each
+/// behind a tick and a tree read in the tab's line at most. Read from code, not measured; the
+/// comparison row prints what each step took.
+const LIST_AGREES_BOUND: Duration = Duration::from_secs(5);
+
+/// One frame as the comparison row compares it: id, parent, name, and URL with its fragment.
+type ComparedFrame = (String, Option<String>, String, String);
+
+/// `TabFrames`' list, built from a tab's CDP events and seed reads only, equals the browser's own
+/// frame tree (`Page.getFrameTree`, out-of-process frames read from their own targets) on the
+/// nested four-level fixture: after its load; after a same-site and a cross-site iframe are
+/// added; after one is removed; after a child navigates (dropping its old subtree); after that
+/// child moves to another site (a cross-process swap); after the main frame navigates; and on a
+/// tab another client opened, which Neo never acted on. The list holds the main frame first and
+/// is whole (its seed landed). The browser's tree is read on a connection of the test's own, so no
+/// session of the run's is touched.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_event_built_frame_list_equals_the_browsers_tree() -> TestResult {
+    let mut pages = nest_pages();
+    pages.insert(
+        "/leaf.html".to_owned(),
+        Page::html("<!doctype html><title>leaf</title>"),
+    );
+    let server = FixtureServer::start(pages).await?;
+    let run = LiveRun::connect().await?;
+    let client = Arc::new(CdpClient::connect(ConnectOptions::new(live_run::cdp_port())).await?);
+    let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
+    let page = run.new_page().await?;
+    let mut outside = None;
+    let result = async {
+        let target = run
+            .browser()
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|info| info.tab_id == page.tab)
+            .ok_or("the run's tab is listed")?
+            .target_id;
+        let top = server.url("127.0.0.1", "/nest/top.html");
+        goto(&run, &page, &top).await?;
+        agree(&run, &transport, &target, "load", |frames| {
+            frames.len() == 8
+        })
+        .await?;
+
+        add_frames(&run, &page, &server).await?;
+        agree(&run, &transport, &target, "add", |frames| {
+            frames.len() == 10
+        })
+        .await?;
+        run.eval(
+            &page,
+            "document.querySelector('iframe[name=\"same-added\"]').remove(); true",
+        )
+        .await?;
+        agree(&run, &transport, &target, "remove", |frames| {
+            frames.len() == 9
+        })
+        .await?;
+
+        for (step, url) in [
+            ("child", server.url("127.0.0.1", "/leaf.html?child")),
+            ("swap", server.url("localhost", "/leaf.html?swap")),
+        ] {
+            run.eval(
+                &page,
+                &format!("document.querySelector('iframe[title=\"a1\"]').src = {url:?}; true"),
+            )
+            .await?;
+            // a1's own subtree (b2, b3) went with its old document.
+            agree(&run, &transport, &target, step, |frames| {
+                frames.len() == 7 && frames.iter().any(|(_, _, _, at)| *at == url)
+            })
+            .await?;
+        }
+        goto(&run, &page, &format!("{top}?again")).await?;
+        agree(&run, &transport, &target, "main", |frames| {
+            frames.len() == 8 && frames.iter().all(|(_, _, _, at)| at.ends_with("?again"))
+        })
+        .await?;
+
+        untouched_agrees(&run, &transport, &top, &mut outside).await?;
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    if let Some(untouched) = outside {
+        let _closed = transport
+            .send(
+                "Target.closeTarget",
+                json!({ "targetId": untouched.as_str() }),
+                None,
+            )
+            .await;
+    }
+    run.close_page(&page).await;
+    client.disconnect().await;
+    result
+}
+
+/// Adds a same-site iframe (`same-added`) and a cross-site one (`cross-added`) to the run's page,
+/// each on the fixture's leaf page.
+async fn add_frames(
+    run: &LiveRun,
+    page: &live_run::TestPage,
+    server: &FixtureServer,
+) -> TestResult {
+    let added = json!([
+        ["same-added", server.url("127.0.0.1", "/leaf.html")],
+        ["cross-added", server.url("localhost", "/leaf.html")]
+    ]);
+    run.eval(
+        page,
+        &format!(
+            "(() => {{ for (const [name, url] of {added}) {{ \
+               const frame = document.createElement('iframe'); \
+               frame.name = name; frame.src = url; document.body.append(frame) }} \
+             return true }})()"
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Opens `top` in a tab of the test's own connection, which Neo never acts on, and waits for the
+/// run's list of it to agree with its tree; the run's core must not have attached to it. The tab
+/// goes into `outside` as soon as it exists, so the row closes it whatever happens.
+async fn untouched_agrees(
+    run: &LiveRun,
+    transport: &Arc<dyn CdpConnection>,
+    top: &str,
+    outside: &mut Option<TargetId>,
+) -> TestResult {
+    let created = transport
+        .send(
+            "Target.createTarget",
+            json!({ "url": top, "background": true }),
+            None,
+        )
+        .await?;
+    let untouched = TargetId(
+        created
+            .get("targetId")
+            .and_then(Value::as_str)
+            .ok_or("no target id")?
+            .to_owned(),
+    );
+    *outside = Some(untouched.clone());
+    agree(run, transport, &untouched, "untouched", |frames| {
+        frames.len() == 8
+    })
+    .await?;
+    let listed = run
+        .browser()
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .find(|info| info.target_id == untouched)
+        .ok_or("the untouched tab is listed")?;
+    if run
+        .browser()
+        .pages
+        .get_attached_session(listed.page_id)
+        .await
+        .is_some()
+    {
+        return Err("the run's core attached to the tab another client opened".into());
+    }
+    Ok(())
+}
+
+/// `page.goto` on the run's page, to its load. The run's own page type is `live_run`'s: this file
+/// also names `live_browser`'s.
+async fn goto(run: &LiveRun, page: &live_run::TestPage, url: &str) -> TestResult {
+    run.invoke(
+        "page.goto",
+        json!({ "call": { "timeoutMs": 30_000 }, "page": live_run::brand(page), "url": url,
+                "waitUntil": "load" }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Waits, within [`LIST_AGREES_BOUND`], until the browser's tree of `target` is `ready` (the
+/// step's change took effect) and the run's event-built list equals it: whole, main frame first,
+/// and the same frames. Prints how long it took.
+#[expect(
+    clippy::print_stderr,
+    reason = "each step prints how long the list took to agree"
+)]
+async fn agree(
+    run: &LiveRun,
+    transport: &Arc<dyn CdpConnection>,
+    target: &TargetId,
+    step: &str,
+    ready: impl Fn(&[ComparedFrame]) -> bool,
+) -> TestResult {
+    let started = Instant::now();
+    // The bound covers the browser's own reads too: a renderer that stalls a read must not
+    // stretch a step past it.
+    let mut last = String::new();
+    let agreed = time::timeout(LIST_AGREES_BOUND, async {
+        loop {
+            let tree = browser_frames(transport, target.as_str()).await?;
+            let listed = run.tab_frames(target);
+            let compared: Option<Vec<ComparedFrame>> = listed.as_ref().map(|list| {
+                list.frames
+                    .iter()
+                    .map(|frame| {
+                        (
+                            frame.id.0.clone(),
+                            frame.parent_id.as_ref().map(|parent| parent.0.clone()),
+                            frame.name.clone(),
+                            frame.url.clone(),
+                        )
+                    })
+                    .collect()
+            });
+            let whole = listed.as_ref().is_some_and(|list| list.whole);
+            let same = compared.as_ref().is_some_and(|list| {
+                list.first().is_some_and(|(id, ..)| id == target.as_str())
+                    && list.iter().collect::<BTreeSet<_>>() == tree.iter().collect::<BTreeSet<_>>()
+            });
+            if ready(&tree) && whole && same {
+                return Ok::<usize, Box<dyn Error>>(tree.len());
+            }
+            last = format!("(whole {whole})\nlist: {compared:#?}\ntree: {tree:#?}");
+            time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    match agreed {
+        Ok(frames) => {
+            eprintln!(
+                "FRAME_LIST step={step} agreed={:?} frames={}",
+                started.elapsed(),
+                frames?
+            );
+            Ok(())
+        }
+        Err(_) => Err(format!(
+            "{step}: the list did not equal the browser's tree within {LIST_AGREES_BOUND:?} {last}"
+        )
+        .into()),
+    }
+}
+
+/// Every frame of tab `target` as the browser reports it now, out-of-process ones included: the
+/// tab's own `Page.getFrameTree`, then each iframe target whose parent frame is already listed,
+/// level by level, as `page/frame_tree.rs` reads a tab.
+async fn browser_frames(
+    transport: &Arc<dyn CdpConnection>,
+    target: &str,
+) -> TestResult<Vec<ComparedFrame>> {
+    let mut frames = Vec::new();
+    let mut visited = BTreeSet::new();
+    let mut read = vec![(target.to_owned(), None::<String>)];
+    while !read.is_empty() {
+        for (at, parent) in mem::take(&mut read) {
+            let tree = target_tree(transport, &at).await?;
+            visited.insert(at);
+            flatten(&tree, parent, &mut frames);
+        }
+        let listed = transport
+            .send(
+                "Target.getTargets",
+                json!({ "filter": [{ "type": "iframe" }] }),
+                None,
+            )
+            .await?;
+        for info in listed
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let (Some(id), Some(parent)) = (
+                info.get("targetId").and_then(Value::as_str),
+                info.get("parentFrameId").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            if !visited.contains(id) && frames.iter().any(|(known, ..)| known == parent) {
+                read.push((id.to_owned(), Some(parent.to_owned())));
+            }
+        }
+    }
+    Ok(frames)
+}
+
+/// `target`'s own `Page.getFrameTree`, read on a session of this connection's own, which it then
+/// leaves.
+async fn target_tree(transport: &Arc<dyn CdpConnection>, target: &str) -> TestResult<Value> {
+    let attached = transport
+        .send(
+            "Target.attachToTarget",
+            json!({ "targetId": target, "flatten": true }),
+            None,
+        )
+        .await?;
+    let id = attached
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .ok_or("no session id")?
+        .to_owned();
+    let session = ProtocolSession::for_session(Arc::clone(transport), SessionId::from(id.as_str()));
+    let tree = async {
+        session.send_value("Page.enable", json!({})).await?;
+        session.send_value("Page.getFrameTree", json!({})).await
+    }
+    .await;
+    let _detached = transport
+        .send("Target.detachFromTarget", json!({ "sessionId": id }), None)
+        .await;
+    Ok(tree?.get("frameTree").cloned().ok_or("no frame tree")?)
+}
+
+/// Appends `node` (a `Page.getFrameTree` frame tree) and its subtree to `out`; `parent` is the
+/// frame that embeds `node`'s root when its own tree names none.
+fn flatten(node: &Value, parent: Option<String>, out: &mut Vec<ComparedFrame>) {
+    let field = |name: &str| {
+        node.get("frame")
+            .and_then(|frame| frame.get(name))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let id = field("id");
+    let parent = node
+        .get("frame")
+        .and_then(|frame| frame.get("parentId"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(parent);
+    out.push((
+        id.clone(),
+        parent,
+        field("name"),
+        format!("{}{}", field("url"), field("urlFragment")),
+    ));
+    for child in node
+        .get("childFrames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        flatten(child, Some(id.clone()), out);
+    }
 }

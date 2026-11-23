@@ -16,7 +16,8 @@
 //! - **Sessions.** Page events arrive on page sessions. `Target.attachedToTarget` names each
 //!   session's tab (core's attaches and its OOPIF auto-attaches alike); a session attached
 //!   before the watcher started is looked up in core's page registry. Each session's frame tree
-//!   seeds the frame tracker, read on a task of its own while the tab's later events wait in its
+//!   seeds the frame tracker (the hub's `TabFrames`, which this watcher alone writes and any op
+//!   can read), read on a task of its own while the tab's later events wait in its
 //!   line (`TabLine`), and while a run listens on the context for lifecycle events, core's page
 //!   session is attached to each untouched tab the same way (`attach_page`). Nothing on the loop
 //!   waits for a renderer there: a busy tab holds only its own tab's events. A tab no session of
@@ -78,7 +79,6 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
-use crate::events::frame_lifecycle::FrameLifecycleTracker;
 use crate::events::log_lease::LogLease;
 use crate::events::page_event::{
     BindingCalled, ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened,
@@ -345,7 +345,6 @@ struct Watcher {
     /// Proof replies return here; the watcher keeps consuming events through their fences.
     recovering: Option<UnboundedSender<RecoveryTree>>,
     recovery_replies: Vec<RecoveryTree>,
-    lifecycle: FrameLifecycleTracker,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
     /// Retained across lag-driven rediscovery, so reconnect still invalidates endpoints.
@@ -807,7 +806,6 @@ impl Watcher {
             crashes,
             recovering: None,
             recovery_replies: Vec::new(),
-            lifecycle: FrameLifecycleTracker::default(),
             epoch: None,
             connection_epoch: None,
             pages: HashMap::new(),
@@ -1158,7 +1156,7 @@ impl Watcher {
         if changed {
             // Whatever the tabs did while the old socket was down went unseen.
             self.baselines.events_lost();
-            self.lifecycle = FrameLifecycleTracker::default();
+            self.writer.reset_frame_lists();
             for id in self.worker_sessions.values().cloned().collect::<Vec<_>>() {
                 self.close_worker(&id);
             }
@@ -1467,7 +1465,7 @@ impl Watcher {
         self.frames.remove(target.as_str());
         self.attach_log.forget(target);
         self.baselines.tab_closed(target);
-        self.lifecycle.forget(target);
+        self.writer.forget_frames(target);
         // Its line stays: a waiting download is let go only as a read is popped, and the hold
         // counts every item, so a dropped read could park a download and hold every reply's
         // synchronize for good. Its reads end instead, as failed ones, and the next
@@ -1862,7 +1860,7 @@ impl Watcher {
                 self.page_sessions.insert(session_id.clone());
                 if self.lifecycle_sources.accepts(&session_id) {
                     self.start_seed(&target, &session_id, TreeRead::Page).await;
-                } else if self.lifecycle.main(&target).is_none()
+                } else if self.writer.hub().main_frame(&target).is_none()
                     && let Some(source) = self.lifecycle_sources.primary.get(&target).cloned()
                 {
                     // A run is about to act on a tab whose source never brought a tree (its
@@ -2306,7 +2304,7 @@ impl Watcher {
         let protocol = self.browser.protocol_session(session.clone());
         let Some(seeded) = self.seeded.clone() else {
             if let Some(tree) = read_tree(&protocol, read).await {
-                self.lifecycle.seed(tab, tree);
+                self.writer.seed_frames(tab, tree);
             }
             return false;
         };
@@ -2463,8 +2461,7 @@ impl Watcher {
                 .params
                 .get("frameId")
                 .and_then(Value::as_str)
-                .and_then(|frame| self.frame_owner(&FrameId(frame.to_owned())))
-                .cloned();
+                .and_then(|frame| self.frame_owner(&FrameId(frame.to_owned())));
             let reading = self.lines.values().flatten().any(|item| {
                 matches!(item, LineItem::Read { started, .. } if *started <= download.position)
             });
@@ -2538,30 +2535,27 @@ impl Watcher {
                 let frame = FrameId(event.params.get("frameId")?.as_str()?.to_owned());
                 // Browser events have no page session. A held attachment already identifies
                 // its tab, but must reach the tracker before the download queries ownership.
-                self.frame_owner(&frame)
-                    .or_else(|| {
-                        self.lines.iter().find_map(|(tab, line)| {
-                            line.iter()
-                                .any(|item| {
-                                    let LineItem::Event { event, .. } = item else {
-                                        return false;
-                                    };
-                                    let id = match event.method.as_str() {
-                                        "Page.frameAttached" | "Page.navigatedWithinDocument" => {
-                                            event.params.get("frameId")
-                                        }
-                                        "Page.frameNavigated" => event
-                                            .params
-                                            .get("frame")
-                                            .and_then(|frame| frame.get("id")),
-                                        _ => None,
-                                    };
-                                    id.and_then(Value::as_str) == Some(frame.0.as_str())
-                                })
-                                .then_some(tab)
-                        })
-                    })?
-                    .clone()
+                self.frame_owner(&frame).or_else(|| {
+                    self.lines.iter().find_map(|(tab, line)| {
+                        line.iter()
+                            .any(|item| {
+                                let LineItem::Event { event, .. } = item else {
+                                    return false;
+                                };
+                                let id = match event.method.as_str() {
+                                    "Page.frameAttached" | "Page.navigatedWithinDocument" => {
+                                        event.params.get("frameId")
+                                    }
+                                    "Page.frameNavigated" => {
+                                        event.params.get("frame").and_then(|frame| frame.get("id"))
+                                    }
+                                    _ => None,
+                                };
+                                id.and_then(Value::as_str) == Some(frame.0.as_str())
+                            })
+                            .then(|| tab.clone())
+                    })
+                })?
             }
             "Browser.downloadProgress" => {
                 let guid = event.params.get("guid")?.as_str()?;
@@ -2656,7 +2650,7 @@ impl Watcher {
                     ..
                 } => {
                     if let TreeAnswer::Back(Some(tree)) = answer {
-                        self.lifecycle.seed(&tab, tree);
+                        self.writer.seed_frames(&tab, tree);
                         self.read_retries.remove(&session);
                         if let Some(observer) = self.root_observers.get_mut(&session) {
                             observer.recovery = RecoveryObservation::On;
@@ -2779,7 +2773,7 @@ impl Watcher {
         } else {
             PageEventKind::DomContentLoaded
         };
-        if self.lifecycle.main(&target).is_none()
+        if self.writer.hub().main_frame(&target).is_none()
             && self.start_seed(&target, session, TreeRead::Page).await
         {
             self.lines
@@ -2803,7 +2797,7 @@ impl Watcher {
         if !self.records_page_events(&target, source.as_ref()) {
             return;
         }
-        if let Some(frame) = self.lifecycle.main(&target) {
+        if let Some(frame) = self.writer.hub().main_frame(&target) {
             self.writer.record(PageEvent::Load {
                 target,
                 kind,
@@ -2816,19 +2810,11 @@ impl Watcher {
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
         if let Some(target) = self.target_of(session).await {
-            let record = self.records_page_events(&target, Some(session));
-            let mut changed = false;
-            for event in self.lifecycle.record(&target, method, params) {
-                if record {
-                    self.writer.record(PageEvent::FrameLifecycle(event));
-                }
-                changed = true;
-            }
-            // A child frame attached, left or committed, or the main frame did: the tab's tree
-            // is no longer the one a run last read (`EventWriter::frames_changed`).
-            if changed || method == "Page.frameNavigated" {
-                self.writer.frames_changed(target);
-            }
+            // The tab's list in the hub follows the event, and a child frame that attached,
+            // left or committed, or a main-frame commit, moves the tab's version: its tree is no
+            // longer the one a run last read (`EventWriter::frame_event`).
+            let write = self.records_page_events(&target, Some(session));
+            self.writer.frame_event(&target, method, params, write);
         }
         match method {
             "Page.frameAttached" => {
@@ -3056,7 +3042,7 @@ impl Watcher {
     /// tab). An out-of-process frame's session records as on main, and so does an observer whose
     /// tab went through crash recovery (`RootObserver::after_crash`). The tracker and the tab's
     /// frame version follow every event either way, and write nothing to the ring
-    /// (`EventWriter::frames_changed`). Asked as the event is applied, in its line: from core's
+    /// (`EventWriter::frame_event`). Asked as the event is applied, in its line: from core's
     /// attach on, the tab's events are recorded, in order, whichever session is its source;
     /// events its line still held from before the attach replay after it and are recorded too.
     /// `session` is the one the event came on, or for a load the tab's source as it is written;
@@ -3142,12 +3128,12 @@ impl Watcher {
 
     /// Raw frame ownership, before download-only popups are attributed to their opener.
     /// OOPIF targets remain a fallback while their lifecycle tree read is outstanding.
-    fn frame_owner(&self, frame: &FrameId) -> Option<&TargetId> {
+    fn frame_owner(&self, frame: &FrameId) -> Option<TargetId> {
         self.pages
             .get_key_value(&TargetId(frame.0.clone()))
-            .map(|(target, _)| target)
-            .or_else(|| self.frames.get(&frame.0))
-            .or_else(|| self.lifecycle.owner(frame))
+            .map(|(target, _)| target.clone())
+            .or_else(|| self.frames.get(&frame.0).cloned())
+            .or_else(|| self.writer.hub().frame_owner(frame))
     }
 
     fn download(&mut self, download: DownloadParams) {
@@ -3161,7 +3147,7 @@ impl Watcher {
                 ..
             }) => Some(opener.clone()),
             Some(_) => Some(frame_target),
-            None => self.frame_owner(&download.frame_id).cloned(),
+            None => self.frame_owner(&download.frame_id),
         };
         self.writer.hub().downloads().begin(
             download.guid.clone(),
@@ -3327,7 +3313,7 @@ async fn read_tree(protocol: &ProtocolSession, read: TreeRead) -> Option<Value> 
         // would (`frame_tree::oopif_tree`). Both commands go out together, `Page.enable` first:
         // `join` polls them in order and the client writes through a fair lock, so the frame's
         // renderer gets the enable first and answers in that order. A commit made before `Page`
-        // was on is in the tree (`FrameLifecycleTracker::seed` gives it to the frame), and one
+        // was on is in the tree (`TabFrames::seed` gives it to the frame), and one
         // made after sends its own event, which waits in the tab's line until this read is
         // applied. Awaiting the enable before sending the read measured worse: on an adopted
         // tab, whose frames all attach at once, one frame's read missed the deadline in each of
@@ -5568,8 +5554,8 @@ mod seed_tests {
         answer_next(&mut watcher, &mut answers).await?;
         let child = FrameId("child".to_owned());
         assert_eq!(
-            watcher.lifecycle.owner(&child),
-            Some(&TargetId("tab".to_owned())),
+            watcher.writer.hub().frame_owner(&child),
+            Some(TargetId("tab".to_owned())),
             "its seed named the existing child"
         );
         let removed = json!({ "frameId": "child", "reason": "remove" });
@@ -5579,7 +5565,7 @@ mod seed_tests {
         )
         .await;
         assert!(
-            watcher.lifecycle.owner(&child).is_none(),
+            watcher.writer.hub().frame_owner(&child).is_none(),
             "its removal reached the tracker"
         );
         settle().await;
@@ -5838,8 +5824,9 @@ mod seed_tests {
         answer_next(&mut watcher, &mut answers).await?;
         assert!(
             watcher
-                .lifecycle
-                .owner(&FrameId("child".to_owned()))
+                .writer
+                .hub()
+                .frame_owner(&FrameId("child".to_owned()))
                 .is_none(),
             "nothing was seeded from the tree that came with the failed enable"
         );
@@ -6023,8 +6010,9 @@ mod seed_tests {
         answer(&mut watcher, "page", tree_with("tab", Some("child"))).await;
         assert!(
             watcher
-                .lifecycle
-                .main(&TargetId("tab".to_owned()))
+                .writer
+                .hub()
+                .main_frame(&TargetId("tab".to_owned()))
                 .is_none(),
             "the gone tab's tracker stays empty"
         );
@@ -6127,8 +6115,9 @@ mod seed_tests {
         answer(&mut watcher, "tf", tf_tree).await;
         assert!(
             watcher
-                .lifecycle
-                .owner(&FrameId("deep".to_owned()))
+                .writer
+                .hub()
+                .frame_owner(&FrameId("deep".to_owned()))
                 .is_none(),
             "the gone tab's tracker learns no frame from the read behind its destroy"
         );

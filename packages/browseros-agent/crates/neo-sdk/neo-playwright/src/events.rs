@@ -52,6 +52,7 @@ mod recorded_reports;
 mod run_downloads;
 mod run_events;
 mod subscription;
+pub(crate) mod tab_frames;
 mod target_watcher;
 mod watcher_progress;
 pub(crate) mod worker_table;

@@ -76,6 +76,7 @@ mod world;
 
 pub use download_facts::{DownloadFacts, DownloadState};
 pub use events::EventFence;
+pub use events::tab_frames::{ListedFrame, TabFrameList};
 pub use file_access::{FileAccess, FileAccessError, ProtectedPath, ReadPath, WritePath};
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
