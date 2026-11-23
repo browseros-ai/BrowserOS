@@ -33,10 +33,9 @@ use neo_trace::{DiagnosticCode, ErrorOwner};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
-use super::PlaywrightFacade;
 use super::event_release::EventRelease;
-use super::navigated;
 use super::op_marks::{self, Hold, OpMarks};
+use super::{PlaywrightFacade, navigated};
 use crate::browser::{IntentReason, NeoTab, OpenFor, OpenIntent, PageRef, Sight};
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
