@@ -30,7 +30,11 @@ import { useUpgradeToasts } from '@/components/skills/NowUltrafast'
 import { AgentFaces, PasteHint } from '@/components/skills/PasteHint'
 import { SkillActions } from '@/components/skills/SkillActions'
 import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
-import { CopyCueContent, SkillPhrase } from '@/components/skills/SkillPhrase'
+import {
+  CopiedLine,
+  CopyCueContent,
+  SkillPhrase,
+} from '@/components/skills/SkillPhrase'
 import { UltrafastNudge } from '@/components/skills/UltrafastNudge'
 import { UltrafastState } from '@/components/skills/UltrafastState'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -204,7 +208,7 @@ function SaveTip() {
  * footer swaps its stats for the paste hint in the same fixed slot, so the grid never moves.
  */
 function SkillCard({ skill, agents }: { skill: Skill; agents: Harness[] }) {
-  const { copied, copy } = useCopyText()
+  const { copied, shown, copy } = useCopyText()
   // A hand-edited SKILL.md can carry a blank description; the name keeps the card titled.
   const title = skill.description.trim() || skill.name
   const sites = skillSites(skill.site)
@@ -251,7 +255,14 @@ function SkillCard({ skill, agents }: { skill: Skill; agents: Harness[] }) {
       >
         {title}
       </h3>
-      <div className="mt-auto flex min-h-[52px] items-center gap-3 rounded-xl border border-accent-tint-2 bg-accent-tint py-2 pr-2 pl-4">
+      <div
+        className={cn(
+          'mt-auto flex min-h-[52px] items-center gap-3 rounded-xl border bg-accent-tint py-2 pr-2 pl-4 transition-[border-color,box-shadow] duration-300',
+          copied
+            ? 'border-primary/55 ring-4 ring-primary/12'
+            : 'border-accent-tint-2',
+        )}
+      >
         <SkillPhrase
           name={skill.name}
           className="flex-1 text-[13.5px] leading-[1.5]"
@@ -261,7 +272,7 @@ function SkillCard({ skill, agents }: { skill: Skill; agents: Harness[] }) {
           className={cn(
             'inline-flex h-9 shrink-0 items-center gap-[7px] rounded-[10px] border px-3.5 font-semibold text-[13.5px] shadow-card transition-colors duration-200',
             copied
-              ? 'border-primary bg-primary text-primary-foreground'
+              ? 'animate-copy-pop border-primary bg-primary text-primary-foreground'
               : 'border-accent-tint-2 bg-card text-accent-ink group-hover/card:border-primary group-hover/card:bg-primary group-hover/card:text-primary-foreground',
           )}
         >
@@ -271,8 +282,8 @@ function SkillCard({ skill, agents }: { skill: Skill; agents: Harness[] }) {
       <div className="pointer-events-none relative h-[30px]">
         <div
           className={cn(
-            'absolute inset-0 flex items-center justify-between gap-2 transition-[opacity,transform] duration-300 motion-reduce:transition-none',
-            copied && '-translate-y-1.5 opacity-0',
+            'absolute inset-0 flex items-center justify-between gap-2 transition-[opacity,translate] duration-350 ease-[cubic-bezier(0.16,1,0.3,1)]',
+            copied && '-translate-y-2 opacity-0',
           )}
         >
           <span className="flex min-w-0 items-center gap-2 text-[13px] text-ink-3">
@@ -293,11 +304,11 @@ function SkillCard({ skill, agents }: { skill: Skill; agents: Harness[] }) {
         <div
           aria-live="polite"
           className={cn(
-            'absolute inset-0 flex items-center transition-[opacity,transform] duration-300 motion-reduce:transition-none',
+            'absolute inset-0 flex items-center transition-[opacity,translate] duration-350 ease-[cubic-bezier(0.16,1,0.3,1)]',
             !copied && 'translate-y-2 opacity-0',
           )}
         >
-          {copied ? <PasteHint agents={agents} className="w-full" /> : null}
+          {shown ? <PasteHint agents={agents} className="w-full" /> : null}
         </div>
       </div>
     </Card>
@@ -374,7 +385,12 @@ function EmptySkills({
           type="button"
           aria-label={`Copy ${SAVE_PHRASE}`}
           onClick={() => void copy(SAVE_PHRASE)}
-          className="group/phrase -mt-1.5 flex min-h-[52px] w-full items-center gap-3 rounded-xl border border-accent-tint-2 bg-card py-2 pr-2 pl-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn(
+            'group/phrase -mt-1.5 flex min-h-[52px] w-full items-center gap-3 rounded-xl border bg-card py-2 pr-2 pl-4 text-left outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-ring',
+            copied
+              ? 'border-primary/55 ring-4 ring-primary/12'
+              : 'border-accent-tint-2',
+          )}
         >
           <SkillPhrase
             name="neo"
@@ -387,27 +403,21 @@ function EmptySkills({
             className={cn(
               'inline-flex h-9 shrink-0 items-center gap-[7px] rounded-[10px] border px-3.5 font-semibold text-[13.5px] shadow-card transition-colors duration-200',
               copied
-                ? 'border-primary bg-primary text-primary-foreground'
+                ? 'animate-copy-pop border-primary bg-primary text-primary-foreground'
                 : 'border-accent-tint-2 bg-card text-accent-ink group-hover/phrase:border-primary group-hover/phrase:bg-primary group-hover/phrase:text-primary-foreground',
             )}
           >
             <CopyCueContent copied={copied} />
           </span>
         </button>
-        <p
-          aria-live="polite"
-          className={cn(
-            'flex flex-wrap items-center gap-3 text-[14.5px]',
-            copied ? 'font-semibold text-cyanotype-ink' : 'text-ink-2',
-          )}
-        >
-          <span>
-            {copied
-              ? 'Copied. Paste it after your next task'
-              : 'Works in any of your connected agents'}
-          </span>
+        <div className="flex flex-wrap items-center gap-3 text-[14.5px]">
+          <CopiedLine
+            copied={copied}
+            before="Works in any of your connected agents"
+            after="Copied. Paste it after your next task"
+          />
           <AgentFaces agents={agents} limit={7} />
-        </p>
+        </div>
       </div>
       <p className="mt-4 flex items-center gap-2 text-[14px] text-ink-3">
         Or

@@ -11,6 +11,7 @@ import {
   describe,
   expect,
   it,
+  jest,
   mock,
   setSystemTime,
 } from 'bun:test'
@@ -437,9 +438,15 @@ describe('using a skill from its page', () => {
     )
   }
 
+  function spoken(): string {
+    return [...container.querySelectorAll('[aria-live="polite"]')]
+      .map((region) => (region.textContent ?? '').trim())
+      .join(' | ')
+  }
+
   it('tests that the copy box copies the phrase and says to paste it', async () => {
     await mount()
-    expect(text()).toContain('Then paste it into any of your agents')
+    expect(spoken()).toContain('Then paste it into any of your agents')
     expect(text()).toContain('Claude Code')
 
     await act(async () => {
@@ -449,7 +456,32 @@ describe('using a skill from its page', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(clipboard).toEqual(['use the reorder-toothpaste skill'])
-    expect(text()).toContain('Copied. Now paste it into your agent and send')
+    expect(spoken()).toContain('Copied. Now paste it into your agent and send')
+    expect(spoken()).not.toContain('Then paste it into any of your agents')
+  })
+
+  it('tests that the copy box goes back to its first line a few seconds after a copy', async () => {
+    await mount()
+    jest.useFakeTimers()
+    try {
+      await act(async () => {
+        copyBox()?.dispatchEvent(new Event('click', { bubbles: true }))
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      // The state comes from the copy itself, not an animation event, so reduced motion gets it.
+      expect(spoken()).toContain(
+        'Copied. Now paste it into your agent and send',
+      )
+
+      await act(async () => {
+        jest.advanceTimersByTime(6000)
+      })
+      expect(spoken()).toContain('Then paste it into any of your agents')
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('tests that the rest waits in a closed fold that opens to the steps', async () => {
