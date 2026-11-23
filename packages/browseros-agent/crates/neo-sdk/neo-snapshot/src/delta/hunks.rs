@@ -86,7 +86,12 @@ fn edit_text<'a>(edit: &Edit, before: &[&'a str], after: &[&'a str]) -> &'a str 
     line.copied().unwrap_or_default()
 }
 
-/// `indentOf`: the JavaScript whitespace a line starts with, in UTF-16 units.
+/// `indentOf`, `line.length - line.trimStart().length`: the JavaScript whitespace a line starts
+/// with, in UTF-16 units. Counted from the start alone, the same number without measuring the
+/// whole line: a hunk in a long section looks back over every line above it for its block.
 fn indent_of(line: &str) -> usize {
-    js::units(line) - js::units(js::trim_start(line))
+    line.chars()
+        .take_while(|character| js::is_space(*character))
+        .map(char::len_utf16)
+        .sum()
 }

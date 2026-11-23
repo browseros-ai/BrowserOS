@@ -63,14 +63,6 @@ pub(crate) fn neo_text(snapshot: &Snapshot, passed: &Passed) -> NeoText {
 /// again. `Kept` and `Always` print the page's text whatever its length, `LeftOut` prints the
 /// notice whatever its length, `Never` neither. A delta renders the new snapshot in its
 /// baseline's form, so the two differ only where the page does.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a delta renders the new page in its baseline's form, and no delta is printed in \
-                  Rust yet; until then the tests are its only callers"
-    )
-)]
 pub(crate) fn neo_text_as(snapshot: &Snapshot, form: &Form) -> String {
     render_form(snapshot, form, None)
 }
