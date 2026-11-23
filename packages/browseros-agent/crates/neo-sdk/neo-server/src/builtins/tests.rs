@@ -99,12 +99,12 @@ impl Harness {
         solver: Option<Arc<CaptchaSolver>>,
         hosted: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        Self::with_tabs(solver, hosted, Arc::new(TabRegistry::new())).await
+        Self::with_tabs::<SCRIPT_CDP>(solver, hosted, Arc::new(TabRegistry::new())).await
     }
 
     /// [`Harness::with_mode`] over `tabs`, a registry the test built: one whose telemetry
     /// records what its tab ledger reports, say.
-    async fn with_tabs(
+    async fn with_tabs<const SCRIPT_CDP: bool>(
         solver: Option<Arc<CaptchaSolver>>,
         hosted: bool,
         tabs: Arc<TabRegistry>,
@@ -1376,7 +1376,7 @@ async fn tabs_until(
 async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), Box<dyn Error>> {
     let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
     let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
-    let harness = Harness::with_tabs(None, false, tabs).await?;
+    let harness = Harness::with_tabs::<false>(None, false, tabs).await?;
     // The owner's tab, which also keeps the janitor from closing the browser's last tab.
     let owners = harness.owner_tab("https://example.com/").await?;
     tabs_until(&telemetry, |(_, found, _)| found == 1).await?;
@@ -6143,7 +6143,7 @@ async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn 
     let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
     let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
     let attach = tabs.life().expect_open(OpenFor::Neo);
-    let harness = Harness::with_tabs(None, false, tabs).await?;
+    let harness = Harness::with_tabs::<false>(None, false, tabs).await?;
     let launch = harness.fake.open_tab("about:blank", "");
     harness.owner_tab("https://example.com/").await?;
     let blank = blank_tab(&harness);
