@@ -50,7 +50,7 @@ pub use op_settled::{OpCounting, OpSettled, OpSite};
 pub use open_tab_counts::{OpenTabCounts, OpenTabsSource};
 pub use otlp_protocol::OtlpProtocol;
 #[cfg(feature = "test-support")]
-pub use probe::{CapturedSpan, Probe, SpanStatus, SpanValue};
+pub use probe::{CapturedKind, CapturedSpan, Probe, SpanStatus, SpanValue};
 pub use run_span::{RunFacts, RunSpan, RunVerdict};
 pub use run_telemetry::RunTelemetry;
 pub use site_detail::SiteDetail;

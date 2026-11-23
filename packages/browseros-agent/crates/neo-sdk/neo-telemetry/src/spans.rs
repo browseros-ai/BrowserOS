@@ -8,21 +8,23 @@
 //!
 //! ```text
 //!  caller's traceparent (or none: a new trace)
-//!   └─ neo.run       started at admission, ended with the run's verdict
-//!       └─ page.goto   built when the op settles: start = OpSettled::started, end = now
+//!   └─ neo.run       SERVER: started at admission, ended with the run's verdict
+//!       └─ page.goto   INTERNAL: built when the op settles: start = OpSettled::started, end = now
 //! ```
 //!
 //! An op span's name is the op's metric label: a method Neo serves, or `unknown`, so the set of
 //! span names stays as small as Neo's method table while `neo.op.name` keeps what the script
 //! wrote. Both kinds carry `neo.span.type` (`run` or `op`), which is how a reader tells them
-//! apart now that op names vary. An internal run (the janitor's sweep, the host's private typing)
+//! apart now that op names vary. A run is Neo serving a caller's call, which waits for its reply,
+//! so `neo.run` is a `SERVER` span: a trace backend then draws the caller's edge to Neo, and the
+//! caller's own client span pairs with it. An op is in-process work under it: `INTERNAL`. An internal run (the janitor's sweep, the host's private typing)
 //! has no `neo.run`, so its ops' spans are roots. Attributes are set only on a span the sampler
 //! kept, so an unsampled run formats and allocates nothing.
 
 use std::time::{Duration, SystemTime};
 
 use opentelemetry::trace::{
-    Span as _, SpanBuilder, SpanContext, Status, TraceContextExt as _, Tracer as _,
+    Span as _, SpanBuilder, SpanContext, SpanKind, Status, TraceContextExt as _, Tracer as _,
 };
 use opentelemetry::{Context, Key, KeyValue};
 use opentelemetry_sdk::trace::{SdkTracer, Span};
@@ -72,9 +74,10 @@ impl Spans {
             Some(parent) => Context::new().with_remote_span_context(parent.span_context().clone()),
             None => Context::new(),
         };
-        let mut span = self
-            .tracer
-            .build_with_context(SpanBuilder::from_name(RUN), &parent);
+        let mut span = self.tracer.build_with_context(
+            SpanBuilder::from_name(RUN).with_kind(SpanKind::Server),
+            &parent,
+        );
         if span.is_recording() {
             span.set_attributes([
                 KeyValue::new(SPAN_TYPE, "run"),
@@ -123,9 +126,12 @@ impl Spans {
             Some(run) => Context::new().with_remote_span_context(run.clone()),
             None => Context::new(),
         };
-        let mut span = self
-            .tracer
-            .build_with_context(SpanBuilder::from_name(name).with_start_time(start), &parent);
+        let mut span = self.tracer.build_with_context(
+            SpanBuilder::from_name(name)
+                .with_kind(SpanKind::Internal)
+                .with_start_time(start),
+            &parent,
+        );
         if span.is_recording() {
             span.set_attributes([
                 KeyValue::new(SPAN_TYPE, "op"),

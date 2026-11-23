@@ -12,8 +12,9 @@ use neo_telemetry::label::{
     CloseReason, Delivery, ErrorCode, ErrorLabel, ErrorOwner, OpOutcome, RunStatus, TabOrigin,
 };
 use neo_telemetry::{
-    CapturedSpan, OpCounting, OpSettled, OpSite, OpenTabCounts, Probe, RunFacts, RunVerdict,
-    SiteDetail, SpanStatus, SpanValue, Telemetry, TelemetryConfig, TraceContext, Vocabulary,
+    CapturedKind, CapturedSpan, OpCounting, OpSettled, OpSite, OpenTabCounts, Probe, RunFacts,
+    RunVerdict, SiteDetail, SpanStatus, SpanValue, Telemetry, TelemetryConfig, TraceContext,
+    Vocabulary,
 };
 
 /// The server's tables, as a test binds them.
@@ -952,6 +953,12 @@ fn an_op_span_is_a_child_of_neo_run_which_is_a_child_of_the_callers_trace() {
         "neo.run joins the caller's trace, under the caller's span"
     );
     assert!(run.parent_is_remote, "its parent is the caller's, not ours");
+    assert_eq!(
+        (run.kind, op.kind),
+        (CapturedKind::Server, CapturedKind::Internal),
+        "neo.run serves the caller's call, so it pairs with the caller's client span; an op is \
+         in-process work under it"
+    );
     assert_eq!(
         (
             op.name.as_str(),

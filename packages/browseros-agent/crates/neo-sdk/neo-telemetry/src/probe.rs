@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use opentelemetry::trace::{SpanId, Status};
+use opentelemetry::trace::{SpanId, SpanKind, Status};
 use opentelemetry::{Context, Value};
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::trace::{Span, SpanData, SpanProcessor};
@@ -28,6 +28,8 @@ pub struct Probe {
 pub struct CapturedSpan {
     /// `neo.run`, or an op span's op name (`page.goto`, `unknown`).
     pub name: String,
+    /// Its OpenTelemetry span kind.
+    pub kind: CapturedKind,
     /// The trace it belongs to, as 32 lowercase hex digits (a `traceparent`'s spelling).
     pub trace_id: String,
     /// Its own id, as 16 lowercase hex digits.
@@ -46,6 +48,21 @@ pub struct CapturedSpan {
     pub start: SystemTime,
     /// When it ended.
     pub end: SystemTime,
+}
+
+/// A span's OpenTelemetry kind, as OTLP names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapturedKind {
+    /// Serves an inbound call (`neo.run`).
+    Server,
+    /// In-process work under another span (an op).
+    Internal,
+    /// An outbound call.
+    Client,
+    /// Hands work to a queue.
+    Producer,
+    /// Takes work from a queue.
+    Consumer,
 }
 
 /// One attribute value. Neo's spans carry only strings and integers; anything else is kept as its
@@ -124,6 +141,13 @@ fn lock(spans: &Mutex<Vec<SpanData>>) -> MutexGuard<'_, Vec<SpanData>> {
 fn captured(span: &SpanData) -> CapturedSpan {
     CapturedSpan {
         name: span.name.to_string(),
+        kind: match span.span_kind {
+            SpanKind::Server => CapturedKind::Server,
+            SpanKind::Internal => CapturedKind::Internal,
+            SpanKind::Client => CapturedKind::Client,
+            SpanKind::Producer => CapturedKind::Producer,
+            SpanKind::Consumer => CapturedKind::Consumer,
+        },
         trace_id: span.span_context.trace_id().to_string(),
         span_id: span.span_context.span_id().to_string(),
         parent_span_id: (span.parent_span_id != SpanId::INVALID)
