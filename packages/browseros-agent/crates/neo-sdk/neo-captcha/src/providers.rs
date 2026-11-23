@@ -23,7 +23,8 @@ use super::{
     },
 };
 
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+// Half of SOLVE_DEADLINE (120 s) so a hung primary vendor (CapSolver) still leaves room for fallback.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_SUBMISSION_BUDGET: Duration = Duration::from_secs(5);
 
 pub trait CaptchaBackend: Send + Sync {
@@ -88,13 +89,13 @@ pub trait VendorClient: Send + Sync {
     fn supports(&self, task: &SolveTask) -> bool;
     fn attempt_budget(&self, task: &SolveTask) -> Duration {
         match task {
-            SolveTask::RecaptchaTiles(_) => ATTEMPT_TIMEOUT,
-            SolveTask::RecaptchaToken(_)
+            SolveTask::RecaptchaTiles(_)
+            | SolveTask::RecaptchaToken(_)
             | SolveTask::TurnstileToken(_)
             | SolveTask::GeetestV3(_)
             | SolveTask::GeetestV4(_)
             | SolveTask::AwsWaf(_)
-            | SolveTask::Arkose(_) => Duration::from_secs(60),
+            | SolveTask::Arkose(_) => ATTEMPT_TIMEOUT,
         }
     }
     fn solve<'a>(
@@ -993,7 +994,7 @@ mod tests {
                     Duration::from_secs(if client.name() == ProviderName::Capsolver {
                         60
                     } else {
-                        90
+                        120
                     })
                 );
                 assert_eq!(
@@ -2037,15 +2038,17 @@ mod tests {
     async fn tests_that_vendor_attempt_budgets_are_used_and_capped_by_the_overall_deadline()
     -> anyhow::Result<()> {
         for (task, delay, overall, elapsed, succeeds) in [
-            (recaptcha(), 65, 120, 65, true),
-            (turnstile(), 65, 120, 65, true),
-            (recaptcha(), 95, 120, 90, false),
+            (tiles(TileGrid::ThreeByThree), 95, 120, 95, true),
+            (recaptcha(), 95, 120, 95, true),
+            (turnstile(), 95, 120, 95, true),
+            (tiles(TileGrid::ThreeByThree), 125, 150, 120, false),
+            (recaptcha(), 125, 150, 120, false),
             (turnstile(), 95, 80, 80, false),
         ] {
             let chain = ProviderChain::with_clients(
                 vec![Box::new(BudgetVendor(
                     SlowVendor(Duration::from_secs(delay)),
-                    Duration::from_secs(90),
+                    Duration::from_secs(120),
                 ))],
                 1,
             );
@@ -2058,7 +2061,12 @@ mod tests {
                 )
                 .await;
             if succeeds {
-                assert_eq!(result?.answer, SolveAnswer::Token("delayed-token".into()));
+                let expected = if matches!(task, SolveTask::RecaptchaTiles(_)) {
+                    SolveAnswer::Tiles(vec![0])
+                } else {
+                    SolveAnswer::Token("delayed-token".into())
+                };
+                assert_eq!(result?.answer, expected);
             } else {
                 let error = result
                     .err()
@@ -2077,10 +2085,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tests_that_late_failover_keeps_prior_charges_without_submitting_again()
     -> anyhow::Result<()> {
-        for (overall, succeeds) in [(34, false), (35, true)] {
+        for (overall, succeeds) in [(64, false), (65, true)] {
             let (backup, calls) = fake("BACKUP", None, true, true);
             let chain = ProviderChain::with_clients(
-                vec![Box::new(SlowVendor(Duration::from_secs(35))), backup],
+                vec![Box::new(SlowVendor(Duration::from_secs(65))), backup],
                 2,
             );
             let started = Instant::now();
@@ -2104,16 +2112,44 @@ mod tests {
             }
             assert_eq!(calls.load(Ordering::Relaxed), u32::from(succeeds));
             assert_eq!(chain.paid_tasks(), 1 + u32::from(succeeds));
-            assert_eq!(started.elapsed(), Duration::from_secs(30));
+            assert_eq!(started.elapsed(), Duration::from_secs(60));
         }
         Ok(())
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_attempt_budgets_depend_on_task_and_respect_the_overall_deadline()
+    async fn tests_that_primary_timeout_leaves_room_for_backup_within_solve_deadline()
+    -> anyhow::Result<()> {
+        let chain = ProviderChain::with_clients(
+            vec![
+                Box::new(SlowVendor(Duration::from_secs(70))),
+                Box::new(BudgetVendor(
+                    SlowVendor(Duration::from_secs(45)),
+                    Duration::from_secs(120),
+                )),
+            ],
+            2,
+        );
+        let started = Instant::now();
+        let answer = chain
+            .solve(
+                &tiles(TileGrid::ThreeByThree),
+                started + crate::SOLVE_DEADLINE,
+                &CancellationToken::new(),
+            )
+            .await?;
+        assert_eq!(answer.answer, SolveAnswer::Tiles(vec![0]));
+        assert_eq!(chain.paid_tasks(), 2);
+        assert_eq!(started.elapsed(), Duration::from_secs(105));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_default_attempt_budgets_respect_cap_and_overall_deadline()
     -> anyhow::Result<()> {
         for (task, delay, overall, elapsed, succeeds) in [
-            (tiles(TileGrid::ThreeByThree), 35, 120, 30, false),
+            (tiles(TileGrid::ThreeByThree), 35, 120, 35, true),
+            (tiles(TileGrid::ThreeByThree), 65, 120, 60, false),
             (recaptcha(), 35, 120, 35, true),
             (turnstile(), 35, 120, 35, true),
             (recaptcha(), 65, 120, 60, false),
