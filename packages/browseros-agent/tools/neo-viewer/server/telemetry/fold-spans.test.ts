@@ -103,10 +103,8 @@ describe('foldSpans', () => {
   test('a failed run carries its error and Neo’s status', () => {
     const store = new SpanStore()
     const traces = fixtureTraces(RUN, { ops: [0] })
-    const span = traces.resourceSpans[0]?.scopeSpans[0]?.spans[0] as {
-      attributes: Array<{ key: string; value: { stringValue: string } }>
-      status: unknown
-    }
+    const span = traces.resourceSpans[0]?.scopeSpans[0]?.spans[0]
+    if (!span) throw new Error('the fixture holds the run span')
     span.attributes = [
       { key: 'neo.span.type', value: { stringValue: 'run' } },
       { key: 'neo.run.id', value: { stringValue: 'r1' } },
