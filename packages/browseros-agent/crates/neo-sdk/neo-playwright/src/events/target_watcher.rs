@@ -1354,7 +1354,7 @@ impl Watcher {
             }
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
-                    self.detached(&session_id);
+                    self.detached(&session_id).await;
                 }
             }
             "Page.loadEventFired" | "Page.domContentEventFired" => {
@@ -2389,18 +2389,30 @@ impl Watcher {
 
     /// `Target.detachedFromTarget`: the session's dialog, its bookkeeping, and its place among
     /// its target's lifecycle sources. A frame session that leaves no other to take over: nothing
-    /// reads that frame's subtree now, so it holds its tab's list from whole no longer. One that
-    /// leaves a session in waiting keeps the hold, and a reseed reads through the one that took
-    /// over (`reseed`).
-    fn detached(&mut self, session: &SessionId) {
+    /// reads that frame's subtree now, so it holds its tab's list from whole no longer. One whose
+    /// session in waiting takes over as the frame's source: that session read nothing, and its
+    /// `Page` may be off (a session in waiting is sent no `Page.enable`), so the list is not whole
+    /// until the frame is read through it, which turns its `Page` on too.
+    async fn detached(&mut self, session: &SessionId) {
         let frame_source = self.frame_source(session);
+        let was_source = frame_source
+            .as_ref()
+            .is_some_and(|(_, frame)| self.lifecycle_sources.primary.get(frame) == Some(session));
         self.dialog_closed(session);
         self.session_detached(session);
         self.lifecycle_sources.detach(session);
-        if let Some((tab, frame)) = frame_source
-            && !self.lifecycle_sources.primary.contains_key(&frame)
-        {
-            self.writer.frame_session_ended(&tab, &FrameId(frame.0));
+        let Some((tab, frame)) = frame_source else {
+            return;
+        };
+        match self.lifecycle_sources.primary.get(&frame).cloned() {
+            None => self.writer.frame_session_ended(&tab, &FrameId(frame.0)),
+            Some(next) if was_source => {
+                self.writer
+                    .frame_session_attached(&tab, FrameId(frame.0.clone()));
+                self.start_seed(&tab, &next, TreeRead::Frame).await;
+            }
+            // A session in waiting went; the source stays.
+            Some(_) => {}
         }
     }
 
@@ -5535,6 +5547,49 @@ mod seed_tests {
         Ok(())
     }
 
+    /// A session in waiting that takes over as a frame's source has read nothing, and its `Page`
+    /// may be off: the tab's list is not whole again until the frame is read through it, and that
+    /// read goes out as it takes over.
+    #[tokio::test]
+    async fn a_frame_session_that_takes_over_reads_its_frame_again() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", json!({}))?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        settle().await;
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        let tf = json!({ "frameTree": { "frame": { "id": "tf", "parentId": "t",
+            "url": "https://tf.test/" } } });
+        answer(&mut watcher, "tf", tf.clone()).await;
+        let t = TargetId("t".to_owned());
+        assert_eq!(hub.missing_seeds(&t), None, "whole");
+        let copy = json!({ "sessionId": "tf2",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", copy)).await;
+        let before = connection.calls()?.len();
+        let detach = json!({ "sessionId": "tf" });
+        read(
+            &mut watcher,
+            on("t-page", "Target.detachedFromTarget", detach),
+        )
+        .await;
+        settle().await;
+        assert!(
+            hub.missing_seeds(&t)
+                .is_some_and(|missing| missing.frames == [FrameId("tf".to_owned())]),
+            "tf2 took over and has read nothing yet"
+        );
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["tf2"],
+            "read through tf2"
+        );
+        answer(&mut watcher, "tf2", tf).await;
+        assert_eq!(hub.missing_seeds(&t), None, "whole again");
+        Ok(())
+    }
+
     /// A list whose seeds all landed but which names a frame with no known parent has its tab's
     /// own tree read again when the reader asks for it; without that ask, a whole list reads
     /// nothing.
@@ -5697,8 +5752,14 @@ mod seed_tests {
         assert!(
             hub.missing_seeds(&t)
                 .is_some_and(|missing| missing.frames == [FrameId("tf".to_owned())]),
-            "tf2 took over and has read nothing"
+            "tf2 took over and its read has not landed"
         );
+        // tf2's read fails, so its line lets its own detach through.
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from("tf2"),
+            tree: None,
+        });
+        watcher.advance_lines().await;
         read(&mut watcher, detach("tf2")).await;
         assert_eq!(hub.missing_seeds(&t), None, "no session reads tf now");
         Ok(())
