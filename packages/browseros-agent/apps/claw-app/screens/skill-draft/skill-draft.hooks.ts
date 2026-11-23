@@ -26,7 +26,6 @@ import {
   type DraftEdits,
   isBusy,
   makeSkillState,
-  type SkillCtaSurface,
   savedDraftProps,
   toSkillCreate,
 } from './skill-draft.helpers'
@@ -40,11 +39,8 @@ export function useMakeSkill({
   sessionId,
   skillName,
   enabled,
-  surface,
 }: {
   sessionId: string
-  /** Where the button is, for analytics. */
-  surface: SkillCtaSurface
   /** The skill already saved from this task, from the task summary. */
   skillName?: string
   /** Whether this plan and task can make a skill; nothing is fetched otherwise. */
@@ -53,7 +49,9 @@ export function useMakeSkill({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [sheetOpen, setSheetOpen] = useState(false)
+  // The ref times the draft for analytics inside the mutation's callbacks; the state drives the sheet.
   const draftStartedAt = useRef(0)
+  const [startedAt, setStartedAt] = useState(0)
   const variables = { sessionId }
   const statusKey = useSkillDraftStatus.getKey(variables)
   const statusQuery = useSkillDraftStatus({
@@ -116,17 +114,20 @@ export function useMakeSkill({
     if (cached?.status === 'writing' || draft.isPending) return
     queryClient.setQueryData(statusKey, WRITING)
     draftStartedAt.current = Date.now()
+    setStartedAt(draftStartedAt.current)
     draft.mutate(variables)
   }
 
+  /**
+   * Opens the skill, the sheet, or a new draft. A new draft starts only from `idle` (after the
+   * person confirmed) or `error` (Try again); a draft being written or kept reopens its sheet.
+   */
   const start = () => {
     if (isBusy(state)) return
     if (state === 'saved' && status?.skillName) {
       navigate(`/skills/${encodeURIComponent(status.skillName)}`)
       return
     }
-    if (state === 'idle')
-      track(AnalyticsEvent.SkillFromTaskClicked, { surface })
     setSheetOpen(true)
     if (state === 'idle' || state === 'error') requestDraft()
   }
@@ -171,6 +172,8 @@ export function useMakeSkill({
     state,
     status,
     sheetOpen,
+    /** When this view started the draft being written, or 0 when another view did. */
+    startedAt,
     start,
     retry: requestDraft,
     save,

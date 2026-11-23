@@ -57,6 +57,13 @@ export const AnalyticsEvent = {
   SkillFromTaskSaved: 'skill_from_task_saved',
   SkillDraftDiscarded: 'skill_draft_discarded',
   SkillUpgradeSeen: 'skill_upgrade_seen',
+  UltrafastNudgeShown: 'ultrafast_nudge_shown',
+  UltrafastNudgeClicked: 'ultrafast_nudge_clicked',
+  SkillMakeConfirmed: 'skill_make_confirmed',
+  SkillMakeDismissed: 'skill_make_dismissed',
+  FreeMakeSkillDialogShown: 'free_make_skill_dialog_shown',
+  FreeMakeSkillPhraseCopied: 'free_make_skill_phrase_copied',
+  SkillCopied: 'skill_copied',
 } as const
 
 export type AnalyticsEventName =
