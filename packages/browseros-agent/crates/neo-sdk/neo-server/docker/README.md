@@ -255,6 +255,8 @@ that exits is restarted by the entrypoint, and a server that exits is relaunched
 flight at shutdown is cut. A relaunched server gives each task back the tabs it held while the browser
 kept them (saved in `tab-holders` beside the trace); after a browser restart, no tab holds a task.
 
+Before it starts the display and the browser, the entrypoint runs `browseros-claw-sdk --check-config` as the neo user with the environment claw-sdk will get. A variable claw-sdk cannot use (a malformed `CLAW_*` value, or `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`) stops the container with exit 1 and that variable's error in its log, instead of a server the browser relaunches until the container gives up as not ready.
+
 ### Saved sessions
 
 For session restore and "reopen closed tab", Chromium saves each tab's page state in

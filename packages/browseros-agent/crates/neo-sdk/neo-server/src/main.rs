@@ -3,6 +3,9 @@
 //! - `--version` prints the dotted version alone on stdout and exits 0, before any config,
 //!   logging or state directory. Chromium's probe reads at most 4096 bytes of stdout within 10 s.
 //! - `--config <path>` serves until SIGTERM, then exits 0. Chromium sends SIGKILL 5 s later.
+//! - `--check-config` reads the environment as `--config` would, prints nothing and exits 0, or
+//!   prints the variable's error on stderr and exits 1. It writes no state and needs no launch
+//!   file; the image runs it before it starts the browser.
 //! - Exit 2 means only "the agent port is in use", and Chromium relaunches Neo on the next port.
 //!   Every other failure exits 1, argument errors included, because clap's own usage exit is 2.
 //!
@@ -48,11 +51,18 @@ const SOURCE_MARKER: &str = match option_env!("NEO_SDK_SOURCE_MARKER") {
 #[command(name = "browseros-claw-sdk", disable_version_flag = true)]
 struct Cli {
     /// Chromium's launch JSON.
-    #[arg(long, required_unless_present = "version", conflicts_with = "version")]
+    #[arg(
+        long,
+        required_unless_present_any = ["version", "check_config"],
+        conflicts_with_all = ["version", "check_config"]
+    )]
     config: Option<PathBuf>,
     /// Print the version alone on stdout and exit.
     #[arg(long)]
     version: bool,
+    /// Check the environment's settings and exit: 0 when Neo can start with them, else 1.
+    #[arg(long, conflicts_with = "version")]
+    check_config: bool,
 }
 
 fn main() -> ExitCode {
@@ -76,6 +86,15 @@ fn main() -> ExitCode {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
         return ExitCode::SUCCESS;
+    }
+    if cli.check_config {
+        return match AppConfig::check_env() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                report_before_logging(&error);
+                ExitCode::FAILURE
+            }
+        };
     }
     let Some(config_path) = cli.config else {
         // clap's `required_unless_present` already refused this.

@@ -66,6 +66,14 @@ impl AppConfig {
         })
     }
 
+    /// Reads the process environment as [`AppConfig::load`] does, with no launch file: the
+    /// binary's `--check-config`. The image runs it before it starts the browser, so a variable
+    /// Neo cannot use stops the container with its error instead of failing every relaunch.
+    pub fn check_env() -> Result<(), ConfigError> {
+        let lookup = |name: &str| env::var(name).ok();
+        EnvConfig::from_lookup(&lookup, &env::home_dir).map(drop)
+    }
+
     /// The application owns filesystem layout; settings stores only the host's overrides.
     pub(crate) fn settings_defaults(&self) -> SettingsDefaults {
         if self.env.downloads_dir.is_none() {

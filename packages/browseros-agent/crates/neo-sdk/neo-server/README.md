@@ -74,6 +74,7 @@ Chromium starts the binary with its launch JSON and reads the exit code.
 |---|---|
 | `--version` | Prints the version alone on stdout and exits 0. Reads no config and opens no state. |
 | `--config <launch.json>` | Serves until SIGTERM or SIGINT, then exits 0. |
+| `--check-config` | Reads the environment as `--config` would and exits 0, or prints the variable's error on stderr and exits 1. Needs no launch JSON and writes no state. The SDK image runs it before it starts the browser, so a bad value stops the container with that error. |
 | The agent port is taken | Exits 2, and Chromium relaunches Neo on the next port. Nothing else exits 2. |
 | Any other failure | Exits 1, bad arguments included. |
 
