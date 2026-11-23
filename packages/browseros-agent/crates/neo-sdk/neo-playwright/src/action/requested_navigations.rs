@@ -187,7 +187,9 @@ impl RequestedNavigations {
             let changed = hub.changed();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            let read = hub.read_after(after);
+            // The clicked tab's ring plus the no-tab ring: its commits and close are there, and
+            // only their loss, never another tab's, can leave a commit unconfirmed.
+            let read = hub.read_tab_after(target, after);
             for record in read.records {
                 if !pending.is_empty()
                     && matches!(&record.event, PageEvent::Closed(closed) if closed == target)
@@ -415,9 +417,10 @@ mod tests {
     #[tokio::test]
     async fn tests_that_journal_loss_cannot_silently_discard_an_unpublished_commit()
     -> Result<(), Box<dyn Error>> {
+        // The clicked tab's own ring overflows: another tab's would not count (`event_hub.rs`).
         let (hub, mut writer) = EventHub::new();
         for _ in 0..=LOG_CAPACITY {
-            writer.record(PageEvent::Closed(TargetId("other".to_owned())));
+            writer.record(PageEvent::Crashed(TargetId("main".to_owned())));
         }
         let (_events, mut watch) = watch();
         watch.apply(&requested("main"));

@@ -1530,7 +1530,9 @@ impl Watcher {
                 self.writer.record(PageEvent::Closed(target.clone()));
             }
             // A tab nobody opened from a page, never reported: its closing is not news either.
-            PageState::Pending { .. } => {}
+            // Its ring, if anything was filed under it, is closed all the same, so it never
+            // counts as a live tab's in the log's fair share (`EventLog::shed`).
+            PageState::Pending { .. } => self.writer.close_ring(target),
         }
     }
 
@@ -1956,12 +1958,14 @@ impl Watcher {
             }
         }
         // Only the record is gated: the workers' closing and the recovery ticket above stand for
-        // every tab. The URL hint rides the record's seq, so it goes with it.
+        // every tab. The URL hint rides the record's seq, so it goes with it. The record goes to
+        // the ring of the tab its session belongs to, since it names only a frame; a session not
+        // yet placed puts it in the no-tab ring, which every one-tab reader reads too.
         if tab
             .as_ref()
             .is_none_or(|tab| self.records_page_events(tab, session))
         {
-            let seq = self.writer.record(navigation);
+            let seq = self.writer.record_in(tab, navigation);
             if let Some(tab) = main_of {
                 self.writer.main_frame_navigated(tab, seq);
             }
@@ -3067,11 +3071,10 @@ impl Watcher {
     /// the shared event log (a frame's attach, removal or commit, a navigation, a load), so that
     /// the log holds what it held on main. It does not for an event of the tab's root observer
     /// while no session of core's is on the tab ([`Self::core_attached`], the dialog rule's
-    /// predicate): on main that observer had `Page` off and reported nothing. The log is one ring
-    /// for every run, 1,024 records long (`LOG_CAPACITY`), which an untouched tab churning frames
-    /// would fill for nobody: every reader of these records has a session of core's on the tab
-    /// first (a page listener is admitted on the tab, a context listener attaches core to every
-    /// tab). An out-of-process frame's session records as on main, and so does an observer whose
+    /// predicate): on main that observer had `Page` off and reported nothing. Every reader of
+    /// these records has a session of core's on the tab first (a page listener is admitted on the
+    /// tab, a context listener attaches core to every tab), so they would serve nobody. Each tab
+    /// has its own ring (`event_hub.rs`), so such records could push out only that tab's own. An out-of-process frame's session records as on main, and so does an observer whose
     /// tab went through crash recovery (`RootObserver::after_crash`). The tracker and the tab's
     /// frame version follow every event either way, and write nothing to the ring
     /// (`EventWriter::frame_event`). Asked as the event is applied, in its line: from core's

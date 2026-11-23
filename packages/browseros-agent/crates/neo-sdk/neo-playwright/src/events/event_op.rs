@@ -22,7 +22,7 @@ use tokio::fs;
 use ts_rs::TS;
 
 use crate::events::dialog_table::{ClosedBy, Unanswerable};
-use crate::events::event_hub::{now_ms, receives};
+use crate::events::event_hub::{ListenerPlace, now_ms, receives};
 use crate::events::event_reader::{Delivered, Tabs, WindowPopup, binding_call, deliver};
 use crate::events::log_lease::{LogRefused, ReportingLease};
 use crate::events::page_event::DialogId;
@@ -690,18 +690,23 @@ async fn next(
         let mut read_up_to = Vec::new();
         let mut tabs = Tabs::default();
         let listeners = run.events.listeners();
-        let after = listeners
-            .iter()
-            .map(|(_, listening)| listening.after)
-            .min()
-            .unwrap_or_else(|| hub.head());
-        // All audiences share one journal cut. Appends during a tab lookup belong to the
-        // next batch for everyone, so page/context mirrors cannot split across batches.
-        let read = hub.read_after(after);
-        for (subscription, listening) in listeners {
-            lost += read
-                .lost
-                .saturating_sub(listening.after.saturating_sub(after));
+        // All audiences share one journal cut, read from the lowest listener's place. Appends
+        // during a tab lookup belong to the next batch for everyone, so page/context mirrors
+        // cannot split across batches. Each listener's loss is counted from its own place in the
+        // same cut: a page listener's from its tab's ring and the no-tab ring, so another tab's
+        // flood is never its loss; a context listener's from every ring.
+        let read = {
+            let places: Vec<ListenerPlace<'_>> = listeners
+                .iter()
+                .map(|(subscription, listening)| ListenerPlace {
+                    tab: subscription.page_event().map(|(target, _)| target),
+                    after: listening.after,
+                })
+                .collect();
+            hub.read_for(&places)
+        };
+        for ((subscription, listening), listener_lost) in listeners.into_iter().zip(read.losses) {
+            lost += listener_lost;
             for record in &read.records {
                 if record.seq > listening.after
                     && receives(&subscription, listening.since_ms, record)
@@ -815,7 +820,12 @@ async fn first_event(
     loop {
         let mut changed = pin!(hub.changed());
         changed.as_mut().enable();
-        for record in hub.read_after(after).records {
+        // A page's wait reads its tab's ring and the no-tab ring; a context's reads every ring.
+        let read = match subscription.page_event() {
+            Some((target, _)) => hub.read_tab_after(target, after),
+            None => hub.read_after(after),
+        };
+        for record in read.records {
             after = record.seq;
             // A close ends every outstanding page wait except the close wait itself.
             // Match the admitted target, not just the reusable native tab id, and report
