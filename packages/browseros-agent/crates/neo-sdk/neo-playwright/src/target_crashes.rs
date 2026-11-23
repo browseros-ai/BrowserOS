@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use browseros_core::{FrameId, TargetId};
 use tokio::sync::Notify;
 
-use crate::events::{EventFence, WatcherProgress};
+use crate::events::{EventFence, EventScope, WatcherProgress};
 
 /// The single admission authority shared by foreground operations and the event watcher.
 #[derive(Default)]
@@ -197,7 +197,7 @@ impl TargetCrashes {
             if progress.events_handled() == u64::MAX {
                 return;
             }
-            if progress.applied_through() < fence.0 {
+            if progress.applied_through(&EventScope::Every) < fence.0 {
                 self.lock().pending.push(PendingCrash {
                     ticket: ticket.clone(),
                     fence,
@@ -216,7 +216,7 @@ impl TargetCrashes {
         if progress.events_handled() == u64::MAX {
             return;
         }
-        let applied = progress.applied_through();
+        let applied = progress.applied_through(&EventScope::Every);
         let pending = mem::take(&mut self.lock().pending);
         let mut waiting = Vec::new();
         for reply in pending {
@@ -340,14 +340,14 @@ impl TargetCrashes {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::error::Error;
     use std::sync::Arc;
 
     use browseros_core::{FrameId, TargetId};
 
     use super::TargetCrashes;
-    use crate::events::{EventFence, WatcherProgress};
+    use crate::events::{EventFence, Held, WatcherProgress};
 
     #[test]
     fn late_request_replies_cannot_poison_recovery_or_a_closed_target() -> Result<(), Box<dyn Error>>
@@ -395,7 +395,10 @@ mod tests {
             !crashes.is_crashed(&target),
             "the queued event prefix may contain a newer document"
         );
-        progress.hold_from(Some(0));
+        progress.hold(Held {
+            tabs: HashMap::from([(target.clone(), 0)]),
+            unowned: None,
+        });
         progress.handled(1);
         crashes.apply_replies(1);
         assert!(
@@ -409,7 +412,7 @@ mod tests {
             EventFence(1),
             1,
         );
-        progress.hold_from(None);
+        progress.hold(Held::default());
         crashes.apply_replies(1);
         assert!(
             !crashes.is_crashed(&target),

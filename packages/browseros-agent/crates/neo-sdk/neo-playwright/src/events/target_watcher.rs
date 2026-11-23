@@ -58,7 +58,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
-use std::{fmt, mem};
+use std::{fmt, iter, mem};
 
 use browseros_cdp::CdpEvent;
 use browseros_core::{
@@ -87,7 +87,7 @@ use crate::events::page_event::{
 };
 use crate::events::recorded_reports::{RecordedReports, ReportKey};
 use crate::events::worker_table::WorkerContext;
-use crate::events::{PageEventKind, WatcherProgress, navigation_event};
+use crate::events::{EventScope, Held, PageEventKind, WatcherProgress, navigation_event};
 use crate::snapshot::SnapshotBaselines;
 use crate::target_crashes::{RecoveryTicket, TargetCrashes};
 use crate::url_scheme;
@@ -182,6 +182,9 @@ struct WatcherRequest {
     handed_back: Option<(TargetId, String)>,
     /// The events this request needs handled: those broadcast before it was asked.
     fence: EventFence,
+    /// Whose held events it needs in the log too: a reply for one tab's op is not held by
+    /// another tab's events waiting behind that tab's tree read.
+    scope: EventScope,
     done: oneshot::Sender<()>,
 }
 
@@ -211,14 +214,16 @@ impl Requests {
         )
     }
 
-    /// Asks the watcher to handle the events before `fence`, retire `closed`'s workers and
-    /// bring the leases in line, and waits at most [`SYNCHRONIZE_BOUND`]. Whether it answered:
-    /// a watcher that is gone answers at once, as there is nothing left to wait for.
+    /// Asks the watcher to handle the events before `fence`, with none of `scope`'s held back,
+    /// retire `closed`'s workers and bring the leases in line, and waits at most
+    /// [`SYNCHRONIZE_BOUND`]. Whether it answered: a watcher that is gone answers at once, as
+    /// there is nothing left to wait for.
     async fn ask(
         &self,
         closed: Option<TargetId>,
         handed_back: Option<(TargetId, String)>,
         fence: EventFence,
+        scope: EventScope,
     ) -> bool {
         let (done, wait) = oneshot::channel();
         if self
@@ -227,6 +232,7 @@ impl Requests {
                 closed,
                 handed_back,
                 fence,
+                scope,
                 done,
             })
             .is_err()
@@ -250,7 +256,9 @@ impl WatcherHandle {
     /// is gone answers at once.
     pub(crate) async fn synchronize(&self) {
         let fence = self.requests.fence();
-        self.requests.ask(None, None, fence).await;
+        self.requests
+            .ask(None, None, fence, EventScope::Every)
+            .await;
     }
 
     /// A handle no watcher answers, for tests.
@@ -282,11 +290,17 @@ impl TargetWatcher {
 
     /// Foreground replies must see every CDP fact received before their command replied:
     /// waits, at most 2 s, until the watcher handled every event before `fence` (later ones are
-    /// another reply's) and brought the leases in line. Whether it answered in time.
-    /// A confirmed explicit close also retires workers before Chromium finishes tearing
-    /// down a renderer with unresolved promises (Playwright issue 43204).
-    pub(crate) async fn synchronize(&self, closed: Option<TargetId>, fence: EventFence) -> bool {
-        self.requests.ask(closed, None, fence).await
+    /// another reply's), with none of `scope`'s held back, and brought the leases in line.
+    /// Whether it answered in time. A confirmed explicit close also retires workers before
+    /// Chromium finishes tearing down a renderer with unresolved promises (Playwright issue
+    /// 43204).
+    pub(crate) async fn synchronize(
+        &self,
+        closed: Option<TargetId>,
+        fence: EventFence,
+        scope: EventScope,
+    ) -> bool {
+        self.requests.ask(closed, None, fence, scope).await
     }
 
     /// Records `target`'s tab as opened at `url`, after every event received until now: the
@@ -294,7 +308,9 @@ impl TargetWatcher {
     /// answered in time.
     pub(crate) async fn hand_back(&self, target: TargetId, url: String) -> bool {
         let fence = self.requests.fence();
-        self.requests.ask(None, Some((target, url)), fence).await
+        self.requests
+            .ask(None, Some((target, url)), fence, EventScope::Every)
+            .await
     }
 
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
@@ -2004,7 +2020,7 @@ impl Watcher {
         // Stopping the watcher releases operation waiters with a sentinel; it supplies no
         // recovery evidence. Only events actually applied by this owner satisfy the fence.
         let live = self.progress.events_handled() != u64::MAX;
-        let applied = self.progress.applied_through();
+        let applied = self.progress.applied_through(&EventScope::Every);
         let (ready, pending): (Vec<_>, Vec<_>) = mem::take(&mut self.recovery_replies)
             .into_iter()
             .partition(|proof| live && applied >= proof.fence);
@@ -2692,24 +2708,40 @@ impl Watcher {
         self.answer_deferred();
     }
 
-    /// Tells [`WatcherProgress`] the oldest event the watcher holds, in a line or as a waiting
-    /// download, so no fence past it counts as in the log. Every item counts, not only each line's
+    /// Tells [`WatcherProgress`] the oldest event the watcher holds for each tab, in its line,
+    /// and the oldest waiting download, which no tab owns yet, so no fence past one counts as in
+    /// the log for a wait that names that tab ([`EventScope`]). A popup not yet reported holds
+    /// its opener too: a download in a tab that opened only to download is recorded on the
+    /// opener (`download`), from the popup's line. Every item counts, not only each line's
     /// first, so the hold stays right whatever order a line holds its items in. It equals the
     /// first-item hold while lines stay sorted, as [`place_by_position`] and the replay keep them,
     /// so no row pins it; it stays in case a later change breaks that order.
     fn publish_hold(&self) {
-        let oldest = self
-            .lines
-            .values()
-            .flatten()
-            .filter_map(LineItem::position)
-            .chain(
-                self.unowned_downloads
-                    .iter()
-                    .map(|download| download.position),
-            )
-            .min();
-        self.progress.hold_from(oldest);
+        let mut held = Held {
+            tabs: HashMap::new(),
+            unowned: self
+                .unowned_downloads
+                .iter()
+                .map(|download| download.position)
+                .min(),
+        };
+        for (tab, line) in &self.lines {
+            let Some(oldest) = line.iter().filter_map(LineItem::position).min() else {
+                continue;
+            };
+            let opener = self
+                .pages
+                .get(tab)
+                .filter(|page| !matches!(page.state, PageState::Reported))
+                .and_then(|page| page.opener.clone());
+            for owner in iter::once(tab.clone()).chain(opener) {
+                held.tabs
+                    .entry(owner)
+                    .and_modify(|at| *at = (*at).min(oldest))
+                    .or_insert(oldest);
+            }
+        }
+        self.progress.hold(held);
     }
 
     /// Answers the deferred synchronize requests whose fence the log now covers.
@@ -2720,10 +2752,10 @@ impl Watcher {
         // Publish crash facts before waking operations whose event prefix is now applied.
         self.crashes
             .apply_replies(self.browser.connection().connection_epoch());
-        let applied = self.progress.applied_through();
+        let progress = &self.progress;
         let (ready, waiting): (Vec<_>, Vec<_>) = mem::take(&mut self.deferred)
             .into_iter()
-            .partition(|request| request.fence.0 <= applied);
+            .partition(|request| request.fence.0 <= progress.applied_through(&request.scope));
         self.deferred = waiting;
         for request in ready {
             let _ = request.done.send(());
@@ -3365,7 +3397,9 @@ mod worker_observation_tests {
 
     use super::{EventFence, SeededTree, Watcher, WatcherHandle, WatcherRequest};
     use crate::events::worker_table::WorkerInfo;
-    use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
+    use crate::events::{
+        EventHub, EventScope, PageEvent, PageEventKind, Subscription, WatcherProgress,
+    };
     use crate::run_state::RunState;
     use crate::snapshot::{Baseline, SnapshotBaselines, SnapshotForm, TextForm};
     use crate::world::FrameAttachLog;
@@ -3536,12 +3570,17 @@ mod worker_observation_tests {
         )
         .await;
         assert_eq!(progress.events_handled(), 2, "both read");
-        assert_eq!(progress.applied_through(), 1, "the removal is held");
+        assert_eq!(
+            progress.applied_through(&EventScope::Every),
+            1,
+            "the removal is held"
+        );
         let (done, mut answered) = oneshot::channel();
         watcher.deferred.push(WatcherRequest {
             closed: None,
             handed_back: None,
             fence: EventFence(2),
+            scope: EventScope::Every,
             done,
         });
         watcher.answer_deferred();
@@ -3576,7 +3615,7 @@ mod worker_observation_tests {
             "removed, with the tree's payload"
         );
         assert!(watcher.lines.is_empty());
-        assert_eq!(progress.applied_through(), 2);
+        assert_eq!(progress.applied_through(&EventScope::Every), 2);
         assert!(answered.try_recv().is_ok(), "answered once the log has it");
         Ok(())
     }
@@ -4504,7 +4543,7 @@ mod crash_tests {
     use tokio::{task, time};
 
     use super::{LineItem, TreeAnswer, TreeRead, Watcher};
-    use crate::events::{EventHub, PageEvent, WatcherProgress};
+    use crate::events::{EventHub, EventScope, PageEvent, WatcherProgress};
     use crate::snapshot::SnapshotBaselines;
     use crate::target_crashes::TargetCrashes;
 
@@ -4666,7 +4705,7 @@ mod crash_tests {
             "admission cannot wait behind renderer work or public opening"
         );
         assert_eq!(
-            watcher.progress.applied_through(),
+            watcher.progress.applied_through(&EventScope::Every),
             0,
             "presentation still respects the held event"
         );
@@ -4867,7 +4906,9 @@ mod seed_tests {
         TREE_READ_WAIT, Watcher, WatcherRequest,
     };
     use crate::DownloadState;
-    use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
+    use crate::events::{
+        EventHub, EventScope, PageEvent, PageEventKind, Subscription, WatcherProgress,
+    };
     use crate::run_state::RunState;
     use crate::snapshot::SnapshotBaselines;
     use crate::world::FrameAttachLog;
@@ -5058,7 +5099,7 @@ mod seed_tests {
             Vec::<String>::new(),
             "the DOMContentLoaded waits for the second read, and the rest behind it"
         );
-        assert_eq!(watcher.progress.applied_through(), 1);
+        assert_eq!(watcher.progress.applied_through(&EventScope::Every), 1);
 
         answer_next(&mut watcher, &mut answers).await?;
         assert_eq!(
@@ -5070,8 +5111,111 @@ mod seed_tests {
             ],
             "in the tab's own order"
         );
-        assert_eq!(watcher.progress.applied_through(), 4);
+        assert_eq!(watcher.progress.applied_through(&EventScope::Every), 4);
         assert!(watcher.lines.is_empty());
+        Ok(())
+    }
+
+    /// A reply waits only for the held events of the tabs it names: one tab's events held behind
+    /// its tree read hold neither another tab's records nor that tab's reply, while a reply that
+    /// names the busy tab, or every tab, still waits for them.
+    #[tokio::test(start_paused = true)]
+    async fn a_reply_for_one_tab_is_not_held_by_another_tabs_line() -> TestResult {
+        let connection = TestConnection::new([
+            ("Page.getFrameTree", cdp_pending()),
+            ("Page.getFrameTree", tree("quiet", "https://a.test/")),
+        ]);
+        let (hub, mut watcher, mut answers) = watcher(&connection);
+        read(&mut watcher, page_attached("busy-page", "busy")).await;
+        read(&mut watcher, page_attached("quiet-page", "quiet")).await;
+        answer_next(&mut watcher, &mut answers).await?;
+        assert!(
+            watcher.lines.contains_key(&TargetId("busy".to_owned()))
+                && !watcher.lines.contains_key(&TargetId("quiet".to_owned())),
+            "only the busy tab's read is still out"
+        );
+        for tab in ["busy", "quiet"] {
+            read(
+                &mut watcher,
+                on(
+                    &format!("{tab}-page"),
+                    "Page.frameAttached",
+                    json!({ "frameId": format!("{tab}-child"), "parentFrameId": tab }),
+                ),
+            )
+            .await;
+        }
+        let fence = EventFence(watcher.progress.events_handled());
+        let tabs = |name: &str| EventScope::Tabs(vec![TargetId(name.to_owned())]);
+        let mut replies = Vec::new();
+        for scope in [tabs("quiet"), tabs("busy"), EventScope::Every] {
+            let (done, answered) = oneshot::channel();
+            watcher.deferred.push(WatcherRequest {
+                closed: None,
+                handed_back: None,
+                fence,
+                scope,
+                done,
+            });
+            replies.push(answered);
+        }
+        watcher.answer_deferred();
+        let [quiet, busy, every] = &mut replies[..] else {
+            return Err("three replies".into());
+        };
+        assert!(quiet.try_recv().is_ok(), "the quiet tab's reply goes on");
+        assert!(
+            busy.try_recv().is_err(),
+            "the busy tab's reply waits for its held attach"
+        );
+        assert!(every.try_recv().is_err(), "so does a reply on every tab");
+        assert_eq!(
+            records(&hub),
+            ["frameattached quiet-child"],
+            "the quiet tab's attach is in the log, the busy tab's is not yet"
+        );
+        Ok(())
+    }
+
+    /// A tab that opened only to download records its download on its opener (`download`), from
+    /// the popup's own line, so while the popup waits to be reported its held events hold a
+    /// reply on the opener too, and still none on another tab.
+    #[tokio::test(start_paused = true)]
+    async fn a_popup_waiting_to_be_reported_holds_its_openers_reply() -> TestResult {
+        let connection = TestConnection::new([("Page.getFrameTree", cdp_pending())]);
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        read(
+            &mut watcher,
+            CdpEvent {
+                method: "Target.targetCreated".to_owned(),
+                params: json!({ "targetInfo": { "targetId": "popup", "type": "page", "url": "",
+                    "openerId": "opener" } }),
+                session_id: None,
+            },
+        )
+        .await;
+        read(&mut watcher, page_attached("popup-page", "popup")).await;
+        read(
+            &mut watcher,
+            on(
+                "popup-page",
+                "Page.frameAttached",
+                json!({ "frameId": "popup-child", "parentFrameId": "popup" }),
+            ),
+        )
+        .await;
+        let read_so_far = watcher.progress.events_handled();
+        let on_tab = |name: &str| EventScope::Tabs(vec![TargetId(name.to_owned())]);
+        assert!(
+            watcher.progress.applied_through(&on_tab("opener")) < read_so_far,
+            "the popup's held attach holds its opener"
+        );
+        assert!(watcher.progress.applied_through(&on_tab("popup")) < read_so_far);
+        assert_eq!(
+            watcher.progress.applied_through(&on_tab("elsewhere")),
+            read_so_far,
+            "and no other tab"
+        );
         Ok(())
     }
 
@@ -5103,6 +5247,7 @@ mod seed_tests {
                 closed: None,
                 handed_back: None,
                 fence: EventFence(read_so_far),
+                scope: EventScope::Every,
                 done,
             });
             watcher.answer_deferred();
@@ -5113,7 +5258,11 @@ mod seed_tests {
 
             answer_next(&mut watcher, &mut answers).await?;
             assert!(watcher.lines.is_empty(), "{tab}: the line is gone");
-            assert_eq!(watcher.progress.applied_through(), read_so_far, "{tab}");
+            assert_eq!(
+                watcher.progress.applied_through(&EventScope::Every),
+                read_so_far,
+                "{tab}"
+            );
             assert!(answered.try_recv().is_ok(), "{tab}: the reply goes on");
             assert!(
                 records(&hub).contains(&format!("frameattached {child}")),
@@ -5156,7 +5305,7 @@ mod seed_tests {
             "the other tab's event is in the log; the busy tab's waits for its read"
         );
         assert_eq!(
-            watcher.progress.applied_through(),
+            watcher.progress.applied_through(&EventScope::Every),
             1,
             "only the busy tab's own event is held"
         );
@@ -5187,14 +5336,14 @@ mod seed_tests {
             "it waits for the read it started"
         );
         assert_eq!(
-            watcher.progress.applied_through(),
+            watcher.progress.applied_through(&EventScope::Every),
             1,
             "and keeps its place in the log"
         );
 
         answer_next(&mut watcher, &mut answers).await?;
         assert_eq!(records(&hub), ["load https://a.test/"]);
-        assert_eq!(watcher.progress.applied_through(), 2);
+        assert_eq!(watcher.progress.applied_through(&EventScope::Every), 2);
         assert_eq!(
             tree_reads(&connection, "page")?,
             2,
@@ -5322,7 +5471,7 @@ mod seed_tests {
             "it waits"
         );
         assert_eq!(
-            watcher.progress.applied_through(),
+            watcher.progress.applied_through(&EventScope::Every),
             1,
             "its place in the log is held"
         );
@@ -5330,7 +5479,7 @@ mod seed_tests {
         answer(&mut watcher, "page", tree_with("tab", Some("child"))).await;
         assert_eq!(download_pages(&hub), [Some("tab".to_owned())]);
         assert!(completed(&hub), "its completion followed it");
-        assert_eq!(watcher.progress.applied_through(), 3);
+        assert_eq!(watcher.progress.applied_through(&EventScope::Every), 3);
         Ok(())
     }
 
@@ -5349,7 +5498,7 @@ mod seed_tests {
         assert_eq!(download_pages(&hub), [None]);
         assert!(completed(&hub), "its completion followed it");
         assert!(watcher.unowned_downloads.is_empty() && watcher.lines.is_empty());
-        assert_eq!(watcher.progress.applied_through(), 3);
+        assert_eq!(watcher.progress.applied_through(&EventScope::Every), 3);
         Ok(())
     }
 
@@ -5390,7 +5539,7 @@ mod seed_tests {
         }
         assert_eq!(download_pages(&hub), [None]);
         assert!(completed(&hub));
-        assert_eq!(watcher.progress.applied_through(), 2);
+        assert_eq!(watcher.progress.applied_through(&EventScope::Every), 2);
         Ok(())
     }
 
@@ -5466,7 +5615,7 @@ mod seed_tests {
             "it waits behind the older event"
         );
         assert_eq!(
-            watcher.progress.applied_through(),
+            watcher.progress.applied_through(&EventScope::Every),
             2,
             "the older event is held"
         );
@@ -5520,7 +5669,7 @@ mod seed_tests {
             "the frame's read is still out"
         );
         assert_eq!(
-            watcher.progress.applied_through(),
+            watcher.progress.applied_through(&EventScope::Every),
             4,
             "nothing of t is held"
         );
@@ -6003,7 +6152,11 @@ mod seed_tests {
             Vec::<Option<String>>::new(),
             "it waits for the read"
         );
-        assert_eq!(watcher.progress.applied_through(), 2, "its place is held");
+        assert_eq!(
+            watcher.progress.applied_through(&EventScope::Every),
+            2,
+            "its place is held"
+        );
 
         watcher.discover(false).await?;
         assert_eq!(tab_records(&hub), ["opened tab", "closed tab"]);
@@ -6027,7 +6180,11 @@ mod seed_tests {
         );
         assert!(completed(&hub), "its completion followed it");
         assert!(watcher.unowned_downloads.is_empty() && watcher.lines.is_empty());
-        assert_eq!(watcher.progress.applied_through(), 4, "the hold moved on");
+        assert_eq!(
+            watcher.progress.applied_through(&EventScope::Every),
+            4,
+            "the hold moved on"
+        );
         Ok(())
     }
 

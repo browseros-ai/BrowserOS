@@ -17,7 +17,7 @@ use tokio::time;
 use crate::events::event_hub::LOG_CAPACITY;
 use crate::events::log_lease::ReportingLease;
 use crate::events::page_event::BindingCalled;
-use crate::events::{ListenerKey, PageEventKind, Subscription};
+use crate::events::{EventScope, ListenerKey, PageEventKind, Subscription};
 
 /// How long an op ending with events still unread waits for a pump to start, when none is in
 /// flight: the prelude calls the next `events.next` as soon as it handled the last, so a pump
@@ -383,6 +383,26 @@ impl RunEvents {
         !self.lock().listening.is_empty()
     }
 
+    /// Whose held events this run's listeners could still receive: the pages they listen on,
+    /// or every tab once one listens on the context ([`Subscription::held_scope`]). An op waits
+    /// for these before its reply, so a busy tab nobody listens on never holds it.
+    pub(crate) fn listened_scope(&self) -> EventScope {
+        let mut tabs = Vec::new();
+        for subscription in self.lock().listening.keys() {
+            match subscription.held_scope() {
+                EventScope::Every => return EventScope::Every,
+                EventScope::Tabs(targets) => {
+                    for target in targets {
+                        if !tabs.contains(&target) {
+                            tabs.push(target);
+                        }
+                    }
+                }
+            }
+        }
+        EventScope::Tabs(tabs)
+    }
+
     /// Returns once the pump read every listener past log seq `head` and took every queued
     /// binding call (calls wait in their own queue, not the log), so whatever it found is on its
     /// way to the script ahead of anything that ends later. With no pump in flight it waits
@@ -428,7 +448,7 @@ mod tests {
 
     use super::{PUMP_GRACE, QueuedCall, RunEvents};
     use crate::events::page_event::BindingCalled;
-    use crate::events::{ListenerKey, PageEventKind, Subscription};
+    use crate::events::{EventScope, ListenerKey, PageEventKind, Subscription};
 
     fn dialogs(page: u32, target: &str) -> Subscription {
         Subscription::Page {
@@ -436,6 +456,37 @@ mod tests {
             target: TargetId(target.to_owned()),
             event: PageEventKind::Dialog,
         }
+    }
+
+    /// An op waits before its reply for the held events of the pages the run listens on, and
+    /// of every tab once it listens on the context, whose listeners hear every tab.
+    #[test]
+    fn tests_that_the_listened_scope_names_the_listened_pages_or_every_tab() {
+        let events = RunEvents::default();
+        assert_eq!(events.listened_scope(), EventScope::Tabs(Vec::new()));
+        events.listen(dialogs(1, "A"), 0, 0);
+        events.listen(dialogs(2, "B"), 0, 0);
+        events.listen(
+            Subscription::Page {
+                tab: TabId(1),
+                target: TargetId("A".to_owned()),
+                event: PageEventKind::Console,
+            },
+            0,
+            0,
+        );
+        let mut tabs = match events.listened_scope() {
+            EventScope::Tabs(tabs) => tabs,
+            EventScope::Every => Vec::new(),
+        };
+        tabs.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(tabs, [TargetId("A".to_owned()), TargetId("B".to_owned())]);
+        events.listen(Subscription::Context(PageEventKind::Load), 0, 0);
+        assert_eq!(
+            events.listened_scope(),
+            EventScope::Every,
+            "a context listener hears every tab"
+        );
     }
 
     #[test]

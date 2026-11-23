@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::{task, time};
 
-use crate::events::EventFence;
+use crate::events::{EventFence, EventScope};
 use crate::op_scope::OpScope;
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::target::CallHeader;
@@ -149,7 +149,7 @@ fn renderer_commands<S: TabScript>(tab: &ScriptedTab<S>) -> Vec<String> {
 async fn settle_watcher(run: &ScriptedRun) -> TestResult {
     assert!(
         run.playwright
-            .synchronize_events(run.playwright.event_fence())
+            .synchronize_events(run.playwright.event_fence(), &EventScope::Every)
             .await,
         "the watcher must finish discovery before command deltas are measured"
     );
@@ -214,9 +214,14 @@ async fn crash_event(run: &ScriptedRun, tab: &ScriptedTab<CrashedTab>) -> TestRe
         fence > before,
         "the connection must forward the crash event"
     );
-    assert!(run.playwright.synchronize_events(fence).await);
     assert!(
-        run.playwright.events_handled_through(fence),
+        run.playwright
+            .synchronize_events(fence, &EventScope::Every)
+            .await
+    );
+    assert!(
+        run.playwright
+            .events_handled_through(fence, &EventScope::Every),
         "a held frame-tree event is not yet an observed crash"
     );
     Ok(())

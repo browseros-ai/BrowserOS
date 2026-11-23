@@ -11,8 +11,8 @@ use tokio::time;
 use crate::action::action_op;
 use crate::events::tab_frames::TabFrameList;
 use crate::events::{
-    BINDING_CALLED, EventFence, EventHub, Fence, TargetWatcher, WatcherHandle, WatcherProgress,
-    event_op,
+    BINDING_CALLED, EventFence, EventHub, EventScope, Fence, TargetWatcher, WatcherHandle,
+    WatcherProgress, event_op,
 };
 use crate::expect::expect_op;
 use crate::input::input_op;
@@ -147,10 +147,26 @@ impl Playwright {
     }
 
     /// Brings the independent event watcher up to `fence` (every event received before it was
-    /// taken) and the leases in line with who listens, waiting at most 2 s. Whether the watcher
-    /// answered in time: `false` means it is still behind `fence`.
-    pub async fn synchronize_events(&self, fence: EventFence) -> bool {
-        self.watcher.synchronize(None, fence).await
+    /// taken), with none of `scope`'s events held back, and the leases in line with who listens,
+    /// waiting at most 2 s. Whether the watcher answered in time: `false` means it is still
+    /// behind `fence` for `scope`.
+    pub async fn synchronize_events(&self, fence: EventFence, scope: &EventScope) -> bool {
+        self.watcher.synchronize(None, fence, scope.clone()).await
+    }
+
+    /// The event scope of `tabs`: their current targets, so a wait covers their held events and
+    /// not another tab's ([`EventScope::Tabs`]). A tab core's registry does not list, not yet (a
+    /// popup whose line the watcher holds before core has it) or no longer, has no target to wait
+    /// for and is left out: its held events do not hold this wait, and the next reply that reads
+    /// it catches up with them.
+    pub async fn tab_scope(&self, tabs: &[TabId]) -> EventScope {
+        let mut targets = Vec::with_capacity(tabs.len());
+        for &tab in tabs {
+            if let Some(info) = self.browser.pages.get_info_by_tab(tab).await {
+                targets.push(info.target_id);
+            }
+        }
+        EventScope::Tabs(targets)
     }
 
     /// The host stopped keeping `target`'s tab for itself (`OpEnv::hides_tab` reads false
@@ -162,11 +178,11 @@ impl Playwright {
         self.watcher.hand_back(target, url).await
     }
 
-    /// Whether every event before `fence` is in the log, without waiting: read by the watcher
-    /// and none of them held back in a tab's line.
+    /// Whether every event before `fence` is in the log for `scope`, without waiting: read by
+    /// the watcher and none of `scope`'s held back in a tab's line.
     #[must_use]
-    pub fn events_handled_through(&self, fence: EventFence) -> bool {
-        self.progress.applied_through() >= fence.0
+    pub fn events_handled_through(&self, fence: EventFence, scope: &EventScope) -> bool {
+        self.progress.applied_through(scope) >= fence.0
     }
 
     /// A handle on the event watcher for what outlives an op (`events::log_lease`).
@@ -178,8 +194,9 @@ impl Playwright {
     /// must reject before the native renderer's eventual protocol shutdown.
     pub(crate) async fn workers_closed(&self, target: TargetId) {
         self.crashes.confirmed_closed(&target);
+        let scope = EventScope::Tabs(vec![target.clone()]);
         self.watcher
-            .synchronize(Some(target), self.watcher.fence())
+            .synchronize(Some(target), self.watcher.fence(), scope)
             .await;
     }
 
@@ -351,8 +368,10 @@ impl Playwright {
             events: self.browser.cdp_events_broadcast(),
             calls: self.browser.cdp_events_targeted_delivered(BINDING_CALLED),
         };
+        // Only the listened tabs' held events: the pump reads nothing of another tab's.
+        let listened = run.events.listened_scope();
         let ordered = async {
-            self.progress.reached(fence).await;
+            self.progress.reached(fence, &listened).await;
             run.events.taken_through(self.events.head()).await;
         };
         let _bounded = time::timeout(bound, ordered).await;
@@ -394,9 +413,35 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::time;
 
+    use browseros_core::{TabId, TargetId};
+
     use super::Playwright;
+    use crate::events::EventScope;
     use crate::test_env::{self, TestEnv};
+    use crate::test_support::{
+        ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript, TestResult,
+    };
     use crate::{ErrorCode, Op, PlaywrightError, Refusal};
+
+    struct NoProbes;
+    impl TabScript for NoProbes {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+    }
+
+    /// A reply's wait names the tabs it reads by their current targets, so it covers their held
+    /// events and no other tab's; a tab the browser does not list has no target to wait for.
+    #[tokio::test]
+    async fn tests_that_a_tab_scope_names_each_listed_tabs_target() -> TestResult {
+        let tab = ScriptedTab::new(NoProbes);
+        let run = ScriptedRun::over(&tab).await?;
+        assert_eq!(
+            run.playwright.tab_scope(&[TabId(7), TabId(404)]).await,
+            EventScope::Tabs(vec![TargetId(SCRIPTED_MAIN.to_owned())])
+        );
+        Ok(())
+    }
 
     /// An op either answers `not built yet` or decodes its input before it reaches the host, so
     /// an empty call names the missing field and nothing is sent or noted. The ops whose
