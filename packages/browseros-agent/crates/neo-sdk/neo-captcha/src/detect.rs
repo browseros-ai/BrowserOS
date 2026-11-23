@@ -526,8 +526,17 @@ async fn scan(
         addresses.extend(probe.addresses.into_iter().map(|url| (url, None)));
         top_url = probe.url;
     }
-    let frames =
-        partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
+    let frames_budget = deadline.saturating_duration_since(Instant::now()) / 2;
+    let frames = match partial(
+        bounded(deadline, page.scan_frames(Some(frames_budget))).await,
+        &mut complete,
+    )? {
+        Some(list) => {
+            complete &= list.complete;
+            list.frames
+        }
+        None => Vec::new(),
+    };
     let parents = partial(
         bounded(deadline, page.frame_parent_ids()).await,
         &mut complete,
@@ -1112,11 +1121,16 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome};
+    use crate::{
+        page::FrameList,
+        types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome},
+    };
 
     struct FakePage {
         main: Mutex<VecDeque<Value>>,
         frames: Vec<FrameRef>,
+        frames_complete: bool,
+        frames_error: Option<PageError>,
         frame_result: Result<Value, PageError>,
         documents: Mutex<VecDeque<DocumentId>>,
         frame_delay: Duration,
@@ -1162,6 +1176,8 @@ mod tests {
             Self {
                 main: Mutex::new(VecDeque::from([probe(widgets)])),
                 frames: vec![],
+                frames_complete: true,
+                frames_error: None,
                 frame_result: Ok(probe(json!([]))),
                 documents: Mutex::new(VecDeque::from([document("a")])),
                 frame_delay: Duration::ZERO,
@@ -1233,7 +1249,17 @@ mod tests {
 
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
             tokio::time::sleep(self.frame_delay).await;
+            if let Some(error) = &self.frames_error {
+                return Err(error.clone());
+            }
             Ok(self.frames.clone())
+        }
+
+        async fn scan_frames(&self, _budget: Option<Duration>) -> Result<FrameList, PageError> {
+            Ok(FrameList {
+                frames: self.frames().await?,
+                complete: self.frames_complete,
+            })
         }
 
         async fn frame_parent_ids(
@@ -3339,6 +3365,9 @@ console.log(JSON.stringify(scan([], false)));
             async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
                 self.0.frames().await
             }
+            async fn scan_frames(&self, budget: Option<Duration>) -> Result<FrameList, PageError> {
+                self.0.scan_frames(budget).await
+            }
             async fn frame_parent_ids(
                 &self,
             ) -> Result<std::collections::HashMap<String, String>, PageError> {
@@ -3807,6 +3836,189 @@ roots.push(el('div', {{id: 'box'}}, [
                 );
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_incomplete_frame_scan_preserves_active_recaptcha_and_never_claims_none()
+    -> anyhow::Result<()> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        use browseros_core::PageId;
+        use tokio_util::sync::CancellationToken;
+
+        use crate::{
+            CaptchaSolver, SolveCtx, SolveDriver,
+            config::CaptchaConfig,
+            events::CaptchaEventBus,
+            providers::{CaptchaBackend, ProviderChain},
+            types::{Attempts, FlowResult, SolveMethod, SolveReason, SolveStatus},
+        };
+
+        struct SolverPage<'a>(&'a FakePage);
+        impl CaptchaPage for SolverPage<'_> {
+            async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+                if expression == "navigator.userAgent" {
+                    return Ok(json!("fake-agent"));
+                }
+                self.0.eval_main(expression).await
+            }
+            async fn scan_dom(
+                &self,
+                frame: Option<&FrameRef>,
+                function: &str,
+            ) -> Result<Value, PageError> {
+                self.0.scan_dom(frame, function).await
+            }
+            async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
+                self.0.frames().await
+            }
+            async fn scan_frames(&self, budget: Option<Duration>) -> Result<FrameList, PageError> {
+                self.0.scan_frames(budget).await
+            }
+            async fn frame_parent_ids(
+                &self,
+            ) -> Result<std::collections::HashMap<String, String>, PageError> {
+                self.0.frame_parent_ids().await
+            }
+            async fn eval_in_frame(
+                &self,
+                frame: &FrameRef,
+                expression: &str,
+            ) -> Result<Value, PageError> {
+                self.0.eval_in_frame(frame, expression).await
+            }
+            async fn eval_in_frame_main(
+                &self,
+                frame: &FrameRef,
+                expression: &str,
+            ) -> Result<Value, PageError> {
+                self.0.eval_in_frame_main(frame, expression).await
+            }
+            async fn document(&self) -> Result<DocumentId, PageError> {
+                self.0.document().await
+            }
+            async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
+                self.0.click_at(x, y).await
+            }
+            async fn screenshot_clip(&self, rect: Rect) -> Result<String, PageError> {
+                self.0.screenshot_clip(rect).await
+            }
+            async fn query_rect_in_frame(
+                &self,
+                frame: &FrameRef,
+                selector: &str,
+            ) -> Result<Option<Rect>, PageError> {
+                self.0.query_rect_in_frame(frame, selector).await
+            }
+        }
+
+        struct RecordingDriver {
+            solve_calls: AtomicU32,
+        }
+        impl SolveDriver for RecordingDriver {
+            async fn detect<P: CaptchaPage>(&self, page: &P) -> Result<Detection, PageError> {
+                detect(page, Duration::from_secs(2)).await
+            }
+            async fn solve<P: CaptchaPage, B: CaptchaBackend>(
+                &self,
+                _: &SolveCtx<'_, P, B>,
+                challenge: &Challenge,
+            ) -> FlowResult {
+                self.solve_calls.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(challenge.kind, CaptchaKind::RecaptchaV2);
+                assert_eq!(challenge.state, ChallengeState::Active);
+                FlowResult {
+                    status: SolveStatus::Solved,
+                    method: SolveMethod::Checkbox,
+                    reason: SolveReason::CheckboxPassed,
+                    attempts: Attempts {
+                        checkbox: 1,
+                        ..Default::default()
+                    },
+                    paid_tasks: 0,
+                    provider: None,
+                    cost_usd: 0.0,
+                    callback_ran: false,
+                    message: "solved".into(),
+                }
+            }
+        }
+
+        let service = CaptchaSolver {
+            providers: ProviderChain::new(&CaptchaConfig::default()),
+            reservations: Default::default(),
+            events: CaptchaEventBus::new(),
+            forced_method: None,
+        };
+
+        // 1. Partial frame scan + readable active reCAPTCHA -> Active detected, complete == false,
+        //    and CaptchaSolver solves it instead of returning ScanIncomplete.
+        let mut active_page = FakePage::recaptcha(false);
+        active_page.frames_complete = false;
+        let detection = scan(&active_page).await?;
+        assert!(!detection.complete);
+        assert_eq!(detection.outcome, ScanOutcome::Detected);
+        assert_eq!(detection.challenges.len(), 1);
+        assert_eq!(detection.challenges[0].kind, CaptchaKind::RecaptchaV2);
+        assert_eq!(detection.challenges[0].state, ChallengeState::Active);
+
+        let driver = RecordingDriver {
+            solve_calls: AtomicU32::new(0),
+        };
+        let outcome = service
+            .solve_with(
+                &SolverPage(&active_page),
+                PageId(1),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(2),
+                &driver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(driver.solve_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            (outcome.status, outcome.reason),
+            (SolveStatus::Solved, SolveReason::CheckboxPassed)
+        );
+
+        // 2. Partial frame scan + no CAPTCHA -> complete == false, ScanOutcome::Unknown, and
+        //    CaptchaSolver returns ScanIncomplete (never NoCaptcha).
+        let mut empty_page = FakePage::new(json!([]));
+        empty_page.frames_complete = false;
+        let detection = scan(&empty_page).await?;
+        assert!(!detection.complete);
+        assert_eq!(detection.outcome, ScanOutcome::Unknown);
+        assert!(detection.challenges.is_empty());
+
+        let empty_driver = RecordingDriver {
+            solve_calls: AtomicU32::new(0),
+        };
+        let empty_outcome = service
+            .solve_with(
+                &SolverPage(&empty_page),
+                PageId(2),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(2),
+                &empty_driver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(empty_driver.solve_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            (empty_outcome.status, empty_outcome.reason),
+            (SolveStatus::Failed, SolveReason::ScanIncomplete)
+        );
+
+        // 3. Fatal errors from `scan_frames` still abort detection immediately.
+        for fatal in [PageError::Closed, PageError::Cancelled] {
+            let mut fatal_page = FakePage::new(json!([]));
+            fatal_page.frames_error = Some(fatal.clone());
+            assert_eq!(scan(&fatal_page).await, Err(fatal));
+        }
+
         Ok(())
     }
 }
