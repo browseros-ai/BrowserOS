@@ -55,7 +55,7 @@ test('the feeder against the stand-in, spans mode: one run, its eight ops from s
   expect(trace?.spans).toHaveLength(9)
   const { metrics } = await get<MetricsResponse>(apiRoutes.metrics)
   expect(metrics?.source).toBe('push')
-  expect(metrics?.families).toHaveLength(11)
+  expect(metrics?.families).toHaveLength(16)
 })
 
 test('the feeder against the stand-in, host mode: the op table is the host record, the health the scrape', async () => {

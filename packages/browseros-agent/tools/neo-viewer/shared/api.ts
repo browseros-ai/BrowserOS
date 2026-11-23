@@ -467,6 +467,23 @@ export interface MetricsView {
     lifetime: Quantiles
   }
   crashes: number
+  /** `neo_navigations_total` and `neo_navigation_errors_total`. */
+  navigations: {
+    total: number
+    /** By HTTP status (`status_code`); `none` for a navigation that read no status. */
+    byStatus: Record<string, number>
+    /** The ones the network refused, by Chromium's net error (`error_code`). */
+    errors: Record<string, number>
+  }
+  /** `neo_captcha_solves_total`, `neo_captcha_reasons_total` and `neo_captcha_spend_usd_total`. */
+  captchas: {
+    total: number
+    /** Solves by the CAPTCHA found and how they ended, most first. */
+    solves: Array<{ family: string; verdict: string; count: number }>
+    byReason: Record<string, number>
+    /** What providers charged, in US dollars, by provider. */
+    spendUsd: Record<string, number>
+  }
   /** Every metric family as received, unknown ones included: the "raw" view. */
   families: MetricFamily[]
 }

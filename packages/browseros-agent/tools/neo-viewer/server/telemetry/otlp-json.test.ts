@@ -252,7 +252,7 @@ describe('OTLP JSON spans', () => {
 })
 
 describe('OTLP JSON metrics', () => {
-  test("the fixture's 11 metrics decode to the families Prometheus text gives", () => {
+  test("the fixture's 16 metrics decode to the families Prometheus text gives", () => {
     const { items, rejected } = decodeMetrics(fixtureMetrics(3))
     expect(rejected).toBe(0)
     expect(items).toEqual(fixtureFamilies(3))
@@ -287,6 +287,14 @@ describe('OTLP JSON metrics', () => {
                 ]),
                 counter('neo.errors', ['neo.error.owner', 'error.type']),
                 counter('neo.runs', ['neo.run.status', 'neo.error.owner']),
+                counter('neo.navigations', ['http.response.status_code']),
+                counter('neo.navigation.errors', ['error.type']),
+                counter('neo.captcha.solves', [
+                  'neo.captcha.family',
+                  'neo.captcha.verdict',
+                ]),
+                counter('neo.captcha.reasons', ['neo.captcha.reason']),
+                counter('neo.captcha.spend', ['neo.captcha.provider']),
                 counter('other.requests', ['error.type']),
               ],
             },
@@ -303,6 +311,11 @@ describe('OTLP JSON metrics', () => {
       ['neo_operations_total', ['op', 'status', 'error_owner']],
       ['neo_errors_total', ['error_owner', 'error_code']],
       ['neo_runs_total', ['status', 'error_owner']],
+      ['neo_navigations_total', ['status_code']],
+      ['neo_navigation_errors_total', ['error_code']],
+      ['neo_captcha_solves_total', ['family', 'verdict']],
+      ['neo_captcha_reasons_total', ['reason']],
+      ['neo_captcha_spend_usd_total', ['provider']],
       ['other.requests', ['error.type']],
     ])
   })

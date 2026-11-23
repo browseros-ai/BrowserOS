@@ -101,6 +101,20 @@ export function metricsView(): MetricsView {
       lifetime: quantiles(Array(8).fill(42), 10, 10),
     },
     crashes: 0,
+    navigations: {
+      total: 12,
+      byStatus: { '200': 9, '404': 1, none: 2 },
+      errors: { name_not_resolved: 1 },
+    },
+    captchas: {
+      total: 3,
+      solves: [
+        { family: 'turnstile', verdict: 'solved', count: 2 },
+        { family: 'perimeterx', verdict: 'unsupported', count: 1 },
+      ],
+      byReason: { checkbox_passed: 2, unsupported_type: 1 },
+      spendUsd: { capsolver: 0.0012 },
+    },
     families: [
       {
         name: 'neo_runs_total',

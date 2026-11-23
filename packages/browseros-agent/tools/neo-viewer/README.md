@@ -132,9 +132,11 @@ The page at `/` (the approved design, "Viewer C v2"):
   the strip and the sidebar keep streaming; **← Runs** or Escape go back to the runs as they
   were): runs by status, each operation's calls, failures, p50 and p95 with its duration
   histogram (one column per bucket of Neo's own bounds, so reading down shows which op is slow),
-  errors by owner and code, tabs open and opened by origin and closed by reason with their
-  lifetimes, renderer crashes, and every metric family in Prometheus' text form, folded. These
-  counts are Neo's own since it started.
+  navigations by HTTP status (a 4xx or 5xx in red, though its goto settled ok) and the ones the
+  network refused by net error, CAPTCHA solves by family and verdict, by reason and what
+  providers charged, errors by owner and code, tabs open and opened by origin and closed by reason
+  with their lifetimes, renderer crashes, and every metric family in Prometheus' text form,
+  folded. These counts are Neo's own since it started.
 - **Where the time went.** The wall clock since the last Clear, from the first call to the last
   reply (to now while a run is running): each run sits where it happened, its time in Neo in blue
   (red if it failed, amber while running) after a grey sliver for the time the viewer held the call.
@@ -345,7 +347,7 @@ the display, takeovers). `bun run neo:viewer` configures it with the container i
 
 ## Neo's telemetry
 
-Neo emits OpenTelemetry (wire-contract: 11 metrics, a `neo.run` span per run and a span per
+Neo emits OpenTelemetry (wire-contract: 16 metrics, a `neo.run` span per run and a span per
 operation, named after the operation: `page.goto`, or `unknown` for a name Neo does not serve). The
 viewer tells the two apart by `neo.span.type` (`run` or `op`), never by name, and reads both of
 Neo's doors with no protobuf library (`server/telemetry/`, one module behind `startTelemetry`):
@@ -368,8 +370,9 @@ Neo's doors with no protobuf library (`server/telemetry/`, one module behind `st
   labels (`neo_run_duration_seconds{status}`); the push sends OpenTelemetry's (`neo.run.duration`
   with `neo.run.status`, `error.type` for an error code). The viewer files a pushed metric under its
   scrape name (`otlp-names.ts`), so the health bar, the Health view and an export read one set of
-  names, and push alone (`--upstream`) shows the same numbers. An operation's source line arrives as
-  `code.line.number` and `code.column.number`.
+  names, and push alone (`--upstream`) shows the same numbers. A navigation's HTTP status arrives
+  as the integer `http.response.status_code` and is filed as `status_code`. An operation's source
+  line arrives as `code.line.number` and `code.column.number`.
 - **Which numbers**: the scrape while it is at most 10 s old, else the push while it is, else none;
   never blended (both read one meter provider). Health (`TelemetryHealth`: runs in flight, tabs
   open, and counts since the last Clear with Neo restarts handled) goes to the page as an
@@ -389,7 +392,7 @@ Neo's doors with no protobuf library (`server/telemetry/`, one module behind `st
 
 `bun server/telemetry/feed-fixture.ts serve` starts a stand-in Neo (MCP and host API) and
 `… feed --viewer <url>` sends one run through a viewer and then, as Neo would, its spans (eight
-operations, one failed) and the 11 metrics: telemetry to build the page against before Neo emits any.
+operations, one failed) and the 16 metrics: telemetry to build the page against before Neo emits any.
 
 ## How the live screen works
 

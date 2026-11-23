@@ -538,7 +538,7 @@ describe("Neo's metrics in an export", () => {
       metrics: { runs: { total: 6 }, crashes: 0 },
       history: [{ runs: 4 }],
     })
-    expect(summary.families).toHaveLength(11)
+    expect(summary.families).toHaveLength(16)
     const readme = await readFile(join(written.dir, 'README.md'), 'utf8')
     expect(readme).toContain('## Neo metrics')
     expect(readme).toContain('`metrics/summary.json`, `metrics/metrics.prom`')

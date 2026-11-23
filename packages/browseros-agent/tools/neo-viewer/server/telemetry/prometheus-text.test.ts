@@ -156,9 +156,9 @@ describe('OpenMetrics extras are tolerated', () => {
   })
 })
 
-test("rendered text parses back to the same families (the fixture's 11 metrics)", () => {
+test("rendered text parses back to the same families (the fixture's 16 metrics)", () => {
   const families = fixtureFamilies(2)
-  expect(families).toHaveLength(11)
+  expect(families).toHaveLength(16)
   const parsed = parsePrometheus(fixturePrometheus(2))
   expect(parsed).toEqual(families)
   expect(renderPrometheus(parsed)).toBe(fixturePrometheus(2))

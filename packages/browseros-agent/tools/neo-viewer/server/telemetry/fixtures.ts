@@ -1,6 +1,6 @@
 /**
  * Neo's telemetry for one realistic run, as Neo emits it (wire-contract.md): a `neo.run` span and
- * eight operation spans, each named after its op (one nested in another, one failed), the 11
+ * eight operation spans, each named after its op (one nested in another, one failed), the 16
  * metrics as Prometheus text and as OTLP JSON, and the matching `GET /v1/runs/{id}` record. The tests and the feeder
  * (`feed-fixture.ts`) both use it, so what the page is built against is what the tests check.
  *
@@ -192,7 +192,7 @@ export function fixtureHostRun(run: FixtureRun) {
 const BOUNDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
 
 /**
- * All 11 metrics, cumulative. `step` moves them on as time does (each step one more run and its
+ * All 16 metrics, cumulative. `step` moves them on as time does (each step one more run and its
  * operations), so a feeder pushing every 500 ms shows the page live numbers.
  */
 export function fixtureFamilies(step = 0): MetricFamily[] {
@@ -274,6 +274,30 @@ export function fixtureFamilies(step = 0): MetricFamily[] {
       [{ origin: 'agent', close_reason: 'script' }, Array(1 + step).fill(42)],
     ]),
     counter('neo_renderer_crashes_total', 'Renderer crashes.', [[{}, 0]]),
+    counter('neo_navigations_total', 'Navigations, by HTTP status.', [
+      [{ status_code: '200' }, runs],
+      [{ status_code: '404' }, 1],
+      [{}, 1],
+    ]),
+    counter('neo_navigation_errors_total', 'Navigations the network refused.', [
+      [{ error_code: 'name_not_resolved' }, 1],
+    ]),
+    counter(
+      'neo_captcha_solves_total',
+      'CAPTCHA solves, by family and verdict.',
+      [
+        [{ family: 'turnstile', verdict: 'solved' }, 2],
+        [{ family: 'perimeterx', verdict: 'unsupported' }, 1],
+      ],
+    ),
+    counter('neo_captcha_reasons_total', 'CAPTCHA solves, by reason.', [
+      [{ reason: 'checkbox_passed' }, 1],
+      [{ reason: 'token_accepted' }, 1],
+      [{ reason: 'unsupported_type' }, 1],
+    ]),
+    counter('neo_captcha_spend_usd_total', 'CAPTCHA spend, by provider.', [
+      [{ provider: 'capsolver' }, 0.0012],
+    ]),
   ]
 }
 
@@ -298,6 +322,14 @@ const PUSHED: Record<string, { name: string; unit: string }> = {
   neo_tabs_closed_total: { name: 'neo.tab.closed', unit: '{tab}' },
   neo_tab_lifetime_seconds: { name: 'neo.tab.duration', unit: 's' },
   neo_renderer_crashes_total: { name: 'neo.renderer.crashes', unit: '{crash}' },
+  neo_navigations_total: { name: 'neo.navigations', unit: '{navigation}' },
+  neo_navigation_errors_total: {
+    name: 'neo.navigation.errors',
+    unit: '{error}',
+  },
+  neo_captcha_solves_total: { name: 'neo.captcha.solves', unit: '{solve}' },
+  neo_captcha_reasons_total: { name: 'neo.captcha.reasons', unit: '{solve}' },
+  neo_captcha_spend_usd_total: { name: 'neo.captcha.spend', unit: '{USD}' },
 }
 
 /** A scrape label as Neo pushes it: the attribute key its spans use for the same value. */
@@ -312,8 +344,21 @@ function pushedKey(family: string, label: string): string {
     error_code: 'error.type',
     origin: 'neo.tab.origin',
     close_reason: 'neo.tab.close_reason',
+    status_code: 'http.response.status_code',
+    family: 'neo.captcha.family',
+    verdict: 'neo.captcha.verdict',
+    reason: 'neo.captcha.reason',
+    provider: 'neo.captcha.provider',
   }
   return keys[label] ?? label
+}
+
+/** A label as Neo pushes it: an HTTP status is the registry's int, anything else a string. */
+function pushedAttribute(family: string, label: string, value: string) {
+  const key = pushedKey(family, label)
+  return key === 'http.response.status_code'
+    ? int(key, Number(value))
+    : string(key, value)
 }
 
 /**
@@ -332,7 +377,7 @@ export function fixtureMetrics(step = 0, at = Date.now()) {
     }
     const attributes = (labels: Record<string, string>) =>
       Object.entries(labels).map(([label, value]) =>
-        string(pushedKey(family.name, label), value),
+        pushedAttribute(family.name, label, value),
       )
     if (family.kind === 'histogram')
       return {
@@ -358,11 +403,14 @@ export function fixtureMetrics(step = 0, at = Date.now()) {
           }),
         },
       }
+    // Neo's spend is its one f64 counter: a double on the wire, every other count an int.
     const points = family.series.map((series) => ({
       attributes: attributes(series.labels),
       startTimeUnixNano: start,
       timeUnixNano: time,
-      asInt: String(series.value ?? 0),
+      ...(Number.isInteger(series.value ?? 0)
+        ? { asInt: String(series.value ?? 0) }
+        : { asDouble: series.value }),
     }))
     if (family.kind === 'counter')
       return {

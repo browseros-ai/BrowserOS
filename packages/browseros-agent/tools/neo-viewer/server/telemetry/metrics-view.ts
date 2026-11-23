@@ -1,5 +1,5 @@
 /**
- * What the viewer reads out of Neo's 11 metric families (wire-contract.md "Metrics"): the few
+ * What the viewer reads out of Neo's 16 metric families (wire-contract.md "Metrics"): the few
  * numbers health is made of (`totalsOf`) and the Health view's tables (`metricsView`). Pure, and
  * the same for a scrape or a push, since both give the one `MetricFamily` model. A family that is
  * missing (an older image, or an instrument that has recorded nothing yet) counts as zero.
@@ -56,6 +56,8 @@ export function metricsView(
     ),
   }))
   operations.sort((a, b) => b.total - a.total || a.op.localeCompare(b.op))
+  const navigations = seriesOf(families, 'neo_navigations_total')
+  const solves = seriesOf(families, 'neo_captcha_solves_total')
   const errors = seriesOf(families, 'neo_errors_total')
     .map((series) => ({
       owner: series.labels.error_owner ?? '',
@@ -88,6 +90,38 @@ export function metricsView(
       lifetime: quantiles(seriesOf(families, 'neo_tab_lifetime_seconds')),
     },
     crashes: totals.crashes,
+    navigations: {
+      total: sum(navigations),
+      byStatus: sumBy(navigations, 'status_code', 'none'),
+      errors: sumBy(
+        seriesOf(families, 'neo_navigation_errors_total'),
+        'error_code',
+      ),
+    },
+    captchas: {
+      total: sum(solves),
+      solves: solves
+        .map((series) => ({
+          family: series.labels.family ?? '',
+          verdict: series.labels.verdict ?? '',
+          count: series.value ?? 0,
+        }))
+        .filter((entry) => entry.count > 0)
+        .sort(
+          (a, b) =>
+            b.count - a.count ||
+            a.family.localeCompare(b.family) ||
+            a.verdict.localeCompare(b.verdict),
+        ),
+      byReason: sumBy(
+        seriesOf(families, 'neo_captcha_reasons_total'),
+        'reason',
+      ),
+      spendUsd: sumBy(
+        seriesOf(families, 'neo_captcha_spend_usd_total'),
+        'provider',
+      ),
+    },
     families,
   }
 }
@@ -193,16 +227,26 @@ function sum(series: Series[]): number {
   return series.reduce((total, one) => total + (one.value ?? 0), 0)
 }
 
-function sumBy(series: Series[], label: string): Record<string, number> {
+/** `series` summed by `label`; a series without it is filed under `missing`. */
+function sumBy(
+  series: Series[],
+  label: string,
+  missing = '',
+): Record<string, number> {
   const out: Record<string, number> = {}
-  for (const [key, members] of groupBy(series, label)) out[key] = sum(members)
+  for (const [key, members] of groupBy(series, label, missing))
+    out[key] = sum(members)
   return out
 }
 
-function groupBy(series: Series[], label: string): Map<string, Series[]> {
+function groupBy(
+  series: Series[],
+  label: string,
+  missing = '',
+): Map<string, Series[]> {
   const groups = new Map<string, Series[]>()
   for (const one of series) {
-    const key = one.labels[label] ?? ''
+    const key = one.labels[label] ?? missing
     const group = groups.get(key)
     if (group) group.push(one)
     else groups.set(key, [one])

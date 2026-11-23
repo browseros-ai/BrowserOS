@@ -8,7 +8,7 @@
  *
  *   bun server/telemetry/feed-fixture.ts feed --viewer http://127.0.0.1:7393 [--seconds 10] [--gzip]
  *       One run through the viewer's MCP URL (the fixture's 8-line script), then, as Neo would,
- *       its spans (neo.run + 8 operations, one failed, one nested) and the 11 metrics to the viewer's
+ *       its spans (neo.run + 8 operations, one failed, one nested) and the 16 metrics to the viewer's
  *       /otlp, the metrics again every 500 ms for --seconds. `--run <viewer run id>` feeds spans
  *       for a run already in the list instead of making one.
  *

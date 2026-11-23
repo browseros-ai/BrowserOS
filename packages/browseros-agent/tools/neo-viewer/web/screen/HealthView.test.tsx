@@ -64,6 +64,50 @@ describe('the Health view', () => {
     )
   })
 
+  it('lists where navigations landed and what CAPTCHA solves did and cost', async () => {
+    await show(metricsView)
+    expect(section('Navigations').textContent).toContain('12 navigated')
+    expect(section('Navigations').textContent).toContain(
+      '1 refused by the network',
+    )
+    expect(rows('Navigations')).toEqual([
+      '200 · 9',
+      'no status · 2',
+      '404 · 1',
+      'name_not_resolved · 1',
+    ])
+    // A 404 is red though its goto settled ok; a 200 is not.
+    const [ok, , notFound] = section('Navigations').querySelectorAll('div.h-7')
+    expect(ok?.querySelector('[data-bar="failed"]')).toBeNull()
+    expect(notFound?.querySelector('[data-bar="failed"]')).not.toBeNull()
+    expect(section('CAPTCHA').textContent).toContain('3 solves')
+    expect(section('CAPTCHA').textContent).toContain('$0.0012 charged')
+    expect(rows('CAPTCHA')).toEqual([
+      'turnstile solved · 2',
+      'perimeterx unsupported · 1',
+      'checkbox_passed · 2',
+      'unsupported_type · 1',
+      'capsolver · $0.0012',
+    ])
+    const [solved, unsupported] = section('CAPTCHA').querySelectorAll('div.h-7')
+    expect(solved?.querySelector('[data-bar="failed"]')).toBeNull()
+    expect(unsupported?.querySelector('[data-bar="failed"]')).not.toBeNull()
+  })
+
+  it('says so when nothing navigated and no CAPTCHA was solved', async () => {
+    await show(() => ({
+      ...metricsView(),
+      navigations: { total: 0, byStatus: {}, errors: {} },
+      captchas: { total: 0, solves: [], byReason: {}, spendUsd: {} },
+    }))
+    expect(section('Navigations').textContent).toContain(
+      'No page has navigated since Neo started.',
+    )
+    expect(section('CAPTCHA').textContent).toContain(
+      'No CAPTCHA solve has run since Neo started.',
+    )
+  })
+
   it("draws a call count's failed share in red, and each histogram on Neo's own buckets", async () => {
     await show(metricsView)
     const click = section('Operations').querySelector('div.h-7') as Element

@@ -148,6 +148,21 @@ describe('health', () => {
     expect(view?.families.map((family) => family.name)).toContain(
       'neo_tab_lifetime_seconds',
     )
+    // The status arrives as the registry's int and the spend as a double, under their OTLP
+    // names and keys, and read as the scrape's.
+    expect(view?.navigations).toEqual({
+      total: 6,
+      byStatus: { '200': 4, '404': 1, none: 1 },
+      errors: { name_not_resolved: 1 },
+    })
+    expect(view?.captchas).toMatchObject({
+      total: 3,
+      solves: [
+        { family: 'turnstile', verdict: 'solved', count: 2 },
+        { family: 'perimeterx', verdict: 'unsupported', count: 1 },
+      ],
+      spendUsd: { capsolver: 0.0012 },
+    })
   })
 
   test('the scrape wins while live; when it goes quiet the push takes over, and with both quiet the numbers go', async () => {

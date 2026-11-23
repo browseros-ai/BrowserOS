@@ -7,6 +7,8 @@
  *
  *   Runs        all runs: count (failed share in red), failed, p50, p95, histogram; then by status
  *   Operations  one row per op: calls, failed, p50, p95, histogram, most called first
+ *   Navigations by HTTP status (4xx and 5xx in red), then the network's refusals by net error
+ *   CAPTCHA     solves by family and verdict, by reason, and what providers charged
  *   Errors      by owner and code, most first
  *   Tabs        open now and opened, by origin; closed, by reason, with their lifetimes
  *   Crashes     renderer crashes
@@ -24,6 +26,7 @@ import type { MetricsView, TelemetryHealth, ViewerInfo } from '../../shared/api'
 import { useMetrics } from '../use-telemetry'
 import { freshness, useSecondClock } from './HealthLine'
 import {
+  BARS,
   Bars,
   Columns,
   Empty,
@@ -221,6 +224,8 @@ function Metrics({ metrics }: { metrics: MetricsView }) {
           </>
         )}
       </Section>
+      <Navigations navigations={metrics.navigations} />
+      <Captchas captchas={metrics.captchas} />
       <Section
         title="Errors"
         lines={[
@@ -341,6 +346,156 @@ function Metrics({ metrics }: { metrics: MetricsView }) {
       </Section>
       <RawFamilies metrics={metrics} />
     </>
+  )
+}
+
+/**
+ * Where navigations landed: each HTTP status a document arrived with, a 4xx or 5xx in red though
+ * its op settled ok, and the ones the network refused, by Chromium's net error.
+ */
+function Navigations({
+  navigations,
+}: {
+  navigations: MetricsView['navigations']
+}) {
+  const statuses = ranked(navigations.byStatus)
+  const refused = ranked(navigations.errors)
+  const refusedTotal = refused.reduce((sum, [, n]) => sum + n, 0)
+  return (
+    <Section
+      title="Navigations"
+      lines={[
+        <>
+          <Figure>{count(navigations.total)}</Figure> navigated
+        </>,
+        <>
+          <Figure bad={refusedTotal > 0}>{count(refusedTotal)}</Figure> refused
+          by the network
+        </>,
+      ]}
+    >
+      {navigations.total === 0 ? (
+        <Empty>No page has navigated since Neo started.</Empty>
+      ) : (
+        <>
+          <Columns name="HTTP status" bars="Navigations" />
+          {statuses.map(([status, n]) => (
+            <Row key={status}>
+              <span className={`${NAME} text-ink`}>
+                {status === 'none' ? 'no status' : status}
+              </span>
+              <Bars
+                value={n}
+                failed={Number(status) >= 400 ? n : 0}
+                max={navigations.total}
+                title={`${plural(n, 'navigation')} ${status === 'none' ? 'without an HTTP status' : `answered ${status}`}`}
+              />
+            </Row>
+          ))}
+          {refused.length > 0 && (
+            <>
+              <div className="h-2" />
+              <Columns name="Net error" bars="Refused" />
+              {refused.map(([error, n]) => (
+                <Row key={error} sub>
+                  <span className={`${NAME} pl-3`}>{error}</span>
+                  <Bars
+                    value={n}
+                    failed={n}
+                    max={Math.max(refusedTotal, 1)}
+                    title={`${plural(n, 'navigation')} refused: ${error}`}
+                  />
+                </Row>
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </Section>
+  )
+}
+
+/** How a solve that got the page past its CAPTCHA, or found none blocking it, ended. */
+const CLEARED = new Set(['solved', 'token_applied', 'already_clear'])
+
+const dollars = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+})
+
+/** CAPTCHA solves by family and verdict (any that did not clear in red), by reason, and spend. */
+function Captchas({ captchas }: { captchas: MetricsView['captchas'] }) {
+  const reasons = ranked(captchas.byReason)
+  const spend = ranked(captchas.spendUsd)
+  const spent = spend.reduce((sum, [, usd]) => sum + usd, 0)
+  const most = captchas.solves[0]?.count ?? 1
+  return (
+    <Section
+      title="CAPTCHA"
+      lines={[
+        <>
+          <Figure>{count(captchas.total)}</Figure>{' '}
+          {captchas.total === 1 ? 'solve' : 'solves'}
+        </>,
+        <>
+          <Figure>{dollars.format(spent)}</Figure> charged
+        </>,
+      ]}
+    >
+      {captchas.total === 0 ? (
+        <Empty>No CAPTCHA solve has run since Neo started.</Empty>
+      ) : (
+        <>
+          <Columns name="Family · verdict" bars="Solves" />
+          {captchas.solves.map((solve) => (
+            <Row key={`${solve.family}/${solve.verdict}`}>
+              <span
+                className={NAME}
+                title={`${solve.family} / ${solve.verdict}`}
+              >
+                <span className="font-plex text-[11px] text-ink-3">
+                  {solve.family}
+                </span>{' '}
+                <span className="text-ink">{solve.verdict}</span>
+              </span>
+              <Bars
+                value={solve.count}
+                failed={CLEARED.has(solve.verdict) ? 0 : solve.count}
+                max={most}
+                title={`${plural(solve.count, 'solve')}: ${solve.family} / ${solve.verdict}`}
+              />
+            </Row>
+          ))}
+          <div className="h-2" />
+          <Columns name="Reason" bars="Solves" />
+          {reasons.map(([reason, n]) => (
+            <Row key={reason} sub>
+              <span className={`${NAME} pl-3`}>{reason}</span>
+              <Bars
+                value={n}
+                failed={0}
+                max={Math.max(captchas.total, 1)}
+                title={`${plural(n, 'solve')} ended ${reason}`}
+              />
+            </Row>
+          ))}
+          {spend.length > 0 && (
+            <>
+              <div className="h-2" />
+              <Columns name="Provider" bars="Charged" />
+              {spend.map(([provider, usd]) => (
+                <Row key={provider} sub>
+                  <span className={`${NAME} pl-3`}>{provider}</span>
+                  <span className={BARS}>{dollars.format(usd)}</span>
+                </Row>
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </Section>
   )
 }
 

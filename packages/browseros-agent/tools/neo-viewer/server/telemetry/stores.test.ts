@@ -313,7 +313,7 @@ describe('the metric store', () => {
   })
 })
 
-describe('reading the 11 metrics', () => {
+describe('reading the 16 metrics', () => {
   test('a quantile never reads above the slowest observation: in its bucket, only that bound, "at most" (live test F5)', () => {
     // Twenty runs: ten up to 30 s, eight up to 60 s, and the slowest two at 61.0 s and 62.2 s.
     const runs = [
@@ -408,7 +408,22 @@ describe('reading the 11 metrics', () => {
       closedByReason: { script: 1, janitor: 0 },
     })
     expect(view.tabs.lifetime.count).toBe(1)
-    expect(view.families).toHaveLength(11)
+    // A navigation without `status_code` is filed as `none`.
+    expect(view.navigations).toEqual({
+      total: 5,
+      byStatus: { '200': 3, '404': 1, none: 1 },
+      errors: { name_not_resolved: 1 },
+    })
+    expect(view.captchas).toEqual({
+      total: 3,
+      solves: [
+        { family: 'turnstile', verdict: 'solved', count: 2 },
+        { family: 'perimeterx', verdict: 'unsupported', count: 1 },
+      ],
+      byReason: { checkbox_passed: 1, token_accepted: 1, unsupported_type: 1 },
+      spendUsd: { capsolver: 0.0012 },
+    })
+    expect(view.families).toHaveLength(16)
   })
 
   test("quantiles as Prometheus' histogram_quantile below the slowest observations' bucket, the top finite bound past it", () => {
