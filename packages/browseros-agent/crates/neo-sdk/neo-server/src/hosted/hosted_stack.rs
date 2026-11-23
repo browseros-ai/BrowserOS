@@ -36,6 +36,10 @@ pub(super) struct HostedStack {
 }
 
 impl HostedStack {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the embedding's composition root: one top-to-bottom startup order, which split helpers would hide"
+    )]
     pub(super) async fn start(
         options: HostedOptions,
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
