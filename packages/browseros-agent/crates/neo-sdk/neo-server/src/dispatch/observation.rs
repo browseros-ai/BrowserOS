@@ -311,10 +311,11 @@ impl Observer {
                     });
                 }
                 // A list read before the log caught up could miss a worker the script holds,
-                // and the prelude retires every worker a list leaves out: none is safer.
+                // and the prelude retires every worker a list leaves out: none is safer. A tab
+                // whose target core replaced after the scope was taken was not waited for.
                 workers.push(if dead {
                     Some(Vec::new())
-                } else if synchronized {
+                } else if synchronized && scope.covers(&info.target_id) {
                     self.log.workers(&info.target_id)
                 } else {
                     None
@@ -586,7 +587,7 @@ mod tests {
                 &[TabId(51), TabId(52)],
                 &HashMap::new(),
                 None,
-                |_| async { Some(info("T51")) },
+                |tab: TabId| async move { Some(info(&format!("T{}", tab.0))) },
             )
             .await;
         assert_eq!(
@@ -616,7 +617,7 @@ mod tests {
         let observer = Observer::new(Arc::clone(&log) as _);
         let registry = TabRegistry::new();
         let claims = HashMap::new();
-        let read = |_: TabId| async { Some(info("T")) };
+        let read = |tab: TabId| async move { Some(info(&format!("T{}", tab.0))) };
         let busy = observer
             .read(&registry, &[TabId(7)], &claims, None, read)
             .await;
@@ -639,6 +640,31 @@ mod tests {
             "another read of the busy tab skips its wait"
         );
         assert_eq!(again.workers, [None]);
+    }
+
+    /// A tab whose target core replaced after the observation took its scope was not waited for,
+    /// so its facts carry no worker list: the replacement's held events may still be on their way.
+    #[tokio::test(start_paused = true)]
+    async fn a_target_replaced_after_the_scope_carries_no_workers() {
+        let log = Arc::new(OneTabBehind::default());
+        let observer = Observer::new(Arc::clone(&log) as _);
+        let registry = TabRegistry::new();
+        let observed = observer
+            .read(&registry, &[TabId(51)], &HashMap::new(), None, |_| async {
+                Some(info("T-replacement"))
+            })
+            .await;
+        assert_eq!(
+            log.scopes(),
+            [EventScope::Tabs(vec![TargetId("T51".into())])],
+            "the wait covered the old target"
+        );
+        assert!(observed.infos[0].is_some(), "the tab is live");
+        assert_eq!(
+            observed.workers,
+            [None],
+            "its replacement's workers are unproven"
+        );
     }
 
     fn info(target: &str) -> PageInfo {

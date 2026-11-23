@@ -54,6 +54,18 @@ pub enum EventScope {
     Tabs(Vec<TargetId>),
 }
 
+impl EventScope {
+    /// Whether a wait on this scope covered `target`'s held events: a tab whose target changed
+    /// after the scope was taken (core replaced it) was not waited for.
+    #[must_use]
+    pub fn covers(&self, target: &TargetId) -> bool {
+        match self {
+            Self::Every => true,
+            Self::Tabs(tabs) => tabs.contains(target),
+        }
+    }
+}
+
 /// The broadcast positions the watcher holds back, by whose events they are: what it publishes
 /// with [`WatcherProgress::hold`] each time a line or a waiting download changes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
