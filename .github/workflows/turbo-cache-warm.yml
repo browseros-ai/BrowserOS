@@ -48,7 +48,7 @@ jobs:
           bun-version-file: packages/browseros-agent/package.json
 
       - name: Start Turbo remote cache (GitHub Actions cache)
-        uses: rharkor/caching-for-turbo@2238fae6eb9a9936f92356f54cb3660200d105e7 # v2.5.1
+        uses: rharkor/caching-for-turbo@760158c05c47e7a764f78e9a22ca3b5a6ed8c52e # v2.5.2
 
       - name: Install dependencies
         run: bun ci
@@ -77,7 +77,7 @@ jobs:
       - name: Setup Rust
         # Pinned to match the Tests workflow. A different toolchain hashes into
         # a different cache key, which would warm a cache nothing else reads.
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy,rustfmt
 
