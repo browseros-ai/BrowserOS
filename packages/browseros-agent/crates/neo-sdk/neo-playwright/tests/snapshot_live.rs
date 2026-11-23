@@ -538,48 +538,7 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
     loaded(&live, &page).await?;
     let run = Arc::new(RunState::default());
     let cached = cache_responsive_frame(&live, &page, &run).await?;
-    // A cross-process message cannot leave a task that spins forever. Let the child announce
-    // readiness and return, command the spin from the parent, then confirm a read stalls.
-    // Fixture startup is outside the snapshot's measured budget, including delayed timers.
-    time::timeout(Duration::from_secs(10), async {
-        loop {
-            if live
-                .main_world(&page, "globalThis.__hangReady === true")
-                .await?
-                == json!(true)
-            {
-                break;
-            }
-            time::sleep(Duration::from_millis(50)).await;
-        }
-        live.main_world(
-            &page,
-            "document.querySelector('iframe[title=hang]').contentWindow.postMessage('neo-fixture-spin', '*')",
-        )
-        .await?;
-        let button = locator(
-            &page,
-            &[attr("[title=\"hang\"s]"), enter_frame(), css("button")],
-            "hang fixture button",
-        );
-        let probe = json!({ "target": button });
-        loop {
-            let Ok(answer) = time::timeout(
-                Duration::from_millis(250),
-                live.invoke("locator.count", probe.clone()),
-            )
-            .await
-            else {
-                return TestResult::Ok(());
-            };
-            assert_eq!(answer??, json!(1), "the fixture button stays attached");
-            time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .map_err(|elapsed| {
-        format!("the hang fixture did not become unresponsive within 10 s: {elapsed}")
-    })??;
+    hang(&live, &page).await?;
 
     assert_metadata_remains_bounded(&live, &page, &run, cached).await?;
 
@@ -669,10 +628,11 @@ async fn assert_metadata_remains_bounded(
 }
 
 /// Saves a real OOPIF endpoint in the same run that will later refresh the busy tree.
-/// f6 in its likeliest real form: a cross-site child that spins from its first script, before its
-/// own frame session's seed read can land, so the tab's list is never whole. A route-less op on the
-/// healthy B1 still answers within its budget: B1's host comes from B1's own chain, which the hung
-/// child is not on, and a list that is not whole is no reason to read the whole tree.
+/// f6 in its likeliest real form: a cross-site child whose renderer is busy before its own frame
+/// session can read it, so its seed never lands and the tab's list is never whole. Here it joins
+/// the process of the fixture's hang frame, already spinning. A route-less op on the healthy B1
+/// still answers within its budget: B1's host comes from B1's own chain, which the hung children
+/// are not on, and a list that is not whole is no reason to read the whole tree.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
 async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sibling() -> TestResult
@@ -681,11 +641,19 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
     let live = LiveBrowser::connect().await?;
     let server = FixtureServer::start(nest_and_hang()).await?;
     let page = live
-        .open(&server.url("127.0.0.1", "/nest/top.html"))
+        .open(&server.url("127.0.0.1", "/nest/top.html?hang"))
         .await?;
     loaded(&live, &page).await?;
     let run = Arc::new(RunState::default());
     let b1 = cache_responsive_frame(&live, &page, &run).await?;
+    hang(&live, &page).await?;
+    let frames = || {
+        live.invoke_in_run(
+            Arc::clone(&run),
+            "page.frames",
+            json!({ "call": {}, "page": page.brand() }),
+        )
+    };
     let frame_ids = |frames: &Value| -> Vec<String> {
         frames
             .get("frames")
@@ -695,15 +663,8 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
             .filter_map(|frame| frame.get("id").and_then(Value::as_str).map(str::to_owned))
             .collect()
     };
-    let before = frame_ids(
-        &live
-            .invoke_in_run(
-                Arc::clone(&run),
-                "page.frames",
-                json!({ "call": {}, "page": page.brand() }),
-            )
-            .await??,
-    );
+    let before = frame_ids(&frames().await??);
+    // Same site as the spinning hang frame, so the browser puts it in that busy process.
     let hung = server.url("hang.localtest.me", "/nest/hang-early.html");
     live.main_world(
         &page,
@@ -713,27 +674,24 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
         ),
     )
     .await?;
-    // Until the list holds the hung child and answers not whole: its seed never landed. The child
+    // Until the list holds the new child and answers not whole: its seed never landed. The child
     // shows only by its id: its renderer never answers its session's `Page.enable`, so no event of
     // its own gives it a URL.
-    time::timeout(Duration::from_secs(10), async {
+    let mut last = Value::Null;
+    let waited = time::timeout(Duration::from_secs(10), async {
         loop {
-            let frames = live
-                .invoke_in_run(
-                    Arc::clone(&run),
-                    "page.frames",
-                    json!({ "call": {}, "page": page.brand() }),
-                )
-                .await??;
-            let listed = frame_ids(&frames).iter().any(|id| !before.contains(id));
-            if listed && frames.get("incomplete") == Some(&json!(true)) {
+            last = frames().await??;
+            let listed = frame_ids(&last).iter().any(|id| !before.contains(id));
+            if listed && last.get("incomplete") == Some(&json!(true)) {
                 return TestResult::Ok(());
             }
             time::sleep(Duration::from_millis(100)).await;
         }
     })
-    .await
-    .map_err(|elapsed| format!("the hung child never left its list not whole: {elapsed}"))??;
+    .await;
+    waited.map_err(|elapsed| {
+        format!("the busy child never left its list not whole ({elapsed}): {last}")
+    })??;
     let started = Instant::now();
     time::timeout(
         Duration::from_millis(1_500),
@@ -746,13 +704,60 @@ async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sib
         ),
     )
     .await
-    .map_err(|elapsed| format!("B1's op waited on the hung child: {elapsed}"))???;
+    .map_err(|elapsed| format!("B1's op waited on the hung children: {elapsed}"))???;
     assert!(
         started.elapsed() < Duration::from_secs(1),
-        "B1's op took {:?} beside the hung child",
+        "B1's op took {:?} beside the hung children",
         started.elapsed()
     );
     live.close(&page).await
+}
+
+/// Starts the fixture's hang frame spinning and returns once a read of it stalls.
+async fn hang(live: &LiveBrowser, page: &TestPage) -> TestResult {
+    // A cross-process message cannot leave a task that spins forever. Let the child announce
+    // readiness and return, command the spin from the parent, then confirm a read stalls.
+    // Fixture startup is outside the snapshot's measured budget, including delayed timers.
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            if live
+                .main_world(page, "globalThis.__hangReady === true")
+                .await?
+                == json!(true)
+            {
+                break;
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        live.main_world(
+            page,
+            "document.querySelector('iframe[title=hang]').contentWindow.postMessage('neo-fixture-spin', '*')",
+        )
+        .await?;
+        let button = locator(
+            page,
+            &[attr("[title=\"hang\"s]"), enter_frame(), css("button")],
+            "hang fixture button",
+        );
+        let probe = json!({ "target": button });
+        loop {
+            let Ok(answer) = time::timeout(
+                Duration::from_millis(250),
+                live.invoke("locator.count", probe.clone()),
+            )
+            .await
+            else {
+                return TestResult::Ok(());
+            };
+            assert_eq!(answer??, json!(1), "the fixture button stays attached");
+            time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|elapsed| {
+        format!("the hang fixture did not become unresponsive within 10 s: {elapsed}")
+    })??;
+    Ok(())
 }
 
 async fn cache_responsive_frame(
