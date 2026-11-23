@@ -2876,6 +2876,48 @@ async fn a_solve_the_run_stops_after_it_was_sent_is_unknown() -> Result<(), Box<
     Ok(())
 }
 
+/// A solve the run stops mid-way still returns an outcome, and it is counted: the solver may
+/// have paid for it, and a race on the stop would drop it before the count.
+#[tokio::test]
+async fn a_solve_the_run_stops_mid_way_is_still_counted() -> Result<(), Box<dyn Error>> {
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let harness = Harness::with_solver(Some(placeholder_solver()?)).await?;
+    let (run, guard) = harness.run_reporting(&telemetry)?;
+    let owners = harness.owner_tab("https://example.com/").await?;
+    harness.fake.hang("Page.getFrameTree");
+    let pending = harness.dispatcher.submit(&run, solve(&owners));
+    within(async {
+        while harness.fake.count("Page.getFrameTree") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+
+    run.stop(StopReason::CallerLeft);
+    let stopped = failure(within(pending.wait()).await?)?;
+    assert_eq!(
+        (stopped.error.code(), stopped.delivery),
+        (ErrorCode::CANCELLED, Delivery::Unknown),
+        "the reply is still the stop's: {}",
+        stopped.error
+    );
+    Harness::finish(guard);
+    let counted = [
+        r#"neo_captcha_reasons_total{neo_captcha_reason="caller_cancelled"} 1"#,
+        r#"neo_captcha_solves_total{neo_captcha_family="none",neo_captcha_verdict="cancelled"} 1"#,
+    ];
+    // The solver answers its stop on its own task, just after the door answered the script.
+    within(async {
+        while !Scrape::of(&telemetry).is_ok_and(|scrape| {
+            scrape.lines_of(&["neo_captcha_solves_total", "neo_captcha_reasons_total"]) == counted
+        }) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
 /// A locator brand on `page`, as the prelude builds `getByRole('button')`.
 fn locator(page: &Value) -> Value {
     json!({
