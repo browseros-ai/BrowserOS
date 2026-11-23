@@ -49,8 +49,10 @@ pub struct TabFrameList {
     /// The tab's frame-tree version: the one every reply carries for the tab, `0` while no
     /// writer moved it.
     pub version: u64,
-    /// Whether a full read of the tab's own tree (its seed) landed: until then the list holds
-    /// only the frames the tab's events and its frame sessions' own subtrees named.
+    /// Whether the list is known complete: a full read of the tab's own tree (its seed) landed,
+    /// and so did the own subtree of every out-of-process frame session the watcher holds for
+    /// the tab. Until then the list holds what the tab's events and the seeds that landed named;
+    /// a frame session's frames from before its `Page` went on may be missing.
     pub whole: bool,
     /// The newest event-log seq the list includes: every record up to it is reflected in
     /// `frames`, so a reader that applies records past a list can skip those it covers. It can
@@ -82,8 +84,28 @@ pub(crate) struct TabFrames {
 #[derive(Debug, Default)]
 struct TabList {
     frames: Vec<EventFrame>,
-    whole: bool,
+    /// Whether the tab's own tree landed as a seed.
+    seeded: bool,
+    /// The out-of-process frames whose session the watcher holds as their source and whose own
+    /// subtree has not landed: the list may lack their same-process children from before that
+    /// session's `Page` went on, so it is not whole while any is here.
+    unseeded: HashSet<FrameId>,
     events: u64,
+}
+
+impl TabList {
+    fn whole(&self) -> bool {
+        self.seeded && self.unseeded.is_empty()
+    }
+}
+
+/// The reads a tab's list still lacks before it is whole ([`TabFrames::missing_seeds`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MissingSeeds {
+    /// The tab's own tree never landed.
+    pub(crate) own_tree: bool,
+    /// The out-of-process frames whose own subtree never landed.
+    pub(crate) frames: Vec<FrameId>,
 }
 
 #[derive(Deserialize)]
@@ -134,7 +156,8 @@ impl TabFrames {
         let Ok(reply) = serde_json::from_value::<Reply>(tree) else {
             return;
         };
-        let full = reply.frame_tree.frame.id.0 == tab.0;
+        let root = reply.frame_tree.frame.id.clone();
+        let full = root.0 == tab.0;
         let list = self.tabs.entry(tab.clone()).or_default();
         let frames = &mut list.frames;
         let mut pending = vec![(reply.frame_tree, None)];
@@ -171,9 +194,44 @@ impl TabFrames {
             );
         }
         if full {
-            list.whole = true;
+            list.seeded = true;
+        } else {
+            list.unseeded.remove(&root);
         }
         list.events = at_event;
+    }
+
+    /// An out-of-process frame's session became `frame`'s source on `tab`: until its own subtree
+    /// lands, the list may lack that frame's same-process children, so it is not whole.
+    pub(crate) fn session_attached(&mut self, tab: &TargetId, frame: FrameId) {
+        self.tabs
+            .entry(tab.clone())
+            .or_default()
+            .unseeded
+            .insert(frame);
+    }
+
+    /// `frame`'s session ended with no other to take over as its source: nothing reads its
+    /// subtree any more, and its own removal, if it went, comes as a frame event.
+    pub(crate) fn session_ended(&mut self, tab: &TargetId, frame: &FrameId) {
+        if let Some(list) = self.tabs.get_mut(tab) {
+            list.unseeded.remove(frame);
+        }
+    }
+
+    /// What `tab`'s list still lacks before it is whole; `None` once it is whole. A tab with no
+    /// list at all (its seed failed and it sent no frame event since) lacks its own tree.
+    pub(crate) fn missing_seeds(&self, tab: &TargetId) -> Option<MissingSeeds> {
+        let Some(list) = self.tabs.get(tab) else {
+            return Some(MissingSeeds {
+                own_tree: true,
+                frames: Vec::new(),
+            });
+        };
+        (!list.whole()).then(|| MissingSeeds {
+            own_tree: !list.seeded,
+            frames: list.unseeded.iter().cloned().collect(),
+        })
     }
 
     /// Applies one CDP frame event of `tab`'s, in CDP order, and returns the public transitions
@@ -255,6 +313,9 @@ impl TabFrames {
         for event in &events {
             if event.kind == PageEventKind::FrameDetached {
                 self.attached.remove(&(tab.clone(), event.frame.id.clone()));
+                if let Some(list) = self.tabs.get_mut(tab) {
+                    list.unseeded.remove(&event.frame.id);
+                }
             }
         }
         events
@@ -323,7 +384,7 @@ impl TabFrames {
         Some(TabFrameList {
             frames,
             version: version.unwrap_or(0),
-            whole: list.is_some_and(|list| list.whole),
+            whole: list.is_some_and(TabList::whole),
             events: list.map_or(0, |list| list.events),
         })
     }
@@ -449,7 +510,7 @@ mod tests {
     use browseros_core::{FrameId, TabId, TargetId};
     use serde_json::{Value, json};
 
-    use super::{TabFrameList, TabFrames};
+    use super::{MissingSeeds, TabFrameList, TabFrames};
     use crate::RunState;
     use crate::events::frame_lifecycle::EventFrame;
     use crate::events::{EventHub, PageEvent, PageEventKind};
@@ -953,6 +1014,72 @@ mod tests {
         assert_eq!(seeded.events, 5);
         frames.forget(&tab);
         assert_eq!(frames.get(&tab), None);
+        Ok(())
+    }
+
+    /// A list is whole once the tab's own tree landed and so did every frame session's own
+    /// subtree: a frame session that becomes a frame's source holds it from whole until its
+    /// subtree lands, its session ends with no other to take over, or its frame goes; the tab's
+    /// forget drops the hold with the list.
+    #[test]
+    fn tests_that_a_frame_session_holds_its_list_from_whole_until_its_subtree_lands()
+    -> Result<(), Box<dyn Error>> {
+        let mut frames = TabFrames::default();
+        let tab = TargetId("main".to_owned());
+        frames.seed(&tab, three_levels(), 1);
+        assert!(list(&frames, &tab)?.whole);
+        assert_eq!(frames.missing_seeds(&tab), None);
+
+        let oopif = FrameId("oopif".to_owned());
+        frames.session_attached(&tab, oopif.clone());
+        assert!(!list(&frames, &tab)?.whole, "its subtree has not landed");
+        assert_eq!(
+            frames.missing_seeds(&tab),
+            Some(MissingSeeds {
+                own_tree: false,
+                frames: vec![oopif.clone()],
+            })
+        );
+        frames.seed(
+            &tab,
+            json!({"frameTree": {"frame": {"id":"oopif", "parentId":"child",
+                "loaderId":"oop-doc", "url":"https://b.test/"}}}),
+            2,
+        );
+        assert!(list(&frames, &tab)?.whole, "its subtree landed");
+
+        let ended = FrameId("ended".to_owned());
+        frames.session_attached(&tab, ended.clone());
+        assert!(!list(&frames, &tab)?.whole);
+        frames.session_ended(&tab, &ended);
+        assert!(list(&frames, &tab)?.whole, "no session reads it any more");
+
+        frames.record(
+            &tab,
+            "Page.frameAttached",
+            &json!({"frameId":"gone", "parentFrameId":"main"}),
+        );
+        frames.session_attached(&tab, FrameId("gone".to_owned()));
+        assert!(!list(&frames, &tab)?.whole);
+        frames.record(
+            &tab,
+            "Page.frameDetached",
+            &json!({"frameId":"gone", "reason":"remove"}),
+        );
+        assert!(list(&frames, &tab)?.whole, "its frame went");
+
+        frames.session_attached(&tab, FrameId("late".to_owned()));
+        frames.forget(&tab);
+        assert_eq!(
+            frames.missing_seeds(&tab),
+            Some(MissingSeeds {
+                own_tree: true,
+                frames: Vec::new(),
+            }),
+            "forgotten with the list: only its own tree is missing now"
+        );
+        frames.seed(&tab, three_levels(), 3);
+        assert!(list(&frames, &tab)?.whole);
         Ok(())
     }
 

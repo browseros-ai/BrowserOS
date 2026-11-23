@@ -457,6 +457,11 @@ impl<S: TabScript> ScriptedTab<S> {
     }
 
     /// The session core attaches to `target`: one per target, as Chromium hands them out.
+    /// The session every attach to `target` gets: the one its events arrive on.
+    pub(crate) fn session_for(&self, target: &str) -> SessionId {
+        SessionId::from(self.session_of(target))
+    }
+
     fn session_of(&self, target: &str) -> String {
         format!("{}-{target}", self.session)
     }

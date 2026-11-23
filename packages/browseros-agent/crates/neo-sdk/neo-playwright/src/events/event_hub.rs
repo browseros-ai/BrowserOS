@@ -38,7 +38,7 @@ use crate::events::frame_lifecycle::EventFrame;
 use crate::events::log_lease::LogLeases;
 use crate::events::page_event::{BindingCalled, DialogId, DialogKind, PageEvent};
 use crate::events::run_events::QueuedCall;
-use crate::events::tab_frames::{TabFrameList, TabFrames};
+use crate::events::tab_frames::{MissingSeeds, TabFrameList, TabFrames};
 use crate::events::{PageEventKind, Subscription};
 
 /// How many records each ring keeps: one tab's, or the no-tab ring's. A reader that falls further
@@ -783,6 +783,11 @@ impl EventHub {
         self.lock_log().frames.main(tab)
     }
 
+    /// The reads `tab`'s list lacks before it is whole ([`TabFrames::missing_seeds`]).
+    pub(crate) fn missing_seeds(&self, tab: &TargetId) -> Option<MissingSeeds> {
+        self.lock_log().frames.missing_seeds(tab)
+    }
+
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
     /// any. An action whose input such a dialog blocks names it when it times out: Chromium
     /// acknowledges no input and answers no page call until the dialog closes (measured).
@@ -958,6 +963,17 @@ impl EventWriter {
         if written {
             self.hub.changed.notify_waiters();
         }
+    }
+
+    /// An out-of-process frame's session became `frame`'s source on `tab`: its list is not
+    /// whole until that session's own subtree lands ([`TabFrames::session_attached`]).
+    pub(crate) fn frame_session_attached(&mut self, tab: &TargetId, frame: FrameId) {
+        self.hub.lock_log().frames.session_attached(tab, frame);
+    }
+
+    /// `frame`'s session ended with no other to take over ([`TabFrames::session_ended`]).
+    pub(crate) fn frame_session_ended(&mut self, tab: &TargetId, frame: &FrameId) {
+        self.hub.lock_log().frames.session_ended(tab, frame);
     }
 
     /// Forgets `tab`'s list as the watcher drops the tab; its version goes with its recorded

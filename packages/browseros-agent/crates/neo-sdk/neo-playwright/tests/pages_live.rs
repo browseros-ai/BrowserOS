@@ -1022,15 +1022,16 @@ async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> Te
 }
 
 /// The longest a run of `ariaSnapshot()` and one click on a healthy tab may take beside tabs whose
-/// renderer is busy, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. The wait it guards is
-/// deterministic: a run that waits for a busy tab's frame tree pays the native read's whole
-/// budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), and with the start hold back a run
-/// cannot go under 2.1 s, so every try fails and the best of three cannot hide it. The run itself
-/// takes about 150 ms on the pool's debug build (main took 5.3 s), plus the start's one grace for
-/// listed tabs (`LISTED_START_GRACE_MS` in context.ts, 300 ms, one window for all of them): three
-/// busy tabs paying it one after another would come to 1,050 ms and fail too. The rest, and the
-/// tries, absorb the seconds-long CPU stalls of a debug test thread on a loaded machine.
-const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(900);
+/// renderer is busy, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. `page.frames` answers from
+/// the target watcher's list and never asks a tab (`frame_tree.rs` `frames`), so the prelude's
+/// reads of the busy tabs answer at once and the run pays nothing for them: about 150 ms on the
+/// pool's debug build (main took 5.3 s before #3723). The bound allows the prelude's one start
+/// retry (`FRAMES_RETRY_MS`, 100 ms) for a tab whose list is not whole yet. With the old renderer
+/// read back, each busy tab's read waits out the start's grace for listed tabs
+/// (`LISTED_START_GRACE_MS` in context.ts, 300 ms), so no try can go under about 450 ms and the
+/// best of three cannot hide it. The rest, and the tries, absorb the CPU stalls of a debug test
+/// thread on a loaded machine.
+const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(400);
 
 /// Tries per case before [`BESIDE_BUSY_TABS_BOUND`] fails it. The busy tabs stay busy for 20 s,
 /// longer than three tries of a run that waits for them.
@@ -1044,8 +1045,8 @@ const BESIDE_BUSY_TABS_SCRIPT: &str = "const text = await page.ariaSnapshot()\n\
 
 /// A run never waits for the frame tree of a tab it does not use. The run's init lists every tab,
 /// as a host whose runs see the whole browser does, so the prelude reads the busy tabs' trees too;
-/// their renderer answers nothing, and each read waits out its budget. The script never names
-/// them, so it pays nothing for them, whether one, two or three are busy.
+/// their renderer answers nothing, but `page.frames` answers from the watcher's list without
+/// asking it. The script pays nothing for them, whether one, two or three are busy.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 #[expect(

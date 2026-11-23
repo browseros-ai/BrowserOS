@@ -1,9 +1,12 @@
-//! `page.frames()`: every frame of a tab, out-of-process ones included, for the prelude's
-//! synchronous `frames()`, `mainFrame()`, `parentFrame()` and `childFrames()`.
+//! A tab's frames, out-of-process ones included. `page.frames()`, for the prelude's synchronous
+//! `frames()`, `mainFrame()`, `parentFrame()` and `childFrames()`, answers from the target
+//! watcher's list (`TabFrames`) and sends the tab nothing ([`frames`]). The ops that act on a
+//! tab's frames (evaluate, tags, navigations, the resolver's walk into a child frame) still read
+//! the tree from the renderer here ([`read`], [`snapshot`]), on the tab they admitted.
 //!
 //! A session's `Page.getFrameTree` lists only the frames in its own renderer. Each
 //! out-of-process iframe is a target of its own whose `parentFrameId` names the frame that
-//! embeds it, so the tree is read session by session:
+//! embeds it, so a read goes session by session:
 //!
 //! ```text
 //!  page session ── getFrameTree ──▶ main frame + same-process children
@@ -20,6 +23,8 @@ use serde_json::json;
 use tokio::time;
 use ts_rs::TS;
 
+use crate::events::EventScope;
+use crate::events::tab_frames::{ListedFrame, TabFrameList};
 use crate::op_scope::OpScope;
 use crate::page::document_watch::{DocumentWatch, FrameTreeNode, FrameTreeReply, decode};
 use crate::page::frame_routes::{FrameRoute, RootAttachment};
@@ -120,6 +125,7 @@ struct IframeTarget {
 
 impl FrameTree {
     /// The frames as the prelude reads them, main frame first; the sessions stay behind.
+    #[cfg(test)]
     pub(crate) fn into_frames(self) -> Vec<FrameInfo> {
         self.frames
     }
@@ -269,48 +275,124 @@ impl FrameTree {
     }
 }
 
-/// `page.frames()`: reads `page`'s frame tree.
+/// `page.frames()`: `page`'s frames from the target watcher's list (`TabFrames`), which the tab's
+/// CDP events and seed reads keep. It sends the tab nothing: no attach, no tree read, so a tab
+/// whose renderer is busy answers as fast as a healthy one, with the last list its events gave.
+/// Frames a busy renderer adds appear once it runs again and its events arrive.
+///
+/// ```text
+///  admit the tab (no attach) ─▶ synchronize on [tab] ─▶ TabFrames.get(tab) ─▶ frames, main first
+///                                (its own held events,      └─ not whole: incomplete, and the
+///                                 never another tab's)         watcher reads its missing seeds
+/// ```
+///
+/// The answer fills no frame routes: a route names a session of core's and is retired by ring
+/// records written only while core's session is on the tab, so routes come only from a child-frame
+/// op's own whole read of a tab it admitted (`navigation::frame_host`).
 pub(crate) async fn frames(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: FramesInput,
 ) -> Result<PageFrames, PlaywrightError> {
-    let frames = match scope.within(snapshot(pw, scope, input.page.tab())).await {
-        Ok(result) => result?,
-        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+    let read = async {
+        let target = scope.admit_target(pw.browser(), input.page.tab()).await?;
+        let fence = pw.event_fence();
+        // Bounded inside: a watcher that cannot catch up answers with what its list holds.
+        let _caught_up = pw
+            .synchronize_events(fence, &EventScope::Tabs(vec![target.clone()]))
+            .await;
+        let list = pw.event_hub().tab_frames(&target);
+        let answer = answer(scope, list);
+        if answer.incomplete.is_some() || answer.frames.is_none() {
+            pw.reseed_frames(target);
+        }
+        Ok::<_, PlaywrightError>(answer)
     };
-    Ok(answer(scope, frames))
+    match scope.within(read).await {
+        Ok(result) => result,
+        Err(_expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
+    }
 }
 
-/// `page.frames()`'s answer from what its read got. Neither a short tree nor a missing one is
-/// silent: the op's record is marked (`OpScope::frames_incomplete`), its notes name each frame
-/// and error for the server's warn line, and the prelude reads the tree again before the
-/// script's next operation resolves.
-fn answer(scope: &OpScope<'_>, frames: Option<FrameTree>) -> PageFrames {
-    let incomplete = frames.as_ref().is_some_and(|tree| !tree.unread.is_empty());
-    if incomplete || frames.is_none() {
+/// `page.frames()`'s answer from the tab's list. Neither a list that is not whole nor a missing
+/// one is silent: the op's record is marked (`OpScope::frames_incomplete`), its note says why for
+/// the server's warn line, and the prelude reads the frames again before the script's next
+/// operation resolves, by which time the watcher may have read what the list lacked.
+fn answer(scope: &OpScope<'_>, list: Option<TabFrameList>) -> PageFrames {
+    let Some(list) = list.filter(|list| {
+        list.frames
+            .first()
+            .is_some_and(|main| main.parent_id.is_none())
+    }) else {
         scope.frames_incomplete();
-    }
-    match &frames {
         // Debug notes, never stored in the run's record (the mark above is); neo-server logs those
-        // starting `frame tree` at warn (operation_guard), naming the frame and the error.
-        None => scope.log(
-            "frame tree not read: the tab was loading or navigating past the read's time; its \
+        // starting `frame tree` at warn (operation_guard).
+        scope.log(
+            "frame tree not known yet: no event or seed of the tab named its main frame; its \
              frames stay as they were"
                 .to_owned(),
-        ),
-        Some(tree) => {
-            for (frame, error) in &tree.unread {
-                scope.log(format!(
-                    "frame tree incomplete: the out-of-process frame {frame} could not be read, \
-                     so the tree lacks it: {error}"
-                ));
-            }
-        }
+        );
+        return PageFrames {
+            frames: None,
+            incomplete: None,
+        };
+    };
+    let (frames, orphans) = parents_first(list.frames);
+    let incomplete = !list.whole || orphans > 0;
+    if incomplete {
+        scope.frames_incomplete();
+        scope.log(format!(
+            "frame tree incomplete: the watcher has not read the tab's own tree or a frame \
+             session's subtree yet ({orphans} frame(s) with no known parent left out); it reads \
+             them again"
+        ));
     }
     PageFrames {
         incomplete: incomplete.then_some(true),
-        frames: frames.map(FrameTree::into_frames),
+        frames: Some(frames),
+    }
+}
+
+/// The list's frames as the prelude reads them: the main frame first, each parent before its
+/// children, as the renderer read gave them. A frame other than the main one with no parent the
+/// list knows is left out, as the prelude would take it for a second main frame; how many were
+/// left out comes back too.
+fn parents_first(frames: Vec<ListedFrame>) -> (Vec<FrameInfo>, usize) {
+    let mut ordered: Vec<FrameInfo> = Vec::with_capacity(frames.len());
+    let mut placed: HashSet<FrameId> = HashSet::new();
+    let mut rest = frames.into_iter();
+    if let Some(main) = rest.next() {
+        placed.insert(main.id.clone());
+        ordered.push(info(main));
+    }
+    let mut rest: Vec<ListedFrame> = rest.collect();
+    loop {
+        let before = rest.len();
+        rest.retain(|frame| {
+            let ready = frame
+                .parent_id
+                .as_ref()
+                .is_some_and(|parent| placed.contains(parent));
+            if ready {
+                placed.insert(frame.id.clone());
+                ordered.push(info(frame.clone()));
+            }
+            !ready
+        });
+        if rest.is_empty() || rest.len() == before {
+            break;
+        }
+    }
+    (ordered, rest.len())
+}
+
+fn info(frame: ListedFrame) -> FrameInfo {
+    FrameInfo {
+        id: frame.id,
+        parent_id: frame.parent_id,
+        name: frame.name,
+        url: frame.url,
+        loader: frame.loader_id.unwrap_or_default(),
     }
 }
 
@@ -580,6 +662,7 @@ mod tests {
 
     use super::{FrameTree, PageFrames, answer, sample_tree};
     use crate::events::EventHub;
+    use crate::events::tab_frames::{ListedFrame, TabFrameList};
     use crate::op_scope::OpScope;
     use crate::page::document_watch::FrameTreeReply;
     use crate::target::CallHeader;
@@ -629,27 +712,69 @@ mod tests {
         Ok(())
     }
 
-    /// A read that came back whole leaves the op's record unmarked. One that lacks an
-    /// out-of-process frame, or got no tree at all, marks it (`OpEnv::frames_incomplete`), so a
-    /// host finds the run whose script was handed a short tree.
+    /// A whole list leaves the op's record unmarked. One that is not whole, one with a frame
+    /// whose parent it does not know, or no list at all marks it (`OpEnv::frames_incomplete`), so
+    /// a host finds the run whose script was handed a short tree; the answer says `incomplete`,
+    /// lists the main frame first and each parent before its children, and leaves the orphan out.
     #[tokio::test]
-    async fn tests_that_only_a_short_or_missing_tree_marks_the_operation()
+    async fn tests_that_only_a_short_or_missing_list_marks_the_operation()
     -> Result<(), Box<dyn Error>> {
-        let marked = |frames: Option<FrameTree>| -> Result<bool, Box<dyn Error>> {
+        let marked = |list: Option<TabFrameList>| -> Result<(bool, PageFrames), Box<dyn Error>> {
             let env = TestEnv::new();
             let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
             let scope = OpScope::new(&env, op, CallHeader::default());
-            answer(&scope, frames);
-            Ok(env.calls().contains(&EnvCall::FramesIncomplete))
+            let answer = answer(&scope, list);
+            Ok((env.calls().contains(&EnvCall::FramesIncomplete), answer))
         };
-        let mut short = sample_tree()?;
-        short.unread.push((
-            "cross".to_owned(),
-            "frame cross's own session is not attached yet".to_owned(),
-        ));
-        assert!(!marked(Some(sample_tree()?))?, "a whole tree");
-        assert!(marked(Some(short))?, "a tree that lacks a frame");
-        assert!(marked(None)?, "no tree");
+        let frame = |id: &str, parent: Option<&str>| ListedFrame {
+            id: FrameId(id.to_owned()),
+            parent_id: parent.map(|parent| FrameId(parent.to_owned())),
+            name: String::new(),
+            url: format!("https://{id}.test/"),
+            loader_id: Some(format!("{id}-doc")),
+        };
+        let list = |whole: bool, frames: Vec<ListedFrame>| TabFrameList {
+            frames,
+            version: 3,
+            whole,
+            events: 0,
+        };
+        let ids = |answer: &PageFrames| -> Vec<String> {
+            answer
+                .frames
+                .iter()
+                .flatten()
+                .map(|frame| frame.id.0.clone())
+                .collect()
+        };
+        let nested = vec![
+            frame("main", None),
+            frame("grandchild", Some("child")),
+            frame("child", Some("main")),
+        ];
+        let (flag, whole) = marked(Some(list(true, nested.clone())))?;
+        assert!(!flag, "a whole list");
+        assert_eq!(whole.incomplete, None);
+        assert_eq!(
+            ids(&whole),
+            ["main", "child", "grandchild"],
+            "parents first"
+        );
+        let (flag, short) = marked(Some(list(false, nested.clone())))?;
+        assert!(flag, "a list that is not whole");
+        assert_eq!(short.incomplete, Some(true));
+        assert_eq!(ids(&short).len(), 3, "its frames are real and go with it");
+        let mut orphaned = nested;
+        orphaned.push(frame("orphan", None));
+        let (flag, orphan) = marked(Some(list(true, orphaned)))?;
+        assert!(flag, "a frame whose parent the list does not know");
+        assert!(!ids(&orphan).contains(&"orphan".to_owned()));
+        let (flag, none) = marked(None)?;
+        assert!(flag, "no list");
+        assert!(none.frames.is_none());
+        let (flag, mainless) = marked(Some(list(true, vec![frame("child", Some("main"))])))?;
+        assert!(flag, "a list with no main frame");
+        assert!(mainless.frames.is_none());
         Ok(())
     }
 
