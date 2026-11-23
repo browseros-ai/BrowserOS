@@ -49,11 +49,13 @@ pub struct TabFrameList {
     /// The tab's frame-tree version: the one every reply carries for the tab, `0` while no
     /// writer moved it.
     pub version: u64,
-    /// Whether a full read of the tab's tree (its seed) landed: until then the list holds only
-    /// the frames the tab's events named.
+    /// Whether a full read of the tab's own tree (its seed) landed: until then the list holds
+    /// only the frames the tab's events and its frame sessions' own subtrees named.
     pub whole: bool,
     /// The newest event-log seq the list includes: every record up to it is reflected in
-    /// `frames`, so a reader that applies records past a list can skip those it covers.
+    /// `frames`, so a reader that applies records past a list can skip those it covers. It can
+    /// sit at the log's head with no record of the tab's own there: a seed, and a frame event the
+    /// log writes no record for (a tab no session of core's is on), move it to the head too.
     pub events: u64,
 }
 
@@ -112,8 +114,10 @@ struct Detached {
 
 impl TabFrames {
     /// Seeds `tab`'s existing documents from a `Page.getFrameTree` reply without inventing
-    /// historical events, and marks the list whole as of event-log seq `at_event`. Queued attach
-    /// notifications still announce their frame once, even if this read ran ahead of them.
+    /// historical events, as of event-log seq `at_event`. Queued attach notifications still
+    /// announce their frame once, even if this read ran ahead of them. Only the tab's own tree,
+    /// its main frame at the root, makes the list whole: an out-of-process frame's session reads
+    /// its own subtree only, which adds those frames and says nothing of the rest of the tab.
     pub(crate) fn seed(&mut self, tab: &TargetId, tree: Value, at_event: u64) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -130,6 +134,7 @@ impl TabFrames {
         let Ok(reply) = serde_json::from_value::<Reply>(tree) else {
             return;
         };
+        let full = reply.frame_tree.frame.id.0 == tab.0;
         let list = self.tabs.entry(tab.clone()).or_default();
         let frames = &mut list.frames;
         let mut pending = vec![(reply.frame_tree, None)];
@@ -165,7 +170,9 @@ impl TabFrames {
                     .map(|child| (child, Some(id.clone()))),
             );
         }
-        list.whole = true;
+        if full {
+            list.whole = true;
+        }
         list.events = at_event;
     }
 
@@ -922,6 +929,18 @@ mod tests {
             !list(&frames, &tab)?.whole,
             "events alone make no whole list"
         );
+        frames.seed(
+            &tab,
+            json!({"frameTree": {"frame": {"id":"child", "parentId":"main",
+                "loaderId":"child-doc", "url":"https://b.test/child"}}}),
+            3,
+        );
+        let subtree = list(&frames, &tab)?;
+        assert!(
+            !subtree.whole,
+            "a frame session's own subtree is not the tab's tree"
+        );
+        assert_eq!(subtree.events, 3);
         frames.seed(&tab, three_levels(), 5);
         let seeded = list(&frames, &tab)?;
         assert!(seeded.whole);

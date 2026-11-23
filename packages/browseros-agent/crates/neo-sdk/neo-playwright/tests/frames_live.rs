@@ -715,43 +715,52 @@ async fn agree(
     ready: impl Fn(&[ComparedFrame]) -> bool,
 ) -> TestResult {
     let started = Instant::now();
-    loop {
-        let tree = browser_frames(transport, target.as_str()).await?;
-        let listed = run.tab_frames(target);
-        let compared: Option<Vec<ComparedFrame>> = listed.as_ref().map(|list| {
-            list.frames
-                .iter()
-                .map(|frame| {
-                    (
-                        frame.id.0.clone(),
-                        frame.parent_id.as_ref().map(|parent| parent.0.clone()),
-                        frame.name.clone(),
-                        frame.url.clone(),
-                    )
-                })
-                .collect()
-        });
-        let whole = listed.as_ref().is_some_and(|list| list.whole);
-        let same = compared.as_ref().is_some_and(|list| {
-            list.first().is_some_and(|(id, ..)| id == target.as_str())
-                && list.iter().collect::<BTreeSet<_>>() == tree.iter().collect::<BTreeSet<_>>()
-        });
-        if ready(&tree) && whole && same {
+    // The bound covers the browser's own reads too: a renderer that stalls a read must not
+    // stretch a step past it.
+    let mut last = String::new();
+    let agreed = time::timeout(LIST_AGREES_BOUND, async {
+        loop {
+            let tree = browser_frames(transport, target.as_str()).await?;
+            let listed = run.tab_frames(target);
+            let compared: Option<Vec<ComparedFrame>> = listed.as_ref().map(|list| {
+                list.frames
+                    .iter()
+                    .map(|frame| {
+                        (
+                            frame.id.0.clone(),
+                            frame.parent_id.as_ref().map(|parent| parent.0.clone()),
+                            frame.name.clone(),
+                            frame.url.clone(),
+                        )
+                    })
+                    .collect()
+            });
+            let whole = listed.as_ref().is_some_and(|list| list.whole);
+            let same = compared.as_ref().is_some_and(|list| {
+                list.first().is_some_and(|(id, ..)| id == target.as_str())
+                    && list.iter().collect::<BTreeSet<_>>() == tree.iter().collect::<BTreeSet<_>>()
+            });
+            if ready(&tree) && whole && same {
+                return Ok::<usize, Box<dyn Error>>(tree.len());
+            }
+            last = format!("(whole {whole})\nlist: {compared:#?}\ntree: {tree:#?}");
+            time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    match agreed {
+        Ok(frames) => {
             eprintln!(
                 "FRAME_LIST step={step} agreed={:?} frames={}",
                 started.elapsed(),
-                tree.len()
+                frames?
             );
-            return Ok(());
+            Ok(())
         }
-        if started.elapsed() > LIST_AGREES_BOUND {
-            return Err(format!(
-                "{step}: the list did not equal the browser's tree within {LIST_AGREES_BOUND:?} \
-                 (whole {whole})\nlist: {compared:#?}\ntree: {tree:#?}"
-            )
-            .into());
-        }
-        time::sleep(Duration::from_millis(100)).await;
+        Err(_) => Err(format!(
+            "{step}: the list did not equal the browser's tree within {LIST_AGREES_BOUND:?} {last}"
+        )
+        .into()),
     }
 }
 
