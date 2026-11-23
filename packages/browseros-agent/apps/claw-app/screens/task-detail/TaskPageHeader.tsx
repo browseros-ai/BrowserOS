@@ -1,16 +1,12 @@
 import type { SessionSummary } from '@browseros/claw-api'
-import { ArrowRight, BookmarkPlus, ExternalLink } from 'lucide-react'
-import { NavLink, useLocation } from 'react-router'
+import { ExternalLink } from 'lucide-react'
+import { useLocation } from 'react-router'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
-import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ButtonLink } from '@/components/motion/button/base'
 import { MakeSkillButton } from '@/components/skills/MakeSkillButton'
-import { usePlan } from '@/modules/api/plan.hooks'
-import { ULTRAFAST_FEATURE } from '@/modules/plan/plan.helpers'
 import { taskDayAndTime, tookLabel } from '@/screens/audit/audit.helpers'
-import { isDraftable } from '@/screens/skill-draft/skill-draft.helpers'
 import { UltrafastLine } from './UltrafastLine'
 
 interface TaskPageHeaderProps {
@@ -89,39 +85,6 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
         }
       />
       <UltrafastLine session={session} />
-      <SkillUpsell session={session} />
     </div>
-  )
-}
-
-/**
- * One quiet line on the task page for a plan without ultrafast: Home and History rows stay as
- * they are for these plans.
- */
-function SkillUpsell({ session }: { session: SessionSummary }) {
-  const plan = usePlan()
-  // Only where ultrafast is on sale, so the link never leads to a plan that cannot be bought.
-  if (
-    !plan.data?.available ||
-    plan.data.features.includes(ULTRAFAST_FEATURE) ||
-    !isDraftable(session)
-  ) {
-    return null
-  }
-  return (
-    <p className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[14.5px] text-ink-2">
-      <BookmarkPlus aria-hidden className="size-4" />
-      <span>
-        With <UltrafastWordmark /> you can turn this task into a skill in one
-        click.
-      </span>
-      <NavLink
-        to="/pro"
-        className="inline-flex items-center gap-1 font-semibold text-primary"
-      >
-        See ultrafast
-        <ArrowRight aria-hidden className="size-[15px]" />
-      </NavLink>
-    </p>
   )
 }

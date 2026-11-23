@@ -33,6 +33,14 @@ export function isDraftable(task: SessionSummary): boolean {
   return ended && task.dispatchCount >= 2 && !task.skillName
 }
 
+/**
+ * Whether a task shows "Make it a skill" on any plan: a draftable task, or one that already has a
+ * skill (the button opens it). What a click does depends on the plan, not this.
+ */
+export function canShowMakeSkill(task: SessionSummary): boolean {
+  return Boolean(task.skillName) || isDraftable(task)
+}
+
 /** The newest task in a list that could become a skill: its button is always shown. */
 export function newestDraftableId(
   tasks: readonly SessionSummary[],
@@ -74,9 +82,12 @@ export function makeSkillState({
   return 'idle'
 }
 
-/** A click does nothing while a draft is being written, read or saved. */
+/**
+ * A click does nothing while a draft is being read or saved. While it is being written a click
+ * reopens the sheet, so the progress is never hidden.
+ */
 export function isBusy(state: MakeSkillState): boolean {
-  return state === 'writing' || state === 'review' || state === 'saving'
+  return state === 'review' || state === 'saving'
 }
 
 function isLimited(
