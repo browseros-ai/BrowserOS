@@ -191,6 +191,11 @@
   --animate-uf-pop: uf-pop 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-uf-grow: uf-grow 1s linear both;
   --animate-uf-flash: uf-flash 1.2s ease both;
+  /* Copying a skill (components/skills/SkillPhrase, PasteHint, UseSkill). */
+  --animate-copy-pop: copy-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  --animate-copy-face: copy-face 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-copy-wave: copy-wave 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-copy-nudge: copy-nudge 1.2s ease-in-out 0.3s 2;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -297,6 +302,31 @@
   from,
   60% {
     background-color: var(--color-amber-tint);
+  }
+}
+
+@keyframes copy-pop {
+  40% {
+    transform: scale(0.94);
+  }
+}
+
+@keyframes copy-face {
+  from {
+    opacity: 0;
+    transform: scale(0.5) translateY(4px);
+  }
+}
+
+@keyframes copy-wave {
+  40% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes copy-nudge {
+  50% {
+    transform: translateX(3px);
   }
 }
 

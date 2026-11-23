@@ -11,6 +11,7 @@ import {
   describe,
   expect,
   it,
+  jest,
   mock,
 } from 'bun:test'
 import type { Plan, Skill } from '@browseros/claw-api'
@@ -330,6 +331,34 @@ describe('copying a skill from the list', () => {
     })
     expect(clipboard).toEqual(['use the neo-skill-2 skill'])
     expect(text()).toContain('Paste it into your agent')
+  })
+
+  it('tests that a copied card shows Copied and the paste hint, then its stats again', async () => {
+    features = ['claw.ultrafast']
+    await mount()
+    jest.useFakeTimers()
+    try {
+      await click(card('Skill number 2'))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      // No animation or transition event is needed for the state, so reduced motion still gets it.
+      expect(text()).toContain('Copied')
+      expect(text()).toContain('Paste it into your agent')
+
+      await act(async () => {
+        jest.advanceTimersByTime(6000)
+      })
+      // The hint stays mounted while it fades out, then leaves.
+      expect(text()).toContain('Paste it into your agent')
+      await act(async () => {
+        jest.advanceTimersByTime(400)
+      })
+      expect(text()).not.toContain('Paste it into your agent')
+      expect(text()).toContain('Details')
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('tests that Details links to the skill and the menu does not copy', async () => {
