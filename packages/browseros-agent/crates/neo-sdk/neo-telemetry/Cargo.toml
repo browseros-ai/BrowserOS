@@ -64,34 +64,50 @@ mod_module_files = "warn"
 # Types: either a plain data bag (all fields pub) or an encapsulated type (none pub).
 partial_pub_fields = "warn"
 [features]
+default = ["otel"]
+# The OpenTelemetry SDK and the OTLP push door. Without it every handle is the no-op: the facade,
+# the config reader and the labels still build, so an embedding whose telemetry is always off
+# (neo-server's Node add-on) links no OpenTelemetry SDK, exporter or HTTP client.
+otel = [
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-http",
+    "dep:async-trait",
+    "dep:bytes",
+    "dep:reqwest",
+    "dep:tokio",
+]
 # `Telemetry::in_memory` and its `Probe`: the live pipeline with its spans kept in memory, so tests
-# read real metrics and spans with no collector. Tests and test builds only.
+# read real metrics and spans with no collector. Tests and test builds only. It does not turn on
+# `otel`, so `cargo test --no-default-features` tests the build without it; with `otel` off the
+# two do not exist.
 test-support = []
 
 [dependencies]
 # The OpenTelemetry set (workspace manifest says why these features). The API crate is all the
 # facade names; the SDK builds the providers; otlp and http are the push door.
+# The API crate stays on without `otel`: `TraceContext` wraps its `SpanContext`.
 opentelemetry.workspace = true
-opentelemetry_sdk.workspace = true
-opentelemetry-otlp.workspace = true
-opentelemetry-http.workspace = true
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-http = { workspace = true, optional = true }
 # The OTLP exporters' HTTP client: the workspace's reqwest 0.12 (rustls), over TCP or a Unix
 # socket, behind opentelemetry-http's async `HttpClient` trait.
-async-trait.workspace = true
-bytes.workspace = true
+async-trait = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 http.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, optional = true }
 # `http+unix://<percent-encoded socket path>/<url path>` endpoints, and endpoint validation.
 percent-encoding.workspace = true
 url.workspace = true
 thiserror.workspace = true
 # The push transport's own thread runs a current-thread runtime for the exporters' requests, so
 # exports never touch the server's runtime.
-tokio.workspace = true
+tokio = { workspace = true, optional = true }
 tracing.workspace = true
 
 [dev-dependencies]
-neo-telemetry = { path = ".", features = ["test-support"] }
+neo-telemetry = { path = ".", default-features = false, features = ["test-support"] }
 # A mock OTLP collector, over TCP and a Unix socket (axum serves both), and what it decodes:
 # gzip bodies, OTLP protobuf (prost and opentelemetry-proto's messages) and OTLP JSON.
 axum.workspace = true
@@ -102,3 +118,20 @@ serde_json.workspace = true
 # A Unix socket's directory for the OTLP-over-Unix-socket tests.
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+
+# Each drives the live pipeline or the SDK itself, so each needs `otel`.
+[[test]]
+name = "metrics_contract"
+required-features = ["otel", "test-support"]
+
+[[test]]
+name = "otel_stack"
+required-features = ["otel"]
+
+[[test]]
+name = "push_shutdown"
+required-features = ["otel"]
+
+[[test]]
+name = "telemetry_pipeline"
+required-features = ["otel", "test-support"]

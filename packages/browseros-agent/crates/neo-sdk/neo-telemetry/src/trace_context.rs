@@ -59,6 +59,10 @@ impl TraceContext {
     /// The caller's span, as the root span's parent. Crate-private: the facade never hands out
     /// OpenTelemetry types.
     #[must_use]
+    #[cfg_attr(
+        not(feature = "otel"),
+        expect(dead_code, reason = "without `otel` no span is started under it")
+    )]
     pub(crate) fn span_context(&self) -> &SpanContext {
         &self.span_context
     }

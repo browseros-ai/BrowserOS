@@ -1,10 +1,12 @@
 //! One run's telemetry, from admission to its end: the `neo.run` span and the run metrics.
 
 use std::fmt;
+#[cfg(feature = "otel")]
 use std::sync::Arc;
 
 use crate::backend::Backend;
 use crate::label::{ErrorLabel, RunStatus};
+#[cfg(feature = "otel")]
 use crate::pipeline::{Pipeline, PipelineRun};
 use crate::run_telemetry::{RunLink, RunTelemetry};
 
@@ -58,8 +60,10 @@ pub struct RunSpan {
     open: Option<OpenRun>,
 }
 
+/// Without `otel` this enum has no variant, so `RunSpan::open` is always `None`.
 #[derive(Debug)]
 enum OpenRun {
+    #[cfg(feature = "otel")]
     Otel {
         pipeline: Arc<Pipeline>,
         run: PipelineRun,
@@ -80,6 +84,7 @@ impl RunSpan {
         }
     }
 
+    #[cfg(feature = "otel")]
     pub(crate) fn otel(pipeline: Arc<Pipeline>, run: PipelineRun) -> Self {
         Self {
             ops: RunTelemetry::new(
@@ -121,8 +126,17 @@ impl Drop for RunSpan {
 }
 
 /// Shared by `finish` and `Drop`; `None` is a run that ended without a verdict.
+#[cfg_attr(
+    not(feature = "otel"),
+    expect(
+        unused_variables,
+        clippy::needless_pass_by_value,
+        reason = "without `otel` no run is open, so none ends"
+    )
+)]
 fn end(open: OpenRun, verdict: Option<RunVerdict>) {
     match open {
+        #[cfg(feature = "otel")]
         OpenRun::Otel { pipeline, run } => pipeline.run_ended(run, verdict),
     }
 }

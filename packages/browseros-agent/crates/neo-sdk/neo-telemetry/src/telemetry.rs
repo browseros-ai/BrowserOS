@@ -1,12 +1,14 @@
 //! The telemetry handle: the one type the server holds and calls.
 
+#[cfg(feature = "otel")]
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::backend::Backend;
 use crate::label::{CloseReason, ErrorLabel, TabOrigin};
+#[cfg(feature = "otel")]
 use crate::pipeline::Pipeline;
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "otel", feature = "test-support"))]
 use crate::probe::Probe;
 use crate::{OpenTabsSource, RunFacts, RunSpan, TelemetryConfig, TelemetryError, Vocabulary};
 
@@ -24,6 +26,16 @@ pub struct Telemetry {
     backend: Backend,
 }
 
+#[cfg_attr(
+    not(feature = "otel"),
+    expect(
+        unused_variables,
+        clippy::needless_pass_by_value,
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "without `otel` every hook is the no-op's arm alone"
+    )
+)]
 impl Telemetry {
     /// Telemetry off. Zero cost: a hook is one branch, with no allocation, lock, thread or I/O.
     #[must_use]
@@ -37,10 +49,24 @@ impl Telemetry {
     /// is always on), and the OTLP push when `config` turns it on, with a tracer provider when
     /// spans are pushed (its transport runs on a thread of its own, never on the caller's
     /// runtime). Starts no connection.
+    ///
+    /// Built without the `otel` feature it is the no-op, and a `config` that pushes over OTLP
+    /// fails instead, so a set endpoint never goes unused in silence.
     pub fn new(config: &TelemetryConfig) -> Result<Self, TelemetryError> {
-        Ok(Self {
-            backend: Backend::Otel(Arc::new(Pipeline::start(config)?)),
-        })
+        #[cfg(feature = "otel")]
+        let backend = Backend::Otel(Arc::new(Pipeline::start(config)?));
+        #[cfg(not(feature = "otel"))]
+        let backend = if config.otlp.traces.is_some() || config.otlp.metrics.is_some() {
+            return Err(TelemetryError::Pipeline {
+                stage: "start",
+                reason: "an OTLP endpoint is set, but this build has no OTLP push (built without \
+                         the `otel` feature)"
+                    .to_owned(),
+            });
+        } else {
+            Backend::Noop
+        };
+        Ok(Self { backend })
     }
 
     /// The live pipeline with its spans kept in memory instead of pushed, and the [`Probe`] that
@@ -48,7 +74,7 @@ impl Telemetry {
     /// reads them. For tests that assert on real output: the labels, counting rules and span
     /// attributes are the production ones, not a double's copy. `config.otlp` gives the resource
     /// and the sampler; nothing is pushed.
-    #[cfg(feature = "test-support")]
+    #[cfg(all(feature = "otel", feature = "test-support"))]
     #[must_use]
     pub fn in_memory(config: &TelemetryConfig) -> (Self, Probe) {
         let (pipeline, probe) = Pipeline::in_memory(config);
@@ -69,6 +95,7 @@ impl Telemetry {
     pub fn bind_vocabulary(&self, vocabulary: Vocabulary) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.bind_vocabulary(vocabulary),
         }
     }
@@ -78,6 +105,7 @@ impl Telemetry {
     pub fn start_run(&self, facts: RunFacts<'_>) -> RunSpan {
         match &self.backend {
             Backend::Noop => RunSpan::noop(),
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => {
                 RunSpan::otel(Arc::clone(pipeline), pipeline.run_started(&facts))
             }
@@ -97,6 +125,7 @@ impl Telemetry {
     pub fn run_refused(&self, error: ErrorLabel) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.run_refused(error),
         }
     }
@@ -105,6 +134,7 @@ impl Telemetry {
     pub fn tab_opened(&self, origin: TabOrigin) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.tab_opened(origin),
         }
     }
@@ -114,6 +144,7 @@ impl Telemetry {
     pub fn tab_closed(&self, origin: TabOrigin, reason: CloseReason, lifetime: Duration) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.tab_closed(origin, reason, lifetime),
         }
     }
@@ -122,6 +153,7 @@ impl Telemetry {
     pub fn renderer_crashed(&self) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.renderer_crashed(),
         }
     }
@@ -131,6 +163,7 @@ impl Telemetry {
     pub fn set_open_tabs(&self, source: OpenTabsSource) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.set_open_tabs(source),
         }
     }
@@ -142,6 +175,7 @@ impl Telemetry {
     pub fn render_prometheus(&self) -> String {
         match &self.backend {
             Backend::Noop => String::new(),
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.render_prometheus(),
         }
     }
@@ -154,6 +188,7 @@ impl Telemetry {
     pub async fn shutdown(&self, budget: Duration) -> Result<(), TelemetryError> {
         match &self.backend {
             Backend::Noop => Ok(()),
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => pipeline.shutdown(budget).await,
         }
     }
@@ -163,6 +198,7 @@ impl Telemetry {
 mod tests {
     use std::error::Error;
     use std::fmt;
+    use std::sync::Arc;
     use std::time::Instant;
 
     use super::*;
@@ -255,10 +291,74 @@ mod tests {
             "the no-op renders an empty exposition, which is valid text format"
         );
         telemetry.shutdown(Duration::ZERO).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn the_real_constructor_always_builds_the_live_pipeline() {
         assert!(
             Telemetry::new(&TelemetryConfig::default())
                 .is_ok_and(|built| matches!(built.backend, Backend::Otel(_))),
-            "the real constructor always builds the live pipeline: the scrape is always on"
+            "the scrape is always on"
+        );
+    }
+
+    /// The build the Node add-on links: no OpenTelemetry SDK, so the real constructor is the
+    /// no-op. Every hook still takes its call, the scrape still answers with a valid (empty)
+    /// exposition, a bad variable still fails startup, and a configured push fails it too
+    /// instead of going unused.
+    #[cfg(not(feature = "otel"))]
+    #[tokio::test]
+    async fn without_otel_the_real_constructor_is_the_noop_and_refuses_a_push()
+    -> Result<(), Box<dyn Error>> {
+        let telemetry = Telemetry::new(&TelemetryConfig::from_env(&|_| None)?)?;
+        assert!(matches!(telemetry.backend, Backend::Noop), "{telemetry:?}");
+        telemetry.bind_vocabulary(vocabulary());
+        telemetry.set_open_tabs(Arc::new(OpenTabCounts::default));
+        let run = telemetry.start_run(run_facts(&"run-1"));
+        assert!(
+            run.is_noop() && run.ops().is_noop(),
+            "nothing to record into"
+        );
+        run.ops()
+            .op_settled(settled("page.goto", &"run-1.1", Instant::now()));
+        run.finish(OK_RUN);
+        drop(telemetry.start_run(run_facts(&"run-2")));
+        telemetry.tab_opened(TabOrigin::Agent);
+        telemetry.tab_closed(TabOrigin::Agent, CloseReason::User, Duration::from_secs(1));
+        telemetry.renderer_crashed();
+        assert_eq!(
+            telemetry.render_prometheus(),
+            "",
+            "GET /v1/metrics still answers: an empty exposition is valid text format"
+        );
+        telemetry.shutdown(Duration::from_secs(1)).await?;
+
+        let endpoint = |name: &str| {
+            (name == "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                .then(|| "http://127.0.0.1:4318/v1/traces".to_owned())
+        };
+        let refused = Telemetry::new(&TelemetryConfig::from_env(&endpoint)?);
+        assert!(
+            matches!(
+                &refused,
+                Err(TelemetryError::Pipeline { stage: "start", reason }) if reason.contains("otel")
+            ),
+            "a push this build cannot make fails startup: {refused:?}"
+        );
+        let protocol =
+            |name: &str| (name == "OTEL_EXPORTER_OTLP_PROTOCOL").then(|| "grpc".to_owned());
+        let bad = TelemetryConfig::from_env(&protocol);
+        assert!(
+            matches!(
+                bad,
+                Err(TelemetryError::InvalidEnv {
+                    name: "OTEL_EXPORTER_OTLP_PROTOCOL",
+                    ..
+                })
+            ),
+            "the variables are still read and checked: {bad:?}"
         );
         Ok(())
     }
@@ -266,6 +366,7 @@ mod tests {
     /// With no `OTEL_*` variable set, the live pipeline is the scrape alone: no tracer provider
     /// (so no span batch thread), no push reader and no transport (so no `neo-telemetry-io`
     /// thread and no socket), and no span is ever started.
+    #[cfg(feature = "otel")]
     #[test]
     fn with_nothing_configured_nothing_pushes_and_no_thread_starts() -> Result<(), Box<dyn Error>> {
         let telemetry = Telemetry::new(&TelemetryConfig::from_env(&|_| None)?)?;

@@ -16,32 +16,47 @@
 //!                                   └ in_memory (test-support): the same pipeline, spans kept for a Probe
 //! ```
 //!
+//! Built without its default `otel` feature, the crate has no `Otel` backend: every handle is the
+//! no-op, the scrape renders an empty exposition, and a configured OTLP push fails
+//! [`Telemetry::new`]. The config reader still runs, so a bad variable fails the same way.
+//!
 //! The crate depends on no browser, CDP, JavaScript engine or SQLite crate, and the server's
 //! dispatch code reaches OpenTelemetry only through this facade. Every metric label comes from a
 //! closed vocabulary ([`label`], and the server's own tables in [`Vocabulary`]), so no caller can
 //! grow a series set.
 
 mod backend;
+#[cfg_attr(
+    not(feature = "otel"),
+    expect(dead_code, reason = "without `otel` only the validation half is read")
+)]
 mod config;
+#[cfg(feature = "otel")]
 mod instruments;
 pub mod label;
 mod op_settled;
 mod open_tab_counts;
+#[cfg(feature = "otel")]
 mod otlp;
 mod otlp_protocol;
+#[cfg(feature = "otel")]
 mod pipeline;
+#[cfg(feature = "otel")]
 mod privacy;
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "otel", feature = "test-support"))]
 mod probe;
+#[cfg(feature = "otel")]
 mod prometheus;
 mod run_span;
 mod run_telemetry;
 mod site_detail;
+#[cfg(feature = "otel")]
 mod spans;
 mod telemetry;
 mod telemetry_config;
 mod telemetry_error;
 mod trace_context;
+#[cfg(feature = "otel")]
 mod transport;
 mod vocabulary;
 
@@ -49,7 +64,7 @@ pub use config::OtlpConfig;
 pub use op_settled::{OpCounting, OpSettled, OpSite};
 pub use open_tab_counts::{OpenTabCounts, OpenTabsSource};
 pub use otlp_protocol::OtlpProtocol;
-#[cfg(feature = "test-support")]
+#[cfg(all(feature = "otel", feature = "test-support"))]
 pub use probe::{CapturedKind, CapturedSpan, Probe, SpanStatus, SpanValue};
 pub use run_span::{RunFacts, RunSpan, RunVerdict};
 pub use run_telemetry::RunTelemetry;

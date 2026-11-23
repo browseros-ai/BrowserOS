@@ -11,6 +11,8 @@ HostedRun}`. It builds the real trace store, browser link, Playwright
 facade, built-ins, dispatcher and tab janitor. It binds no listeners and disables the trace
 screenshot queue. Feature-off builds retain the product path.
 
+The default-on feature `telemetry` builds Neo's OpenTelemetry pipeline. The embedding's telemetry is always off, so an embedder that links this crate with `default-features = false` (as the Node add-on does) leaves the OpenTelemetry SDK, the OTLP exporters and their HTTP client out. Without it `Telemetry::new` is the no-op, `GET /v1/metrics` answers an empty exposition, and a set OTLP endpoint fails startup.
+
 Each connection owns an `App::runtime()` executor with the product's worker stack size.
 `open_run(timeout)` starts a real `RunCtx` and seeds the same tab listing as MCP runs.
 `invoke(name, json, site)` enters that executor and calls `Bridge::submit` synchronously; its
@@ -366,7 +368,7 @@ A built-in is a private type in `src/builtins/` that implements `dispatch::Metho
 
 ## Test it
 
-`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, the SDK image's Python scripts (their tests, an import of each, and ruff where uv is installed), the Bun suites of `neo-playwright-js`, this package's conformance tables and `neo-captcha`'s test bed under the repository's pinned Bun (`BUN=/path/to/bun` names one), a `--locked` resolve of the spec corpus add-on's lock file, clippy with `-D warnings`, and `cargo test`, then clippy and tests again with the `hosted-run` feature, all on CI's pinned toolchain. The same rustfmt (with the workspace's defaults), clippy and tests run on every other crate under `crates/neo-sdk` too, such as `neo-takeover` and `neo-trace`; `neo-captcha`'s tests stay out until two flaky ones are fixed (`check.sh` names them). Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
+`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, the SDK image's Python scripts (their tests, an import of each, and ruff where uv is installed), the Bun suites of `neo-playwright-js`, this package's conformance tables and `neo-captcha`'s test bed under the repository's pinned Bun (`BUN=/path/to/bun` names one), a `--locked` resolve of the spec corpus add-on's lock file, clippy with `-D warnings`, and `cargo test`, then clippy and tests again with the `hosted-run` feature, then clippy and `neo-telemetry`'s tests without the `otel` feature, as the add-on builds, all on CI's pinned toolchain. The same rustfmt (with the workspace's defaults), clippy and tests run on every other crate under `crates/neo-sdk` too, such as `neo-takeover` and `neo-trace`; `neo-captcha`'s tests stay out until two flaky ones are fixed (`check.sh` names them). Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
 
 ```sh
 CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent/target/build-private" \

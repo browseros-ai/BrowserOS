@@ -2,6 +2,7 @@
 
 use crate::OpSettled;
 use crate::backend::Backend;
+#[cfg(feature = "otel")]
 use crate::pipeline::PipelineParent;
 
 /// A run as its ops see it: the handle it records through and, for a counted run, the run's
@@ -16,6 +17,10 @@ use crate::pipeline::PipelineParent;
 #[derive(Clone, Debug)]
 pub struct RunTelemetry {
     backend: Backend,
+    #[cfg_attr(
+        not(feature = "otel"),
+        expect(dead_code, reason = "without `otel` every op settles into the no-op")
+    )]
     link: RunLink,
 }
 
@@ -25,6 +30,7 @@ pub(crate) enum RunLink {
     /// An internal run: no run span, no run metrics.
     Internal,
     /// A counted run on the live pipeline.
+    #[cfg(feature = "otel")]
     Otel(PipelineParent),
 }
 
@@ -39,9 +45,17 @@ impl RunTelemetry {
     /// with `op.started` as its start; an [`crate::OpCounting::Internal`] op gets its span alone.
     /// The door calls it exactly once per op, from its one settle, on every path (answered,
     /// refused, stopped, aborted, panicked).
+    #[cfg_attr(
+        not(feature = "otel"),
+        expect(
+            unused_variables,
+            reason = "without `otel` every op settles into the no-op"
+        )
+    )]
     pub fn op_settled(&self, op: OpSettled<'_>) {
         match &self.backend {
             Backend::Noop => {}
+            #[cfg(feature = "otel")]
             Backend::Otel(pipeline) => {
                 let parent = match &self.link {
                     RunLink::Otel(parent) => Some(parent),

@@ -79,12 +79,18 @@ name = "browseros-claw-sdk"
 path = "src/main.rs"
 
 [features]
+default = ["telemetry"]
+# Neo's telemetry pipeline (the OpenTelemetry SDK and the OTLP push door). Without it
+# `Telemetry::new` is the no-op, `GET /v1/metrics` answers an empty exposition, and setting an OTLP
+# endpoint fails startup. The Node add-on turns it off: its hosted embedding never turns telemetry
+# on. claw-server keeps it, since its engine child is `App::start` on the inherited environment.
+telemetry = ["neo-telemetry/otel"]
 # The real SDK door hosted by another JavaScript engine; no listeners or QuickJS realm.
 hosted-run = []
 # `neo_server::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
 # crate below turns it on for every test build, unit and integration; release builds never have
-# it.
-test-support = ["neo-telemetry/test-support"]
+# it. The telemetry tests read the live pipeline, so it needs `telemetry`.
+test-support = ["telemetry", "neo-telemetry/test-support"]
 
 [dependencies]
 # DOM URL parsing and form encoding for the agent realm; already in the workspace graph.

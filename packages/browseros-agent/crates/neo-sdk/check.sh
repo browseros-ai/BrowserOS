@@ -268,4 +268,12 @@ cargo_pinned clippy -p neo-server --all-targets --locked --features hosted-run -
 step "tests hosted-run"
 cargo_pinned test -p neo-server --locked --features hosted-run
 
+# The spec add-on links neo-server without default features, so without neo-telemetry's `otel`:
+# no OpenTelemetry SDK, every telemetry handle the no-op. Nothing above builds that graph, since
+# the workspace's own neo-server turns `otel` on for every package built with it.
+step "clippy and tests without otel -D warnings"
+cargo_pinned clippy -p neo-telemetry --no-default-features --all-targets --locked -- -D warnings
+cargo_pinned clippy -p neo-server --no-default-features --features hosted-run --lib --locked -- -D warnings
+cargo_pinned test -p neo-telemetry --no-default-features --locked
+
 printf '\ncheck.sh: all checks passed\n'
