@@ -874,7 +874,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
         let mut v = self.read().await?;
         self.snapshot_prior(&v);
         if self.ctx.forced_method == Some(ForcedMethod::Token)
-            || (self.ctx.backend.is_configured() && self.sitekey().is_some() && v.main.present)
+            || (self.ctx.backend.has_paid_budget() && self.sitekey().is_some() && v.main.present)
         {
             return self.token(Some(v)).await;
         }
@@ -927,7 +927,7 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             Ok(true) => return Ok(self.accepted()),
             Ok(false) => {}
             Err(Stop(_, SolveReason::ProviderError | SolveReason::BrowserError, _))
-                if self.ctx.backend.is_configured() && self.sitekey().is_some() => {}
+                if self.ctx.backend.has_paid_budget() && self.sitekey().is_some() => {}
             Err(stop) => return Err(stop),
         }
         self.token(None).await
@@ -1362,6 +1362,7 @@ mod tests {
         tasks: Mutex<Vec<SolveTask>>,
         after: Option<Arc<Mutex<State>>>,
         configured: bool,
+        has_budget: bool,
         pending_request: Option<Arc<Notify>>,
     }
     impl FakeBackend {
@@ -1383,6 +1384,7 @@ mod tests {
                 tasks: Mutex::new(vec![]),
                 after: None,
                 configured: true,
+                has_budget: true,
                 pending_request: None,
             }
         }
@@ -1399,6 +1401,9 @@ mod tests {
     impl CaptchaBackend for FakeBackend {
         fn is_configured(&self) -> bool {
             self.configured
+        }
+        fn has_paid_budget(&self) -> bool {
+            self.configured && self.has_budget
         }
         async fn solve(
             &self,
@@ -1444,9 +1449,9 @@ mod tests {
             .0
     }
 
-    async fn run_with_method(
+    async fn run_with_method<B: CaptchaBackend>(
         page: &FakePage,
-        backend: &FakeBackend,
+        backend: &B,
         challenge: &Challenge,
         cancel: &CancellationToken,
         deadline: Instant,
@@ -3525,6 +3530,70 @@ const inspect = () => ({{
                 );
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_zero_paid_budget_tries_free_checkbox_instead_of_stopping_at_spend_limit() {
+        let page = FakePage::new(false);
+        let backend = FakeBackend {
+            has_budget: false,
+            ..FakeBackend::new(vec![])
+        };
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.attempts.token, 0);
+        assert_eq!(result.paid_tasks, 0);
+        assert!(backend.tasks().is_empty());
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_zero_paid_budget_with_provider_chain_passes_simple_checkbox_for_free()
+    -> anyhow::Result<()> {
+        let key = tempfile::NamedTempFile::new()?;
+        std::fs::write(key.path(), "dummy-key")?;
+        let config = crate::config::CaptchaConfig::from_lookup(|name| match name {
+            crate::config::CAPSOLVER_KEY_FILE_ENV => {
+                Some(key.path().to_string_lossy().into_owned())
+            }
+            crate::config::PAID_TASK_LIMIT_ENV => Some("0".into()),
+            _ => None,
+        });
+        let chain = crate::providers::ProviderChain::new(&config);
+        assert!(chain.is_configured());
+        assert!(!chain.has_paid_budget());
+
+        let page = FakePage::new(false);
+        let (result, _) = run_with_method(
+            &page,
+            &chain,
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.attempts.token, 0);
+        assert_eq!(result.paid_tasks, 0);
+        assert_eq!(chain.paid_tasks(), 0);
         Ok(())
     }
 }

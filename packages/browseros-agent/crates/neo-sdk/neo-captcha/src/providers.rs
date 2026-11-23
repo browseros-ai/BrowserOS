@@ -29,6 +29,10 @@ const MIN_SUBMISSION_BUDGET: Duration = Duration::from_secs(5);
 
 pub trait CaptchaBackend: Send + Sync {
     fn is_configured(&self) -> bool;
+    /// Whether at least one paid-task slot remains in the instance's spend budget.
+    fn has_paid_budget(&self) -> bool {
+        self.is_configured()
+    }
     fn solve_fresh<'a, F, Fut>(
         &'a self,
         mut fresh: F,
@@ -167,6 +171,9 @@ impl ProviderChain {
 impl CaptchaBackend for ProviderChain {
     fn is_configured(&self) -> bool {
         !self.vendors.clients.is_empty()
+    }
+    fn has_paid_budget(&self) -> bool {
+        self.is_configured() && self.paid_tasks() < self.vendors.limit
     }
 
     async fn solve_fresh<'a, F, Fut>(
@@ -2179,6 +2186,34 @@ mod tests {
             }
             assert_eq!(start.elapsed(), Duration::from_secs(elapsed));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_has_paid_budget_tracks_configuration_and_spend_limit() -> anyhow::Result<()>
+    {
+        let empty = ProviderChain::with_clients(vec![], 10);
+        assert!(!empty.is_configured());
+        assert!(!empty.has_paid_budget());
+
+        let (zero_client, _) = fake("ZERO", None, false, true);
+        let zero_budget = ProviderChain::with_clients(vec![zero_client], 0);
+        assert!(zero_budget.is_configured());
+        assert!(
+            !zero_budget.has_paid_budget(),
+            "zero paid-task limit must report no paid budget"
+        );
+
+        let (client, _) = fake("ONE", None, false, true);
+        let one_slot = ProviderChain::with_clients(vec![client], 1);
+        assert!(one_slot.is_configured());
+        assert!(one_slot.has_paid_budget());
+        let _ = solve(&one_slot, &recaptcha()).await?;
+        assert_eq!(one_slot.paid_tasks(), 1);
+        assert!(
+            !one_slot.has_paid_budget(),
+            "exhausting the last paid-task slot must flip has_paid_budget to false"
+        );
         Ok(())
     }
 }
