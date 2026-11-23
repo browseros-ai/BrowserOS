@@ -10,10 +10,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::aria_node::AriaNode;
+use crate::call::Call;
 use crate::form::Passed;
 use crate::snapshot::Snapshot;
 
 use super::case_file::Pending;
+use super::expected::Expected;
 
 /// Today's TypeScript renderer: one script that sets the global `todaysAnswer(call, result)`
 /// (neo-playwright-js `scripts/snapshot-cases/answer.ts`), the dispatch the case writer uses.
@@ -59,9 +61,18 @@ impl Bundles {
         &self,
         snapshot: &Snapshot,
     ) -> Result<String, Box<dyn Error>> {
-        self.todays_answer(&json!({ "playwright": {} }), snapshot)?
+        self.todays(&Call::Playwright, snapshot)?
             .text
             .ok_or_else(|| "Playwright's format always prints a text".into())
+    }
+
+    /// Today's answer to the same call `render` takes, as the prelude would send it.
+    pub(crate) fn todays(
+        &self,
+        call: &Call<'_>,
+        snapshot: &Snapshot,
+    ) -> Result<TodaysAnswer, Box<dyn Error>> {
+        self.todays_answer(&call_json(call), snapshot)
     }
 
     /// Today's answer to `call` (a case's call, `{ page: passed }` and the like) on `snapshot`:
@@ -115,6 +126,33 @@ pub(crate) struct TodaysAnswer {
     pub(crate) pending: Option<Pending>,
 }
 
+impl TodaysAnswer {
+    /// The answer as every judge holds `render`'s to it.
+    pub(crate) fn expected(&self) -> Expected<'_> {
+        Expected {
+            text: self.text.as_deref(),
+            pending: self.pending.as_ref(),
+        }
+    }
+}
+
+/// `call` as the case writer's `Call` says it (`scripts/snapshot-cases/model.ts`): its one key and
+/// its options, each left out when the script left it out.
+fn call_json(call: &Call<'_>) -> Value {
+    match call {
+        Call::Playwright => json!({ "playwright": {} }),
+        Call::Full { max_tokens } => {
+            let mut options = Map::new();
+            if let Some(max_tokens) = max_tokens {
+                options.insert("maxTokens".to_owned(), json!(max_tokens.tokens()));
+            }
+            json!({ "full": options })
+        }
+        Call::Element(passed) => json!({ "element": passed_json(passed) }),
+        Call::Page(passed) => json!({ "page": passed_json(passed) }),
+    }
+}
+
 /// The snapshot operation's result as Rust hands it to today's renderer: `{ json, partial }`, and
 /// `onTop`, `closedRoots` and `unmarked` when the page has them.
 fn result(snapshot: &Snapshot) -> Value {
@@ -149,7 +187,7 @@ fn result(snapshot: &Snapshot) -> Value {
 }
 
 /// A call's options as the prelude sends them: each left out when the script left it out.
-pub(crate) fn passed_json(passed: &Passed) -> Value {
+fn passed_json(passed: &Passed) -> Value {
     let mut options = Map::new();
     if let Some(text) = passed.text {
         options.insert("text".to_owned(), json!(text));

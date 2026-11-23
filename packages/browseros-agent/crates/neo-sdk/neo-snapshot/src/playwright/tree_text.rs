@@ -1,14 +1,27 @@
 use crate::aria_node::{AriaChild, AriaNode};
 use crate::js;
+use crate::neo::shown_text;
 use crate::snapshot::{PartialFrame, Snapshot};
 
 use super::node_text::{NodeAlone, node_text, text_line};
 
 /// One line of Playwright's text, with the node whose key line it is. A text line, the lines
 /// under a key and a comment have none.
-struct TreeLine<'a> {
-    text: String,
-    node: Option<&'a AriaNode>,
+pub(crate) struct TreeLine<'a> {
+    pub(crate) text: String,
+    pub(crate) node: Option<&'a AriaNode>,
+}
+
+/// What an iframe's own text is in the two formats that print Playwright's lines for every node.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IframeText {
+    /// Playwright's text: the fallback markup written between the iframe's tags is the node's
+    /// text and prints on its line, and, as upstream prints no child of a node with text, the
+    /// frame's content stitched under it does not.
+    Fallback,
+    /// `mode: 'full'`: Neo's rule (`shown_text`) drops that markup, which no browser shows, so the
+    /// iframe opens a block of its frame's content as an iframe without fallback does.
+    Dropped,
 }
 
 /// One entry of the walk's own stack: a child still to print, at its depth.
@@ -25,7 +38,7 @@ enum Step<'a> {
 /// Ported from the TypeScript renderer's `renderSnapshot` (neo-playwright-js
 /// `prelude/snapshot.ts`), whose output it must equal byte for byte.
 pub(crate) fn tree_text(snapshot: &Snapshot) -> String {
-    let lines = with_partial_frames(tree_lines(&snapshot.tree), &snapshot.partial);
+    let lines = yaml_lines(snapshot, IframeText::Fallback);
     let mut text = String::new();
     for (index, line) in lines.iter().enumerate() {
         if index > 0 {
@@ -36,8 +49,14 @@ pub(crate) fn tree_text(snapshot: &Snapshot) -> String {
     text
 }
 
-/// `treeLines` with an iframe's fallback text kept: upstream's lines for `tree`, each element's
-/// key line with its node.
+/// `yamlLines`: upstream's lines for the snapshot's tree, `iframe` saying what an iframe's text
+/// is, with each frame that could not be read placed as a `# partial:` comment.
+pub(crate) fn yaml_lines(snapshot: &Snapshot, iframe: IframeText) -> Vec<TreeLine<'_>> {
+    with_partial_frames(tree_lines(&snapshot.tree, iframe), &snapshot.partial)
+}
+
+/// `treeLines`: upstream's lines for `tree`, each element's key line with its node, `iframe`
+/// saying what an iframe's text is.
 ///
 /// Upstream's renderer recurses once per level. This walk keeps its pending children on its own
 /// stack, as the TypeScript does, so no tree is too deep for it. A node's own lines are
@@ -46,12 +65,16 @@ pub(crate) fn tree_text(snapshot: &Snapshot) -> String {
 /// is the TypeScript's and changes bytes: where a role or a ref holds a line break, upstream's own
 /// whole-tree text keeps the colon at the end of the quoted key and the key's later lines at the
 /// margin, while this text puts the colon after the key's first line and indents the rest.
-fn tree_lines(tree: &[AriaNode]) -> Vec<TreeLine<'_>> {
+pub(crate) fn tree_lines<'a, Tree>(tree: Tree, iframe: IframeText) -> Vec<TreeLine<'a>>
+where
+    Tree: IntoIterator<Item = &'a AriaNode>,
+    Tree::IntoIter: DoubleEndedIterator,
+{
     let mut lines = Vec::new();
     // One node's own text, reused for every node.
     let mut own = String::new();
     let mut steps: Vec<(Step<'_>, usize)> = tree
-        .iter()
+        .into_iter()
         .rev()
         .map(|node| (Step::Node(node), 0))
         .collect();
@@ -78,10 +101,20 @@ fn tree_lines(tree: &[AriaNode]) -> Vec<TreeLine<'_>> {
             }
             Step::Node(node) => node,
         };
-        node_text(&NodeAlone::from(node), &mut own);
+        let text = match iframe {
+            IframeText::Fallback => node.text.as_deref(),
+            IframeText::Dropped => shown_text(node),
+        };
+        node_text(
+            &NodeAlone {
+                text,
+                ..NodeAlone::from(node)
+            },
+            &mut own,
+        );
         // Alone, a node whose children print under it has no text, url or placeholder, so
         // upstream printed it as a leaf, without the colon.
-        let opens_children = node.text.is_none()
+        let opens_children = text.is_none()
             && node.url.is_none()
             && node.placeholder.is_none()
             && !node.children.is_empty();
@@ -99,7 +132,7 @@ fn tree_lines(tree: &[AriaNode]) -> Vec<TreeLine<'_>> {
             });
         }
         // Upstream prints no child of a node with a text.
-        if node.text.is_none() {
+        if text.is_none() {
             steps.extend(node.children.iter().rev().map(|child| {
                 let step = match child {
                     AriaChild::Text(text) => Step::Text(text),

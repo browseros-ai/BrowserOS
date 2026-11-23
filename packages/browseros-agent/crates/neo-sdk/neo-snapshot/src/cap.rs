@@ -1,5 +1,5 @@
 //! The size cap on a snapshot's text, ported from the TypeScript renderer's `snapshot-cap.ts`.
-//! Neo's default format (`neo/`) cuts its lines with it, and `mode: 'full'` will cut
+//! Neo's default format (`neo/`) cuts its lines with it, and `mode: 'full'` (`full_text.rs`) cuts
 //! Playwright's lines with the same function: each format says which of its lines are sections
 //! and kept blocks, and this cuts them alike.
 //!
@@ -19,28 +19,68 @@ use crate::snapshot::{ClosedRoots, Snapshot};
 /// A token is counted as four UTF-16 units of the text.
 const UNITS_PER_TOKEN: f64 = 4.0;
 
-/// The cap when the script passes none.
-pub(crate) const DEFAULT_MAX_TOKENS: MaxTokens = MaxTokens(8_000.0);
+/// The cap, in tokens, of a text in Neo's default format or `mode: 'full'` when the script passes
+/// none. The crate applies it itself (`MaxTokens::default`), so a caller leaves a cap the script
+/// left out as `None` and never needs this number to render; the run description's tests compare
+/// its prose with it.
+pub const DEFAULT_MAX_TOKENS: u32 = 8_000;
+
+/// The call a cut `mode: 'full'` text offers on a section's ref: that section in the same mode,
+/// not Neo's short list, so following the offer shows what the cut removed in the same format.
+const FULL_CALL: &str = "ariaSnapshot({ mode: 'full' })";
 
 /// A token cap as the prelude lets a script pass it: finite and above zero, fractions included
-/// (`2.5` is a limit of 10 units).
+/// (`2.5` is a limit of 10 units). Part of the interface: a caller builds one with
+/// [`MaxTokens::new`] from the number the script passed, and the crate cuts at `tokens * 4`
+/// UTF-16 units, a double, as the TypeScript compares it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MaxTokens(f64);
+pub struct MaxTokens(f64);
 
 impl MaxTokens {
-    /// `None` for a number the prelude refuses.
-    pub(crate) fn new(tokens: f64) -> Option<Self> {
+    /// The cap for `tokens`, or `None` for a number the prelude refuses (not finite, or not
+    /// above zero). The prelude never sends such a number, so a caller that meets `None` has a
+    /// broken producer, not a script error.
+    #[must_use]
+    pub fn new(tokens: f64) -> Option<Self> {
         (tokens.is_finite() && tokens > 0.0).then_some(Self(tokens))
     }
 
-    /// The number of tokens, as the script passed it.
-    pub(crate) fn tokens(self) -> f64 {
+    /// The number of tokens, as the script passed it: what a stored form writes back.
+    #[must_use]
+    pub fn tokens(self) -> f64 {
         self.0
     }
 
     /// The limit in UTF-16 units: `maxTokens * 4`, a double.
     pub(crate) fn units(self) -> f64 {
         self.0 * UNITS_PER_TOKEN
+    }
+}
+
+/// [`DEFAULT_MAX_TOKENS`]: the cap a call takes when the script passed none, its one owner.
+impl Default for MaxTokens {
+    fn default() -> Self {
+        Self(f64::from(DEFAULT_MAX_TOKENS))
+    }
+}
+
+/// Which snapshot call the cut line offers on a section's ref: the call of the text being cut, so
+/// following the offer gives that section in the format the agent was reading.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Offer {
+    /// `ariaSnapshot()`: Neo's default format.
+    Neo,
+    /// `ariaSnapshot({ mode: 'full' })`.
+    Full,
+}
+
+impl Offer {
+    /// The call as the cut line writes it after `page.getByRef('<ref>').`.
+    fn call(self) -> &'static str {
+        match self {
+            Self::Neo => "ariaSnapshot()",
+            Self::Full => FULL_CALL,
+        }
     }
 }
 
@@ -67,10 +107,17 @@ pub(crate) struct Section {
     pub(crate) end: usize,
 }
 
-/// `cap(head, pinned, lines, limit)`: `head`, then `pinned`, then `lines`, within `limit` units.
-/// The head lines (the notice) count toward the limit. The pinned lines (the closed-roots line),
-/// the cut line and the kept blocks printed after it do not, and print whatever the limit.
-pub(crate) fn cap(head: &[String], pinned: &[String], lines: &[Printed], limit: f64) -> String {
+/// `cap(head, pinned, lines, limit, call)`: `head`, then `pinned`, then `lines`, within `limit`
+/// units. The head lines (the notice) count toward the limit. The pinned lines (the closed-roots
+/// line), the cut line and the kept blocks printed after it do not, and print whatever the limit.
+/// `offer` is the call the cut line offers on a section's ref, in the caller's own format.
+pub(crate) fn cap(
+    head: &[String],
+    pinned: &[String],
+    lines: &[Printed],
+    limit: f64,
+    offer: Offer,
+) -> String {
     let texts = || {
         head.iter()
             .map(String::as_str)
@@ -144,15 +191,15 @@ pub(crate) fn cap(head: &[String], pinned: &[String], lines: &[Printed], limit: 
         "the whole snapshot is about {} tokens",
         number(about_tokens(measured))
     );
+    let call = offer.call();
     let offer = match (open_section(lines, cut, limit), later) {
         (Some(open), _) => format!(
-            "page.getByRef('{}').ariaSnapshot() shows all of the {} section. Or pass a larger \
-             maxTokens.",
+            "page.getByRef('{}').{call} shows all of the {} section. Or pass a larger maxTokens.",
             open.r#ref, open.label
         ),
         (None, Some(later)) => format!(
-            "page.getByRef('{}').ariaSnapshot() shows the {} section, which is not shown above. \
-             Or pass a larger maxTokens.",
+            "page.getByRef('{}').{call} shows the {} section, which is not shown above. Or pass \
+             a larger maxTokens.",
             later.r#ref, later.label
         ),
         (None, None) => "Pass a larger maxTokens.".to_owned(),
@@ -186,8 +233,9 @@ fn open_section(lines: &[Printed], cut: usize, limit: f64) -> Option<&Section> {
         })
 }
 
-/// `partialHead`: the line a text in Neo's formats pins before its tree when some closed shadow
-/// roots may be unread. No `maxTokens` may hide that the tree itself is short.
+/// `partialHead`: the line a text in Neo's default format or `mode: 'full'` pins before its tree
+/// when some closed shadow roots may be unread. No `maxTokens` may hide that the tree itself is
+/// short.
 pub(crate) fn partial_head(snapshot: &Snapshot) -> Option<String> {
     snapshot
         .closed_roots

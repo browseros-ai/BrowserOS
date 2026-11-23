@@ -1,44 +1,40 @@
-//! Neo's default format in Rust against its judges (`crate::judges`): the committed cases; the
-//! private sets of saved pages, where a folder names them; and today's TypeScript renderer in
-//! QuickJS on seeded random trees with every fact and every combination of options.
+//! Neo's default format in Rust against its judges (`crate::judges`), through `render` with
+//! `Call::Element` and `Call::Page`: the committed cases; the private sets of saved pages, where
+//! a folder names them; and today's TypeScript renderer in QuickJS on seeded random trees with
+//! every fact and every combination of options. Each is held to its text and to what it keeps.
 
 use std::error::Error;
 use std::{env, fs};
 
 use serde_json::json;
 
+use crate::call::Call;
 use crate::cover_block::cover_block;
-use crate::form::{Form, Passed};
-use crate::judges::{
-    Bundles, Case, CaseFile, Generator, NEO_CASES, count, first_difference, passed_json, seed,
-};
+use crate::form::Passed;
+use crate::judges::{Bundles, CaseFile, Generator, NEO_CASES, Shown, count, seed};
+use crate::render::render;
 use crate::snapshot::Snapshot;
 
-use super::{neo_text, neo_text_as};
+use super::neo_text_as;
 
 /// How many random trees the gate's run draws.
 const GATE_TREES: usize = 300;
+
+/// A call in Neo's default format, a locator's or a whole page's.
+fn neos(call: &Call<'_>) -> bool {
+    matches!(call, Call::Element(_) | Call::Page(_))
+}
 
 #[test]
 fn tests_that_neos_format_prints_every_committed_case() -> Result<(), Box<dyn Error>> {
     let cases: CaseFile = serde_json::from_str(NEO_CASES)?;
     let mut judged = 0;
     let mut differing = Vec::new();
-    for (case, passed) in cases.neo_cases() {
-        let snapshot = cases.snapshot(case.snapshot.as_deref().ok_or("a case names its tree")?)?;
-        let printed = neo_text(&snapshot, &passed.passed()?);
-        let expected = case
-            .text
-            .as_deref()
-            .ok_or("a case in Neo's format has a text")?;
-        if let Some((line, printed_line, expected_line)) = first_difference(&printed.text, expected)
-        {
-            differing.push(format!(
-                "{}: line {line}\n  printed:  {printed_line:?}\n  expected: {expected_line:?}",
-                case.name
-            ));
-        } else if let Some(kept) = kept_differs(case, &printed.text, printed.form)? {
-            differing.push(format!("{}: {kept}", case.name));
+    for found in cases.rendered_cases(neos) {
+        let (case, call, name) = found?;
+        let answer = render(&cases.snapshot(name)?, call);
+        if let Some(difference) = case.expected().difference(&call, &answer, Shown::Lines)? {
+            differing.push(format!("{}: {difference}", case.name));
         }
         judged += 1;
     }
@@ -136,21 +132,10 @@ fn saved_texts(
     differing: &mut Vec<String>,
 ) -> Result<Tally, Box<dyn Error>> {
     let mut tally = Tally::default();
-    for (index, (case, passed)) in cases.neo_cases().enumerate() {
-        let snapshot = cases.snapshot(case.snapshot.as_deref().ok_or("a case names its tree")?)?;
-        let printed = neo_text(&snapshot, &passed.passed()?);
-        let expected = case
-            .text
-            .as_deref()
-            .ok_or("a case in Neo's format has a text")?;
-        let difference = match first_difference(&printed.text, expected) {
-            Some((line, _, _)) => Some(format!(
-                "line {line} differs; {} bytes printed, {} saved",
-                printed.text.len(),
-                expected.len()
-            )),
-            None => kept_differs(case, &printed.text, printed.form)?,
-        };
+    for (index, found) in cases.rendered_cases(neos).enumerate() {
+        let (case, call, name) = found?;
+        let answer = render(&cases.snapshot(name)?, call);
+        let difference = case.expected().difference(&call, &answer, Shown::Lengths)?;
         if let Some(difference) = &difference {
             differing.push(format!("{shown}: Neo-format case {index}: {difference}"));
         }
@@ -159,8 +144,9 @@ fn saved_texts(
     Ok(tally)
 }
 
-/// Every saved tree in `cases`, not only those a Neo-format call was saved for: Rust's text with
-/// every default and its covered block, beside today's renderer's in QuickJS.
+/// Every saved tree in `cases`, not only those a Neo-format call was saved for: Rust's whole page
+/// with every default, its text and what it keeps, and its covered block, beside today's
+/// renderer's in QuickJS.
 fn saved_trees(
     cases: &CaseFile,
     bundles: &Bundles,
@@ -168,23 +154,22 @@ fn saved_trees(
     differing: &mut Vec<String>,
 ) -> Result<Tally, Box<dyn Error>> {
     let mut tally = Tally::default();
+    let passed = Passed::default();
+    let call = Call::Page(&passed);
     for (index, name) in cases.snapshot_names().enumerate() {
         let snapshot = cases.snapshot(name)?;
-        let printed = neo_text(&snapshot, &Passed::default()).text;
-        let todays = bundles
-            .todays_answer(&json!({ "page": {} }), &snapshot)?
-            .text
-            .unwrap_or_default();
+        let answer = render(&snapshot, call);
+        let todays = bundles.todays(&call, &snapshot)?;
         let block = cover_block(snapshot.tree.clone());
         let todays_block = bundles
             .todays_answer(&json!({ "cover": {} }), &snapshot)?
             .text;
-        let difference = if let Some((line, _, _)) = first_difference(&printed, &todays) {
-            Some(format!(
-                "line {line} differs; {} bytes printed, {} by today's renderer",
-                printed.len(),
-                todays.len()
-            ))
+        let difference = if let Some(difference) =
+            todays
+                .expected()
+                .difference(&call, &answer, Shown::Lengths)?
+        {
+            Some(format!("against today's renderer: {difference}"))
         } else if block != todays_block {
             Some(format!(
                 "the covered block differs; {:?} bytes printed, {:?} by today's renderer",
@@ -202,6 +187,8 @@ fn saved_trees(
     Ok(tally)
 }
 
+/// Seeded random trees, each in Neo's format as a whole page and as a locator's snapshot with
+/// the same options, against today's renderer: the text, and what each keeps.
 #[test]
 fn tests_that_neos_format_is_todays_on_generated_trees() -> Result<(), Box<dyn Error>> {
     let seed = seed()?;
@@ -210,72 +197,48 @@ fn tests_that_neos_format_is_todays_on_generated_trees() -> Result<(), Box<dyn E
     for index in 0..count("NEO_SNAPSHOT_DIFFERENTIAL_TREES", GATE_TREES)? {
         let snapshot = generator.snapshot();
         let passed = generator.passed();
-        let printed = neo_text(&snapshot, &passed);
-        let todays = bundles.todays_answer(&json!({ "page": passed_json(&passed) }), &snapshot)?;
-        let context = format!("seed {seed:#x}, tree {index}, {passed:?}: {snapshot:?}");
-        assert_eq!(
-            Some(&printed.text),
-            todays.text.as_ref(),
-            "prints today's renderer's text; {context}"
-        );
-        let pending = todays.pending.ok_or("a whole page keeps a baseline")?;
-        assert_eq!(
-            (&pending.text, pending.form()?),
-            (&printed.text, printed.form),
-            "keeps the text in today's form; {context}"
-        );
+        for call in [Call::Page(&passed), Call::Element(&passed)] {
+            let answer = render(&snapshot, call);
+            let todays = bundles.todays(&call, &snapshot)?;
+            if let Some(difference) = todays.expected().difference(&call, &answer, Shown::Lines)? {
+                panic!("seed {seed:#x}, tree {index}, {call:?}: {difference}\n{snapshot:?}");
+            }
+        }
     }
     Ok(())
 }
 
-/// What a delta stands on: a whole page's text rendered again in the form it was kept in is the
-/// same text, the length rule not asked again and the text form walked again for the notice.
+/// What a delta stands on: a whole page's text rendered again in the form it keeps is the same
+/// text, the length rule not asked again and the text form walked again for the notice.
 #[test]
 fn tests_that_a_text_rendered_again_in_its_own_form_is_the_same_text() -> Result<(), Box<dyn Error>>
 {
     let cases: CaseFile = serde_json::from_str(NEO_CASES)?;
     let mut judged = 0;
-    for (case, passed) in cases.neo_cases() {
-        let snapshot = cases.snapshot(case.snapshot.as_deref().ok_or("a case names its tree")?)?;
-        let printed = neo_text(&snapshot, &passed.passed()?);
-        assert!(
-            neo_text_as(&snapshot, &printed.form) == printed.text,
-            "{} renders again in its form {:?} as it was",
-            case.name,
-            printed.form
-        );
+    let rendered_again = |snapshot: &Snapshot, passed: &Passed| -> Result<(), String> {
+        let answer = render(snapshot, Call::Page(passed));
+        let kept = answer.pending().ok_or("a whole page keeps itself")?;
+        (neo_text_as(snapshot, &kept.form) == kept.text)
+            .then_some(())
+            .ok_or_else(|| format!("renders again in its form {:?} as it was", kept.form))
+    };
+    for found in cases.rendered_cases(|call| matches!(call, Call::Page(_))) {
+        let (case, call, name) = found?;
+        let Call::Page(passed) = call else {
+            continue;
+        };
+        rendered_again(&cases.snapshot(name)?, passed)
+            .map_err(|failed| format!("{}: {failed}", case.name))?;
         judged += 1;
     }
     let seed = seed()?;
     let mut generator = Generator::new(seed);
     for index in 0..count("NEO_SNAPSHOT_DIFFERENTIAL_TREES", GATE_TREES)? {
         let snapshot: Snapshot = generator.snapshot();
-        let printed = neo_text(&snapshot, &generator.passed());
-        assert!(
-            neo_text_as(&snapshot, &printed.form) == printed.text,
-            "seed {seed:#x}, tree {index} renders again in its form {:?} as it was",
-            printed.form
-        );
+        rendered_again(&snapshot, &generator.passed())
+            .map_err(|failed| format!("seed {seed:#x}, tree {index}: {failed}"))?;
         judged += 1;
     }
     assert!(judged > 0, "texts were rendered again");
     Ok(())
-}
-
-/// How what `case` kept differs from what Rust would keep for `text` in `form`, in words that hold
-/// no page text; `None` when it is the same. A whole page keeps its text in its form; a locator's
-/// snapshot keeps nothing.
-fn kept_differs(case: &Case, text: &str, form: Form) -> Result<Option<String>, String> {
-    Ok(match (&case.pending, case.keeps_pending()) {
-        (Some(pending), true) if pending.text != text => {
-            Some("the kept text is not the text returned".to_owned())
-        }
-        (Some(pending), true) => {
-            let kept = pending.form()?;
-            (kept != form).then(|| format!("the form {form:?} printed, {kept:?} kept"))
-        }
-        (None, false) => None,
-        (Some(_), false) => Some("a locator's snapshot kept a baseline".to_owned()),
-        (None, true) => Some("a whole page kept no baseline".to_owned()),
-    })
 }

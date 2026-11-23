@@ -37,8 +37,9 @@ pub(super) const FIELD: &[&str] = &[
     "menuitemradio",
 ];
 
-/// Regions an agent can scope a snapshot to (the cut line names one), so their refs print.
-const SECTION: &[&str] = &[
+/// Regions an agent can scope a snapshot to (the cut line names one), so their refs print. A
+/// cut `mode: 'full'` text offers them too.
+pub(crate) const SECTION: &[&str] = &[
     "banner",
     "navigation",
     "main",
@@ -51,9 +52,12 @@ const SECTION: &[&str] = &[
     "iframe",
 ];
 
-/// Blocks whose text says what the controls around them mean (an error, a confirm question), so
-/// their text prints even in the interactive form, and a cut never hides them.
-const KEPT: &[&str] = &["dialog", "alertdialog", "alert", "status"];
+/// The roles the cap keeps whole past its cut, in Neo's default format and in `mode: 'full'`:
+/// blocks whose text says what the controls around them mean (an error, a confirm question), so
+/// their text prints even in the interactive form, and a cut never hides them. Part of the
+/// interface because the run description says so in words, and its test compares its prose with
+/// this value.
+pub const KEPT_ROLES: &[&str] = &["dialog", "alertdialog", "alert", "status"];
 
 /// The kept blocks whose line always prints its ref: an agent scopes to a dialog.
 const KEPT_WITH_REF: &[&str] = &["dialog", "alertdialog"];
@@ -105,7 +109,7 @@ impl<'a> Rule<'a> {
         let role = node.role.as_str();
         if role == "text" {
             Self::Piece(node.text.as_deref().unwrap_or_default())
-        } else if KEPT.contains(&role) {
+        } else if KEPT_ROLES.contains(&role) {
             Self::Kept(node)
         } else if SECTION.contains(&role) {
             Self::Section(node)
@@ -142,11 +146,12 @@ pub(super) fn interactive(role: &str) -> bool {
     INTERACTIVE.contains(&role)
 }
 
-/// `shownText`: a node's own `text` as Neo's formats print it. An iframe's text is the fallback
-/// markup written between its tags, which no browser shows; printing it would hide the frame's
-/// content, which is stitched under the same node as children, since upstream's printer prints a
-/// node with text as one line and never visits its children.
-pub(super) fn shown_text(node: &AriaNode) -> Option<&str> {
+/// `shownText`: a node's own `text` as Neo's formats print it, the default format and
+/// `mode: 'full'`. An iframe's text is the fallback markup written between its tags, which no
+/// browser shows; printing it would hide the frame's content, which is stitched under the same
+/// node as children, since upstream's printer prints a node with text as one line and never
+/// visits its children.
+pub(crate) fn shown_text(node: &AriaNode) -> Option<&str> {
     if node.role == "iframe" {
         None
     } else {
@@ -156,7 +161,7 @@ pub(super) fn shown_text(node: &AriaNode) -> Option<&str> {
 
 /// `sectionLabel`: how the cut line names a section, its role and its quoted name when it has
 /// one.
-pub(super) fn section_label(node: &AriaNode) -> String {
+pub(crate) fn section_label(node: &AriaNode) -> String {
     let mut label = node.role.clone();
     if let Some(name) = named(node.name.as_deref()) {
         label.push(' ');

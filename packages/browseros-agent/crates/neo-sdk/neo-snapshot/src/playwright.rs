@@ -2,7 +2,8 @@
 //! for one node, and the whole tree with the frames that could not be read.
 //!
 //! ```text
-//!  Snapshot ─▶ tree_text: walks the tree on its own stack, places each # partial: comment
+//!  Snapshot ─▶ tree_text: walks the tree on its own stack, places each # partial: comment;
+//!                 │ yaml_lines, with an iframe's fallback text dropped, feeds mode: 'full'
 //!                 │ one node at a time, without its children (NodeAlone)
 //!                 ▼
 //!              node_text: upstream's createKey and visit ─▶ YamlEscape: upstream's quoting
@@ -32,4 +33,4 @@ mod yaml_escape;
 
 pub(crate) use node_text::{NodeAlone, node_text, text_line};
 pub use ported_from::{PORTED_FROM, PortedFile};
-pub(crate) use tree_text::tree_text;
+pub(crate) use tree_text::{IframeText, TreeLine, tree_lines, tree_text, yaml_lines};
