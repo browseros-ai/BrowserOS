@@ -590,7 +590,10 @@ enum TreeRead {
 /// A session's last failed tree read ([`Watcher::failed_reads`]).
 struct FailedRead {
     at: Instant,
+    /// The tab's frame version when it failed.
     version: u64,
+    /// Whether the session sent an event since.
+    heard: bool,
 }
 
 /// A session to read again after reads that failed or missed [`TREE_READ_WAIT`] (a renderer
@@ -1260,6 +1263,7 @@ impl Watcher {
             self.sessions.clear();
             self.lifecycle_sources = LifecycleSources::default();
             self.read_retries.clear();
+            self.failed_reads.clear();
             self.frames.clear();
             self.contexts.clear();
             self.pending_dialogs.clear();
@@ -1308,6 +1312,7 @@ impl Watcher {
             params,
             session_id,
         } = event;
+        self.heard_from(session_id.as_ref());
         match method.as_str() {
             "Page.frameAttached"
             | "Page.frameNavigated"
@@ -2455,12 +2460,28 @@ impl Watcher {
     }
 
     /// Whether a reseed may read `session` again: its last read did not fail, or it failed at
-    /// least [`RESEED_BACKOFF`] ago, or `tab`'s frame version moved since.
+    /// least [`RESEED_BACKOFF`] ago, or it showed signs of life since. For an out-of-process
+    /// frame's session that is an event of its own (`heard_from`): the tab's version moves on any
+    /// frame's event, so on a page whose other frames churn it would lift a stuck frame's backoff
+    /// at nearly every step. For the tab's own source it is a move of the tab's version, which
+    /// that source's own frame events make.
     fn may_reread(&self, tab: &TargetId, session: &SessionId) -> bool {
         self.failed_reads.get(session).is_none_or(|failed| {
-            failed.at + RESEED_BACKOFF <= Instant::now()
-                || failed.version != self.writer.hub().frame_version(tab)
+            let alive = if self.frame_logs.contains_key(session) {
+                failed.heard
+            } else {
+                failed.version != self.writer.hub().frame_version(tab)
+            };
+            failed.at + RESEED_BACKOFF <= Instant::now() || alive
         })
+    }
+
+    /// `session` sent an event: if its last tree read failed, it is answering again, so a reseed
+    /// may read it at once (`may_reread`).
+    fn heard_from(&mut self, session: Option<&SessionId>) {
+        if let Some(failed) = session.and_then(|session| self.failed_reads.get_mut(session)) {
+            failed.heard = true;
+        }
     }
 
     /// Sends `Page.getFrameTree` on `tab`'s source session and on each of its out-of-process
@@ -2875,6 +2896,7 @@ impl Watcher {
                         let failed = FailedRead {
                             at: Instant::now(),
                             version: self.writer.hub().frame_version(&tab),
+                            heard: false,
                         };
                         self.failed_reads.insert(session.clone(), failed);
                         self.retry_later(&tab, session, read);
@@ -5465,6 +5487,50 @@ mod seed_tests {
             tree_reads_since(&connection, before)?,
             ["t-page", "t-page"],
             "a version move lets it read at once"
+        );
+        Ok(())
+    }
+
+    /// A frame session whose read failed is read again before the backoff passed only once it
+    /// sent an event of its own: another frame's event moves the tab's version, and on a page whose
+    /// other frames churn it would read the stuck frame at nearly every step.
+    #[tokio::test(start_paused = true)]
+    async fn a_reseed_reads_a_stuck_frame_again_only_once_it_speaks() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", json!({}))?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        settle().await;
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from("tf"),
+            tree: None,
+        });
+        watcher.advance_lines().await;
+        let t = TargetId("t".to_owned());
+        let reseed = || Order::Reseed {
+            tab: t.clone(),
+            own_tree: false,
+        };
+        let sibling = json!({ "frameId": "sibling", "parentFrameId": "t" });
+        read(&mut watcher, on("t-page", "Page.frameAttached", sibling)).await;
+        let before = connection.calls()?.len();
+        watcher.order(reseed()).await;
+        settle().await;
+        assert!(
+            tree_reads_since(&connection, before)?.is_empty(),
+            "another frame's event moved the tab's version, and tf said nothing"
+        );
+        let own = json!({ "frame": { "id": "tf", "parentId": "t", "loaderId": "next",
+            "url": "https://tf.test/next" } });
+        read(&mut watcher, on("tf", "Page.frameNavigated", own)).await;
+        watcher.order(reseed()).await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["tf"],
+            "tf sent an event of its own"
         );
         Ok(())
     }
