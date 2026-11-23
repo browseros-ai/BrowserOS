@@ -694,7 +694,7 @@ impl RouteSource for LiveRoutes<'_> {
                 .resolve_frame_target(self.core_page.clone(), Some(frame.clone()), None, true)
                 .await
                 .ok()
-                .map(|target| target.session)
+                .and_then(known_host::own_session)
         })
     }
 }

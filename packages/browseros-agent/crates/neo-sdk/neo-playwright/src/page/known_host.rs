@@ -22,6 +22,7 @@
 
 use std::collections::HashSet;
 
+use browseros_core::frames::FrameTarget;
 use browseros_core::{FrameId, ProtocolSession, TargetId};
 use futures_util::future::BoxFuture;
 
@@ -105,6 +106,15 @@ fn chain(list: &TabFrameList, tab: &TargetId, frame: &FrameId) -> Option<Vec<Fra
     None
 }
 
+/// The session core's registry answered for an out-of-process frame, when it is that frame's own:
+/// one it held or just attached. When the attach failed (the target went between the browser's
+/// list and the attach, removed or swapped back into its parent's process), core falls back to
+/// sharing a parent's session, the page's here, which hosts the frame only if it moved back into
+/// the main frame's process; the op then falls back to the read rather than trust it.
+pub(crate) fn own_session(target: FrameTarget) -> Option<ProtocolSession> {
+    target.cursor_uses_session_default.then_some(target.session)
+}
+
 /// The nearest frame of `chain`, the child first, that the browser lists as an out-of-process
 /// target: its session hosts the child. `None`: the whole chain shares the main frame's process.
 fn host_frame<'a>(chain: &'a [FrameId], targets: &HashSet<String>) -> Option<&'a FrameId> {
@@ -116,11 +126,12 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::{Mutex, PoisonError};
 
+    use browseros_core::frames::FrameTarget;
     use browseros_core::testing::TestConnection;
     use browseros_core::{FrameId, ProtocolSession, SessionId, TargetId};
     use futures_util::future::BoxFuture;
 
-    use super::{RouteSource, chain, host_frame, known_host};
+    use super::{RouteSource, chain, host_frame, known_host, own_session};
     use crate::events::tab_frames::{ListedFrame, TabFrameList};
 
     fn id(name: &str) -> FrameId {
@@ -192,6 +203,30 @@ mod tests {
         assert!(
             chain(&list(false, None), &tab, &id("g2")).is_some(),
             "a list that is not whole still holds the real chain"
+        );
+    }
+
+    /// Core's answer counts as an out-of-process frame's host only when it is that frame's own
+    /// session; a failed attach's fallback to a parent's session builds no route.
+    #[test]
+    fn tests_that_only_a_frames_own_session_hosts_it() {
+        let own = FrameTarget {
+            session: session("g"),
+            ax_params: serde_json::json!({}),
+            cursor_uses_session_default: true,
+        };
+        let shared = FrameTarget {
+            session: session("page"),
+            ax_params: serde_json::json!({ "frameId": "g" }),
+            cursor_uses_session_default: false,
+        };
+        assert_eq!(
+            own_session(own).and_then(|session| session.session_id().cloned()),
+            Some(SessionId::from("g".to_owned()))
+        );
+        assert!(
+            own_session(shared).is_none(),
+            "the page's session, after a failed attach"
         );
     }
 
