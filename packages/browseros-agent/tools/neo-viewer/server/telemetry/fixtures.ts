@@ -214,89 +214,154 @@ export function fixtureFamilies(step = 0): MetricFamily[] {
   ): MetricFamily => ({ ...counter(name, help, series), kind: 'gauge' })
   return [
     counter('neo_runs_total', 'Runs ended, by status and fault owner.', [
-      [{ status: 'ok', error_owner: 'none' }, runs],
-      [{ status: 'error', error_owner: 'script' }, 1],
+      [{ neo_run_status: 'ok', neo_error_owner: 'none' }, runs],
+      [{ neo_run_status: 'error', neo_error_owner: 'script' }, 1],
     ]),
-    gauge('neo_runs_in_flight', 'Runs running now.', [[{}, step % 2]]),
+    gauge('neo_run_active', 'Runs running now.', [[{}, step % 2]]),
     histogram('neo_run_duration_seconds', 'Run duration.', [
-      [{ status: 'ok' }, Array(runs).fill(1.23)],
-      [{ status: 'error' }, [0.61]],
+      [{ neo_run_status: 'ok' }, Array(runs).fill(1.23)],
+      [{ neo_run_status: 'error' }, [0.61]],
     ]),
     counter(
       'neo_operations_total',
       'Operations settled, by op, status and fault owner.',
       [
-        [{ op: 'page.goto', status: 'ok', error_owner: 'none' }, runs],
         [
-          { op: 'locator.textContent', status: 'ok', error_owner: 'none' },
+          {
+            neo_op_name: 'page.goto',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
           runs,
         ],
-        [{ op: 'locator.count', status: 'ok', error_owner: 'none' }, runs],
-        [{ op: 'locator.click', status: 'ok', error_owner: 'none' }, runs],
         [
-          { op: 'locator.click', status: 'error', error_owner: 'script' },
+          {
+            neo_op_name: 'locator.textContent',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
+          runs,
+        ],
+        [
+          {
+            neo_op_name: 'locator.count',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
+          runs,
+        ],
+        [
+          {
+            neo_op_name: 'locator.click',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
+          runs,
+        ],
+        [
+          {
+            neo_op_name: 'locator.click',
+            neo_op_outcome: 'error',
+            neo_error_owner: 'script',
+          },
           runs + 1,
         ],
         [
-          { op: 'frame.waitForLoadState', status: 'ok', error_owner: 'none' },
+          {
+            neo_op_name: 'frame.waitForLoadState',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
           runs,
         ],
         [
-          { op: 'page.waitForLoadState', status: 'ok', error_owner: 'none' },
+          {
+            neo_op_name: 'page.waitForLoadState',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
           runs,
         ],
-        [{ op: 'page.title', status: 'ok', error_owner: 'none' }, runs],
+        [
+          {
+            neo_op_name: 'page.title',
+            neo_op_outcome: 'ok',
+            neo_error_owner: 'none',
+          },
+          runs,
+        ],
       ],
     ),
     histogram('neo_operation_duration_seconds', 'Operation duration.', [
-      [{ op: 'page.goto', status: 'ok' }, Array(runs).fill(0.415)],
-      [{ op: 'locator.click', status: 'ok' }, Array(runs).fill(0.168)],
-      [{ op: 'locator.click', status: 'error' }, Array(runs + 1).fill(0.508)],
-      [{ op: 'page.title', status: 'ok' }, Array(runs).fill(0.008)],
+      [
+        { neo_op_name: 'page.goto', neo_op_outcome: 'ok' },
+        Array(runs).fill(0.415),
+      ],
+      [
+        { neo_op_name: 'locator.click', neo_op_outcome: 'ok' },
+        Array(runs).fill(0.168),
+      ],
+      [
+        { neo_op_name: 'locator.click', neo_op_outcome: 'error' },
+        Array(runs + 1).fill(0.508),
+      ],
+      [
+        { neo_op_name: 'page.title', neo_op_outcome: 'ok' },
+        Array(runs).fill(0.008),
+      ],
     ]),
     counter('neo_errors_total', 'Errors, each counted once where attributed.', [
-      [{ error_owner: 'script', error_code: 'no_match' }, runs + 1],
-      [{ error_owner: 'website', error_code: 'navigation_failed' }, 1],
+      [{ neo_error_owner: 'script', error_type: 'no_match' }, runs + 1],
+      [{ neo_error_owner: 'website', error_type: 'navigation_failed' }, 1],
     ]),
-    gauge('neo_tabs_open', 'Tabs open now, by origin.', [
-      [{ origin: 'agent' }, 2],
-      [{ origin: 'found' }, 1],
+    gauge('neo_tab_count', 'Tabs open now, by origin.', [
+      [{ neo_tab_origin: 'agent' }, 2],
+      [{ neo_tab_origin: 'found' }, 1],
     ]),
-    counter('neo_tabs_opened_total', 'Tabs opened, by origin.', [
-      [{ origin: 'agent' }, 3 + step],
-      [{ origin: 'found' }, 1],
+    counter('neo_tab_opened_total', 'Tabs opened, by origin.', [
+      [{ neo_tab_origin: 'agent' }, 3 + step],
+      [{ neo_tab_origin: 'found' }, 1],
     ]),
-    counter('neo_tabs_closed_total', 'Tabs closed, by origin and reason.', [
-      [{ origin: 'agent', close_reason: 'script' }, 1 + step],
-      [{ origin: 'agent', close_reason: 'janitor' }, 0],
+    counter('neo_tab_closed_total', 'Tabs closed, by origin and reason.', [
+      [{ neo_tab_origin: 'agent', neo_tab_close_reason: 'script' }, 1 + step],
+      [{ neo_tab_origin: 'agent', neo_tab_close_reason: 'janitor' }, 0],
     ]),
-    histogram('neo_tab_lifetime_seconds', 'Tab lifetime before close.', [
-      [{ origin: 'agent', close_reason: 'script' }, Array(1 + step).fill(42)],
+    histogram('neo_tab_duration_seconds', 'Tab lifetime before close.', [
+      [
+        { neo_tab_origin: 'agent', neo_tab_close_reason: 'script' },
+        Array(1 + step).fill(42),
+      ],
     ]),
     counter('neo_renderer_crashes_total', 'Renderer crashes.', [[{}, 0]]),
     counter('neo_navigations_total', 'Navigations, by HTTP status.', [
-      [{ status_code: '200' }, runs],
-      [{ status_code: '404' }, 1],
+      [{ http_response_status_code: '200' }, runs],
+      [{ http_response_status_code: '404' }, 1],
       [{}, 1],
     ]),
     counter('neo_navigation_errors_total', 'Navigations the network refused.', [
-      [{ error_code: 'name_not_resolved' }, 1],
+      [{ error_type: 'name_not_resolved' }, 1],
     ]),
     counter(
       'neo_captcha_solves_total',
       'CAPTCHA solves, by family and verdict.',
       [
-        [{ family: 'turnstile', verdict: 'solved' }, 2],
-        [{ family: 'perimeterx', verdict: 'unsupported' }, 1],
+        [{ neo_captcha_family: 'turnstile', neo_captcha_verdict: 'solved' }, 2],
+        [
+          {
+            neo_captcha_family: 'perimeterx',
+            neo_captcha_verdict: 'unsupported',
+          },
+          1,
+        ],
       ],
     ),
     counter('neo_captcha_reasons_total', 'CAPTCHA solves, by reason.', [
-      [{ reason: 'checkbox_passed' }, 1],
-      [{ reason: 'token_accepted' }, 1],
-      [{ reason: 'unsupported_type' }, 1],
+      [{ neo_captcha_reason: 'checkbox_passed' }, 1],
+      [{ neo_captcha_reason: 'token_accepted' }, 1],
+      [{ neo_captcha_reason: 'unsupported_type' }, 1],
     ]),
-    counter('neo_captcha_spend_usd_total', 'CAPTCHA spend, by provider.', [
-      [{ provider: 'capsolver' }, 0.0012],
+    counter('neo_captcha_spend_total', 'CAPTCHA spend, by provider.', [
+      [{ neo_captcha_provider: 'capsolver' }, 0.0012],
     ]),
   ]
 }
@@ -309,7 +374,7 @@ export function fixturePrometheus(step = 0): string {
 /** Each family as Neo's catalog pushes it: its OpenTelemetry name and unit. */
 const PUSHED: Record<string, { name: string; unit: string }> = {
   neo_runs_total: { name: 'neo.runs', unit: '{run}' },
-  neo_runs_in_flight: { name: 'neo.run.active', unit: '{run}' },
+  neo_run_active: { name: 'neo.run.active', unit: '{run}' },
   neo_run_duration_seconds: { name: 'neo.run.duration', unit: 's' },
   neo_operations_total: { name: 'neo.operations', unit: '{operation}' },
   neo_operation_duration_seconds: {
@@ -317,10 +382,10 @@ const PUSHED: Record<string, { name: string; unit: string }> = {
     unit: 's',
   },
   neo_errors_total: { name: 'neo.errors', unit: '{error}' },
-  neo_tabs_open: { name: 'neo.tab.count', unit: '{tab}' },
-  neo_tabs_opened_total: { name: 'neo.tab.opened', unit: '{tab}' },
-  neo_tabs_closed_total: { name: 'neo.tab.closed', unit: '{tab}' },
-  neo_tab_lifetime_seconds: { name: 'neo.tab.duration', unit: 's' },
+  neo_tab_count: { name: 'neo.tab.count', unit: '{tab}' },
+  neo_tab_opened_total: { name: 'neo.tab.opened', unit: '{tab}' },
+  neo_tab_closed_total: { name: 'neo.tab.closed', unit: '{tab}' },
+  neo_tab_duration_seconds: { name: 'neo.tab.duration', unit: 's' },
   neo_renderer_crashes_total: { name: 'neo.renderer.crashes', unit: '{crash}' },
   neo_navigations_total: { name: 'neo.navigations', unit: '{navigation}' },
   neo_navigation_errors_total: {
@@ -329,33 +394,31 @@ const PUSHED: Record<string, { name: string; unit: string }> = {
   },
   neo_captcha_solves_total: { name: 'neo.captcha.solves', unit: '{solve}' },
   neo_captcha_reasons_total: { name: 'neo.captcha.reasons', unit: '{solve}' },
-  neo_captcha_spend_usd_total: { name: 'neo.captcha.spend', unit: '{USD}' },
+  neo_captcha_spend_total: { name: 'neo.captcha.spend', unit: '{USD}' },
 }
 
-/** A scrape label as Neo pushes it: the attribute key its spans use for the same value. */
-function pushedKey(family: string, label: string): string {
-  if (label === 'status')
-    return family.startsWith('neo_operation')
-      ? 'neo.op.outcome'
-      : 'neo.run.status'
+/** A scrape label as Neo pushes it: the attribute key it was translated from. */
+function pushedKey(label: string): string {
   const keys: Record<string, string> = {
-    op: 'neo.op.name',
-    error_owner: 'neo.error.owner',
-    error_code: 'error.type',
-    origin: 'neo.tab.origin',
-    close_reason: 'neo.tab.close_reason',
-    status_code: 'http.response.status_code',
-    family: 'neo.captcha.family',
-    verdict: 'neo.captcha.verdict',
-    reason: 'neo.captcha.reason',
-    provider: 'neo.captcha.provider',
+    neo_run_status: 'neo.run.status',
+    neo_op_outcome: 'neo.op.outcome',
+    neo_op_name: 'neo.op.name',
+    neo_error_owner: 'neo.error.owner',
+    error_type: 'error.type',
+    neo_tab_origin: 'neo.tab.origin',
+    neo_tab_close_reason: 'neo.tab.close_reason',
+    http_response_status_code: 'http.response.status_code',
+    neo_captcha_family: 'neo.captcha.family',
+    neo_captcha_verdict: 'neo.captcha.verdict',
+    neo_captcha_reason: 'neo.captcha.reason',
+    neo_captcha_provider: 'neo.captcha.provider',
   }
   return keys[label] ?? label
 }
 
 /** A label as Neo pushes it: an HTTP status is the registry's int, anything else a string. */
-function pushedAttribute(family: string, label: string, value: string) {
-  const key = pushedKey(family, label)
+function pushedAttribute(label: string, value: string) {
+  const key = pushedKey(label)
   return key === 'http.response.status_code'
     ? int(key, Number(value))
     : string(key, value)
@@ -377,7 +440,7 @@ export function fixtureMetrics(step = 0, at = Date.now()) {
     }
     const attributes = (labels: Record<string, string>) =>
       Object.entries(labels).map(([label, value]) =>
-        pushedAttribute(family.name, label, value),
+        pushedAttribute(label, value),
       )
     if (family.kind === 'histogram')
       return {

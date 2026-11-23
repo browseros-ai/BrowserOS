@@ -217,9 +217,9 @@ function tabIdOf(value: Attribute | undefined): number | null {
 }
 
 /**
- * `ExportMetricsServiceRequest` → metric families, one per name. Neo's metrics arrive under
- * OpenTelemetry's names and are filed under the scrape's (`otlp-names.ts`), so both doors give
- * one model.
+ * `ExportMetricsServiceRequest` → metric families, one per name. Metrics arrive under
+ * OpenTelemetry's names and are filed under the Prometheus names a scrape derives from them
+ * (`otlp-names.ts`), so both doors give one model.
  */
 export function decodeMetrics(body: unknown): Decoded<MetricFamily> {
   const byName = new Map<string, MetricFamily>()
@@ -233,7 +233,11 @@ export function decodeMetrics(body: unknown): Decoded<MetricFamily> {
         const decoded = decodeMetric(raw)
         rejected += decoded.rejected
         if (!decoded.family) continue
-        const family = asScraped(decoded.family)
+        const unit = field(raw, 'unit')
+        const family = asScraped(
+          decoded.family,
+          typeof unit === 'string' ? unit : '',
+        )
         const known = byName.get(family.name)
         if (known && known.kind === family.kind)
           known.series.push(...family.series)

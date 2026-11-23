@@ -447,7 +447,7 @@ export interface MetricsView {
   runs: {
     total: number
     inFlight: number
-    /** `neo_runs_total` by `status`. */
+    /** `neo_runs_total` by `neo_run_status`. */
     byStatus: Record<string, number>
     duration: Quantiles
   }
@@ -470,12 +470,12 @@ export interface MetricsView {
   /** `neo_navigations_total` and `neo_navigation_errors_total`. */
   navigations: {
     total: number
-    /** By HTTP status (`status_code`); `none` for a navigation that read no status. */
+    /** By HTTP status (`http_response_status_code`); `none` for a navigation that read no status. */
     byStatus: Record<string, number>
-    /** The ones the network refused, by Chromium's net error (`error_code`). */
+    /** The ones the network refused, by Chromium's net error (`error_type`). */
     errors: Record<string, number>
   }
-  /** `neo_captcha_solves_total`, `neo_captcha_reasons_total` and `neo_captcha_spend_usd_total`. */
+  /** `neo_captcha_solves_total`, `neo_captcha_reasons_total` and `neo_captcha_spend_total`. */
   captchas: {
     total: number
     /** Solves by the CAPTCHA found and how they ended, most first. */

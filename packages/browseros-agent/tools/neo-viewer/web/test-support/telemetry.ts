@@ -121,8 +121,14 @@ export function metricsView(): MetricsView {
         kind: 'counter',
         help: 'Runs ended, by status and fault owner.',
         series: [
-          { labels: { status: 'ok', error_owner: 'none' }, value: 14 },
-          { labels: { status: 'error', error_owner: 'script' }, value: 1 },
+          {
+            labels: { neo_run_status: 'ok', neo_error_owner: 'none' },
+            value: 14,
+          },
+          {
+            labels: { neo_run_status: 'error', neo_error_owner: 'script' },
+            value: 1,
+          },
         ],
       },
       {
@@ -131,7 +137,7 @@ export function metricsView(): MetricsView {
         help: 'Run duration.',
         series: [
           {
-            labels: { status: 'ok' },
+            labels: { neo_run_status: 'ok' },
             value: 2,
             sum: 2.46,
             buckets: [

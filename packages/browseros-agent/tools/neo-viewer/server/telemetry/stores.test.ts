@@ -163,11 +163,11 @@ function sample(runs: number, runErrors: number, crashes = 0): MetricFamily[] {
         ...family,
         series: [
           {
-            labels: { status: 'ok', error_owner: 'none' },
+            labels: { neo_run_status: 'ok', neo_error_owner: 'none' },
             value: runs - runErrors,
           },
           {
-            labels: { status: 'error', error_owner: 'script' },
+            labels: { neo_run_status: 'error', neo_error_owner: 'script' },
             value: runErrors,
           },
         ],
@@ -238,7 +238,7 @@ describe('the metric store', () => {
     expect(names()).toContain('neo_errors_total')
     // The new one has only its gauges and its first runs so far.
     const fresh = sample(1, 0).filter((family) =>
-      ['neo_runs_total', 'neo_runs_in_flight', 'neo_tabs_open'].includes(
+      ['neo_runs_total', 'neo_run_active', 'neo_tab_count'].includes(
         family.name,
       ),
     )
@@ -246,9 +246,9 @@ describe('the metric store', () => {
     expect(names()).toContain('neo_errors_total')
     store.pushedFamilies(fresh, at(10.5))
     expect(names().sort()).toEqual([
-      'neo_runs_in_flight',
+      'neo_run_active',
       'neo_runs_total',
-      'neo_tabs_open',
+      'neo_tab_count',
     ])
     // Not the old process's 40 runs, crashes and errors beside the new one's.
     expect(store.totals('push')).toMatchObject({
@@ -297,7 +297,7 @@ describe('the metric store', () => {
     store.pushedFamilies(
       [
         {
-          name: 'neo_runs_in_flight',
+          name: 'neo_run_active',
           kind: 'gauge',
           help: null,
           series: [{ labels: {}, value: 4 }],
@@ -343,7 +343,12 @@ describe('reading the 16 metrics', () => {
           kind: 'histogram',
           help: null,
           series: [
-            { labels: { status: 'ok' }, value: 20, sum: 700, buckets: runs },
+            {
+              labels: { neo_run_status: 'ok' },
+              value: 20,
+              sum: 700,
+              buckets: runs,
+            },
           ],
         },
       ],

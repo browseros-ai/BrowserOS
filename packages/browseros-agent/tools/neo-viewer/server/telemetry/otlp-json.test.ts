@@ -258,9 +258,10 @@ describe('OTLP JSON metrics', () => {
     expect(items).toEqual(fixtureFamilies(3))
   })
 
-  test("Neo's OpenTelemetry names and keys are filed under the scrape's; anything else as sent", () => {
-    const counter = (name: string, keys: string[]) => ({
+  test('OpenTelemetry names and keys are filed under the Prometheus names a scrape derives', () => {
+    const counter = (name: string, keys: string[], unit = '{x}') => ({
       name,
+      unit,
       sum: {
         isMonotonic: true,
         dataPoints: [
@@ -294,8 +295,10 @@ describe('OTLP JSON metrics', () => {
                   'neo.captcha.verdict',
                 ]),
                 counter('neo.captcha.reasons', ['neo.captcha.reason']),
-                counter('neo.captcha.spend', ['neo.captcha.provider']),
+                counter('neo.captcha.spend', ['neo.captcha.provider'], '{USD}'),
                 counter('other.requests', ['error.type']),
+                counter('other.sent', ['net.peer'], 'By'),
+                counter('other.retries_total', ['9x']),
               ],
             },
           ],
@@ -308,15 +311,23 @@ describe('OTLP JSON metrics', () => {
         Object.keys(family.series[0]?.labels ?? {}),
       ]),
     ).toEqual([
-      ['neo_operations_total', ['op', 'status', 'error_owner']],
-      ['neo_errors_total', ['error_owner', 'error_code']],
-      ['neo_runs_total', ['status', 'error_owner']],
-      ['neo_navigations_total', ['status_code']],
-      ['neo_navigation_errors_total', ['error_code']],
-      ['neo_captcha_solves_total', ['family', 'verdict']],
-      ['neo_captcha_reasons_total', ['reason']],
-      ['neo_captcha_spend_usd_total', ['provider']],
-      ['other.requests', ['error.type']],
+      [
+        'neo_operations_total',
+        ['neo_op_name', 'neo_op_outcome', 'neo_error_owner'],
+      ],
+      ['neo_errors_total', ['neo_error_owner', 'error_type']],
+      ['neo_runs_total', ['neo_run_status', 'neo_error_owner']],
+      ['neo_navigations_total', ['http_response_status_code']],
+      ['neo_navigation_errors_total', ['error_type']],
+      [
+        'neo_captcha_solves_total',
+        ['neo_captcha_family', 'neo_captcha_verdict'],
+      ],
+      ['neo_captcha_reasons_total', ['neo_captcha_reason']],
+      ['neo_captcha_spend_total', ['neo_captcha_provider']],
+      ['other_requests_total', ['error_type']],
+      ['other_sent_bytes_total', ['net_peer']],
+      ['other_retries_total', ['key_9x']],
     ])
   })
 

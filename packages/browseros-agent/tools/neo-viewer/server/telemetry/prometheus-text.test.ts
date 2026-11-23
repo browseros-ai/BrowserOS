@@ -19,11 +19,11 @@ describe('Prometheus text 0.0.4', () => {
       [
         '# HELP neo_runs_total Runs ended.',
         '# TYPE neo_runs_total counter',
-        'neo_runs_total{status="ok",error_owner="none"} 3',
-        'neo_runs_total{status="error",error_owner="script"} 1 1700000000000',
-        '# TYPE neo_tabs_open gauge',
-        'neo_tabs_open{origin="agent"} 2',
-        'neo_tabs_open{origin="found"} 1e0',
+        'neo_runs_total{neo_run_status="ok",neo_error_owner="none"} 3',
+        'neo_runs_total{neo_run_status="error",neo_error_owner="script"} 1 1700000000000',
+        '# TYPE neo_tab_count gauge',
+        'neo_tab_count{neo_tab_origin="agent"} 2',
+        'neo_tab_count{neo_tab_origin="found"} 1e0',
         '',
       ].join('\n'),
     )
@@ -32,12 +32,15 @@ describe('Prometheus text 0.0.4', () => {
       kind: 'counter',
       help: 'Runs ended.',
       series: [
-        { labels: { status: 'ok', error_owner: 'none' }, value: 3 },
-        { labels: { status: 'error', error_owner: 'script' }, value: 1 },
+        { labels: { neo_run_status: 'ok', neo_error_owner: 'none' }, value: 3 },
+        {
+          labels: { neo_run_status: 'error', neo_error_owner: 'script' },
+          value: 1,
+        },
       ],
     })
     expect(
-      family(families, 'neo_tabs_open').series.map((s) => s.value),
+      family(families, 'neo_tab_count').series.map((s) => s.value),
     ).toEqual([2, 1])
   })
 
@@ -45,11 +48,11 @@ describe('Prometheus text 0.0.4', () => {
     const families = parsePrometheus(
       [
         '# TYPE neo_run_duration_seconds histogram',
-        'neo_run_duration_seconds_bucket{status="ok",le="0.5"} 1',
-        'neo_run_duration_seconds_bucket{status="ok",le="+Inf"} 3',
-        'neo_run_duration_seconds_bucket{status="ok",le="2.5"} 2',
-        'neo_run_duration_seconds_sum{status="ok"} 4.2',
-        'neo_run_duration_seconds_count{status="ok"} 3',
+        'neo_run_duration_seconds_bucket{neo_run_status="ok",le="0.5"} 1',
+        'neo_run_duration_seconds_bucket{neo_run_status="ok",le="+Inf"} 3',
+        'neo_run_duration_seconds_bucket{neo_run_status="ok",le="2.5"} 2',
+        'neo_run_duration_seconds_sum{neo_run_status="ok"} 4.2',
+        'neo_run_duration_seconds_count{neo_run_status="ok"} 3',
       ].join('\n'),
     )
     expect(family(families, 'neo_run_duration_seconds')).toEqual({
@@ -58,7 +61,7 @@ describe('Prometheus text 0.0.4', () => {
       help: null,
       series: [
         {
-          labels: { status: 'ok' },
+          labels: { neo_run_status: 'ok' },
           value: 3,
           sum: 4.2,
           buckets: [
@@ -118,8 +121,8 @@ describe('OpenMetrics extras are tolerated', () => {
         '# TYPE neo_runs counter',
         '# UNIT neo_runs runs',
         '# HELP neo_runs Runs ended.',
-        'neo_runs_total{status="ok"} 3',
-        'neo_runs_created{status="ok"} 1700000000.5',
+        'neo_runs_total{neo_run_status="ok"} 3',
+        'neo_runs_created{neo_run_status="ok"} 1700000000.5',
         '# EOF',
         'after_eof 1',
       ].join('\n'),
@@ -129,7 +132,7 @@ describe('OpenMetrics extras are tolerated', () => {
         name: 'neo_runs_total',
         kind: 'counter',
         help: 'Runs ended.',
-        series: [{ labels: { status: 'ok' }, value: 3 }],
+        series: [{ labels: { neo_run_status: 'ok' }, value: 3 }],
       },
     ])
   })
@@ -138,9 +141,9 @@ describe('OpenMetrics extras are tolerated', () => {
     const families = parsePrometheus(
       [
         '# TYPE neo_operation_duration_seconds histogram',
-        'neo_operation_duration_seconds_bucket{op="page.goto",le="1"} 2 # {trace_id="4bf92f35"} 0.4 1700000000.1',
-        'neo_operation_duration_seconds_bucket{op="page.goto",le="+Inf"} 2',
-        'neo_operation_duration_seconds_count{op="page.goto"} 2 1700000000000',
+        'neo_operation_duration_seconds_bucket{neo_op_name="page.goto",le="1"} 2 # {trace_id="4bf92f35"} 0.4 1700000000.1',
+        'neo_operation_duration_seconds_bucket{neo_op_name="page.goto",le="+Inf"} 2',
+        'neo_operation_duration_seconds_count{neo_op_name="page.goto"} 2 1700000000000',
         '{"neo.dotted.name", k="v"} 7',
       ].join('\n'),
     )

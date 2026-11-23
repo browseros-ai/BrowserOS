@@ -34,8 +34,8 @@ export function totalsOf(families: MetricFamily[]): Totals {
     ops: sum(ops),
     opErrors: sum(ops.filter(failed)),
     crashes: sum(seriesOf(families, 'neo_renderer_crashes_total')),
-    runsInFlight: sum(seriesOf(families, 'neo_runs_in_flight')),
-    tabsOpen: sum(seriesOf(families, 'neo_tabs_open')),
+    runsInFlight: sum(seriesOf(families, 'neo_run_active')),
+    tabsOpen: sum(seriesOf(families, 'neo_tab_count')),
   }
 }
 
@@ -47,21 +47,23 @@ export function metricsView(
   const totals = totalsOf(families)
   const opSeries = seriesOf(families, 'neo_operations_total')
   const opDurations = seriesOf(families, 'neo_operation_duration_seconds')
-  const operations = [...groupBy(opSeries, 'op')].map(([op, series]) => ({
-    op,
-    total: sum(series),
-    errors: sum(series.filter(failed)),
-    duration: quantiles(
-      opDurations.filter((candidate) => candidate.labels.op === op),
-    ),
-  }))
+  const operations = [...groupBy(opSeries, 'neo_op_name')].map(
+    ([op, series]) => ({
+      op,
+      total: sum(series),
+      errors: sum(series.filter(failed)),
+      duration: quantiles(
+        opDurations.filter((candidate) => candidate.labels.neo_op_name === op),
+      ),
+    }),
+  )
   operations.sort((a, b) => b.total - a.total || a.op.localeCompare(b.op))
   const navigations = seriesOf(families, 'neo_navigations_total')
   const solves = seriesOf(families, 'neo_captcha_solves_total')
   const errors = seriesOf(families, 'neo_errors_total')
     .map((series) => ({
-      owner: series.labels.error_owner ?? '',
-      code: series.labels.error_code ?? '',
+      owner: series.labels.neo_error_owner ?? '',
+      code: series.labels.error_type ?? '',
       count: series.value ?? 0,
     }))
     .filter((entry) => entry.count > 0)
@@ -72,38 +74,41 @@ export function metricsView(
     runs: {
       total: totals.runs,
       inFlight: totals.runsInFlight,
-      byStatus: sumBy(seriesOf(families, 'neo_runs_total'), 'status'),
+      byStatus: sumBy(seriesOf(families, 'neo_runs_total'), 'neo_run_status'),
       duration: quantiles(seriesOf(families, 'neo_run_duration_seconds')),
     },
     operations,
     errors,
     tabs: {
-      openByOrigin: sumBy(seriesOf(families, 'neo_tabs_open'), 'origin'),
+      openByOrigin: sumBy(
+        seriesOf(families, 'neo_tab_count'),
+        'neo_tab_origin',
+      ),
       openedByOrigin: sumBy(
-        seriesOf(families, 'neo_tabs_opened_total'),
-        'origin',
+        seriesOf(families, 'neo_tab_opened_total'),
+        'neo_tab_origin',
       ),
       closedByReason: sumBy(
-        seriesOf(families, 'neo_tabs_closed_total'),
-        'close_reason',
+        seriesOf(families, 'neo_tab_closed_total'),
+        'neo_tab_close_reason',
       ),
-      lifetime: quantiles(seriesOf(families, 'neo_tab_lifetime_seconds')),
+      lifetime: quantiles(seriesOf(families, 'neo_tab_duration_seconds')),
     },
     crashes: totals.crashes,
     navigations: {
       total: sum(navigations),
-      byStatus: sumBy(navigations, 'status_code', 'none'),
+      byStatus: sumBy(navigations, 'http_response_status_code', 'none'),
       errors: sumBy(
         seriesOf(families, 'neo_navigation_errors_total'),
-        'error_code',
+        'error_type',
       ),
     },
     captchas: {
       total: sum(solves),
       solves: solves
         .map((series) => ({
-          family: series.labels.family ?? '',
-          verdict: series.labels.verdict ?? '',
+          family: series.labels.neo_captcha_family ?? '',
+          verdict: series.labels.neo_captcha_verdict ?? '',
           count: series.value ?? 0,
         }))
         .filter((entry) => entry.count > 0)
@@ -115,11 +120,11 @@ export function metricsView(
         ),
       byReason: sumBy(
         seriesOf(families, 'neo_captcha_reasons_total'),
-        'reason',
+        'neo_captcha_reason',
       ),
       spendUsd: sumBy(
-        seriesOf(families, 'neo_captcha_spend_usd_total'),
-        'provider',
+        seriesOf(families, 'neo_captcha_spend_total'),
+        'neo_captcha_provider',
       ),
     },
     families,
@@ -215,12 +220,13 @@ function seriesOf(families: MetricFamily[], name: string): Series[] {
 }
 
 /**
- * A run or operation someone has to act on: Neo attributed it (`error_owner` other than `none`);
- * without that label, any status but `ok`.
+ * A run or operation someone has to act on: Neo attributed it (`neo_error_owner` other than
+ * `none`); without that label, any run status or op outcome but `ok`.
  */
 function failed(series: Series): boolean {
-  const owner = series.labels.error_owner
-  return owner === undefined ? series.labels.status !== 'ok' : owner !== 'none'
+  const owner = series.labels.neo_error_owner
+  if (owner !== undefined) return owner !== 'none'
+  return (series.labels.neo_run_status ?? series.labels.neo_op_outcome) !== 'ok'
 }
 
 function sum(series: Series[]): number {

@@ -62,16 +62,16 @@ describe("the Health view's numbers", () => {
     expect(lines).toEqual([
       '# HELP neo_runs_total Runs ended, by status and fault owner.',
       '# TYPE neo_runs_total counter',
-      'neo_runs_total{status="ok",error_owner="none"} 14',
-      'neo_runs_total{status="error",error_owner="script"} 1',
+      'neo_runs_total{neo_run_status="ok",neo_error_owner="none"} 14',
+      'neo_runs_total{neo_run_status="error",neo_error_owner="script"} 1',
       '',
       '# HELP neo_run_duration_seconds Run duration.',
       '# TYPE neo_run_duration_seconds histogram',
-      'neo_run_duration_seconds_bucket{status="ok",le="1"} 0',
-      'neo_run_duration_seconds_bucket{status="ok",le="2.5"} 2',
-      'neo_run_duration_seconds_bucket{status="ok",le="+Inf"} 2',
-      'neo_run_duration_seconds_sum{status="ok"} 2.46',
-      'neo_run_duration_seconds_count{status="ok"} 2',
+      'neo_run_duration_seconds_bucket{neo_run_status="ok",le="1"} 0',
+      'neo_run_duration_seconds_bucket{neo_run_status="ok",le="2.5"} 2',
+      'neo_run_duration_seconds_bucket{neo_run_status="ok",le="+Inf"} 2',
+      'neo_run_duration_seconds_sum{neo_run_status="ok"} 2.46',
+      'neo_run_duration_seconds_count{neo_run_status="ok"} 2',
     ])
   })
 

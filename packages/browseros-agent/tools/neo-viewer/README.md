@@ -366,13 +366,14 @@ Neo's doors with no protobuf library (`server/telemetry/`, one module behind `st
   listening: pushes do not arrive there, and the scrape below still does.
 - **Scrape**: `GET /v1/metrics` on the host API every 2 s. An image older than telemetry answers 404:
   the poller stops for good, silently.
-- **Names**: the two doors name the same numbers differently. The scrape serves Prometheus names and
-  labels (`neo_run_duration_seconds{status}`); the push sends OpenTelemetry's (`neo.run.duration`
-  with `neo.run.status`, `error.type` for an error code). The viewer files a pushed metric under its
-  scrape name (`otlp-names.ts`), so the health bar, the Health view and an export read one set of
-  names, and push alone (`--upstream`) shows the same numbers. A navigation's HTTP status arrives
-  as the integer `http.response.status_code` and is filed as `status_code`. An operation's source
-  line arrives as `code.line.number` and `code.column.number`.
+- **Names**: the push sends OpenTelemetry names and keys (`neo.run.duration` with
+  `neo.run.status`, `error.type` for an error code); the scrape serves the Prometheus names
+  OpenTelemetry's compatibility rules derive from them (`neo_run_duration_seconds{neo_run_status}`).
+  The viewer applies the same rules to a pushed metric (`otlp-names.ts`), as a collector or
+  Prometheus' own OTLP receiver would, so the health bar, the Health view and an export read one
+  set of names, and push alone (`--upstream`) shows the same numbers. A navigation's HTTP status
+  arrives as the integer `http.response.status_code` and is filed as `http_response_status_code`.
+  An operation's source line arrives as `code.line.number` and `code.column.number`.
 - **Which numbers**: the scrape while it is at most 10 s old, else the push while it is, else none;
   never blended (both read one meter provider). Health (`TelemetryHealth`: runs in flight, tabs
   open, and counts since the last Clear with Neo restarts handled) goes to the page as an

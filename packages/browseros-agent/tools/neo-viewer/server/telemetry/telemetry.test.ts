@@ -99,7 +99,7 @@ describe('the scrape door', () => {
   test('the poller reads the body as text and hands it on', async () => {
     const texts: string[] = []
     const poller = pollMetrics({
-      fetch: async () => new Response('neo_runs_in_flight 2\n'),
+      fetch: async () => new Response('neo_run_active 2\n'),
       onText: (text) => texts.push(text),
       now: Date.now,
       intervalMs: 5,
@@ -110,7 +110,7 @@ describe('the scrape door', () => {
     await Bun.sleep(30)
     // Stopped: no scrape after it.
     expect(texts).toHaveLength(heard)
-    expect(texts[0]).toBe('neo_runs_in_flight 2\n')
+    expect(texts[0]).toBe('neo_run_active 2\n')
   })
 })
 
@@ -146,7 +146,7 @@ describe('health', () => {
       lifetime: { count: 2 },
     })
     expect(view?.families.map((family) => family.name)).toContain(
-      'neo_tab_lifetime_seconds',
+      'neo_tab_duration_seconds',
     )
     // The status arrives as the registry's int and the spend as a double, under their OTLP
     // names and keys, and read as the scrape's.

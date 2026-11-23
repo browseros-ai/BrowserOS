@@ -1,69 +1,110 @@
 /**
- * Neo's two doors name its metrics differently. The scrape (`GET /v1/metrics`) serves Prometheus
- * names and label names (`neo_run_duration_seconds{status}`); the OTLP push sends OpenTelemetry's
- * (`neo.run.duration` with `neo.run.status`). The viewer's model is the scrape's, so a pushed
- * metric is renamed into it here and the Health view and health bar read one set of names
- * whichever door answered (openapi.yaml, `/v1/metrics`).
+ * A pushed metric under the name a scrape gives it. Neo's OTLP push sends OpenTelemetry names
+ * and attribute keys (`neo.run.duration` with `neo.run.status`); `GET /v1/metrics` serves the
+ * Prometheus names OpenTelemetry's compatibility rules derive from them
+ * (`neo_run_duration_seconds` with `neo_run_status`), the same translation a collector's
+ * Prometheus exporter or Prometheus' own OTLP receiver applies. The viewer applies it too, so the
+ * Health view and health bar read one set of names whichever door answered (openapi.yaml,
+ * `/v1/metrics`).
  */
 
 import type { MetricFamily } from '../../shared/api'
 
-/** Each OTLP metric name, and the scrape family it is. */
-export const SCRAPE_FAMILY: Readonly<Record<string, string>> = {
-  'neo.runs': 'neo_runs_total',
-  'neo.run.active': 'neo_runs_in_flight',
-  'neo.run.duration': 'neo_run_duration_seconds',
-  'neo.operations': 'neo_operations_total',
-  'neo.operation.duration': 'neo_operation_duration_seconds',
-  'neo.errors': 'neo_errors_total',
-  'neo.tab.count': 'neo_tabs_open',
-  'neo.tab.opened': 'neo_tabs_opened_total',
-  'neo.tab.closed': 'neo_tabs_closed_total',
-  'neo.tab.duration': 'neo_tab_lifetime_seconds',
-  'neo.renderer.crashes': 'neo_renderer_crashes_total',
-  'neo.navigations': 'neo_navigations_total',
-  'neo.navigation.errors': 'neo_navigation_errors_total',
-  'neo.captcha.solves': 'neo_captcha_solves_total',
-  'neo.captcha.reasons': 'neo_captcha_reasons_total',
-  'neo.captcha.spend': 'neo_captcha_spend_usd_total',
+/** The UCUM units Prometheus spells out (the compatibility spec's table). */
+const UNIT_WORDS: Readonly<Record<string, string>> = {
+  d: 'days',
+  h: 'hours',
+  min: 'minutes',
+  s: 'seconds',
+  ms: 'milliseconds',
+  us: 'microseconds',
+  ns: 'nanoseconds',
+  By: 'bytes',
+  KiBy: 'kibibytes',
+  MiBy: 'mebibytes',
+  GiBy: 'gibibytes',
+  TiBy: 'tebibytes',
+  kBy: 'kilobytes',
+  MBy: 'megabytes',
+  GBy: 'gigabytes',
+  TBy: 'terabytes',
+  m: 'meters',
+  V: 'volts',
+  A: 'amperes',
+  J: 'joules',
+  W: 'watts',
+  g: 'grams',
+  Cel: 'celsius',
+  Hz: 'hertz',
+  '%': 'percent',
 }
 
-/** Each OTLP attribute key Neo's metrics carry, and the scrape's label name for it. */
-export const SCRAPE_LABEL: Readonly<Record<string, string>> = {
-  'neo.run.status': 'status',
-  'neo.op.outcome': 'status',
-  'neo.op.name': 'op',
-  'neo.error.owner': 'error_owner',
-  'error.type': 'error_code',
-  'neo.tab.origin': 'origin',
-  'neo.tab.close_reason': 'close_reason',
-  'http.response.status_code': 'status_code',
-  'neo.captcha.family': 'family',
-  'neo.captcha.verdict': 'verdict',
-  'neo.captcha.reason': 'reason',
-  'neo.captcha.provider': 'provider',
+/** A rate's time unit in the singular, as Prometheus spells it after `per_`. */
+const PER_UNIT_WORDS: Readonly<Record<string, string>> = {
+  s: 'second',
+  m: 'minute',
+  h: 'hour',
+  d: 'day',
+  w: 'week',
+  mo: 'month',
+  y: 'year',
 }
 
-/**
- * A pushed family as the scrape names it: its name and every series' labels. Only Neo's own
- * metrics are renamed: any other family is kept as sent.
- */
-export function asScraped(family: MetricFamily): MetricFamily {
-  const name = lookup(SCRAPE_FAMILY, family.name)
-  if (name === undefined) return family
+/** A pushed family as a scrape names it: its name and every series' label names. */
+export function asScraped(family: MetricFamily, unit: string): MetricFamily {
   return {
     ...family,
-    name,
+    name: familyName(family.name, family.kind, unit),
     series: family.series.map((series) => ({
       ...series,
       labels: Object.fromEntries(
         Object.entries(series.labels).map(([key, value]) => [
-          lookup(SCRAPE_LABEL, key) ?? key,
+          labelName(key),
           value,
         ]),
       ),
     })),
   }
+}
+
+/**
+ * The Prometheus name of an OpenTelemetry metric: the unit's word follows the name unless it
+ * already ends with it (`s` is `seconds`; an annotation such as `{run}` adds nothing), a counter
+ * ends in `_total`, every character outside `[a-zA-Z0-9_:]` is `_`, and runs of `_` are one.
+ */
+export function familyName(
+  name: string,
+  kind: MetricFamily['kind'],
+  unit: string,
+): string {
+  let scraped = name
+  const word = unitWord(unit)
+  if (word && !scraped.endsWith(`_${word}`)) scraped += `_${word}`
+  if (kind === 'counter' && !scraped.endsWith('_total')) scraped += '_total'
+  return sanitized(scraped, /[^a-zA-Z0-9_:]/g)
+}
+
+/** An attribute key as a label name: `neo.op.name` is `neo_op_name`. */
+export function labelName(key: string): string {
+  if (key === '') return '_'
+  const name = sanitized(key, /[^a-zA-Z0-9_]/g)
+  return /^[0-9]/.test(name) ? `key_${name}` : name
+}
+
+function unitWord(unit: string): string | null {
+  const bare = unit.replace(/\{[^}]*\}/g, '')
+  const [main = '', per = ''] = bare.split('/', 2)
+  const mainWord = main ? (lookup(UNIT_WORDS, main) ?? main) : ''
+  const perWord = per
+    ? (lookup(PER_UNIT_WORDS, per) ?? lookup(UNIT_WORDS, per) ?? per)
+    : ''
+  if (mainWord && perWord) return `${mainWord}_per_${perWord}`
+  if (perWord) return `per_${perWord}`
+  return mainWord || null
+}
+
+function sanitized(text: string, disallowed: RegExp): string {
+  return text.replace(disallowed, '_').replace(/_+/g, '_')
 }
 
 function lookup(
