@@ -1,0 +1,5 @@
+# The QuickJS scripts neo-playwright-js's build.ts writes for this crate's tests are generated
+# sources, committed like the cases beside them; the package's rule against compiled test
+# JavaScript does not apply to them.
+!/todays-renderer.js
+!/vendored-printer.js

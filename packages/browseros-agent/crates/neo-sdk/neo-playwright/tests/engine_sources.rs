@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use neo_snapshot::PORTED_FROM;
 use sha2::{Digest, Sha256};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -85,12 +86,10 @@ fn tests_that_the_vendored_yaml_files_are_the_bytes_sync_sh_recorded() -> TestRe
     vendored_as_synced("third_party/yaml")
 }
 
-/// The manifest check of one vendored tree (`dir`, from the crate's root) with its own
-/// `sync.sh` and `SHA256SUMS`.
-fn vendored_as_synced(dir: &str) -> TestResult {
-    let vendored = crate_root().join(dir);
+/// One vendored tree's `SHA256SUMS` (`dir`, from the crate's root): each file's path with its hash.
+fn sha256sums(dir: &str) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
     let mut manifest = BTreeMap::new();
-    for line in fs::read_to_string(vendored.join("SHA256SUMS"))?.lines() {
+    for line in fs::read_to_string(crate_root().join(dir).join("SHA256SUMS"))?.lines() {
         let Some((hash, path)) = line.split_once("  ") else {
             return Err(format!(
                 "{dir}/SHA256SUMS has a line that is not `<hash>  <path>`: {line}"
@@ -99,6 +98,14 @@ fn vendored_as_synced(dir: &str) -> TestResult {
         };
         manifest.insert(path.to_owned(), hash.to_owned());
     }
+    Ok(manifest)
+}
+
+/// The manifest check of one vendored tree (`dir`, from the crate's root) with its own
+/// `sync.sh` and `SHA256SUMS`.
+fn vendored_as_synced(dir: &str) -> TestResult {
+    let vendored = crate_root().join(dir);
+    let manifest = sha256sums(dir)?;
     let script = fs::read_to_string(vendored.join("sync.sh"))?;
     let Some((_, list)) = script.split_once("FILES=(") else {
         return Err(format!("{dir}/sync.sh has no FILES list").into());
@@ -141,6 +148,38 @@ fn vendored_as_synced(dir: &str) -> TestResult {
     assert!(
         edited.is_empty(),
         "changed after sync.sh copied them: {edited:?}"
+    );
+    Ok(())
+}
+
+/// neo-snapshot prints Playwright's text with a Rust copy of upstream's printer and escaping, and
+/// reads the tree with a Rust copy of its shape. Each copy records the hash of the vendored file
+/// it mirrors (`neo_snapshot::PORTED_FROM`). An upgrade whose `sync.sh` changes one of those files
+/// fails here, so the Rust copy cannot fall behind upstream's unseen.
+#[test]
+fn tests_that_neo_snapshot_mirrors_the_vendored_files_sync_sh_recorded() -> TestResult {
+    let manifest = sha256sums(VENDORED)?;
+    let mut moved = Vec::new();
+    for ported in PORTED_FROM {
+        match manifest.get(ported.path) {
+            Some(hash) if hash == ported.sha256 => {}
+            Some(hash) => moved.push(format!(
+                "{} (mirrored by neo-snapshot's {}): ported at {}, vendored now at {hash}",
+                ported.path, ported.mirror, ported.sha256
+            )),
+            None => moved.push(format!(
+                "{} (mirrored by neo-snapshot's {}): no longer vendored",
+                ported.path, ported.mirror
+            )),
+        }
+    }
+    assert!(
+        moved.is_empty(),
+        "upstream changed files neo-snapshot mirrors:\n{}\nFor each: read upstream's diff of the \
+         file, port what changed into its mirror, regenerate the cases and test bundles \
+         (`bun scripts/build.ts` in crates/neo-sdk/neo-playwright-js), then record the new hash \
+         in neo_snapshot::PORTED_FROM",
+        moved.join("\n")
     );
     Ok(())
 }
