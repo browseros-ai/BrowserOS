@@ -209,8 +209,10 @@ afterEach(async () => {
   Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
 })
 
+let client: QueryClient
+
 async function mount() {
-  const client = new QueryClient({
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
   await act(async () => {
@@ -404,5 +406,33 @@ describe('copying a skill from the list', () => {
       (span) => (span.textContent ?? '').trim() === 'ultrafast',
     )
     expect(marks).toHaveLength(0)
+  })
+})
+
+describe('searching while the list shrinks', () => {
+  it('tests that the search box stays while a search is active, and clearing it shows every skill', async () => {
+    skills = many(7)
+    await mount()
+    const search = () => container.querySelector('input[type="search"]')
+    await typeInto(search() as Element, 'number 7')
+    expect(text()).toContain('1 of 7 skills')
+
+    skills = many(6)
+    await act(async () => {
+      await client.invalidateQueries()
+    })
+    for (let tick = 0; tick < 3; tick += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+    expect(search()).not.toBeNull()
+    expect((search() as HTMLInputElement).value).toBe('number 7')
+    expect(text()).toContain('No skills match “number 7”.')
+
+    await typeInto(search() as Element, '')
+    expect(card('Skill number 1')).toBeDefined()
+    expect(card('Skill number 6')).toBeDefined()
+    expect(search()).toBeNull()
   })
 })

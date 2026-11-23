@@ -51,7 +51,7 @@ import {
 const GRID_CLASS =
   'grid grid-cols-[repeat(auto-fill,minmax(min(330px,100%),1fr))] gap-4'
 
-/** A list longer than this gets a search box. */
+/** A list longer than this gets a search box; it stays while a search is active. */
 const SEARCH_FROM = 6
 
 /** Things you ask for often, as cards: a click copies the phrase that runs one again. */
@@ -103,7 +103,7 @@ export function Skills() {
         <EmptySkills agents={connected} onMake={() => setCreating(true)} />
       ) : (
         <div className="flex flex-col gap-5">
-          {skills.length > SEARCH_FROM ? (
+          {skills.length > SEARCH_FROM || query.trim() ? (
             <SkillSearch
               query={query}
               onQuery={setQuery}
