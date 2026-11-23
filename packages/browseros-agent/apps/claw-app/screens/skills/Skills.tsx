@@ -42,6 +42,7 @@ import {
   cardStats,
   matchesQuery,
   SAVE_PHRASE,
+  skillAgents,
   skillCommand,
   skillSites,
   ultrafastMark,
@@ -56,8 +57,7 @@ const SEARCH_FROM = 6
 
 /** Things you ask for often, as cards: a click copies the phrase that runs one again. */
 export function Skills() {
-  const { skills, agents, connected, nudge, isLoading, isError } =
-    useSkillsScreenData()
+  const { skills, connected, nudge, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
   const [query, setQuery] = useState('')
   useUpgradeToasts(skills)
@@ -115,7 +115,10 @@ export function Skills() {
             <ul className={GRID_CLASS}>
               {shown.map((skill) => (
                 <li key={skill.name} className="flex">
-                  <SkillCard skill={skill} agents={agents} />
+                  <SkillCard
+                    skill={skill}
+                    agents={skillAgents(skill, connected)}
+                  />
                 </li>
               ))}
             </ul>

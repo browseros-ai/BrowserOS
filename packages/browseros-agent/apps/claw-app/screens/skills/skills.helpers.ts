@@ -7,7 +7,7 @@
  */
 
 import type { Skill, SkillRun, SkillUltrafast } from '@browseros/claw-api'
-import { HARNESSES, type Harness } from '@/components/harness/harness.types'
+import type { Harness } from '@/components/harness/harness.types'
 import { verbForTool } from '@/lib/step-sentences'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
 import { siteHost } from '@/modules/favicon/favicon.helpers'
@@ -123,19 +123,15 @@ export function skillSites(site: string | undefined): string[] {
 }
 
 /**
- * The connected agents any skill is linked into, once, in the usual harness
- * order. A skill records its links when it is saved and keeps them after an
- * agent is disconnected, so the saved links alone can name agents that are gone.
+ * The connected agents a skill can be pasted into: the ones it is linked into. A skill saved with
+ * no links (an empty list) can go to any connected agent, so it shows them all.
  */
-export function worksInAgents(
-  skills: Pick<Skill, 'linkedAgents'>[],
+export function skillAgents(
+  skill: Pick<Skill, 'linkedAgents'>,
   connected: readonly Harness[],
 ): Harness[] {
-  return HARNESSES.filter(
-    (harness) =>
-      connected.includes(harness) &&
-      skills.some((skill) => skill.linkedAgents.includes(harness)),
-  )
+  if (!skill.linkedAgents.length) return [...connected]
+  return connected.filter((harness) => skill.linkedAgents.includes(harness))
 }
 
 const STUCK_WHILE: Record<ReplayVerb, string> = {

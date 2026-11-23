@@ -17,13 +17,10 @@ import { useConnections } from '@/modules/api/connections.hooks'
 import { usePlan } from '@/modules/api/plan.hooks'
 import { useSkills } from '@/modules/api/skills.hooks'
 import { showsUltrafastNudge } from '@/modules/plan/plan.helpers'
-import { worksInAgents } from './skills.helpers'
 
 export interface SkillsScreenData {
   skills: Skill[]
-  /** The connected agents the skills work in, shown after a copy. */
-  agents: Harness[]
-  /** Every connected agent, for the empty state's "works in" line. */
+  /** Every connected agent, in the usual order; each card narrows it to the skill's own. */
   connected: Harness[]
   /** A free plan where ultrafast is on sale hears that ultrafast runs skills in seconds. */
   nudge: boolean
@@ -41,7 +38,6 @@ export function useSkillsScreenData(): SkillsScreenData {
     .map((c) => c.harness)
   return {
     skills,
-    agents: worksInAgents(skills, connected),
     connected: HARNESSES.filter((harness) => connected.includes(harness)),
     nudge: showsUltrafastNudge(plan.data),
     isLoading: query.isPending,

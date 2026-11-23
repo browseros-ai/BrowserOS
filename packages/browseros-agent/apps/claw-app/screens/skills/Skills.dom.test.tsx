@@ -53,7 +53,12 @@ mock.module('@/modules/api/client', () => ({
   apiClient: async () => ({
     getPlan: async () => plan(),
     listSkills: async () => ({ items: skills }),
-    listConnections: async () => ({ items: [] }),
+    listConnections: async () => ({
+      items: [
+        { harness: 'Claude Code', installed: true },
+        { harness: 'Codex', installed: true },
+      ],
+    }),
   }),
 }))
 
@@ -434,5 +439,24 @@ describe('searching while the list shrinks', () => {
     expect(card('Skill number 1')).toBeDefined()
     expect(card('Skill number 6')).toBeDefined()
     expect(search()).toBeNull()
+  })
+})
+
+describe('the paste hint after a copy', () => {
+  it('tests that a skill linked only to Codex names only Codex', async () => {
+    skills = [
+      skill(1, { linkedAgents: ['Codex'] }),
+      skill(2, { linkedAgents: ['Claude Code', 'Codex'] }),
+    ]
+    await mount()
+    await click(card('Skill number 1'))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    const faces = [...container.querySelectorAll('[role="img"]')].map((img) =>
+      img.getAttribute('aria-label'),
+    )
+    expect(faces).toEqual(['Codex'])
   })
 })

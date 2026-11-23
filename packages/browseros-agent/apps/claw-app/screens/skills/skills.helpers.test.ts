@@ -15,6 +15,7 @@ import {
   runSpeed,
   runsByItself,
   runsChoice,
+  skillAgents,
   skillCommand,
   skillSites,
   skillValue,
@@ -28,7 +29,6 @@ import {
   VERIFYING_POLL_MS,
   VERIFYING_WINDOW_MS,
   verifyingPoll,
-  worksInAgents,
 } from './skills.helpers'
 
 describe('skillCommand', () => {
@@ -140,31 +140,28 @@ describe('skillSites', () => {
   })
 })
 
-describe('worksInAgents', () => {
+describe('skillAgents', () => {
   const linked = (...agents: Skill['linkedAgents']) => ({
     linkedAgents: agents,
   })
   const everyone = ['Claude Code', 'Codex', 'Cursor'] as const
 
-  it('lists every connected agent any skill is linked into, once, in the usual order', () => {
-    expect(
-      worksInAgents(
-        [linked('Cursor', 'Claude Code'), linked('Codex', 'Claude Code')],
-        everyone,
-      ),
-    ).toEqual(['Claude Code', 'Codex', 'Cursor'])
+  it('lists the connected agents this skill is linked into, in the usual order', () => {
+    expect(skillAgents(linked('Cursor', 'Claude Code'), everyone)).toEqual([
+      'Claude Code',
+      'Cursor',
+    ])
+    expect(skillAgents(linked('Codex'), everyone)).toEqual(['Codex'])
   })
 
   it('leaves out an agent that was disconnected after the skill was saved', () => {
     expect(
-      worksInAgents([linked('Claude Code', 'Codex')], ['Claude Code']),
+      skillAgents(linked('Claude Code', 'Codex'), ['Claude Code']),
     ).toEqual(['Claude Code'])
-    expect(worksInAgents([linked('Codex')], [])).toEqual([])
   })
 
-  it('is empty when no skill is linked into an agent', () => {
-    expect(worksInAgents([linked(), linked()], everyone)).toEqual([])
-    expect(worksInAgents([], everyone)).toEqual([])
+  it('offers every connected agent for a skill saved with no links', () => {
+    expect(skillAgents(linked(), everyone)).toEqual([...everyone])
   })
 })
 
