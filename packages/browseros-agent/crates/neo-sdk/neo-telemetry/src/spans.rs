@@ -49,6 +49,7 @@ const OP_OUTCOME: Key = Key::from_static_str("neo.op.outcome");
 const OP_DELIVERY: Key = Key::from_static_str("neo.op.delivery");
 const ERROR_OWNER: Key = Key::from_static_str("neo.error.owner");
 const ERROR_CODE: Key = Key::from_static_str("neo.error.code");
+const ERROR_TYPE: Key = Key::from_static_str("error.type");
 const URL_DOMAIN: Key = Key::from_static_str("url.domain");
 const URL_FULL: Key = Key::from_static_str("url.full");
 
@@ -101,10 +102,10 @@ impl Spans {
                 RunStatus::Error | RunStatus::Cancelled | RunStatus::Timeout => true,
             };
             if failed {
-                span.set_status(Status::error(description(
-                    verdict.error,
-                    verdict.status.as_str(),
-                )));
+                set_failed(
+                    &mut span,
+                    description(verdict.error, verdict.status.as_str()),
+                );
             }
         }
         span.end();
@@ -165,7 +166,7 @@ impl Spans {
                 OpOutcome::Ok | OpOutcome::Cancelled => false,
             };
             if failed {
-                span.set_status(Status::error(description(op.error, op.outcome.as_str())));
+                set_failed(&mut span, description(op.error, op.outcome.as_str()));
             }
         }
         span.end_with_timestamp(end);
@@ -182,8 +183,16 @@ fn set_error(span: &mut Span, error: Option<ErrorLabel>) {
     }
 }
 
-/// A failed span's status text: its error code when it has one, else how it ended (a run's
-/// `cancelled` or `timeout`, an op's `error`).
+/// Status `ERROR` with `what` as its text, and the registry's `error.type` with the same value,
+/// which semantic conventions ask for on every failed span so a backend can group failures
+/// without knowing Neo's own `neo.error.code`.
+fn set_failed(span: &mut Span, what: &'static str) {
+    span.set_attribute(KeyValue::new(ERROR_TYPE, what));
+    span.set_status(Status::error(what));
+}
+
+/// A failed span's status text and `error.type`: its error code when it has one, else how it
+/// ended (a run's `cancelled` or `timeout`, an op's `error`).
 fn description(error: Option<ErrorLabel>, ended: &'static str) -> &'static str {
     error.map_or(ended, |error| error.code.as_str())
 }

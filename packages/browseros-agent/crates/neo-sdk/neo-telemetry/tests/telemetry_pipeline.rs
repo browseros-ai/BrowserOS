@@ -1042,8 +1042,10 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
             ("neo.op.delivery", text("unknown")),
             ("neo.error.owner", text("website")),
             ("neo.error.code", text("no_match")),
+            ("error.type", text("no_match")),
         ]),
-        "a failed op: every contract attribute, and no URL under the default dial"
+        "a failed op: every contract attribute, the registry's error.type, and no URL under the \
+         default dial"
     );
     assert_eq!(
         failed.status,
@@ -1077,6 +1079,7 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
             ("neo.run.status", text("error")),
             ("neo.error.owner", text("script")),
             ("neo.error.code", text("script_error")),
+            ("error.type", text("script_error")),
         ]),
         "neo.run carries its type, the run id, the task id, its status and its failure"
     );
@@ -1453,8 +1456,10 @@ fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Erro
             span.attributes.get("neo.error.code") == Some(&text("run_timeout"))
                 && span.attributes.get("neo.op.outcome") == Some(&text("cancelled"))
                 && span.status == SpanStatus::Unset
+                && !span.attributes.contains_key("error.type")
         }),
-        "each cut op's span keeps the error that cut it, and is no error span itself"
+        "each cut op's span keeps the error that cut it, and is no error span itself: no ERROR \
+         status, so no error.type either"
     );
     Ok(())
 }
