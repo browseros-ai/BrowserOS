@@ -80,6 +80,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       sync()
     }
 
+    const mediaDark = () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches
+
+    let sawDark = mediaDark()
+    const watch = window.setInterval(() => {
+      const dark = mediaDark()
+      if (dark === sawDark) return
+      sawDark = dark
+      sync()
+    }, 200)
+
     sync()
     document.addEventListener('visibilitychange', onVisibility)
     const mediaQuery =
@@ -89,6 +101,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     mediaQuery?.addEventListener('change', onMedia)
     return () => {
       cancelled = true
+      window.clearInterval(watch)
       document.removeEventListener('visibilitychange', onVisibility)
       mediaQuery?.removeEventListener('change', onMedia)
     }
