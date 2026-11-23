@@ -11,7 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::aria_node::AriaNode;
 use crate::call::Call;
-use crate::form::Passed;
+use crate::delta::Earlier;
+use crate::form::{Form, Passed, TextForm};
 use crate::snapshot::Snapshot;
 
 use super::case_file::Pending;
@@ -150,7 +151,37 @@ fn call_json(call: &Call<'_>) -> Value {
         }
         Call::Element(passed) => json!({ "element": passed_json(passed) }),
         Call::Page(passed) => json!({ "page": passed_json(passed) }),
+        Call::Delta { passed, earlier } => json!({
+            "delta": { "passed": passed_json(passed), "earlier": earlier_json(*earlier) }
+        }),
     }
+}
+
+/// What a delta found, as the case writer's `Earlier` holds it: `'notRead'`, `'nothing'`, or the
+/// stored text and its form, `inert` written only when true, as the TypeScript writes a form.
+fn earlier_json(earlier: Earlier<'_>) -> Value {
+    match earlier {
+        Earlier::NotRead => json!("notRead"),
+        Earlier::Nothing => json!("nothing"),
+        Earlier::Text(stored) => json!({ "text": stored.text, "form": form_json(&stored.form) }),
+    }
+}
+
+fn form_json(form: &Form) -> Value {
+    let text = match form.text {
+        TextForm::Kept => "kept",
+        TextForm::LeftOut => "leftOut",
+        TextForm::Always => "always",
+        TextForm::Never => "never",
+    };
+    let mut json = Map::new();
+    json.insert("text".to_owned(), json!(text));
+    json.insert("urls".to_owned(), json!(form.urls));
+    json.insert("maxTokens".to_owned(), json!(form.max_tokens.tokens()));
+    if form.inert {
+        json.insert("inert".to_owned(), json!(true));
+    }
+    Value::Object(json)
 }
 
 /// The snapshot operation's result as Rust hands it to today's renderer: `{ json, partial }`, and

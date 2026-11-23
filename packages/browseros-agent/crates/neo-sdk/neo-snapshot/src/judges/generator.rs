@@ -8,11 +8,15 @@
 //! and a call passes every combination of Neo's options. A cap is any number the prelude accepts,
 //! fractions and the extremes of a double included, and a page for `mode: 'full'` is now and then
 //! long enough to be cut at the default cap, with kept blocks and sections past the cut.
+//!
+//! For the delta, a snapshot can also carry a shelf of plain lines from a few words, so equal
+//! lines repeat and the search meets its ties, and a changed copy of a snapshot edits a few places
+//! of its tree and of its facts, as a page changes between two snapshots.
 
 use std::env;
 use std::error::Error;
 
-use serde_json::Number;
+use serde_json::{Number, Value};
 
 use crate::aria_node::{AriaChild, AriaNode, Invalid, NodeBox, Tristate};
 use crate::cap::MaxTokens;
@@ -184,6 +188,41 @@ const EXTREME_CAPS: &[f64] = &[5e-324, f64::MIN_POSITIVE, 1e-9, 1e300, f64::MAX]
 /// The deepest level a generated tree reaches, the top level being 0.
 const MAX_DEPTH: usize = 4;
 
+/// What a layer's name quoted raw is made of, now and then: quotes, backslashes, and a backslash
+/// before each line terminator JavaScript's `.` refuses, the escapes the on-top expression reads.
+const ESCAPES: &[&str] = &[
+    "a",
+    " ",
+    "\"",
+    "\\",
+    "\\\"",
+    "\\\\",
+    "\\\r",
+    "\\\u{2028}",
+    "\\\u{2029}",
+    "\\\t",
+    "\\\u{1f600}",
+    "\" ",
+    "]",
+    "[ref=e1]",
+];
+
+/// The few names a shelf's lines take, so the same line comes up many times.
+const SHELF_NAMES: &[&str] = &["Red mug", "Blue mug", "Tan mug", "Jug"];
+
+/// What a generated delta found for the tab.
+#[derive(Clone, Copy)]
+pub(crate) enum EarlierKind {
+    /// The stored text was not read.
+    NotRead,
+    /// Nothing was stored.
+    Nothing,
+    /// Another page's text: no comparison lists it, and its layers are named gone.
+    OtherPage,
+    /// The text a whole-page call kept on the snapshot the copy was changed from.
+    ThisPage,
+}
+
 pub(crate) struct Generator(SplitMix64);
 
 impl Generator {
@@ -307,6 +346,149 @@ impl Generator {
         }
     }
 
+    /// A snapshot for the delta: [`Generator::snapshot`], often with a shelf of plain lines from
+    /// a few words after it, so a changed copy is mostly equal lines and the search meets ties.
+    pub(crate) fn delta_snapshot(&mut self) -> Snapshot {
+        let mut snapshot = self.snapshot();
+        if self.chance(60) {
+            let shelf = self.shelf();
+            snapshot.tree.push(shelf);
+        }
+        snapshot
+    }
+
+    /// A copy of `snapshot` with zero to three places of its tree edited (a node added, removed,
+    /// doubled, swapped with its neighbour, or renamed, refed, made inert or put on top) and now
+    /// and then a layer, a frame not read, the closed roots or the unfinished check gained or
+    /// lost.
+    pub(crate) fn changed(&mut self, snapshot: &Snapshot) -> Snapshot {
+        let mut tree = snapshot.tree.clone();
+        for _ in 0..self.below(4) {
+            self.change_tree(&mut tree);
+        }
+        let mut layers: Vec<Layer> = snapshot
+            .layers
+            .iter()
+            .map(|layer| Layer {
+                r#ref: layer.r#ref.clone(),
+                line: layer.line.clone(),
+                whole_view: layer.whole_view,
+            })
+            .collect();
+        match self.below(6) {
+            0 if !layers.is_empty() => {
+                layers.remove(self.below(layers.len()));
+            }
+            1 => {
+                let layer = self.layer();
+                layers.push(layer);
+            }
+            2 => layers.clear(),
+            _ => {}
+        }
+        let mut partial: Vec<PartialFrame> = snapshot
+            .partial
+            .iter()
+            .map(|frame| PartialFrame {
+                r#ref: frame.r#ref.clone(),
+                frame: frame.frame.clone(),
+                reason: frame.reason.clone(),
+            })
+            .collect();
+        if !partial.is_empty() && self.chance(12) {
+            partial.remove(self.below(partial.len()));
+        }
+        let closed_roots = match (&snapshot.closed_roots, self.chance(12)) {
+            (Some(roots), false) => Some(ClosedRoots {
+                sent: roots.sent,
+                found: roots.found,
+            }),
+            (None, true) => Some(ClosedRoots {
+                sent: self.small(),
+                found: self.small(),
+            }),
+            _ => None,
+        };
+        let unmarked = match (&snapshot.unmarked, self.chance(12)) {
+            (Some(unmarked), false) => Some(Unmarked {
+                reason: unmarked.reason.clone(),
+            }),
+            (None, true) => Some(Unmarked {
+                reason: "timeout".to_owned(),
+            }),
+            _ => None,
+        };
+        Snapshot {
+            tree,
+            partial,
+            layers,
+            closed_roots,
+            unmarked,
+        }
+    }
+
+    /// The options of a delta call on a changed copy: often none, which takes every option from
+    /// the stored form, or the options the stored text was kept with, which agree with its form;
+    /// otherwise any.
+    pub(crate) fn delta_passed(&mut self, kept: Passed) -> Passed {
+        match self.below(4) {
+            0 | 1 => Passed::default(),
+            2 => kept,
+            _ => self.passed(),
+        }
+    }
+
+    /// What a generated delta finds: mostly the text kept on the page it was changed from.
+    pub(crate) fn earlier_kind(&mut self) -> EarlierKind {
+        match self.below(20) {
+            0..3 => EarlierKind::NotRead,
+            3..6 => EarlierKind::Nothing,
+            6..8 => EarlierKind::OtherPage,
+            _ => EarlierKind::ThisPage,
+        }
+    }
+
+    /// A line an earlier text may hold where a layer's would be: mostly as neo-playwright words a
+    /// layer (`action::on_top_line`: the role, the name JSON-quoted or none, the ref, then
+    /// `, blank`, `, loading`, `, says "…"`), with names quoted raw too, so quotes and backslashes
+    /// meet the expression unescaped, and refs and roles of any string; sometimes any string
+    /// after `# on top: `.
+    pub(crate) fn on_top_line(&mut self) -> String {
+        if self.chance(10) {
+            return format!("# on top: {}", self.string());
+        }
+        let role = if self.chance(80) {
+            self.pick(ROLES).to_owned()
+        } else {
+            self.string()
+        };
+        let reference = self.reference();
+        let name = match self.below(5) {
+            0 => None,
+            1 => Some(format!("\"{}\"", self.string())),
+            2 => {
+                let escapes: String = (0..=self.below(5)).map(|_| self.pick(ESCAPES)).collect();
+                Some(format!("\"{escapes}\""))
+            }
+            _ => Some(Value::from(self.string()).to_string()),
+        };
+        let mut line = match name {
+            Some(name) => format!("# on top: {role} {name} [ref={reference}]"),
+            None => format!("# on top: {role} [ref={reference}]"),
+        };
+        match self.below(5) {
+            0 => line.push_str(", blank"),
+            1 => line.push_str(", loading"),
+            2 => {
+                line.push_str(", says ");
+                line.push_str(&Value::from(self.string()).to_string());
+            }
+            _ => {}
+        }
+        line.push_str(self.pick(&[" over the whole view", " over part of the view", ""]));
+        line
+    }
+
     /// The options of one call in Neo's default format.
     pub(crate) fn passed(&mut self) -> Passed {
         let max_tokens = self.max_tokens();
@@ -401,6 +583,113 @@ impl Generator {
                 .push(AriaChild::Text(format!("{words}\u{1f600}{words}")));
         }
         paragraph
+    }
+
+    /// A list of 10 to 59 plain lines, links and pictures named from [`SHELF_NAMES`], a few refs
+    /// among them and now and then a text, so the same line repeats.
+    fn shelf(&mut self) -> AriaNode {
+        let mut shelf = plain("list", None, Some("e7".to_owned()));
+        for _ in 0..10 + self.below(50) {
+            let child = if self.chance(10) {
+                AriaChild::Text("In stock".to_owned())
+            } else {
+                let role = self.pick(&["link", "img", "listitem"]);
+                let name = self.pick(SHELF_NAMES).to_owned();
+                let r#ref = self.maybe(30, |generator| generator.pick(REFS).to_owned());
+                AriaChild::Node(Box::new(plain(role, Some(name), r#ref)))
+            };
+            shelf.children.push(child);
+        }
+        shelf
+    }
+
+    /// One edit at a random place of `tree`: at its top level, or inside a node.
+    fn change_tree(&mut self, tree: &mut Vec<AriaNode>) {
+        if tree.is_empty() || self.chance(25) {
+            match self.below(5) {
+                0 => {
+                    let node = self.subtree(1);
+                    tree.insert(self.below(tree.len() + 1), node);
+                }
+                1 if !tree.is_empty() => {
+                    tree.remove(self.below(tree.len()));
+                }
+                2 if !tree.is_empty() => {
+                    let at = self.below(tree.len());
+                    let copy = tree[at].clone();
+                    tree.insert(at, copy);
+                }
+                3 if tree.len() > 1 => {
+                    let at = self.below(tree.len() - 1);
+                    tree.swap(at, at + 1);
+                }
+                _ if !tree.is_empty() => {
+                    let at = self.below(tree.len());
+                    self.change_node(&mut tree[at]);
+                }
+                _ => {}
+            }
+            return;
+        }
+        let at = self.below(tree.len());
+        self.change_inside(&mut tree[at]);
+    }
+
+    /// One edit inside `node`: in a node below it, half the time, or among its own children.
+    fn change_inside(&mut self, node: &mut AriaNode) {
+        let nodes: Vec<usize> = node
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(index, child)| matches!(child, AriaChild::Node(_)).then_some(index))
+            .collect();
+        if !nodes.is_empty() && self.chance(50) {
+            let at = nodes[self.below(nodes.len())];
+            if let AriaChild::Node(child) = &mut node.children[at] {
+                self.change_inside(child);
+            }
+            return;
+        }
+        let length = node.children.len();
+        match self.below(6) {
+            0 => {
+                let child = if self.chance(30) {
+                    AriaChild::Text(self.string())
+                } else {
+                    AriaChild::Node(Box::new(self.subtree(MAX_DEPTH - 1)))
+                };
+                node.children.insert(self.below(length + 1), child);
+            }
+            1 if length > 0 => {
+                node.children.remove(self.below(length));
+            }
+            2 if length > 0 => {
+                let at = self.below(length);
+                let copy = node.children[at].clone();
+                node.children.insert(at, copy);
+            }
+            3 if length > 1 => {
+                let at = self.below(length - 1);
+                node.children.swap(at, at + 1);
+            }
+            4 if length > 0 => {
+                let at = self.below(length);
+                node.children[at] = AriaChild::Text(self.string());
+            }
+            _ => self.change_node(node),
+        }
+    }
+
+    /// One of `node`'s own facts changed: its name, its ref, its inert mark, its on-top mark or
+    /// its role.
+    fn change_node(&mut self, node: &mut AriaNode) {
+        match self.below(5) {
+            0 => node.name = self.maybe(70, Self::string),
+            1 => node.r#ref = self.maybe(70, Self::reference),
+            2 => node.inert = self.flag(),
+            3 => node.on_top = self.maybe(50, Self::reference),
+            _ => node.role = self.pick(ROLES).to_owned(),
+        }
     }
 
     /// A count below 4,000.
@@ -518,6 +807,32 @@ impl Generator {
 
     fn draw(&mut self) -> u64 {
         self.0.next().unwrap_or_default()
+    }
+}
+
+/// A node with a role, maybe a name and a ref, and nothing else.
+fn plain(role: &str, name: Option<String>, r#ref: Option<String>) -> AriaNode {
+    AriaNode {
+        role: role.to_owned(),
+        name,
+        checked: None,
+        disabled: None,
+        expanded: None,
+        active: None,
+        inert: None,
+        on_top: None,
+        invalid: None,
+        level: None,
+        pressed: None,
+        selected: None,
+        aria_hidden: None,
+        r#ref,
+        cursor: None,
+        r#box: None,
+        url: None,
+        placeholder: None,
+        text: None,
+        children: Vec::new(),
     }
 }
 

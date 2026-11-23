@@ -14,6 +14,7 @@ use serde::de::IgnoredAny;
 use crate::aria_node::{AriaChild, AriaNode};
 use crate::call::Call;
 use crate::cap::MaxTokens;
+use crate::delta::{Baseline, Earlier};
 use crate::form::{Form, Passed, TextForm};
 use crate::snapshot::{ClosedRoots, Layer, PartialFrame, Snapshot, Unmarked};
 
@@ -49,8 +50,7 @@ pub(crate) struct Case {
     pub(crate) pending: Option<Pending>,
 }
 
-/// Which text, by its one key, with that call's options, decoded as `render` takes them. The
-/// options of a delta are read by the piece that prints it.
+/// Which text, by its one key, with that call's options, decoded as `render` takes them.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum CaseCall {
@@ -60,7 +60,8 @@ enum CaseCall {
     Element(CasePassed),
     /// A whole page in Neo's format.
     Page(CasePassed),
-    Delta {},
+    /// A whole page with `{ delta: true }`.
+    Delta(CaseDelta),
     Cover {},
 }
 
@@ -108,6 +109,69 @@ impl TryFrom<PassedJson> for CasePassed {
             max_tokens: passed.max_tokens.map(max_tokens).transpose()?,
             inert: passed.inert,
         }))
+    }
+}
+
+/// A delta call: the options it passed and what it found for the tab, decoded as `render` takes
+/// them, the stored text owned so the call can borrow it.
+#[derive(Deserialize)]
+#[serde(try_from = "DeltaJson")]
+struct CaseDelta {
+    passed: Passed,
+    earlier: Found,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeltaJson {
+    passed: CasePassed,
+    earlier: EarlierJson,
+}
+
+/// `'notRead'`, `'nothing'`, or the stored text and its form.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum EarlierJson {
+    Word(EarlierWord),
+    Text(Pending),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum EarlierWord {
+    NotRead,
+    Nothing,
+}
+
+impl TryFrom<DeltaJson> for CaseDelta {
+    type Error = String;
+
+    fn try_from(delta: DeltaJson) -> Result<Self, String> {
+        let CasePassed(passed) = delta.passed;
+        let earlier = match delta.earlier {
+            EarlierJson::Word(EarlierWord::NotRead) => Found::NotRead,
+            EarlierJson::Word(EarlierWord::Nothing) => Found::Nothing,
+            EarlierJson::Text(stored) => Found::Text(stored.baseline()?),
+        };
+        Ok(Self { passed, earlier })
+    }
+}
+
+/// What a delta found for the tab, owning the stored text.
+enum Found {
+    NotRead,
+    Nothing,
+    Text(Baseline),
+}
+
+impl Found {
+    /// As `Call::Delta` takes it.
+    fn earlier(&self) -> Earlier<'_> {
+        match self {
+            Self::NotRead => Earlier::NotRead,
+            Self::Nothing => Earlier::Nothing,
+            Self::Text(stored) => Earlier::Text(stored),
+        }
     }
 }
 
@@ -291,8 +355,7 @@ impl CaseFile {
 }
 
 impl Case {
-    /// The case's call as `render` takes it; `None` for a delta, which `render` does not print
-    /// yet, and for a cover, which `cover_block` prints.
+    /// The case's call as `render` takes it; `None` for a cover, which `cover_block` prints.
     pub(crate) fn call(&self) -> Option<Call<'_>> {
         match &self.call {
             CaseCall::Playwright {} => Some(Call::Playwright),
@@ -301,7 +364,11 @@ impl Case {
             }),
             CaseCall::Element(CasePassed(passed)) => Some(Call::Element(passed)),
             CaseCall::Page(CasePassed(passed)) => Some(Call::Page(passed)),
-            CaseCall::Delta {} | CaseCall::Cover {} => None,
+            CaseCall::Delta(CaseDelta { passed, earlier }) => Some(Call::Delta {
+                passed,
+                earlier: earlier.earlier(),
+            }),
+            CaseCall::Cover {} => None,
         }
     }
 
@@ -315,6 +382,14 @@ impl Case {
 }
 
 impl Pending {
+    /// The text and its form, as a tab's store keeps them.
+    pub(crate) fn baseline(&self) -> Result<Baseline, String> {
+        Ok(Baseline {
+            text: self.text.clone(),
+            form: self.form()?,
+        })
+    }
+
     /// The form the baseline was rendered in.
     pub(crate) fn form(&self) -> Result<Form, String> {
         let CaseForm {
