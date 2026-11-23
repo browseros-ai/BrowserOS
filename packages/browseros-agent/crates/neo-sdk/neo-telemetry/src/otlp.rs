@@ -29,6 +29,7 @@ use opentelemetry_otlp::{
 };
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, Temporality};
+use opentelemetry_sdk::resource::TelemetryResourceDetector;
 use opentelemetry_sdk::trace::{BatchConfigBuilder, BatchSpanProcessor, Sampler};
 
 use crate::config::{SamplerChoice, SignalPush};
@@ -164,15 +165,18 @@ fn not_built(what: &str, error: &ExporterBuildError) -> TelemetryError {
     }
 }
 
-/// The resource both providers share: `service.name` (`OTEL_SERVICE_NAME`, default
-/// `browseros-neo`), then `OTEL_RESOURCE_ATTRIBUTES`, applied last so it wins. Built from the
-/// config alone: `Resource::builder` would read the process environment behind its back.
+/// The resource both providers share: the SDK's own `telemetry.sdk.*` (name, language,
+/// version), which the OpenTelemetry resource spec has every SDK report; `service.name`
+/// (`OTEL_SERVICE_NAME`, default `browseros-neo`); then `OTEL_RESOURCE_ATTRIBUTES`, applied last
+/// so it wins. Built from the config alone: `Resource::builder` would read the process
+/// environment behind its back, and the telemetry detector reads none.
 pub(crate) fn resource(config: &OtlpConfig) -> Resource {
     let attributes = config
         .resource_attributes
         .iter()
         .map(|attribute| KeyValue::new(attribute.key.clone(), attribute.value.clone()));
     Resource::builder_empty()
+        .with_detector(Box::new(TelemetryResourceDetector))
         .with_service_name(config.service_name.clone())
         .with_attributes(attributes)
         .build()
@@ -711,6 +715,23 @@ mod tests {
         assert_eq!(
             resource(&defaults).get(&service),
             Some(Value::from("browseros-neo"))
+        );
+        assert_eq!(
+            (
+                resource(&defaults).get(&Key::new("telemetry.sdk.name")),
+                resource(&defaults).get(&Key::new("telemetry.sdk.language")),
+            ),
+            (
+                Some(Value::from("opentelemetry")),
+                Some(Value::from("rust"))
+            ),
+            "every SDK reports what it is, as the resource spec asks"
+        );
+        assert!(
+            resource(&defaults)
+                .get(&Key::new("telemetry.sdk.version"))
+                .is_some(),
+            "and at which version"
         );
         assert_eq!(format!("{:?}", sampler(&defaults)), "ParentBased(AlwaysOn)");
         let config = config(&[
