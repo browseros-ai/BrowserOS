@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "claw-server"
-version = "0.0.99"
+version = "0.0.100"
 dependencies = [
  "anyhow",
  "axum",
@@ -543,6 +543,7 @@ dependencies = [
  "hosted-api",
  "neo-captcha",
  "neo-screencast",
+ "neo-server",
  "os_info",
  "percent-encoding",
  "posthog-rs",

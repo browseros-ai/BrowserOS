@@ -1,0 +1,86 @@
+{
+  "case": "25-fl-bus-puzzle-after-a-pass-claim",
+  "source": "04-ohio-florida.browseros.txt 7:19: '# on top: generic, blank over part of the view' and the puzzle 'Select all images with a bus'. The checkbox-pass claim is synthetic.",
+  "truth": "blocked",
+  "claim": {
+    "basis": "widget_passed",
+    "challenge": {
+      "kind": "recaptcha_v2",
+      "state": "active",
+      "frame": {
+        "frameId": "fl-anchor",
+        "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+        "rect": null
+      },
+      "challengeFrame": null,
+      "sitekey": "fl-site-key",
+      "invisible": false,
+      "enterprise": false
+    }
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "portal.claimyourcashfl.gov",
+      "layer": {
+        "dialog": false,
+        "share": 0.4,
+        "overSubmit": true,
+        "vendor": "recaptcha",
+        "part": "puzzle",
+        "text": []
+      },
+      "puzzle": "recaptcha",
+      "submit": {
+        "label": "Search",
+        "covered": true
+      },
+      "buttons": ["Search", "Clear"],
+      "text": [
+        "ABANDONED PROPERTY SEARCH",
+        "Last Name",
+        "First Name",
+        "If the search yields too many results, narrow it by adding: City",
+        "OR Property Id",
+        "You should also consider searching all of your names, such as maiden, married, etc., and for your current and any past Florida cities in which you have resided.",
+        "Contact Us",
+        "Legislative Statute",
+        "Administrative Rules",
+        "Copyright © Florida Department of Financial Services 2019"
+      ]
+    },
+    "rescan": {
+      "outcome": "detected",
+      "challenges": [
+        {
+          "kind": "recaptcha_v2",
+          "state": "active",
+          "frame": {
+            "frameId": "fl-anchor",
+            "url": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=fl-site-key&size=normal",
+            "rect": null
+          },
+          "challengeFrame": {
+            "frameId": "fl-bframe",
+            "url": "https://www.google.com/recaptcha/api2/bframe?hl=en&k=fl-site-key",
+            "rect": null
+          },
+          "sitekey": "fl-site-key",
+          "invisible": false,
+          "enterprise": false
+        }
+      ],
+      "complete": true,
+      "document": {
+        "url": "https://replay.test/",
+        "loaderId": "claim"
+      },
+      "cloudflareWall": false
+    }
+  },
+  "expect": {
+    "result": "blocked",
+    "tier": "deterministic",
+    "cause": "challenge_open"
+  }
+}

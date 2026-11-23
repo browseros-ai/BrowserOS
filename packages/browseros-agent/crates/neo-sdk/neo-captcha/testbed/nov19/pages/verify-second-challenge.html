@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>A second check after the first passed</title>
+<style>
+#dialog { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
+#dialog[hidden] { display: none; }
+#dialog > div { background: #fff; padding: 24px; border-radius: 8px; }
+</style></head>
+<body>
+<h1>A second check after the first passed</h1>
+<form id="captcha-form" method="post" action="/submit/verify-second-challenge">
+  <label>Last or Business Name: <input name="last" value="Rivera"></label>
+  <div id="widget" class="cf-turnstile" data-sitekey="3x00000000000000000000FF"></div>
+  <button id="submit" type="submit">Search</button>
+</form>
+<div id="dialog" role="dialog" aria-label="Please check the box below to continue." hidden>
+  <div>
+    <p>Please check the box below to continue.</p>
+    <button id="close" type="button">Close</button>
+    <div id="second-widget" class="cf-turnstile" data-sitekey="2x00000000000000000000AB"></div>
+  </div>
+</div>
+<script>
+// Kelmar's state sites on Nov 19 (NC, then NY): Turnstile passed, then the site covered the
+// whole view with a dialog holding a second Turnstile that read "Verification failed", and the
+// page said "There was an issue verifying your browser." A solver that stops at the first pass
+// calls this page solved while it is blocked; only a look at the page after the pass sees the
+// dialog's vendor frame on top.
+//
+// The first widget uses Cloudflare's interactive test key, so it passes only when the solver
+// clicks it: the solve has always begun before the pass. (With the always-passes key the widget
+// can pass before the solve starts, and the solver then meets the dialog instead of claiming
+// the pass.) Its callback opens the dialog, whose always-blocks widget fails and stays failed
+// (retry off). The dialog sits outside the form, so the search posts only the first token; the
+// server checks it with the always-fail secret (the catalog sitekey is the dialog's), as Kelmar's
+// server refused the search while its second check had not passed.
+const SECOND_CHECK_DELAY_MS = 250;
+const ALERT = 'There was an issue verifying your browser. Please try again. If this problem persists, refresh the page and submit the form again.';
+const fixtureState = window.__captchaFixture = { id: 'verify-second-challenge', family: 'turnstile', sitekey: '2x00000000000000000000AB', firstSitekey: '3x00000000000000000000FF', rendered: false, callbackFired: false, tokenLength: 0, secondChallenge: false, secondFailed: false, errors: [] };
+function mirror() { document.documentElement.dataset.captchaFixture = JSON.stringify(fixtureState); }
+function markRendered() {
+  // Turnstile can keep its iframe in a closed shadow root; observe its visible host.
+  const frame = document.querySelector('#widget iframe, #widget > div');
+  if (!frame) return;
+  const rect = frame.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) { fixtureState.rendered = true; mirror(); observer.disconnect(); resizeObserver.disconnect(); }
+}
+function showAlert() {
+  if (document.getElementById('alert')) return;
+  const alert = document.createElement('p');
+  alert.id = 'alert';
+  alert.setAttribute('role', 'alert');
+  alert.textContent = ALERT;
+  document.querySelector('h1').after(alert);
+}
+function openSecondCheck() {
+  if (fixtureState.secondChallenge) return;
+  fixtureState.secondChallenge = true;
+  document.getElementById('dialog').hidden = false;
+  turnstile.render('#second-widget', {
+    sitekey: fixtureState.sitekey,
+    retry: 'never',
+    'error-callback': code => { fixtureState.secondFailed = true; fixtureState.errors.push(String(code || 'widget-error')); showAlert(); mirror(); }
+  });
+  mirror();
+}
+document.getElementById('close').addEventListener('click', () => { document.getElementById('dialog').hidden = true; });
+const observer = new MutationObserver(markRendered);
+const resizeObserver = new ResizeObserver(markRendered);
+resizeObserver.observe(document.querySelector('#widget'));
+observer.observe(document.querySelector('#widget'), { childList: true, subtree: true, attributes: true });
+window.fixtureLoaded = function() {
+  turnstile.render('#widget', {
+    sitekey: fixtureState.firstSitekey,
+    callback: token => { fixtureState.callbackFired = true; fixtureState.tokenLength = token.length; mirror(); setTimeout(openSecondCheck, SECOND_CHECK_DELAY_MS); },
+    'error-callback': code => { fixtureState.tokenLength = 0; fixtureState.errors.push(String(code || 'widget-error')); mirror(); },
+    'expired-callback': () => { fixtureState.tokenLength = 0; fixtureState.errors.push('expired'); mirror(); }
+  });
+  markRendered();
+};
+mirror();
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=fixtureLoaded&amp;render=explicit" async defer onerror="fixtureState.errors.push('script-load-error'); mirror()"></script>
+</body>
+</html>

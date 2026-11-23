@@ -15,18 +15,34 @@ import { join } from 'node:path'
 import { type FixturePair, startFixturePair } from '../fixtures/server'
 import { type BrowserHandle, isSuiteEnabled, launchBrowser } from './browser'
 import { runCaptureMode } from './capture'
-import { CASE_TIMEOUT_MS, type CaseContext, contractCases } from './cases'
+import {
+  CASE_TIMEOUT_MS,
+  type CaseContext,
+  type ContractCase,
+  contractCases,
+} from './cases'
 import { parsePageId, waitUntil } from './helpers'
 import { McpSession, textOf } from './mcp-client'
+import { playwrightRunner } from './playwright/runner'
 import { type ContractServer, startRustServer } from './rust-server'
 
 const gate = isSuiteEnabled() ? describe : describe.skip
-const onlyCases = process.env.CLAW_MCP_ONLY?.trim()
-const activeCases = (
-  process.env.CLAW_MCP_SMOKE === '1'
-    ? contractCases.filter((contractCase) => contractCase.smoke)
-    : contractCases
-).filter((contractCase) => !onlyCases || contractCase.name.includes(onlyCases))
+type SharedCaseContext = Omit<CaseContext, 'scopedMcp'>
+
+/** Binds each case registry to the page IDs and session setup its tools use. */
+interface ContractRunner<Context extends SharedCaseContext> {
+  name: string
+  cases: Array<
+    Omit<ContractCase, 'run'> & { run: (context: Context) => Promise<void> }
+  >
+  connectAttached(
+    server: ContractServer,
+    clientName: string,
+  ): Promise<McpSession>
+  openPage(run: ServerRun, url: string, session?: McpSession): Promise<number>
+  cleanupCase(run: ServerRun): Promise<void>
+  caseContext(context: SharedCaseContext, run: ServerRun): Context
+}
 
 interface ServerRun {
   browserArgs: string[]
@@ -54,6 +70,7 @@ async function ensureFixtures(): Promise<FixturePair> {
 }
 
 async function ensureRun(
+  runner: Pick<ContractRunner<SharedCaseContext>, 'connectAttached'>,
   browserArgs: string[] = [],
   headless = process.env.BROWSEROS_TEST_HEADLESS !== 'false',
 ): Promise<ServerRun> {
@@ -89,7 +106,7 @@ async function ensureRun(
       )
     }
     server = await startRustServer(browser.cdpPort)
-    const mcp = await connectAttached(server, 'claw-contract')
+    const mcp = await runner.connectAttached(server, 'claw-contract')
     run = {
       browserArgs,
       headless,
@@ -108,7 +125,6 @@ async function ensureRun(
   }
 }
 
-/** An MCP session once the server has attached to the browser. */
 async function connectAttached(
   server: ContractServer,
   clientName: string,
@@ -160,17 +176,16 @@ async function startScoped(
   }
 }
 
-function makeContext(run: ServerRun): CaseContext {
+function makeContext(
+  run: ServerRun,
+  runner: Pick<ContractRunner<SharedCaseContext>, 'openPage'>,
+): SharedCaseContext {
   const pair = fixtures
   if (!pair) throw new Error('fixture servers not started')
   return {
     server: run.server,
     browser: run.browser,
     mcp: run.mcp,
-    async scopedMcp() {
-      run.scoped ??= startScoped(run)
-      return (await run.scoped)?.mcp ?? run.mcp
-    },
     scratchDir: run.scratchDir,
     async openSession(clientName = 'claw-contract-extra') {
       const session = await McpSession.connect(run.server.baseUrl, clientName)
@@ -179,22 +194,11 @@ function makeContext(run: ServerRun): CaseContext {
     },
     fixture: (path) => pair.primary.url(path),
     fixture2: (path) => pair.secondary.url(path),
-    async openPage(url, session = run.mcp) {
-      const result = await session.callTool('tabs', {
-        action: 'new',
-        url,
-      })
-      if (result.isError) {
-        throw new Error(`tabs new failed: ${textOf(result)}`)
-      }
-      const page = parsePageId(result)
-      run.openedPages.push({ session, page })
-      return page
-    },
+    openPage: (url, session) => runner.openPage(run, url, session),
   }
 }
 
-/** Close pages a case opened so the next case starts from a clean browser. */
+/** Close each tracked page through the MCP session that owns it. */
 async function cleanupCase(run: ServerRun): Promise<void> {
   const opened = run.openedPages.splice(0)
   if (!(await run.browser.isRunning())) return
@@ -218,31 +222,77 @@ async function teardownRun(): Promise<void> {
   await rm(current.scratchDir, { recursive: true, force: true })
 }
 
-gate('Rust /mcp conformance', () => {
-  // Two owned servers can each use their six-second shutdown grace before the
-  // browser/profile cleanup. Bun's default five-second hook limit cuts that off.
-  afterAll(async () => {
-    await teardownRun()
-  }, 30_000)
-
-  for (const contractCase of activeCases) {
-    test(
-      contractCase.name,
-      async () => {
-        const activeRun = await ensureRun(
-          contractCase.browserArgs,
-          contractCase.headless,
-        )
-        try {
-          await contractCase.run(makeContext(activeRun))
-        } finally {
-          await cleanupCase(activeRun)
-        }
+const catalogRunner: ContractRunner<CaseContext> = {
+  name: 'catalog',
+  cases: contractCases,
+  connectAttached,
+  async openPage(run, url, session = run.mcp) {
+    const result = await session.callTool('tabs', { action: 'new', url })
+    if (result.isError) {
+      throw new Error(`tabs new failed: ${textOf(result)}`)
+    }
+    const page = parsePageId(result)
+    run.openedPages.push({ session, page })
+    return page
+  },
+  cleanupCase,
+  caseContext(context, run) {
+    return {
+      ...context,
+      async scopedMcp() {
+        run.scoped ??= startScoped(run)
+        return (await run.scoped)?.mcp ?? run.mcp
       },
-      CASE_TIMEOUT_MS,
-    )
-  }
-})
+    }
+  },
+}
+
+function registerCases<Context extends SharedCaseContext>(
+  runner: ContractRunner<Context>,
+): void {
+  const onlyCases = process.env.CLAW_MCP_ONLY?.trim()
+  const smoke = process.env.CLAW_MCP_SMOKE === '1'
+  const activeCases = runner.cases.filter(
+    (contractCase) =>
+      (!smoke || contractCase.smoke) &&
+      (!onlyCases || contractCase.name.includes(onlyCases)),
+  )
+
+  gate(`Rust /mcp conformance (${runner.name})`, () => {
+    // The two catalog servers can each take six seconds to shut down, plus
+    // browser and profile cleanup. Bun's default hook timeout is five seconds.
+    afterAll(async () => {
+      await teardownRun()
+    }, 30_000)
+
+    for (const contractCase of activeCases) {
+      test(
+        contractCase.name,
+        async () => {
+          const activeRun = await ensureRun(
+            runner,
+            contractCase.browserArgs,
+            contractCase.headless,
+          )
+          try {
+            await contractCase.run(
+              runner.caseContext(makeContext(activeRun, runner), activeRun),
+            )
+          } finally {
+            await runner.cleanupCase(activeRun)
+          }
+        },
+        CASE_TIMEOUT_MS,
+      )
+    }
+  })
+}
+
+if (process.env.CLAW_PLAYWRIGHT_RUN === '1') {
+  registerCases(playwrightRunner)
+} else {
+  registerCases(catalogRunner)
+}
 
 afterAll(async () => {
   await fixtures?.stop()

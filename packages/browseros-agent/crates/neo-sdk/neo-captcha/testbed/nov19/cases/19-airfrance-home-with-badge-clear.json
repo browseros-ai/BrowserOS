@@ -1,0 +1,31 @@
+{
+  "case": "19-airfrance-home-with-badge-clear",
+  "source": "02-sfo-paris-seatsaero.browserbase.txt 6:30: Air France home with the passive 'protected by reCAPTCHA' badge (an invisible anchor, so no widget) and the 'Main menu' dialog wrapper that covers nothing.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "wwws.airfrance.us",
+      "alerts": [["Situation in the Near and Middle East"]],
+      "headings": [
+        "Air France home page",
+        "Give your Miles a boost",
+        "Destinations and deals"
+      ],
+      "buttons": ["Close banner", "Feedback"],
+      "text": [
+        "Air France home page",
+        "Situation in the Near and Middle East",
+        "Give your Miles a boost",
+        "Destinations and deals"
+      ]
+    }
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "deterministic"
+  }
+}

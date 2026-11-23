@@ -368,3 +368,20 @@ async fn a_finishing_agent_leaves_a_page_another_agent_is_acting_on() -> anyhow:
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sdk_input_leaves_the_overlay_and_hold_off() -> anyhow::Result<()> {
+    let call = tool_call_with_behavior(
+        "act",
+        json!({ "page": 1, "kind": "click", "ref": "e1" }),
+        ServerMode::Desktop,
+        Behavior {
+            playwright_run: true,
+            ..behavior_with_overlay()
+        },
+    )
+    .await?;
+    assert!(!call.state.page_hold.enabled());
+    Ok(())
+}

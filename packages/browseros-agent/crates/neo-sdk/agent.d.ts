@@ -99,21 +99,25 @@ declare global {
   type Page = pw.Page
 
   interface Neo {
+    /** Send one CDP request. Works only when the host launch file sets flags.script_cdp to true.
+     * With page, use its tab session. Bypasses Neo's page model; prefer Playwright when possible. */
+    cdp(
+      method: string,
+      params?: Record<string, unknown>,
+      options?: { page?: Page },
+    ): Promise<unknown>
     /** Create and pick a task. `name` is an optional label. Return `task.id`. */
     createTask(name?: string): Promise<Task>
     /** Pick a task. An unknown id throws `task_not_found`; recover with
      * `context.pages()` and each page's `taskId`. */
     task(id: string): Promise<Task>
-    /** Solves the CAPTCHA on a page. Every verdict, unsolved too, is a value to branch on. */
+    /** Runs one fresh solve attempt on the page's CAPTCHA. Reports only what Neo did, never
+     * whether the site accepted it: inspect a fresh `page.ariaSnapshot()` and `page.screenshot()`
+     * afterwards to verify the page. */
     solveCaptcha(page: Page): Promise<{
-      verdict:
-        | 'solved'
-        | 'token_applied'
-        | 'already_clear'
-        | 'unsolved'
-        | 'cancelled'
-        | 'unknown'
+      attempted: boolean
       type: string | null
+      method: 'none' | 'auto_pass' | 'checkbox' | 'tiles' | 'token'
       reason: string
       message: string
       durationMs: number

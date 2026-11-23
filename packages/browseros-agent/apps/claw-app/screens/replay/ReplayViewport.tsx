@@ -156,7 +156,13 @@ function readRecordedSize(events: readonly ReplayEvent[]): {
 }
 
 function alignPlayer(replayer: Replayer, target: PlayerTarget): void {
-  const ms = Math.max(MIN_RENDER_SEEK_MS, target.trackTime * 1000)
+  const totalMs = replayer.getMetaData().totalTime
+  // The track ends at its last event, but rrweb seeks strictly before a target.
+  // Cross that boundary only at the end so middle seeks keep their semantics.
+  const ms = Math.max(
+    MIN_RENDER_SEEK_MS,
+    target.trackTime >= totalMs / 1000 ? totalMs + 1 : target.trackTime * 1000,
+  )
   replayer.setConfig({ speed: target.speed })
   if (target.isPlaying && target.live) replayer.play(ms)
   else replayer.pause(ms)

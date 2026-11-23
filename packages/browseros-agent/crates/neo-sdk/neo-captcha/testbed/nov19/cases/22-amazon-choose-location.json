@@ -1,0 +1,51 @@
+{
+  "case": "22-amazon-choose-location",
+  "source": "06-desk-amazon.browseros.txt 11:24: dialog 'Choose your location' over the whole view.",
+  "truth": "clear",
+  "claim": {
+    "basis": "nothing_found"
+  },
+  "look": {
+    "probe": {
+      "complete": true,
+      "site": "www.amazon.com",
+      "layer": {
+        "dialog": true,
+        "share": 1.0,
+        "text": [
+          "Choose your location",
+          "Delivery options and delivery speeds may vary for different locations",
+          "Sign in to see your addresses",
+          "or enter a US zip code",
+          "Apply",
+          "or ship outside the US",
+          "Done"
+        ]
+      },
+      "headings": [
+        "Choose your location",
+        "or enter a US zip code",
+        "or ship outside the US"
+      ],
+      "buttons": ["Close", "Sign in to see your addresses", "Apply", "Done"]
+    }
+  },
+  "jev": {
+    "source": "measured by cv-verify with jev-1.14.0 on 2026-11-20 through HttpJudge (980 input tokens), on this brief's own evidence",
+    "standing": {
+      "agent_policy": 0.0,
+      "challenge": 0.0,
+      "checking": 0.0,
+      "clear": 0.01,
+      "denied": 0.0,
+      "failed": 0.0,
+      "insufficient": 0.0,
+      "other_overlay": 0.99
+    },
+    "blocked": 0.15
+  },
+  "expect": {
+    "result": "clear",
+    "tier": "jev"
+  }
+}

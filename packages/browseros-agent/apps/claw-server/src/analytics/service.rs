@@ -36,6 +36,7 @@ const PRODUCT: &str = "product";
 const SURFACE: &str = "surface";
 const PROCESS_PERSON_PROFILE: &str = "$process_person_profile";
 const IS_SERVER: &str = "$is_server";
+const PLAYWRIGHT_RUN: &str = "playwright_run";
 const PRODUCT_BROWSERCLAW: &str = "browserclaw";
 const SURFACE_SERVER: &str = "server";
 
@@ -111,6 +112,7 @@ pub struct AnalyticsService {
     path: PathBuf,
     distinct_id: Option<String>,
     config: AnalyticsConfig,
+    report_playwright_run: bool,
     state: Mutex<AnalyticsState>,
     active: RwLock<Option<ActiveClient>>,
     #[cfg(test)]
@@ -138,11 +140,19 @@ impl AnalyticsService {
             path,
             distinct_id,
             config,
+            report_playwright_run: false,
             state: Mutex::new(state),
             active: RwLock::new(active),
             #[cfg(test)]
             shutdown_calls: AtomicUsize::new(0),
         })
+    }
+
+    /// Adds `playwright_run: true` to product events when startup enables the rollout.
+    #[must_use]
+    pub fn with_playwright_run(mut self, enabled: bool) -> Self {
+        self.report_playwright_run = enabled;
+        self
     }
 
     #[cfg(test)]
@@ -230,7 +240,9 @@ impl AnalyticsService {
         let Some(active) = self.active_client() else {
             return;
         };
-        if let Some(event) = build_event(&active, definition, properties) {
+        if let Some(event) =
+            build_event(&active, definition, properties, self.report_playwright_run)
+        {
             active.client.capture(event);
         }
     }
@@ -254,7 +266,9 @@ impl AnalyticsService {
         let Some(active) = self.active_client() else {
             return Delivery::Dropped;
         };
-        let Some(mut event) = build_event(&active, definition, properties) else {
+        let Some(mut event) =
+            build_event(&active, definition, properties, self.report_playwright_run)
+        else {
             return Delivery::Dropped;
         };
         let Some(timestamp) = chrono::DateTime::from_timestamp_millis(timestamp_ms) else {
@@ -336,6 +350,7 @@ fn build_event(
     active: &ActiveClient,
     definition: EventDefinition,
     properties: Value,
+    report_playwright_run: bool,
 ) -> Option<Event> {
     let Some(Value::Object(properties)) = definition.sanitize(&properties) else {
         return None;
@@ -360,6 +375,9 @@ fn build_event(
         (IS_SERVER, Value::Bool(true)),
     ] {
         event.insert_prop(key, value).ok()?;
+    }
+    if report_playwright_run {
+        event.insert_prop(PLAYWRIGHT_RUN, true).ok()?;
     }
     Some(event)
 }
@@ -422,6 +440,9 @@ fn final_allowlist(mut event: Event) -> Option<Event> {
         .properties()
         .keys()
         .filter(|key| {
+            if key.as_str() == PLAYWRIGHT_RUN {
+                return event.properties().get(PLAYWRIGHT_RUN) != Some(&Value::Bool(true));
+            }
             !definition.allows_property(key)
                 && !matches!(
                     key.as_str(),
@@ -510,6 +531,37 @@ mod tests {
             Some("compiled-key".to_string())
         );
         assert_eq!(configured_value(Some("  "), Some("  ")), None);
+    }
+
+    #[tokio::test]
+    async fn playwright_run_is_reported_on_queued_and_immediate_product_events()
+    -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        seed_installation(directory.path(), "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8").await?;
+        let (host, mut requests, endpoint) = local_endpoint().await?;
+        let service = AnalyticsService::new_with_config(directory.path(), test_config(host, true))
+            .await?
+            .with_playwright_run(true);
+        assert!(service.set_consent(true).await?.enabled);
+
+        service.capture(SERVER_STARTED, json!({ "playwright_run": false }));
+        assert_eq!(
+            service
+                .send_once(SERVER_STARTED, json!({}), 1_700_000_000_000, "playwright")
+                .await,
+            Delivery::Sent
+        );
+        service.shutdown().await;
+
+        for _ in 0..2 {
+            let body = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing Playwright product event"))?;
+            assert_eq!(body["batch"][0]["event"], SERVER_STARTED.name());
+            assert_eq!(body["batch"][0]["properties"][PLAYWRIGHT_RUN], true);
+        }
+        endpoint.abort();
+        Ok(())
     }
 
     #[tokio::test]

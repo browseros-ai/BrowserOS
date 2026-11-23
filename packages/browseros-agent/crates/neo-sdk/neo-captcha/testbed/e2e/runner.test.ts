@@ -48,6 +48,7 @@ const refusalPage: CaptchaPage = {
 }
 const solve = (verdict: string, extra = {}) => ({
   verdict,
+  attempted: true as boolean | null,
   type: 'turnstile',
   reason: 'auto_passed',
   paidTasks: 0,
@@ -276,6 +277,55 @@ test('tests that an absent solver passes only when absence is expected', () => {
   })
 })
 
+test('tests that providerRefusesKey marks zero-paid provider_error unverified regardless of site or --paid', () => {
+  const refused: CaptchaPage = {
+    ...solvePage,
+    expect: ['solved', 'token_applied'],
+    expectAttempted: true,
+    mayNeedPaid: false,
+    providerRefusesKey: true,
+  }
+  const expected = {
+    outcome: 'UNVERIFIED' as const,
+    note: 'the widget passed before the solve; paid providers refuse this test key',
+  }
+  for (const paidTasks of [0, null] as const) {
+    for (const siteVerdict of ['accepted', 'rejected', 'error', 'n/a']) {
+      for (const paid of [false, true]) {
+        expect(
+          classifyOutcome(
+            refused,
+            solve('unsolved', { reason: 'provider_error', paidTasks }),
+            siteVerdict,
+            { paid },
+          ),
+        ).toEqual(expected)
+      }
+    }
+  }
+  // A charged provider_error still fails (paidTasks > 0 means a provider accepted the task).
+  expect(
+    classifyOutcome(
+      refused,
+      solve('unsolved', { reason: 'provider_error', paidTasks: 1 }),
+      'accepted',
+      { paid: true },
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'the site accepted a page the solver called unsolved',
+  })
+  // Free auto-pass on the same page still passes when the site accepts.
+  expect(
+    classifyOutcome(
+      refused,
+      solve('solved', { reason: 'auto_passed', paidTasks: 0 }),
+      'accepted',
+      { paid: true },
+    ).outcome,
+  ).toBe('PASS')
+})
+
 test('tests that unpaid provider failures are unverified and paid runs fail them', () => {
   const paid = { ...solvePage, mayNeedPaid: true }
   const failed = solve('unsolved', { reason: 'provider_error' })
@@ -297,14 +347,106 @@ test('tests that unpaid provider failures are unverified and paid runs fail them
   ).toBe('FAIL')
 })
 
+test('tests that expectAttempted gates SDK passes, ignores claw-server nulls, and leaves unpaid failures unverified', () => {
+  const attemptedPage = { ...solvePage, expectAttempted: true }
+  const idlePage = {
+    ...solvePage,
+    family: 'none' as const,
+    expect: ['already_clear' as const],
+    expectAttempted: false,
+  }
+  expect(
+    classifyOutcome(
+      attemptedPage,
+      solve('solved', { attempted: true }),
+      'accepted',
+    ).outcome,
+  ).toBe('PASS')
+  expect(
+    classifyOutcome(
+      attemptedPage,
+      solve('solved', { attempted: false }),
+      'accepted',
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'expected attempted true, received false',
+  })
+  // claw-server reports attempted: null, so expectAttempted is ignored there.
+  expect(
+    classifyOutcome(
+      attemptedPage,
+      solve('solved', { attempted: null }),
+      'accepted',
+    ).outcome,
+  ).toBe('PASS')
+  expect(
+    classifyOutcome(
+      idlePage,
+      solve('already_clear', {
+        attempted: false,
+        type: null,
+        reason: 'no_captcha',
+      }),
+      'accepted',
+    ).outcome,
+  ).toBe('PASS')
+  expect(
+    classifyOutcome(
+      idlePage,
+      solve('already_clear', {
+        attempted: true,
+        type: null,
+        reason: 'no_captcha',
+      }),
+      'accepted',
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'expected attempted false, received true',
+  })
+  // Also enforced on token_applied passes for solve pages, alongside expectReason.
+  expect(
+    classifyOutcome(
+      attemptedPage,
+      solve('token_applied', { attempted: false, reason: 'awaiting_submit' }),
+      'accepted',
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'expected attempted true, received false',
+  })
+  expect(
+    classifyOutcome(
+      { ...attemptedPage, expectReason: ['checkbox_passed'] },
+      solve('token_applied', { attempted: true, reason: 'awaiting_submit' }),
+      'accepted',
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'expected reason checkbox_passed, received awaiting_submit',
+  })
+  // Unpaid mayNeedPaid pages with attempted: false (e.g. provider_unavailable) stay UNVERIFIED.
+  expect(
+    classifyOutcome(
+      { ...attemptedPage, mayNeedPaid: true },
+      solve('unsolved', { attempted: false, reason: 'provider_unavailable' }),
+      'rejected',
+    ),
+  ).toEqual({
+    outcome: 'UNVERIFIED',
+    note: 'paid path unverified: provider_unavailable',
+  })
+})
+
 for (const server of ['sdk', 'claw-server'] as const) {
   test(`tests that every fixture and spotting page passes against the ${server} contract`, async () => {
     const { records, calls } = await run('contract', { server })
     expect(records.filter((r) => r.outcome !== 'PASS')).toEqual([])
     expect(exitCode(records)).toBe(0)
     expect(summarize(records)).toMatchObject({
-      pass: 22,
-      siteAccepted: 7,
+      pass: 25,
+      siteAccepted: 10,
       deliveredOnly: 0,
       detected: 15,
       paidTasks: 0,
@@ -313,6 +455,7 @@ for (const server of ['sdk', 'claw-server'] as const) {
     // waiting hidden is an ordinary page the site accepts.
     expect(records.find((r) => r.id === 'perimeterx-modal')).toMatchObject({
       verdict: 'unsolved',
+      attempted: server === 'sdk' ? false : null,
       type: 'unknown',
       reason: 'unsupported_type',
       check: 'detect',
@@ -321,6 +464,34 @@ for (const server of ['sdk', 'claw-server'] as const) {
     })
     expect(records.find((r) => r.id === 'perimeterx-waiting')).toMatchObject({
       verdict: 'already_clear',
+      attempted: server === 'sdk' ? false : null,
+      check: 'solve',
+      site: 'accepted',
+      outcome: 'PASS',
+    })
+    expect(records.find((r) => r.id === 'turnstile-stale')).toMatchObject({
+      verdict: 'token_applied',
+      attempted: server === 'sdk' ? true : null,
+      method: 'token',
+      reason: 'awaiting_submit',
+      check: 'solve',
+      site: 'accepted',
+      outcome: 'PASS',
+    })
+    expect(
+      records.find((r) => r.id === 'turnstile-stale-interactive'),
+    ).toMatchObject({
+      verdict: 'solved',
+      attempted: server === 'sdk' ? true : null,
+      reason: 'checkbox_passed',
+      check: 'solve',
+      site: 'accepted',
+      outcome: 'PASS',
+    })
+    expect(records.find((r) => r.id === 'recaptcha-v2-stale')).toMatchObject({
+      verdict: 'solved',
+      attempted: server === 'sdk' ? true : null,
+      reason: 'checkbox_passed',
       check: 'solve',
       site: 'accepted',
       outcome: 'PASS',
@@ -335,6 +506,7 @@ for (const server of ['sdk', 'claw-server'] as const) {
     })
     expect(records.find((r) => r.id === 'hcaptcha-test')).toMatchObject({
       verdict: 'unsolved',
+      attempted: server === 'sdk' ? false : null,
       type: 'hcaptcha',
       reason: 'unsupported_type',
       check: 'detect',
@@ -423,14 +595,14 @@ test('tests that an absent SDK solver passes every page only when absence is exp
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
   expect(summarize(expected.records)).toMatchObject({
-    pass: 22,
+    pass: 25,
     siteAccepted: 0,
     deliveredOnly: 0,
     detected: 0,
-    absent: 22,
+    absent: 25,
   })
   expect(renderSummary(expected.records)).toContain(
-    'solver absent as expected: 22',
+    'solver absent as expected: 25',
   )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),
@@ -546,7 +718,7 @@ test('tests that a rejection beyond the inline limit still fails a solved result
   })
 })
 
-test('tests that the table and summary keep the exact verdict, reason and paid tasks apart from site acceptance', async () => {
+test('tests that the table and summary keep the classified verdict, attempted, method, reason and paid tasks apart from site acceptance', async () => {
   const { records } = await run('contract', {
     pages: [solvePage, refusalPage],
   })
@@ -554,11 +726,11 @@ test('tests that the table and summary keep the exact verdict, reason and paid t
   first.note = 'a|b\nc'
   const table = renderTable(records)
   expect(table).toContain(
-    '| Page | Check | Expected | Verdict | Type | Reason | Paid | Site | Latency | Outcome | Note |',
+    '| Page | Check | Expected | Verdict | Attempted | Type | Method | Reason | Paid | Site | Latency | Outcome | Note |',
   )
   expect(table).toContain('a\\|b c')
   expect(table).toContain(
-    '| unsupported | detect | unsolved | unsolved | hcaptcha | unsupported_type | 0 | n/a |',
+    '| unsupported | detect | unsolved | unsolved | false | hcaptcha | none | unsupported_type | 0 | n/a |',
   )
   expect(
     renderTable([{ ...first, verdict: 'unsolved', status: 'needs_human' }]),
@@ -587,7 +759,7 @@ test('tests that progress lines carry the exact answer and the outcome', async (
     await stub.stop()
   }
   expect(seen).toEqual([
-    '[captcha-e2e] unsupported: unsolved unsupported_type type=hcaptcha paid=0 site=n/a -> PASS',
+    '[captcha-e2e] unsupported: unsolved unsupported_type attempted=false method=none type=hcaptcha paid=0 site=n/a -> PASS',
   ])
 })
 

@@ -72,6 +72,13 @@ impl HelpEntry {
         &self.request_id
     }
 
+    /// The original native tab stays available after resolution so an MCP wait
+    /// reply can identify the same tab even when the cockpit no longer shows it.
+    #[must_use]
+    pub fn browser_tab_id(&self) -> Option<i64> {
+        self.browser_tab_id
+    }
+
     fn mark_resolved(&self, note: Option<String>) {
         if let Ok(mut slot) = self.note.lock() {
             *slot = note;
