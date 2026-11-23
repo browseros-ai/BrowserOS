@@ -1,50 +1,13 @@
-import type { AgentRoutes } from '@browseros/server'
+import { ServerApiClient } from '@browseros/server-api/client'
+import type { components } from '@browseros/server-api/openapi'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { hc } from 'hono/client'
 import { Feature } from '@/lib/browseros/capabilities'
+import { agentServerReadRetry } from '@/modules/browseros/agent-server-read-retry'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
-import type { AcpAgentType, CustomAcpAgentConfig } from './acp-agent-types'
 import { computeAgentsSettled } from './agents.helpers'
 
-interface CreateAcpAgentInput {
-  name: string
-  type: AcpAgentType
-  modelId?: string
-  reasoningEffort?: string
-  workingDirectory?: string
-  customConfig?: CustomAcpAgentConfig
-}
-
-interface UpdateAcpAgentInput {
-  agentId: string
-  patch: {
-    name?: string
-    modelId?: string | null
-    reasoningEffort?: string | null
-    workingDirectory?: string | null
-    customConfig?: CustomAcpAgentConfig
-  }
-}
-
 const AGENTS_QUERY_KEY = 'acp-agents'
-
-function agentsClient(baseUrl: string) {
-  return hc<AgentRoutes>(`${baseUrl}/agents`)
-}
-
-// Accept the minimal shape this reads rather than the full `Response`: the Hono
-// client returns a `ClientResponse`, which is not structurally the global
-// `Response` under the current lib types.
-async function agentRequestError(response: {
-  status: number
-  json: () => Promise<unknown>
-}): Promise<Error> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string }
-  return new Error(
-    body.error ?? `Request failed with status ${response.status}`,
-  )
-}
 
 export function useAcpAgents(enabled = true) {
   const { supports, isLoading: capabilitiesLoading } = useCapabilities()
@@ -55,17 +18,20 @@ export function useAcpAgents(enabled = true) {
     error: urlError,
   } = useAgentServerUrl()
   const query = useQuery({
+    ...agentServerReadRetry,
     queryKey: [AGENTS_QUERY_KEY, baseUrl],
     queryFn: async () => {
-      const response = await agentsClient(baseUrl as string).index.$get()
-      if (!response.ok) throw await agentRequestError(response)
-      return response.json()
+      if (!baseUrl) throw new Error('BrowserOS agent server URL is not ready')
+      const { agents } = await new ServerApiClient(baseUrl).listAgents()
+      // The TypeScript server can still return custom ACP rows. Only the two
+      // built-in agents are supported by the OpenAPI contract.
+      return agents.filter(({ type }) => type === 'claude' || type === 'codex')
     },
     enabled: Boolean(baseUrl) && !urlLoading && enabled && agentsSupported,
   })
 
   return {
-    agents: agentsSupported ? (query.data?.agents ?? []) : [],
+    agents: agentsSupported ? (query.data ?? []) : [],
     loading:
       capabilitiesLoading ||
       (agentsSupported && (query.isLoading || urlLoading)),
@@ -89,36 +55,12 @@ export function useCreateAcpAgent() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (input: CreateAcpAgentInput) => {
+    mutationFn: async (input: components['schemas']['AgentInput']) => {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      const response = await agentsClient(baseUrl).index.$post({ json: input })
-      if (!response.ok) throw await agentRequestError(response)
-      const result = await response.json()
-      return result.agent
-    },
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),
-  })
-}
-
-export function useUpdateAcpAgent() {
-  const { baseUrl, isLoading } = useAgentServerUrl()
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async ({ agentId, patch }: UpdateAcpAgentInput) => {
-      if (!baseUrl || isLoading) {
-        throw new Error('BrowserOS agent server URL is not ready')
-      }
-      const response = await agentsClient(baseUrl)[':agentId'].$put({
-        param: { agentId },
-        json: patch,
-      })
-      if (!response.ok) throw await agentRequestError(response)
-      const result = await response.json()
-      return result.agent
+      const { agent } = await new ServerApiClient(baseUrl).createAgent(input)
+      return agent
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),
@@ -134,11 +76,7 @@ export function useDeleteAcpAgent() {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      const response = await agentsClient(baseUrl)[':agentId'].$delete({
-        param: { agentId },
-      })
-      if (!response.ok) throw await agentRequestError(response)
-      return response.json()
+      return new ServerApiClient(baseUrl).deleteAgent({ agentId })
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),

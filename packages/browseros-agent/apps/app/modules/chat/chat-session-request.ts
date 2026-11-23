@@ -1,6 +1,10 @@
+import type { components } from '@browseros/server-api/openapi'
 import type { Provider } from '../../components/chat/chatComponentTypes'
 import type { LlmProviderConfig } from '../../lib/llm-providers/types'
-import { buildChatRequestBody } from '../../lib/messaging/server/buildChatRequestBody'
+import {
+  buildChatRequestBody,
+  toChatBrowserContext,
+} from '../../lib/messaging/server/buildChatRequestBody'
 import {
   type SidepanelChatTarget,
   toLlmProviderConfig,
@@ -10,7 +14,7 @@ export type LlmChatRequestBodyInput = Parameters<typeof buildChatRequestBody>[0]
 
 export type CommonSidepanelRequestInput = Omit<
   LlmChatRequestBodyInput,
-  'provider' | 'message' | 'isScheduledTask'
+  'provider' | 'message'
 >
 
 export interface BuildSidepanelPreparedSendMessagesRequestInput
@@ -24,7 +28,7 @@ export interface BuildSidepanelPreparedSendMessagesRequestInput
    */
   fallbackProvider: LlmProviderConfig | undefined
   message?: string
-  attachments?: Array<{ mediaType: string; data: string }>
+  attachments?: components['schemas']['ChatAttachment'][]
 }
 
 export interface PrepareSidepanelSendMessagesRequestInput
@@ -52,21 +56,25 @@ export function buildSidepanelPreparedSendMessagesRequest({
   fallbackProvider,
   message,
   ...common
-}: BuildSidepanelPreparedSendMessagesRequestInput) {
+}: BuildSidepanelPreparedSendMessagesRequestInput): {
+  api: string
+  body: components['schemas']['ChatRequest']
+} {
   if (target?.kind === 'acp') {
     return {
       api: `${agentServerUrl}/chat`,
       body: {
         target: { type: target.agentType, agentId: target.agentId },
         conversationId: common.conversationId,
+        userMessageId: common.userMessageId,
         message: message ?? '',
         mode: common.mode,
-        browserContext: common.browserContext,
+        browserContext:
+          common.browserContext && toChatBrowserContext(common.browserContext),
         userSystemPrompt: common.userSystemPrompt,
         userWorkingDir: common.userWorkingDir,
-        supportsImages: common.supportsImages,
+        persist: common.persist,
         previousConversation: common.previousConversation,
-        declinedApps: common.declinedApps,
         selectedText: common.selectedText,
         selectedTextSource: common.selectedTextSource,
         attachments: common.attachments?.length

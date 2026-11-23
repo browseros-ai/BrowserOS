@@ -81,10 +81,10 @@ import {
 } from './models'
 import { ProviderHeadersFields } from './ProviderHeadersFields'
 import {
-  isCredentiallessProviderType,
   normalizeProviderFormValues,
   type ProviderFormValues,
   providerFormSchema,
+  sameProviderAddress,
 } from './provider-form-schema'
 
 /** Window assumed for any model the bundled catalog cannot size. */
@@ -101,11 +101,7 @@ const KEEP_SAVED_PLACEHOLDER = 'Leave blank to keep the saved value'
 // is hidden for them rather than letting users save headers that would be
 // silently ignored. Keep in sync with the provider factories that omit
 // config.headers.
-const HEADERLESS_PROVIDER_TYPES = new Set<string>([
-  'chatgpt-pro',
-  'github-copilot',
-  'qwen-code',
-])
+const HEADERLESS_PROVIDER_TYPES = new Set<string>(['chatgpt-pro'])
 
 function headerEntries(headers: LlmProviderConfig['headers']) {
   return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }))
@@ -152,9 +148,6 @@ function isProviderTypeOptionSupported(
   supports: (feature: Feature) => boolean,
 ): boolean {
   if (value === 'chatgpt-pro') return supports(Feature.CHATGPT_PRO_SUPPORT)
-  if (value === 'github-copilot')
-    return supports(Feature.GITHUB_COPILOT_SUPPORT)
-  if (value === 'qwen-code') return supports(Feature.QWEN_CODE_SUPPORT)
   return true
 }
 
@@ -198,13 +191,7 @@ function isProviderTestable(input: {
     input.secretAccessKey || input.stored?.hasSecretAccessKey,
   )
 
-  if (
-    input.type === 'chatgpt-pro' ||
-    input.type === 'github-copilot' ||
-    input.type === 'qwen-code'
-  ) {
-    return true
-  }
+  if (input.type === 'chatgpt-pro') return true
 
   if (input.type === 'azure') {
     return Boolean((input.resourceName || input.baseUrl) && hasApiKey)
@@ -264,6 +251,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       hasAccessKeyId: initialValues?.hasAccessKeyId ?? false,
       hasSecretAccessKey: initialValues?.hasSecretAccessKey ?? false,
       originalType: initialValues?.type,
+      originalBaseUrl: initialValues?.baseUrl,
+      originalResourceName: initialValues?.resourceName,
+      originalRegion: initialValues?.region,
       reasoningEffort:
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
@@ -286,14 +276,25 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   // Editing a provider that already has a credential stored: the field is
   // optional (blank keeps the saved value), so drop the required marker and the
   // "enter a key" placeholder that make a saved credential read as missing. The
-  // stored credential only applies while the type is unchanged; switching the
-  // provider type re-requires the new type's own credential.
-  const typeUnchanged = watchedType === initialValues?.type
-  const savedApiKey = Boolean(initialValues?.hasApiKey) && typeUnchanged
+  // stored credential only applies while the address (type plus the fields
+  // that type sends its key to) matches the stored row: the server clears a
+  // kept credential on a save that moves it, so the key must be entered again.
+  // Compared against the raw row, so a base URL the form filled with a default
+  // counts as a change, as it does on the server.
+  const addressUnchanged = sameProviderAddress(
+    {
+      type: watchedType,
+      baseUrl: watchedBaseUrl,
+      resourceName: watchedResourceName,
+      region: watchedRegion,
+    },
+    initialValues ?? {},
+  )
+  const savedApiKey = Boolean(initialValues?.hasApiKey) && addressUnchanged
   const savedAccessKeyId =
-    Boolean(initialValues?.hasAccessKeyId) && typeUnchanged
+    Boolean(initialValues?.hasAccessKeyId) && addressUnchanged
   const savedSecretAccessKey =
-    Boolean(initialValues?.hasSecretAccessKey) && typeUnchanged
+    Boolean(initialValues?.hasSecretAccessKey) && addressUnchanged
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - clear result when any credential changes
   useEffect(() => {
@@ -427,6 +428,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         hasAccessKeyId: initialValues.hasAccessKeyId ?? false,
         hasSecretAccessKey: initialValues.hasSecretAccessKey ?? false,
         originalType: initialValues.type,
+        originalBaseUrl: initialValues.baseUrl,
+        originalResourceName: initialValues.resourceName,
+        originalRegion: initialValues.region,
         reasoningEffort:
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
@@ -457,6 +461,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         hasAccessKeyId: false,
         hasSecretAccessKey: false,
         originalType: undefined,
+        originalBaseUrl: undefined,
+        originalResourceName: undefined,
+        originalRegion: undefined,
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
@@ -505,9 +512,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     accessKeyId: watchedAccessKeyId,
     secretAccessKey: watchedSecretAccessKey,
     region: watchedRegion,
-    // A saved credential only counts while the type is unchanged; after a type
-    // switch the Test needs the new type's own credential entered.
-    stored: typeUnchanged ? initialValues : undefined,
+    // A saved credential only counts at the stored address; after a type or
+    // address change the Test needs the credential entered again.
+    stored: addressUnchanged ? initialValues : undefined,
   })
 
   const handleTest = async () => {
@@ -528,9 +535,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
       const result = await testProvider(
         {
-          // The real id (when editing) lets the server fill a blank key from
-          // the saved credential; a new provider has no saved row to reuse.
-          id: initialValues?.id ?? 'test',
+          // The real id lets the server fill a blank credential from the saved
+          // row, and then test at the saved address. Once the address changes,
+          // Save clears whatever was not re-entered, so the test borrows
+          // nothing either and checks what Save will keep.
+          id: (addressUnchanged && initialValues?.id) || 'test',
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,
@@ -663,18 +672,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   )
 
   const renderProviderSpecificFields = () => {
-    if (
-      isCredentiallessProviderType(watchedType) &&
-      watchedType !== 'chatgpt-pro'
-    ) {
-      const name = watchedType === 'github-copilot' ? 'GitHub' : 'Qwen Code'
-      return (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-          Credentials are managed via {name} OAuth. No API key needed.
-        </div>
-      )
-    }
-
     if (watchedType === 'chatgpt-pro') {
       return (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">

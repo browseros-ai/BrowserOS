@@ -292,9 +292,9 @@ describe('deriveChatGptSubscription', () => {
   })
 
   test('drops what the Codex backend does not serve', () => {
-    const ids = idsFor(['gpt-5.6', 'gpt-4.1', 'gpt-4o', 'gpt-realtime-2.1'])
+    const ids = idsFor(['gpt-5.6-sol', 'gpt-4.1', 'gpt-4o', 'gpt-realtime-2.1'])
 
-    expect(ids).toContain('gpt-5.6')
+    expect(ids).toContain('gpt-5.6-sol')
     expect(ids).not.toContain('gpt-4.1')
     expect(ids).not.toContain('gpt-4o')
     expect(ids).not.toContain('gpt-realtime-2.1')
@@ -304,26 +304,22 @@ describe('deriveChatGptSubscription', () => {
     // These answer on a background channel and createCodexFetch sets
     // stream:true on every request, so offering one hands the user an option
     // that fails when used.
-    const ids = idsFor(['gpt-5.5', 'gpt-5.5-pro', 'gpt-6-pro'])
+    const ids = idsFor(['gpt-6-sol', 'gpt-5.5-pro', 'gpt-6-pro'])
 
-    expect(ids).toContain('gpt-5.5')
+    expect(ids).toContain('gpt-6-sol')
     expect(ids).not.toContain('gpt-5.5-pro')
     expect(ids).not.toContain('gpt-6-pro')
   })
 
-  test('adds back the codex variants the platform API never exposed', () => {
-    const ids = idsFor(['gpt-5.6'])
-
-    expect(ids).toContain('gpt-5.1-codex-max')
-    expect(ids).toContain('gpt-5.1-codex-mini')
-    expect(ids).toContain('gpt-5.2-codex')
+  test('includes the verified Codex default when the platform catalogue omits it', () => {
+    expect(idsFor(['gpt-5.6-sol'])).toContain('gpt-6.1-sol')
   })
 
   test('orders newest first so the picker opens on current models', () => {
     const models = deriveChatGptSubscription(
       provider({
         old: model({
-          id: 'gpt-5',
+          id: 'gpt-5.6-sol',
           reasoning: true,
           last_updated: '2025-08-07',
         }),
@@ -335,17 +331,55 @@ describe('deriveChatGptSubscription', () => {
       }),
     ).models
 
-    expect(models[0].id).toBe('gpt-6')
+    expect(
+      models
+        .map((entry) => entry.id)
+        .filter((id) => ['gpt-5.6-sol', 'gpt-6'].includes(id)),
+    ).toEqual(['gpt-6', 'gpt-5.6-sol'])
+  })
+
+  const rejected = [
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-5.1',
+    'gpt-5.1-codex',
+    'gpt-5.1-codex-max',
+    'gpt-5.1-codex-mini',
+    'gpt-5.2',
+    'gpt-5.2-codex',
+    'gpt-5.3-codex',
+    'gpt-5.3-codex-spark',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.4-nano',
+    'gpt-5.5',
+    'gpt-5.6',
+  ]
+
+  test('uses the verified Codex default once and keeps rejected aliases on the OpenAI API', () => {
+    const output = generateModelsData(
+      { openai: openai(['gpt-6.1-sol', ...rejected]) },
+      { openai: 'openai' },
+    )
+    const subscription = output[CHATGPT_SUBSCRIPTION_ID].models
+    expect(subscription.filter((entry) => entry.id === 'gpt-6.1-sol')).toEqual([
+      expect.objectContaining({ contextWindow: 500000 }),
+    ])
+    for (const id of rejected) {
+      expect(subscription.map((entry) => entry.id)).not.toContain(id)
+      expect(output.openai.models.map((entry) => entry.id)).toContain(id)
+    }
   })
 
   test('is emitted as a provider of its own', () => {
     const output = generateModelsData(
-      { openai: openai(['gpt-5.6']) },
+      { openai: openai(['gpt-5.6-sol']) },
       { openai: 'openai' },
     )
 
     expect(output[CHATGPT_SUBSCRIPTION_ID].models.map((m) => m.id)).toContain(
-      'gpt-5.6',
+      'gpt-5.6-sol',
     )
   })
 })

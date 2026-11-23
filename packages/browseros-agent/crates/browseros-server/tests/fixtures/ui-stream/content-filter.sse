@@ -1,0 +1,10 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"content-filter"}
+
+data: [DONE]
+

@@ -19,14 +19,6 @@ const trackMock = {
 } satisfies typeof import('@/lib/metrics/track')
 mock.module('@/lib/metrics/track', () => trackMock)
 
-const clientOauthMock = {
-  requestDeviceCode: async () => {
-    throw new Error('not used')
-  },
-  startTokenPolling: () => {},
-} satisfies typeof import('@/lib/llm-providers/client-oauth')
-mock.module('@/lib/llm-providers/client-oauth', () => clientOauthMock)
-
 const providerDisplayNamesMock = {
   CHATGPT_PROVIDER_DISPLAY_NAME: 'ChatGPT',
 } satisfies typeof import('@/lib/llm-providers/provider-display-names')
@@ -86,7 +78,6 @@ describe('saveOAuthProviderFromStatus', () => {
 
     const promise = saveOAuthProviderFromStatus({
       config: chatgptConfig,
-      status: { email: 'user@example.com' },
       now: 1234,
       saveProvider: async (provider) => {
         savedProvider = provider
@@ -129,7 +120,6 @@ describe('saveOAuthProviderFromStatus', () => {
     await expect(
       saveOAuthProviderFromStatus({
         config: chatgptConfig,
-        status: {},
         now: 1234,
         saveProvider: async () => {
           throw new Error('storage failed')

@@ -33,11 +33,6 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
-      label: 'server tests',
-      cwd: resolve(projectRoot, 'apps/server'),
-      argv: [bun, 'run', 'test'],
-    },
-    {
       label: 'claw-app tests',
       cwd: resolve(projectRoot, 'apps/claw-app'),
       argv: [bun, 'run', 'test'],
@@ -78,18 +73,6 @@ const testSuites = {
     {
       label: 'release script tests',
       argv: [bun, 'run', './scripts/run-bun-test.ts', './scripts/release'],
-    },
-  ],
-  main: [
-    {
-      label: 'server tools tests',
-      cwd: resolve(projectRoot, 'apps/server'),
-      argv: [bun, 'run', 'test:tools'],
-    },
-    {
-      label: 'server integration tests',
-      cwd: resolve(projectRoot, 'apps/server'),
-      argv: [bun, 'run', 'test:integration'],
     },
   ],
 } satisfies Record<string, readonly TestCommand[]>

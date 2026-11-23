@@ -34,7 +34,7 @@ describe('server conversations api', () => {
   })
 
   it('lists conversations, defaulting a missing snippet to empty', async () => {
-    const fetchMock = mock((_input: RequestInfo | URL) =>
+    const fetchMock = mock((_input: Request) =>
       Promise.resolve(
         jsonResponse({
           conversations: [
@@ -50,7 +50,7 @@ describe('server conversations api', () => {
       { id: 'a', lastMessagedAt: 2, lastUserMessage: 'hi' },
       { id: 'b', lastMessagedAt: 1, lastUserMessage: '' },
     ])
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+    expect(fetchMock.mock.calls[0]?.[0].url).toBe(
       'http://127.0.0.1:9999/conversations',
     )
   })

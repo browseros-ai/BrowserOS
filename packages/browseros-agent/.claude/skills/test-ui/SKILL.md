@@ -1,6 +1,6 @@
 ---
 name: test-ui
-description: Test the BrowserOS app extension UI by starting the dev environment and visually verifying changes via CDP. Covers the new tab page (left sidebar — Home, Scheduled Tasks, Settings, etc.) and the right side panel (chat interface). Use after making UI changes to apps/app/.
+description: Test the BrowserOS app extension UI by starting the dev environment and visually verifying changes via CDP. Covers the new tab page with its sidebar and the right side panel (chat interface). Use after making UI changes to apps/app/.
 argument-hint: [what to test, e.g. "verify the new settings page renders correctly"]
 ---
 
@@ -65,7 +65,7 @@ You will see targets like:
 - `[page] sidepanel.html` — **Right side panel (chat)**
 
 The two main testable surfaces:
-- **`app.html`** — the new tab page with left sidebar (Home, Connect Apps, Scheduled Tasks, Skills, Memory, Soul, Settings)
+- **`app.html`** — the new tab page with left sidebar
 - **`sidepanel.html`** — the right side panel chat interface
 
 ## Step 3: Navigate to the main UI
@@ -107,8 +107,6 @@ bun scripts/dev/inspect-ui.ts snapshot app.html
 Output shows interactive elements with IDs:
 ```
 [52] link "Home"
-[57] link "Connect Apps"
-[65] link "Scheduled Tasks"
 [74] link "Skills"
 [103] link "Settings"
 ```
@@ -117,13 +115,11 @@ Output shows interactive elements with IDs:
 
 **Click-based** (use element IDs from snapshot):
 ```bash
-bun scripts/dev/inspect-ui.ts click app.html 65    # Click "Scheduled Tasks"
 ```
 
 **Hash routing** (faster, no snapshot needed):
 ```bash
 bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/settings'"
-bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/scheduled-tasks'"
 bun scripts/dev/inspect-ui.ts eval app.html "window.location.hash = '#/home'"
 ```
 
@@ -231,7 +227,7 @@ bun scripts/dev/inspect-ui.ts eval app.html "document.querySelector('#root')?.in
 
 The extension talks to the MCP server. Verify the server is reachable:
 ```bash
-bun scripts/dev/inspect-ui.ts eval sidepanel "fetch('http://127.0.0.1:<serverPort>/health').then(r => r.ok).catch(() => false)"
+bun scripts/dev/inspect-ui.ts eval sidepanel "fetch('http://127.0.0.1:<serverPort>/system/health').then(r => r.ok).catch(() => false)"
 ```
 
 ### Common issues
@@ -270,8 +266,7 @@ These can be used with `eval app.html "window.location.hash = '#/<route>'"`:
 | Route | View |
 |-------|------|
 | `/home` | Home page with search bar and top sites |
-| `/settings` | Settings (LLM providers, customization, workflows, MCP) |
-| `/scheduled-tasks` | Scheduled Tasks management |
+| `/settings` | AI provider and customization settings |
 | `/onboarding` | Onboarding flow (first-run experience) |
 
 ## Gotchas learned from real testing
@@ -282,4 +277,4 @@ These can be used with `eval app.html "window.location.hash = '#/<route>'"`:
 4. **Side panel starts disabled** — `open-sidepanel` handles the BrowserOS-specific enable + toggle API
 5. **`Input.enable` does not exist** — the CDP Input domain has no enable method (already handled in the script)
 6. **`DOM.getDocument` required** — must be called before DOM operations like `pushNodesByBackendIdsToFrontend` (already handled in the script)
-7. **Settings sub-navigation** — the settings page has its own left sidebar (BrowserOS AI, Chat & Council Provider, Search Provider, Customize BrowserOS, BrowserOS as MCP, Workflows) — use snapshot + click to navigate within settings
+7. **Settings sub-navigation** — Use `snapshot` and `click` to navigate the settings sidebar.

@@ -1,0 +1,30 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "Reading the file.",
+      "state": "done"
+    },
+    {
+      "type": "dynamic-tool",
+      "toolName": "Read",
+      "toolCallId": "toolu_01",
+      "state": "output-available",
+      "input": {
+        "file_path": "README.md"
+      },
+      "output": "# BrowserOS",
+      "providerExecuted": true
+    },
+    {
+      "type": "text",
+      "text": "It is the readme.",
+      "state": "done"
+    }
+  ]
+}

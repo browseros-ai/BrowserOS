@@ -8,16 +8,11 @@ let originalFetch: typeof globalThis.fetch
 beforeEach(() => {
   lastCall = null
   originalFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    lastCall = {
-      url: typeof input === 'string' ? input : input.toString(),
-      body: init?.body ? JSON.parse(init.body as string) : {},
-    }
-    return {
-      ok: true,
-      json: async () => ({ success: true, message: 'ok' }),
-    } as Response
-  }) as unknown as typeof globalThis.fetch
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+    if (!(input instanceof Request)) throw new Error('Expected a Request')
+    lastCall = { url: input.url, body: await input.json() }
+    return Response.json({ success: true, message: 'ok' })
+  }, originalFetch)
 })
 
 afterEach(() => {
@@ -79,19 +74,16 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
   })
 
   it('wraps a JSON-parse failure the same way (server returned non-JSON)', async () => {
-    globalThis.fetch = (async () =>
-      ({
-        ok: true,
-        json: async () => {
-          throw new SyntaxError('Unexpected token < in JSON')
-        },
-      }) as unknown as Response) as unknown as typeof globalThis.fetch
+    globalThis.fetch = Object.assign(
+      async () => new Response('<html>'),
+      originalFetch,
+    )
 
     const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
     expect(result.success).toBe(false)
     expect(result.message).toContain('local BrowserOS server')
     expect(result.message).toContain('http://127.0.0.1:9200')
-    expect(result.message).toContain('Unexpected token')
+    expect(result.message).toContain('JSON')
   })
 
   it('does NOT wrap a server-returned failure (provider error passes through)', async () => {
@@ -99,18 +91,32 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
     // prefixed message. That is the happy path and must land in the
     // return statement unmodified so the user sees the real provider
     // error (bad URL, 401, timeout, etc.).
-    globalThis.fetch = (async () =>
-      ({
-        ok: true,
-        json: async () => ({
-          success: false,
-          message: '[anthropic] 401 Unauthorized',
-        }),
-      }) as unknown as Response) as unknown as typeof globalThis.fetch
+    globalThis.fetch = Object.assign(
+      async () =>
+        Response.json(
+          {
+            success: false,
+            message: '[anthropic] 401 Unauthorized',
+          },
+          { status: 400 },
+        ),
+      originalFetch,
+    )
 
     const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
     expect(result.success).toBe(false)
     expect(result.message).toBe('[anthropic] 401 Unauthorized')
     expect(result.message).not.toContain('local BrowserOS server')
+  })
+
+  it('returns a failure result for a trust refusal', async () => {
+    globalThis.fetch = Object.assign(
+      async () => Response.json({ error: 'Forbidden' }, { status: 403 }),
+      originalFetch,
+    )
+
+    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('Forbidden')
   })
 })

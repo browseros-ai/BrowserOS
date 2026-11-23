@@ -2,13 +2,14 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"browseros-dev/browser"
 	"browseros-dev/proc"
@@ -235,20 +236,18 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 	root := t.TempDir()
 	userDataDir := t.TempDir()
 	sidecarPath := watchSidecarConfigPath(userDataDir, "claw-server")
+	listener := reserveRustServerTestPort(t)
 	ports := proc.Ports{
 		CDP:       9012,
-		Server:    9123,
+		Server:    listener.Addr().(*net.TCPAddr).Port,
 		Extension: 9321,
 	}
+	listener.Close()
 	env, err := buildWatchEnv(ports, userDataDir, true, false)
 	if err != nil {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}
-	var killedPort int
-	cfg := clawBackendProcConfig(clawServerBackend, root, env, ports, userDataDir, sidecarPath, func(port int, _ time.Duration) error {
-		killedPort = port
-		return nil
-	})
+	cfg := rustServerProcConfig(clawServerBackend, root, env, ports, userDataDir, sidecarPath)
 
 	wantCmd := []string{"cargo", "run", "-p", "claw-server", "--features", "billing-staging", "--", "--config", sidecarPath}
 	if !reflect.DeepEqual(cfg.Cmd, wantCmd) {
@@ -264,7 +263,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		"NODE_ENV=development",
 		"BROWSEROS_PRODUCT=browserclaw",
 		"BROWSEROS_CLAW_CDP_PORT=9012",
-		"VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:9123",
+		fmt.Sprintf("VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:%d", ports.Server),
 	} {
 		if !hasEnvEntry(cfg.Env, want) {
 			t.Fatalf("expected env to contain %q, got %#v", want, cfg.Env)
@@ -273,9 +272,6 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 
 	if err := cfg.BeforeStart(); err != nil {
 		t.Fatalf("BeforeStart returned error: %v", err)
-	}
-	if killedPort != ports.Server {
-		t.Fatalf("expected BeforeStart to kill server port %d, got %d", ports.Server, killedPort)
 	}
 
 	raw, err := os.ReadFile(sidecarPath)
@@ -323,7 +319,7 @@ func TestClawRustServerBuildsInItsOwnCargoDir(t *testing.T) {
 		{[]string{"CARGO_BUILD_BUILD_DIR=/ssd/build"}, ownDir, "/ssd/build"},
 	} {
 		shared := slices.Clone(tc.env)
-		cfg := clawBackendProcConfig(clawServerBackend, root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json", nil)
+		cfg := rustServerProcConfig(clawServerBackend, root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json")
 		if got := envValue(cfg.Env, "CARGO_TARGET_DIR"); got != tc.wantTarget {
 			t.Errorf("env %v: expected CARGO_TARGET_DIR %q, got %q", tc.env, tc.wantTarget, got)
 		}
@@ -452,6 +448,26 @@ func TestEnsureCargoPresentFindsPathBinary(t *testing.T) {
 
 	if err := ensureCargoPresent(); err != nil {
 		t.Fatalf("expected cargo to resolve, got %v", err)
+	}
+}
+
+func TestBrowserOSWatchChecksPinnedCargo(t *testing.T) {
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+	if err := os.WriteFile(filepath.Join(binDir, "cargo"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWatchCargo(t.Context(), browserOSServerBackend); err == nil ||
+		!strings.Contains(err.Error(), "rustup toolchain install 1.98.0") {
+		t.Fatalf("expected rustup install hint despite Cargo on PATH, got %v", err)
+	}
+
+	rustup := []byte("#!/bin/sh\n[ \"$*\" = 'run 1.98.0 cargo --version' ]\n")
+	if err := os.WriteFile(filepath.Join(binDir, "rustup"), rustup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWatchCargo(t.Context(), browserOSServerBackend); err != nil {
+		t.Fatalf("expected pinned Cargo preflight to succeed, got %v", err)
 	}
 }
 

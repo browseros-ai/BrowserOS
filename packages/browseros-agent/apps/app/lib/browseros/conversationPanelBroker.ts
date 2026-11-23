@@ -1,3 +1,4 @@
+import { ServerApiClient } from '@browseros/server-api/client'
 import {
   type ConversationPanelAssignment,
   type ConversationPanelAssignments,
@@ -14,7 +15,7 @@ export interface ConversationPanelBrokerErrorContext {
 
 export interface ConversationPanelBrokerDeps {
   resolveServerUrl(): Promise<string>
-  fetch(input: string, init: RequestInit): Promise<Response>
+  fetch(input: string | Request, init?: RequestInit): Promise<Response>
   getTab(tabId: number): Promise<{ id?: number; windowId: number }>
   openPanel(target: { tabId: number; windowId: number }): Promise<void>
   readViews(): Promise<ConversationPanelViews>
@@ -84,12 +85,9 @@ export class ConversationPanelBroker {
     this.reconciliation = cleaned
     await cleaned
     const serverUrl = await this.deps.resolveServerUrl()
-    const response = await this.deps.fetch(
-      `${serverUrl}/chat/panels/${tabId}`,
-      { method: 'DELETE' },
-    )
-    if (!response.ok)
-      throw new Error(`Panel cleanup failed (${response.status})`)
+    await new ServerApiClient(serverUrl, {
+      fetch: (request) => this.deps.fetch(request),
+    }).forgetPanel({ tabId })
   }
 
   private async applyAssignments(

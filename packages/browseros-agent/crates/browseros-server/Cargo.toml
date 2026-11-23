@@ -1,0 +1,109 @@
+[package]
+name = "browseros-server"
+# Above the TypeScript server's 0.0.168: Chromium launches a downloaded server only when its
+# version is strictly higher than the bundled one.
+version = "0.1.0"
+edition.workspace = true
+# Rig 0.47 declares Rust 1.97.1. Only this crate needs it; the rest of the workspace keeps the
+# workspace floor.
+rust-version = "1.97.1"
+license.workspace = true
+repository.workspace = true
+description = "The BrowserOS agent server: chat, providers, coding agents and history for the extension"
+
+# Every dependency any chunk of the design needs is declared here, once, so that the chunks built
+# in parallel after the skeleton never edit this file or move Cargo.lock.
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+# The file name Chromium launches: resources/bin/browseros_server.
+name = "browseros_server"
+path = "src/main.rs"
+
+[features]
+# `browser::scripted`, the browser test double. The dev-dependency on this crate below turns it
+# on for every test build; release builds never have it.
+test-support = []
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1"
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+http.workspace = true
+os_info = "3.15.0"
+rand.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+# The private MCP endpoint a coding agent reaches the browser through (`browser::mcp`).
+rmcp.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+sentry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+# The contract: every wire type derives `ToSchema` and every route is one `routes!` entry, so the
+# axum router and contracts/server-api/openapi.json come from one declaration. The layering test
+# keeps both crates inside `http`.
+utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "preserve_order", "preserve_path_order"] }
+utoipa-axum = "0.3.0"
+
+# Model calls (`model`) go through Rig: one library speaks the Chat Completions, Responses,
+# ChatGPT, Anthropic Messages and Bedrock wires. Rig leaves serde_json's features as they are
+# (tests/feature_guard.rs); genai 0.7.5, tried first, turned on preserve_order for every crate
+# in a build.
+#
+# Rig's HTTP transport runs on a reqwest 0.13 client the server builds itself (`model::route`),
+# so the provider keeps the redirect, retry and proxy rules it had. Rig's own `rustls` feature is
+# left off on purpose: it turns on reqwest's `system-proxy`, which reaches the one hyper-util in
+# the build and would make every reqwest client in this binary, 0.12 included, start reading the
+# macOS and Windows proxy settings. Rustls alone comes from the reqwest line below.
+# Exact versions: on an upgrade of Rig or the AWS SDK, re-read their log sites for any that write
+# provider or request text (`model::UNSCRUBBED_LOG_TARGETS`); tests/model_logs is the gate.
+rig-core = { version = "=0.47.0", default-features = false, features = ["reqwest"] }
+rig-reqwest = { version = "=0.47.0", default-features = false }
+rig-bedrock = "=0.47.0"
+reqwest-rig = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["rustls"] }
+# rustls's own certificate error, so a provider whose certificate cannot be verified gets a card
+# that says so (`model::errors`). The TLS stack itself comes from reqwest above.
+rustls = { version = "0.23", default-features = false }
+# The AWS SDK client a Bedrock row's calls go through, built from the row's key, secret, session
+# token and region alone (`model::bedrock`). Only the current HTTPS client (hyper 1, rustls 0.23)
+# and the tokio runtime: the default features add a legacy rustls 0.21 stack and the SSO and
+# credential-process chains, which a request-scoped key never uses.
+aws-sdk-bedrockruntime = { version = "=1.135.0", default-features = false, features = ["rt-tokio", "default-https-client"] }
+
+[target.'cfg(unix)'.dependencies]
+# The browser engine child (`browseros_server __neo-engine`), whose body is neo-server's own main.
+# Unix only: the SDK does not build on Windows, where `browser` has no engine.
+neo-server.workspace = true
+
+[dev-dependencies]
+browseros-server = { path = ".", features = ["test-support"] }
+# Only for tests/dependency_boundaries.rs, which parses src/ to enforce the module layering.
+syn = { version = "2", features = ["full", "visit"] }
+tokio = { workspace = true, features = ["test-util"] }
+# A loopback HTTPS provider with a certificate nothing trusts (tests/model_tls.rs): the key and
+# the self-signed certificate are made when the test runs, so no key is committed.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
+tokio-rustls = { version = "0.26", default-features = false }
+
+[lints]
+workspace = true

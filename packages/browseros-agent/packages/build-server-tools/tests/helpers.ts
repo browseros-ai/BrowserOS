@@ -1,27 +1,25 @@
 import type {
-  BuildProductDescriptor,
   BuildTarget,
   R2Config,
+  ResourceBuildProductDescriptor,
   TargetId,
 } from '../src'
 
 export function testProduct(
-  overrides: Partial<BuildProductDescriptor> = {},
-): BuildProductDescriptor {
+  overrides: Partial<ResourceBuildProductDescriptor> = {},
+): ResourceBuildProductDescriptor {
   return {
     label: 'Test server',
     packageDir: 'apps/test-server',
-    entrypoint: 'apps/test-server/src/main.ts',
     distRoot: 'dist/prod/test-server',
-    rawBinaryBaseName: 'test-server',
     stagedBinaryBaseName: 'test_server',
     archiveBaseName: 'test-server-resources',
     defaultManifestPath: 'scripts/build/config/test-server-resources.json',
     env: {
       requiredInlineEnvKeys: ['TEST_CONFIG_URL'],
-      inlineEnvKeys: ['TEST_CONFIG_URL', 'LOG_LEVEL'],
+      inlineEnvKeys: ['TEST_CONFIG_URL', 'BROWSEROS_LOG'],
       ciInlineEnvDefaults: {
-        LOG_LEVEL: 'info',
+        BROWSEROS_LOG: 'info',
         TEST_CONFIG_URL: 'https://test.invalid/config',
       },
       defaultR2UploadPrefix: 'test-server/prod-resources',
@@ -46,7 +44,6 @@ export function testTarget(
     name: id,
     os,
     arch,
-    bunTarget: `bun-${id}`,
     ...overrides,
   }
 }

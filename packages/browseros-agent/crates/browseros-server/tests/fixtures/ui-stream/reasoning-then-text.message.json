@@ -1,0 +1,20 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "reasoning",
+      "id": "r1",
+      "text": "The user asks about Paris. Answer directly.",
+      "state": "done"
+    },
+    {
+      "type": "text",
+      "text": "Paris is in France.",
+      "state": "done"
+    }
+  ]
+}

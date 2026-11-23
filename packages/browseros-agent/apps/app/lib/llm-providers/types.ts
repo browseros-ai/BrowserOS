@@ -1,18 +1,6 @@
-/** AI settings provider config types. Most API-backed values match backend AIProvider. */
-export type ProviderType =
-  | 'anthropic'
-  | 'openai'
-  | 'openai-compatible'
-  | 'google'
-  | 'openrouter'
-  | 'azure'
-  | 'ollama'
-  | 'lmstudio'
-  | 'bedrock'
-  | 'moonshot'
-  | 'chatgpt-pro'
-  | 'github-copilot'
-  | 'qwen-code'
+import type { components } from '@browseros/server-api/openapi'
+
+export type ProviderType = components['schemas']['ProviderType']
 
 /**
  * LLM Provider configuration

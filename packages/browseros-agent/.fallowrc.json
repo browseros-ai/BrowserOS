@@ -1,8 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
-    "apps/server/src/index.ts",
-    "apps/server/src/compiled-bootstrap.ts",
     "apps/claw-onboard/src/main.tsx",
     "apps/app-onboard/src/main.tsx",
     "apps/app/entrypoints/app/main.tsx",
@@ -14,7 +12,6 @@
     "apps/app/entrypoints/selection.content.ts",
     "scripts/run-bun-test.ts",
     "scripts/dev/inspect-ui.ts",
-    "scripts/patch-windows-exe.ts",
     "crates/neo-sdk/neo-server/src/runtime/js/abort_globals.js",
     "crates/neo-sdk/neo-playwright-tests/node/filechooser-lifetime.test.mjs",
     "crates/neo-sdk/neo-playwright-tests/node/child-frame-goto.test.mjs",
@@ -44,8 +41,7 @@
     "@tailwindcss/typography",
     "pino-pretty",
     "dotenv",
-    "picocolors",
-    "@browseros/cdp-protocol"
+    "picocolors"
   ],
   "ignoreUnresolvedImports": ["@/assets/**", "@/styles/global.css"],
   "ignorePatterns": [
@@ -62,8 +58,6 @@
     "apps/app/assets/**",
     "apps/app/generated/**",
     "apps/app/public/**",
-    "apps/server/src/lib/db/migrations/**",
-    "packages/cdp-protocol/src/generated/**",
     ".agents/skills/**",
     ".claude/skills/**",
     "packages/agent-cursor/playground/**",

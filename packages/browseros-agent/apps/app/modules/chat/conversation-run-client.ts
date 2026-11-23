@@ -1,30 +1,40 @@
+import {
+  ServerApiClient,
+  type ServerApiClientOptions,
+  ServerApiError,
+} from '@browseros/server-api/client'
+import type { components } from '@browseros/server-api/openapi'
 import type { UIMessage } from 'ai'
 
-export interface ConversationRunState {
-  conversationId: string
-  runId: string
-  status: 'running' | 'completed' | 'aborted' | 'failed'
-  messages: UIMessage[]
-}
+export type ConversationRunState = Pick<
+  components['schemas']['RunState'],
+  'conversationId' | 'runId' | 'status'
+> & { messages: UIMessage[] }
 
+/**
+ * Loads the server's transcript before the panel follows any running turn's stream, or
+ * `undefined` when the server knows no run for the conversation (`404`).
+ */
 export async function fetchConversationRunState(
   serverUrl: string,
   conversationId: string,
-  fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
-): Promise<ConversationRunState> {
-  const response = await fetchImpl(
-    `${serverUrl}/chat/${encodeURIComponent(conversationId)}/state`,
-    { cache: 'no-store', ...(signal && { signal }) },
-  )
-  if (!response.ok) {
-    throw new Error(`Failed to load active conversation (${response.status})`)
+  fetchImpl?: ServerApiClientOptions['fetch'],
+): Promise<ConversationRunState | undefined> {
+  let state: unknown
+  try {
+    state = await new ServerApiClient(serverUrl, {
+      fetch: fetchImpl,
+    }).getRunState({ conversationId }, signal)
+  } catch (error) {
+    if (error instanceof ServerApiError && error.status === 404)
+      return undefined
+    throw error
   }
-  const value: unknown = await response.json()
-  if (!isConversationRunState(value)) {
+  if (!isConversationRunState(state)) {
     throw new Error('Invalid active conversation state')
   }
-  return value
+  return state
 }
 
 export function conversationReconnectUrl(
@@ -38,13 +48,16 @@ export function conversationReconnectUrl(
 
 function isConversationRunState(value: unknown): value is ConversationRunState {
   if (!value || typeof value !== 'object') return false
-  const candidate = value as Record<string, unknown>
   return (
-    typeof candidate.conversationId === 'string' &&
-    typeof candidate.runId === 'string' &&
+    'conversationId' in value &&
+    typeof value.conversationId === 'string' &&
+    'runId' in value &&
+    typeof value.runId === 'string' &&
+    'status' in value &&
     ['running', 'completed', 'aborted', 'failed'].includes(
-      String(candidate.status),
+      String(value.status),
     ) &&
-    Array.isArray(candidate.messages)
+    'messages' in value &&
+    Array.isArray(value.messages)
   )
 }

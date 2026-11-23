@@ -18,13 +18,9 @@ const entries: AddProviderEntryMeta[] = [
 ]
 
 describe('categoryForTemplate', () => {
-  // These three are the templates that run an OAuth flow instead of asking
-  // for a key, so they must not sit in the api-key group.
-  for (const id of ['chatgpt-pro', 'github-copilot', 'qwen-code']) {
-    it(`${id} is a subscription sign-in`, () => {
-      expect(categoryForTemplate(id)).toBe('subscription')
-    })
-  }
+  it('groups ChatGPT under subscription sign-in', () => {
+    expect(categoryForTemplate('chatgpt-pro')).toBe('subscription')
+  })
 
   it('groups the on-device runtimes as local', () => {
     expect(categoryForTemplate('ollama')).toBe('local')
@@ -58,16 +54,6 @@ describe('matchesQuery', () => {
   it('does not match an unrelated query', () => {
     expect(matchesQuery('Ollama', 'anthropic')).toBe(false)
   })
-
-  // Searching for a specific ACP agent should find the tile that connects it,
-  // rather than returning nothing because the label says "Custom".
-  it('matches on keywords as well as the label', () => {
-    expect(matchesQuery('Custom ACP agent', 'opencode', ['opencode'])).toBe(
-      true,
-    )
-    expect(matchesQuery('Custom ACP agent', 'hermes', ['Hermes'])).toBe(true)
-    expect(matchesQuery('Custom ACP agent', 'ollama', ['opencode'])).toBe(false)
-  })
 })
 
 describe('groupAddProviderEntries', () => {
@@ -95,18 +81,6 @@ describe('groupAddProviderEntries', () => {
       'Claude Code',
       'Codex',
     ])
-  })
-
-  it('keeps an entry whose keyword matches even when its label does not', () => {
-    const withKeywords = [
-      {
-        key: 'custom',
-        label: 'Custom ACP agent',
-        category: 'agent' as const,
-        keywords: ['opencode', 'Hermes'],
-      },
-    ]
-    expect(groupAddProviderEntries(withKeywords, 'hermes')).toHaveLength(1)
   })
 
   it('returns nothing when the query matches no entry', () => {

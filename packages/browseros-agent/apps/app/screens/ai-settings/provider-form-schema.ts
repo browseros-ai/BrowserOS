@@ -16,13 +16,50 @@ const providerTypeEnum = z.enum([
   'lmstudio',
   'bedrock',
   'chatgpt-pro',
-  'github-copilot',
-  'qwen-code',
+  'fireworks',
 ])
 
-const credentiallessProviderTypes: ReadonlySet<
-  z.infer<typeof providerTypeEnum>
-> = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
+/** Where a provider sends its credential, as compared by `sameProviderAddress`. */
+export interface ProviderAddress {
+  type?: z.infer<typeof providerTypeEnum>
+  baseUrl?: string
+  resourceName?: string
+  region?: string
+}
+
+type AddressField = Exclude<keyof ProviderAddress, 'type'>
+
+function addressFields(type: ProviderAddress['type']): AddressField[] {
+  if (type === 'bedrock') return ['region']
+  if (type === 'azure') return ['baseUrl', 'resourceName']
+  if (type === 'chatgpt-pro') return []
+  return ['baseUrl']
+}
+
+const blankToUndefined = (value?: string) => (value?.trim() ? value : undefined)
+
+/**
+ * Whether two configs send their credential to the same address: the same type
+ * and the same values in the fields that type sends its key to (Bedrock:
+ * region; Azure: base URL and resource name; ChatGPT Pro: none; every other
+ * type: base URL). A blank value equals an absent one, and anything else
+ * compares exactly as written.
+ *
+ * Mirrors the server's save rule (crates/browseros-server/src/store/providers.rs):
+ * a save that changes the address and brings no new secret clears the kept
+ * one, so the form must stop offering "leave blank to keep" as soon as the
+ * address differs from the stored row's.
+ */
+export function sameProviderAddress(
+  current: ProviderAddress,
+  original: ProviderAddress,
+): boolean {
+  if (current.type !== original.type) return false
+  return addressFields(current.type).every(
+    (field) =>
+      blankToUndefined(current[field]) === blankToUndefined(original[field]),
+  )
+}
 
 export const providerFormSchema = z
   .object({
@@ -74,20 +111,29 @@ export const providerFormSchema = z
     hasApiKey: z.boolean().optional(),
     hasAccessKeyId: z.boolean().optional(),
     hasSecretAccessKey: z.boolean().optional(),
-    // The provider type when the edit started. A stored-credential flag only
-    // applies while the type is unchanged; switching type must require the new
-    // type's own credential rather than reusing the previous provider's.
+    // The stored row's address when the edit started, raw as read back (an
+    // absent base URL stays undefined, not the form's default). A
+    // stored-credential flag only applies while the address is unchanged:
+    // the server clears a kept credential on a save that moves it.
     originalType: providerTypeEnum.optional(),
+    originalBaseUrl: z.string().optional(),
+    originalResourceName: z.string().optional(),
+    originalRegion: z.string().optional(),
     reasoningEffort: z.string().optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
   })
   .superRefine((data, ctx) => {
-    // Stored-credential flags only count while the provider type is unchanged.
-    const typeUnchanged = data.type === data.originalType
-    const hasStoredApiKey = Boolean(data.hasApiKey) && typeUnchanged
-    const hasStoredAccessKeyId = Boolean(data.hasAccessKeyId) && typeUnchanged
+    const addressUnchanged = sameProviderAddress(data, {
+      type: data.originalType,
+      baseUrl: data.originalBaseUrl,
+      resourceName: data.originalResourceName,
+      region: data.originalRegion,
+    })
+    const hasStoredApiKey = Boolean(data.hasApiKey) && addressUnchanged
+    const hasStoredAccessKeyId =
+      Boolean(data.hasAccessKeyId) && addressUnchanged
     const hasStoredSecretAccessKey =
-      Boolean(data.hasSecretAccessKey) && typeUnchanged
+      Boolean(data.hasSecretAccessKey) && addressUnchanged
     if (data.type === 'azure') {
       if (!data.resourceName && !data.baseUrl) {
         ctx.addIssue({
@@ -125,31 +171,46 @@ export const providerFormSchema = z
           path: ['region'],
         })
       }
-    } else if (credentiallessProviderTypes.has(data.type)) {
+    } else if (data.type === 'chatgpt-pro') {
       return
-    } else if (!data.baseUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Base URL is required',
-        path: ['baseUrl'],
-      })
-    } else if (!/^https?:\/\/.+/.test(data.baseUrl)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Must be a valid URL',
-        path: ['baseUrl'],
-      })
+    } else {
+      if (!data.baseUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Base URL is required',
+          path: ['baseUrl'],
+        })
+      } else if (!/^https?:\/\/.+/.test(data.baseUrl)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Must be a valid URL',
+          path: ['baseUrl'],
+        })
+      }
+      // A stored key that this save will clear is asked for again, so the
+      // provider is not left keyless without the person noticing. The server
+      // runs these three types without a key (a keyless gateway or a local
+      // model), so for them a blank key stays a choice.
+      const apiKeyOptional =
+        data.type === 'openai-compatible' ||
+        data.type === 'ollama' ||
+        data.type === 'lmstudio'
+      if (
+        data.hasApiKey &&
+        !hasStoredApiKey &&
+        !data.apiKey &&
+        !apiKeyOptional
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'API Key is required',
+          path: ['apiKey'],
+        })
+      }
     }
   })
 
 export type ProviderFormValues = z.infer<typeof providerFormSchema>
-
-/** Identifies provider types whose settings form does not collect credentials. */
-export function isCredentiallessProviderType(
-  type: z.infer<typeof providerTypeEnum>,
-): boolean {
-  return credentiallessProviderTypes.has(type)
-}
 
 export function normalizeProviderFormValues(
   values: ProviderFormValues,

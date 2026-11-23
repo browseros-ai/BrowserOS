@@ -59,13 +59,6 @@ PRODUCT_LINES = {
     "docs/browseros/features/use-with-claude-code.mdx": {
         "7f128c3fd2e5dbdf1f16ca6255f8831337aeef66bf6314db4944f03f3bc0a0a5",
     },
-    "packages/browseros-agent/apps/app/components/mcp/McpServerIcon.tsx": {
-        "c40f28a88015e98901e8449b1a49d28f16b22555a9fda284f3a1100e42c036ac",
-        "2b779f7e30e2224e7c0783aadbe4923049678cc4c2be778b3e3d658ff7c063ed",
-    },
-    "packages/browseros-agent/apps/server/src/api/services/klavis/catalog.ts": {
-        "cdff02cdd86eecc7ecd10292d57267e3e69099579f2c38b7827ac7f14bacc831",
-    },
 }
 
 

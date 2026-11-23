@@ -20,7 +20,7 @@ const R2_ENV = {
 const TEST_ENV_KEYS = [
   ...Object.keys(REQUIRED_INLINE_ENV),
   ...Object.keys(R2_ENV),
-  'LOG_LEVEL',
+  'BROWSEROS_LOG',
   'NODE_ENV',
   'R2_DOWNLOAD_PREFIX',
   'R2_UPLOAD_PREFIX',
@@ -59,7 +59,7 @@ describe('build config', () => {
     const rootDir = await writeProdRoot({
       ...REQUIRED_INLINE_ENV,
       ...R2_ENV,
-      LOG_LEVEL: 'debug',
+      BROWSEROS_LOG: 'debug',
     })
 
     const config = loadBuildConfig(rootDir, testProduct(), { requireR2: true })
@@ -67,7 +67,7 @@ describe('build config', () => {
     expect(config.version).toBe('0.0.0-test')
     expect(config.envVars).toMatchObject({
       TEST_CONFIG_URL: 'https://stub.test/config',
-      LOG_LEVEL: 'debug',
+      BROWSEROS_LOG: 'debug',
     })
     expect(config.r2?.uploadPrefix).toBe('test-server/prod-resources')
     expect(config.r2?.downloadPrefix).toBe('artifacts/vendor')
@@ -121,17 +121,17 @@ describe('build config', () => {
     const rootDir = await writeProdRoot({
       ...REQUIRED_INLINE_ENV,
       ...R2_ENV,
-      LOG_LEVEL: 'debug',
+      BROWSEROS_LOG: 'debug',
       R2_UPLOAD_PREFIX: 'ignored-file-prefix',
       R2_DOWNLOAD_PREFIX: 'ignored-file-prefix',
     })
-    process.env.LOG_LEVEL = 'warn'
+    process.env.BROWSEROS_LOG = 'warn'
     process.env.R2_UPLOAD_PREFIX = 'process-prefix'
     process.env.R2_DOWNLOAD_PREFIX = 'process-vendor'
 
     const config = loadBuildConfig(rootDir, testProduct(), { requireR2: true })
 
-    expect(config.envVars.LOG_LEVEL).toBe('warn')
+    expect(config.envVars.BROWSEROS_LOG).toBe('warn')
     expect(config.r2?.uploadPrefix).toBe('process-prefix')
     expect(config.r2?.downloadPrefix).toBe('process-vendor')
   })
@@ -153,21 +153,21 @@ describe('build config', () => {
   it('applies product inline env overrides after file and process env', async () => {
     const rootDir = await writeProdRoot({
       ...REQUIRED_INLINE_ENV,
-      LOG_LEVEL: 'debug',
+      BROWSEROS_LOG: 'debug',
     })
-    process.env.LOG_LEVEL = 'warn'
+    process.env.BROWSEROS_LOG = 'warn'
     const product = testProduct({
       env: {
         ...testProduct().env,
         inlineEnvOverrides: {
-          LOG_LEVEL: 'info',
+          BROWSEROS_LOG: 'info',
         },
       },
     })
 
     const config = loadBuildConfig(rootDir, product)
 
-    expect(config.envVars.LOG_LEVEL).toBe('info')
+    expect(config.envVars.BROWSEROS_LOG).toBe('info')
   })
 
   it('lets CI-specific overrides replace available production values', async () => {
@@ -192,7 +192,7 @@ describe('build config', () => {
     const config = loadBuildConfig(rootDir, testProduct(), { ci: true })
 
     expect(config.envVars).toEqual({
-      LOG_LEVEL: 'info',
+      BROWSEROS_LOG: 'info',
       TEST_CONFIG_URL: 'https://test.invalid/config',
     })
     expect(config.r2).toBeUndefined()

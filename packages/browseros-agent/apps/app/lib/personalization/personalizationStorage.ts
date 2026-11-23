@@ -1,7 +1,7 @@
 import { storage } from '@wxt-dev/storage'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export const personalizationStorage = storage.defineItem<string>(
+const personalizationStorage = storage.defineItem<string>(
   'local:personalization',
   {
     fallback: '',

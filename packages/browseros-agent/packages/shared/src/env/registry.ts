@@ -265,17 +265,9 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     modes: { development: { value: '' } },
   },
   {
-    key: 'POSTHOG_API_KEY',
+    key: 'BROWSEROS_SENTRY_DSN',
     section: 'server',
-    description: 'Server telemetry key; CLI release builds read the same key.',
-    secret: true,
-    schema: stringSchema,
-    modes: { development: { value: '' }, production: { value: '' } },
-  },
-  {
-    key: 'SENTRY_DSN',
-    section: 'server',
-    description: 'Server Sentry DSN.',
+    description: 'Optional BrowserOS Rust server Sentry DSN.',
     secret: false,
     schema: stringSchema,
     modes: {
@@ -295,21 +287,12 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     },
   },
   {
-    key: 'LOG_LEVEL',
+    key: 'BROWSEROS_LOG',
     section: 'server',
-    description: 'Server log level.',
+    description: 'BrowserOS Rust server tracing filter.',
     secret: false,
     schema: stringSchema,
     modes: { development: { value: 'info' }, production: { value: 'info' } },
-  },
-  {
-    key: 'BROWSEROS_AI_SDK_DEVTOOLS',
-    section: 'server',
-    description:
-      'Optional AI SDK DevTools capture toggle for local server runs.',
-    secret: false,
-    schema: stringSchema,
-    modes: { development: { value: 'true', commented: true } },
   },
   {
     key: 'BROWSEROS_TEST_HEADLESS',

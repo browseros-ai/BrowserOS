@@ -65,16 +65,6 @@ describe('agentDescription', () => {
     expect(helpers.agentDescription(agent)).toBe('Codex · gpt-5.5 · medium')
   })
 
-  it('identifies a custom agent by its launch command', () => {
-    expect(
-      helpers.agentDescription({
-        ...agent,
-        type: 'custom',
-        customConfig: { command: 'opencode acp' },
-      } as AcpAgent),
-    ).toContain('opencode acp')
-  })
-
   it('falls back when the agent has no model of its own', () => {
     const { modelId: _modelId, ...withoutModel } = agent
     expect(helpers.agentDescription(withoutModel as AcpAgent)).toContain(
@@ -155,26 +145,6 @@ describe('buildAgentActions', () => {
       'Set as default',
       'Delete',
     ])
-  })
-
-  it('adds edit only for a custom agent', () => {
-    const custom = { ...agent, type: 'custom' } as AcpAgent
-    expect(
-      agentActions({ agent: custom, onEditAgent: noop }).map((a) => a.label),
-    ).toEqual(['Set as default', 'Edit', 'Delete'])
-  })
-
-  it('omits edit when no edit handler is supplied', () => {
-    const custom = { ...agent, type: 'custom' } as AcpAgent
-    expect(agentActions({ agent: custom }).map((a) => a.label)).not.toContain(
-      'Edit',
-    )
-  })
-
-  it('omits edit for a non-custom agent even when a handler exists', () => {
-    expect(
-      agentActions({ onEditAgent: noop }).map((a) => a.label),
-    ).not.toContain('Edit')
   })
 
   it('disables delete while that agent is being deleted', () => {

@@ -1,0 +1,39 @@
+{
+  "id": "msg-golden",
+  "role": "assistant",
+  "parts": [
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "Checking the page.",
+      "state": "done"
+    },
+    {
+      "type": "tool-run",
+      "toolCallId": "call_1",
+      "state": "output-available",
+      "input": {
+        "code": "return document.title"
+      },
+      "output": {
+        "content": [
+          {
+            "text": "Example Domain",
+            "type": "text"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "type": "step-start"
+    },
+    {
+      "type": "text",
+      "text": "The page is titled Example Domain.",
+      "state": "done"
+    }
+  ]
+}

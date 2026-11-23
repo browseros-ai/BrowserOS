@@ -13,14 +13,12 @@ export {
 } from './assets'
 export { parseAssetBuildArgs, parseBuildArgs } from './cli'
 export { runCommand } from './command'
-export { compiledBinaryPath, compileProductBinaries } from './compile'
 export { loadBuildConfig } from './config'
 export { getTargetRules, loadManifest } from './manifest'
 export { writeArtifactMetadata } from './metadata'
 export {
   recoverVersionedTargets,
   runCompiledResourceBuild,
-  runProdResourceBuild,
 } from './orchestrator'
 export type {
   ImmutableObjectIdentity,
@@ -47,7 +45,6 @@ export type {
   BuildArgs,
   BuildConfig,
   BuildEnvSpec,
-  BuildProductDescriptor,
   BuildTarget,
   CompiledServerBinary,
   ProductBuildSpec,
@@ -64,4 +61,3 @@ export type {
   TargetOs,
   UploadResult,
 } from './types'
-export { wasmBinaryPlugin } from './wasm-binary'

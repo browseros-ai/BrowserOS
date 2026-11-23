@@ -133,4 +133,24 @@ describe('stripImageToolOutputs', () => {
     expect(() => stripImageToolOutputs(messages)).not.toThrow()
     expect(stripImageToolOutputs(messages)).toBe(messages)
   })
+
+  it('preserves browser text results in both stored formats', () => {
+    for (const output of [
+      'Example Domain',
+      { content: [{ type: 'text', text: 'Example Domain' }], isError: false },
+    ]) {
+      const messages = [
+        assistantMessage('a', [
+          {
+            type: 'tool-run',
+            toolCallId: 'run',
+            state: 'output-available',
+            input: {},
+            output,
+          },
+        ]),
+      ]
+      expect(stripImageToolOutputs(messages)).toBe(messages)
+    }
+  })
 })

@@ -1,0 +1,26 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"r1"}
+
+data: {"type":"reasoning-delta","id":"r1","delta":"Two clicks."}
+
+data: {"type":"reasoning-end","id":"r1"}
+
+data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"run"}
+
+data: {"type":"tool-input-start","toolCallId":"call_2","toolName":"run"}
+
+data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"run","input":{"code":"click('a')"}}
+
+data: {"type":"tool-output-available","toolCallId":"call_1","output":{"content":[{"text":"{\"clicked\":true}","type":"text"}],"isError":false}}
+
+data: {"type":"tool-input-available","toolCallId":"call_2","toolName":"run","input":{}}
+
+data: {"type":"tool-output-error","toolCallId":"call_2","errorText":"Not run"}
+
+data: {"type":"abort"}
+
+data: [DONE]
+

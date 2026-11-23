@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error","data":{"acpxCode":"RUNTIME","origin":"cli","sessionId":"unknown","details":"Model 'claude-invalid-f11-example' not found"}}}

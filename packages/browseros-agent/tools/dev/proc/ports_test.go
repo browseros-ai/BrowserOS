@@ -2,10 +2,68 @@ package proc
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
+	"os"
+	"os/exec"
+	"slices"
 	"testing"
+	"time"
 )
+
+func TestTCPListenerPIDsExcludeConnectedClient(t *testing.T) {
+	const addressEnv = "BROWSEROS_DEV_PORT_TEST_ADDR"
+	if address := os.Getenv(addressEnv); address != "" {
+		conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		// The parent closes stdin after checking lsof, so the socket stays open
+		// in a different PID for the entire query.
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof is required for TCP listener discovery")
+	}
+
+	listener := listenOnPort(t, 0).(*net.TCPListener)
+	defer listener.Close()
+	if err := listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	client := exec.Command(os.Args[0], "-test.run=^TestTCPListenerPIDsExcludeConnectedClient$")
+	client.Env = append(os.Environ(), addressEnv+"="+listener.Addr().String())
+	stdin, err := client.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Stderr = os.Stderr
+	if err := client.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stdin.Close()
+		if err := client.Wait(); err != nil {
+			t.Errorf("client did not exit cleanly: %v", err)
+		}
+	}()
+
+	conn, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	if got, want := tcpListenerPIDs(port), []int{os.Getpid()}; !slices.Equal(got, want) {
+		t.Fatalf("port %d listener PIDs = %v, want %v (client PID %d)", port, got, want, client.Process.Pid)
+	}
+}
 
 func TestSelectPreferredPortUsesPreferredWhenAvailable(t *testing.T) {
 	reserved := map[int]struct{}{}

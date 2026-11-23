@@ -31,37 +31,3 @@ async function getMcpPort(): Promise<number> {
 
   throw new McpPortError()
 }
-
-/** Returns the MCP proxy endpoint for local server connections. */
-export async function getMcpServerUrl(): Promise<string> {
-  const port = await getProxyPort()
-  return `http://127.0.0.1:${port}/mcp`
-}
-
-class ProxyPortError extends Error {
-  constructor() {
-    super('Proxy server port not configured.')
-    this.name = 'ProxyPortError'
-  }
-}
-
-export async function getProxyPort(): Promise<number> {
-  try {
-    const adapter = getBrowserOSAdapter()
-    const pref = await adapter.getPref(BROWSEROS_PREFS.PROXY_PORT)
-
-    if (pref?.value && typeof pref.value === 'number') {
-      return pref.value
-    }
-  } catch {
-    // BrowserOS API not available
-  }
-
-  throw new ProxyPortError()
-}
-
-/** Returns the MCP proxy health-check endpoint. */
-export async function getHealthCheckUrl(): Promise<string> {
-  const port = await getProxyPort()
-  return `http://127.0.0.1:${port}/system/health`
-}

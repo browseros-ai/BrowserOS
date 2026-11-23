@@ -33,20 +33,53 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['app-onboard'])
   })
 
-  it('maps the server package to all seven server suites', () => {
-    expect(suiteNames([pkg('@browseros/server', 'apps/server')])).toEqual([
-      'server-agent',
+  it('maps the BrowserOS Rust server to the Rust workspace suites', () => {
+    expect(
+      suiteNames([pkg('browseros-server', 'crates/browseros-server')]),
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
+  })
+
+  it('runs the agent and server API suites when the app manifest changes its AI SDK version', () => {
+    expect(
+      suiteNames(
+        [pkg('@browseros/app', 'apps/app')],
+        ['packages/browseros-agent/apps/app/package.json'],
+      ),
+    ).toEqual(['agent', 'server-api'])
+  })
+
+  it('runs the server API suite when the client package is affected', () => {
+    expect(
+      suiteNames([pkg('@browseros/server-api', 'packages/server-api')]),
+    ).toEqual(['server-api'])
+  })
+
+  it.each([
+    'crates/browseros-server/tests/fixtures/ui-stream/text-only.message.json',
+    'contracts/server-api/openapi.json',
+    'packages/server-api/src/generated/openapi.ts',
+  ])('runs the server API suite when %s changes', (path) => {
+    expect(suiteNames([], [`packages/browseros-agent/${path}`])).toEqual([
       'server-api',
-      'server-tools',
-      'server-browser',
-      'server-integration',
-      'server-lib',
-      'server-root',
     ])
   })
 
-  it('maps the app package to the agent suite', () => {
-    expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
+  it('runs the server API suite when the shared TypeScript generator changes', () => {
+    expect(
+      suiteNames(
+        [],
+        ['packages/browseros-agent/scripts/codegen/server-api.ts'],
+      ),
+    ).toEqual(['server-api', 'build'])
+  })
+
+  it('keeps Rust server implementation changes out of the server API suite', () => {
+    expect(
+      suiteNames(
+        [pkg('browseros-server', 'crates/browseros-server')],
+        ['packages/browseros-agent/crates/browseros-server/src/lib.rs'],
+      ),
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('tests that the cursor package selects its own and pointer integration suites', () => {
@@ -291,6 +324,7 @@ describe('computeAffectedSuites', () => {
     // path request it, and the order follows the SUITES declaration.
     expect(result).toEqual([
       'agent',
+      'server-api',
       'claw-app',
       'claw-server',
       'claw-server-quality',
@@ -303,13 +337,12 @@ describe('computeAffectedSuites', () => {
     // A change to @browseros/shared marks all packages affected (Turbo global
     // hash); the mapping should then request every suite.
     const allPackages: AffectedPackage[] = [
-      pkg('@browseros/server', 'apps/server'),
       pkg('@browseros/app', 'apps/app'),
       pkg('@browseros/claw-app', 'apps/claw-app'),
       pkg('@browseros/claw-onboard', 'apps/claw-onboard'),
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
-      pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('browseros-server', 'crates/browseros-server'),
       pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
       pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),

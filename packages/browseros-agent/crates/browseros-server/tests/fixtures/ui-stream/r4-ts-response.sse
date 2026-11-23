@@ -1,0 +1,44 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"thought-1"}
+
+data: {"type":"reasoning-delta","id":"thought-1","delta":"I should look up Paris."}
+
+data: {"type":"reasoning-end","id":"thought-1"}
+
+data: {"type":"text-start","id":"text-1"}
+
+data: {"type":"text-delta","id":"text-1","delta":"Checking…"}
+
+data: {"type":"text-end","id":"text-1"}
+
+data: {"type":"tool-input-start","toolCallId":"call-1","toolName":"lookup_city"}
+
+data: {"type":"tool-input-delta","toolCallId":"call-1","inputTextDelta":"{\"city\":"}
+
+data: {"type":"tool-input-delta","toolCallId":"call-1","inputTextDelta":"\"Paris\"}"}
+
+data: {"type":"tool-input-available","toolCallId":"call-1","toolName":"lookup_city","input":{"city":"Paris"}}
+
+data: {"type":"tool-output-available","toolCallId":"call-1","output":{"city":"Paris","country":"France"}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"text-2"}
+
+data: {"type":"text-delta","id":"text-2","delta":"Paris is in France.\n"}
+
+data: {"type":"text-delta","id":"text-2","delta":"Lookup complete."}
+
+data: {"type":"text-end","id":"text-2"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

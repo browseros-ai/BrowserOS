@@ -1,6 +1,6 @@
+import type { components } from '@browseros/server-api/openapi'
 import { getModelsDevModels } from '@/lib/llm-providers/models-dev'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type { ChatMode } from '@/modules/chat/chat-types'
 
 /**
  * Resolves whether the selected model supports reasoning from the models.dev
@@ -14,101 +14,86 @@ function resolvesSupportsReasoning(provider: LlmProviderConfig): boolean {
   return model?.supportsReasoning ?? true
 }
 
-export interface ChatHistoryEntry {
-  role: 'user' | 'assistant'
-  content: string
-}
+type Tab = components['schemas']['Tab']
+
+// Chrome tabs may have no id. They cannot be addressed by the server.
+type BrowserTab = Omit<Tab, 'id'> & { id?: number }
 
 export interface ChatRequestBrowserContext {
   windowId?: number
-  activeTab?: {
-    id?: number
-    url?: string
-    title?: string
-  }
-  selectedTabs?: {
-    id?: number
-    url?: string
-    title?: string
-  }[]
-  enabledMcpServers?: string[]
-  customMcpServers?: {
-    name: string
-    url?: string
-  }[]
+  activeTab?: Partial<components['schemas']['Tab']>
+  selectedTabs?: Partial<components['schemas']['Tab']>[]
 }
 
-export interface ChatRequestBodyParams {
-  conversationId: string
+export function toChatBrowserContext({
+  windowId,
+  activeTab,
+  selectedTabs,
+}: ChatRequestBrowserContext): components['schemas']['BrowserContext'] {
+  const hasTabId = (tab: BrowserTab): tab is Tab => typeof tab.id === 'number'
+  return {
+    windowId,
+    activeTab: activeTab && hasTabId(activeTab) ? activeTab : undefined,
+    selectedTabs: selectedTabs?.filter(hasTabId),
+  }
+}
+
+export interface ChatRequestBodyParams
+  extends Omit<
+    components['schemas']['ChatRequest'],
+    'target' | 'browserContext' | 'supportsReasoning' | 'attachments'
+  > {
   /**
    * The provider config, when the caller already holds it. Only the id is sent;
    * the rest is used to describe what the chosen model can do, which comes from
    * a catalogue the extension bundles.
-   *
-   * Callers that hold nothing but an id, such as the scheduled runner, pass
-   * `providerId` instead and let the server resolve the rest.
    */
   provider?: LlmProviderConfig
-  providerId?: string
-  message?: string
-  mode?: ChatMode
   browserContext?: ChatRequestBrowserContext
-  userSystemPrompt?: string
-  userWorkingDir?: string
-  supportsImages?: boolean
-  previousConversation?: ChatHistoryEntry[] | string
-  /** Whether the conversation is written to the local database. */
-  persist?: boolean
-  declinedApps?: string[]
-  selectedText?: string
-  selectedTextSource?: {
-    url: string
-    title: string
-  }
-  isScheduledTask?: boolean
+}
+
+type ProviderChatRequestBody = components['schemas']['ChatRequest'] & {
+  historyMode: 'local' | 'cloud'
 }
 
 export const buildChatRequestBody = ({
   conversationId,
+  userMessageId,
   provider,
-  providerId,
   message = '',
   mode,
   browserContext,
   userSystemPrompt,
   userWorkingDir,
-  supportsImages,
   previousConversation,
   persist,
-  declinedApps,
   selectedText,
   selectedTextSource,
-  isScheduledTask,
-}: ChatRequestBodyParams) => ({
+}: ChatRequestBodyParams): ProviderChatRequestBody => ({
   // The provider is named, not described. The server holds the list and which
   // one is selected, so it resolves the model, endpoint and credentials from
   // the id. Those used to travel on every message, which meant the api key and
   // the aws secret crossed the wire each time the user pressed send.
   target: {
-    type: 'browseros' as const,
-    // Absent when the caller has neither, which tells the server to use the
-    // selected provider.
-    providerId: provider?.id ?? providerId,
+    type: 'browseros',
+    // Absent without a provider, which tells the server to use the selected
+    // one.
+    providerId: provider?.id,
   },
   message,
   conversationId,
+  userMessageId,
   mode,
-  browserContext,
+  browserContext: browserContext && toChatBrowserContext(browserContext),
   userSystemPrompt,
   userWorkingDir,
-  // Sent because the caller can override what the provider says, and because
-  // the reasoning answer comes from a model catalogue the extension bundles.
-  supportsImages: supportsImages ?? provider?.supportsImages,
   supportsReasoning: provider ? resolvesSupportsReasoning(provider) : undefined,
   previousConversation,
   persist,
-  declinedApps: declinedApps?.length ? declinedApps : undefined,
+  // Bundled TypeScript servers through 0.0.166 read historyMode. TypeScript
+  // 0.0.167 and later and Rust read persist. Drop historyMode when fallback
+  // to bundles older than 0.0.167 is no longer supported.
+  historyMode: persist === false ? 'cloud' : 'local',
   selectedText,
   selectedTextSource,
-  isScheduledTask,
 })

@@ -1,0 +1,14 @@
+data: {"type":"start","messageId":"msg-golden"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Partial ans"}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"abort"}
+
+data: [DONE]
+

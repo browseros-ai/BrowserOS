@@ -24,59 +24,17 @@ export interface SuiteConfig {
 
 /** Every suite, in the order `test.yml` declares them (stable CI ordering). */
 export const SUITES: Record<string, SuiteConfig> = {
-  'server-agent': {
-    suite: 'server-agent',
-    command: '(cd apps/server && bun run test:agent)',
-    junit_path: 'test-results/server-agent.xml',
+  agent: {
+    suite: 'agent',
+    command: '(cd apps/app && bun run test)',
+    junit_path: 'test-results/agent.xml',
     needs_browser: false,
     needs_rust: false,
   },
   'server-api': {
     suite: 'server-api',
-    command: '(cd apps/server && bun run test:api)',
+    command: 'bun run ./scripts/run-bun-test.ts ./contracts/server-api/tests',
     junit_path: 'test-results/server-api.xml',
-    needs_browser: true,
-    needs_rust: false,
-  },
-  'server-tools': {
-    suite: 'server-tools',
-    command: '(cd apps/server && bun run test:tools)',
-    junit_path: 'test-results/server-tools.xml',
-    needs_browser: true,
-    needs_rust: false,
-  },
-  'server-browser': {
-    suite: 'server-browser',
-    command: '(cd apps/server && bun run test:browser)',
-    junit_path: 'test-results/server-browser.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
-  'server-integration': {
-    suite: 'server-integration',
-    command: '(cd apps/server && bun run test:integration)',
-    junit_path: 'test-results/server-integration.xml',
-    needs_browser: true,
-    needs_rust: false,
-  },
-  'server-lib': {
-    suite: 'server-lib',
-    command: '(cd apps/server && bun run test:lib)',
-    junit_path: 'test-results/server-lib.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
-  'server-root': {
-    suite: 'server-root',
-    command: '(cd apps/server && bun run test:root)',
-    junit_path: 'test-results/server-root.xml',
-    needs_browser: false,
-    needs_rust: false,
-  },
-  agent: {
-    suite: 'agent',
-    command: '(cd apps/app && bun run test)',
-    junit_path: 'test-results/agent.xml',
     needs_browser: false,
     needs_rust: false,
   },
@@ -181,16 +139,8 @@ export const SUITES: Record<string, SuiteConfig> = {
 
 /** Workspace package name -> the suites that cover it. */
 const PACKAGE_SUITES: Record<string, string[]> = {
-  '@browseros/server': [
-    'server-agent',
-    'server-api',
-    'server-tools',
-    'server-browser',
-    'server-integration',
-    'server-lib',
-    'server-root',
-  ],
-  '@browseros/app': ['agent'],
+  '@browseros/app': ['agent', 'server-api'],
+  '@browseros/server-api': ['server-api'],
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
@@ -270,6 +220,20 @@ export function computeAffectedSuites(
     if (SDK_FIXTURE_ROOTS.some((root) => `${pkg.path}/`.startsWith(root)))
       keys.add('sdk-desktop-fixtures')
   }
+
+  // The Bun suite consumes the committed protocol inputs and shares the CLI's generator.
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}contracts/server-api/`) ||
+        f.startsWith(`${AGENT}packages/server-api/`) ||
+        f.startsWith(
+          `${AGENT}crates/browseros-server/tests/fixtures/ui-stream/`,
+        ) ||
+        f === `${AGENT}scripts/codegen/server-api.ts`,
+    )
+  )
+    keys.add('server-api')
 
   // Path signals for things that are not workspace packages.
   if (

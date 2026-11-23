@@ -14,6 +14,10 @@ import {
   TaskItem,
   TaskTrigger,
 } from '@/components/ai-elements/task'
+import {
+  TOOL_NOT_RUN,
+  TOOL_STOPPED,
+} from '@/lib/messaging/server/tool-output-status'
 import type {
   ToolInvocationInfo,
   ToolInvocationState,
@@ -47,7 +51,22 @@ export const ToolBatch: FC<ToolBatchProps> = ({
   }, [isStreaming, isLastMessage, isLastBatch, hasUserInteracted])
 
   const completedCount = tools.filter((t) => isToolCompleted(t.state)).length
-  const triggerTitle = `${completedCount}/${tools.length} actions completed`
+  const stoppedCount = tools.filter(
+    (t) => t.skippedStatus === TOOL_STOPPED,
+  ).length
+  const notRunCount = tools.filter(
+    (t) => t.skippedStatus === TOOL_NOT_RUN,
+  ).length
+  const actionCount = tools.length - stoppedCount - notRunCount
+  const triggerTitle = [
+    actionCount > 0 && `${completedCount}/${actionCount} actions completed`,
+    stoppedCount > 0 &&
+      formatSkippedCount(stoppedCount, TOOL_STOPPED, actionCount),
+    notRunCount > 0 &&
+      formatSkippedCount(notRunCount, TOOL_NOT_RUN, actionCount),
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   const onManualToggle = (newState: boolean) => {
     setHasUserInteracted(true)
@@ -61,14 +80,31 @@ export const ToolBatch: FC<ToolBatchProps> = ({
         {tools.map((tool) => (
           <div key={tool.toolCallId}>
             <TaskItem className="flex items-center gap-2">
-              <ToolStatusIcon state={tool.state} />
+              <ToolStatusIcon
+                state={tool.state}
+                skippedStatus={tool.skippedStatus}
+              />
               <span className="flex-1">{formatToolName(tool.toolName)}</span>
+              {tool.skippedStatus && (
+                <span aria-hidden="true">{tool.skippedStatus}</span>
+              )}
             </TaskItem>
           </div>
         ))}
       </TaskContent>
     </Task>
   )
+}
+
+const formatSkippedCount = (
+  count: number,
+  status: NonNullable<ToolInvocationInfo['skippedStatus']>,
+  actionCount: number,
+) => {
+  const action = count === 1 ? 'action' : 'actions'
+  return actionCount > 0
+    ? `${count} ${status.toLowerCase()}`
+    : `${count} ${action} ${status.toLowerCase()}`
 }
 
 const formatToolName = (name: string) => {
@@ -91,7 +127,18 @@ const isToolDenied = (state: ToolInvocationState) => state === 'output-denied'
 const isToolWaitingForApproval = (state: ToolInvocationState) =>
   state === 'approval-requested'
 
-const ToolStatusIcon: FC<{ state: ToolInvocationState }> = ({ state }) => {
+const ToolStatusIcon: FC<
+  Pick<ToolInvocationInfo, 'state' | 'skippedStatus'>
+> = ({ state, skippedStatus }) => {
+  if (skippedStatus) {
+    return (
+      <CircleDashed
+        aria-label={skippedStatus}
+        role="img"
+        className="h-3.5 w-3.5 text-muted-foreground"
+      />
+    )
+  }
   if (isToolCompleted(state)) {
     return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
   }
