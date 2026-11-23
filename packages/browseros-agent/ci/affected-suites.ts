@@ -169,6 +169,17 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: true,
     needs_rust: true,
   },
+  // Its server, shared and web tests, as its own `bun run test` picks them. tests/ holds the
+  // real-image suite, which needs a built Neo SDK image. Biome already lints it through the
+  // package-wide `bun run lint`.
+  'neo-viewer': {
+    suite: 'neo-viewer',
+    command:
+      'bun run ./scripts/run-bun-test.ts --cwd=./tools/neo-viewer ./tools/neo-viewer/server ./tools/neo-viewer/shared ./tools/neo-viewer/web',
+    junit_path: 'test-results/neo-viewer.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   captcha: {
     suite: 'captcha',
     command:
@@ -200,6 +211,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
   '@browseros/neo-server': ['claw-sdk-quality'],
+  '@browseros/neo-viewer': ['neo-viewer'],
 }
 
 /**
