@@ -21,8 +21,9 @@ use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_telemetry::{RunFacts, Telemetry, TelemetryConfig};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
-    OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    OperationStarted, Outcome, RecordPolicy, RedactionLimits, Redactor, RunEnded, RunId,
+    RunStarted, RunStatus, RunTabsScope, TaskId, TraceSink, TraceStore, Values, WriterConfig,
+    spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -588,12 +589,23 @@ async fn a_load_the_browser_could_not_make_is_the_websites_failure() -> Result<(
 
 /// Navigation telemetry through the real door: a goto the network refused is a navigation and a
 /// navigation error by Chromium's name, while the op still fails as the website's; a goto the
-/// door refused before sending and an op that navigates nothing count nothing.
+/// door refused before sending and an op that navigates nothing count nothing. The same with
+/// `trace.values` on and off: the metrics read the op's result, never its record.
 #[tokio::test]
-async fn a_navigation_the_network_refused_is_counted_by_its_net_error() -> Result<(), Box<dyn Error>>
-{
+async fn a_goto_the_network_refused_counts_by_its_net_error() -> Result<(), Box<dyn Error>> {
+    for values in [Values::On, Values::Off] {
+        net_error_navigation(values).await?;
+    }
+    Ok(())
+}
+
+async fn net_error_navigation(values: Values) -> Result<(), Box<dyn Error>> {
     let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
     let harness = Harness::new().await?;
+    harness.sink.record_policy(RecordPolicy {
+        values,
+        ..RecordPolicy::default()
+    });
     let (run, guard) = harness.run_reporting(&telemetry)?;
     let page = page_of(&value(
         harness.submit(&run, "context.newPage", json!({})).await,
@@ -641,7 +653,7 @@ async fn a_navigation_the_network_refused_is_counted_by_its_net_error() -> Resul
             r#"neo_navigation_errors_total{error_code="name_not_resolved"} 1"#,
             "neo_navigations_total 1",
         ],
-        "one navigation sent, the one the network refused"
+        "{values:?}: one navigation sent, the one the network refused"
     );
     Ok(())
 }
@@ -2717,6 +2729,60 @@ async fn a_solve_answers_what_neo_did_as_a_value() -> Result<(), Box<dyn Error>>
         (row.outcome, row.delivery),
         (Some(Outcome::Ok), Some(Delivery::Done)),
         "every completed solve is a value, and the solver may have acted, so it was sent"
+    );
+    Ok(())
+}
+
+/// CAPTCHA telemetry through the real door and solver: a solve that returned an outcome counts
+/// once by family, verdict and reason, with no spend when nothing was paid, and with
+/// `trace.values` off, as a production host records; a call refused before any solve (no
+/// provider key) counts nothing.
+#[tokio::test]
+async fn a_solve_that_returned_an_outcome_is_counted_and_a_refused_one_is_not()
+-> Result<(), Box<dyn Error>> {
+    const SOLVES: [&str; 3] = [
+        "neo_captcha_solves_total",
+        "neo_captcha_reasons_total",
+        "neo_captcha_spend_usd_total",
+    ];
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let keyless = Harness::new().await?;
+    let (run, guard) = keyless.run_reporting(&telemetry)?;
+    let owners = keyless.owner_tab("https://example.com/").await?;
+    let refused = failure(
+        keyless
+            .submit(&run, "neo.solveCaptcha", json!({ "page": handle(&owners) }))
+            .await,
+    )?;
+    assert_eq!(refused.error.code(), ErrorCode::CAPTCHA_UNAVAILABLE);
+    Harness::finish(guard);
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&SOLVES),
+        Vec::<String>::new(),
+        "no solve ran"
+    );
+
+    let harness = Harness::with_solver(Some(placeholder_solver()?)).await?;
+    harness.sink.record_policy(RecordPolicy {
+        values: Values::Off,
+        ..RecordPolicy::default()
+    });
+    let (run, guard) = harness.run_reporting(&telemetry)?;
+    let owners = harness.owner_tab("https://example.com/").await?;
+    let answer = value(
+        harness
+            .submit(&run, "neo.solveCaptcha", json!({ "page": handle(&owners) }))
+            .await,
+    )?;
+    Harness::finish(guard);
+    assert_eq!(answer["reason"], "browser_error", "{answer}");
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&SOLVES),
+        [
+            r#"neo_captcha_reasons_total{reason="browser_error"} 1"#,
+            r#"neo_captcha_solves_total{family="none",verdict="failed"} 1"#,
+        ],
+        "the fake browser's empty frame tree fails detection before any CAPTCHA or provider"
     );
     Ok(())
 }
