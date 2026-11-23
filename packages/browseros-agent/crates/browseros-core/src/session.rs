@@ -12,7 +12,7 @@ use crate::{
     },
     windows::WindowManager,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, RawReply};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::{
@@ -479,6 +479,38 @@ impl CdpConnection for EvictingConnection {
                 move || raw_names_other_session(params_json, session),
                 self.inner
                     .send_raw_json_at_epoch(expected_epoch, method, params_json, session),
+            ),
+        )
+    }
+
+    fn send_raw<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        let names_other = names_other_session(&params, session);
+        Box::pin(self.evicting(
+            session,
+            move || names_other,
+            self.inner.send_raw(method, params, session),
+        ))
+    }
+
+    fn send_raw_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        let names_other = names_other_session(&params, session);
+        Box::pin(
+            self.evicting(
+                session,
+                move || names_other,
+                self.inner
+                    .send_raw_at_epoch(expected_epoch, method, params, session),
             ),
         )
     }

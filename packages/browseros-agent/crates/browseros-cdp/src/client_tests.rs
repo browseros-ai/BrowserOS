@@ -648,15 +648,19 @@ async fn a_lone_utf16_half_reaches_its_reply_and_events_as_the_replacement_chara
     let mut broadcast = client.events();
     let mut stream = client.on_event("Test.text");
 
+    let answer = json!({ "text": format!(r#"{{"id":{{id}},"result":{{"text":{HALVES}}}}}"#) });
     let reply = client
-        .send(
-            "Fixture.answer_raw",
-            json!({ "text": format!(r#"{{"id":{{id}},"result":{{"text":{HALVES}}}}}"#) }),
-            None,
-        )
+        .send("Fixture.answer_raw", answer.clone(), None)
         .await
         .unwrap_or_else(|err| panic!("the reply with lone halves: {err}"));
     assert_eq!(reply["text"], REPAIRED);
+    let text = client
+        .send_raw_json("Fixture.answer_raw", &answer.to_string(), None)
+        .await
+        .unwrap_or_else(|err| panic!("the raw reply with lone halves: {err}"));
+    let parsed: Value =
+        serde_json::from_str(&text).unwrap_or_else(|err| panic!("the raw reply reads: {err}"));
+    assert_eq!(parsed["text"], REPAIRED);
 
     client
         .send(
@@ -800,5 +804,117 @@ async fn streams_and_broadcast_readers_make_no_copy_of_a_megabyte_event() {
         "the count sees a deep copy"
     );
     drop(copy);
+    client.disconnect().await;
+}
+
+/// A reply of `rows` small arrays, the shape of a DOM capture's columns: a parsed `Value` of it
+/// takes tens of times its text.
+fn columns(rows: usize) -> String {
+    let rows: Vec<String> = (0..rows).map(|row| format!("[{row}]")).collect();
+    format!("[{}]", rows.join(","))
+}
+
+/// Registers a request the test answers itself through `handle_text_message`, as the reader
+/// loop would on the browser's reply.
+async fn pending(client: &CdpClient, id: u64) -> oneshot::Receiver<Result<RawReply, CdpError>> {
+    let (reply, receiver) = oneshot::channel();
+    client.inner.pending.lock().await.insert(
+        id,
+        Pending {
+            session: None,
+            reply,
+        },
+    );
+    receiver
+}
+
+/// The reader loop's whole work on a large reply is a copy of its result: it builds no tree, so
+/// the next message, another session's reply, is handled while the first is still undecoded.
+/// The decode runs where the caller awaits it, and is what allocates the tree. On the loop, it
+/// would hold up every message behind it for as long as it took.
+#[tokio::test]
+async fn the_reader_hands_a_large_reply_over_as_text_and_its_caller_decodes_it() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let large = columns(50_000);
+    let mut first = pending(&client, 9_001).await;
+    let mut other = pending(&client, 9_002).await;
+
+    let message = format!(r#"{{"id":9001,"result":{large},"sessionId":"tab-a"}}"#);
+
+    let before = alloc_count::allocated();
+    handle_text_message(&client.inner, &message).await;
+    let on_loop = alloc_count::allocated() - before;
+    assert!(
+        on_loop <= large.len() + 4096,
+        "the reader allocated {on_loop} bytes for a {} byte result",
+        large.len()
+    );
+
+    handle_text_message(
+        &client.inner,
+        r#"{"id":9002,"result":{"value":1},"sessionId":"tab-b"}"#,
+    )
+    .await;
+    let small = other
+        .try_recv()
+        .unwrap_or_else(|err| panic!("the other session's reply was not delivered: {err}"))
+        .unwrap_or_else(|err| panic!("the other session's reply: {err}"));
+    assert_eq!(small.get(), r#"{"value":1}"#);
+
+    let kept = first
+        .try_recv()
+        .unwrap_or_else(|err| panic!("the large reply was not delivered: {err}"))
+        .unwrap_or_else(|err| panic!("the large reply: {err}"));
+    assert_eq!(kept.get(), large, "handed over undecoded, as written");
+    let before = alloc_count::allocated();
+    let rows: Vec<[u32; 1]> = kept.decode().unwrap_or_else(|err| panic!("decode: {err}"));
+    assert_eq!(rows.len(), 50_000);
+    drop(rows);
+    let tree: Value = kept.decode().unwrap_or_else(|err| panic!("decode: {err}"));
+    assert!(
+        alloc_count::allocated() - before >= 4 * large.len(),
+        "the caller's decodes build what the loop did not"
+    );
+    drop(tree);
+    client.disconnect().await;
+}
+
+/// `send_raw_json` and `send_raw` return the browser's own text, which no parse and re-encode
+/// would keep: spacing, key order and escapes. `send_typed` decodes it into the caller's type.
+#[tokio::test]
+async fn raw_sends_return_the_browsers_text_and_typed_sends_decode_it() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let written = r#"{ "b": [1,  2.50], "a": "\u00e9" }"#;
+    let answer = json!({ "text": format!(r#"{{"id":{{id}},"result":{written}}}"#) });
+
+    let text = client
+        .send_raw_json("Fixture.answer_raw", &answer.to_string(), None)
+        .await
+        .unwrap_or_else(|err| panic!("send_raw_json: {err}"));
+    assert_eq!(text, written);
+    let kept = client
+        .send_raw("Fixture.answer_raw", answer.clone(), None)
+        .await
+        .unwrap_or_else(|err| panic!("send_raw: {err}"));
+    assert_eq!(kept.get(), written);
+
+    #[derive(Debug, serde::Deserialize, PartialEq)]
+    struct Answer {
+        a: String,
+        b: Vec<f64>,
+    }
+    let typed: Answer = client
+        .send_typed("Fixture.answer_raw", answer, None)
+        .await
+        .unwrap_or_else(|err| panic!("send_typed: {err}"));
+    assert_eq!(
+        typed,
+        Answer {
+            a: "\u{e9}".to_owned(),
+            b: vec![1.0, 2.5],
+        }
+    );
     client.disconnect().await;
 }

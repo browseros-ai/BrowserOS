@@ -7,6 +7,7 @@ mod error;
 mod events;
 mod generated;
 mod inbound;
+mod raw_reply;
 mod targeted;
 
 pub use client::{CdpClient, ConnectOptions, ReconnectPolicy};
@@ -15,6 +16,7 @@ pub use discovery::discover_websocket_url;
 pub use error::CdpError;
 pub use events::{CdpEvent, EventStream};
 pub use generated::*;
+pub use raw_reply::RawReply;
 pub use targeted::TargetedEvents;
 
 use serde::{Deserialize, Serialize};
