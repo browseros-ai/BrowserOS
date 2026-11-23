@@ -212,7 +212,7 @@ describe("the top bar's health line", () => {
     const late = line(health(), NOW + 7_000)
     expect(late).toContain('data-freshness="late"')
     expect(text(late)).toContain('7 s ago')
-    // No source for 10 s: every figure is unknown, not zero.
+    // No source for 30 s: every figure is unknown, not zero.
     const quiet = text(
       line(
         health({

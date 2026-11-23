@@ -142,7 +142,7 @@ describe('the Health view', () => {
   it('says what it is waiting for when no source is live', async () => {
     await show(() => null)
     expect(dom.container.textContent).toContain(
-      "No live metrics: Neo has sent none in the last 10 s. The viewer scrapes Neo's GET /v1/metrics every 2 s when it has a host API, and takes OTLP pushes at /otlp.",
+      "No live metrics: Neo has sent none in the last 30 s. The viewer scrapes Neo's GET /v1/metrics every 2 s when it has a host API, and takes OTLP pushes at /otlp.",
     )
     expect(dom.container.querySelector('section[aria-label="Runs"]')).toBeNull()
   })

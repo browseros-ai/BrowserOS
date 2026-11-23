@@ -126,7 +126,7 @@ The page at `/` (the approved design, "Viewer C v2"):
   **Clear**, **Export** (below), and **Take over** (below). Once Neo's telemetry arrives (see
   Neo's telemetry), Neo's health follows the container line: runs in flight, the run and
   operation error rates and renderer crashes since the last Clear, tabs open, and how fresh
-  that is (**live**, `7 s ago`, or **no metrics** once no source has answered for 10 s). An image
+  that is (**live**, `7 s ago`, or **no metrics** once no source has answered for 30 s). An image
   older than telemetry shows none of it, nor anything below that comes from telemetry.
 - **Neo health.** Clicking the health opens Neo's metrics in place of the runs (the top bar,
   the strip and the sidebar keep streaming; **← Runs** or Escape go back to the runs as they
@@ -374,7 +374,7 @@ Neo's doors with no protobuf library (`server/telemetry/`, one module behind `st
   set of names, and push alone (`--upstream`) shows the same numbers. A navigation's HTTP status
   arrives as the integer `http.response.status_code` and is filed as `http_response_status_code`.
   An operation's source line arrives as `code.line.number` and `code.column.number`.
-- **Which numbers**: the scrape while it is at most 10 s old, else the push while it is, else none;
+- **Which numbers**: the scrape while it is at most 30 s old, else the push while it is, else none;
   never blended (both read one meter provider). Health (`TelemetryHealth`: runs in flight, tabs
   open, and counts since the last Clear with Neo restarts handled) goes to the page as an
   unversioned `health` event at most once a second, and in the runs snapshot.

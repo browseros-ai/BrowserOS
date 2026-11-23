@@ -179,20 +179,31 @@ function sample(runs: number, runErrors: number, crashes = 0): MetricFamily[] {
 }
 
 describe('the metric store', () => {
-  test('the scrape is shown while it is at most 10 s old, else the push, else nothing; never blended', () => {
+  test('the scrape is shown while it is at most 30 s old, else the push, else nothing; never blended', () => {
     const store = new MetricStore()
     expect(store.active(at(0))).toBeNull()
     store.pushedFamilies(sample(5, 0), at(0))
     expect(store.active(at(1))).toBe('push')
     store.scraped(sample(5, 0), 'text', at(1))
     expect(store.active(at(2))).toBe('scrape')
-    // Pushes keep coming, the scrape stops: the push takes over once the scrape is 10 s old.
-    store.pushedFamilies(sample(6, 0), at(11))
-    expect(store.active(at(11))).toBe('scrape')
-    expect(store.active(at(11.5))).toBe('push')
+    // Pushes keep coming, the scrape stops: the push takes over once the scrape is 30 s old.
+    store.pushedFamilies(sample(6, 0), at(31))
+    expect(store.active(at(31))).toBe('scrape')
+    expect(store.active(at(31.5))).toBe('push')
     // Both quiet: nothing is live; an export still finds the last heard.
-    expect(store.active(at(30))).toBeNull()
-    expect(store.newest(at(30))).toBe('push')
+    expect(store.active(at(70))).toBeNull()
+    expect(store.newest(at(70))).toBe('push')
+  })
+
+  test('a Neo pushing at its default 15 s interval stays live between pushes', () => {
+    const store = new MetricStore()
+    store.pushedFamilies(sample(1, 0), at(0))
+    expect(store.active(at(14.9))).toBe('push')
+    store.pushedFamilies(sample(2, 0), at(15))
+    expect(store.active(at(29.9))).toBe('push')
+    expect(
+      store.latest('push')?.families.map((family) => family.name),
+    ).toContain('neo_errors_total')
   })
 
   test('since the last Clear: deltas from the counters as they stood, a restart (a counter going down) counts on from zero', () => {
@@ -229,7 +240,7 @@ describe('the metric store', () => {
     })
   })
 
-  test("after Neo restarts, the old process's families go once the new one has not sent them for 10 s", () => {
+  test("after Neo restarts, the old process's families go once the new one has not sent them for 30 s", () => {
     const store = new MetricStore()
     const names = () =>
       (store.latest('push')?.families ?? []).map((family) => family.name)
@@ -244,7 +255,7 @@ describe('the metric store', () => {
     )
     store.pushedFamilies(fresh, at(5))
     expect(names()).toContain('neo_errors_total')
-    store.pushedFamilies(fresh, at(10.5))
+    store.pushedFamilies(fresh, at(30.5))
     expect(names().sort()).toEqual([
       'neo_run_active',
       'neo_runs_total',

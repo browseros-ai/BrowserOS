@@ -2,7 +2,7 @@
  * Neo's metrics as they arrive through either door: the scrape of `GET /v1/metrics` and the OTLP
  * push. Each door keeps its own slot (its latest families), its own history and its own count
  * since the last Clear; which door the viewer shows is a pure function of the two slots' ages
- * (`active`): the scrape while it is at most 10 s old, else the push while it is, else none. The
+ * (`active`): the scrape while it is at most 30 s old, else the push while it is, else none. The
  * doors are never blended: both read one meter provider, so either alone is the whole truth, and
  * a fixed order means the numbers never jump between them while both are live.
  */
@@ -25,8 +25,11 @@ export type SinceClear = Pick<
 
 const COUNTERS = ['runs', 'runErrors', 'ops', 'opErrors', 'crashes'] as const
 
-/** A door's samples stop counting as live past this age. */
-export const LIVE_WITHIN_MS = 10_000
+/**
+ * A door's samples stop counting as live past this age: twice Neo's default push interval
+ * (15 s), so a Neo pushing at its default never reads as gone between two pushes.
+ */
+export const LIVE_WITHIN_MS = 30_000
 /** History: at most one point a second, ten minutes of them. */
 const POINT_EVERY_MS = 1_000
 const HISTORY_POINTS = 600

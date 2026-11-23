@@ -401,7 +401,7 @@ export type StreamEvent = ViewerEvent | HealthEvent
 /**
  * Neo's health in one full state (never a patch), from its metrics (`GET /v1/metrics` scraped
  * through the host API, or pushed over OTLP) and its spans. The numbers come from one source at
- * a time, never blended: the scrape while it is at most 10 s old, else the push while it is, else
+ * a time, never blended: the scrape while it is at most 30 s old, else the push while it is, else
  * none (`source: null`, numbers null: Neo stopped answering).
  */
 export interface TelemetryHealth {

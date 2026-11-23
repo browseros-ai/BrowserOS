@@ -91,7 +91,7 @@ export function HealthView({
         <Note>Reading Neo's metrics…</Note>
       ) : metrics === null ? (
         <Note>
-          No live metrics: Neo has sent none in the last 10 s. The viewer
+          No live metrics: Neo has sent none in the last 30 s. The viewer
           scrapes Neo's GET /v1/metrics every 2 s when it has a host API, and
           takes OTLP pushes at{' '}
           <span className="font-code text-ink">

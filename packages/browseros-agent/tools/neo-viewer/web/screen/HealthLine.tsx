@@ -23,7 +23,7 @@ import { count, plural } from './units'
 export const LIVE_FOR_MS = 5_000
 
 export interface Freshness {
-  /** `live`, `7 s ago`, or `no metrics` (no source has answered for 10 s, or none ever did). */
+  /** `live`, `7 s ago`, or `no metrics` (no source has answered for 30 s, or none ever did). */
   text: string
   tone: 'live' | 'late' | 'none'
   /** Words for the tooltip: where the numbers come from and when. */
@@ -36,7 +36,7 @@ export function freshness(health: TelemetryHealth, now: number): Freshness {
       text: 'no metrics',
       tone: 'none',
       where:
-        'No metrics from Neo in the last 10 s: it stopped answering, or it sends spans only.',
+        'No metrics from Neo in the last 30 s: it stopped answering, or it sends spans only.',
     }
   }
   const age = Math.max(0, now - health.observedAt)
