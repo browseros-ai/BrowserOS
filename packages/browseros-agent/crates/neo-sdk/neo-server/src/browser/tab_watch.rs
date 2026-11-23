@@ -229,8 +229,9 @@ struct Watch {
     gap: Gap,
     /// `targets` may hold a page target whose destroy was among dropped events, or lack one whose
     /// announcement was: the watch fell behind, and the next listing first rebuilds the map
-    /// (`Watch::rebuild_targets`). Until a rebuild succeeds the ledger is not told which unlisted
-    /// tabs have a live target, since a dead one would keep a closed tab counted for good.
+    /// (`Watch::rebuild_targets`). Until a rebuild succeeds the ledger hears no listing: without
+    /// the live targets it would close a tab on an excluded page, and a dead target would keep a
+    /// closed tab counted for good.
     targets_stale: bool,
 }
 
@@ -473,7 +474,13 @@ impl Watch {
             .retain(|target, _| pages.iter().any(|page| page.target_id.as_str() == target));
         self.opener_tabs
             .retain(|target, _| pages.iter().any(|page| page.target_id.as_str() == target));
-        self.tell_ledger(&pages);
+        if self.targets_stale {
+            // The rebuild failed. The ledger waits, with its gap, for a listing after one that
+            // succeeds, which the next check runs.
+            self.owes_listing = true;
+        } else {
+            self.tell_ledger(&pages);
+        }
         let open: BTreeSet<TabId> = pages.iter().map(|page| page.tab_id).collect();
         // Opens go out before closes, each first to the registry's open sink, synchronously: a
         // takeover whose tab closed in this listing is released by its close, and a tab the
@@ -567,17 +574,14 @@ impl Watch {
             })
             .collect();
         let destroyed: Vec<TabId> = self.closing.iter().copied().collect();
-        let targeted: Vec<TabTarget> = if self.targets_stale {
-            Vec::new()
-        } else {
-            self.targets
-                .iter()
-                .map(|(target, tab)| TabTarget {
-                    tab: *tab,
-                    target: TargetId(target.clone()),
-                })
-                .collect()
-        };
+        let targeted: Vec<TabTarget> = self
+            .targets
+            .iter()
+            .map(|(target, tab)| TabTarget {
+                tab: *tab,
+                target: TargetId(target.clone()),
+            })
+            .collect();
         self.tabs.life().listed(Listing {
             tabs: &listed,
             destroyed: &destroyed,

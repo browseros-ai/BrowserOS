@@ -8,6 +8,7 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_cdp::CdpError;
 use browseros_core::{NativeCapabilities, TabId, page_js};
 use neo_telemetry::{Telemetry, TelemetryConfig};
 use neo_trace::TaskId;
@@ -590,6 +591,86 @@ async fn after_a_lag_the_watch_still_knows_a_tab_on_an_excluded_page() -> Result
         expected,
         "five tabs born once each, and only the two the owner closed closed: the parked tab was \
          never closed nor born twice"
+    );
+    Ok(())
+}
+
+/// After a lag, a failed `Target.getTargets` leaves the watch without its live targets, so the
+/// ledger hears no listing until a later rebuild succeeds: a tab on an excluded page is never
+/// closed for it, and nothing is missed once the rebuild works.
+#[tokio::test(start_paused = true)]
+async fn a_failed_rebuild_after_a_lag_closes_no_tab() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let shown = fake.open_tab("https://example.com/", "Example");
+    let parked = fake.open_tab("https://example.org/", "Parked");
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let telemetry = telemetry.clone();
+        move || Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0, count, 0))
+    };
+    eventually(Duration::from_secs(5), found(2)).await?;
+    assert!(
+        fake.navigate_tab(parked, "chrome-extension://abc/page.html", "Extension"),
+        "the fake had the tab"
+    );
+    let page = |tab: TabId, url: &str| json!({ "targetId": format!("target-{}", tab.0), "type": "page", "tabId": tab.0, "url": url });
+
+    let listings = fake.count("Browser.getTabs");
+    let target_listings = fake.count("Target.getTargets");
+    fake.fail(
+        "Target.getTargets",
+        CdpError::Protocol {
+            code: -32000,
+            message: "target listing unavailable".to_owned(),
+        },
+    );
+    fake.hold_next("Browser.getTabs");
+    let lagger = fake.open_tab("https://example.net/", "Lagger");
+    eventually(Duration::from_secs(5), || {
+        fake.count("Browser.getTabs") > listings
+    })
+    .await?;
+    let changed =
+        json!({ "targetInfo": { "targetId": format!("target-{}", shown.0), "type": "page" } });
+    for _ in 0..1100 {
+        assert!(
+            fake.page_event(shown, "Target.targetInfoChanged", changed.clone()),
+            "the fake had the tab"
+        );
+    }
+    fake.release_held();
+    // Several failed rebuilds, each followed by a listing the ledger does not hear, and past
+    // the two seconds a close nobody asked for would wait.
+    eventually(Duration::from_secs(10), || {
+        fake.count("Target.getTargets") > target_listings + 2
+    })
+    .await?;
+    time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        [r#"neo_tab_opened_total{neo_tab_origin="found"} 3"#],
+        "the parked tab is not closed while the live targets are unknown"
+    );
+
+    let first = fake.open_tab("https://example.edu/", "First");
+    fake.answer(
+        "Target.getTargets",
+        json!({ "targetInfos": [
+            page(shown, "https://example.com/"),
+            page(parked, "chrome-extension://abc/page.html"),
+            page(lagger, "https://example.net/"),
+            page(first, "https://example.edu/"),
+        ] }),
+    );
+    fake.unfail("Target.getTargets");
+    eventually(Duration::from_secs(5), found(4)).await?;
+    time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        [r#"neo_tab_opened_total{neo_tab_origin="found"} 4"#],
+        "once a rebuild works the tab opened meanwhile counts, and the parked tab is still open"
     );
     Ok(())
 }

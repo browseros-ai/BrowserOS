@@ -336,6 +336,11 @@ impl FakeCdp {
         self.lock().failures.insert(method.to_owned(), error);
     }
 
+    /// Calls to `method` succeed again, after [`FakeCdp::fail`].
+    pub fn unfail(&self, method: &str) {
+        self.lock().failures.remove(method);
+    }
+
     /// Calls to `method` get the fake's own answer again, after [`FakeCdp::answer`].
     pub fn unanswer(&self, method: &str) {
         self.lock().answers.remove(method);
