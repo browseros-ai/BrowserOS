@@ -998,7 +998,7 @@ mod shutdown_tests {
                 collector
                     .metric_names()?
                     .iter()
-                    .any(|name| name == "neo_runs_total"),
+                    .any(|name| name == "neo.runs"),
                 "the pending metrics arrived"
             );
             Ok::<(), TestError>(())

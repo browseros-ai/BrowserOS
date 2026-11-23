@@ -222,7 +222,7 @@ fn ids(traceparent: &str) -> (&str, &str) {
 /// one that throws with the caller's trace in `_meta`: the collector gets both `neo.run` spans,
 /// each a child of its caller's span, with the op a child of its run under its raw name; the
 /// authenticated scrape counts both runs, the op as `unknown` and each error once, with nothing
-/// left in flight; and the push carries the metrics too.
+/// left in flight; and the push carries the metrics too, under OpenTelemetry's names.
 async fn both_doors_tell_the_same_story(wire: Wire) -> Result<(), TestError> {
     let collector = MockCollector::start(wire)?;
     let neo = Neo::start(&collector.env(100)).await?;
@@ -264,7 +264,7 @@ async fn both_doors_tell_the_same_story(wire: Wire) -> Result<(), TestError> {
     within(PATIENCE, async {
         while !collector
             .metric_names()
-            .is_ok_and(|names| names.iter().any(|name| name == "neo_runs_total"))
+            .is_ok_and(|names| names.iter().any(|name| name == "neo.runs"))
         {
             time::sleep(Duration::from_millis(20)).await;
         }
