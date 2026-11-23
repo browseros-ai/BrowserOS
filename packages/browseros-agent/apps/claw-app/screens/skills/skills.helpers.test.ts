@@ -17,11 +17,13 @@ import {
   runsChoice,
   skillCommand,
   skillSites,
+  skillValue,
   stillVerifying,
   stuckWhile,
   turnedUltrafast,
   ultrafastMark,
   upgradeSeconds,
+  usageLevel,
   usedLabel,
   VERIFYING_POLL_MS,
   VERIFYING_WINDOW_MS,
@@ -653,5 +655,93 @@ describe('ultrafastMark on a plan without ultrafast', () => {
     expect(
       ultrafastMark(ultrafast({ status: 'verified', locked: true })),
     ).toBeNull()
+  })
+})
+
+describe('skillValue', () => {
+  const now = new Date(2026, 10, 23, 12).getTime()
+  const skill = (patch: Partial<Skill>): Skill => ({
+    name: 'neo-hn',
+    description: 'Hacker News top 10',
+    origin: 'agent',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...patch,
+  })
+  const agentRun = { mode: 'agent' as const, durationMs: 41_000 }
+
+  it('sorts usage into never, rarely, sometimes and a lot', () => {
+    expect([0, 1, 2, 3, 9, 10].map(usageLevel)).toEqual([
+      'never',
+      'rare',
+      'rare',
+      'sometimes',
+      'sometimes',
+      'lot',
+    ])
+  })
+
+  it('invites the first run instead of showing empty figures', () => {
+    expect(
+      skillValue(
+        skill({
+          origin: 'history',
+          ultrafast: ultrafast({ status: 'none' }),
+        }),
+        [],
+        now,
+      ),
+    ).toMatchObject({ kind: 'invite', title: 'Run it once and neo learns it' })
+    expect(
+      skillValue(
+        skill({ ultrafast: ultrafast({ status: 'verified', p50Ms: 6000 }) }),
+        [agentRun],
+        now,
+      ),
+    ).toMatchObject({
+      kind: 'invite',
+      title: 'Ready when you are',
+      body: 'It takes about 6 sec a run, down from about 41 sec the normal way.',
+    })
+  })
+
+  it('shows speed beside the runs only when runs go the fast way', () => {
+    const fast = skill({
+      runCount: 2,
+      lastRunAt: now,
+      ultrafast: ultrafast({ status: 'verified', p50Ms: 1800 }),
+    })
+    expect(skillValue(fast, [agentRun], now)).toEqual({
+      kind: 'tiles',
+      tiles: [
+        {
+          value: '1.8',
+          unit: 's',
+          label: 'a run, down from about 41 sec',
+          fast: true,
+        },
+        { value: '2', unit: 'runs', label: 'last used today', fast: false },
+      ],
+    })
+    expect(
+      skillValue(
+        skill({
+          runCount: 5,
+          lastRunAt: now,
+          ultrafast: ultrafast({ status: 'degraded', p50Ms: 1800 }),
+        }),
+        [],
+        now,
+      ),
+    ).toEqual({
+      kind: 'tiles',
+      tiles: [
+        { value: '5', unit: 'runs', label: 'last used today', fast: false },
+      ],
+    })
   })
 })

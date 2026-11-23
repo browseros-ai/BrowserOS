@@ -547,3 +547,109 @@ export function matchesQuery(
     field.toLowerCase().includes(words),
   )
 }
+
+/** How much a skill is used: the skill page's value row changes shape with it. */
+export type UsageLevel = 'never' | 'rare' | 'sometimes' | 'lot'
+
+export function usageLevel(runCount: number): UsageLevel {
+  if (runCount <= 0) return 'never'
+  if (runCount < 3) return 'rare'
+  if (runCount < 10) return 'sometimes'
+  return 'lot'
+}
+
+/** One figure on the skill page's value row. */
+export interface ValueTile {
+  value: string
+  unit?: string
+  label: string
+  /** Speed tiles read in the ultrafast blue. */
+  fast: boolean
+}
+
+/** What the skill page says above its stats: tiles once it has run, an invite before. */
+export type SkillValue =
+  | { kind: 'invite'; title: string; body: string; fast: boolean }
+  | { kind: 'tiles'; tiles: ValueTile[] }
+
+/**
+ * What a skill has done for this person, by how much it is used. Speed shows only when its runs
+ * really go the fast way (verified, and read-only or chosen to run without the agent), since a
+ * skill that runs with the agent takes the agent's own time.
+ */
+export function skillValue(
+  skill: Skill,
+  runs: Pick<SkillRun, 'mode' | 'durationMs'>[],
+  now: number,
+): SkillValue {
+  const p50Ms = skill.ultrafast?.p50Ms
+  const fast =
+    skill.ultrafast?.status === 'verified' && runsByItself(skill) && p50Ms
+      ? p50Ms
+      : null
+  const normal = normalRunLabel(runs)
+  const level = usageLevel(skill.runCount)
+  if (level === 'never') {
+    if (fast) {
+      return {
+        kind: 'invite',
+        fast: true,
+        title: 'Ready when you are',
+        body: normal
+          ? `It takes ${durationLabel(fast)} a run, down from ${normal} the normal way.`
+          : `It takes ${durationLabel(fast)} a run.`,
+      }
+    }
+    if (awaitsFirstRun(skill)) {
+      return {
+        kind: 'invite',
+        fast: false,
+        title: 'Run it once and neo learns it',
+        body: 'Your agent does it the normal way the first time. Next time it takes seconds.',
+      }
+    }
+    if (skill.ultrafast?.status === 'pending' && !skill.ultrafast.locked) {
+      return {
+        kind: 'invite',
+        fast: false,
+        title: 'Almost ready',
+        body: 'Your agent is turning this skill into a fast version.',
+      }
+    }
+    return {
+      kind: 'invite',
+      fast: false,
+      title: 'Try it the first time',
+      body: 'Copy it, paste it into your agent, and it does the task for you.',
+    }
+  }
+  const lastUsed =
+    skill.lastRunAt === undefined ? null : lastUsedLabel(skill.lastRunAt, now)
+  const tiles: ValueTile[] = []
+  if (fast) {
+    tiles.push({
+      value: `${Math.max(0.1, Math.round(fast / 100) / 10)}`,
+      unit: 's',
+      label: normal ? `a run, down from ${normal}` : 'a run',
+      fast: true,
+    })
+  }
+  const runsUnit = skill.runCount === 1 ? 'run' : 'runs'
+  if (fast && level !== 'rare' && lastUsed) {
+    tiles.push({
+      value: String(skill.runCount),
+      unit: runsUnit,
+      label: 'so far',
+      fast: false,
+    })
+    tiles.push({ value: lastUsed, label: 'last used', fast: false })
+  } else {
+    tiles.push({
+      value: String(skill.runCount),
+      unit: runsUnit,
+      label: lastUsed ? `last used ${lastUsed}` : 'so far',
+      fast: false,
+    })
+  }
+  return { kind: 'tiles', tiles }
+}
