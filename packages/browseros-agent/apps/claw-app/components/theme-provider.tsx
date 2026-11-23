@@ -48,10 +48,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Ask the browser what its own chrome is set to. getPref is callback-
   // based, so the answer lands after first paint; caching it means the
   // next paint starts from the right class instead of guessing off the
-  // OS. There is no pref-change event, so re-read whenever the tab comes
-  // back into view — flipping Appearance in chrome://settings and
-  // returning to an open cockpit is exactly how someone tries gray mode.
+  // OS. There is no pref-change event. Re-read while the stored theme is
+  // system: on mount, when Match browser is selected, and when this tab
+  // becomes visible. Appearance can change without a visibility event,
+  // and a stale cache would keep system mode on the old scheme.
   useEffect(() => {
+    if (theme !== 'system') return
+
     let cancelled = false
 
     const sync = () => {
@@ -71,7 +74,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       cancelled = true
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [])
+  }, [theme])
 
   const resolved = resolveTheme(theme, browserScheme)
 
