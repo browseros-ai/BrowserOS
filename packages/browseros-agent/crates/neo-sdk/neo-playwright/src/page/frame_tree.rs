@@ -17,7 +17,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
-use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId};
+use browseros_core::{
+    BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId, TargetId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::time;
@@ -302,9 +304,9 @@ pub(crate) async fn frames(
             .synchronize_events(fence, &EventScope::Tabs(vec![target.clone()]))
             .await;
         let list = pw.event_hub().tab_frames(&target);
-        let answer = answer(scope, list);
+        let (answer, own_tree) = answer(scope, &target, list);
         if answer.incomplete.is_some() || answer.frames.is_none() {
-            pw.reseed_frames(target);
+            pw.reseed_frames(target, own_tree);
         }
         Ok::<_, PlaywrightError>(answer)
     };
@@ -314,16 +316,17 @@ pub(crate) async fn frames(
     }
 }
 
-/// `page.frames()`'s answer from the tab's list. Neither a list that is not whole nor a missing
-/// one is silent: the op's record is marked (`OpScope::frames_incomplete`), its note says why for
-/// the server's warn line, and the prelude reads the frames again before the script's next
-/// operation resolves, by which time the watcher may have read what the list lacked.
-fn answer(scope: &OpScope<'_>, list: Option<TabFrameList>) -> PageFrames {
-    let Some(list) = list.filter(|list| {
-        list.frames
-            .first()
-            .is_some_and(|main| main.parent_id.is_none())
-    }) else {
+/// `page.frames()`'s answer from `tab`'s list, and whether the tab's own tree should be read
+/// again even if the list's seeds all landed: it has no main frame, or a frame whose parent it
+/// does not know. Neither a list that is not whole nor a missing one is silent: the op's record is
+/// marked (`OpScope::frames_incomplete`), its note says why for the server's warn line, and the
+/// prelude reads the frames again before the script's next operation resolves, by which time the
+/// watcher may have read what the list lacked. The main frame is the one whose id is the tab's
+/// target id: a frame whose commit carried no parent and whose attach the list never saw also
+/// has none, and must not reach the prelude as the main frame.
+fn answer(scope: &OpScope<'_>, tab: &TargetId, list: Option<TabFrameList>) -> (PageFrames, bool) {
+    let Some(list) = list.filter(|list| list.frames.first().is_some_and(|main| main.id.0 == tab.0))
+    else {
         scope.frames_incomplete();
         // Debug notes, never stored in the run's record (the mark above is); neo-server logs those
         // starting `frame tree` at warn (operation_guard).
@@ -332,10 +335,11 @@ fn answer(scope: &OpScope<'_>, list: Option<TabFrameList>) -> PageFrames {
              frames stay as they were"
                 .to_owned(),
         );
-        return PageFrames {
+        let answer = PageFrames {
             frames: None,
             incomplete: None,
         };
+        return (answer, true);
     };
     let (frames, orphans) = parents_first(list.frames);
     let incomplete = !list.whole || orphans > 0;
@@ -347,10 +351,11 @@ fn answer(scope: &OpScope<'_>, list: Option<TabFrameList>) -> PageFrames {
              them again"
         ));
     }
-    PageFrames {
+    let answer = PageFrames {
         incomplete: incomplete.then_some(true),
         frames: Some(frames),
-    }
+    };
+    (answer, orphans > 0)
 }
 
 /// The list's frames as the prelude reads them: the main frame first, each parent before its
@@ -656,7 +661,7 @@ pub(crate) fn sample_tree() -> Result<FrameTree, serde_json::Error> {
 mod tests {
     use std::error::Error;
 
-    use browseros_core::{FrameId, SessionId, TabId};
+    use browseros_core::{FrameId, SessionId, TabId, TargetId};
     use serde::Serialize;
     use serde_json::json;
 
@@ -719,12 +724,22 @@ mod tests {
     #[tokio::test]
     async fn tests_that_only_a_short_or_missing_list_marks_the_operation()
     -> Result<(), Box<dyn Error>> {
+        // Whether the op was marked, its answer, and whether it asks for the tab's own tree again.
+        let asked =
+            |list: Option<TabFrameList>| -> Result<(bool, PageFrames, bool), Box<dyn Error>> {
+                let env = TestEnv::new();
+                let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
+                let scope = OpScope::new(&env, op, CallHeader::default());
+                let (answer, own_tree) = answer(&scope, &TargetId("main".to_owned()), list);
+                Ok((
+                    env.calls().contains(&EnvCall::FramesIncomplete),
+                    answer,
+                    own_tree,
+                ))
+            };
         let marked = |list: Option<TabFrameList>| -> Result<(bool, PageFrames), Box<dyn Error>> {
-            let env = TestEnv::new();
-            let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
-            let scope = OpScope::new(&env, op, CallHeader::default());
-            let answer = answer(&scope, list);
-            Ok((env.calls().contains(&EnvCall::FramesIncomplete), answer))
+            let (flag, answer, _own_tree) = asked(list)?;
+            Ok((flag, answer))
         };
         let frame = |id: &str, parent: Option<&str>| ListedFrame {
             id: FrameId(id.to_owned()),
@@ -764,17 +779,28 @@ mod tests {
         assert!(flag, "a list that is not whole");
         assert_eq!(short.incomplete, Some(true));
         assert_eq!(ids(&short).len(), 3, "its frames are real and go with it");
+        let (_, _, own_tree) = asked(Some(list(false, nested.clone())))?;
+        assert!(!own_tree, "a list short of a seed asks for that seed alone");
         let mut orphaned = nested;
         orphaned.push(frame("orphan", None));
-        let (flag, orphan) = marked(Some(list(true, orphaned)))?;
+        let (flag, orphan, own_tree) = asked(Some(list(true, orphaned)))?;
         assert!(flag, "a frame whose parent the list does not know");
         assert!(!ids(&orphan).contains(&"orphan".to_owned()));
+        assert!(own_tree, "an orphan has the tab's own tree read again");
         let (flag, none) = marked(None)?;
         assert!(flag, "no list");
         assert!(none.frames.is_none());
         let (flag, mainless) = marked(Some(list(true, vec![frame("child", Some("main"))])))?;
         assert!(flag, "a list with no main frame");
         assert!(mainless.frames.is_none());
+        // A frame whose commit carried no parent and whose attach the list never saw has none
+        // either: it is not the main frame, which is the one with the tab's own id.
+        let (flag, stray) = marked(Some(list(true, vec![frame("stray", None)])))?;
+        assert!(flag, "a list whose only parentless frame is not the tab's");
+        assert!(
+            stray.frames.is_none(),
+            "no stray frame goes as the main frame"
+        );
         Ok(())
     }
 

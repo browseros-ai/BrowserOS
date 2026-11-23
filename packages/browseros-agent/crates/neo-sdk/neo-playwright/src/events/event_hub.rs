@@ -783,6 +783,11 @@ impl EventHub {
         self.lock_log().frames.main(tab)
     }
 
+    /// `tab`'s frame-tree version, `0` while no writer moved it.
+    pub(crate) fn frame_version(&self, tab: &TargetId) -> u64 {
+        self.lock_log().frames.version(tab)
+    }
+
     /// The reads `tab`'s list lacks before it is whole ([`TabFrames::missing_seeds`]).
     pub(crate) fn missing_seeds(&self, tab: &TargetId) -> Option<MissingSeeds> {
         self.lock_log().frames.missing_seeds(tab)

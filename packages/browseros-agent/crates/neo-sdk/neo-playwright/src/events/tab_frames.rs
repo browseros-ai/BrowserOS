@@ -335,6 +335,11 @@ impl TabFrames {
         self.versions.insert(tab, self.last_version);
     }
 
+    /// `tab`'s version, `0` while no writer moved it.
+    pub(crate) fn version(&self, tab: &TargetId) -> u64 {
+        self.versions.get(tab).copied().unwrap_or(0)
+    }
+
     /// Records `tab`'s tab id, which the per-tab versions are keyed by on the wire.
     pub(crate) fn tab_id(&mut self, tab: TargetId, id: TabId) {
         self.tab_ids.insert(tab, id);

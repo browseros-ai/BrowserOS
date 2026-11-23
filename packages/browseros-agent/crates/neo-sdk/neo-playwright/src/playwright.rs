@@ -186,9 +186,10 @@ impl Playwright {
     }
 
     /// Asks the watcher to read again each session of `target`'s tab whose tree has not landed,
-    /// without waiting for it (`TargetWatcher::reseed`).
-    pub(crate) fn reseed_frames(&self, target: TargetId) {
-        self.watcher.reseed(target);
+    /// and the tab's own tree whatever landed when `own_tree`, without waiting for it
+    /// (`TargetWatcher::reseed`).
+    pub(crate) fn reseed_frames(&self, target: TargetId, own_tree: bool) {
+        self.watcher.reseed(target, own_tree);
     }
 
     /// The host stopped keeping `target`'s tab for itself (`OpEnv::hides_tab` reads false
@@ -567,8 +568,9 @@ mod tests {
                 .synchronize_events(playwright.event_fence(), &EventScope::Every)
                 .await
         );
-        // Past the watcher's retries of the failed seed (two, a tick apart).
-        time::sleep(Duration::from_secs(1)).await;
+        // Past the watcher's retries of the failed seed (two, a tick apart) and the reseed's
+        // backoff after the last of them.
+        time::sleep(Duration::from_secs(2)).await;
         let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
         let frames = || playwright.invoke(&run.env, op, json!({ "call": {}, "page": run.page }));
         let whole =
@@ -667,13 +669,14 @@ mod tests {
                 .synchronize_events(playwright.event_fence(), &EventScope::Every)
                 .await
         );
-        // Past the watcher's retries of the failed seed (two, a tick apart).
-        time::sleep(Duration::from_secs(1)).await;
+        // Past the watcher's retries of the failed seed (two, a tick apart) and the reseed's
+        // backoff after the last of them.
+        time::sleep(Duration::from_secs(2)).await;
         let target = TargetId(SCRIPTED_MAIN.to_owned());
         tab.script().failing.store(false, Ordering::SeqCst);
         tab.script().slow.store(true, Ordering::SeqCst);
         // A read of the tab goes out and holds its line for 300 ms.
-        playwright.reseed_frames(target.clone());
+        playwright.reseed_frames(target.clone(), false);
         time::sleep(Duration::from_millis(20)).await;
         let late = json!({ "frameId": "late", "parentFrameId": SCRIPTED_MAIN });
         let session = tab.session_for(SCRIPTED_MAIN);
