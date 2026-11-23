@@ -1,4 +1,4 @@
-//! The live pipeline through the public facade only: each metric's Prometheus text after its facade calls, closed label sets, in-flight across every way a run ends, the open-tabs gauge, both spans, the privacy dial and the shutdown.
+//! The live pipeline through the public facade only: each metric's Prometheus text after its facade calls, closed label sets, in-flight across every way a run ends, the open-tabs gauge, navigations and CAPTCHA solves, both spans, the privacy dial and the shutdown.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 use std::{fmt, thread};
 
 use neo_telemetry::label::{
-    CloseReason, Delivery, ErrorCode, ErrorLabel, ErrorOwner, OpOutcome, RunStatus, TabOrigin,
+    CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, CloseReason, Delivery,
+    ErrorCode, ErrorLabel, ErrorOwner, HttpStatus, NetError, OpOutcome, RunStatus, TabOrigin,
 };
 use neo_telemetry::{
-    CapturedKind, CapturedSpan, OpCounting, OpSettled, OpSite, OpenTabCounts, Probe, RunFacts,
-    RunVerdict, SiteDetail, SpanStatus, SpanValue, Telemetry, TelemetryConfig, TraceContext,
-    Vocabulary,
+    CaptchaSolve, CaptchaSpend, CapturedKind, CapturedSpan, Navigated, OpCounting, OpSettled,
+    OpSite, OpenTabCounts, Probe, RunFacts, RunTelemetry, RunVerdict, SiteDetail, SpanStatus,
+    SpanValue, Telemetry, TelemetryConfig, TraceContext, Vocabulary,
 };
 
 /// The server's tables, as a test binds them.
@@ -298,7 +299,7 @@ struct Expected {
 }
 
 /// What `every_metric_reports_its_facade_calls` expects after its calls.
-const EXPECTED: [Expected; 19] = [
+const EXPECTED: [Expected; 26] = [
     Expected {
         series: "neo_runs_total",
         labels: &[("status", "error"), ("error_owner", "website")],
@@ -405,7 +406,75 @@ const EXPECTED: [Expected; 19] = [
         labels: &[],
         value: "1",
     },
+    Expected {
+        series: "neo_navigations_total",
+        labels: &[("status_code", "200")],
+        value: "1",
+    },
+    Expected {
+        series: "neo_navigations_total",
+        labels: &[("status_code", "404")],
+        value: "2",
+    },
+    Expected {
+        series: "neo_navigations_total",
+        labels: &[],
+        value: "2",
+    },
+    Expected {
+        series: "neo_navigation_errors_total",
+        labels: &[("error_code", "name_not_resolved")],
+        value: "1",
+    },
+    Expected {
+        series: "neo_captcha_solves_total",
+        labels: &[("family", "perimeterx"), ("verdict", "unsupported")],
+        value: "1",
+    },
+    Expected {
+        series: "neo_captcha_reasons_total",
+        labels: &[("reason", "unsupported_type")],
+        value: "1",
+    },
+    Expected {
+        series: "neo_captcha_spend_usd_total",
+        labels: &[("provider", "capsolver")],
+        value: "0.0035",
+    },
 ];
+
+/// The navigations and solves `every_metric_reports_its_facade_calls` records: a 200, two 404s,
+/// one without a status and one the network refused; a free `PerimeterX` refusal and two paid
+/// reCAPTCHA solves.
+fn navigate_and_solve(ops: &RunTelemetry) {
+    for status in [Some(200), Some(404), Some(404), None] {
+        ops.navigated(Navigated {
+            status: status.and_then(HttpStatus::new),
+            error: None,
+        });
+    }
+    ops.navigated(Navigated {
+        status: None,
+        error: Some(NetError::of_chromium("net::ERR_NAME_NOT_RESOLVED")),
+    });
+    ops.captcha_solved(CaptchaSolve {
+        family: CaptchaFamily::Perimeterx,
+        verdict: CaptchaVerdict::Unsupported,
+        reason: CaptchaReason::UnsupportedType,
+        spend: None,
+    });
+    for usd in [0.002, 0.0015] {
+        ops.captcha_solved(CaptchaSolve {
+            family: CaptchaFamily::RecaptchaV2,
+            verdict: CaptchaVerdict::Solved,
+            reason: CaptchaReason::TokenAccepted,
+            spend: Some(CaptchaSpend {
+                provider: CaptchaProvider::Capsolver,
+                usd,
+            }),
+        });
+    }
+}
 
 #[test]
 fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
@@ -438,7 +507,7 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
         found: 1,
         neo: 1,
     }));
-
+    navigate_and_solve(&open.ops());
     let metrics = scrape(&telemetry)?;
     let types: Vec<(&str, &str)> = metrics
         .types
@@ -448,7 +517,12 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         types,
         vec![
+            ("neo_captcha_reasons_total", "counter"),
+            ("neo_captcha_solves_total", "counter"),
+            ("neo_captcha_spend_usd_total", "counter"),
             ("neo_errors_total", "counter"),
+            ("neo_navigation_errors_total", "counter"),
+            ("neo_navigations_total", "counter"),
             ("neo_operation_duration_seconds", "histogram"),
             ("neo_operations_total", "counter"),
             ("neo_renderer_crashes_total", "counter"),
@@ -460,7 +534,7 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
             ("neo_tabs_open", "gauge"),
             ("neo_tabs_opened_total", "counter"),
         ],
-        "all 11 families, each with the type wire-contract.md gives it"
+        "all 16 families, each with the type wire-contract.md gives it"
     );
     for Expected {
         series,
@@ -483,6 +557,16 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
         metrics.named("neo_runs_total").len(),
         2,
         "the open run is not counted until it ends"
+    );
+    assert_eq!(
+        metrics.named("neo_navigation_errors_total").len(),
+        1,
+        "a navigation that arrived, whatever its status, is no network error"
+    );
+    assert_eq!(
+        metrics.named("neo_captcha_spend_usd_total").len(),
+        1,
+        "a free solve books no spend"
     );
     open.finish(OK);
     Ok(())
@@ -565,9 +649,65 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
     Ok(())
 }
 
-/// Drives every run, op, refusal and tab hook with every closed value, and with caller text
-/// everywhere a caller can put text: invented op names and codes, run and task ids, raw names
-/// with quotes, URLs with credentials. Ops of internal runs and of counted ones alike.
+/// The navigation and CAPTCHA half of [`drive_every_hook_with_hostile_text`]: every status
+/// from 0 to 1000, net error texts a page could word, every closed value, and costs no provider
+/// could charge.
+fn navigate_and_solve_hostile(telemetry: &Telemetry) {
+    let navigations = telemetry.internal_run();
+    let ops = navigations.ops();
+    for code in 0..=1000 {
+        ops.navigated(Navigated {
+            status: HttpStatus::new(code),
+            error: None,
+        });
+    }
+    for text in [
+        "net::ERR_NAME_NOT_RESOLVED",
+        "net::ERR_SECRET_INVENTED",
+        "net::err_connection_refused",
+        "ERR_TIMED_OUT",
+        "net::ERR_\" injected=\"1",
+        "",
+    ] {
+        ops.navigated(Navigated {
+            status: None,
+            error: Some(NetError::of_chromium(text)),
+        });
+    }
+    for error in NetError::ALL {
+        ops.navigated(Navigated {
+            status: None,
+            error: Some(error),
+        });
+    }
+    let providers = [
+        CaptchaProvider::Capsolver,
+        CaptchaProvider::TwoCaptcha,
+        CaptchaProvider::Unknown,
+    ];
+    let costs = [0.001, 0.0, -1.0, f64::NAN, f64::INFINITY];
+    for (((family, verdict), reason), (provider, usd)) in CaptchaFamily::ALL
+        .into_iter()
+        .cycle()
+        .zip(CaptchaVerdict::ALL.into_iter().cycle())
+        .zip(CaptchaReason::ALL.into_iter().cycle())
+        .zip(providers.into_iter().cycle().zip(costs.into_iter().cycle()))
+        .take(11 * 7 * 22)
+    {
+        ops.captcha_solved(CaptchaSolve {
+            family,
+            verdict,
+            reason,
+            spend: Some(CaptchaSpend { provider, usd }),
+        });
+    }
+    navigations.finish(OK);
+}
+
+/// Drives every run, op, refusal, tab, navigation and CAPTCHA hook with every closed value, and
+/// with caller text everywhere a caller can put text: invented op names and codes, run and task
+/// ids, raw names with quotes, URLs with credentials, net error texts a page could word, every
+/// status a server could send. Ops of internal runs and of counted ones alike.
 fn drive_every_hook_with_hostile_text(telemetry: &Telemetry) {
     let owners = [
         ErrorOwner::Website,
@@ -620,6 +760,7 @@ fn drive_every_hook_with_hostile_text(telemetry: &Telemetry) {
         });
         telemetry.run_refused(error);
     }
+    navigate_and_solve_hostile(telemetry);
     for origin in [TabOrigin::Agent, TabOrigin::Found, TabOrigin::Neo] {
         telemetry.tab_opened(origin);
         for reason in [
@@ -638,7 +779,13 @@ fn drive_every_hook_with_hostile_text(telemetry: &Telemetry) {
 /// the contract's closed set for that label.
 fn label_violations(metrics: &Exposition) -> Vec<String> {
     let ops: Vec<&str> = OPS.iter().copied().chain(["unknown"]).collect();
-    let codes: Vec<&str> = CODES.iter().copied().chain(["unknown"]).collect();
+    let codes: Vec<&str> = CODES
+        .iter()
+        .copied()
+        .chain(["unknown"])
+        .chain(NetError::ALL.map(NetError::as_str))
+        .collect();
+    let statuses: Vec<String> = (100..=599).map(|code: u16| code.to_string()).collect();
     let allowed: BTreeMap<&str, Vec<&str>> = BTreeMap::from([
         ("status", vec!["ok", "error", "cancelled", "timeout"]),
         (
@@ -652,6 +799,20 @@ fn label_violations(metrics: &Exposition) -> Vec<String> {
             "close_reason",
             vec!["script", "janitor", "user", "crash", "shutdown"],
         ),
+        ("status_code", statuses.iter().map(String::as_str).collect()),
+        (
+            "family",
+            CaptchaFamily::ALL.map(CaptchaFamily::as_str).to_vec(),
+        ),
+        (
+            "verdict",
+            CaptchaVerdict::ALL.map(CaptchaVerdict::as_str).to_vec(),
+        ),
+        (
+            "reason",
+            CaptchaReason::ALL.map(CaptchaReason::as_str).to_vec(),
+        ),
+        ("provider", vec!["capsolver", "2captcha", "unknown"]),
     ]);
     let keys: BTreeMap<&str, Vec<&str>> = BTreeMap::from([
         ("neo_runs_total", vec!["error_owner", "status"]),
@@ -665,7 +826,14 @@ fn label_violations(metrics: &Exposition) -> Vec<String> {
         ("neo_tabs_closed_total", vec!["close_reason", "origin"]),
         ("neo_tab_lifetime_seconds", vec!["close_reason", "origin"]),
         ("neo_renderer_crashes_total", vec![]),
+        ("neo_navigations_total", vec!["status_code"]),
+        ("neo_navigation_errors_total", vec!["error_code"]),
+        ("neo_captcha_solves_total", vec!["family", "verdict"]),
+        ("neo_captcha_reasons_total", vec!["reason"]),
+        ("neo_captcha_spend_usd_total", vec!["provider"]),
     ]);
+    // A navigation whose document had no HTTP status is counted without `status_code`.
+    let optional = BTreeSet::from(["neo_navigations_total"]);
     let mut violations = Vec::new();
     for sample in &metrics.samples {
         let family = family_of(&sample.name, &metrics.types).unwrap_or_default();
@@ -676,7 +844,8 @@ fn label_violations(metrics: &Exposition) -> Vec<String> {
             .map(String::as_str)
             .filter(|key| !(bucket && *key == "le"))
             .collect();
-        if keys.get(family) != Some(&names) {
+        let unlabelled = names.is_empty() && optional.contains(family);
+        if keys.get(family) != Some(&names) && !unlabelled {
             violations.push(format!("{}: label names {names:?}", sample.name));
         }
         for (key, value) in &sample.labels {
@@ -697,7 +866,7 @@ fn no_label_outside_the_closed_sets_reaches_the_exposition() -> Result<(), Box<d
     let (telemetry, _probe) = live(SiteDetail::Url);
     drive_every_hook_with_hostile_text(&telemetry);
     let exposition = telemetry.render_prometheus();
-    for secret in ["secret", "token", "injected", "invented", "pw@", "frag"] {
+    for secret in ["secret", "token=", "injected", "invented", "pw@", "frag"] {
         assert!(
             !exposition.contains(secret),
             "`{secret}` came from a caller and must never reach a metric"
@@ -718,13 +887,64 @@ fn no_label_outside_the_closed_sets_reaches_the_exposition() -> Result<(), Box<d
         metrics.named("neo_errors_total").len() <= 4 * (CODES.len() + 1),
         "error series stay within owners x (codes + unknown)"
     );
+    for (family, bound) in [
+        ("neo_navigations_total", 500 + 1),
+        ("neo_navigation_errors_total", NetError::ALL.len()),
+        ("neo_captcha_solves_total", 11 * 7),
+        ("neo_captcha_reasons_total", 22),
+        ("neo_captcha_spend_usd_total", 3),
+    ] {
+        let series = metrics.named(family).len();
+        assert!(
+            series <= bound,
+            "{family}: {series} series, past its bound of {bound}"
+        );
+    }
+    assert_eq!(
+        metrics.named("neo_navigations_total").len(),
+        501,
+        "every status from 100 to 599 has its series and every other value none"
+    );
+    assert_eq!(
+        metrics.value("neo_navigations_total", &[]),
+        Some("528"),
+        "0 to 99 and 600 to 1000, and the 27 network failures, carry no status"
+    );
+    assert_eq!(
+        metrics.value("neo_navigation_errors_total", &[("error_code", "_OTHER")]),
+        Some("6"),
+        "five texts no listed error matches whole, and the listed `_OTHER` itself"
+    );
+    let spent: Vec<(&str, &str)> = metrics
+        .named("neo_captcha_spend_usd_total")
+        .iter()
+        .map(|sample| {
+            (
+                sample.labels.get("provider").map_or("", String::as_str),
+                sample.value.as_str(),
+            )
+        })
+        .collect();
+    assert!(
+        spent.iter().all(|(_, value)| value
+            .parse::<f64>()
+            .is_ok_and(|usd| usd.is_finite() && usd > 0.0)),
+        "only a finite cost above 0 adds to the spend: {spent:?}"
+    );
     Ok(())
 }
 
 /// Every sample line's name and label names the scrape served before the push door took
-/// OpenTelemetry's names, after every hook ran: the scrape must keep them exactly.
-const SCRAPE_SHAPES: [(&str, &[&str]); 17] = [
+/// OpenTelemetry's names, after every hook ran: the scrape must keep them exactly. The
+/// navigation and CAPTCHA families follow the same rule from their first release.
+const SCRAPE_SHAPES: [(&str, &[&str]); 23] = [
+    ("neo_captcha_reasons_total", &["reason"]),
+    ("neo_captcha_solves_total", &["family", "verdict"]),
+    ("neo_captcha_spend_usd_total", &["provider"]),
     ("neo_errors_total", &["error_code", "error_owner"]),
+    ("neo_navigation_errors_total", &["error_code"]),
+    ("neo_navigations_total", &[]),
+    ("neo_navigations_total", &["status_code"]),
     (
         "neo_operation_duration_seconds_bucket",
         &["le", "op", "status"],
@@ -786,7 +1006,12 @@ fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetr
     assert_eq!(
         metrics.help.iter().map(String::as_str).collect::<Vec<_>>(),
         vec![
+            "neo_captcha_reasons_total",
+            "neo_captcha_solves_total",
+            "neo_captcha_spend_usd_total",
             "neo_errors_total",
+            "neo_navigation_errors_total",
+            "neo_navigations_total",
             "neo_operation_duration_seconds",
             "neo_operations_total",
             "neo_renderer_crashes_total",
@@ -798,7 +1023,7 @@ fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetr
             "neo_tabs_open",
             "neo_tabs_opened_total",
         ],
-        "the 11 family names, in `# HELP` and `# TYPE` alike"
+        "the 16 family names, in `# HELP` and `# TYPE` alike"
     );
     assert!(
         metrics.types.keys().eq(metrics.help.iter()),
@@ -814,6 +1039,9 @@ fn the_scrape_keeps_its_prometheus_names_and_labels_while_otlp_uses_opentelemetr
         "neo.op.",
         "neo.error.owner",
         "error.type",
+        "neo.navigation",
+        "neo.captcha",
+        "http.response",
     ] {
         assert!(
             !text.contains(otel),

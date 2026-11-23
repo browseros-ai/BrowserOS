@@ -1,8 +1,8 @@
 //! Prometheus text exposition 0.0.4 from one collection of the pipeline's manual reader, for
 //! `GET /v1/metrics`.
 //!
-//! Our own renderer, not a third-party exporter: the subset is small (u64 counters, two i64
-//! up-down counters, f64 histograms; no units, scope labels or `target_info`), the
+//! Our own renderer, not a third-party exporter: the subset is small (u64 counters, one f64
+//! counter, two i64 up-down counters, f64 histograms; no units, scope labels or `target_info`), the
 //! catalog that built the instruments (`instruments::CATALOG`) supplies every `# HELP` / `# TYPE`
 //! line and the family order, and an OpenTelemetry bump never waits on another crate's release.
 //!
@@ -65,6 +65,10 @@ impl Prometheus {
             Some(AggregatedMetrics::I64(MetricData::Sum(sum))) => sum
                 .data_points()
                 .map(|point| sample(name, point.attributes(), point.value()))
+                .collect(),
+            Some(AggregatedMetrics::F64(MetricData::Sum(sum))) => sum
+                .data_points()
+                .map(|point| sample(name, point.attributes(), float(point.value())))
                 .collect(),
             Some(AggregatedMetrics::F64(MetricData::Histogram(histogram))) => histogram
                 .data_points()
@@ -221,10 +225,11 @@ mod tests {
     use super::*;
     use crate::instruments::{CodeLabel, Instruments, OpLabel, OpenTabs};
     use crate::label::{
-        CloseReason, ErrorCode, ErrorLabel, ErrorOwner, OpOutcome, RunStatus, TabOrigin,
+        CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, CloseReason, ErrorCode,
+        ErrorLabel, ErrorOwner, HttpStatus, NetError, OpOutcome, RunStatus, TabOrigin,
     };
     use crate::pipeline::ScrapeReader;
-    use crate::{OpenTabCounts, Vocabulary};
+    use crate::{CaptchaSolve, CaptchaSpend, Navigated, OpenTabCounts, Vocabulary};
 
     fn rendered(record: impl FnOnce(&Instruments, &OpenTabs)) -> Result<String, Box<dyn Error>> {
         let reader = ScrapeReader::new();
@@ -263,6 +268,8 @@ mod tests {
     }
 
     /// The exposition `renders_the_golden_exposition` records: one of each kind, in catalog order.
+    /// A navigation without a status is a series without `status_code`, and the f64 spend
+    /// counter renders as the shortest decimal that reads back.
     const GOLDEN: &str = "\
 # HELP neo_runs_total Runs that ended, and calls refused before they became a run, by status and by who must fix the failure.
 # TYPE neo_runs_total counter
@@ -344,6 +351,22 @@ neo_tab_lifetime_seconds_count{close_reason=\"script\",origin=\"agent\"} 1
 # HELP neo_renderer_crashes_total Renderer crashes, whether or not an op was using the tab.
 # TYPE neo_renderer_crashes_total counter
 neo_renderer_crashes_total 1
+# HELP neo_navigations_total Navigations sent to the browser that ended, by the HTTP status their document arrived with, when one was read.
+# TYPE neo_navigations_total counter
+neo_navigations_total 1
+neo_navigations_total{status_code=\"404\"} 1
+# HELP neo_navigation_errors_total Navigations that failed on the network, by the browser's net error.
+# TYPE neo_navigation_errors_total counter
+neo_navigation_errors_total{error_code=\"name_not_resolved\"} 1
+# HELP neo_captcha_solves_total CAPTCHA solves that returned an outcome, by the CAPTCHA found and how the solve ended.
+# TYPE neo_captcha_solves_total counter
+neo_captcha_solves_total{family=\"turnstile\",verdict=\"solved\"} 1
+# HELP neo_captcha_reasons_total CAPTCHA solves that returned an outcome, by why the solve ended as it did.
+# TYPE neo_captcha_reasons_total counter
+neo_captcha_reasons_total{reason=\"token_accepted\"} 1
+# HELP neo_captcha_spend_usd_total US dollars CAPTCHA providers charged, by the provider each solve booked it to.
+# TYPE neo_captcha_spend_usd_total counter
+neo_captcha_spend_usd_total{provider=\"2captcha\"} 0.003
 ";
 
     #[test]
@@ -373,6 +396,23 @@ neo_renderer_crashes_total 1
                 Duration::from_secs(45),
             );
             instruments.renderer_crashed();
+            instruments.navigated(Navigated {
+                status: HttpStatus::new(404),
+                error: None,
+            });
+            instruments.navigated(Navigated {
+                status: None,
+                error: Some(NetError::NameNotResolved),
+            });
+            instruments.captcha_solved(CaptchaSolve {
+                family: CaptchaFamily::Turnstile,
+                verdict: CaptchaVerdict::Solved,
+                reason: CaptchaReason::TokenAccepted,
+                spend: Some(CaptchaSpend {
+                    provider: CaptchaProvider::TwoCaptcha,
+                    usd: 0.003,
+                }),
+            });
             open_tabs.set(Arc::new(|| OpenTabCounts {
                 agent: 2,
                 found: 0,
@@ -446,6 +486,8 @@ neo_renderer_crashes_total 1
             ("neo.error.owner", "error_owner"),
             ("error.type", "error_code"),
             ("neo.op.name", "op"),
+            ("http.response.status_code", "status_code"),
+            ("neo.captcha.family", "family"),
         ] {
             assert_eq!(
                 label_name(key),

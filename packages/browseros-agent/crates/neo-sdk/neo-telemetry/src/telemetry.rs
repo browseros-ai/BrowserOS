@@ -202,8 +202,14 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use crate::label::{Delivery, ErrorCode, ErrorOwner, OpOutcome, RunStatus};
-    use crate::{OpCounting, OpSettled, OpSite, OpenTabCounts, RunVerdict, TraceContext};
+    use crate::label::{
+        CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, Delivery, ErrorCode,
+        ErrorOwner, HttpStatus, NetError, OpOutcome, RunStatus,
+    };
+    use crate::{
+        CaptchaSolve, CaptchaSpend, Navigated, OpCounting, OpSettled, OpSite, OpenTabCounts,
+        RunVerdict, TraceContext,
+    };
 
     const PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
@@ -222,6 +228,21 @@ mod tests {
     const OK_RUN: RunVerdict = RunVerdict {
         status: RunStatus::Ok,
         error: None,
+    };
+
+    const NAVIGATED: Navigated = Navigated {
+        status: HttpStatus::new(404),
+        error: Some(NetError::Other),
+    };
+
+    const SOLVED: CaptchaSolve = CaptchaSolve {
+        family: CaptchaFamily::Turnstile,
+        verdict: CaptchaVerdict::Solved,
+        reason: CaptchaReason::TokenAccepted,
+        spend: Some(CaptchaSpend {
+            provider: CaptchaProvider::TwoCaptcha,
+            usd: 0.002,
+        }),
     };
 
     fn settled<'a>(
@@ -270,6 +291,8 @@ mod tests {
             }),
             url: Some("https://user:pw@example.com/?q=secret"),
         });
+        run.ops().navigated(NAVIGATED);
+        run.ops().captcha_solved(SOLVED);
         run.finish(OK_RUN);
         drop(telemetry.start_run(run_facts(&"run-2")));
         let internal = telemetry.internal_run();
@@ -323,6 +346,8 @@ mod tests {
         );
         run.ops()
             .op_settled(settled("page.goto", &"run-1.1", Instant::now()));
+        run.ops().navigated(NAVIGATED);
+        run.ops().captcha_solved(SOLVED);
         run.finish(OK_RUN);
         drop(telemetry.start_run(run_facts(&"run-2")));
         telemetry.tab_opened(TabOrigin::Agent);

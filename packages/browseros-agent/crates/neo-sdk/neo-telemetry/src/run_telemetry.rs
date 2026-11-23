@@ -1,9 +1,9 @@
 //! A run as its ops see it: where every op of the run reports its settlement.
 
-use crate::OpSettled;
 use crate::backend::Backend;
 #[cfg(feature = "otel")]
 use crate::pipeline::PipelineParent;
+use crate::{CaptchaSolve, Navigated, OpSettled};
 
 /// A run as its ops see it: the handle it records through and, for a counted run, the run's
 /// span context and shared per-run state, so each op's span is a child of the run's
@@ -63,6 +63,43 @@ impl RunTelemetry {
                 };
                 pipeline.op_settled(parent, &op);
             }
+        }
+    }
+
+    /// Records one navigation the browser was sent and that ended on its own:
+    /// `neo_navigations_total` and, when the network refused it, `neo_navigation_errors_total`.
+    /// The op that ran it settles as usual; this adds what its outcome cannot say, such as the
+    /// 404 of a goto that settled `ok`. Recorded for an internal run's ops too.
+    #[cfg_attr(
+        not(feature = "otel"),
+        expect(
+            unused_variables,
+            reason = "without `otel` every navigation records into the no-op"
+        )
+    )]
+    pub fn navigated(&self, navigation: Navigated) {
+        match &self.backend {
+            Backend::Noop => {}
+            #[cfg(feature = "otel")]
+            Backend::Otel(pipeline) => pipeline.navigated(navigation),
+        }
+    }
+
+    /// Records one CAPTCHA solve that returned an outcome: `neo_captcha_solves_total`,
+    /// `neo_captcha_reasons_total` and its cost in `neo_captcha_spend_usd_total`. Recorded for
+    /// an internal run's ops too.
+    #[cfg_attr(
+        not(feature = "otel"),
+        expect(
+            unused_variables,
+            reason = "without `otel` every solve records into the no-op"
+        )
+    )]
+    pub fn captcha_solved(&self, solve: CaptchaSolve) {
+        match &self.backend {
+            Backend::Noop => {}
+            #[cfg(feature = "otel")]
+            Backend::Otel(pipeline) => pipeline.captcha_solved(solve),
         }
     }
 

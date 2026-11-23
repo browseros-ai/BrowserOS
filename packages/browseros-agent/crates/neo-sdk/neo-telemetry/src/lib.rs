@@ -26,6 +26,7 @@
 //! grow a series set.
 
 mod backend;
+mod captcha_solve;
 #[cfg_attr(
     not(feature = "otel"),
     expect(dead_code, reason = "without `otel` only the validation half is read")
@@ -34,6 +35,7 @@ mod config;
 #[cfg(feature = "otel")]
 mod instruments;
 pub mod label;
+mod navigated;
 mod op_settled;
 mod open_tab_counts;
 #[cfg(feature = "otel")]
@@ -60,7 +62,9 @@ mod trace_context;
 mod transport;
 mod vocabulary;
 
+pub use captcha_solve::{CaptchaSolve, CaptchaSpend};
 pub use config::OtlpConfig;
+pub use navigated::Navigated;
 pub use op_settled::{OpCounting, OpSettled, OpSite};
 pub use open_tab_counts::{OpenTabCounts, OpenTabsSource};
 pub use otlp_protocol::OtlpProtocol;

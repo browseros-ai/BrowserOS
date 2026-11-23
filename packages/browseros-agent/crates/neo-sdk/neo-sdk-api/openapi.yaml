@@ -1281,25 +1281,51 @@ paths:
         (`op`, `status`, `error_owner`), `neo_operation_duration_seconds` (`op`, `status`),
         `neo_errors_total` (`error_owner`, `error_code`), `neo_tabs_open` (`origin`),
         `neo_tabs_opened_total` (`origin`), `neo_tabs_closed_total` (`origin`, `close_reason`),
-        `neo_tab_lifetime_seconds` (`origin`, `close_reason`) and `neo_renderer_crashes_total`.
-        Every one has its `# HELP` and `# TYPE` lines from the first scrape, in this order, even
-        before it has a sample, so the body is never empty: `neo_runs_in_flight` and
-        `neo_renderer_crashes_total` start at `0`, `neo_tabs_open` has a series for each
-        `origin`, and any other family gains a series the first time Neo records its label set.
-        The operation families count the script's operations and the ones Neo runs for it, such
-        as opening a run's default page. Neo's own housekeeping, sent with no call site (its
-        frame-tree reads, its event pump and listener bookkeeping), grows with open tabs rather
-        than with the script's work, so it is in none of `neo_operations_total`,
-        `neo_operation_duration_seconds` and `neo_errors_total`: its operations appear in the
-        run's trace alone, and a run that fails on one counts that failure once, as the run's.
-        Durations are in seconds. Every label value comes from a closed set: `status` is how a
-        run ended (`Run.status`: `ok`, `error`, `cancelled` or `timeout`) or how an operation
-        did (`Operation.outcome`), `error_owner` an `OperationError.owner` or `none`,
-        `error_code` an `OperationError.code`, `op` a method Neo serves or `unknown`, `origin`
-        `agent`, `found` or `neo`, and `close_reason` `script`, `janitor`, `user`, `crash` or
-        `shutdown`. No URL, title, tab, run or task id is ever a label. Neo chooses the bucket
-        boundaries: read them from the data. Parse the text with a parser that also accepts
-        OpenMetrics extras (`# EOF`, `# UNIT`, exemplars).
+        `neo_tab_lifetime_seconds` (`origin`, `close_reason`), `neo_renderer_crashes_total`,
+        `neo_navigations_total` (`status_code`), `neo_navigation_errors_total` (`error_code`),
+        `neo_captcha_solves_total` (`family`, `verdict`), `neo_captcha_reasons_total` (`reason`)
+        and `neo_captcha_spend_usd_total` (`provider`). Every one has its `# HELP` and `# TYPE`
+        lines from the first scrape, in this order, even before it has a sample, so the body is
+        never empty: `neo_runs_in_flight` and `neo_renderer_crashes_total` start at `0`,
+        `neo_tabs_open` has a series for each `origin`, and any other family gains a series the
+        first time Neo records its label set. The operation families count the script's
+        operations and the ones Neo runs for it, such as opening a run's default page. Neo's own
+        housekeeping, sent with no call site (its frame-tree reads, its event pump and listener
+        bookkeeping), grows with open tabs rather than with the script's work, so it is in none
+        of `neo_operations_total`, `neo_operation_duration_seconds` and `neo_errors_total`: its
+        operations appear in the run's trace alone, and a run that fails on one counts that
+        failure once, as the run's. A navigation is a `page.goto` (`frame.goto` included),
+        `page.reload`, `page.goBack` or `page.goForward` the browser was sent and that ended
+        with a value or a browser failure: `neo_navigations_total` counts each once, with
+        `status_code` only when its document arrived with an HTTP status from 100 to 599 (a
+        same-document step, an `about:` or `data:` page or an unreadable status has none), and
+        `neo_navigation_errors_total` counts those the network refused. The operation's own
+        outcome is unchanged: a goto answered 404 is still an `ok` operation. A CAPTCHA solve is
+        every `neo.solveCaptcha` whose solver returned an outcome, one cut short by the run's
+        stop included; each adds 1 to `neo_captcha_solves_total` and to
+        `neo_captcha_reasons_total`, and what providers charged for it, in US dollars, to
+        `neo_captcha_spend_usd_total`. None of these depends on the `trace` settings. Durations
+        are in seconds. Every label value comes from a closed set: `status` is how a run ended
+        (`Run.status`: `ok`, `error`, `cancelled` or `timeout`) or how an operation did
+        (`Operation.outcome`), `error_owner` an `OperationError.owner` or `none`, `error_code`
+        an `OperationError.code`, `op` a method Neo serves or `unknown`, `origin` `agent`,
+        `found` or `neo`, `close_reason` `script`, `janitor`, `user`, `crash` or `shutdown`,
+        `status_code` an HTTP status from 100 to 599, `error_code` on
+        `neo_navigation_errors_total` Chromium's net error lowercased without `net::ERR_`
+        (`aborted`, `address_unreachable`, `blocked_by_client`, `blocked_by_response`,
+        `cert_authority_invalid`, `cert_common_name_invalid`, `cert_date_invalid`,
+        `connection_closed`, `connection_refused`, `connection_reset`, `connection_timed_out`,
+        `empty_response`, `failed`, `http2_protocol_error`, `internet_disconnected`,
+        `name_not_resolved`, `ssl_protocol_error`, `timed_out`, `too_many_redirects`,
+        `unsafe_port`) or `_OTHER` for any other, `family` the CAPTCHA a solve found
+        (`recaptcha_v2`, `recaptcha_v3`, `turnstile`, `cloudflare_challenge`, `hcaptcha`,
+        `geetest`, `aws_waf`, `arkose`, `perimeterx`, `unknown`, or `none` when it found none),
+        `verdict` how it ended (`solved`, `token_applied`, `already_clear`, `unsupported`,
+        `failed`, `cancelled`, `needs_human`), `reason` the solve's `reason`, and `provider`
+        `capsolver`, `2captcha`, or `unknown` for a cost reported without one. No URL, title,
+        tab, run or task id is ever a label. Neo chooses the bucket boundaries: read them from
+        the data. Parse the text with a parser that also accepts OpenMetrics extras (`# EOF`, `#
+        UNIT`, exemplars).
 
         An OTLP push carries the same numbers under OpenTelemetry's metric names, which hold no
         unit and no `_total`, and with namespaced attribute keys; this route keeps the names
@@ -1308,12 +1334,19 @@ paths:
         `neo.operations`, `neo_operation_duration_seconds` is `neo.operation.duration`,
         `neo_errors_total` is `neo.errors`, `neo_tabs_open` is `neo.tab.count`,
         `neo_tabs_opened_total` is `neo.tab.opened`, `neo_tabs_closed_total` is
-        `neo.tab.closed`, `neo_tab_lifetime_seconds` is `neo.tab.duration` and
-        `neo_renderer_crashes_total` is `neo.renderer.crashes`. The label `status` is
-        `neo.run.status` on the run families and `neo.op.outcome` on the operation families,
-        `error_owner` is `neo.error.owner`, `error_code` is the registry's `error.type`, `op` is
-        `neo.op.name`, `origin` is `neo.tab.origin` and `close_reason` is
-        `neo.tab.close_reason`: the keys Neo's spans use for the same values.
+        `neo.tab.closed`, `neo_tab_lifetime_seconds` is `neo.tab.duration`,
+        `neo_renderer_crashes_total` is `neo.renderer.crashes`, `neo_navigations_total` is
+        `neo.navigations`, `neo_navigation_errors_total` is `neo.navigation.errors`,
+        `neo_captcha_solves_total` is `neo.captcha.solves`, `neo_captcha_reasons_total` is
+        `neo.captcha.reasons` and `neo_captcha_spend_usd_total` is `neo.captcha.spend` (unit
+        `{USD}`). The label `status` is `neo.run.status` on the run families and
+        `neo.op.outcome` on the operation families, `error_owner` is `neo.error.owner`,
+        `error_code` is the registry's `error.type`, `op` is `neo.op.name`, `origin` is
+        `neo.tab.origin`, `close_reason` is `neo.tab.close_reason`, `status_code` is the
+        registry's `http.response.status_code` (an integer), `family` is `neo.captcha.family`,
+        `verdict` is `neo.captcha.verdict`, `reason` is `neo.captcha.reason` and `provider` is
+        `neo.captcha.provider`: the keys Neo's spans use for the same values where a span
+        carries them.
       responses:
         '200':
           description: The metrics as of this request.

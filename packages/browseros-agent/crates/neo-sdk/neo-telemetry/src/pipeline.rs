@@ -10,7 +10,7 @@
 //!                                        resource: otlp::resource, sampler: otlp::sampler
 //! ```
 //!
-//! `instruments.rs` holds the 11 instruments, `spans.rs` the two spans, `privacy.rs` the
+//! `instruments.rs` holds the 16 instruments, `spans.rs` the two spans, `privacy.rs` the
 //! site-detail dial, `prometheus.rs` the text renderer. The facade (`telemetry.rs`, `run_span.rs`,
 //! `run_telemetry.rs`) owns each run's exactly-once end; this file decides what an end records. A
 //! verdict of `None` is a run dropped unfinished: it records as `error` / `neo` /
@@ -60,8 +60,8 @@ use crate::prometheus::Prometheus;
 use crate::spans::Spans;
 use crate::transport::Transport;
 use crate::{
-    OpCounting, OpSettled, OpenTabsSource, RunFacts, RunVerdict, TelemetryConfig, TelemetryError,
-    Vocabulary,
+    CaptchaSolve, Navigated, OpCounting, OpSettled, OpenTabsSource, RunFacts, RunVerdict,
+    TelemetryConfig, TelemetryError, Vocabulary,
 };
 
 /// What a run dropped unfinished records: Neo's own failure, as `run_span.rs` promises.
@@ -441,6 +441,16 @@ impl Pipeline {
         self.instruments.renderer_crashed();
     }
 
+    /// `neo_navigations_total` and, on a network failure, `neo_navigation_errors_total`.
+    pub(crate) fn navigated(&self, navigation: Navigated) {
+        self.instruments.navigated(navigation);
+    }
+
+    /// `neo_captcha_solves_total`, `neo_captcha_reasons_total` and `neo_captcha_spend_usd_total`.
+    pub(crate) fn captcha_solved(&self, solve: CaptchaSolve) {
+        self.instruments.captcha_solved(solve);
+    }
+
     /// The source `neo_tabs_open`'s callback reads at each collection.
     pub(crate) fn set_open_tabs(&self, source: OpenTabsSource) {
         self.open_tabs.set(source);
@@ -572,9 +582,12 @@ mod tests {
     use opentelemetry_sdk::trace::SpanData;
 
     use super::*;
-    use crate::OpenTabCounts;
     use crate::instruments::CATALOG;
-    use crate::label::{Delivery, OpOutcome};
+    use crate::label::{
+        CaptchaFamily, CaptchaProvider, CaptchaReason, CaptchaVerdict, Delivery, HttpStatus,
+        NetError, OpOutcome,
+    };
+    use crate::{CaptchaSpend, OpenTabCounts};
 
     const NO_MATCH: ErrorCode = ErrorCode::new("no_match");
     const TIMEOUT: ErrorCode = ErrorCode::new("run_timeout");
@@ -743,8 +756,21 @@ mod tests {
     }
 
     /// What the push door sends for each family: OpenTelemetry name, unit and attribute keys.
-    const PUSHED: [(&str, &str, &[&str]); 11] = [
+    const PUSHED: [(&str, &str, &[&str]); 16] = [
+        ("neo.captcha.reasons", "{solve}", &["neo.captcha.reason"]),
+        (
+            "neo.captcha.solves",
+            "{solve}",
+            &["neo.captcha.family", "neo.captcha.verdict"],
+        ),
+        ("neo.captcha.spend", "{USD}", &["neo.captcha.provider"]),
         ("neo.errors", "{error}", &["error.type", "neo.error.owner"]),
+        ("neo.navigation.errors", "{error}", &["error.type"]),
+        (
+            "neo.navigations",
+            "{navigation}",
+            &["http.response.status_code"],
+        ),
         (
             "neo.operation.duration",
             "s",
@@ -784,6 +810,10 @@ mod tests {
                 .flat_map(|point| keys(point.attributes()))
                 .collect(),
             AggregatedMetrics::I64(MetricData::Sum(sum)) => sum
+                .data_points()
+                .flat_map(|point| keys(point.attributes()))
+                .collect(),
+            AggregatedMetrics::F64(MetricData::Sum(sum)) => sum
                 .data_points()
                 .flat_map(|point| keys(point.attributes()))
                 .collect(),
@@ -833,6 +863,23 @@ mod tests {
             Duration::from_secs(3),
         );
         pipeline.renderer_crashed();
+        pipeline.navigated(Navigated {
+            status: HttpStatus::new(503),
+            error: None,
+        });
+        pipeline.navigated(Navigated {
+            status: None,
+            error: Some(NetError::ConnectionRefused),
+        });
+        pipeline.captcha_solved(CaptchaSolve {
+            family: CaptchaFamily::RecaptchaV2,
+            verdict: CaptchaVerdict::Failed,
+            reason: CaptchaReason::ProviderError,
+            spend: Some(CaptchaSpend {
+                provider: CaptchaProvider::Capsolver,
+                usd: 0.0012,
+            }),
+        });
         // The scrape reader reads the meter provider the OTLP reader exports, so what it collects
         // is what a push sends.
         let mut collected = ResourceMetrics::default();
@@ -871,6 +918,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             catalog,
             "and the catalog is where those names and units come from"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_status_code_goes_out_as_the_integer_the_registry_types_it() -> Result<(), Box<dyn Error>>
+    {
+        let pipeline = Pipeline::start(&TelemetryConfig::default())?;
+        pipeline.navigated(Navigated {
+            status: HttpStatus::new(404),
+            error: None,
+        });
+        let mut collected = ResourceMetrics::default();
+        pipeline.scrape.collect(&mut collected)?;
+        let mut values = Vec::new();
+        for scope in collected.scope_metrics() {
+            for metric in scope
+                .metrics()
+                .filter(|metric| metric.name() == "neo.navigations")
+            {
+                if let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() {
+                    for point in sum.data_points() {
+                        values.extend(point.attributes().map(|kv| kv.value.clone()));
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            values,
+            vec![opentelemetry::Value::I64(404)],
+            "`http.response.status_code` is an int, not the text the scrape prints"
         );
         Ok(())
     }

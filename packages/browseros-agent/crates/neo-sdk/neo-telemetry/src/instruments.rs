@@ -1,9 +1,11 @@
-//! The 11 foundational instruments, as one catalog (wire-contract.md, "Metrics").
+//! Neo's 16 instruments, as one catalog (wire-contract.md, "Metrics"): the 11 foundational ones,
+//! then navigation and CAPTCHA.
 //!
 //! [`CATALOG`] is the one list of families: both names, help, kind, unit and buckets.
 //! [`Instruments::new`] takes each instrument's OpenTelemetry name, help, unit and buckets from its
-//! entry: the counters and the histograms through one helper each, the in-flight up-down counter
-//! and the open-tabs observable up-down counter written out, as their builders differ. The
+//! entry: the counters and the histograms through one helper each, the in-flight up-down counter,
+//! the open-tabs observable up-down counter and the f64 spend counter written out, as their
+//! builders differ. The
 //! Prometheus renderer (`prometheus.rs`) walks the same list for its `# HELP` / `# TYPE` lines and
 //! family order, so the pull door and the OTLP push door cannot drift apart.
 //!
@@ -16,7 +18,8 @@
 //! ([`crate::label`]) and the two vocabulary tokens [`OpLabel`] and [`CodeLabel`], which only a
 //! lookup in the bound [`Vocabulary`] can mint (their fields are private to this module). No `&str`
 //! from a caller reaches a `KeyValue` here, so no caller can add a series: never a URL, host, title,
-//! tab, run or task id. Every label value is a `&'static str`, so recording allocates nothing.
+//! tab, run or task id. Every label value is a `&'static str`, or the integer of an [`HttpStatus`]
+//! (100 to 599), so recording allocates nothing.
 
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -26,9 +29,9 @@ use opentelemetry::metrics::{Counter, Histogram, Meter, UpDownCounter};
 use opentelemetry::{Key, KeyValue};
 
 use crate::label::{
-    CloseReason, ErrorCode, ErrorLabel, ErrorOwner, OpOutcome, RunStatus, TabOrigin,
+    CloseReason, ErrorCode, ErrorLabel, ErrorOwner, HttpStatus, OpOutcome, RunStatus, TabOrigin,
 };
-use crate::{OpenTabCounts, OpenTabsSource, Vocabulary};
+use crate::{CaptchaSolve, Navigated, OpenTabCounts, OpenTabsSource, Vocabulary};
 
 /// How a family is typed in Prometheus text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,9 +180,50 @@ const RENDERER_CRASHES_TOTAL: MetricSpec = MetricSpec {
     unit: "{crash}",
     buckets: &[],
 };
+const NAVIGATIONS_TOTAL: MetricSpec = MetricSpec {
+    name: "neo_navigations_total",
+    otel: "neo.navigations",
+    help: "Navigations sent to the browser that ended, by the HTTP status their document \
+           arrived with, when one was read.",
+    kind: Kind::Counter,
+    unit: "{navigation}",
+    buckets: &[],
+};
+const NAVIGATION_ERRORS_TOTAL: MetricSpec = MetricSpec {
+    name: "neo_navigation_errors_total",
+    otel: "neo.navigation.errors",
+    help: "Navigations that failed on the network, by the browser's net error.",
+    kind: Kind::Counter,
+    unit: "{error}",
+    buckets: &[],
+};
+const CAPTCHA_SOLVES_TOTAL: MetricSpec = MetricSpec {
+    name: "neo_captcha_solves_total",
+    otel: "neo.captcha.solves",
+    help: "CAPTCHA solves that returned an outcome, by the CAPTCHA found and how the solve ended.",
+    kind: Kind::Counter,
+    unit: "{solve}",
+    buckets: &[],
+};
+const CAPTCHA_REASONS_TOTAL: MetricSpec = MetricSpec {
+    name: "neo_captcha_reasons_total",
+    otel: "neo.captcha.reasons",
+    help: "CAPTCHA solves that returned an outcome, by why the solve ended as it did.",
+    kind: Kind::Counter,
+    unit: "{solve}",
+    buckets: &[],
+};
+const CAPTCHA_SPEND_USD_TOTAL: MetricSpec = MetricSpec {
+    name: "neo_captcha_spend_usd_total",
+    otel: "neo.captcha.spend",
+    help: "US dollars CAPTCHA providers charged, by the provider each solve booked it to.",
+    kind: Kind::Counter,
+    unit: "{USD}",
+    buckets: &[],
+};
 
 /// Every family, in wire-contract order: the order of the Prometheus text.
-pub(crate) const CATALOG: [&MetricSpec; 11] = [
+pub(crate) const CATALOG: [&MetricSpec; 16] = [
     &RUNS_TOTAL,
     &RUNS_IN_FLIGHT,
     &RUN_DURATION,
@@ -191,6 +235,11 @@ pub(crate) const CATALOG: [&MetricSpec; 11] = [
     &TABS_CLOSED_TOTAL,
     &TAB_LIFETIME,
     &RENDERER_CRASHES_TOTAL,
+    &NAVIGATIONS_TOTAL,
+    &NAVIGATION_ERRORS_TOTAL,
+    &CAPTCHA_SOLVES_TOTAL,
+    &CAPTCHA_REASONS_TOTAL,
+    &CAPTCHA_SPEND_USD_TOTAL,
 ];
 
 /// One attribute the instruments set: its OpenTelemetry key, and the label name the scrape
@@ -210,7 +259,8 @@ impl Label {
 }
 
 // The span attributes' keys where a span carries the same value, so a metric and a trace are
-// filtered alike; `error.type` is the registry's key for a failure's class.
+// filtered alike; `error.type` is the registry's key for a failure's class, a Neo code or a net
+// error, and `http.response.status_code` its key for the status an HTTP response carried.
 const RUN_STATUS: Label = Label {
     otel: "neo.run.status",
     scrape: "status",
@@ -239,9 +289,29 @@ const CLOSE_REASON: Label = Label {
     otel: "neo.tab.close_reason",
     scrape: "close_reason",
 };
+const HTTP_STATUS: Label = Label {
+    otel: "http.response.status_code",
+    scrape: "status_code",
+};
+const CAPTCHA_FAMILY: Label = Label {
+    otel: "neo.captcha.family",
+    scrape: "family",
+};
+const CAPTCHA_VERDICT: Label = Label {
+    otel: "neo.captcha.verdict",
+    scrape: "verdict",
+};
+const CAPTCHA_REASON: Label = Label {
+    otel: "neo.captcha.reason",
+    scrape: "reason",
+};
+const CAPTCHA_PROVIDER: Label = Label {
+    otel: "neo.captcha.provider",
+    scrape: "provider",
+};
 
 /// Every attribute the instruments set.
-pub(crate) const LABELS: [&Label; 7] = [
+pub(crate) const LABELS: [&Label; 12] = [
     &RUN_STATUS,
     &OP_OUTCOME,
     &OP_NAME,
@@ -249,6 +319,11 @@ pub(crate) const LABELS: [&Label; 7] = [
     &ERROR_TYPE,
     &ORIGIN,
     &CLOSE_REASON,
+    &HTTP_STATUS,
+    &CAPTCHA_FAMILY,
+    &CAPTCHA_VERDICT,
+    &CAPTCHA_REASON,
+    &CAPTCHA_PROVIDER,
 ];
 
 /// The scrape's label name for the attribute `key`, or `None` for a key the instruments never set.
@@ -350,6 +425,11 @@ pub(crate) struct Instruments {
     tabs_closed_total: Counter<u64>,
     tab_lifetime: Histogram<f64>,
     renderer_crashes_total: Counter<u64>,
+    navigations_total: Counter<u64>,
+    navigation_errors_total: Counter<u64>,
+    captcha_solves_total: Counter<u64>,
+    captcha_reasons_total: Counter<u64>,
+    captcha_spend_usd_total: Counter<f64>,
 }
 
 impl Instruments {
@@ -372,6 +452,15 @@ impl Instruments {
             tabs_closed_total: counter(meter, &TABS_CLOSED_TOTAL),
             tab_lifetime: histogram(meter, &TAB_LIFETIME),
             renderer_crashes_total: counter(meter, &RENDERER_CRASHES_TOTAL),
+            navigations_total: counter(meter, &NAVIGATIONS_TOTAL),
+            navigation_errors_total: counter(meter, &NAVIGATION_ERRORS_TOTAL),
+            captcha_solves_total: counter(meter, &CAPTCHA_SOLVES_TOTAL),
+            captcha_reasons_total: counter(meter, &CAPTCHA_REASONS_TOTAL),
+            captcha_spend_usd_total: meter
+                .f64_counter(CAPTCHA_SPEND_USD_TOTAL.otel)
+                .with_description(CAPTCHA_SPEND_USD_TOTAL.help)
+                .with_unit(CAPTCHA_SPEND_USD_TOTAL.unit)
+                .build(),
         };
         instruments.runs_in_flight.add(0, &[]);
         instruments.renderer_crashes_total.add(0, &[]);
@@ -483,6 +572,54 @@ impl Instruments {
     pub(crate) fn renderer_crashed(&self) {
         self.renderer_crashes_total.add(1, &[]);
     }
+
+    /// `neo_navigations_total`, with `status_code` only when the document had one, and
+    /// `neo_navigation_errors_total` when the network refused it.
+    pub(crate) fn navigated(&self, navigation: Navigated) {
+        match navigation.status {
+            Some(status) => self
+                .navigations_total
+                .add(1, &[KeyValue::new(HTTP_STATUS.key(), status_code(status))]),
+            None => self.navigations_total.add(1, &[]),
+        }
+        if let Some(error) = navigation.error {
+            self.navigation_errors_total
+                .add(1, &[KeyValue::new(ERROR_TYPE.key(), error.as_str())]);
+        }
+    }
+
+    /// `neo_captcha_solves_total`, `neo_captcha_reasons_total` and, for a finite cost above 0,
+    /// `neo_captcha_spend_usd_total`.
+    pub(crate) fn captcha_solved(&self, solve: CaptchaSolve) {
+        self.captcha_solves_total.add(
+            1,
+            &[
+                KeyValue::new(CAPTCHA_FAMILY.key(), solve.family.as_str()),
+                KeyValue::new(CAPTCHA_VERDICT.key(), solve.verdict.as_str()),
+            ],
+        );
+        self.captcha_reasons_total.add(
+            1,
+            &[KeyValue::new(CAPTCHA_REASON.key(), solve.reason.as_str())],
+        );
+        if let Some(spend) = solve.spend
+            && spend.usd.is_finite()
+            && spend.usd > 0.0
+        {
+            self.captcha_spend_usd_total.add(
+                spend.usd,
+                &[KeyValue::new(
+                    CAPTCHA_PROVIDER.key(),
+                    spend.provider.as_str(),
+                )],
+            );
+        }
+    }
+}
+
+/// The registry types `http.response.status_code` as an int.
+fn status_code(status: HttpStatus) -> i64 {
+    i64::from(status.code())
 }
 
 fn counter(meter: &Meter, spec: &MetricSpec) -> Counter<u64> {
@@ -511,7 +648,7 @@ mod tests {
     use super::*;
 
     /// wire-contract.md's table, row by row: scrape name, OTLP name, kind, unit.
-    const WIRE_CONTRACT: [(&str, &str, Kind, &str); 11] = [
+    const WIRE_CONTRACT: [(&str, &str, Kind, &str); 16] = [
         ("neo_runs_total", "neo.runs", Kind::Counter, "{run}"),
         ("neo_runs_in_flight", "neo.run.active", Kind::Gauge, "{run}"),
         (
@@ -558,6 +695,36 @@ mod tests {
             Kind::Counter,
             "{crash}",
         ),
+        (
+            "neo_navigations_total",
+            "neo.navigations",
+            Kind::Counter,
+            "{navigation}",
+        ),
+        (
+            "neo_navigation_errors_total",
+            "neo.navigation.errors",
+            Kind::Counter,
+            "{error}",
+        ),
+        (
+            "neo_captcha_solves_total",
+            "neo.captcha.solves",
+            Kind::Counter,
+            "{solve}",
+        ),
+        (
+            "neo_captcha_reasons_total",
+            "neo.captcha.reasons",
+            Kind::Counter,
+            "{solve}",
+        ),
+        (
+            "neo_captcha_spend_usd_total",
+            "neo.captcha.spend",
+            Kind::Counter,
+            "{USD}",
+        ),
     ];
 
     #[test]
@@ -573,7 +740,8 @@ mod tests {
         );
     }
 
-    /// A dotted name of lowercase `snake_case` segments under `neo` (or the registry's `error`).
+    /// A dotted name of lowercase `snake_case` segments under `neo` (or one of the registry's
+    /// namespaces).
     fn dotted(name: &str, namespaces: &[&str]) -> bool {
         let segments: Vec<&str> = name.split('.').collect();
         segments.len() >= 2
@@ -655,7 +823,7 @@ mod tests {
     fn every_attribute_key_is_namespaced_and_maps_to_its_scrape_label() {
         for label in LABELS {
             assert!(
-                dotted(label.otel, &["neo", "error"]),
+                dotted(label.otel, &["neo", "error", "http"]),
                 "{}: a namespaced attribute key",
                 label.otel
             );
@@ -670,6 +838,11 @@ mod tests {
             scrape_label("error.type"),
             Some("error_code"),
             "the registry's `error.type` carries the code the scrape calls `error_code`"
+        );
+        assert_eq!(
+            scrape_label("http.response.status_code"),
+            Some("status_code"),
+            "and its `http.response.status_code` the status the scrape calls `status_code`"
         );
         assert_eq!(
             scrape_label("otel.metric.overflow"),
