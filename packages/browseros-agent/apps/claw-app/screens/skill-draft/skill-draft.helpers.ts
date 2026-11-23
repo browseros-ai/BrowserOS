@@ -15,9 +15,8 @@ import type {
   SkillDraftInput,
   SkillDraftStatus,
 } from '@browseros/claw-api'
+import { ULTRAFAST_FEATURE } from '@/modules/plan/plan.helpers'
 import { neoName } from '@/screens/skills/skills.helpers'
-
-export const ULTRAFAST_FEATURE = 'claw.ultrafast'
 
 /** Whether this plan can make skills from tasks: every ultrafast plan can. */
 export function canDraftSkills(

@@ -10,7 +10,9 @@
 import type { SkillDetail } from '@browseros/claw-api'
 import { useState } from 'react'
 import { useParams } from 'react-router'
+import { usePlan } from '@/modules/api/plan.hooks'
 import { useSkill } from '@/modules/api/skills.hooks'
+import { showsUltrafastNudge } from '@/modules/plan/plan.helpers'
 import { stillVerifying, verifyingPoll } from '@/screens/skills/skills.helpers'
 
 export interface SkillDetailScreenData {
@@ -20,11 +22,14 @@ export interface SkillDetailScreenData {
   isError: boolean
   /** A pending fast version is still being checked; false once the page stops checking. */
   checking: boolean
+  /** A free plan where ultrafast is on sale hears that ultrafast runs this skill in seconds. */
+  nudge: boolean
 }
 
 export function useSkillDetailData(): SkillDetailScreenData {
   const { name = '' } = useParams()
   const [openedAt] = useState(() => Date.now())
+  const plan = usePlan()
   const query = useSkill({
     variables: { name },
     enabled: name.length > 0,
@@ -38,5 +43,6 @@ export function useSkillDetailData(): SkillDetailScreenData {
     isError: query.isError,
     // Reading dataUpdatedAt re-renders on the check that crosses the window.
     checking: stillVerifying(openedAt, query.dataUpdatedAt),
+    nudge: showsUltrafastNudge(plan.data),
   }
 }

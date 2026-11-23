@@ -16,7 +16,9 @@ import {
 } from 'bun:test'
 import type {
   SkillDetail as Detail,
+  Plan,
   Skill,
+  SkillRun,
   SkillUltrafast,
 } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -29,6 +31,8 @@ const api = await import('@/modules/api/client')
 
 let ultrafast: SkillUltrafast
 let overrides: Partial<Skill> = {}
+let features: string[]
+let runs: SkillRun[]
 // Runs inside each fetch, so a test can move the clock while the page waits on the server.
 let duringFetch = () => {}
 
@@ -48,7 +52,7 @@ const detail = (): Detail => ({
     ...overrides,
   },
   body: '',
-  runs: [],
+  runs,
   tokenSavings: { saved: 0, otherBrowsers: 0, used: 0, measuredRunCount: 0 },
 })
 
@@ -59,6 +63,19 @@ mock.module('@/modules/api/client', () => ({
       duringFetch()
       return detail()
     },
+    getPlan: async (): Promise<Plan> => ({
+      available: true,
+      plan: features.length ? 'ultrafast' : null,
+      planName: features.length ? 'ultrafast' : null,
+      features,
+      status: features.length ? 'active' : 'none',
+      periodEnd: null,
+      endsAt: null,
+      graceUntil: null,
+      onKey: false,
+      checkedAt: null,
+      stale: false,
+    }),
   }),
 }))
 
@@ -117,6 +134,8 @@ function define(name: string, value: unknown) {
 
 beforeEach(async () => {
   overrides = {}
+  features = ['claw.ultrafast']
+  runs = []
   duringFetch = () => {}
   ultrafast = {
     status: 'verified',
@@ -206,6 +225,44 @@ describe('the skill page without ultrafast', () => {
     expect(text()).toContain('Reorder my usual toothpaste')
     expect(text()).not.toContain('Illustration.')
     expect(link('See ultrafast')).toBeUndefined()
+  })
+})
+
+describe('the skill page on a free plan', () => {
+  function speedNote(): string | undefined {
+    return [...container.querySelectorAll('p')]
+      .map((line) => (line.textContent ?? '').replace(/\s+/g, ' ').trim())
+      .find((line) => line.startsWith('Runs at normal speed'))
+  }
+
+  it('tests that the page says the skill runs at normal speed, with its usual time', async () => {
+    features = []
+    runs = [
+      {
+        id: 'r1',
+        skillName: 'reorder-toothpaste',
+        sessionId: 's1',
+        runNumber: 1,
+        agentId: 'claude',
+        createdAt: 0,
+        clean: true,
+        mode: 'agent',
+        durationMs: 41_000,
+      },
+    ]
+    await mount()
+
+    expect(speedNote()).toContain(
+      'Runs at normal speed, about 41 sec a run. With ultrafast, neo runs it in seconds.',
+    )
+    expect(speedNote()).toContain('See ultrafast')
+    expect(speedNote()).not.toContain('your agent')
+  })
+
+  it('tests that an ultrafast plan gets no speed note', async () => {
+    await mount()
+
+    expect(speedNote()).toBeUndefined()
   })
 })
 

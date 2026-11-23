@@ -43,6 +43,7 @@ import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { RunsChoiceDialog } from '@/components/skills/RunsChoiceDialog'
 import { SiteBadge } from '@/components/skills/SiteBadge'
 import { SkillActions } from '@/components/skills/SkillActions'
+import { UltrafastNudge } from '@/components/skills/UltrafastNudge'
 import { UltrafastState } from '@/components/skills/UltrafastState'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -56,6 +57,7 @@ import {
   firstRunLearning,
   healthLine,
   type LearningStep,
+  normalRunLabel,
   parseSkillBody,
   type RunsChoice,
   runModeCounts,
@@ -72,7 +74,7 @@ const BACK = { to: '/skills', label: 'Skills' }
 
 /** One skill: the steps neo follows, what it learned, and its runs. */
 export function SkillDetail() {
-  const { detail, isLoading, isError, checking } = useSkillDetailData()
+  const { detail, isLoading, isError, checking, nudge } = useSkillDetailData()
   const navigate = useNavigate()
 
   if (isError) {
@@ -143,6 +145,11 @@ export function SkillDetail() {
               ) : null}
               {usedLabel(skill.runCount, skill.lastRunAt, Date.now())}
             </p>
+            {nudge ? (
+              <UltrafastNudge surface="skill_page" className="text-[14px]">
+                <SpeedNote normal={normalRunLabel(runs)} />
+              </UltrafastNudge>
+            ) : null}
           </div>
         }
       />
@@ -214,6 +221,16 @@ export function SkillDetail() {
 }
 
 // ---------------------------------------------------------------------------
+
+/** "Runs at normal speed, about 41 sec a run. With ultrafast, neo runs it in seconds." */
+function SpeedNote({ normal }: { normal: string | null }) {
+  return (
+    <>
+      Runs at normal speed{normal ? `, ${normal} a run` : ''}. With{' '}
+      <UltrafastWordmark />, neo runs it in seconds.
+    </>
+  )
+}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (

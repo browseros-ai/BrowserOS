@@ -8,6 +8,7 @@ import type { Skill } from '@browseros/claw-api'
 import { Bookmark, Globe, Lightbulb, Plus, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { CopyButton } from '@/components/copy/CopyButton'
 import { Favicon } from '@/components/favicon/Favicon'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
@@ -21,6 +22,7 @@ import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { SkillActions } from '@/components/skills/SkillActions'
 import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
+import { UltrafastNudge } from '@/components/skills/UltrafastNudge'
 import { UltrafastState } from '@/components/skills/UltrafastState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -38,7 +40,7 @@ const GRID_CLASS =
 
 /** Things you ask for often, as cards that each copy the phrase that runs it again. */
 export function Skills() {
-  const { skills, agents, isLoading, isError } = useSkillsScreenData()
+  const { skills, agents, nudge, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
   useUpgradeToasts(skills)
   const now = Date.now()
@@ -60,6 +62,13 @@ export function Skills() {
           </Button>
         }
       />
+
+      {nudge ? (
+        <UltrafastNudge surface="skills_list" className="-mt-2">
+          Your skills run at normal speed. With <UltrafastWordmark />, neo runs
+          them in seconds.
+        </UltrafastNudge>
+      ) : null}
 
       <div className="flex flex-col gap-4">
         <SaveTip />

@@ -379,6 +379,19 @@ function median(values: number[]): number | null {
   return sorted[Math.floor(sorted.length / 2)] ?? null
 }
 
+/** How long a run done the normal way usually takes, "about 41 sec", from the skill's runs. */
+export function normalRunLabel(
+  runs: Pick<SkillRun, 'mode' | 'durationMs'>[],
+): string | null {
+  return durationLabel(
+    median(
+      runs
+        .filter((run) => run.mode !== 'ultrafast' && run.durationMs)
+        .map((run) => run.durationMs as number),
+    ),
+  )
+}
+
 /**
  * Where a skill stands on running with or without the agent, or null when the skill page has
  * nothing to say (no fast version yet).
@@ -392,13 +405,7 @@ export function runsChoice(
     ultrafast.status === 'verified' || ultrafast.status === 'degraded'
   if (!live) return null
   const fastLabel = durationLabel(ultrafast.p50Ms)
-  const slowLabel = durationLabel(
-    median(
-      runs
-        .filter((run) => run.mode !== 'ultrafast' && run.durationMs)
-        .map((run) => run.durationMs as number),
-    ),
-  )
+  const slowLabel = normalRunLabel(runs)
   const base = { fastLabel, slowLabel, withoutLocked: false, disabled: false }
   if (ultrafast.locked) {
     return {

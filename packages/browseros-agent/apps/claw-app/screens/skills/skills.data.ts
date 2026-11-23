@@ -13,13 +13,17 @@ import {
   isUserFacingHarness,
 } from '@/components/harness/harness.types'
 import { useConnections } from '@/modules/api/connections.hooks'
+import { usePlan } from '@/modules/api/plan.hooks'
 import { useSkills } from '@/modules/api/skills.hooks'
+import { showsUltrafastNudge } from '@/modules/plan/plan.helpers'
 import { worksInAgents } from './skills.helpers'
 
 export interface SkillsScreenData {
   skills: Skill[]
   /** The connected agents the skills work in; empty hides the line about them. */
   agents: Harness[]
+  /** A free plan where ultrafast is on sale hears that ultrafast runs skills in seconds. */
+  nudge: boolean
   isLoading: boolean
   isError: boolean
 }
@@ -27,6 +31,7 @@ export interface SkillsScreenData {
 export function useSkillsScreenData(): SkillsScreenData {
   const query = useSkills()
   const connections = useConnections()
+  const plan = usePlan()
   const skills = query.data?.items ?? []
   const connected = (connections.data?.items ?? [])
     .filter((c) => c.installed && isUserFacingHarness(c.harness))
@@ -34,6 +39,7 @@ export function useSkillsScreenData(): SkillsScreenData {
   return {
     skills,
     agents: worksInAgents(skills, connected),
+    nudge: showsUltrafastNudge(plan.data),
     isLoading: query.isPending,
     isError: query.isError,
   }

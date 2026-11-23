@@ -8,11 +8,9 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { ButtonLink } from '@/components/motion/button/base'
 import { MakeSkillButton } from '@/components/skills/MakeSkillButton'
 import { usePlan } from '@/modules/api/plan.hooks'
+import { ULTRAFAST_FEATURE } from '@/modules/plan/plan.helpers'
 import { taskDayAndTime, tookLabel } from '@/screens/audit/audit.helpers'
-import {
-  isDraftable,
-  ULTRAFAST_FEATURE,
-} from '@/screens/skill-draft/skill-draft.helpers'
+import { isDraftable } from '@/screens/skill-draft/skill-draft.helpers'
 import { UltrafastLine } from './UltrafastLine'
 
 interface TaskPageHeaderProps {
