@@ -126,8 +126,27 @@ impl EventLog {
     /// Appends `event` as the next seq to the ring of the tab it names ([`PageEvent::tab`]).
     /// The frame-only kinds name none: the watcher files those with [`EventWriter::record_in`].
     fn append(&mut self, event: PageEvent) -> u64 {
-        let tab = event.tab().cloned();
+        let tab = self.ring_of(&event);
         self.append_in(tab, event)
+    }
+
+    /// The ring `event` goes to: the tab it names ([`PageEvent::tab`]), except a popup's
+    /// `Opened` once its opener is known closed. `page.on('popup')` cannot fire on a closed
+    /// opener, and its ring may be cut or removed, which would drop the record a context `page`
+    /// listener needs for a live tab; it goes to the popup's own ring instead.
+    fn ring_of(&self, event: &PageEvent) -> Option<TargetId> {
+        match event {
+            PageEvent::Opened(opened) => match &opened.opener {
+                Some(opener)
+                    if !self.closed.contains_key(opener)
+                        && !self.folded_targets.contains(opener) =>
+                {
+                    Some(opener.clone())
+                }
+                _ => Some(opened.target.clone()),
+            },
+            _ => event.tab().cloned(),
+        }
     }
 
     /// Appends `event` as the next seq to `tab`'s ring (the no-tab ring for `None`), keeping
@@ -278,12 +297,15 @@ impl Ring {
 
     /// The newest seq this ring knows to be older than `since_ms`, held or dropped. A dropped
     /// record counts only through the newest one, as it is the only one this ring remembers.
+    /// A binary search: stamps rise within a ring (one writer, one clock), so the lock is held
+    /// for a few steps per ring, not a walk of every record.
     fn newest_before(&self, since_ms: u64) -> Option<u64> {
-        let held = self
+        let older = self
             .records
-            .iter()
-            .take_while(|record| record.at_ms < since_ms)
-            .last()
+            .partition_point(|record| record.at_ms < since_ms);
+        let held = older
+            .checked_sub(1)
+            .and_then(|last| self.records.get(last))
             .map(|record| record.seq);
         held.max(self.newest_dropped.before(since_ms))
     }
@@ -335,12 +357,17 @@ impl EventLog {
 
     /// `target`'s ring and the no-tab ring after `after`, merged into seq order.
     fn tab_after(&self, target: &TargetId, after: u64) -> Vec<EventRecord> {
+        self.tabs_after(&[target], after)
+    }
+
+    /// The rings of `tabs` and the no-tab ring after `after`, merged into seq order.
+    fn tabs_after(&self, tabs: &[&TargetId], after: u64) -> Vec<EventRecord> {
         let mut records: Vec<EventRecord> = self
             .no_tab
             .after(after)
             .chain(
-                self.tab_ring(target)
-                    .into_iter()
+                tabs.iter()
+                    .filter_map(|tab| self.tab_ring(tab))
                     .flat_map(|ring| ring.after(after)),
             )
             .cloned()
@@ -542,10 +569,13 @@ impl EventHub {
         }
     }
 
-    /// The pump's read: every ring after the lowest place in `places`, and each listener's loss
-    /// from its own place, counted under the same lock. A page listener's is its tab's ring and
-    /// the no-tab ring's; a context listener's is every ring's. Counting after the read would
-    /// let a record this read delivers count as lost once a later record pushed it out.
+    /// The pump's read: the rings its places name after the lowest place, and each listener's
+    /// loss from its own place, counted under the same lock. Page listeners name their tabs'
+    /// rings and the no-tab ring; a context listener names every ring. So a run that listens on
+    /// its own pages never copies another tab's records under the lock. A page listener's loss
+    /// is its tab's ring and the no-tab ring's; a context listener's is every ring's. Counting
+    /// after the read would let a record this read delivers count as lost once a later record
+    /// pushed it out.
     pub(crate) fn read_for(&self, places: &[ListenerPlace<'_>]) -> PumpRead {
         let log = self.lock_log();
         let lowest = places
@@ -553,8 +583,22 @@ impl EventHub {
             .map(|place| place.after)
             .min()
             .unwrap_or(log.last_seq);
+        let named: Option<Vec<&TargetId>> = places.iter().map(|place| place.tab).collect();
+        let records = match named {
+            Some(named) => {
+                // Each tab once: a run often holds several listeners on one page.
+                let mut tabs: Vec<&TargetId> = Vec::with_capacity(named.len());
+                for tab in named {
+                    if !tabs.contains(&tab) {
+                        tabs.push(tab);
+                    }
+                }
+                log.tabs_after(&tabs, lowest)
+            }
+            None => log.merged_after(lowest),
+        };
         PumpRead {
-            records: log.merged_after(lowest),
+            records,
             head: log.last_seq,
             losses: places
                 .iter()
@@ -766,11 +810,14 @@ impl EventHub {
 }
 
 impl EventWriter {
-    /// Appends `event` to the ring of the tab it names ([`PageEvent::tab`]), and wakes the
-    /// readers. The frame-only kinds name none: the watcher files those with [`Self::record_in`].
+    /// Appends `event` to the ring the log files it in ([`EventLog::append`]), and wakes the
+    /// readers. The frame-only kinds name no tab: the watcher files those with
+    /// [`Self::record_in`].
     pub(crate) fn record(&mut self, event: PageEvent) -> u64 {
-        let tab = event.tab().cloned();
-        self.record_in(tab, event)
+        let seq = self.hub.lock_log().append(event);
+        // Outside the lock: woken readers take it at once.
+        self.hub.changed.notify_waiters();
+        seq
     }
 
     /// Appends `event` to `tab`'s ring (the no-tab ring for `None`) with the next seq
@@ -937,10 +984,13 @@ mod tests {
     use browseros_core::{FrameId, TabId, TargetId};
     use neo_trace::EpochMillis;
 
-    use super::{CLOSED_RINGS, EventHub, LOG_CAPACITY, LOG_TOTAL, ListenerPlace, LogRead, now_ms};
+    use super::{
+        CLOSED_RINGS, EventHub, EventWriter, LOG_CAPACITY, LOG_TOTAL, ListenerPlace, LogRead,
+        now_ms,
+    };
     use crate::RunState;
     use crate::events::navigation_event::NavigationEvent;
-    use crate::events::page_event::{BindingCalled, PageEvent};
+    use crate::events::page_event::{BindingCalled, OpenedPage, PageEvent, WindowKind};
     use crate::events::run_events::QUEUED_CALLS;
     use crate::events::{PageEventKind, Subscription};
 
@@ -1414,12 +1464,7 @@ mod tests {
         }
         let close = writer.record(closed("closed"));
         // Past the total once (the closed ring is cut, freeing 100), then back under it.
-        for busy in 0..16 {
-            let count = if busy < 15 { LOG_CAPACITY } else { 940 };
-            for _ in 0..count {
-                writer.record(crashed(&format!("busy{busy}")));
-            }
-        }
+        press_past_the_total(&mut writer);
         assert!(hub.read_after(0).records.len() < LOG_TOTAL, "room again");
         writer.record(crashed("closed"));
         assert_eq!(seqs(&hub.read_tab_after(&target("closed"), 0)), [close]);
@@ -1437,6 +1482,92 @@ mod tests {
         }
         let place = hub.position_at(since);
         assert!(hub.read_tab_after(&target("A"), place).lost > 0);
+    }
+
+    /// Fills the log past `LOG_TOTAL` once with busy open tabs, then leaves room again: any
+    /// closed ring at the time is cut to its `Closed`.
+    fn press_past_the_total(writer: &mut EventWriter) {
+        for busy in 0..16 {
+            let count = if busy < 15 { LOG_CAPACITY } else { 940 };
+            for _ in 0..count {
+                writer.record(crashed(&format!("busy{busy}")));
+            }
+        }
+    }
+
+    /// A popup whose opener closed before its window lookup came back goes to the popup's own
+    /// ring, not the opener's cut ring that would drop it: a context `page` listener still gets
+    /// a tab that is alive, with no loss.
+    #[test]
+    fn tests_that_a_popup_of_a_closed_opener_is_kept() {
+        let (hub, mut writer) = EventHub::new();
+        for _ in 0..100 {
+            writer.record(crashed("opener"));
+        }
+        writer.record(closed("opener"));
+        press_past_the_total(&mut writer);
+        let place = hub.head();
+        let opened = writer.record(PageEvent::Opened(OpenedPage {
+            target: target("popup"),
+            opener: Some(target("opener")),
+            url: "https://a.test/popup".to_owned(),
+            window: WindowKind::Tab,
+            tab: Some(TabId(3)),
+        }));
+        let read = hub.read_after(place);
+        assert_eq!((seqs(&read), read.lost), (vec![opened], 0));
+    }
+
+    /// The pump copies only the rings its places name when every listener is a page listener:
+    /// another tab's records never enter its read under the lock.
+    #[test]
+    fn tests_that_a_page_only_pump_reads_only_its_rings() {
+        let (hub, mut writer) = EventHub::new();
+        let mine = writer.record(crashed("mine"));
+        writer.record(crashed("other"));
+        let unplaced = writer.record(navigated("frame"));
+        writer.record(crashed("other"));
+        let mine_too = writer.record(crashed("mine"));
+        let page = target("mine");
+        let place = ListenerPlace {
+            tab: Some(&page),
+            after: 0,
+        };
+        let read = hub.read_for(&[place, place]);
+        let pumped: Vec<u64> = read.records.iter().map(|record| record.seq).collect();
+        assert_eq!(
+            pumped,
+            [mine, unplaced, mine_too],
+            "each tab once, no other tab's"
+        );
+    }
+
+    /// `position_at`'s binary search gives what a walk of every held record gives: the newest
+    /// seq stamped before `since`, or 0, across rings written over several milliseconds.
+    #[test]
+    fn tests_that_position_at_matches_a_walk_of_every_record() {
+        let (hub, mut writer) = EventHub::new();
+        for round in 0..4 {
+            for tab in ["A", "B", "C"] {
+                for _ in 0..=round {
+                    writer.record(crashed(tab));
+                }
+            }
+            after_every_stamp();
+        }
+        let held = hub.read_after(0).records;
+        let mut stamps: Vec<u64> = held.iter().map(|record| record.at_ms).collect();
+        stamps.push(held.first().map_or(0, |record| record.at_ms) - 1);
+        stamps.push(now_ms() + 1);
+        for since in stamps {
+            let walked = held
+                .iter()
+                .filter(|record| record.at_ms < since)
+                .map(|record| record.seq)
+                .max()
+                .unwrap_or(0);
+            assert_eq!(hub.position_at(since), walked, "since {since}");
+        }
     }
 
     /// A close is found while its tab's ring holds it: another tab's records never push it out,

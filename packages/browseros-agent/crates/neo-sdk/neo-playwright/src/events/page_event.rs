@@ -61,7 +61,8 @@ pub(crate) enum PageEvent {
 
 impl PageEvent {
     /// The tab whose ring keeps this record (`event_hub.rs`): the page it names, or a popup's
-    /// opener, since `page.on('popup')` reads the opener's ring. `None` for a download of no
+    /// opener, since `page.on('popup')` reads the opener's ring (the log files a popup under its
+    /// own ring instead once the opener is known closed, `EventLog::ring_of`). `None` for a download of no
     /// page, and for the kinds that carry only a frame id (`Navigation`, `FrameDetached`,
     /// `FrameSwapped`): the watcher files those under the tab it resolved for their session
     /// (`EventWriter::record_in`), or in the no-tab ring, which every one-tab read includes.
