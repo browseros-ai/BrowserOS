@@ -2,8 +2,8 @@
 //!
 //! [`CATALOG`] is the one list of families: name, help, kind, unit and buckets. [`Instruments::new`]
 //! takes each instrument's name, help, unit and buckets from its entry: the counters and the
-//! histograms through one helper each, the in-flight up-down counter and the open-tabs gauge
-//! written out, as their builders differ. The Prometheus renderer (`prometheus.rs`) walks the same
+//! histograms through one helper each, the in-flight up-down counter and the open-tabs observable
+//! up-down counter written out, as their builders differ. The Prometheus renderer (`prometheus.rs`) walks the same
 //! list for its `# HELP` / `# TYPE` lines and family order, so the pull door and the OTLP push
 //! door cannot drift apart.
 //!
@@ -299,11 +299,14 @@ impl Instruments {
         };
         instruments.runs_in_flight.add(0, &[]);
         instruments.renderer_crashes_total.add(0, &[]);
-        // The SDK keeps the callback for the meter provider's life; the returned handle has no
-        // way to unregister it, so it is not kept. The callback is not wrapped in `catch_unwind`
-        // (STYLE.md G16): the tab registry's source is a lock and a count that cannot panic.
+        // An up-down counter, not a gauge: open tabs add up across Neo processes, and OTel keeps
+        // the gauge for values that do not (a temperature, a ratio), so a backend may sum this one.
+        // Prometheus text types it a gauge either way. The SDK keeps the callback for the meter
+        // provider's life; the returned handle has no way to unregister it, so it is not kept.
+        // The callback is not wrapped in `catch_unwind` (STYLE.md G16): the tab registry's source
+        // is a lock and a count that cannot panic.
         meter
-            .u64_observable_gauge(TABS_OPEN.name)
+            .i64_observable_up_down_counter(TABS_OPEN.name)
             .with_description(TABS_OPEN.help)
             .with_unit(TABS_OPEN.unit)
             .with_callback(move |observer| {
@@ -311,7 +314,8 @@ impl Instruments {
                     return;
                 };
                 for origin in ORIGINS {
-                    observer.observe(counts.of(origin), &[KeyValue::new(ORIGIN, origin.as_str())]);
+                    let open = i64::try_from(counts.of(origin)).unwrap_or(i64::MAX);
+                    observer.observe(open, &[KeyValue::new(ORIGIN, origin.as_str())]);
                 }
             })
             .build();

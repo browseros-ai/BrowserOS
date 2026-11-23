@@ -2,9 +2,9 @@
 //!
 //! A version pin kept as a test, so an OpenTelemetry bump that changes one fails here first: a
 //! meter provider read through a shared manual reader, and names, values, histogram bounds and an
-//! observable gauge read back through `ResourceMetrics`' public accessors, as `prometheus.rs`
-//! reads them. The OTLP push door has tests of its own (`otlp.rs`, `transport.rs`,
-//! `tests/push_shutdown.rs`).
+//! observable up-down counter read back through `ResourceMetrics`' public accessors, as
+//! `prometheus.rs` reads them. The OTLP push door has tests of its own (`otlp.rs`,
+//! `transport.rs`, `tests/push_shutdown.rs`).
 
 use std::error::Error;
 use std::sync::{Arc, Weak};
@@ -74,8 +74,8 @@ fn the_scrape_reads_the_same_meter_provider_through_a_shared_manual_reader()
         .with_boundaries(vec![0.1, 1.0])
         .build()
         .record(0.5, &[]);
-    let _gauge = meter
-        .u64_observable_gauge("neo_spike_open")
+    let _open = meter
+        .i64_observable_up_down_counter("neo_spike_open")
         .with_callback(|observer| observer.observe(3, &[KeyValue::new("origin", "agent")]))
         .build();
 
@@ -90,7 +90,7 @@ fn the_scrape_reads_the_same_meter_provider_through_a_shared_manual_reader()
                     .map(|point| format!("{} {}", metric.name(), point.value()))
                     .collect::<Vec<_>>()
                     .join(","),
-                AggregatedMetrics::U64(MetricData::Gauge(gauge)) => gauge
+                AggregatedMetrics::I64(MetricData::Sum(sum)) => sum
                     .data_points()
                     .map(|point| format!("{} {}", metric.name(), point.value()))
                     .collect::<Vec<_>>()
@@ -118,7 +118,7 @@ fn the_scrape_reads_the_same_meter_provider_through_a_shared_manual_reader()
             "neo_spike_total 2".to_owned(),
         ],
         "the renderer reads names, values, bounds and bucket counts from the reader, and the \
-         observable gauge is read at collection time"
+         observable up-down counter is read at collection time"
     );
     provider.shutdown()?;
     Ok(())

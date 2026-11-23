@@ -255,8 +255,8 @@ function decodeMetric(raw: unknown): {
     series: [],
   }
   if (isObject(raw.sum) || isObject(raw.gauge)) {
-    // A monotonic sum is a counter; an UpDownCounter (`neo_runs_in_flight`) is a gauge, as
-    // Prometheus renders it.
+    // A monotonic sum is a counter; an up-down counter (`neo_runs_in_flight`, `neo_tabs_open`)
+    // is a gauge, as Prometheus renders it.
     family.kind =
       isObject(raw.sum) && raw.sum.isMonotonic === true ? 'counter' : 'gauge'
     const data = (isObject(raw.sum) ? raw.sum : raw.gauge) as Json

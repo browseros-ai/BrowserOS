@@ -282,12 +282,27 @@ export function fixturePrometheus(step = 0): string {
   return renderPrometheus(fixtureFamilies(step))
 }
 
+/** Each family's OTLP unit, as Neo's catalog sets it. */
+const UNITS: Record<string, string> = {
+  neo_runs_total: '{run}',
+  neo_runs_in_flight: '{run}',
+  neo_run_duration_seconds: 's',
+  neo_operations_total: '{operation}',
+  neo_operation_duration_seconds: 's',
+  neo_errors_total: '{error}',
+  neo_tabs_open: '{tab}',
+  neo_tabs_opened_total: '{tab}',
+  neo_tabs_closed_total: '{tab}',
+  neo_tab_lifetime_seconds: 's',
+  neo_renderer_crashes_total: '{crash}',
+}
+
 /** The families as an `ExportMetricsServiceRequest` (cumulative temporality). */
 export function fixtureMetrics(step = 0, at = Date.now()) {
   const time = nanos(at)
   const start = nanos(at - 60_000)
   const metrics = fixtureFamilies(step).map((family) => {
-    const unit = family.name.endsWith('_seconds') ? 's' : ''
+    const unit = UNITS[family.name] ?? ''
     const head = { name: family.name, description: family.help ?? '', unit }
     if (family.kind === 'histogram')
       return {
@@ -328,17 +343,16 @@ export function fixtureMetrics(step = 0, at = Date.now()) {
           dataPoints: points,
         },
       }
-    // `neo_runs_in_flight` is an UpDownCounter: a non-monotonic sum on the wire.
-    if (family.name === 'neo_runs_in_flight')
-      return {
-        ...head,
-        sum: {
-          aggregationTemporality: 2,
-          isMonotonic: false,
-          dataPoints: points,
-        },
-      }
-    return { ...head, gauge: { dataPoints: points } }
+    // Neo's two gauges (`neo_runs_in_flight`, `neo_tabs_open`) are up-down counters, as their
+    // values add up across processes: a non-monotonic sum on the wire.
+    return {
+      ...head,
+      sum: {
+        aggregationTemporality: 2,
+        isMonotonic: false,
+        dataPoints: points,
+      },
+    }
   })
   return {
     resourceMetrics: [

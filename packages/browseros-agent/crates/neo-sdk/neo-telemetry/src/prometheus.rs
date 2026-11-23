@@ -1,8 +1,8 @@
 //! Prometheus text exposition 0.0.4 from one collection of the pipeline's manual reader, for
 //! `GET /v1/metrics`.
 //!
-//! Our own renderer, not a third-party exporter: the subset is small (u64 counters, one i64
-//! up-down counter, one u64 gauge, f64 histograms; no units, scope labels or `target_info`), the
+//! Our own renderer, not a third-party exporter: the subset is small (u64 counters, two i64
+//! up-down counters, f64 histograms; no units, scope labels or `target_info`), the
 //! catalog that built the instruments (`instruments::CATALOG`) supplies every `# HELP` / `# TYPE`
 //! line and the family order, and an OpenTelemetry bump never waits on another crate's release.
 //!
@@ -58,10 +58,6 @@ impl Prometheus {
                 .map(|point| sample(name, point.attributes(), point.value()))
                 .collect(),
             Some(AggregatedMetrics::I64(MetricData::Sum(sum))) => sum
-                .data_points()
-                .map(|point| sample(name, point.attributes(), point.value()))
-                .collect(),
-            Some(AggregatedMetrics::U64(MetricData::Gauge(gauge))) => gauge
                 .data_points()
                 .map(|point| sample(name, point.attributes(), point.value()))
                 .collect(),
