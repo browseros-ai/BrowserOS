@@ -100,6 +100,23 @@ describe('the screen with Neo health', () => {
       (candidate) => candidate.textContent === text,
     ) as Element
 
+  it('opens Runs first and returns to the same run table after viewing metrics', async () => {
+    await screen([health()])
+    const nav = dom.container.querySelector('nav[aria-label="Viewer sections"]')
+    const current = () =>
+      nav?.querySelector('[aria-current="page"]')?.textContent
+    const table = dom.container.querySelector('[aria-label="Sort by Neo time"]')
+    expect(current()).toBe('Runs')
+    expect(table).not.toBeNull()
+    await dom.interact(() => fire(button('Metrics'), 'click'))
+    expect(current()).toBe('Metrics')
+    await dom.interact(() => fire(button('Runs'), 'click'))
+    expect(current()).toBe('Runs')
+    expect(dom.container.querySelector('[aria-label="Sort by Neo time"]')).toBe(
+      table,
+    )
+  })
+
   it('closes with ← Runs or Escape and gives focus back to the health line', async () => {
     await screen([health()])
     const line = healthLine()

@@ -18,6 +18,7 @@ import type {
   RunSummary,
   RunTask,
   TextSize,
+  TraceRunSummary,
   ViewerEvent,
 } from '../../shared/api'
 import { textSize } from '../../shared/api'
@@ -32,6 +33,8 @@ import {
 const PREVIEW_CHARS = 240
 
 interface RunState {
+  /** Cached position, updated alongside the existing renumbering when arrival order changes. */
+  seq: number
   start: StoredRunStart
   end: StoredRunEnd | null
   /** Started in this process and not ended yet; false for a run read back without an end. */
@@ -51,6 +54,10 @@ type Change =
 export class RunStore {
   private runs: RunState[] = []
   private byId = new Map<string, RunState>()
+  // Search starts from the bounded telemetry store. These indexes join it to current runs in
+  // O(1), without constructing summaries or walking an arbitrarily long proxy log per query.
+  private readonly byNeoRunId = new Map<string, Set<RunState>>()
+  private readonly byMintedSpanId = new Map<string, RunState>()
   private toolsList: TextSize | null = null
   private toolsListResult: unknown = null
   private logId = newLogId()
@@ -129,6 +136,7 @@ export class RunStore {
   startRun(start: RunStart): string {
     const id = `${this.logId}-${++this.count}`
     const run: RunState = {
+      seq: 0,
       start: { ...start, id },
       end: null,
       live: true,
@@ -138,6 +146,9 @@ export class RunStore {
     const index = at === -1 ? this.runs.length : at
     this.runs.splice(index, 0, run)
     this.byId.set(id, run)
+    const trace = start.trace
+    if (trace?.injected) this.byMintedSpanId.set(trace.spanId, run)
+    this.renumberFrom(index)
     void this.log.append({ type: 'run-start', run: run.start })
     // A run placed before others renumbers them.
     this.emitRunsFrom(index)
@@ -150,6 +161,7 @@ export class RunStore {
     if (!run || run.end) return
     run.end = end
     run.live = false
+    this.indexNeoRun(run)
     void this.log.append({ type: 'run-end', id: runId, end })
     // Its reply can give later runs their gap (it may have been recorded after them).
     this.emitRunsFrom(this.runs.indexOf(run))
@@ -192,6 +204,8 @@ export class RunStore {
   async clear(at = Date.now()): Promise<void> {
     this.runs = []
     this.byId = new Map()
+    this.byNeoRunId.clear()
+    this.byMintedSpanId.clear()
     this.toolsList = null
     this.toolsListResult = null
     this.count = 0
@@ -225,6 +239,51 @@ export class RunStore {
     return run && view ? detailRun(run, view) : null
   }
 
+  /**
+   * Current viewer runs owning retained Neo spans. A shared caller trace id is never a join key.
+   * The minted parent is a fallback only for a run whose reply did not identify its Neo run.
+   */
+  *traceRuns(
+    neoRunId: string,
+    mintedSpanId: string | null,
+  ): Iterable<TraceRunSummary> {
+    const known = this.byNeoRunId.get(neoRunId)
+    if (known)
+      for (const run of known)
+        yield {
+          id: run.start.id,
+          seq: run.seq,
+          sentAt: run.start.sentAt,
+          status: statusOf(run),
+        }
+    const fallback = mintedSpanId ? this.byMintedSpanId.get(mintedSpanId) : null
+    if (fallback && neoIdOf(fallback) === null)
+      yield {
+        id: fallback.start.id,
+        seq: fallback.seq,
+        sentAt: fallback.start.sentAt,
+        status: statusOf(fallback),
+      }
+  }
+
+  private renumberFrom(index: number): void {
+    for (let i = index; i < this.runs.length; i++) {
+      const run = this.runs[i]
+      if (run) run.seq = i + 1
+    }
+  }
+
+  private indexNeoRun(run: RunState): void {
+    const neoRunId = neoIdOf(run)
+    if (!neoRunId) return
+    let bucket = this.byNeoRunId.get(neoRunId)
+    if (!bucket) {
+      bucket = new Set()
+      this.byNeoRunId.set(neoRunId, bucket)
+    }
+    bucket.add(run)
+  }
+
   private restore(lines: LogLine[]): void {
     for (const line of lines) {
       if (line.type === 'log') {
@@ -235,6 +294,7 @@ export class RunStore {
         this.toolsListResult = line.reply ?? null
       } else if (line.type === 'run-start') {
         const run: RunState = {
+          seq: 0,
           start: line.run,
           end: null,
           live: false,
@@ -254,6 +314,12 @@ export class RunStore {
       comesBefore(a, b) ? -1 : comesBefore(b, a) ? 1 : 0,
     )
     this.count = this.runs.length
+    this.renumberFrom(0)
+    for (const run of this.runs) {
+      this.indexNeoRun(run)
+      const trace = run.start.trace
+      if (trace?.injected) this.byMintedSpanId.set(trace.spanId, run)
+    }
   }
 
   private emitRunsFrom(index: number): void {
@@ -308,6 +374,11 @@ function runViews(runs: RunState[]): RunSummary[] {
 function statusOf(run: RunState): RunStatus {
   if (run.end) return run.end.status
   return run.live ? 'running' : 'lost'
+}
+
+function neoIdOf(run: RunState): string | null {
+  const id = runMetaOf(run.end?.reply.meta)?.id
+  return typeof id === 'string' ? id : null
 }
 
 function summarizeRun(

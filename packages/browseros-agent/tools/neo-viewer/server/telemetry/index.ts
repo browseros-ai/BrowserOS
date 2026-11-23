@@ -12,7 +12,13 @@
  * and the span → record fold. What leaves is the page's domain types (`shared/api.ts`).
  */
 
-import type { MetricsView, RunTrace, TelemetryHealth } from '../../shared/api'
+import type {
+  MetricsView,
+  RunTrace,
+  TelemetryHealth,
+  TraceSearchQuery,
+  TracesResponse,
+} from '../../shared/api'
 import { hostFetch } from '../hostApi'
 import type { RunRecordSource } from '../neo-runs'
 import { buildTrace } from './fold-spans'
@@ -26,10 +32,12 @@ import { metricsView } from './metrics-view'
 import { pollMetrics } from './neo-metrics'
 import { receiverRoutes } from './otlp-receiver'
 import { parsePrometheus } from './prometheus-text'
+import { searchTraces, type TraceRunLookup } from './search-traces'
 import { spanRecords } from './span-records'
 import { type SpanLimits, SpanStore } from './span-store'
 
 export type { HealthPoint } from './metric-store'
+export { parseTraceQuery } from './search-traces'
 
 export interface TelemetryDeps {
   /** A host API is configured: scrape its `GET /v1/metrics`. */
@@ -82,6 +90,8 @@ export interface Telemetry {
     neoRunId: string | null
     mintedSpanId: string | null
   }): RunTrace | null
+  /** Searches retained actual spans, joined only to this viewer's current proxy runs. */
+  searchTraces(query: TraceSearchQuery, lookup: TraceRunLookup): TracesResponse
   /** Null when no metric ever arrived (an older image). */
   exportSnapshot(): TelemetryExport | null
   /** The log was cleared: `sinceClear` counts from here. */
@@ -218,6 +228,9 @@ export function startTelemetry(deps: TelemetryDeps): Telemetry {
         neoRunId ?? (mintedSpanId ? spans.runUnder(mintedSpanId) : null)
       const run = id ? spans.get(id) : null
       return run ? buildTrace(run) : null
+    },
+    searchTraces(query, lookup) {
+      return searchTraces(spans.retainedRuns(), query, lookup)
     },
     exportSnapshot() {
       const door = store.newest(now())

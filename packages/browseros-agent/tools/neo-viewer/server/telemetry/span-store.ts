@@ -99,6 +99,11 @@ export class SpanStore {
     return this.runs.get(neoRunId) ?? null
   }
 
+  /** Retained runs only: search work is capped by this store's run/span/byte limits. */
+  retainedRuns(): Iterable<RunSpans> {
+    return this.runs.values()
+  }
+
   /** The run whose `neo.run` span hangs under this parent span id (one the viewer minted). */
   runUnder(parentSpanId: string): string | null {
     return this.byParent.get(parentSpanId) ?? null

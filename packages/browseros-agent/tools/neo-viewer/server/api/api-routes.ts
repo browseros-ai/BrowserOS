@@ -14,11 +14,13 @@ import type {
   RunsResponse,
   RunTraceResponse,
   StreamEvent,
+  TraceSearchQuery,
   ViewerInfo,
 } from '../../shared/api'
 import { apiRoutes } from '../../shared/api'
 import type { RunStore } from '../log/run-store'
 import type { Telemetry } from '../telemetry'
+import { parseTraceQuery } from '../telemetry'
 
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const EVENT_KEEP_ALIVE_MS = 15_000
@@ -31,7 +33,10 @@ export function apiRouteTable(
   exportRuns: () => Promise<ExportResponse>,
   /** Waits, bounded, for Neo's record of a run that just ended (`?wait=neo`). */
   awaitNeoRecord: (runId: string) => Promise<void>,
-  telemetry: Pick<Telemetry, 'health' | 'subscribe' | 'metrics' | 'runTrace'>,
+  telemetry: Pick<
+    Telemetry,
+    'health' | 'subscribe' | 'metrics' | 'runTrace' | 'searchTraces'
+  >,
 ) {
   const snapshot = (): RunsResponse => ({
     log: store.summary(),
@@ -44,6 +49,21 @@ export function apiRouteTable(
       Response.json((await info()) satisfies ViewerInfo),
     ),
     [apiRoutes.runs]: local(() => Response.json(snapshot())),
+    [apiRoutes.traces]: {
+      GET: local((req) => {
+        let query: TraceSearchQuery
+        try {
+          query = parseTraceQuery(new URL(req.url).searchParams)
+        } catch (error) {
+          return Response.json({ error: String(error) }, { status: 400 })
+        }
+        return Response.json(
+          telemetry.searchTraces(query, (neoRunId, mintedSpanId) =>
+            store.traceRuns(neoRunId, mintedSpanId),
+          ),
+        )
+      }),
+    },
     '/api/runs/:runId': local(async (req: RouteRequest<'runId'>) => {
       if (new URL(req.url).searchParams.get('wait') === 'neo')
         await awaitNeoRecord(req.params.runId)

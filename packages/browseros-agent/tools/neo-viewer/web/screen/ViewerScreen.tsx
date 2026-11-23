@@ -6,6 +6,7 @@
  *
  *   ┌ TopBar: name · container line · health · MCP URL + Copy · Export · Clear · Take over ┐
  *   ├ ExportNotice: the last export's folder + Copy path, until dismissed ─────────────────┤
+ *   ├ Runs · Metrics · Traces: the explorers use the full area below navigation             ┤
  *   ├ TimeStrip: where the wall clock went, since the last Clear ──────────────────────────┤
  *   │ RunTable: one row per run(); open rows show RunBlock    ┃ Sidebar: live              │
  *   │ (code + "Model read" + "Trace"); totals row             ┃ screen, then the selected  │
@@ -15,7 +16,7 @@
  *   LiveScreenPopup: "Pop out" moves the live screen into a large pop-up; closing docks it again.
  *
  * Neo's telemetry adds to this only where it exists (`useViewer().health` is null for an image
- * older than telemetry, and then none of it shows): the top bar's health line, which opens the
+ * older than telemetry): the top bar's health line, which opens the
  * Health view in the runs' place (the top bar, strip and sidebar keep streaming beside it, and
  * the runs keep their scroll, selection and open rows), and a run's trace (below).
  *
@@ -38,8 +39,10 @@ import { LiveScreenPopup } from '../live-screen/LiveScreen'
 import { useLiveScreen } from '../live-screen/use-live-screen'
 import { useRunTrace } from '../use-telemetry'
 import { useRunDetail, useViewer } from '../use-viewer'
+import type { ExplorerSpanFilter } from './explorer-filter'
 import { FullOutput } from './FullOutput'
 import { HealthView } from './HealthView'
+import { MetricsExplorer } from './MetricsExplorer'
 import { runTotals } from './measures'
 import type { OperationSelection } from './operations'
 import { RunTable } from './RunTable'
@@ -49,6 +52,7 @@ import { DEFAULT_SORT, type RunSort } from './sort'
 import { TimeStrip } from './TimeStrip'
 import { ExportNotice, TopBar } from './TopBar'
 import type { TraceSelection } from './TracePanel'
+import { TracesExplorer } from './TracesExplorer'
 import { operationFor, selectedSpan } from './trace'
 import { useContainer } from './use-container'
 import { TraceFull } from './Waterfall'
@@ -84,19 +88,43 @@ export function ViewerScreen() {
   const container = useContainer(info)
   const [popped, setPopped] = useState(false)
   const nowMs = useNow(runs.some((run) => run.status === 'running'))
-  const [healthOpen, setHealthOpen] = useState(false)
+  // A metrics drilldown carries its method and duration bounds into the trace search.
+  const [view, setView] = useState<'Runs' | 'Metrics' | 'Traces' | 'Health'>(
+    'Runs',
+  )
+  const [filter, setFilter] = useState<ExplorerSpanFilter | null>(null)
+  const showRuns = view === 'Runs' || view === 'Health'
+  const focusRun = useRef<number | null>(null)
+  const focusTraceResults = useRef(false)
+  const traceResults = useRef<HTMLElement>(null)
+  // The row can be far below the preserved scroll position when we arrive from Traces.
+  useEffect(() => {
+    if (view === 'Traces' && focusTraceResults.current) {
+      traceResults.current?.focus()
+      focusTraceResults.current = false
+    }
+    if (view === 'Runs' && focusRun.current !== null) {
+      const row = document.querySelector<HTMLButtonElement>(
+        `button[data-run="${focusRun.current}"]`,
+      )
+      row?.focus()
+      row?.scrollIntoView({ block: 'nearest' })
+      focusRun.current = null
+    }
+  }, [view])
   const healthButton = useRef<HTMLButtonElement>(null)
   // The view needs the health line that opens it. Health gone (a viewer restarted without
   // telemetry) closes it for good: it does not reopen by itself when health comes back.
-  const healthShown = healthOpen && health !== null
+  const healthShown = view === 'Health' && health !== null
   const noHealth = health === null
   useEffect(() => {
-    if (noHealth) setHealthOpen(false)
+    if (noHealth)
+      setView((current) => (current === 'Health' ? 'Runs' : current))
   }, [noHealth])
   // "← Runs" and Escape take away the focused element with the view: focus goes back to the
   // health line that opened it.
   const closeHealth = useCallback(() => {
-    setHealthOpen(false)
+    setView('Runs')
     healthButton.current?.focus()
   }, [])
   useEscapeCloses(healthShown, closeHealth)
@@ -219,9 +247,28 @@ export function ViewerScreen() {
         live={live}
         health={health}
         healthOpen={healthShown}
-        onHealth={() => setHealthOpen(!healthShown)}
+        onHealth={() => setView(healthShown ? 'Runs' : 'Health')}
         healthButton={healthButton}
       />
+      <nav
+        aria-label="Viewer sections"
+        className="flex shrink-0 gap-5 border-line border-b px-4"
+      >
+        {(['Runs', 'Metrics', 'Traces'] as const).map((section) => {
+          const active = section === (showRuns ? 'Runs' : view)
+          return (
+            <button
+              key={section}
+              type="button"
+              aria-current={active ? 'page' : undefined}
+              onClick={() => setView(section)}
+              className={`border-b-2 py-2 font-medium ${active ? 'border-neo text-neo' : 'border-transparent text-ink-2 hover:text-ink'}`}
+            >
+              {section}
+            </button>
+          )
+        })}
+      </nav>
       {exported && (
         <ExportNotice exported={exported} onDismiss={() => setExported(null)} />
       )}
@@ -233,13 +280,50 @@ export function ViewerScreen() {
           {error}
         </p>
       )}
-      <TimeStrip
-        runs={runs}
-        totals={totals}
-        nowMs={nowMs}
-        selectedId={selected?.id ?? null}
-      />
-      <div className="flex min-h-0 flex-1">
+      {view === 'Metrics' && (
+        <main className="min-h-0 flex-1 overflow-auto">
+          <MetricsExplorer
+            health={health}
+            onFindTraces={(next) => {
+              focusTraceResults.current = true
+              setFilter(next)
+              setView('Traces')
+            }}
+          />
+        </main>
+      )}
+      {view === 'Traces' && (
+        <main
+          ref={traceResults}
+          tabIndex={-1}
+          aria-label="Trace search results"
+          className="min-h-0 flex-1 overflow-auto"
+        >
+          <TracesExplorer
+            runs={runs}
+            rev={health?.rev}
+            filter={filter}
+            onClearFilter={() => setFilter(null)}
+            onOpenRun={(run, span, call) => {
+              focusRun.current = run.seq
+              setChosenId(run.id)
+              setOpenIds((current) => new Set(current).add(run.id))
+              setOperation(call ?? null)
+              setTrace(span ? { runId: run.id, spanId: span.spanId } : null)
+              setView('Runs')
+            }}
+          />
+        </main>
+      )}
+      {showRuns && (
+        <TimeStrip
+          runs={runs}
+          totals={totals}
+          nowMs={nowMs}
+          selectedId={selected?.id ?? null}
+        />
+      )}
+      <div className={showRuns ? 'flex min-h-0 flex-1' : 'hidden'}>
         {/* The runs and the Health view scroll on their own, so each keeps its place. */}
         <main className="relative min-w-0 flex-1">
           <div
@@ -272,27 +356,29 @@ export function ViewerScreen() {
           )}
         </main>
         <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
-        <Sidebar
-          width={sidebarWidth}
-          run={selected}
-          operation={selectedOperation}
-          trace={selectedTrace}
-          traceRev={health?.rev}
-          onShowReply={() => {
-            setOperation(null)
-            setTrace(null)
-          }}
-          onOpenFull={openFull}
-          onOpenFullOperation={openFullOperation}
-          onSelectSpan={(span, call) =>
-            selected && selectSpan(selected, span, call)
-          }
-          onShowCall={() => setTrace(null)}
-          onOpenFullTrace={() => selected && openFullTrace(selected)}
-          live={live}
-          popped={popped}
-          onPopOut={() => setPopped(true)}
-        />
+        {showRuns && (
+          <Sidebar
+            width={sidebarWidth}
+            run={selected}
+            operation={selectedOperation}
+            trace={selectedTrace}
+            traceRev={health?.rev}
+            onShowReply={() => {
+              setOperation(null)
+              setTrace(null)
+            }}
+            onOpenFull={openFull}
+            onOpenFullOperation={openFullOperation}
+            onSelectSpan={(span, call) =>
+              selected && selectSpan(selected, span, call)
+            }
+            onShowCall={() => setTrace(null)}
+            onOpenFullTrace={() => selected && openFullTrace(selected)}
+            live={live}
+            popped={popped}
+            onPopOut={() => setPopped(true)}
+          />
+        )}
       </div>
       {popped && (
         <LiveScreenPopup live={live} onClose={() => setPopped(false)} />
