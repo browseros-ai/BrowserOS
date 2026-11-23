@@ -18,7 +18,7 @@ use neo_playwright::{
     ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
-use neo_telemetry::{Telemetry, TelemetryConfig};
+use neo_telemetry::{RunFacts, Telemetry, TelemetryConfig};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
     OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -232,6 +232,34 @@ impl Harness {
             tabs_scope: TabsScope::Browser,
             access: None,
             telemetry: Telemetry::noop().internal_run(),
+        };
+        Ok(RunCtx::start(&self.dispatcher, start))
+    }
+
+    /// A script run like [`Harness::run`], counted by `telemetry`, so its ops' navigation and
+    /// CAPTCHA metrics reach `telemetry`'s scrape.
+    fn run_reporting(
+        &self,
+        telemetry: &Telemetry,
+    ) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+        let view = self.link.view().ok_or("the link is up")?;
+        let id = RunId::new();
+        let start = RunStart {
+            id,
+            code: "await page.goto(url)".to_owned(),
+            request_id: None,
+            task_id: None,
+            host_data: None,
+            view,
+            deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+            default_page: None,
+            tabs_scope: TabsScope::Browser,
+            access: None,
+            telemetry: telemetry.start_run(RunFacts {
+                run_id: &id,
+                task_id: None,
+                parent: None,
+            }),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -554,6 +582,66 @@ async fn a_load_the_browser_could_not_make_is_the_websites_failure() -> Result<(
     assert_eq!(
         row.error.map(|error| (error.owner, error.code)),
         Some((ErrorOwner::Website, "navigation_failed".to_owned()))
+    );
+    Ok(())
+}
+
+/// Navigation telemetry through the real door: a goto the network refused is a navigation and a
+/// navigation error by Chromium's name, while the op still fails as the website's; a goto the
+/// door refused before sending and an op that navigates nothing count nothing.
+#[tokio::test]
+async fn a_navigation_the_network_refused_is_counted_by_its_net_error() -> Result<(), Box<dyn Error>>
+{
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let harness = Harness::new().await?;
+    let (run, guard) = harness.run_reporting(&telemetry)?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "page.goto",
+                json!({ "page": handle(&page), "url": "bank.example/login" }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        harness.fake.count("Page.navigate"),
+        0,
+        "refused before the browser was asked: {}",
+        refused.error
+    );
+    value(
+        harness
+            .submit(&run, "page.opener", json!({ "page": handle(&page) }))
+            .await,
+    )?;
+    harness.fake.answer(
+        "Page.navigate",
+        json!({ "frameId": "frame", "errorText": "net::ERR_NAME_NOT_RESOLVED" }),
+    );
+    let input = json!({
+        "page": handle(&page),
+        "url": "https://nowhere.invalid/",
+        "waitUntil": "load",
+    });
+    let failed = failure(within(harness.submit(&run, "page.goto", input)).await?)?;
+    assert_eq!(
+        (failed.error.owner(), failed.error.code()),
+        (ErrorOwner::Website, ErrorCode::NAVIGATION_FAILED),
+        "the op keeps its own outcome: {}",
+        failed.error
+    );
+    Harness::finish(guard);
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&["neo_navigations_total", "neo_navigation_errors_total"]),
+        [
+            r#"neo_navigation_errors_total{error_code="name_not_resolved"} 1"#,
+            "neo_navigations_total 1",
+        ],
+        "one navigation sent, the one the network refused"
     );
     Ok(())
 }

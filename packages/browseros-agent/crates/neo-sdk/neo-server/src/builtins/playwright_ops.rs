@@ -36,6 +36,7 @@ use serde_json::{Map, Value, json};
 use super::PlaywrightFacade;
 use super::event_release::EventRelease;
 use super::op_marks::{self, Hold, OpMarks};
+use super::telemetry_labels;
 use crate::browser::{IntentReason, NeoTab, OpenFor, OpenIntent, PageRef, Sight};
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
@@ -294,6 +295,13 @@ impl Method for PlaywrightOp {
         op.report_publications(env.run_state().completed_navigation_loads());
         let result = result?;
         self.pages.report(op, page, &result);
+        // Only a navigation the browser was sent: a refusal before it navigated nothing, and the
+        // run's stop returned above.
+        if env.sent()
+            && let Some(navigation) = telemetry_labels::navigated(self.spec.name, &result)
+        {
+            op.run().telemetry().navigated(navigation);
+        }
         // A page can step itself onto a `file:` entry of its tab's history while an op waits on
         // it (its own `history.back()`, measured), and the op then reads the new document. What
         // it took there, a value or a call log that previews elements, never reaches the script.

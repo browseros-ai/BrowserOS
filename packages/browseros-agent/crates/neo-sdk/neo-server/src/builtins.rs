@@ -39,6 +39,7 @@ mod playwright_facade;
 mod playwright_ops;
 mod solve_captcha;
 mod tab_janitor;
+mod telemetry_labels;
 #[cfg(test)]
 mod tests;
 

@@ -31,7 +31,7 @@ use crate::page::frame_tree::{FrameInfo, FrameTree};
 use crate::page::{LoadState, frame_tree, subtree_load};
 use crate::target::PageRef;
 use crate::wire::options;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, NetFailure, Playwright, PlaywrightError};
 
 /// How long the response read may take once the document is there. It runs inside the op's
 /// timeout too; this only keeps a busy renderer from holding a finished navigation.
@@ -393,7 +393,10 @@ async fn drive(
                 if let Some(loader) = &reply.loader_id {
                     let _ = time::timeout(ERROR_PAGE_COMMIT, watch.committed(loader)).await;
                 }
-                return Err(scope.fail(ErrorCode::NavigationFailed, &format!("{error} at {url}")));
+                let failure = NetFailure::Named(error.as_str().into());
+                return Err(scope
+                    .fail(ErrorCode::NavigationFailed, &format!("{error} at {url}"))
+                    .with_net_failure(failure));
             }
             if let Some(loader) = reply.loader_id {
                 match target.committed(scope, watch, &loader).await? {
@@ -446,7 +449,9 @@ async fn drive(
         && let Some(unreachable) = &commit.unreachable
     {
         let message = format!("the browser could not load {unreachable}");
-        return Err(scope.fail(ErrorCode::NavigationFailed, &message));
+        return Err(scope
+            .fail(ErrorCode::NavigationFailed, &message)
+            .with_net_failure(NetFailure::ErrorPage));
     }
     target.register_load_publication(scope, &arrival, wait_until);
     // Keep the selected document's response while it still exists. A later navigation can
@@ -1045,7 +1050,7 @@ mod tests {
         use crate::op::Op;
         use crate::test_env::EnvCall;
         use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript};
-        use crate::{ErrorCode, PlaywrightError};
+        use crate::{ErrorCode, NetFailure, PlaywrightError};
         use serde_json::{Value, json};
 
         struct Aborted;
@@ -1075,6 +1080,11 @@ mod tests {
                 failed.error_code(),
                 Some(ErrorCode::NavigationFailed),
                 "{failed}"
+            );
+            assert_eq!(
+                failed.net_failure(),
+                Some(&NetFailure::Named("net::ERR_ABORTED".into())),
+                "{url}: the browser's own error, apart from the message the URL is in"
             );
             assert_eq!(
                 run.env.calls().contains(&EnvCall::MainWorld),
