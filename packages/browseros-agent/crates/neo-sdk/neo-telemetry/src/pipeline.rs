@@ -570,6 +570,9 @@ mod tests {
     use opentelemetry_sdk::trace::SpanData;
 
     use super::*;
+    use crate::OpenTabCounts;
+    use crate::instruments::CATALOG;
+    use crate::label::{Delivery, OpOutcome};
 
     const NO_MATCH: ErrorCode = ErrorCode::new("no_match");
     const TIMEOUT: ErrorCode = ErrorCode::new("run_timeout");
@@ -733,6 +736,60 @@ mod tests {
                 .map(|name| name.to_string()),
             Some("browseros-neo".to_owned()),
             "the meter provider takes `otlp::resource`, so OTLP metrics name the service"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn every_instrument_the_push_door_exports_carries_its_unit() -> Result<(), Box<dyn Error>> {
+        let pipeline = Pipeline::start(&TelemetryConfig::default())?;
+        pipeline.set_open_tabs(Arc::new(OpenTabCounts::default));
+        pipeline.run_refused(ErrorLabel {
+            owner: ErrorOwner::Host,
+            code: NO_MATCH,
+        });
+        let run = pipeline.run_started(&RunFacts {
+            run_id: &"run-1",
+            task_id: None,
+            parent: None,
+        });
+        pipeline.op_settled(
+            Some(&run.ops()),
+            &OpSettled {
+                op: "page.goto",
+                raw_name: None,
+                op_id: &"run-1.1",
+                site: None,
+                tab_id: None,
+                started: Instant::now(),
+                outcome: OpOutcome::Ok,
+                delivery: Delivery::Done,
+                counting: OpCounting::Counted,
+                error: None,
+                url: None,
+            },
+        );
+        pipeline.run_ended(run, None);
+        pipeline.tab_opened(TabOrigin::Agent);
+        pipeline.tab_closed(
+            TabOrigin::Agent,
+            CloseReason::Script,
+            Duration::from_secs(3),
+        );
+        pipeline.renderer_crashed();
+        let mut collected = ResourceMetrics::default();
+        pipeline.scrape.collect(&mut collected)?;
+        let mut units: Vec<(&str, &str)> = Vec::new();
+        for scope in collected.scope_metrics() {
+            units.extend(scope.metrics().map(|metric| (metric.name(), metric.unit())));
+        }
+        units.sort_unstable();
+        let mut catalog: Vec<(&str, &str)> =
+            CATALOG.iter().map(|spec| (spec.name, spec.unit)).collect();
+        catalog.sort_unstable();
+        assert_eq!(
+            units, catalog,
+            "each family goes out with its UCUM unit: seconds, or a {{thing}} for a count"
         );
         Ok(())
     }

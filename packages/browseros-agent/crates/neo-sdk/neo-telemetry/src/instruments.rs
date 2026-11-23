@@ -57,8 +57,9 @@ pub(crate) struct MetricSpec {
     pub(crate) help: &'static str,
     /// How Prometheus types it.
     pub(crate) kind: Kind,
-    /// The OTLP unit: `s` for the durations, empty otherwise (Prometheus reads the unit from the
-    /// name's suffix instead).
+    /// The OTLP unit, in UCUM as semantic conventions ask: `s` for the durations, a `{thing}`
+    /// annotation for a count of things. Prometheus text reads a duration's unit from its
+    /// name's suffix instead, and an annotation is no unit there.
     pub(crate) unit: &'static str,
     /// Bucket upper bounds in seconds, strictly increasing; empty for a non-histogram.
     pub(crate) buckets: &'static [f64],
@@ -84,14 +85,14 @@ const RUNS_TOTAL: MetricSpec = MetricSpec {
     help: "Runs that ended, and calls refused before they became a run, by status and by who \
            must fix the failure.",
     kind: Kind::Counter,
-    unit: "",
+    unit: "{run}",
     buckets: &[],
 };
 const RUNS_IN_FLIGHT: MetricSpec = MetricSpec {
     name: "neo_runs_in_flight",
     help: "Runs admitted and not yet ended.",
     kind: Kind::Gauge,
-    unit: "",
+    unit: "{run}",
     buckets: &[],
 };
 const RUN_DURATION: MetricSpec = MetricSpec {
@@ -106,7 +107,7 @@ const OPERATIONS_TOTAL: MetricSpec = MetricSpec {
     help: "Operations settled, by op (unregistered names count as unknown), status and who must \
            fix the failure.",
     kind: Kind::Counter,
-    unit: "",
+    unit: "{operation}",
     buckets: &[],
 };
 const OPERATION_DURATION: MetricSpec = MetricSpec {
@@ -121,28 +122,28 @@ const ERRORS_TOTAL: MetricSpec = MetricSpec {
     help: "Failures by who must fix them and their code, each counted once where it is \
            attributed.",
     kind: Kind::Counter,
-    unit: "",
+    unit: "{error}",
     buckets: &[],
 };
 const TABS_OPEN: MetricSpec = MetricSpec {
     name: "neo_tabs_open",
     help: "Tabs open now, by who opened them.",
     kind: Kind::Gauge,
-    unit: "",
+    unit: "{tab}",
     buckets: &[],
 };
 const TABS_OPENED_TOTAL: MetricSpec = MetricSpec {
     name: "neo_tabs_opened_total",
     help: "Tabs Neo registered, by who opened them.",
     kind: Kind::Counter,
-    unit: "",
+    unit: "{tab}",
     buckets: &[],
 };
 const TABS_CLOSED_TOTAL: MetricSpec = MetricSpec {
     name: "neo_tabs_closed_total",
     help: "Tabs closed, by who opened them and why they closed.",
     kind: Kind::Counter,
-    unit: "",
+    unit: "{tab}",
     buckets: &[],
 };
 const TAB_LIFETIME: MetricSpec = MetricSpec {
@@ -156,7 +157,7 @@ const RENDERER_CRASHES_TOTAL: MetricSpec = MetricSpec {
     name: "neo_renderer_crashes_total",
     help: "Renderer crashes, whether or not an op was using the tab.",
     kind: Kind::Counter,
-    unit: "",
+    unit: "{crash}",
     buckets: &[],
 };
 
@@ -285,6 +286,7 @@ impl Instruments {
             runs_in_flight: meter
                 .i64_up_down_counter(RUNS_IN_FLIGHT.name)
                 .with_description(RUNS_IN_FLIGHT.help)
+                .with_unit(RUNS_IN_FLIGHT.unit)
                 .build(),
             run_duration: histogram(meter, &RUN_DURATION),
             operations_total: counter(meter, &OPERATIONS_TOTAL),
@@ -303,6 +305,7 @@ impl Instruments {
         meter
             .u64_observable_gauge(TABS_OPEN.name)
             .with_description(TABS_OPEN.help)
+            .with_unit(TABS_OPEN.unit)
             .with_callback(move |observer| {
                 let Some(counts) = open_tabs.read() else {
                     return;
@@ -406,6 +409,7 @@ fn counter(meter: &Meter, spec: &MetricSpec) -> Counter<u64> {
     meter
         .u64_counter(spec.name)
         .with_description(spec.help)
+        .with_unit(spec.unit)
         .build()
 }
 
@@ -424,17 +428,17 @@ mod tests {
 
     /// wire-contract.md's table, row by row: name, kind, unit.
     const WIRE_CONTRACT: [(&str, Kind, &str); 11] = [
-        ("neo_runs_total", Kind::Counter, ""),
-        ("neo_runs_in_flight", Kind::Gauge, ""),
+        ("neo_runs_total", Kind::Counter, "{run}"),
+        ("neo_runs_in_flight", Kind::Gauge, "{run}"),
         ("neo_run_duration_seconds", Kind::Histogram, "s"),
-        ("neo_operations_total", Kind::Counter, ""),
+        ("neo_operations_total", Kind::Counter, "{operation}"),
         ("neo_operation_duration_seconds", Kind::Histogram, "s"),
-        ("neo_errors_total", Kind::Counter, ""),
-        ("neo_tabs_open", Kind::Gauge, ""),
-        ("neo_tabs_opened_total", Kind::Counter, ""),
-        ("neo_tabs_closed_total", Kind::Counter, ""),
+        ("neo_errors_total", Kind::Counter, "{error}"),
+        ("neo_tabs_open", Kind::Gauge, "{tab}"),
+        ("neo_tabs_opened_total", Kind::Counter, "{tab}"),
+        ("neo_tabs_closed_total", Kind::Counter, "{tab}"),
         ("neo_tab_lifetime_seconds", Kind::Histogram, "s"),
-        ("neo_renderer_crashes_total", Kind::Counter, ""),
+        ("neo_renderer_crashes_total", Kind::Counter, "{crash}"),
     ];
 
     #[test]
@@ -484,11 +488,18 @@ mod tests {
                         spec.name
                     );
                 }
-                Kind::Counter | Kind::Gauge => assert!(
-                    spec.buckets.is_empty(),
-                    "{}: only a histogram has buckets",
-                    spec.name
-                ),
+                Kind::Counter | Kind::Gauge => {
+                    assert!(
+                        spec.buckets.is_empty(),
+                        "{}: only a histogram has buckets",
+                        spec.name
+                    );
+                    assert!(
+                        spec.unit.starts_with('{') && spec.unit.ends_with('}'),
+                        "{}: a count of things has a UCUM annotation as its unit",
+                        spec.name
+                    );
+                }
             }
             assert!(
                 spec.help.ends_with('.') && !spec.help.contains('\n'),
