@@ -14,6 +14,20 @@ pub struct OpSite {
     pub column: u32,
 }
 
+/// Whether a settled op counts on the op metrics. Every op keeps its `neo.op` span either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpCounting {
+    /// The script's op, or one Neo ran for it (a child op, the run's lazy page): counted on
+    /// `neo_operations_total`, `neo_operation_duration_seconds` and, when it fails,
+    /// `neo_errors_total`.
+    Counted,
+    /// Neo's own housekeeping, sent with no script call site: the frame-tree reads, the event
+    /// pump and listener bookkeeping. Their number grows with open tabs rather than with the
+    /// script's work, so counting them would dilute every op rate and op error rate. Span only,
+    /// so a trace still shows them; a failure that ends the run is counted once, at the run.
+    Internal,
+}
+
 /// One op, as the door settled it ([`crate::RunTelemetry::op_settled`]): the same decided values
 /// its trace record gets. Borrowed, so the no-op never copies or formats anything.
 #[derive(Clone, Copy)]
@@ -40,6 +54,8 @@ pub struct OpSettled<'a> {
     pub outcome: OpOutcome,
     /// As the op's record says; span only.
     pub delivery: Delivery,
+    /// Whether the op metrics see it.
+    pub counting: OpCounting,
     /// Its failure, exactly when its record carries an error; a retired background pull is
     /// `None`.
     pub error: Option<ErrorLabel>,
@@ -61,6 +77,7 @@ impl fmt::Debug for OpSettled<'_> {
             .field("started", &self.started)
             .field("outcome", &self.outcome)
             .field("delivery", &self.delivery)
+            .field("counting", &self.counting)
             .field("error", &self.error)
             .field("url", &self.url.map(|_| "<redacted>"))
             .finish()

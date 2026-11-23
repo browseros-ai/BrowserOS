@@ -12,8 +12,8 @@ use neo_telemetry::label::{
     CloseReason, Delivery, ErrorCode, ErrorLabel, ErrorOwner, OpOutcome, RunStatus, TabOrigin,
 };
 use neo_telemetry::{
-    CapturedSpan, OpSettled, OpSite, OpenTabCounts, Probe, RunFacts, RunVerdict, SiteDetail,
-    SpanStatus, SpanValue, Telemetry, TelemetryConfig, TraceContext, Vocabulary,
+    CapturedSpan, OpCounting, OpSettled, OpSite, OpenTabCounts, Probe, RunFacts, RunVerdict,
+    SiteDetail, SpanStatus, SpanValue, Telemetry, TelemetryConfig, TraceContext, Vocabulary,
 };
 
 /// The server's tables, as a test binds them.
@@ -69,6 +69,7 @@ fn settled<'a>(op: &'static str, op_id: &'a dyn fmt::Display) -> OpSettled<'a> {
         started: Instant::now(),
         outcome: OpOutcome::Ok,
         delivery: Delivery::Done,
+        counting: OpCounting::Counted,
         error: None,
         url: None,
     }
@@ -408,6 +409,7 @@ fn every_metric_reports_its_facade_calls() -> Result<(), Box<dyn Error>> {
     run.ops().op_settled(OpSettled {
         outcome: OpOutcome::Error,
         delivery: Delivery::NotSent,
+        counting: OpCounting::Counted,
         error: Some(failure(ErrorOwner::Website, "no_match")),
         ..settled("locator.click", &"run-1.2")
     });
@@ -491,6 +493,7 @@ fn unregistered_ops_count_as_unknown_while_their_spans_keep_the_raw_name()
             raw_name: Some(raw),
             outcome: OpOutcome::Error,
             delivery: Delivery::NotSent,
+            counting: OpCounting::Counted,
             error: Some(failure(ErrorOwner::Script, "method_unavailable")),
             ..settled("unknown", &"run-1.1")
         });
@@ -985,6 +988,7 @@ fn span_attributes_and_status_match_the_wire_contract() -> Result<(), Box<dyn Er
         started: ago(Duration::from_millis(250))?,
         outcome: OpOutcome::Error,
         delivery: Delivery::Unknown,
+        counting: OpCounting::Counted,
         error: Some(failure(ErrorOwner::Website, "no_match")),
         url: Some("https://shop.example.com/cart?id=1"),
         ..settled("locator.click", &"run-8.1")
@@ -1163,6 +1167,64 @@ fn an_internal_runs_ops_count_and_their_spans_are_roots() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn neo_internal_ops_leave_every_op_metric_and_keep_their_spans() -> Result<(), Box<dyn Error>> {
+    let (telemetry, probe) = live(SiteDetail::None);
+    let gone = failure(ErrorOwner::Website, "no_match");
+    let run = telemetry.start_run(facts(&"run-1"));
+    let ops = run.ops();
+    ops.op_settled(OpSettled {
+        counting: OpCounting::Internal,
+        ..settled("page.goto", &"run-1.1")
+    });
+    ops.op_settled(OpSettled {
+        counting: OpCounting::Internal,
+        outcome: OpOutcome::Error,
+        error: Some(gone),
+        ..settled("locator.click", &"run-1.2")
+    });
+    run.finish(RunVerdict {
+        status: RunStatus::Error,
+        error: Some(gone),
+    });
+    let metrics = scrape(&telemetry)?;
+    assert!(
+        metrics.named("neo_operations_total").is_empty()
+            && metrics
+                .named("neo_operation_duration_seconds_count")
+                .is_empty(),
+        "housekeeping grows with open tabs, so it never reaches an op rate"
+    );
+    assert_eq!(
+        metrics.value(
+            "neo_errors_total",
+            &[("error_owner", "website"), ("error_code", "no_match")]
+        ),
+        Some("1"),
+        "the internal op's failure is not counted, so the run that ended on it counts it once"
+    );
+    assert_eq!(
+        metrics.value(
+            "neo_runs_total",
+            &[("status", "error"), ("error_owner", "website")]
+        ),
+        Some("1"),
+        "the run itself is counted as usual"
+    );
+    let spans = probe.spans();
+    let run_span = the_span(&spans, "neo.run")?;
+    let op_spans: Vec<&CapturedSpan> = spans
+        .iter()
+        .filter(|span| span.parent_span_id.as_ref() == Some(&run_span.span_id))
+        .collect();
+    assert_eq!(
+        op_spans.len(),
+        2,
+        "both ops keep a span under their run, so the trace still shows Neo's own work"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_unsampled_caller_trace_keeps_its_metrics_but_exports_no_span() -> Result<(), Box<dyn Error>> {
     let (telemetry, probe) = live(SiteDetail::None);
     let parent = TraceContext::from_w3c(UNSAMPLED, None);
@@ -1259,6 +1321,7 @@ fn an_op_that_settles_after_its_run_ended_still_counts_and_nests() -> Result<(),
     ops.op_settled(OpSettled {
         outcome: OpOutcome::Cancelled,
         delivery: Delivery::Unknown,
+        counting: OpCounting::Counted,
         error: Some(crash),
         ..settled("page.goto", &"run-1.1")
     });
@@ -1310,6 +1373,7 @@ fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Erro
         run.ops().op_settled(OpSettled {
             outcome: OpOutcome::Cancelled,
             delivery: Delivery::Unknown,
+            counting: OpCounting::Counted,
             error: Some(timeout),
             ..settled("locator.click", &op_id)
         });
@@ -1323,6 +1387,7 @@ fn a_stop_counts_once_however_many_ops_it_cut_short() -> Result<(), Box<dyn Erro
     ok.ops().op_settled(OpSettled {
         outcome: OpOutcome::Cancelled,
         delivery: Delivery::NotSent,
+        counting: OpCounting::Counted,
         error: Some(failure(ErrorOwner::Script, "not_awaited")),
         ..settled("page.goto", &"run-2.1")
     });
@@ -1380,6 +1445,7 @@ fn an_ok_run_whose_own_long_poll_was_cut_has_no_error_span() -> Result<(), Box<d
     run.ops().op_settled(OpSettled {
         outcome: OpOutcome::Cancelled,
         delivery: Delivery::NotSent,
+        counting: OpCounting::Counted,
         ..settled("events.next", &"run-1.2")
     });
     run.finish(OK);

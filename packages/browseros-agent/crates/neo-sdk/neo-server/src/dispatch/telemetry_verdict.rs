@@ -8,11 +8,11 @@
 //! of reaching a metric under a guessed label.
 
 use neo_telemetry::label::{self, ErrorLabel, OpOutcome};
-use neo_telemetry::{OpSite, RunVerdict};
+use neo_telemetry::{OpCounting, OpSite, RunVerdict};
 use neo_trace::{Delivery, ErrorOwner, ErrorRecord, OperationKind, Outcome, PageState, RunStatus};
 
 use super::operation_guard::Settled;
-use super::{CallSite, ErrorCode, OperationError, RunEnd};
+use super::{CallSite, ErrorCode, OpMetrics, OperationError, RunEnd};
 
 /// A run's end as its telemetry records it (`RunSpan::finish`): the status and the failure its
 /// `run_ended` record carries. `RunGuard` reports both of its ends through it, and a call refused
@@ -52,6 +52,16 @@ pub(super) fn op_failure(result: &Settled) -> Option<ErrorLabel> {
     match result {
         Settled::Failed(error) => Some(failure(error)),
         Settled::Value(_) | Settled::Retired(_) => None,
+    }
+}
+
+/// Whether an op counts on the op metrics: always, unless its method is Neo's housekeeping and
+/// the op carries no script call site (`site`, as its record names it), so Neo sent it on its own.
+#[must_use]
+pub(super) fn op_counting(metrics: OpMetrics, site: Option<CallSite>) -> OpCounting {
+    match (metrics, site) {
+        (OpMetrics::Counted, _) | (OpMetrics::Housekeeping, Some(_)) => OpCounting::Counted,
+        (OpMetrics::Housekeeping, None) => OpCounting::Internal,
     }
 }
 
@@ -126,9 +136,11 @@ mod tests {
     };
     use serde_json::json;
 
-    use super::{op_delivery, op_failure, op_outcome, op_url, telemetry_verdict};
+    use neo_telemetry::OpCounting;
+
+    use super::{op_counting, op_delivery, op_failure, op_outcome, op_url, telemetry_verdict};
     use crate::dispatch::operation_guard::Settled;
-    use crate::dispatch::{ErrorCode, OperationError, RunEnd, StopReason};
+    use crate::dispatch::{CallSite, ErrorCode, OpMetrics, OperationError, RunEnd, StopReason};
 
     fn run_end(status: RunStatus, error: Option<ErrorRecord>) -> RunEnd {
         RunEnd {
@@ -240,6 +252,25 @@ mod tests {
                 verdict.error.map(|error| error.owner.as_str()),
                 Some(owner.as_str()),
                 "the owner keeps its record's spelling"
+            );
+        }
+    }
+
+    #[test]
+    fn only_housekeeping_neo_sent_on_its_own_leaves_the_op_metrics() {
+        let site = Some(CallSite { line: 3, column: 7 });
+        let cases = [
+            (OpMetrics::Counted, site, OpCounting::Counted),
+            (OpMetrics::Counted, None, OpCounting::Counted),
+            (OpMetrics::Housekeeping, site, OpCounting::Counted),
+            (OpMetrics::Housekeeping, None, OpCounting::Internal),
+        ];
+        for (metrics, site, counting) in cases {
+            assert_eq!(
+                op_counting(metrics, site),
+                counting,
+                "{metrics:?} with site {site:?}: a script's own `page.on` listener counts, the \
+                 prelude's unsited bookkeeping does not"
             );
         }
     }

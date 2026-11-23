@@ -167,7 +167,7 @@ mod tests {
 
     use super::*;
     use crate::label::{Delivery, ErrorCode, ErrorOwner, OpOutcome, RunStatus};
-    use crate::{OpSettled, OpSite, OpenTabCounts, RunVerdict, TraceContext};
+    use crate::{OpCounting, OpSettled, OpSite, OpenTabCounts, RunVerdict, TraceContext};
 
     const PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
@@ -202,6 +202,7 @@ mod tests {
             started,
             outcome: OpOutcome::Ok,
             delivery: Delivery::Done,
+            counting: OpCounting::Counted,
             error: None,
             url: None,
         }
@@ -226,6 +227,7 @@ mod tests {
             started: Instant::now(),
             outcome: OpOutcome::Error,
             delivery: Delivery::NotSent,
+            counting: OpCounting::Counted,
             error: Some(ErrorLabel {
                 owner: ErrorOwner::Script,
                 code: ErrorCode::new("method_unavailable"),

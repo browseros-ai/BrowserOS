@@ -45,7 +45,7 @@ mod transport;
 mod vocabulary;
 
 pub use config::OtlpConfig;
-pub use op_settled::{OpSettled, OpSite};
+pub use op_settled::{OpCounting, OpSettled, OpSite};
 pub use open_tab_counts::{OpenTabCounts, OpenTabsSource};
 pub use otlp_protocol::OtlpProtocol;
 #[cfg(feature = "test-support")]

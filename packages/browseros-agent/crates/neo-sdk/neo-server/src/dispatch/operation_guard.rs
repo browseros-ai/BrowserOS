@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 
 use super::dispatcher::NAME_CHARS;
 use super::op_ctx::OpState;
-use super::telemetry_verdict::{op_delivery, op_failure, op_outcome, op_site, op_url};
+use super::telemetry_verdict::{op_counting, op_delivery, op_failure, op_outcome, op_site, op_url};
 use super::{
     Answer, CallSite, ErrorCode, FrameVersion, LeafError, Lifetime, MethodSpec, Observation,
     OpFailure, OpLine, OpReply, OperationError, PageFact, RunCtx, StopReason, clip,
@@ -373,6 +373,7 @@ fn settle(
         started: opened_at,
         outcome: op_outcome(settlement.outcome),
         delivery: op_delivery(settlement.delivery),
+        counting: op_counting(spec.metrics, recorded_site(&spec, site)),
         error: op_failure(&settlement.result),
         url: op_url(spec.record, page_after.as_ref()),
     });

@@ -1286,6 +1286,12 @@ paths:
         before it has a sample, so the body is never empty: `neo_runs_in_flight` and
         `neo_renderer_crashes_total` start at `0`, `neo_tabs_open` has a series for each
         `origin`, and any other family gains a series the first time Neo records its label set.
+        The operation families count the script's operations and the ones Neo runs for it, such
+        as opening a run's default page. Neo's own housekeeping, sent with no call site (its
+        frame-tree reads, its event pump and listener bookkeeping), grows with open tabs rather
+        than with the script's work, so it is in none of `neo_operations_total`,
+        `neo_operation_duration_seconds` and `neo_errors_total`: its operations appear in the
+        run's trace alone, and a run that fails on one counts that failure once, as the run's.
         Durations are in seconds. Every label value comes from a closed set: `status` is how a
         run ended (`Run.status`: `ok`, `error`, `cancelled` or `timeout`) or how an operation
         did (`Operation.outcome`), `error_owner` an `OperationError.owner` or `none`,

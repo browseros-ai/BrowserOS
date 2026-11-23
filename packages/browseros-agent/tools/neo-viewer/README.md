@@ -367,6 +367,10 @@ both of its doors with no protobuf library (`server/telemetry/`, one module behi
   never blended (both read one meter provider). Health (`TelemetryHealth`: runs in flight, tabs
   open, and counts since the last Clear with Neo restarts handled) goes to the page as an
   unversioned `health` event at most once a second, and in the runs snapshot.
+- **Housekeeping**: Neo's operation metrics count the script's operations and the ones Neo runs for
+  it. Its own housekeeping, sent with no source line (frame-tree reads, the event pump, listener
+  bookkeeping), grows with open tabs, so Neo leaves it out of them; its spans still arrive and fold
+  under **Neo internal**.
 - **Which ops**: a run's op table is `RunDetail.neo`, from one source chosen at start. With a host
   API, Neo's `/v1/runs/{id}`, as before, and spans are only the run's trace. Without one
   (`--upstream`), the record is folded from the run's `neo.run`/`neo.op` spans (`source: 'spans'`;

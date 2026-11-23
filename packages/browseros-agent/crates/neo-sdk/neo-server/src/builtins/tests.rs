@@ -40,9 +40,9 @@ use crate::browser::{Adopt, BrowserLink, NeoTab, OpenFor, PageRef, TabRegistry, 
 use crate::config::Defaults;
 use crate::dispatch::{
     Call, CallSite, Dispatcher, ErrorCode, EventLog, FrameVersion, LeafError, Lifetime, Listing,
-    Method, MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageFact,
-    PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError,
-    RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
+    Method, MethodSpec, Observer, OpCtx, OpFailure, OpMetrics, OpReply, OperationError, PageChange,
+    PageFact, PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder,
+    RegistryError, RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
@@ -2898,6 +2898,16 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
                 "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
             ),
             "{}: only the prelude's own work is cut quietly when the run ends",
+            spec.name
+        );
+        assert_eq!(
+            spec.metrics == OpMetrics::Housekeeping,
+            matches!(
+                spec.name,
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
+            ),
+            "{}: only the prelude's own work stays out of the op metrics, as it grows with open \
+             tabs rather than with the script's work",
             spec.name
         );
         let Listing::Grouped(line) = spec.listing else {

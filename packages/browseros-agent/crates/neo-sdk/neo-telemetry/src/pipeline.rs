@@ -60,7 +60,8 @@ use crate::prometheus::Prometheus;
 use crate::spans::Spans;
 use crate::transport::Transport;
 use crate::{
-    OpSettled, OpenTabsSource, RunFacts, RunVerdict, TelemetryConfig, TelemetryError, Vocabulary,
+    OpCounting, OpSettled, OpenTabsSource, RunFacts, RunVerdict, TelemetryConfig, TelemetryError,
+    Vocabulary,
 };
 
 /// What a run dropped unfinished records: Neo's own failure, as `run_span.rs` promises.
@@ -383,8 +384,21 @@ impl Pipeline {
     /// `neo_operations_total`, `neo_operation_duration_seconds`, `neo_errors_total` on a
     /// failure (subject to the run's once rule), and the `neo.op` span, built now from
     /// `op.started`: a child of `parent`'s span, or a root for an op of an internal run (`None`).
+    /// An [`OpCounting::Internal`] op gets its span alone.
     pub(crate) fn op_settled(&self, parent: Option<&PipelineParent>, op: &OpSettled<'_>) {
         let took = op.started.elapsed();
+        match op.counting {
+            OpCounting::Counted => self.op_counted(parent, op, took),
+            // Nor does its failure enter the run's memo: a run that ends on it counts it once.
+            OpCounting::Internal => {}
+        }
+        if let Some(spans) = &self.spans {
+            let run = parent.and_then(|parent| parent.shared.span_context.as_ref());
+            spans.op_settled(run, op, took);
+        }
+    }
+
+    fn op_counted(&self, parent: Option<&PipelineParent>, op: &OpSettled<'_>, took: Duration) {
         self.instruments.op_settled(
             OpLabel::of(self.vocabulary.get(), op.op),
             op.outcome,
@@ -405,10 +419,6 @@ impl Pipeline {
                 self.instruments
                     .error_counted(error.owner, self.code_label(error.code));
             }
-        }
-        if let Some(spans) = &self.spans {
-            let run = parent.and_then(|parent| parent.shared.span_context.as_ref());
-            spans.op_settled(run, op, took);
         }
     }
 

@@ -497,6 +497,51 @@ fn each_op_is_one_span_under_its_run_as_its_record_says() -> Result<(), TestErro
     })
 }
 
+/// Neo's housekeeping (here the rig's background pull, as the event pump and the frame-tree
+/// reads are) keeps its span under the run, and leaves every op metric to the script's own ops.
+#[test]
+fn housekeeping_ops_keep_their_spans_and_leave_the_op_metrics() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (telemetry, probe) = telemetry(&rig);
+        let service = rig.run_service_reporting(GRACE, telemetry.clone());
+        let code = [
+            "__neo.invoke('test.pull', {});",
+            "await __neo.invoke('test.echo', { hello: 1 });",
+            "return 1;",
+        ]
+        .join("\n");
+        let reply = service.run(request(&code, meta(None, None)?)?).await;
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        rig.sink.flush().await?;
+        let run = run_span(&probe, reply.id)?;
+        let mut names: Vec<Option<&str>> = Vec::new();
+        let ops = op_spans(&probe, &run);
+        for op in &ops {
+            names.push(text(op, "neo.op.name"));
+        }
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [Some("test.echo"), Some("test.pull")],
+            "the pull is still a span under its run, so the trace shows Neo's own work"
+        );
+        assert_eq!(
+            Scrape::of(&telemetry)?.lines_of(&[
+                "neo_operations_total",
+                "neo_operation_duration_seconds_count",
+                "neo_errors_total",
+            ]),
+            [
+                r#"neo_operation_duration_seconds_count{op="test.echo",status="ok"} 1"#,
+                r#"neo_operations_total{error_owner="none",op="test.echo",status="ok"} 1"#,
+            ],
+            "only the script's op counts: housekeeping grows with open tabs, not with its work"
+        );
+        Ok(())
+    })
+}
+
 /// A run stopped at its deadline with two ops in flight: teardown cuts both, and each settles
 /// cancelled with the stop's own error before the run ends, yet the timeout is one failure, the
 /// run's (wire-contract.md; review F1).

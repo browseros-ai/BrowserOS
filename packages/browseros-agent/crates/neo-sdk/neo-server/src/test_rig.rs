@@ -32,7 +32,7 @@ use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::builtins;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
+    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx, OpMetrics,
     OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
     RunStart,
 };
@@ -696,8 +696,9 @@ impl Method for Abortable {
     }
 }
 
-/// `test.pull`: a background pull, as neo-playwright's event pump is. It answers only when
-/// something happens, and here nothing does, so the run's end is what ends it.
+/// `test.pull`: a background pull, as neo-playwright's event pump is, and Neo's housekeeping as
+/// it is. It answers only when something happens, and here nothing does, so the run's end is
+/// what ends it.
 struct Pull;
 
 impl Method for Pull {
@@ -707,6 +708,7 @@ impl Method for Pull {
     fn spec(&self) -> MethodSpec {
         MethodSpec {
             lifetime: Lifetime::Background,
+            metrics: OpMetrics::Housekeeping,
             ..MethodSpec::new("test.pull", Effect::Read)
         }
     }
