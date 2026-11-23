@@ -478,9 +478,9 @@ describe("an open run's trace row", () => {
     expect(row?.textContent).toBe(
       'Trace4bf92f359 spans, 1 failed, 1.23 sOpen full',
     )
-    await dom.interact(() =>
-      fire(row?.querySelector('button') as Element, 'click'),
-    )
+    const open = row?.querySelector('button')
+    if (!open) throw new Error('the trace row has its button')
+    await dom.interact(() => fire(open, 'click'))
     expect(picked).toBe(1)
   })
 
