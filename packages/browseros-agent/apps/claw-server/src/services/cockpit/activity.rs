@@ -340,7 +340,7 @@ mod tests {
     use tokio::sync::{Notify, broadcast, mpsc};
 
     struct DisconnectedConnection {
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
     }
 
@@ -414,7 +414,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 
@@ -432,7 +432,7 @@ mod tests {
     }
 
     struct RebindingConnection {
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         list_calls: AtomicUsize,
         refresh_started: Notify,
@@ -543,7 +543,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 

@@ -623,7 +623,7 @@ impl CdpConnection for HeldRemovals {
             .send_raw_json_at_epoch(expected, method, params_json, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.scripted.events()
     }
 

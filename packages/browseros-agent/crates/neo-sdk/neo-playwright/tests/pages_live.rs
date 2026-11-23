@@ -804,7 +804,7 @@ const CRASH_COMMAND_REPLY_WAIT: Duration = Duration::from_secs(1);
 async fn crash_renderer(
     run: &LiveRun,
     page: &TestPage,
-    events: &mut Receiver<CdpEvent>,
+    events: &mut Receiver<Arc<CdpEvent>>,
     crashes: &mut Vec<Value>,
 ) -> TestResult<String> {
     let core_page = run.core_page(page).await?;
@@ -816,7 +816,7 @@ async fn crash_renderer(
             if event.method == "Target.targetCrashed" {
                 let ours =
                     event.params.get("targetId").and_then(Value::as_str) == Some(target.as_str());
-                crashes.push(event.params);
+                crashes.push(event.params.clone());
                 if ours {
                     return Ok::<(), Box<dyn Error>>(());
                 }
@@ -891,13 +891,15 @@ async fn check_crash_neighbours(
 )]
 fn check_crash_scope(
     target: &str,
-    events: &mut Receiver<CdpEvent>,
+    events: &mut Receiver<Arc<CdpEvent>>,
     crashes: &mut Vec<Value>,
     stage: &str,
 ) -> TestResult {
     let drained = loop {
         match events.try_recv() {
-            Ok(event) if event.method == "Target.targetCrashed" => crashes.push(event.params),
+            Ok(event) if event.method == "Target.targetCrashed" => {
+                crashes.push(event.params.clone());
+            }
             Ok(_) => {}
             Err(TryRecvError::Empty) => break Ok(()),
             Err(error) => break Err(error),

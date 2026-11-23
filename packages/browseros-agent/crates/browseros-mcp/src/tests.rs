@@ -37,7 +37,7 @@ mod tool_guard_tests;
 mod click_feedback_tests;
 
 struct FakeConnection {
-    sender: broadcast::Sender<CdpEvent>,
+    sender: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -80,7 +80,7 @@ impl CdpConnection for FakeConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.sender.subscribe()
     }
 
@@ -217,7 +217,7 @@ struct HarnessCall {
 
 /// Tool fixture whose transport epoch is immutable; guarded dispatch still validates callers.
 struct HarnessConnection {
-    sender: broadcast::Sender<CdpEvent>,
+    sender: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     calls: Mutex<Vec<HarnessCall>>,
     created_tab: Mutex<Option<Value>>,
@@ -331,7 +331,7 @@ impl HarnessConnection {
             session_id: session_id.map(SessionId::from),
         };
         if let Some(event) = self.targeted.deliver(event) {
-            let _ = self.sender.send(event);
+            let _ = self.sender.send(Arc::new(event));
         }
     }
 
@@ -601,7 +601,7 @@ impl CdpConnection for HarnessConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.sender.subscribe()
     }
 

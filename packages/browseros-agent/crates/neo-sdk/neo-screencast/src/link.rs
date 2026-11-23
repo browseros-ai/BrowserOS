@@ -44,7 +44,7 @@ impl Link {
     ) -> CaptureResult<Arc<Self>> {
         let cdp = transport.connect().await?;
         // Frames bypass the client's broadcast ring: at several per second and up to ~100 KB
-        // each, that ring would copy them once per subscriber and hold hundreds of them.
+        // each, that ring would hold hundreds of them.
         let frames = cdp.events_targeted("Page.screencastFrame");
         let events = cdp.events();
         let link = Arc::new(Self {
@@ -141,7 +141,7 @@ async fn route_frames(link: Arc<Link>, mut frames: mpsc::UnboundedReceiver<CdpEv
     }
 }
 
-async fn watch_detaches(link: Arc<Link>, mut events: broadcast::Receiver<CdpEvent>) {
+async fn watch_detaches(link: Arc<Link>, mut events: broadcast::Receiver<Arc<CdpEvent>>) {
     loop {
         let event = tokio::select! {
             () = link.broken.cancelled() => return,

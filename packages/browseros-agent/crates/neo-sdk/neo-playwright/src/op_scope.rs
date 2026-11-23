@@ -1250,7 +1250,7 @@ mod tests {
             Box::pin(async { Ok("{}".to_owned()) })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             broadcast::channel(1).1
         }
 

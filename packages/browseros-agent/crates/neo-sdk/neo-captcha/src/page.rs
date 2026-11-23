@@ -712,7 +712,7 @@ mod tests {
         isolated_refused: AtomicBool,
         mark_failures: Mutex<Vec<i64>>,
         page_open: AtomicBool,
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
     }
     impl Native {
@@ -935,7 +935,7 @@ mod tests {
                 )?)?)
             })
         }
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
         fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {

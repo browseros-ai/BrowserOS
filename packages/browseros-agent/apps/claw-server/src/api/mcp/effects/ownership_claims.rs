@@ -119,7 +119,7 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
 
     struct PageListConnection {
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
     }
 
@@ -210,7 +210,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 

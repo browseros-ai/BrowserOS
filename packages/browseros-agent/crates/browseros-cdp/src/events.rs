@@ -12,11 +12,9 @@ pub struct CdpEvent {
 
 /// One event method's events, from [`crate::CdpClient::on_event`].
 ///
-/// Every stream reads every event of the connection, so the channel carries each event once,
-/// shared: a broadcast receiver clones what it carries, and cloning a `CdpEvent` copies its whole
-/// params tree, a megabyte for a large console message. A stream checks the method on the
-/// shared event and copies only one it returns; the last reader of an event takes it without
-/// a copy.
+/// A stream reads the connection's one event broadcast, which carries each event once behind
+/// an `Arc` ([`crate::CdpClient::events`]). It checks the method on the shared event and copies
+/// only one it returns; the last reader of an event takes it without a copy.
 pub struct EventStream {
     method: String,
     inner: broadcast::Receiver<Arc<CdpEvent>>,

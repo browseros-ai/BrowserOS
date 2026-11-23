@@ -1201,7 +1201,10 @@ mod tests {
             {
                 Box::pin(async { Err(browseros_cdp::CdpError::NotConnected) })
             }
-            fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
+            fn events(
+                &self,
+            ) -> tokio::sync::broadcast::Receiver<std::sync::Arc<browseros_cdp::CdpEvent>>
+            {
                 tokio::sync::broadcast::channel(1).1
             }
             fn events_targeted(

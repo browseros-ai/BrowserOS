@@ -115,12 +115,12 @@ struct Inner {
     /// Serializes socket publication with dispatch. An epoch-bound request must
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
-    /// Every event no targeted subscriber took, for [`CdpClient::events`]. Each receiver gets
-    /// its own deep copy of each event; see `events_shared` for the stream that does not.
-    events_tx: broadcast::Sender<CdpEvent>,
-    /// The same events, carried once behind an `Arc` for [`EventStream`]s, which drop the
-    /// methods they do not read without copying them. Fed only while a stream is live.
-    events_shared: broadcast::Sender<Arc<CdpEvent>>,
+    /// Every event no targeted subscriber took, for [`CdpClient::events`] and the
+    /// [`EventStream`]s. A broadcast receiver clones what it carries, and cloning a `CdpEvent`
+    /// copies its whole params tree, a megabyte for a large console message, once per
+    /// receiver. Behind the `Arc` each receiver gets a pointer to the one event instead: a
+    /// reader checks the method through it and copies only an event it keeps.
+    events_tx: broadcast::Sender<Arc<CdpEvent>>,
     /// How many events the reader has put on `events_tx`, ever. The reader handles one message
     /// at a time, so once a command's reply arrived, every event that came before it is
     /// counted: a consumer that numbers what its receiver took can tell when it has seen them.
@@ -152,14 +152,12 @@ struct Inner {
 impl CdpClient {
     pub async fn connect(opts: ConnectOptions) -> Result<Self, CdpError> {
         let (events_tx, _) = broadcast::channel(4096);
-        let (events_shared, _) = broadcast::channel(4096);
         let inner = Arc::new(Inner {
             opts,
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
-            events_shared,
             events_broadcast: std::sync::Mutex::new(0),
             targeted: TargetedEvents::default(),
             connected: AtomicBool::new(false),
@@ -362,7 +360,10 @@ impl CdpClient {
         serde_json::to_string(&response).map_err(CdpError::from)
     }
 
-    pub fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    /// Every event no targeted subscriber took, shared with every other receiver. Check
+    /// `method` through the `Arc` and read params by reference; `Arc::unwrap_or_clone` takes an
+    /// owned event, copying it only while another receiver still holds it.
+    pub fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.inner.events_tx.subscribe()
     }
 
@@ -379,7 +380,7 @@ impl CdpClient {
     /// A receiver of [`Self::events`] and the count of events broadcast before it subscribed,
     /// which it will never receive. Taken under the broadcast's lock, so an event is either in
     /// the count or in the receiver, never both and never neither.
-    pub fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    pub fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         let count = self
             .inner
             .events_broadcast
@@ -389,7 +390,7 @@ impl CdpClient {
     }
 
     pub fn on_event(&self, method: &str) -> EventStream {
-        EventStream::new(method, self.inner.events_shared.subscribe())
+        EventStream::new(method, self.inner.events_tx.subscribe())
     }
 
     /// Subscribes to one event method on a dedicated, unbounded channel, for events too large
@@ -646,7 +647,7 @@ fn closed(frame: Option<CloseFrame>) -> ConnectionLoss {
 }
 
 /// Routes one message from the browser: a reply to its pending request, an event to its
-/// targeted subscribers or else the broadcasts. The parsed tree is taken apart, not copied: a
+/// targeted subscribers or else the broadcast. The parsed tree is taken apart, not copied: a
 /// reply's `result` and an event's `params` move out of it whole.
 async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
     let mut message = match inbound::read(text) {
@@ -700,17 +701,8 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *count += 1;
-    // Sent under the count's lock, so `events_counted` subscribes between two events. With no
-    // live stream the shared channel costs nothing; with streams and broadcast readers both,
-    // the broadcast gets one copy and the streams share the original.
-    if inner.events_shared.receiver_count() == 0 {
-        let _ = inner.events_tx.send(event);
-        return;
-    }
-    if inner.events_tx.receiver_count() > 0 {
-        let _ = inner.events_tx.send(event.clone());
-    }
-    let _ = inner.events_shared.send(Arc::new(event));
+    // Sent under the count's lock, so `events_counted` subscribes between two events.
+    let _ = inner.events_tx.send(Arc::new(event));
 }
 
 /// JSON-RPC's "Parse error", the code Chromium gives a command it cannot parse; here the client

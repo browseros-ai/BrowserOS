@@ -1913,7 +1913,7 @@ mod tests {
     }
 
     struct GroupDispatchRecorder {
-        sender: broadcast::Sender<CdpEvent>,
+        sender: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         calls: StdMutex<Vec<(String, Value)>>,
         members: StdMutex<HashMap<String, BTreeSet<i64>>>,
@@ -2291,7 +2291,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.sender.subscribe()
         }
 

@@ -45,7 +45,7 @@ struct TestApp {
 }
 
 struct FixtureConnection {
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     tabs: tokio::sync::Mutex<Vec<Value>>,
     get_tabs_calls: AtomicUsize,
@@ -226,7 +226,7 @@ impl CdpConnection for FixtureConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

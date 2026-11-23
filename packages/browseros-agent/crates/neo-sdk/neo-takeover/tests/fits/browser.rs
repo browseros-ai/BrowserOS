@@ -37,7 +37,7 @@ type Probe = Box<dyn Fn() -> bool + Send + Sync>;
 pub struct FakeBrowser {
     xvnc: Arc<FakeXvnc>,
     state: Mutex<State>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     /// `false` while a test holds navigations: each `Page.navigate` then waits, subscribed, until
     /// it is `true` again.
@@ -686,7 +686,7 @@ impl CdpConnection for FakeBrowser {
         Box::pin(self.answer_raw(method, params_json, session))
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

@@ -1257,7 +1257,7 @@ mod tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             let (_tx, rx) = broadcast::channel(1);
             rx
         }
