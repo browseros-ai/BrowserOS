@@ -4211,51 +4211,56 @@ impl Method for InFlightClose {
     }
 }
 
-/// Pushes every close recorded so far out of the event log, the way the log lets one go. Each
-/// tab keeps its own ring, so another tab's records never push a close out; a closed tab's ring
-/// goes only once `CLOSED_RINGS` (1,024) later tabs closed (neo-playwright's `event_hub.rs`). So
-/// this opens, reports and closes that many owner tabs past them, in batches, each batch's
-/// records waited for, so the watcher, not the fake's transport, decides what the log keeps.
-/// Their opens and closes move the head past `close_seq` by more than one ring.
+/// Pushes the closes of `targets` out of the event log, the way the log lets one go. Each tab
+/// keeps its own ring, so another tab's records never push a close out; a closed tab's ring goes
+/// only once `CLOSED_RINGS` (1,024) later tabs closed (neo-playwright's `event_hub.rs`). So this
+/// opens, reports and closes owner tabs in batches until no ring holds a close of `targets`.
+///
+/// It counts no records: the watcher's passes attach observers to the churned tabs, and can
+/// attach again a target the test destroyed by event alone (the fake still lists its tab), all
+/// of which write records of their own. Each batch instead waits for its last tab's close: the
+/// watcher applies a tab's URL before its destroy, and its events in order, so by then every
+/// tab of the batch was reported and closed. A close written after its ring went is dropped, so
+/// the answer stays.
 async fn push_closes_out_of_the_log(
     harness: &Harness,
-    close_seq: u64,
+    targets: &[&TargetId],
 ) -> Result<(), Box<dyn Error>> {
-    /// One more than the closed rings the log keeps.
-    const LATER_CLOSES: u64 = 1_025;
     const BATCH: u64 = 25;
+    /// Well past `CLOSED_RINGS`, so a close that will not leave fails here, not by hanging.
+    const MOST: u64 = 4_000;
     let pw = harness.playwright.get().await;
-    let start = pw.event_head().max(close_seq);
-    let mut written = 0;
-    for batch in 0..LATER_CLOSES.div_ceil(BATCH) {
+    let mut churned = 0;
+    while targets
+        .iter()
+        .any(|target| pw.closed_target(target).is_some())
+    {
+        if churned >= MOST {
+            return Err(format!("a close stayed in the log past {MOST} later closes").into());
+        }
         let mut tabs = Vec::new();
         for slot in 0..BATCH {
-            let url = format!("https://closed-{}.example/", batch * BATCH + slot);
-            // Straight on the fake, not through core's listing: a listing would also let the
-            // watcher's discovery report again a target the test destroyed by event alone.
+            let url = format!("https://closed-{}.example/", churned + slot);
+            // Straight on the fake, not through core's listing, which would also let discovery
+            // report again a target the test destroyed by event alone.
             let tab = harness.fake.open_tab(&url, "Closed");
             // The fake announces a target with no URL, named `target-<tab>` (`FakeCdp`); this
             // event makes the watcher report it.
+            let target = TargetId(format!("target-{}", tab.0));
             assert!(harness.fake.page_event(
                 tab,
                 "Target.targetInfoChanged",
-                json!({ "targetInfo": {"targetId":format!("target-{}", tab.0),"type":"page","url":url} })
+                json!({ "targetInfo": {"targetId":target,"type":"page","url":url} })
             ));
-            tabs.push(tab);
+            tabs.push((tab, target));
         }
-        written += BATCH;
-        within(async {
-            while pw.event_head() < start + written {
-                time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await?;
-        for tab in &tabs {
+        churned += BATCH;
+        for (tab, _) in &tabs {
             assert!(harness.fake.close_tab(*tab));
         }
-        written += BATCH;
+        let last = tabs.last().map(|(_, target)| target).ok_or("a batch")?;
         within(async {
-            while pw.event_head() < start + written {
+            while pw.closed_target(last).is_none() {
                 time::sleep(Duration::from_millis(1)).await;
             }
         })
@@ -4367,7 +4372,7 @@ async fn evicted_close_case(name: &'static str, rebind: bool) -> Result<(), Box<
     let close_seq = pw
         .closed_target(&target)
         .ok_or("copied close is retained")?;
-    push_closes_out_of_the_log(&harness, close_seq).await?;
+    push_closes_out_of_the_log(&harness, &[&target]).await?;
     assert_eq!(
         pw.closed_target(&target),
         None,
@@ -4725,8 +4730,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
     })?;
     let pending = door.submit(&run, Call::script("events.next".into(), json!({}), None));
     within(copied.notified()).await?;
-    let head = pw.event_head();
-    push_closes_out_of_the_log(&harness, head).await?;
+    push_closes_out_of_the_log(&harness, &[&old, &current]).await?;
     assert!(pw.closed_target(&old).is_none() && pw.closed_target(&current).is_none());
     resume.notify_one();
     let reply = pending.wait().await;
@@ -4868,7 +4872,7 @@ async fn withheld_close_keeps_internal_evidence_without_releasing_lifecycle()
             .is_none_or(|at| at.closes.is_empty())
     );
     assert_eq!(harness.tabs.gone_target(page.tab), Some(target.clone()));
-    push_closes_out_of_the_log(&harness, pw.event_head()).await?;
+    push_closes_out_of_the_log(&harness, &[&target]).await?;
     assert!(pw.closed_target(&target).is_none());
     harness.locks.unlock_host(lock.id)?;
     let later = harness
