@@ -2029,6 +2029,7 @@ dependencies = [
  "browseros-cdp",
  "browseros-core",
  "futures-util",
+ "neo-snapshot",
  "neo-trace",
  "png",
  "rquickjs",
@@ -2108,6 +2109,15 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "url",
+]
+
+[[package]]
+name = "neo-snapshot"
+version = "0.1.0"
+dependencies = [
+ "rquickjs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

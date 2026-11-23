@@ -12,6 +12,8 @@ browseros-cdp.workspace = true
 # `ts-rs`: the three core ids on the wire (`TabId`, `FrameId`, `TargetId`) print as TypeScript.
 browseros-core = { workspace = true, features = ["ts-rs"] }
 neo-trace.workspace = true
+# The aria snapshot tree's type (`AriaNode`): each frame's reply is read into it, stitched, served.
+neo-snapshot.workspace = true
 # Tall native-tab screenshots are joined one PNG row at a time, without a full RGBA bitmap.
 png.workspace = true
 base64.workspace = true

@@ -4,9 +4,9 @@
 # It covers every Rust crate under crates/neo-sdk, read from the folder, so a new crate is in the
 # gate the day it lands. Standalone crates get rustfmt here. Workspace members use one of two
 # lint sets, selected by their Cargo.toml:
-#   - claw-sdk's lint set: a restated [lints] table (neo-server, neo-playwright). On top of the
-#     rest, Google's rustfmt options (stable rustfmt applies them only through --config) and the
-#     dependency boundary.
+#   - claw-sdk's lint set: a restated [lints] table (neo-server, neo-playwright, neo-snapshot). On
+#     top of the rest, Google's rustfmt options (stable rustfmt applies them only through --config)
+#     and the dependency boundary.
 #   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-http,
 #     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
 # Every workspace member here gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),

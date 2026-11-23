@@ -1579,6 +1579,7 @@ dependencies = [
  "browseros-cdp",
  "browseros-core",
  "futures-util",
+ "neo-snapshot",
  "neo-trace",
  "png",
  "serde",
@@ -1647,6 +1648,14 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "url",
+]
+
+[[package]]
+name = "neo-snapshot"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
