@@ -204,6 +204,7 @@ impl FrameTree {
                     FrameRoute {
                         session: session.clone(),
                         ancestors: self.path_to(frame)?,
+                        since,
                     },
                 ))
             })
@@ -215,7 +216,6 @@ impl FrameTree {
                 frame: main.id.clone(),
                 epoch: pw.browser().connection().connection_epoch(),
             },
-            since,
             routes,
         );
     }
@@ -502,6 +502,17 @@ async fn list_iframes(browser: &BrowserSession) -> Result<Targets, CoreError> {
         )
         .await
         .and_then(decode)
+}
+
+/// The target ids of the browser's out-of-process frames, of every tab: the browser answers it
+/// from its own frame tree, so no renderer, busy or not, holds it.
+pub(crate) async fn iframe_targets(browser: &BrowserSession) -> Result<HashSet<String>, CoreError> {
+    Ok(list_iframes(browser)
+        .await?
+        .target_infos
+        .into_iter()
+        .map(|target| target.target_id)
+        .collect())
 }
 
 fn target_ids(targets: &Targets) -> BTreeSet<&str> {

@@ -1119,13 +1119,13 @@ async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> Tes
 static BUSY_TABS: Semaphore = Semaphore::const_new(1);
 
 /// The longest the run may take from the moment another client opened a busy tab to the end of
-/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
-/// run first sees mid-run holds the script for its reads until one goes unanswered, so such a tab
-/// may cost the run one wait in all: one native read's whole budget (one second,
-/// `frame_tree.rs` `SNAPSHOT_BUDGET`). The bound is that one wait plus the room
-/// [`BESIDE_BUSY_TABS_BOUND`] gives a run. A tab that held every statement would cost five or
-/// more, so every try would fail.
-const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
+/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. `page.frames`
+/// answers from the target watcher's list and never asks the tab, so the run pays nothing for it,
+/// past the prelude's one start retry for a list that is not whole (100 ms). With the old renderer
+/// read back, the run's first read of the tab it first sees mid-run holds the script for one
+/// native read's whole budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), so no try can go
+/// under it.
+const MID_RUN_BUSY_TAB_BOUND: Duration = BESIDE_BUSY_TABS_BOUND;
 
 /// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
 /// it waits for the tab the owner opens from its page, then runs five statements on its own tab,
@@ -1208,12 +1208,11 @@ impl OpHost for FrameReads {
     }
 }
 
-/// A tab another client opens while a run is going, and that never answers, costs the run one
-/// wait at most, never one per statement. Here the owner opens it from the run's page, as a
-/// click on a link that opens a tab would. The run first sees it mid-run, so its first read holds
-/// the script; that read goes unanswered, and from then on the tab is read only in the background.
-/// The row also checks that the run did read the tab while it was busy, so it cannot pass by never
-/// meeting the busy tab.
+/// A tab another client opens while a run is going, and that never answers, costs the run
+/// nothing: `page.frames` answers its frames from the target watcher's list. Here the owner opens
+/// it from the run's page, as a click on a link that opens a tab would. The run first sees it
+/// mid-run and reads its frames at once. The row also checks that the run did read the busy tab,
+/// so it cannot pass by never meeting it.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 #[expect(
@@ -1267,9 +1266,9 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            let unanswered = reads
+            let met = reads
                 .iter()
-                .filter(|(tab, read)| *tab != healthy.tab.0 && *read >= Duration::from_millis(900))
+                .filter(|(tab, _)| *tab != healthy.tab.0)
                 .count();
             eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?} script={outcome}");
             assert!(
@@ -1277,8 +1276,8 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 "the script never met the busy tab's page event: {outcome}"
             );
             assert!(
-                unanswered >= 1,
-                "the run never met the busy tab unanswered, so this try tested nothing: {reads:?}"
+                met >= 1,
+                "the run never read the busy tab, so this try tested nothing: {reads:?}"
             );
             tries.push(took);
             if took < MID_RUN_BUSY_TAB_BOUND {

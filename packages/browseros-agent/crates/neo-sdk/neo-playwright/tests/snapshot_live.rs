@@ -273,6 +273,11 @@ fn nest_and_hang() -> HashMap<String, Page> {
         "/nest/hang.html".to_owned(),
         Page::html(include_str!("data/nest/hang.html")).with_header("cache-control", "no-store"),
     );
+    pages.insert(
+        "/nest/hang-early.html".to_owned(),
+        Page::html(include_str!("data/nest/hang-early.html"))
+            .with_header("cache-control", "no-store"),
+    );
     pages
 }
 
@@ -621,8 +626,10 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
     live.close(&page).await
 }
 
-/// The prelude refreshes optional frame metadata between agent calls. A busy child must
-/// preserve the last complete tree instead of stalling that handoff or looking detached.
+/// The prelude refreshes optional frame metadata between agent calls. `page.frames` answers from
+/// the target watcher's list and asks no renderer, so a busy child neither stalls that handoff
+/// nor empties the answer, and a route-less op on a healthy child resolves its host without
+/// reading the hung one (`known_host`).
 async fn assert_metadata_remains_bounded(
     live: &LiveBrowser,
     page: &TestPage,
@@ -642,11 +649,14 @@ async fn assert_metadata_remains_bounded(
         format!("optional frame metadata blocked on the hung child: {elapsed}")
     })???;
     assert!(
-        metadata.get("frames").is_none(),
-        "a busy tree leaves its cache intact: {metadata}"
+        metadata
+            .get("frames")
+            .and_then(Value::as_array)
+            .is_some_and(|frames| !frames.is_empty()),
+        "page.frames answers the watcher's list at once while a child hangs: {metadata}"
     );
-    // A lost route would force rediscovery through the still-hung sibling and time out.
-    // This public frame operation must keep using the endpoint saved before the hang.
+    // `page.frames` saved no route, so B1's host is resolved now. A whole-tree read would go
+    // through the still-hung sibling and time out; the host comes from B1's own chain instead.
     live.invoke_in_run(
         Arc::clone(run),
         "page.waitForURL",
@@ -659,6 +669,82 @@ async fn assert_metadata_remains_bounded(
 }
 
 /// Saves a real OOPIF endpoint in the same run that will later refresh the busy tree.
+/// f6 in its likeliest real form: a cross-site child that spins from its first script, before its
+/// own frame session's seed read can land, so the tab's list is never whole. A route-less op on the
+/// healthy B1 still answers within its budget: B1's host comes from B1's own chain, which the hung
+/// child is not on, and a list that is not whole is no reason to read the whole tree.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_f6_a_child_hung_before_its_seed_holds_no_op_on_a_healthy_sibling() -> TestResult
+{
+    let _alone = ALONE.acquire().await?;
+    let live = LiveBrowser::connect().await?;
+    let server = FixtureServer::start(nest_and_hang()).await?;
+    let page = live
+        .open(&server.url("127.0.0.1", "/nest/top.html"))
+        .await?;
+    loaded(&live, &page).await?;
+    let run = Arc::new(RunState::default());
+    let b1 = cache_responsive_frame(&live, &page, &run).await?;
+    let hung = server.url("hang.localtest.me", "/nest/hang-early.html");
+    live.main_world(
+        &page,
+        &format!(
+            "(() => {{ const f = document.createElement('iframe'); f.title = 'hang-early'; \
+             f.src = {hung:?}; document.body.append(f); return true; }})()"
+        ),
+    )
+    .await?;
+    // Until the list holds the hung child and answers not whole: its seed never landed.
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            let frames = live
+                .invoke_in_run(
+                    Arc::clone(&run),
+                    "page.frames",
+                    json!({ "call": {}, "page": page.brand() }),
+                )
+                .await??;
+            let listed = frames
+                .get("frames")
+                .and_then(Value::as_array)
+                .is_some_and(|frames| {
+                    frames.iter().any(|frame| {
+                        frame
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .is_some_and(|url| url.contains("hang-early"))
+                    })
+                });
+            if listed && frames.get("incomplete") == Some(&json!(true)) {
+                return TestResult::Ok(());
+            }
+            time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|elapsed| format!("the hung child never left its list not whole: {elapsed}"))??;
+    let started = Instant::now();
+    time::timeout(
+        Duration::from_millis(1_500),
+        live.invoke_in_run(
+            Arc::clone(&run),
+            "page.waitForURL",
+            json!({ "call": { "api": "frame.waitForURL", "timeoutMs": 1_000 },
+                    "page": page.brand(), "frame": b1.0,
+                    "url": { "glob": b1.1 }, "waitUntil": "commit" }),
+        ),
+    )
+    .await
+    .map_err(|elapsed| format!("B1's op waited on the hung child: {elapsed}"))???;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "B1's op took {:?} beside the hung child",
+        started.elapsed()
+    );
+    live.close(&page).await
+}
+
 async fn cache_responsive_frame(
     live: &LiveBrowser,
     page: &TestPage,

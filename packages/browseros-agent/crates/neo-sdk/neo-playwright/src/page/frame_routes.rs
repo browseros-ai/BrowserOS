@@ -1,6 +1,9 @@
-//! Run-scoped endpoint hints from admitted frame-tree discovery. Navigation can dispatch on
-//! an already discovered frame without querying a renderer stalled by its pending navigation.
-//! Root attachment/connection identity and journaled ancestor swaps retire stale hints.
+//! Run-scoped endpoint hints for a tab's child frames: from a whole frame-tree read of an admitted
+//! tab, or from a child's host resolved with no renderer read (`known_host`). Navigation can
+//! dispatch on an already discovered frame without querying a renderer stalled by its pending
+//! navigation, or by a hung sibling. Root attachment/connection identity and journaled ancestor
+//! swaps retire stale hints. Each route keeps the log seq it was made at, so a route added later
+//! is checked only against what happened after it was made.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -13,7 +16,11 @@ use crate::events::{EventHub, PageEvent};
 #[derive(Clone, Debug)]
 pub(crate) struct FrameRoute {
     pub(crate) session: ProtocolSession,
+    /// The frames from the main frame (left out) down to the frame itself.
     pub(crate) ancestors: Vec<FrameId>,
+    /// The event-log seq the route was made at, taken at or before what it was made from: every
+    /// record after it can retire it.
+    pub(crate) since: u64,
 }
 
 /// A route belongs to this native page attachment on exactly one CDP connection epoch.
@@ -27,7 +34,6 @@ pub(crate) struct RootAttachment {
 #[derive(Debug)]
 struct PageRoutes {
     root: RootAttachment,
-    since: u64,
     frames: HashMap<FrameId, FrameRoute>,
 }
 
@@ -42,20 +48,38 @@ impl FrameRoutes {
         &self,
         tab: TabId,
         root: RootAttachment,
-        since: u64,
         frames: HashMap<FrameId, FrameRoute>,
     ) {
         self.pages
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                tab,
-                PageRoutes {
-                    root,
-                    since,
-                    frames,
-                },
-            );
+            .insert(tab, PageRoutes { root, frames });
+    }
+
+    /// Adds one route beside `tab`'s others under the same root attachment; under another, it
+    /// starts the tab's routes afresh, as the old attachment's no longer hold.
+    pub(crate) fn insert(
+        &self,
+        tab: TabId,
+        root: RootAttachment,
+        frame: FrameId,
+        route: FrameRoute,
+    ) {
+        let mut pages = self.pages.lock().unwrap_or_else(PoisonError::into_inner);
+        match pages.get_mut(&tab) {
+            Some(page) if page.root == root => {
+                page.frames.insert(frame, route);
+            }
+            _ => {
+                pages.insert(
+                    tab,
+                    PageRoutes {
+                        root,
+                        frames: HashMap::from([(frame, route)]),
+                    },
+                );
+            }
+        }
     }
 
     pub(crate) fn forget(&self, tab: TabId) {
@@ -74,35 +98,44 @@ impl FrameRoutes {
         frame: &FrameId,
         events: &EventHub,
     ) -> Option<ProtocolSession> {
-        let (since, route) = {
+        let route = {
             let pages = self.pages.lock().unwrap_or_else(PoisonError::into_inner);
             let page = pages.get(&tab).filter(|page| page.root == *root)?;
-            (page.since, page.frames.get(frame)?.clone())
+            page.frames.get(frame)?.clone()
         };
-        // The root's tab (a main frame has its tab's target id) plus the no-tab ring, where a
-        // frame record the watcher could not place lands: either may retire this route, and only
-        // their loss, never another tab's, leaves it unproven.
-        let tab = TargetId(root.frame.as_str().to_owned());
-        let read = events.read_tab_after(&tab, since);
-        if read.lost > 0
-            || read.records.iter().any(|record| match &record.event {
-                PageEvent::FrameDetached(id) | PageEvent::FrameSwapped(id) => {
-                    route.ancestors.contains(id)
-                }
-                // A new ancestor document retires its old children, including documents
-                // parked in BFCache. The frame's own same-session commit keeps its endpoint.
-                PageEvent::Navigation(navigation)
-                    if navigation.new_document && navigation.frame != *frame =>
-                {
-                    navigation.frame == root.frame || route.ancestors.contains(&navigation.frame)
-                }
-                _ => false,
-            })
-        {
-            return None;
-        }
-        Some(route.session)
+        (!retired(root, frame, &route, events)).then_some(route.session)
     }
+}
+
+/// Whether a record after `route`'s stamp, or a lost stretch of the rings it reads, retires it: an
+/// ancestor (the frame itself included) detached or swapped to another renderer, or a new
+/// document in the main frame or an ancestor. The frame's own same-session commit keeps its
+/// endpoint.
+pub(crate) fn retired(
+    root: &RootAttachment,
+    frame: &FrameId,
+    route: &FrameRoute,
+    events: &EventHub,
+) -> bool {
+    // The root's tab (a main frame has its tab's target id) plus the no-tab ring, where a frame
+    // record the watcher could not place lands: either may retire this route, and only their
+    // loss, never another tab's, leaves it unproven.
+    let tab = TargetId(root.frame.as_str().to_owned());
+    let read = events.read_tab_after(&tab, route.since);
+    read.lost > 0
+        || read.records.iter().any(|record| match &record.event {
+            PageEvent::FrameDetached(id) | PageEvent::FrameSwapped(id) => {
+                route.ancestors.contains(id)
+            }
+            // A new ancestor document retires its old children, including documents parked in
+            // BFCache.
+            PageEvent::Navigation(navigation)
+                if navigation.new_document && navigation.frame != *frame =>
+            {
+                navigation.frame == root.frame || route.ancestors.contains(&navigation.frame)
+            }
+            _ => false,
+        })
 }
 
 #[cfg(test)]
@@ -133,12 +166,12 @@ mod tests {
         routes.replace(
             TabId(7),
             root.clone(),
-            0,
             HashMap::from([(
                 child.clone(),
                 FrameRoute {
                     session,
                     ancestors: vec![parent.clone(), child.clone()],
+                    since: 0,
                 },
             )]),
         );
@@ -178,5 +211,52 @@ mod tests {
         assert!(routes.cached(TabId(7), &root, &child, &hub).is_none());
         routes.forget(TabId(7));
         assert!(routes.cached(TabId(7), &root, &child, &hub).is_none());
+    }
+
+    /// Each route is checked against what happened after it was made: an ancestor's new document
+    /// before a later route was made retires the older route only, and the later route, added
+    /// beside it, keeps working.
+    #[test]
+    fn a_route_added_later_keeps_its_own_stamp() {
+        let routes = FrameRoutes::default();
+        let root = RootAttachment {
+            session: SessionId::from("root".to_owned()),
+            frame: FrameId("main".to_owned()),
+            epoch: 10,
+        };
+        let session = |id: &str| {
+            ProtocolSession::for_session(TestConnection::new([]), SessionId::from(id.to_owned()))
+        };
+        let (hub, mut writer) = EventHub::new();
+        let (old, new) = (FrameId("old".to_owned()), FrameId("new".to_owned()));
+        routes.insert(
+            TabId(7),
+            root.clone(),
+            old.clone(),
+            FrameRoute {
+                session: session("old-session"),
+                ancestors: vec![FrameId("parent".to_owned()), old.clone()],
+                since: hub.head(),
+            },
+        );
+        writer.record(PageEvent::FrameSwapped(FrameId("parent".to_owned())));
+        routes.insert(
+            TabId(7),
+            root.clone(),
+            new.clone(),
+            FrameRoute {
+                session: session("new-session"),
+                ancestors: vec![FrameId("parent".to_owned()), new.clone()],
+                since: hub.head(),
+            },
+        );
+        assert!(
+            routes.cached(TabId(7), &root, &old, &hub).is_none(),
+            "the swap came after the older route was made"
+        );
+        assert!(
+            routes.cached(TabId(7), &root, &new, &hub).is_some(),
+            "the later route was made after it, beside the older one"
+        );
     }
 }

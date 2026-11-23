@@ -36,6 +36,7 @@ mod evaluate;
 mod evaluate_guard;
 mod frame_routes;
 pub(crate) mod frame_tree;
+mod known_host;
 pub(crate) use frame_routes::FrameRoutes;
 pub(crate) mod init_script;
 mod load_state;

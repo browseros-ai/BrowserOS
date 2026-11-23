@@ -788,6 +788,13 @@ impl EventHub {
         self.lock_log().frames.version(tab)
     }
 
+    /// The log's head and `tab`'s list, taken together under the log's one lock: a route built
+    /// from the list and stamped with that head is retired by every record written after it.
+    pub(crate) fn frames_at(&self, tab: &TargetId) -> (u64, Option<TabFrameList>) {
+        let log = self.lock_log();
+        (log.last_seq, log.frames.get(tab))
+    }
+
     /// The reads `tab`'s list lacks before it is whole ([`TabFrames::missing_seeds`]).
     pub(crate) fn missing_seeds(&self, tab: &TargetId) -> Option<MissingSeeds> {
         self.lock_log().frames.missing_seeds(tab)
