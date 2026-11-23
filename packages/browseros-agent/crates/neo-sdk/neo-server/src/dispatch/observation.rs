@@ -4,7 +4,10 @@
 //! remembered dead bindings remain decisive after ring eviction, until core detaches or rebinds.
 //!
 //! Each observation first brings the log up to a fence it took before it queued: the events
-//! received until the op's work was done, never those a busy page sends while it waits.
+//! received until the op's work was done, never those a busy page sends while it waits. It
+//! waits only for the held events of the tabs it reads (`EventScope`): another tab's events
+//! held behind that tab's frame-tree read are recorded later, and the next reply that reads
+//! that tab catches up with them.
 //!
 //! ```text
 //!  op done ─▶ fence = events received now ─▶ lock (serial turn) ─▶ log reaches fence? ─▶ seq,
@@ -26,7 +29,7 @@ use std::time::Instant;
 
 use browseros_core::pages::PageInfo;
 use browseros_core::{TabId, TargetId};
-use neo_playwright::EventFence;
+use neo_playwright::{EventFence, EventScope};
 use serde::Serialize;
 use tokio::sync::Mutex;
 #[cfg(test)]
@@ -41,13 +44,22 @@ pub(crate) trait EventLog: Send + Sync {
     fn fence(&self) -> EventFence {
         EventFence::default()
     }
-    /// Records every event before `fence` and brings the log's leases in line, waiting at
-    /// most its bound. Whether it did: `false` means the log is still short of `fence`.
-    fn synchronize(&self, _fence: EventFence) -> BoxFuture<'_, bool> {
+    /// Whose held events an observation of `tabs` waits for: their current targets'.
+    fn scope<'a>(&'a self, _tabs: &'a [TabId]) -> BoxFuture<'a, EventScope> {
+        Box::pin(async { EventScope::Every })
+    }
+    /// Records every event before `fence`, with none of `scope`'s held back, and brings the
+    /// log's leases in line, waiting at most its bound. Whether it did: `false` means the log is
+    /// still short of `fence` for `scope`.
+    fn synchronize<'a>(
+        &'a self,
+        _fence: EventFence,
+        _scope: &'a EventScope,
+    ) -> BoxFuture<'a, bool> {
         Box::pin(async { true })
     }
-    /// Whether every event before `fence` is already recorded, without waiting.
-    fn handled_through(&self, _fence: EventFence) -> bool {
+    /// Whether every event before `fence` is already recorded for `scope`, without waiting.
+    fn handled_through(&self, _fence: EventFence, _scope: &EventScope) -> bool {
         true
     }
     /// Newest event recorded before the batch begins reading core.
@@ -148,9 +160,11 @@ pub(crate) struct Observer {
 pub(crate) struct Turn {
     /// The host's read serial: the newest observation's `seq`.
     serial: u64,
-    /// The fence the newest wait gave up on, while the log is still short of it. Until the log
-    /// passes it, observations do not wait again: theirs would end the same way.
-    stalled_at: Option<EventFence>,
+    /// The fence the newest wait gave up on, and the scope it waited for, while the log is still
+    /// short of it there. An observation whose own scope is short of that fence too does not
+    /// wait again: its wait would end the same way. One whose scope already passed it (the stall
+    /// is another tab's) waits as usual.
+    stalled_at: Option<(EventFence, EventScope)>,
 }
 
 /// How an observation's wait for its fence ended, for the debug log.
@@ -226,10 +240,12 @@ impl Observer {
         // done, not stretched by the events that arrive while it queues or waits.
         let fence = self.log.fence();
         let started = Instant::now();
+        // Only the tabs this observation reads: a busy tab it does not read holds nothing here.
+        let scope = self.log.scope(tabs).await;
         let mut turn = self.turn.lock().await;
         let queued = started.elapsed();
-        let waited = self.catch_up(&mut turn, fence).await;
-        let synchronized = waited == Waited::Reached || self.log.handled_through(fence);
+        let waited = self.catch_up(&mut turn, fence, &scope).await;
+        let synchronized = waited == Waited::Reached || self.log.handled_through(fence, &scope);
         let caught_up = started.elapsed();
         turn.serial += 1;
         let mut observed = Observation {
@@ -330,17 +346,18 @@ impl Observer {
     /// that gave up always published, facts the log has not caught up with: a close still
     /// reaches the script in log order (a live fact with an older head cannot reopen a page the
     /// log closed later), and the batch carries no worker list.
-    async fn catch_up(&self, turn: &mut Turn, fence: EventFence) -> Waited {
-        if let Some(stalled) = turn.stalled_at {
-            if !self.log.handled_through(stalled) {
+    async fn catch_up(&self, turn: &mut Turn, fence: EventFence, scope: &EventScope) -> Waited {
+        if let Some((stalled, stalled_scope)) = &turn.stalled_at {
+            if self.log.handled_through(*stalled, stalled_scope) {
+                turn.stalled_at = None;
+            } else if !self.log.handled_through(*stalled, scope) {
                 return Waited::Stalled;
             }
-            turn.stalled_at = None;
         }
-        if self.log.synchronize(fence).await {
+        if self.log.synchronize(fence, scope).await {
             Waited::Reached
         } else {
-            turn.stalled_at = Some(fence);
+            turn.stalled_at = Some((fence, scope.clone()));
             Waited::GaveUp
         }
     }
@@ -375,7 +392,7 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::future::{BoxFuture, join_all};
-    use neo_playwright::EventFence;
+    use neo_playwright::{EventFence, EventScope};
     use tokio::{task, time};
 
     use crate::browser::TabRegistry;
@@ -409,7 +426,11 @@ mod tests {
         fn fence(&self) -> EventFence {
             EventFence::at(10)
         }
-        fn synchronize(&self, _fence: EventFence) -> BoxFuture<'_, bool> {
+        fn synchronize<'a>(
+            &'a self,
+            _fence: EventFence,
+            _scope: &'a EventScope,
+        ) -> BoxFuture<'a, bool> {
             Box::pin(async move {
                 self.waits.fetch_add(1, Ordering::SeqCst);
                 if self.caught.load(Ordering::SeqCst) {
@@ -419,7 +440,7 @@ mod tests {
                 false
             })
         }
-        fn handled_through(&self, _fence: EventFence) -> bool {
+        fn handled_through(&self, _fence: EventFence, _scope: &EventScope) -> bool {
             self.caught.load(Ordering::SeqCst)
         }
         fn head(&self) -> u64 {
@@ -484,6 +505,140 @@ mod tests {
         );
         assert!(caught_up.workers[0].is_some(), "and carries the workers");
         Ok(())
+    }
+
+    /// A watcher whose tab 7 holds events behind a tree read it never gets back: a wait that
+    /// names tab 7's target gives up after its 2 s bound, and any other wait is answered at once.
+    /// Each tab's target is `T<tab id>`. Records the scope of every wait it was asked for.
+    #[derive(Default)]
+    struct OneTabBehind {
+        scopes: Mutex<Vec<EventScope>>,
+    }
+    impl OneTabBehind {
+        fn holds(scope: &EventScope) -> bool {
+            match scope {
+                EventScope::Every => true,
+                EventScope::Tabs(targets) => targets.iter().any(|target| target.0 == "T7"),
+            }
+        }
+        fn scopes(&self) -> Vec<EventScope> {
+            self.scopes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+    }
+    impl EventLog for OneTabBehind {
+        fn fence(&self) -> EventFence {
+            EventFence::at(10)
+        }
+        fn scope<'a>(&'a self, tabs: &'a [TabId]) -> BoxFuture<'a, EventScope> {
+            Box::pin(async move {
+                EventScope::Tabs(
+                    tabs.iter()
+                        .map(|tab| TargetId(format!("T{}", tab.0)))
+                        .collect(),
+                )
+            })
+        }
+        fn synchronize<'a>(
+            &'a self,
+            _fence: EventFence,
+            scope: &'a EventScope,
+        ) -> BoxFuture<'a, bool> {
+            Box::pin(async move {
+                self.scopes
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(scope.clone());
+                if Self::holds(scope) {
+                    time::sleep(Duration::from_secs(2)).await;
+                    return false;
+                }
+                true
+            })
+        }
+        fn handled_through(&self, _fence: EventFence, scope: &EventScope) -> bool {
+            !Self::holds(scope)
+        }
+        fn head(&self) -> u64 {
+            0
+        }
+        fn workers(&self, _target: &TargetId) -> Option<Vec<WorkerFact>> {
+            Some(Vec::new())
+        }
+        fn closed(&self, _target: &TargetId) -> Option<u64> {
+            None
+        }
+    }
+
+    /// An observation waits for the held events of the tabs it reads, by their targets, and of
+    /// no other tab: a busy tab the op never touched holds no reply.
+    #[tokio::test(start_paused = true)]
+    async fn an_observation_waits_only_for_the_tabs_it_reads() {
+        let log = Arc::new(OneTabBehind::default());
+        let observer = Observer::new(Arc::clone(&log) as _);
+        let registry = TabRegistry::new();
+        let started = time::Instant::now();
+        let observed = observer
+            .read(
+                &registry,
+                &[TabId(51), TabId(52)],
+                &HashMap::new(),
+                None,
+                |_| async { Some(info("T51")) },
+            )
+            .await;
+        assert_eq!(
+            log.scopes(),
+            [EventScope::Tabs(vec![
+                TargetId("T51".into()),
+                TargetId("T52".into())
+            ])],
+            "one wait, on the two tabs it reads"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "tab 7 held nothing"
+        );
+        assert!(
+            observed.workers.iter().all(Option::is_some),
+            "proven, so with workers"
+        );
+    }
+
+    /// A wait that gave up on one tab's held events stops later observations that would end the
+    /// same way, those that read that tab, and no other: an observation of a quiet tab after it
+    /// still waits, and is proven.
+    #[tokio::test(start_paused = true)]
+    async fn a_stall_on_one_tab_skips_only_the_waits_that_read_it() {
+        let log = Arc::new(OneTabBehind::default());
+        let observer = Observer::new(Arc::clone(&log) as _);
+        let registry = TabRegistry::new();
+        let claims = HashMap::new();
+        let read = |_: TabId| async { Some(info("T")) };
+        let busy = observer
+            .read(&registry, &[TabId(7)], &claims, None, read)
+            .await;
+        assert_eq!(busy.workers, [None], "the busy tab's wait gave up");
+        let quiet = observer
+            .read(&registry, &[TabId(51)], &claims, None, read)
+            .await;
+        assert_eq!(
+            log.scopes().len(),
+            2,
+            "the quiet tab's observation still waits"
+        );
+        assert!(quiet.workers[0].is_some(), "and its facts are proven");
+        let again = observer
+            .read(&registry, &[TabId(7)], &claims, None, read)
+            .await;
+        assert_eq!(
+            log.scopes().len(),
+            2,
+            "another read of the busy tab skips its wait"
+        );
+        assert_eq!(again.workers, [None]);
     }
 
     fn info(target: &str) -> PageInfo {

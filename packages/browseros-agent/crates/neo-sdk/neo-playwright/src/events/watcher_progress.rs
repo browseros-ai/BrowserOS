@@ -10,10 +10,26 @@
 //! router hands its subscribers (`BrowserSession::cdp_events_targeted_delivered`). The watcher
 //! counts what it handled on the same numbering, so once its counts reach the client's counts
 //! read after a reply ([`Fence`]), every earlier event was handled.
+//!
+//! An event the watcher read but holds back (a tab's event waiting behind that tab's frame-tree
+//! read) is not in the log yet. The watcher publishes the oldest held position of each tab
+//! ([`Held`]), so a wait names whose held events it needs ([`EventScope`]): an op on one tab
+//! waits for that tab's, and another tab's seed read, up to 200 ms while its renderer is busy,
+//! never holds it. The other tab's held events land in the log later, behind the op's reply.
+//!
+//! ```text
+//!  read:  ... e7(X) e8(Y, held) e9(X) e10(Y, held) e11(X)       handled = 12
+//!  held:  Y -> 8
+//!  wait for fence 12 on [X]:        applied through 12: done
+//!  wait for fence 12 on every tab:  applied through min(12, 8) = 8: waits for Y's read
+//! ```
 
+use std::collections::HashMap;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use browseros_core::TargetId;
 use tokio::sync::Notify;
 
 /// The client's counts read after an op's last reply: what the watcher must have handled.
@@ -23,6 +39,47 @@ pub(crate) struct Fence {
     pub(crate) events: u64,
     /// `Runtime.bindingCalled` events the targeted router handed out.
     pub(crate) calls: u64,
+}
+
+/// Whose held events a wait for the watcher covers ([`WatcherProgress::applied_through`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum EventScope {
+    /// Every tab's: the whole log before the fence, as a context-level listener or a caller
+    /// that reads every tab's records needs.
+    #[default]
+    Every,
+    /// Only these tabs' held events, and the download begins no tab owns yet (each could turn
+    /// out to be one of theirs). Another tab's events held behind its tree read do not hold the
+    /// wait: they are recorded later, after the events the wait did cover.
+    Tabs(Vec<TargetId>),
+}
+
+/// The broadcast positions the watcher holds back, by whose events they are: what it publishes
+/// with [`WatcherProgress::hold`] each time a line or a waiting download changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Held {
+    /// Each tab's oldest held position. A tab counts its own line's, and a popup still waiting
+    /// to be reported counts its line's for its opener too: a download in a tab that opened only
+    /// to download is the opener's (`Watcher::download`).
+    pub(crate) tabs: HashMap<TargetId, u64>,
+    /// The oldest download begin no tab owns yet (`UnownedDownload`): it may be any tab's, so
+    /// every scope counts it.
+    pub(crate) unowned: Option<u64>,
+}
+
+impl Held {
+    /// The oldest position `scope` must wait for, or `None` when it holds none of them.
+    fn oldest(&self, scope: &EventScope) -> Option<u64> {
+        let tabs = match scope {
+            EventScope::Every => self.tabs.values().min().copied(),
+            EventScope::Tabs(tabs) => tabs
+                .iter()
+                .filter_map(|tab| self.tabs.get(tab))
+                .min()
+                .copied(),
+        };
+        tabs.into_iter().chain(self.unowned).min()
+    }
 }
 
 /// Shared by the watcher (the only writer) and every op that waits for it.
@@ -35,10 +92,11 @@ pub(crate) struct WatcherProgress {
     /// Binding calls handled, on the router's numbering for `Runtime.bindingCalled`: its count
     /// when the watcher subscribed, then one per call handled. `u64::MAX` once stopped.
     calls: AtomicU64,
-    /// One past the position of the oldest broadcast event the watcher read but holds back (a
-    /// tab's frame event waiting behind a frame-tree read, `target_watcher.rs`), or 0 when it
-    /// holds none. `handled` counts a held event; the log does not have it yet.
-    held: AtomicU64,
+    /// The broadcast events the watcher read but holds back, by tab (a tab's frame event
+    /// waiting behind a frame-tree read, `target_watcher.rs`). `handled` counts a held event;
+    /// the log does not have it yet. A short lock: the watcher replaces it whole, and a waiter
+    /// reads one minimum.
+    held: Mutex<Held>,
     changed: Notify,
 }
 
@@ -58,23 +116,22 @@ impl WatcherProgress {
         self.handled.load(Ordering::Acquire)
     }
 
-    /// How many broadcast events are in the log, counted from the first: every event before
-    /// this position was handled and none of them is held back.
-    pub(crate) fn applied_through(&self) -> u64 {
+    /// How many broadcast events are in the log for `scope`, counted from the first: every event
+    /// before this position was handled, and none of `scope`'s is held back.
+    pub(crate) fn applied_through(&self, scope: &EventScope) -> u64 {
         let handled = self.handled.load(Ordering::Acquire);
-        match self.held.load(Ordering::Acquire) {
-            0 => handled,
-            held => handled.min(held - 1),
-        }
+        let held = self.lock_held().oldest(scope);
+        held.map_or(handled, |held| handled.min(held))
     }
 
-    /// The watcher now holds back events from `position` on (the oldest it holds), or none.
-    pub(crate) fn hold_from(&self, position: Option<u64>) {
-        self.held.store(
-            position.map_or(0, |position| position.saturating_add(1)),
-            Ordering::Release,
-        );
+    /// The watcher now holds back exactly `held`.
+    pub(crate) fn hold(&self, held: Held) {
+        *self.lock_held() = held;
         self.changed.notify_waiters();
+    }
+
+    fn lock_held(&self) -> MutexGuard<'_, Held> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The watcher handled, or a lag skipped, `count` more broadcast events.
@@ -93,17 +150,17 @@ impl WatcherProgress {
     pub(crate) fn stopped(&self) {
         self.handled.store(u64::MAX, Ordering::Release);
         self.calls.store(u64::MAX, Ordering::Release);
-        self.held.store(0, Ordering::Release);
+        *self.lock_held() = Held::default();
         self.changed.notify_waiters();
     }
 
-    /// Returns once the watcher handled every event and call `fence` counts. The caller bounds
-    /// the wait.
-    pub(crate) async fn reached(&self, fence: Fence) {
+    /// Returns once the watcher handled every event and call `fence` counts, and none of
+    /// `scope`'s before it is held back. The caller bounds the wait.
+    pub(crate) async fn reached(&self, fence: Fence, scope: &EventScope) {
         loop {
             let mut changed = pin!(self.changed.notified());
             changed.as_mut().enable();
-            if self.applied_through() >= fence.events
+            if self.applied_through(scope) >= fence.events
                 && self.calls.load(Ordering::Acquire) >= fence.calls
             {
                 return;
@@ -115,12 +172,26 @@ impl WatcherProgress {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use browseros_core::TargetId;
     use tokio::time;
 
-    use super::{Fence, WatcherProgress};
+    use super::{EventScope, Fence, Held, WatcherProgress};
+
+    fn tab(name: &str) -> TargetId {
+        TargetId(name.to_owned())
+    }
+
+    /// `tabs` hold from their positions, and no download waits.
+    fn held(tabs: &[(&str, u64)]) -> Held {
+        Held {
+            tabs: tabs.iter().map(|(name, at)| (tab(name), *at)).collect(),
+            unowned: None,
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_wait_ends_when_the_watcher_counts_past_the_fence() {
@@ -130,10 +201,13 @@ mod tests {
             let progress = Arc::clone(&progress);
             async move {
                 progress
-                    .reached(Fence {
-                        events: 12,
-                        calls: 5,
-                    })
+                    .reached(
+                        Fence {
+                            events: 12,
+                            calls: 5,
+                        },
+                        &EventScope::Every,
+                    )
                     .await;
             }
         });
@@ -150,9 +224,12 @@ mod tests {
             calls: 0,
         };
         assert!(
-            time::timeout(Duration::from_secs(1), progress.reached(earlier))
-                .await
-                .is_ok(),
+            time::timeout(
+                Duration::from_secs(1),
+                progress.reached(earlier, &EventScope::Every)
+            )
+            .await
+            .is_ok(),
             "an earlier fence is reached already"
         );
     }
@@ -164,10 +241,10 @@ mod tests {
         let progress = Arc::new(WatcherProgress::default());
         progress.start(0, 0);
         progress.handled(5);
-        progress.hold_from(Some(2));
+        progress.hold(held(&[("x", 2)]));
         assert_eq!(progress.events_handled(), 5);
         assert_eq!(
-            progress.applied_through(),
+            progress.applied_through(&EventScope::Every),
             2,
             "events 0 and 1 are in the log"
         );
@@ -177,26 +254,101 @@ mod tests {
         };
         let waiter = tokio::spawn({
             let progress = Arc::clone(&progress);
-            async move { progress.reached(fence).await }
+            async move {
+                progress
+                    .reached(fence, &EventScope::Tabs(vec![tab("x")]))
+                    .await;
+            }
         });
         time::sleep(Duration::from_millis(1)).await;
         assert!(!waiter.is_finished(), "event 2 is held");
-        progress.hold_from(None);
+        progress.hold(Held::default());
         assert!(time::timeout(Duration::from_secs(1), waiter).await.is_ok());
+    }
+
+    /// One tab's held events hold only the waits that name it: an op on another tab goes on
+    /// while the busy tab's tree read is out, and a wait on every tab still waits for them.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_wait_on_one_tab_passes_another_tabs_held_events() {
+        let progress = Arc::new(WatcherProgress::default());
+        progress.start(0, 0);
+        progress.handled(12);
+        progress.hold(held(&[("busy", 8), ("slow", 10)]));
+        let on = |names: &[&str]| EventScope::Tabs(names.iter().map(|name| tab(name)).collect());
+        assert_eq!(
+            progress.applied_through(&on(&["quiet"])),
+            12,
+            "nothing of its own held"
+        );
+        assert_eq!(progress.applied_through(&on(&["busy"])), 8);
+        assert_eq!(progress.applied_through(&on(&["quiet", "slow"])), 10);
+        assert_eq!(
+            progress.applied_through(&on(&["slow", "busy"])),
+            8,
+            "the oldest it names"
+        );
+        assert_eq!(progress.applied_through(&EventScope::Every), 8);
+        let fence = Fence {
+            events: 12,
+            calls: 0,
+        };
+        assert!(
+            time::timeout(
+                Duration::from_secs(1),
+                progress.reached(fence, &on(&["quiet"]))
+            )
+            .await
+            .is_ok(),
+            "the quiet tab's wait does not wait for the busy tab"
+        );
+        let every = tokio::spawn({
+            let progress = Arc::clone(&progress);
+            async move { progress.reached(fence, &EventScope::Every).await }
+        });
+        time::sleep(Duration::from_millis(1)).await;
+        assert!(
+            !every.is_finished(),
+            "a wait on every tab waits for the held events"
+        );
+        progress.hold(Held::default());
+        assert!(time::timeout(Duration::from_secs(1), every).await.is_ok());
+    }
+
+    /// A download begin no tab owns yet may be any tab's, so it holds every wait, whichever tabs
+    /// it names.
+    #[test]
+    fn tests_that_a_download_no_tab_owns_holds_every_tab() {
+        let progress = WatcherProgress::default();
+        progress.start(0, 0);
+        progress.handled(9);
+        progress.hold(Held {
+            tabs: HashMap::new(),
+            unowned: Some(4),
+        });
+        assert_eq!(
+            progress.applied_through(&EventScope::Tabs(vec![tab("x")])),
+            4
+        );
+        assert_eq!(progress.applied_through(&EventScope::Tabs(Vec::new())), 4);
+        assert_eq!(progress.applied_through(&EventScope::Every), 4);
     }
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_stopped_watcher_holds_no_one() {
         let progress = WatcherProgress::default();
+        progress.hold(held(&[("x", 0)]));
         progress.stopped();
         let fence = Fence {
             events: u64::MAX - 1,
             calls: u64::MAX - 1,
         };
         assert!(
-            time::timeout(Duration::from_secs(1), progress.reached(fence))
-                .await
-                .is_ok()
+            time::timeout(
+                Duration::from_secs(1),
+                progress.reached(fence, &EventScope::Tabs(vec![tab("x")]))
+            )
+            .await
+            .is_ok()
         );
     }
 }

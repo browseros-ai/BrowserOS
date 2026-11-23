@@ -66,4 +66,5 @@ pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub use target_watcher::EventFence;
 pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher, WatcherHandle};
-pub(crate) use watcher_progress::{Fence, WatcherProgress};
+pub use watcher_progress::EventScope;
+pub(crate) use watcher_progress::{Fence, Held, WatcherProgress};
