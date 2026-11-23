@@ -111,6 +111,11 @@ fn chain(list: &TabFrameList, tab: &TargetId, frame: &FrameId) -> Option<Vec<Fra
 /// list and the attach, removed or swapped back into its parent's process), core falls back to
 /// sharing a parent's session, the page's here, which hosts the frame only if it moved back into
 /// the main frame's process; the op then falls back to the read rather than trust it.
+///
+/// It reads core's `FrameTarget::cursor_uses_session_default` as "core returned the frame's own
+/// session". In `resolve_child_target` (browseros-core `frames.rs`) that is true only for the
+/// out-of-process cache hit, a fresh `attach_oopif_on_demand` and the cache re-check after it,
+/// and false for the shared-parent fallback. A change to when core sets it changes this check.
 pub(crate) fn own_session(target: FrameTarget) -> Option<ProtocolSession> {
     target.cursor_uses_session_default.then_some(target.session)
 }
