@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { metricsView as buildMetricsView } from '../../server/telemetry/metrics-view'
 import type { MetricFamily, MetricsView, Quantiles } from '../../shared/api'
 import { quantiles } from '../test-support/telemetry'
 import {
@@ -100,6 +101,55 @@ describe('Metrics explorer duration ranges', () => {
     ).toBe(0)
   })
 
+  it('requires raw bounds in every outcome and drills down only through their intersection', () => {
+    const samples = family([
+      {
+        labels: { neo_op_name: 'locator.click', neo_op_outcome: 'ok' },
+        value: 5,
+        buckets: [
+          { le: 0.5, count: 1 },
+          { le: 1, count: 3 },
+          { le: 2.5, count: 4 },
+          { le: null, count: 5 },
+        ],
+      },
+      {
+        labels: { neo_op_name: 'locator.click', neo_op_outcome: 'error' },
+        value: 3,
+        buckets: [
+          { le: 0.5, count: 1 },
+          { le: 2.5, count: 2 },
+          { le: null, count: 3 },
+        ],
+      },
+    ])
+    samples.push({
+      name: 'neo_operations_total',
+      kind: 'counter',
+      help: null,
+      series: [{ labels: { neo_op_name: 'locator.click' }, value: 8 }],
+    })
+    const view = buildMetricsView(samples, 'push', 1)
+    expect(
+      operationBandCount(view.operations, { minMs: 500, maxMs: 1000 }, samples),
+    ).toBeNull()
+    expect(
+      operationBandCount(view.operations, { minMs: 500, maxMs: null }, samples),
+    ).toBe(6)
+    expect(slowOperationBuckets(view.operations, samples)).toEqual([
+      {
+        filter: { method: 'locator.click', minMs: 500, maxMs: 2500 },
+        count: 4,
+        label: '>500 ms to 2.5 s',
+      },
+      {
+        filter: { method: 'locator.click', minMs: 2500, maxMs: null },
+        count: 2,
+        label: 'Over 2.5 s',
+      },
+    ])
+  })
+
   it('treats an empty histogram as no observations rather than unavailable bounds', () => {
     const empty = { ...quantiles([], null, null), buckets: [] }
     expect(
@@ -109,6 +159,37 @@ describe('Metrics explorer duration ranges', () => {
     const unbounded = { ...empty, count: 4 }
     expect(durationBandCount(unbounded, { minMs: 500, maxMs: null })).toBeNull()
     expect(slowOperationBuckets([operation(unbounded)])).toEqual([])
+  })
+
+  it('keeps incomplete raw histograms unknown instead of using the merged summary', () => {
+    const op = operation(quantiles([0.6, 0.7], null, null))
+    for (const samples of [
+      family([series('ok', [0.6])]),
+      family([{ ...series('ok', [0.6, 0.7]), value: null }]),
+    ]) {
+      expect(
+        operationBandCount([op], { minMs: 500, maxMs: null }, samples),
+      ).toBeNull()
+      expect(slowOperationBuckets([op], samples)).toEqual([])
+    }
+  })
+
+  it('does not require finite bounds from zero-observation raw series', () => {
+    const op = operation(quantiles([0.6], null, null))
+    const samples = family([
+      series('ok', [0.6]),
+      { labels: { neo_op_name: op.op, neo_op_outcome: 'error' }, value: 0 },
+    ])
+    expect(operationBandCount([op], { minMs: 500, maxMs: 1000 }, samples)).toBe(
+      1,
+    )
+    expect(slowOperationBuckets([op], samples)).toEqual([
+      {
+        filter: { method: op.op, minMs: 500, maxMs: 1000 },
+        count: 1,
+        label: '>500 ms to 1 s',
+      },
+    ])
   })
 
   it('uses custom bucket bounds for exact trace filters and omits a bucket crossing 500 ms', () => {

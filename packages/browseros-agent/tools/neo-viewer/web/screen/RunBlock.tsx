@@ -18,7 +18,7 @@
  * there from the first span on, for every run, so it never appears under a run as it is read.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
 import type { FormattedCode } from '../../shared/code-format'
 import { RUN_VALUES_OFF_NOTICE } from '../../shared/trace-values'
@@ -109,6 +109,13 @@ export function RunBlock({
   const replyShown = selected && openId === null && !traceShown
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set())
   const [showUnplaced, setShowUnplaced] = useState(false)
+  const selectedUnplaced =
+    placed?.unplaced.find((operation) => operation.id === openId)?.id ?? null
+  // Reveal an incoming selection once, including after a delayed record read. Keep the
+  // group's manual toggle independent so a reader can collapse the selected operation again.
+  useEffect(() => {
+    if (selectedUnplaced !== null) setShowUnplaced(true)
+  }, [selectedUnplaced])
   const toggle = (id: string) =>
     onSelect(
       id === openId
@@ -252,8 +259,14 @@ function CodeLine({
     ...operations.map((operation) => places.get(operation.id)?.calls ?? 1),
   )
   const [first, ...more] = operations
+  // A selection from the trace explorer can name a call hidden past this line's fold.
+  // Derive its visibility from the selection, including when the record arrives later.
   const shown =
-    unfolded || operations.length <= FOLD_AFTER
+    unfolded ||
+    operations.length <= FOLD_AFTER ||
+    operations
+      .slice(SHOWN_PER_LINE)
+      .some((operation) => operation.id === openId)
       ? more
       : more.slice(0, SHOWN_PER_LINE - 1)
   const folded = more.length - shown.length

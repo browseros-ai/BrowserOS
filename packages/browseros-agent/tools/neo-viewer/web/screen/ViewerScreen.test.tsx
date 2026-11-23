@@ -12,6 +12,7 @@ import {
   type TelemetryHealth,
   type ViewerInfo,
 } from '../../shared/api'
+import { liveRoutes } from '../../shared/live-screen'
 import { fire, installDom, type TestDom } from '../test-support/dom'
 import { FakeOrigin } from '../test-support/tabs'
 import { health, metricsView } from '../test-support/telemetry'
@@ -44,7 +45,10 @@ describe('the screen with Neo health', () => {
   })
 
   /** The screen on a fake viewer whose run snapshots carry `snapshots` in turn (then the last). */
-  async function screen(snapshots: Array<TelemetryHealth | null>) {
+  async function screen(
+    snapshots: Array<TelemetryHealth | null>,
+    withAgent = false,
+  ) {
     dom = await installDom()
     const origin = new FakeOrigin()
     uninstall = origin.tab().install()
@@ -68,6 +72,26 @@ describe('the screen with Neo health', () => {
     Object.assign(window, { innerWidth: 1440 })
     globalThis.fetch = (async (input: string | URL) => {
       const path = String(input)
+      if (withAgent && path === liveRoutes.status)
+        return Response.json({
+          host: { state: 'up' },
+          agent: {
+            tab: { tabId: 12, title: 'Test', url: 'about:blank' },
+            taskId: null,
+          },
+          takeover: null,
+        })
+      if (withAgent && path === liveRoutes.takeovers)
+        return Response.json({
+          takeover: {
+            id: 'tk1',
+            tabId: 12,
+            state: 'active',
+            display: '/v1/display?mode=control&release=tk1',
+            createdAt: 1,
+            expiresAt: Date.now() + 60000,
+          },
+        })
       if (path === apiRoutes.info) return Response.json(INFO)
       if (path === apiRoutes.metrics)
         return Response.json({ metrics: metricsView() })
@@ -115,6 +139,20 @@ describe('the screen with Neo health', () => {
     expect(dom.container.querySelector('[aria-label="Sort by Neo time"]')).toBe(
       table,
     )
+  })
+
+  it('shows the control screen when taking over from Metrics and keeps it across sections', async () => {
+    await screen([health()], true)
+    await dom.interact(() => fire(button('Metrics'), 'click'))
+    const display = () =>
+      dom.container.querySelector('section[aria-label="Live screen"]')
+    expect(display()).toBeNull()
+    await dom.interact(() => fire(button('Take over'), 'click'))
+    const held = display()
+    expect(held).not.toBeNull()
+    expect(button('Give back')).toBeDefined()
+    await dom.interact(() => fire(button('Runs'), 'click'))
+    expect(display()).toBe(held)
   })
 
   it('closes with ← Runs or Escape and gives focus back to the health line', async () => {

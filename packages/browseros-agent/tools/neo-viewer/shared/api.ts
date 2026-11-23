@@ -542,12 +542,14 @@ export interface RunTraceResponse {
 export interface TraceSearchQuery {
   /** Case-insensitive partial W3C trace id, at most 32 hex characters. */
   traceId: string
-  /** Exact, case-sensitive `neo.op.name`; empty means any method. */
+  /** Exact, case-sensitive canonical span name, also used by Metrics; empty means any method. */
   method: string
   minMs: number | null
   maxMs: number | null
   /** Number of run slices returned, 1–200. */
   limit: number
+  /** Validated continuation boundary in immutable viewer arrival order. */
+  cursor: Pick<TraceRunSummary, 'sentAt' | 'id'> | null
 }
 
 export type TraceRunSummary = Pick<
@@ -578,6 +580,8 @@ export interface TracesResponse {
   traces: TraceSearchResult[]
   /** More matching run slices exist than the requested limit. */
   truncated: boolean
+  /** Opaque continuation token, preserving the current filters; null on the final page. */
+  nextCursor: string | null
 }
 
 /** One run's spans, found by Neo's run id (`neo.run.id`), never by trace id alone. */

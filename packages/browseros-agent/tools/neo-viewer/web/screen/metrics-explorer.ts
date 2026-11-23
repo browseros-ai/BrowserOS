@@ -8,6 +8,7 @@ import type { ExplorerSpanFilter } from './explorer-filter'
 import { boundText } from './metrics'
 
 type Operation = MetricsView['operations'][number]
+type DurationHistogram = Pick<Quantiles, 'count' | 'buckets'>
 
 /** Counters without outcome labels cannot distinguish a success from a cancellation. */
 export type OperationOutcomes =
@@ -63,7 +64,7 @@ export const DURATION_BANDS: readonly DurationBand[] = [
 
 /** An absent finite bound is unknown. Interpolating it would invent observations. */
 export function durationBandCount(
-  duration: Pick<Quantiles, 'count' | 'buckets'>,
+  duration: DurationHistogram,
   band: Pick<DurationBand, 'minMs' | 'maxMs'>,
 ): number | null {
   if (duration.count === 0) return 0
@@ -94,12 +95,7 @@ export function failedDurationBandCount(
   operation: Operation,
   band: Pick<DurationBand, 'minMs' | 'maxMs'>,
 ): number | null {
-  const series = families.flatMap((family) =>
-    family.name === 'neo_operation_duration_seconds' &&
-    family.kind === 'histogram'
-      ? family.series.filter((one) => one.labels.neo_op_name === operation.op)
-      : [],
-  )
+  const series = operationDurationSeries(families, operation)
   if (series.length === 0) return null
   let total = 0
   let failed = 0
@@ -125,10 +121,12 @@ export function failedDurationBandCount(
 export function operationBandCount(
   operations: Operation[],
   band: Pick<DurationBand, 'minMs' | 'maxMs'>,
+  families: MetricFamily[] = [],
 ): number | null {
   let total = 0
   for (const operation of operations) {
-    const value = durationBandCount(operation.duration, band)
+    const duration = exactOperationHistogram(families, operation)
+    const value = duration === null ? null : durationBandCount(duration, band)
     if (value === null) return null
     total += value
   }
@@ -149,28 +147,23 @@ export interface SlowOperationBucket {
  */
 export function slowOperationBuckets(
   operations: Operation[],
+  families: MetricFamily[] = [],
 ): SlowOperationBucket[] {
   const rows: SlowOperationBucket[] = []
   for (const operation of operations) {
+    const duration = exactOperationHistogram(families, operation)
+    if (duration === null) continue
     let minMs = 0
     let previousCount = 0
-    for (const bucket of operation.duration.buckets) {
+    for (const bucket of duration.buckets) {
       const maxMs = bucket.le === null ? null : bucket.le * 1000
       addBucket(operation.op, minMs, maxMs, bucket.count - previousCount)
       if (maxMs === null) break
       minMs = maxMs
       previousCount = bucket.count
     }
-    if (
-      operation.duration.buckets.length > 0 &&
-      operation.duration.buckets.at(-1)?.le !== null
-    ) {
-      addBucket(
-        operation.op,
-        minMs,
-        null,
-        operation.duration.count - previousCount,
-      )
+    if (duration.buckets.length > 0 && duration.buckets.at(-1)?.le !== null) {
+      addBucket(operation.op, minMs, null, duration.count - previousCount)
     }
   }
   return rows.sort(
@@ -196,4 +189,49 @@ export function slowOperationBuckets(
           : `>${boundText(minMs / 1000)} to ${boundText(maxMs / 1000)}`,
     })
   }
+}
+
+function operationDurationSeries(
+  families: MetricFamily[],
+  operation: Operation,
+) {
+  return families.flatMap((family) =>
+    family.name === 'neo_operation_duration_seconds' &&
+    family.kind === 'histogram'
+      ? family.series.filter((one) => one.labels.neo_op_name === operation.op)
+      : [],
+  )
+}
+
+/**
+ * Health's merged quantiles carry forward counts when outcome series use different bounds.
+ * Exact Metrics ranges instead share only bounds present in every populated raw series.
+ * Older responses and aggregate-only fixtures retain their supplied histogram when raw series
+ * are absent; incomplete raw data must stay unknown rather than fall back to merged counts.
+ */
+function exactOperationHistogram(
+  families: MetricFamily[],
+  operation: Operation,
+): DurationHistogram | null {
+  const series = operationDurationSeries(families, operation)
+  if (series.length === 0) return operation.duration
+  let count = 0
+  for (const one of series) {
+    if (one.value === null) return null
+    count += one.value
+  }
+  if (count !== operation.duration.count) return null
+  // A zero-observation series contributes exact zero at every bound, even without buckets.
+  const populated = series.filter((one) => one.value !== 0)
+  const buckets = (populated[0]?.buckets ?? []).flatMap((bucket) => {
+    if (bucket.le === null) return []
+    let cumulative = 0
+    for (const one of populated) {
+      const matching = one.buckets?.find((other) => other.le === bucket.le)
+      if (!matching) return []
+      cumulative += matching.count
+    }
+    return [{ le: bucket.le, count: cumulative }]
+  })
+  return { count, buckets: [...buckets, { le: null, count }] }
 }

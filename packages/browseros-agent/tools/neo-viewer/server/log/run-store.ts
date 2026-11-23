@@ -409,7 +409,7 @@ function summarizeRun(
     codeSize: textSize(start.code),
     replySize: text === null ? null : textSize(text),
     replyPreview: text === null ? null : text.slice(0, PREVIEW_CHARS),
-    neoRunId: typeof runMeta?.id === 'string' ? runMeta.id : null,
+    neoRunId: neoIdOf(run),
     neoStatus: typeof runMeta?.status === 'string' ? runMeta.status : null,
     neoEffects: typeof runMeta?.effects === 'string' ? runMeta.effects : null,
     neoDurationMs: run.neo?.durationMs ?? null,

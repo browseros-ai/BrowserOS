@@ -36,7 +36,34 @@ export function parseTraceQuery(params: URLSearchParams): TraceSearchQuery {
   const limit = rawLimit === null ? 100 : Number(rawLimit)
   if (!Number.isInteger(limit) || limit < 1 || limit > 200)
     throw new Error('limit must be an integer from 1 to 200')
-  return { traceId, method, minMs, maxMs, limit }
+  const cursor = cursorParam(params.get('cursor'))
+  return { traceId, method, minMs, maxMs, limit, cursor }
+}
+
+/** A cursor names an arrival, not a mutable span start or a log's renumbered run sequence. */
+function cursorParam(raw: string | null): TraceSearchQuery['cursor'] {
+  if (raw === null) return null
+  if (/^[A-Za-z0-9_-]{1,1024}$/.test(raw)) {
+    try {
+      const parsed: unknown = JSON.parse(
+        Buffer.from(raw, 'base64url').toString(),
+      )
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === 2 &&
+        typeof parsed[0] === 'string' &&
+        parsed[0].length <= 40 &&
+        Number.isFinite(Date.parse(parsed[0])) &&
+        typeof parsed[1] === 'string' &&
+        parsed[1].length > 0 &&
+        parsed[1].length <= 256
+      )
+        return { sentAt: parsed[0], id: parsed[1] }
+    } catch {
+      // Malformed JSON is a bad request just like an invalid cursor shape below.
+    }
+  }
+  throw new Error('cursor must be a trace-search continuation token')
 }
 
 function durationParam(params: URLSearchParams, name: string): number | null {
@@ -55,26 +82,39 @@ export function searchTraces(
   query: TraceSearchQuery,
   lookup: TraceRunLookup,
 ): TracesResponse {
-  // At most SpanStore.maxRuns candidates. Sorting this small snapshot gives stable newest-first
-  // results without collecting matches from an unbounded proxy log or sorting any span tree.
-  const candidates: Array<TraceSlice & { spans: RunSpans }> = []
+  // Arrival timestamps and viewer ids never change when a late root span or reply lands.
+  // Keep only one page plus lookahead, even if a retained Neo run has several proxy bindings.
+  const page: TraceSearchResult[] = []
   for (const spans of retained) {
     const summary = summarizeTrace(spans, query)
-    if (summary) candidates.push({ spans, ...summary })
-  }
-  candidates.sort(
-    (a, b) =>
-      b.startedAt - a.startedAt ||
-      a.spans.neoRunId.localeCompare(b.spans.neoRunId),
-  )
-  const traces: TraceSearchResult[] = []
-  for (const { spans, ...summary } of candidates) {
+    if (!summary) continue
     for (const run of lookup(spans.neoRunId, spans.run?.parentSpanId ?? null)) {
-      if (traces.length === query.limit) return { traces, truncated: true }
-      traces.push({ ...summary, run })
+      if (query.cursor && arrivalOrder(run, query.cursor) <= 0) continue
+      page.push({ ...summary, run })
+      page.sort((a, b) => arrivalOrder(a.run, b.run))
+      if (page.length > query.limit + 1) page.pop()
     }
   }
-  return { traces, truncated: false }
+  const truncated = page.length > query.limit
+  const traces = page.slice(0, query.limit)
+  const last = traces.at(-1)
+  return {
+    traces,
+    truncated,
+    nextCursor:
+      truncated && last
+        ? Buffer.from(JSON.stringify([last.run.sentAt, last.run.id])).toString(
+            'base64url',
+          )
+        : null,
+  }
+}
+
+function arrivalOrder(
+  a: Pick<TraceRunSummary, 'sentAt' | 'id'>,
+  b: Pick<TraceRunSummary, 'sentAt' | 'id'>,
+): number {
+  return Date.parse(b.sentAt) - Date.parse(a.sentAt) || a.id.localeCompare(b.id)
 }
 
 /** A cheap summary of retained spans; matching never folds records or sorts a waterfall. */
@@ -114,7 +154,7 @@ function summarizeTrace(
           spanId: match.spanId,
           name: match.spanName,
           label: match.name,
-          durationMs: match.endMs - match.startMs,
+          durationMs: match.durationMs,
         }
       : null,
   }
@@ -122,9 +162,9 @@ function summarizeTrace(
 
 /** Every predicate describes this one operation, never timings from another span in the run. */
 function operationMatches(op: OpSpan, query: TraceSearchQuery): boolean {
-  const duration = op.endMs - op.startMs
+  const duration = op.durationMs
   return (
-    (!query.method || op.name === query.method) &&
+    (!query.method || op.spanName === query.method) &&
     (query.minMs === null || duration > query.minMs) &&
     (query.maxMs === null || duration <= query.maxMs)
   )

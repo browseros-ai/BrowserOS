@@ -128,6 +128,20 @@ describe('foldSpans', () => {
 })
 
 describe('buildTrace', () => {
+  test('the waterfall and operation record share the exact decoded nanosecond duration', () => {
+    const store = new SpanStore()
+    const body = fixtureTraces(RUN, { ops: [1] })
+    const op = body.resourceSpans[0]?.scopeSpans[0]?.spans[0]
+    if (!op) throw new Error('Missing fixture operation')
+    op.startTimeUnixNano = '1763650000000000123'
+    op.endTimeUnixNano = '1763650000500100123'
+    store.add(decodeSpans(body).items)
+    const spans = store.get(RUN.neoRunId)
+    if (!spans) throw new Error('Missing retained spans')
+    expect(buildTrace(spans)?.spans[0]?.durationMs).toBe(500.1)
+    expect(foldSpans(spans).operations[0]?.durationMs).toBe(500.1)
+  })
+
   test('depth first, siblings by start: neo.run, its ops, the nested one under its parent', () => {
     const trace = buildTrace(filed(ALL))
     expect(trace).toMatchObject({

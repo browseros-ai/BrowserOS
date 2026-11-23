@@ -141,6 +141,7 @@ test('shared W3C ids produce current viewer run slices, not one merged trace or 
   expect(await v.search('?traceId=ffffffff')).toEqual({
     traces: [],
     truncated: false,
+    nextCursor: null,
   })
 })
 
@@ -167,7 +168,7 @@ test('exact method and duration must match the same actual operation span', asyn
   ).toBe(508)
 })
 
-test('search uses raw operation timing and exact neo.op.name even when OTel calls the span unknown', async () => {
+test('canonical method matching retains raw labels and exact fractional duration boundaries at epoch timestamps', async () => {
   const v = await viewer()
   record(v.store, 'fractional')
   const body = fixtureTraces(
@@ -175,28 +176,31 @@ test('search uses raw operation timing and exact neo.op.name even when OTel call
       neoRunId: 'fractional',
       traceId: TRACE,
       parentSpanId: null,
-      startMs: 1_000,
+      startMs: 1_763_650_000_000,
     },
     { ops: [0, 1] },
   )
   const op = body.resourceSpans[0]?.scopeSpans[0]?.spans[0]
   if (!op) throw new Error('missing fixture operation')
   op.name = 'unknown'
-  op.endTimeUnixNano = '1420001000'
+  op.startTimeUnixNano = '1763650000000000123'
+  op.endTimeUnixNano = '1763650000500100123'
   await fetch(`${v.url}/otlp/v1/traces`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const result = await v.search(
-    '?method=page.goto&minMs=415.0005&maxMs=415.0015',
-  )
+  const result = await v.search('?method=unknown&minMs=500.099999&maxMs=500.1')
   expect(result.traces[0]?.matchedSpan).toMatchObject({
     name: 'unknown',
     label: 'page.goto',
   })
-  expect(result.traces[0]?.matchedSpan?.durationMs).toBeCloseTo(415.001, 7)
-  expect((await v.search('?method=unknown')).traces).toEqual([])
+  expect(result.traces[0]?.matchedSpan?.durationMs).toBe(500.1)
+  expect((await v.search('?method=unknown&minMs=500.1')).traces).toEqual([])
+  expect((await v.search('?method=unknown&maxMs=500.099999')).traces).toEqual(
+    [],
+  )
+  expect((await v.search('?method=page.goto')).traces).toEqual([])
 })
 
 test('missing spans never become matches from script text or an unrelated method', async () => {
@@ -230,7 +234,11 @@ test('only a viewer-minted parent binds a run without a reply; Clear drops every
   await v.push('no-reply', 1_000, PARENT)
   expect((await v.search()).traces.map((row) => row.run.id)).toEqual([minted])
   await v.store.clear()
-  expect(await v.search()).toEqual({ traces: [], truncated: false })
+  expect(await v.search()).toEqual({
+    traces: [],
+    truncated: false,
+    nextCursor: null,
+  })
   record(v.store, 'fresh', 4_000)
   expect((await v.search()).traces).toEqual([])
   await v.push('fresh', 4_000)
@@ -271,6 +279,37 @@ test('result limits report truncation and evicted spans disappear even when prox
   expect(all.traces.map((row) => row.run.seq)).toEqual([3, 2])
 })
 
+test('an exact shared trace id can continue through the storage cap despite new arrivals and late span starts', async () => {
+  const v = await viewer()
+  const ids: string[] = []
+  for (let index = 0; index < 500; index++) {
+    const at = (index + 1) * 1_000
+    ids.push(record(v.store, `shared-${index}`, at))
+    await v.push(`shared-${index}`, at, null, [0, 1])
+  }
+  const filters = `?traceId=${TRACE}&method=page.goto&minMs=414.999&maxMs=415`
+  const first = await v.search(filters)
+  expect(first.traces).toHaveLength(100)
+  expect(first.nextCursor).not.toBeNull()
+
+  // Neither a root's corrected start nor a newer arrival changes the immutable page boundary.
+  await v.push('shared-499', 1, null, [0, 1])
+  record(v.store, 'new-arrival', 600_000)
+  await v.push('new-arrival', 600_000, null, [0, 1])
+  const seen = [...first.traces]
+  let cursor = first.nextCursor
+  while (cursor) {
+    const page = await v.search(`${filters}&cursor=${cursor}`)
+    expect(page.traces.length).toBeLessThanOrEqual(100)
+    seen.push(...page.traces)
+    cursor = page.nextCursor
+  }
+  // The oldest span set was evicted, while the new arrival belongs to a later first-page refresh.
+  expect(seen.map((row) => row.run.id)).toEqual(ids.slice(1).reverse())
+  expect(new Set(seen.map((row) => row.run.id)).size).toBe(499)
+  expect((await v.search(filters)).traces[0]?.run.seq).toBe(501)
+})
+
 test('query boundaries reject invalid values and a foreign host cannot read trace search', async () => {
   const v = await viewer()
   for (const query of [
@@ -284,6 +323,9 @@ test('query boundaries reject invalid values and a foreign host cannot read trac
     'limit=0',
     'limit=201',
     'limit=1.5',
+    'cursor=invalid',
+    'cursor=e30',
+    'cursor=WzEsMl0',
   ]) {
     const response = await fetch(`${v.url}${apiRoutes.traces}?${query}`)
     expect(response.status).toBe(400)

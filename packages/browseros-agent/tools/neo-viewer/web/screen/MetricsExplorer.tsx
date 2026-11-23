@@ -72,25 +72,31 @@ function MetricsContents({
     (total, operation) => total + operation.total,
     0,
   )
-  const failed = operations.reduce(
-    (total, operation) => total + operation.errors,
-    0,
-  )
+  const failed = operations.reduce((total, operation) => {
+    const outcomes = operationOutcomes(metrics.families, operation)
+    return (
+      total + (outcomes.kind === 'labeled' ? outcomes.error : outcomes.failed)
+    )
+  }, 0)
   const measured = operations.reduce(
     (total, operation) => total + operation.duration.count,
     0,
   )
-  const slow = operationBandCount(operations, { minMs: 500, maxMs: null })
+  const slow = operationBandCount(
+    operations,
+    { minMs: 500, maxMs: null },
+    metrics.families,
+  )
   const buckets = DURATION_BANDS.map((band) => ({
     ...band,
-    count: operationBandCount(operations, band),
+    count: operationBandCount(operations, band, metrics.families),
   }))
   const peak = Math.max(0, ...buckets.map((bucket) => bucket.count ?? 0))
   const maxCalls = Math.max(
     0,
     ...operations.map((operation) => operation.total),
   )
-  const rows = slowOperationBuckets(operations).map((row) => {
+  const rows = slowOperationBuckets(operations, metrics.families).map((row) => {
     const operation = operations.find((one) => one.op === row.filter.method)
     return {
       ...row,
@@ -99,7 +105,6 @@ function MetricsContents({
         : null,
     }
   })
-  const failedRuns = Math.max(0, runs.total - (runs.byStatus.ok ?? 0))
   return (
     <>
       <section
@@ -131,7 +136,7 @@ function MetricsContents({
         <MetricTotal
           label="Completed runs"
           value={count(runs.total)}
-          detail={`${plural(failedRuns, 'failed run')} · ${count(runs.inFlight)} in flight`}
+          detail={`${count(runs.byStatus.ok ?? 0)} succeeded · ${count(runs.inFlight)} in flight`}
         />
       </section>
       <div className="grid gap-7 pt-5 xl:grid-cols-2">

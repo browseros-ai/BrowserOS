@@ -133,7 +133,7 @@ The page at `/` (the approved design, "Viewer C v2"):
   search the recorded spans for calls in that range. Metrics can include calls whose spans
   the viewer never received or no longer retains.
 - **Traces.** Search by trace ID and inspect the span waterfall and attributes. The list shows
-  the browser work for each recorded run. Several runs can belong to the same agent trace.
+  the browser work for each recorded run. Several runs can belong to the same agent trace. Choose **Load more traces** to see older matches.
   **Open in Runs** opens the corresponding run and selects the recorded call when available.
 - **Neo health.** Clicking the health opens Neo's metrics in place of the runs (the top bar,
   the strip and the sidebar keep streaming; **← Runs** or Escape go back to the runs as they
@@ -316,7 +316,7 @@ it adds later) is shown under the value as the model read it, and never stops th
 | `GET /api/info` | `ViewerInfo`: the MCP URL, the upstream, the data folder, and the container the command started (`container: {name, image, up}`, null with `--upstream`) |
 | `GET /api/runs` | `RunsResponse`: every `RunSummary` since the last Clear, in order, and the log's totals (`LogSummary`) |
 | `GET /api/runs/:runId` | `RunResponse`: one `RunDetail`, request and reply as they crossed |
-| `GET /api/traces` | Search retained run traces by partial `traceId`, exact `method`, and operation duration in milliseconds (`minMs` exclusive, `maxMs` inclusive). |
+| `GET /api/traces` | Search retained run traces by partial `traceId`, exact `method`, and operation duration in milliseconds (`minMs` exclusive, `maxMs` inclusive). Pass `nextCursor` as `cursor` with the same filters for the next page. The default page size is 100 and `limit` accepts 1–200. |
 | `GET /api/runs/:runId/trace` | `RunTraceResponse`: the run's spans for the waterfall (`trace: null` when none arrived) |
 | `GET /api/metrics` | `MetricsResponse`: Neo's metrics from the live source (`metrics: null` when none is live) |
 | `POST /api/clear` | `RunsResponse`, empty: starts a new log, keeps the previous as `log.prev.jsonl`; only from the viewer's own page |

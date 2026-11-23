@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { metricsView as buildMetricsView } from '../../server/telemetry/metrics-view'
 import type { MetricsView, TelemetryHealth } from '../../shared/api'
 import { fire, installDom, type TestDom } from '../test-support/dom'
 import { health, metricsView, quantiles } from '../test-support/telemetry'
@@ -39,6 +40,9 @@ describe('Metrics explorer', () => {
     )
     expect(totals?.textContent).toContain(
       'Failed operations11Across all duration ranges',
+    )
+    expect(totals?.textContent).toContain(
+      'Completed runs1514 succeeded · 1 in flight',
     )
     const graph = section(page.container, 'Operation duration')
     expect(
@@ -169,6 +173,139 @@ describe('Metrics explorer', () => {
     expect(
       section(page.container, 'Outcomes by operation').textContent,
     ).toContain('2 failed')
+  })
+
+  it('renders exact common-bound drilldowns and unknown ranges for mixed outcome bounds', async () => {
+    const filters: ExplorerSpanFilter[] = []
+    const page = await show(
+      () =>
+        buildMetricsView(
+          [
+            {
+              name: 'neo_operations_total',
+              kind: 'counter',
+              help: null,
+              series: [
+                {
+                  labels: {
+                    neo_op_name: 'locator.click',
+                    neo_op_outcome: 'ok',
+                  },
+                  value: 5,
+                },
+                {
+                  labels: {
+                    neo_op_name: 'locator.click',
+                    neo_op_outcome: 'error',
+                  },
+                  value: 3,
+                },
+              ],
+            },
+            {
+              name: 'neo_operation_duration_seconds',
+              kind: 'histogram',
+              help: null,
+              series: [
+                {
+                  labels: {
+                    neo_op_name: 'locator.click',
+                    neo_op_outcome: 'ok',
+                  },
+                  value: 5,
+                  buckets: [
+                    { le: 0.5, count: 1 },
+                    { le: 1, count: 3 },
+                    { le: 2.5, count: 4 },
+                    { le: null, count: 5 },
+                  ],
+                },
+                {
+                  labels: {
+                    neo_op_name: 'locator.click',
+                    neo_op_outcome: 'error',
+                  },
+                  value: 3,
+                  buckets: [
+                    { le: 0.5, count: 1 },
+                    { le: 2.5, count: 2 },
+                    { le: null, count: 3 },
+                  ],
+                },
+              ],
+            },
+          ],
+          'push',
+          1,
+        ),
+      (filter) => filters.push(filter),
+    )
+    expect(
+      page.container.querySelector('[aria-label="Metric totals"]')?.textContent,
+    ).toContain('Over 500 ms675% of measured operations')
+    const graph = section(page.container, 'Operation duration')
+    expect(
+      graph.querySelector('[data-duration-range=">500 ms to 1 s"]')
+        ?.textContent,
+    ).toContain('Unknown')
+    const rows = [
+      ...section(page.container, 'Slow operations').querySelectorAll(
+        'tbody tr',
+      ),
+    ]
+    expect(rows.map((row) => row.children[2]?.textContent)).toEqual(['4', '2'])
+    expect(rows.map((row) => row.children[3]?.textContent)).toEqual(['1', '1'])
+    const action = rows[0]?.querySelector('button')
+    if (!action) throw new Error('Missing common-bound trace action')
+    await page.interact(() => fire(action, 'click'))
+    expect(filters).toEqual([
+      { method: 'locator.click', minMs: 500, maxMs: 2500 },
+    ])
+  })
+
+  it('uses explicit error outcomes for the failure KPI and keeps cancellations separate', async () => {
+    const page = await show(() => ({
+      ...metricsView(),
+      operations: [
+        {
+          op: 'events.next',
+          total: 6,
+          // Health attribution includes these cancellations; the Metrics chart does not.
+          errors: 5,
+          duration: quantiles([], null, null),
+        },
+      ],
+      families: [
+        {
+          name: 'neo_operations_total',
+          kind: 'counter',
+          help: null,
+          series: [
+            {
+              labels: { neo_op_name: 'events.next', neo_op_outcome: 'ok' },
+              value: 1,
+            },
+            {
+              labels: { neo_op_name: 'events.next', neo_op_outcome: 'error' },
+              value: 2,
+            },
+            {
+              labels: {
+                neo_op_name: 'events.next',
+                neo_op_outcome: 'cancelled',
+              },
+              value: 3,
+            },
+          ],
+        },
+      ],
+    }))
+    expect(
+      page.container.querySelector('[aria-label="Metric totals"]')?.textContent,
+    ).toContain('Failed operations2Across all duration ranges')
+    expect(
+      section(page.container, 'Outcomes by operation').textContent,
+    ).toContain('1 succeeded · 2 failed · 3 cancelled')
   })
 
   it('refreshes on health revisions without switching to since-Clear totals', async () => {

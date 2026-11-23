@@ -4,10 +4,17 @@
  * time. Metrics supplies one method/duration filter; the local trace-ID search composes with it.
  */
 import { useEffect, useState } from 'react'
-import type { RunSummary, TraceSearchResult, TraceSpan } from '../../shared/api'
-import { useRunTrace } from '../use-telemetry'
+import {
+  apiRoutes,
+  type RunDetail,
+  type RunResponse,
+  type RunSummary,
+  type TraceSearchResult,
+  type TraceSpan,
+} from '../../shared/api'
+import { useRunTraceRead } from '../use-telemetry'
 import { useTraceSearch } from '../use-trace-search'
-import { useRunDetail } from '../use-viewer'
+import { getJson } from '../use-viewer'
 import type { ExplorerSpanFilter } from './explorer-filter'
 import type { OperationSelection } from './operations'
 import { operationFor, selectedSpan, shortTraceId, spanEnd } from './trace'
@@ -123,9 +130,14 @@ export function TracesExplorer({
               : `${plural(rows.length, filtered ? 'matching trace' : 'trace')}${search.kind === 'ready' && search.answer.truncated ? ' shown' : ''}`}
           </h2>
           {search.kind === 'ready' && search.answer.truncated && (
-            <span className="text-ink-2 text-xs">
-              Refine the trace ID to see more results.
-            </span>
+            <button
+              type="button"
+              onClick={search.loadMore}
+              disabled={search.loadingMore}
+              className="font-semibold text-neo text-xs hover:underline disabled:text-ink-2"
+            >
+              {search.loadingMore ? 'Loading more…' : 'Load more traces'}
+            </button>
           )}
         </div>
         {(search.kind === 'failed' ||
@@ -220,15 +232,51 @@ function TraceDetail({
     operation?: OperationSelection | null,
   ) => void
 }) {
-  const trace = useRunTrace(run, true, rev)
-  const fetched = useRunDetail(run, true)
+  const traceRead = useRunTraceRead(run, true, rev, 'live')
+  const trace = traceRead.trace
+  const request = `${run.id}@${run.sentAt}#${run.status}#${run.operationCount}#${run.neoDurationMs}`
+  const [detailRead, setDetailRead] = useState<{
+    request: string
+    detail: RunDetail | null
+  } | null>(null)
+  // Unlike the usual read-only panels, navigation must distinguish an unfinished read from
+  // a failed one. Wait for the former; a missing/older Neo record still permits opening the run.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: request includes every summary field that changes the run's record.
+  useEffect(() => {
+    let current = true
+    getJson<RunResponse>(apiRoutes.run(run.id)).then(
+      (answer) => {
+        if (current) setDetailRead({ request, detail: answer.run })
+      },
+      () => {
+        if (current) setDetailRead({ request, detail: null })
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [request])
+  const fetched = detailRead?.detail
   const detail =
     fetched?.id === run.id && fetched.sentAt === run.sentAt ? fetched : null
-  const [spanId, setSpanId] = useState<string | null>(null)
+  const [spanId, setSpanId] = useState<string | null>(
+    result.matchedSpan?.spanId ?? null,
+  )
   const [copied, setCopied] = useState(false)
-  const span = trace
-    ? selectedSpan(trace, spanId ?? result.matchedSpan?.spanId ?? null, null)
-    : null
+  const span = trace ? selectedSpan(trace, spanId, null) : null
+  // Anchor the first automatic pick too. New spans and retried exports must not move it.
+  useEffect(() => {
+    if (spanId === null && span) setSpanId(span.spanId)
+  }, [spanId, span])
+  const call = span ? operationFor(run, detail?.neo ?? null, span) : null
+  const opening =
+    traceRead.kind === 'loading' || detailRead?.request !== request
+  let openHelp: string | undefined
+  if (opening) openHelp = 'Waiting for the span and run record.'
+  else if (!span) openHelp = 'Open the run; its spans could not be loaded.'
+  else if (span.opId && !call)
+    openHelp =
+      'Open the run and span; this operation is not in the available run record.'
   useEffect(() => {
     if (!copied) return
     const timer = setTimeout(() => setCopied(false), 1500)
@@ -269,14 +317,10 @@ function TraceDetail({
           </button>
           <button
             type="button"
-            onClick={() =>
-              onOpenRun(
-                run,
-                span,
-                span ? operationFor(run, detail?.neo ?? null, span) : null,
-              )
-            }
-            className="rounded-md border border-control px-3 py-2 font-semibold text-xs hover:bg-panel"
+            disabled={opening}
+            title={openHelp}
+            onClick={() => onOpenRun(run, span, call)}
+            className="rounded-md border border-control px-3 py-2 font-semibold text-xs hover:bg-panel disabled:opacity-50"
           >
             Open in Runs ↗
           </button>
@@ -311,7 +355,9 @@ function TraceDetail({
           ) : (
             <p className="p-4 text-ink-2 text-sm">
               {trace === undefined
-                ? 'Loading spans…'
+                ? traceRead.kind === 'failed'
+                  ? 'Could not load spans.'
+                  : 'Loading spans…'
                 : 'These spans are no longer available.'}
             </p>
           )}

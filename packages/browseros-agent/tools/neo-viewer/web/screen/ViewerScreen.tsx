@@ -6,7 +6,7 @@
  *
  *   ┌ TopBar: name · container line · health · MCP URL + Copy · Export · Clear · Take over ┐
  *   ├ ExportNotice: the last export's folder + Copy path, until dismissed ─────────────────┤
- *   ├ Runs · Metrics · Traces: the explorers use the full area below navigation             ┤
+ *   ├ Runs · Metrics · Traces: Metrics or Traces fills the area beside any active takeover  ┤
  *   ├ TimeStrip: where the wall clock went, since the last Clear ──────────────────────────┤
  *   │ RunTable: one row per run(); open rows show RunBlock    ┃ Sidebar: live              │
  *   │ (code + "Model read" + "Trace"); totals row             ┃ screen, then the selected  │
@@ -71,6 +71,58 @@ function useNow(ticking: boolean): number {
   return now
 }
 
+type ViewerSection = 'Runs' | 'Metrics' | 'Traces'
+
+/** A drilldown removes its initiating button. Move focus after the destination is visible. */
+function useDrilldownFocus(view: ViewerSection | 'Health') {
+  const nextFocus = useRef<number | 'results' | null>(null)
+  const traceResults = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const target = nextFocus.current
+    if (view === 'Traces' && target === 'results') traceResults.current?.focus()
+    if (view === 'Runs' && typeof target === 'number') {
+      const row = document.querySelector<HTMLButtonElement>(
+        `button[data-run="${target}"]`,
+      )
+      row?.focus()
+      row?.scrollIntoView({ block: 'nearest' })
+    }
+    nextFocus.current = null
+  }, [view])
+  return { nextFocus, traceResults }
+}
+
+function ViewerSections({
+  current,
+  onSelect,
+}: {
+  current: ViewerSection | 'Health'
+  onSelect: (section: ViewerSection) => void
+}) {
+  return (
+    <nav
+      aria-label="Viewer sections"
+      className="flex shrink-0 gap-5 border-line border-b px-4"
+    >
+      {(['Runs', 'Metrics', 'Traces'] as const).map((section) => {
+        const active =
+          section === current || (section === 'Runs' && current === 'Health')
+        return (
+          <button
+            key={section}
+            type="button"
+            aria-current={active ? 'page' : undefined}
+            onClick={() => onSelect(section)}
+            className={`border-b-2 py-2 font-medium ${active ? 'border-neo text-neo' : 'border-transparent text-ink-2 hover:text-ink'}`}
+          >
+            {section}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
 export function ViewerScreen() {
   const { info, runs, log, health, clear, exportRuns, error } = useViewer()
   const [exported, setExported] = useState<ExportResponse | null>(null)
@@ -89,38 +141,24 @@ export function ViewerScreen() {
   const [popped, setPopped] = useState(false)
   const nowMs = useNow(runs.some((run) => run.status === 'running'))
   // A metrics drilldown carries its method and duration bounds into the trace search.
-  const [view, setView] = useState<'Runs' | 'Metrics' | 'Traces' | 'Health'>(
-    'Runs',
-  )
+  const [view, setView] = useState<ViewerSection | 'Health'>('Runs')
   const [filter, setFilter] = useState<ExplorerSpanFilter | null>(null)
   const showRuns = view === 'Runs' || view === 'Health'
-  const focusRun = useRef<number | null>(null)
-  const focusTraceResults = useRef(false)
-  const traceResults = useRef<HTMLElement>(null)
-  // The row can be far below the preserved scroll position when we arrive from Traces.
-  useEffect(() => {
-    if (view === 'Traces' && focusTraceResults.current) {
-      traceResults.current?.focus()
-      focusTraceResults.current = false
-    }
-    if (view === 'Runs' && focusRun.current !== null) {
-      const row = document.querySelector<HTMLButtonElement>(
-        `button[data-run="${focusRun.current}"]`,
-      )
-      row?.focus()
-      row?.scrollIntoView({ block: 'nearest' })
-      focusRun.current = null
-    }
-  }, [view])
+  // Neo's takeover lease outlives a display connection. Keep the same control surface
+  // available across sections during the request, while held, or to show a failed action.
+  const showSidebar =
+    showRuns ||
+    live.state.busy ||
+    live.state.takeover !== null ||
+    live.state.actionError !== null
+  const { nextFocus, traceResults } = useDrilldownFocus(view)
   const healthButton = useRef<HTMLButtonElement>(null)
   // The view needs the health line that opens it. Health gone (a viewer restarted without
   // telemetry) closes it for good: it does not reopen by itself when health comes back.
   const healthShown = view === 'Health' && health !== null
-  const noHealth = health === null
   useEffect(() => {
-    if (noHealth)
-      setView((current) => (current === 'Health' ? 'Runs' : current))
-  }, [noHealth])
+    if (view === 'Health' && health === null) setView('Runs')
+  }, [view, health])
   // "← Runs" and Escape take away the focused element with the view: focus goes back to the
   // health line that opened it.
   const closeHealth = useCallback(() => {
@@ -139,9 +177,8 @@ export function ViewerScreen() {
   const fullRun = runs.find((run) => run.id === fullId) ?? null
   const totals = runTotals(runs)
   // A call is shown only while its run is the selected one; so is a trace.
-  const selectedOperation =
-    operation && operation.runId === selected?.id ? operation : null
-  const selectedTrace = trace && trace.runId === selected?.id ? trace : null
+  const selectedOperation = operation?.runId === selected?.id ? operation : null
+  const selectedTrace = trace?.runId === selected?.id ? trace : null
   const fullTraceRun = runs.find((run) => run.id === fullTraceId) ?? null
 
   const onClear = () => {
@@ -250,25 +287,7 @@ export function ViewerScreen() {
         onHealth={() => setView(healthShown ? 'Runs' : 'Health')}
         healthButton={healthButton}
       />
-      <nav
-        aria-label="Viewer sections"
-        className="flex shrink-0 gap-5 border-line border-b px-4"
-      >
-        {(['Runs', 'Metrics', 'Traces'] as const).map((section) => {
-          const active = section === (showRuns ? 'Runs' : view)
-          return (
-            <button
-              key={section}
-              type="button"
-              aria-current={active ? 'page' : undefined}
-              onClick={() => setView(section)}
-              className={`border-b-2 py-2 font-medium ${active ? 'border-neo text-neo' : 'border-transparent text-ink-2 hover:text-ink'}`}
-            >
-              {section}
-            </button>
-          )
-        })}
-      </nav>
+      <ViewerSections current={view} onSelect={setView} />
       {exported && (
         <ExportNotice exported={exported} onDismiss={() => setExported(null)} />
       )}
@@ -280,41 +299,6 @@ export function ViewerScreen() {
           {error}
         </p>
       )}
-      {view === 'Metrics' && (
-        <main className="min-h-0 flex-1 overflow-auto">
-          <MetricsExplorer
-            health={health}
-            onFindTraces={(next) => {
-              focusTraceResults.current = true
-              setFilter(next)
-              setView('Traces')
-            }}
-          />
-        </main>
-      )}
-      {view === 'Traces' && (
-        <main
-          ref={traceResults}
-          tabIndex={-1}
-          aria-label="Trace search results"
-          className="min-h-0 flex-1 overflow-auto"
-        >
-          <TracesExplorer
-            runs={runs}
-            rev={health?.rev}
-            filter={filter}
-            onClearFilter={() => setFilter(null)}
-            onOpenRun={(run, span, call) => {
-              focusRun.current = run.seq
-              setChosenId(run.id)
-              setOpenIds((current) => new Set(current).add(run.id))
-              setOperation(call ?? null)
-              setTrace(span ? { runId: run.id, spanId: span.spanId } : null)
-              setView('Runs')
-            }}
-          />
-        </main>
-      )}
       {showRuns && (
         <TimeStrip
           runs={runs}
@@ -323,9 +307,45 @@ export function ViewerScreen() {
           selectedId={selected?.id ?? null}
         />
       )}
-      <div className={showRuns ? 'flex min-h-0 flex-1' : 'hidden'}>
+      <div className="flex min-h-0 flex-1">
+        {view === 'Metrics' && (
+          <main className="min-h-0 flex-1 overflow-auto">
+            <MetricsExplorer
+              health={health}
+              onFindTraces={(next) => {
+                nextFocus.current = 'results'
+                setFilter(next)
+                setView('Traces')
+              }}
+            />
+          </main>
+        )}
+        {view === 'Traces' && (
+          <main
+            ref={traceResults}
+            tabIndex={-1}
+            aria-label="Trace search results"
+            className="min-h-0 flex-1 overflow-auto"
+          >
+            <TracesExplorer
+              runs={runs}
+              rev={health?.rev}
+              filter={filter}
+              onClearFilter={() => setFilter(null)}
+              onOpenRun={(run, span, call) => {
+                nextFocus.current = run.seq
+                setChosenId(run.id)
+                setOpenIds((current) => new Set(current).add(run.id))
+                setOperation(call ?? null)
+                setTrace(span ? { runId: run.id, spanId: span.spanId } : null)
+                setView('Runs')
+              }}
+            />
+          </main>
+        )}
+
         {/* The runs and the Health view scroll on their own, so each keeps its place. */}
-        <main className="relative min-w-0 flex-1">
+        <main className={showRuns ? 'relative min-w-0 flex-1' : 'hidden'}>
           <div
             className={`absolute inset-0 overflow-auto ${healthShown ? 'invisible' : ''}`}
           >
@@ -355,29 +375,31 @@ export function ViewerScreen() {
             </div>
           )}
         </main>
-        <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
-        {showRuns && (
-          <Sidebar
-            width={sidebarWidth}
-            run={selected}
-            operation={selectedOperation}
-            trace={selectedTrace}
-            traceRev={health?.rev}
-            onShowReply={() => {
-              setOperation(null)
-              setTrace(null)
-            }}
-            onOpenFull={openFull}
-            onOpenFullOperation={openFullOperation}
-            onSelectSpan={(span, call) =>
-              selected && selectSpan(selected, span, call)
-            }
-            onShowCall={() => setTrace(null)}
-            onOpenFullTrace={() => selected && openFullTrace(selected)}
-            live={live}
-            popped={popped}
-            onPopOut={() => setPopped(true)}
-          />
+        {showSidebar && (
+          <>
+            <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
+            <Sidebar
+              width={sidebarWidth}
+              run={selected}
+              operation={selectedOperation}
+              trace={selectedTrace}
+              traceRev={health?.rev}
+              onShowReply={() => {
+                setOperation(null)
+                setTrace(null)
+              }}
+              onOpenFull={openFull}
+              onOpenFullOperation={openFullOperation}
+              onSelectSpan={(span, call) =>
+                selected && selectSpan(selected, span, call)
+              }
+              onShowCall={() => setTrace(null)}
+              onOpenFullTrace={() => selected && openFullTrace(selected)}
+              live={live}
+              popped={popped}
+              onPopOut={() => setPopped(true)}
+            />
+          </>
         )}
       </div>
       {popped && (
