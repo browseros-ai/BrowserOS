@@ -386,7 +386,7 @@ function EmptySkills({
           aria-label={`Copy ${SAVE_PHRASE}`}
           onClick={() => void copy(SAVE_PHRASE)}
           className={cn(
-            'group/phrase -mt-1.5 flex min-h-[52px] w-full items-center gap-3 rounded-xl border bg-card py-2 pr-2 pl-4 text-left outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-ring',
+            'group/phrase -mt-1.5 flex min-h-[52px] w-full cursor-pointer items-center gap-3 rounded-xl border bg-card py-2 pr-2 pl-4 text-left outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-ring',
             copied
               ? 'border-primary/55 ring-4 ring-primary/12'
               : 'border-accent-tint-2',

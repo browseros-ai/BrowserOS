@@ -47,7 +47,7 @@ export function UseSkill({
           }
         }}
         className={cn(
-          'group/use flex w-full items-center gap-3.5 rounded-2xl border bg-card py-2.5 pr-2.5 pl-4 text-left shadow-card outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-ring sm:pl-[22px]',
+          'group/use flex w-full cursor-pointer items-center gap-3.5 rounded-2xl border bg-card py-2.5 pr-2.5 pl-4 text-left shadow-card outline-none transition-[border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-ring sm:pl-[22px]',
           copied
             ? 'border-primary/55 ring-[5px] ring-primary/12'
             : 'border-accent-tint-2 hover:border-primary/40',
