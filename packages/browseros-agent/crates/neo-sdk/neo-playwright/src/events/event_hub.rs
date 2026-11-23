@@ -20,7 +20,7 @@
 //! so a merged read has the order the single ring had, and every reader's place is one number.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::{iter, mem};
 
@@ -97,10 +97,12 @@ struct EventLog {
     folded: Mark,
     /// How many records the removed rings held or had dropped, to bound that loss's count.
     folded_count: u64,
-    /// The targets of the last [`CLOSED_RINGS`] removed rings, in `folded_order`. A record that
-    /// arrives for one late (a popup's window lookup filing under an opener long gone) goes into
-    /// `folded`, rather than opening a ring for a dead tab that would count as live forever.
-    folded_targets: HashSet<TargetId>,
+    /// The last [`CLOSED_RINGS`] removed rings, each with its own newest record and count, in
+    /// `folded_order`. A reader of such a tab reads its loss from its own fold, so other tabs'
+    /// later removals never read as its loss; a record that arrives for one late (a popup's
+    /// window lookup filing under an opener long gone) goes into its fold, rather than opening a
+    /// ring for a dead tab that would count as live forever.
+    folded_targets: HashMap<TargetId, Fold>,
     folded_order: VecDeque<TargetId>,
     /// Records held across every ring, against [`LOG_TOTAL`].
     total: usize,
@@ -139,7 +141,7 @@ impl EventLog {
             PageEvent::Opened(opened) => match &opened.opener {
                 Some(opener)
                     if !self.closed.contains_key(opener)
-                        && !self.folded_targets.contains(opener) =>
+                        && !self.folded_targets.contains_key(opener) =>
                 {
                     Some(opener.clone())
                 }
@@ -202,6 +204,14 @@ enum RingState {
     /// once ([`EventLog::push`]), so a cut ring never holds more than its close and the cut order
     /// never needs revisiting.
     Cut,
+}
+
+/// What a removed ring leaves behind: its newest record and how many records it held or had
+/// dropped, for its tab's readers ([`EventLog::tab_lost`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Fold {
+    newest: Mark,
+    count: u64,
 }
 
 /// A record's seq and stamp, kept for what a ring dropped; seq 0 is "nothing".
@@ -324,14 +334,17 @@ impl EventLog {
     }
 
     /// What a reader of `target` placed at `after` lost: drops from that tab's ring and the
-    /// no-tab ring, never another tab's. A tab with no ring that the hub still knows as live
-    /// never had one (only closed rings are removed), so it lost nothing; any other missing ring
-    /// was removed, and answers with the folded watermark: conservative, never silent.
+    /// no-tab ring, never another tab's. A removed ring answers from its own fold, so a reader
+    /// that read past its tab's records hears nothing of other tabs' later removals. A tab with
+    /// no ring that the hub still knows as live never had one (only closed rings are removed), so
+    /// it lost nothing; a ring removed longer ago than the folds remember answers with the
+    /// shared watermark: conservative, never silent.
     fn tab_lost(&self, target: &TargetId, after: u64) -> u64 {
-        let own = match self.tab_ring(target) {
-            Some(ring) => ring.lost_after(after),
-            None if self.frames.knows(target) => 0,
-            None => self.folded.lost_after(self.folded_count, after),
+        let own = match (self.tab_ring(target), self.folded_targets.get(target)) {
+            (Some(ring), _) => ring.lost_after(after),
+            (None, Some(fold)) => fold.newest.lost_after(fold.count, after),
+            (None, None) if self.frames.knows(target) => 0,
+            (None, None) => self.folded.lost_after(self.folded_count, after),
         };
         own + self.no_tab.lost_after(after)
     }
@@ -382,12 +395,16 @@ impl EventLog {
             None => &mut self.no_tab,
             Some(target) => match self.closed.get_mut(&target) {
                 Some(ring) => ring,
-                None if self.folded_targets.contains(&target) => {
-                    self.folded = self.folded.max_seq(Mark::of(&record));
-                    self.folded_count += 1;
-                    return;
-                }
-                None => self.open.entry(target).or_default(),
+                None => match self.folded_targets.get_mut(&target) {
+                    Some(fold) => {
+                        fold.newest = fold.newest.max_seq(Mark::of(&record));
+                        fold.count += 1;
+                        self.folded = self.folded.max_seq(Mark::of(&record));
+                        self.folded_count += 1;
+                        return;
+                    }
+                    None => self.open.entry(target).or_default(),
+                },
             },
         };
         // A record replayed into a cut ring (a held event of a tab already closed and trimmed)
@@ -419,13 +436,18 @@ impl EventLog {
                 break;
             };
             self.cut = self.cut.saturating_sub(1);
+            let mut fold = Fold::default();
             if let Some(ring) = self.closed.remove(&gone) {
                 let held = ring.records.len();
                 self.total -= held;
-                self.folded_count += ring.dropped + u64::try_from(held).unwrap_or(u64::MAX);
-                self.folded = self.folded.max_seq(ring.newest());
+                fold = Fold {
+                    newest: ring.newest(),
+                    count: ring.dropped + u64::try_from(held).unwrap_or(u64::MAX),
+                };
+                self.folded_count += fold.count;
+                self.folded = self.folded.max_seq(fold.newest);
             }
-            self.folded_targets.insert(gone.clone());
+            self.folded_targets.insert(gone.clone(), fold);
             self.folded_order.push_back(gone);
             while self.folded_order.len() > CLOSED_RINGS {
                 if let Some(old) = self.folded_order.pop_front() {
@@ -1198,17 +1220,26 @@ mod tests {
 
     /// A tab that goes while Pending with no opener records no close, but its ring still joins
     /// the closed ones and the hub forgets its tab id: it is removed past `CLOSED_RINGS` like any
-    /// closed tab's, and a reader of it then reads the folded loss rather than a live tab's 0.
+    /// closed tab's, and a reader of it then reads its fold's loss. One that went with no record
+    /// at all has no ring and no fold; forgotten, it reads the shared watermark, not a live tab's 0.
     #[test]
     fn tests_that_a_ring_closed_without_a_record_is_a_closed_tabs() {
         let (hub, mut writer) = EventHub::new();
         writer.tab_id(target("pending"), TabId(5));
         writer.record(crashed("pending"));
         writer.close_ring(&target("pending"));
+        writer.tab_id(target("silent"), TabId(6));
+        writer.close_ring(&target("silent"));
         for later in 0..CLOSED_RINGS {
-            writer.record(closed(&format!("later{later}")));
+            let name = format!("later{later}");
+            writer.record(crashed(&name));
+            writer.record(closed(&name));
         }
         assert!(hub.read_tab_after(&target("pending"), 0).lost > 0);
+        assert!(
+            hub.read_tab_after(&target("silent"), 0).lost > 0,
+            "a gone tab is not read as a live one with no ring yet"
+        );
     }
 
     #[test]
@@ -1568,6 +1599,32 @@ mod tests {
                 .unwrap_or(0);
             assert_eq!(hub.position_at(since), walked, "since {since}");
         }
+    }
+
+    /// A reader of a removed tab that read past its tab's records hears nothing of other tabs'
+    /// later removals: its loss comes from its own tab's fold, not the shared watermark, so a
+    /// listener left on a closed page cannot fail a live page's click with a loss it never had.
+    #[test]
+    fn tests_that_a_removed_tabs_reader_hears_only_its_own_fold() {
+        let (hub, mut writer) = EventHub::new();
+        writer.record(crashed("gone"));
+        writer.record(closed("gone"));
+        let place = hub.head();
+        for later in 0..CLOSED_RINGS + 10 {
+            let name = format!("later{later}");
+            writer.record(crashed(&name));
+            writer.record(closed(&name));
+        }
+        assert_eq!(hub.closed_at(&target("gone")), None, "its ring was removed");
+        assert_eq!(
+            hub.read_tab_after(&target("gone"), place).lost,
+            0,
+            "it read past its tab's records"
+        );
+        assert!(
+            hub.read_tab_after(&target("gone"), 0).lost > 0,
+            "read from before them, the loss shows"
+        );
     }
 
     /// A close is found while its tab's ring holds it: another tab's records never push it out,
