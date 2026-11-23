@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     future::Future,
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -144,6 +145,10 @@ pub struct LivePage {
     pub page: PageId,
     last_point: Mutex<(f64, f64)>,
     frame_parents: Mutex<HashMap<String, String>>,
+    /// Set when the latest frame enumeration encountered an unresponsive child iframe so clicks
+    /// jump directly to the verified target instead of sweeping intermediate hover points across
+    /// a hung OOPIF.
+    unresponsive_child_frame: AtomicBool,
     dom: DomWorld,
 }
 
@@ -162,6 +167,7 @@ impl LivePage {
             page,
             last_point: Mutex::new((0.0, 0.0)),
             frame_parents: Mutex::new(HashMap::new()),
+            unresponsive_child_frame: AtomicBool::new(false),
             dom,
         }
     }
@@ -427,6 +433,8 @@ impl LivePage {
         result.extend(discovered.into_iter().map(|(_, frame)| frame));
 
         *self.frame_parents.lock().await = parents;
+        self.unresponsive_child_frame
+            .store(!complete, Ordering::Relaxed);
         Ok(FrameList {
             frames: result,
             complete,
@@ -602,14 +610,16 @@ impl CaptchaPage for LivePage {
         }
         let mut last = self.last_point.lock().await;
         let input = browser(self.view.input(self.page.clone())).await?;
+        let humanlike_from =
+            (!self.unresponsive_child_frame.load(Ordering::Relaxed)).then_some(Point {
+                x: last.0,
+                y: last.1,
+            });
         browser(input.click_at(
             x,
             y,
             ClickOptions {
-                humanlike_from: Some(Point {
-                    x: last.0,
-                    y: last.1,
-                }),
+                humanlike_from,
                 ..Default::default()
             },
         ))
@@ -2407,6 +2417,29 @@ mod tests {
             &calls[6..],
             &[(50.0, 70.0), (40.0, 50.0), (30.0, 30.0), (20.0, 10.0)],
         );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_click_at_skips_intermediate_hover_sweep_after_incomplete_frame_scan()
+    -> TestResult {
+        let (native, page) = fixture();
+        page.unresponsive_child_frame.store(true, Ordering::Relaxed);
+        page.click_at(60.0, 90.0).await?;
+        let calls = native.calls("Input.dispatchMouseEvent")?;
+        assert_eq!(
+            calls.len(),
+            3,
+            "direct click should skip intermediate hover points over a hung child frame: {calls:?}"
+        );
+        assert_eq!(calls[0].1, json!({"type":"mouseMoved","x":60.0,"y":90.0}));
+        assert_eq!(calls[1].1["type"], "mousePressed");
+        assert_eq!(calls[1].1["x"], 60.0);
+        assert_eq!(calls[1].1["y"], 90.0);
+        assert_eq!(calls[2].1["type"], "mouseReleased");
+        assert_eq!(calls[2].1["x"], 60.0);
+        assert_eq!(calls[2].1["y"], 90.0);
+        assert_eq!(*page.last_point.lock().await, (60.0, 90.0));
         Ok(())
     }
 

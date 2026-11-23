@@ -789,6 +789,193 @@ async fn solve_stale_recaptcha(rig: &Rig, pages: &CaptchaPages) -> TestResult {
     Ok(())
 }
 
+/// Proves in a real browser that when a Google reCAPTCHA v2 `bframe` challenge overlay already
+/// covers a form's submit button, `neo.solveCaptcha` applies the fresh provider token, dismisses
+/// the covering `bframe` overlay without hiding the form or anchor widget, and unblocks a normal
+/// Playwright click on the submit button (`acceptedSubmits === 1`).
+#[tokio::test(flavor = "multi_thread")]
+async fn solve_captcha_dismisses_open_recaptcha_bframe_overlay_so_submit_works() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let pages = CaptchaPages::start(ProviderMode::Mint).await?;
+    let provider = pages.provider();
+    let rig = Rig::start_with(
+        &browser,
+        CaptchaKey::Placeholder,
+        &[("BROWSEROS_CAPSOLVER_API_URL", &provider)],
+    )?;
+    let failure = match time::timeout(TEST_BUDGET, solve_recaptcha_overlay(&rig, &pages)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+const RECAPTCHA_OVERLAY_SCRIPT: &str = r#"
+        const p = await context.newPage();
+        await p.goto(OVERLAY_URL);
+        await p.waitForFunction(() => {
+            const frame = document.querySelector('iframe[src*="/recaptcha/"][src*="/anchor"]');
+            const field = document.querySelector('textarea[name="g-recaptcha-response"]');
+            if (!frame || !field) return false;
+            const rect = frame.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        }, null, { timeout: 30000 });
+        await p.frameLocator('iframe[src*="/recaptcha/"][src*="/anchor"]')
+            .locator('#recaptcha-anchor')
+            .waitFor({ state: 'visible', timeout: 30000 });
+        await p.evaluate(() => {
+            const existing = document.querySelector('iframe[src*="/recaptcha/"][src*="/bframe"]');
+            let overlay = null;
+            if (existing) {
+                let cur = existing;
+                while (cur.parentElement && cur.parentElement !== document.body) {
+                    cur = cur.parentElement;
+                }
+                if (cur.parentElement === document.body && cur.tagName === 'DIV') {
+                    overlay = cur;
+                    overlay.style.visibility = 'visible';
+                    overlay.style.opacity = '1';
+                    overlay.style.top = '0px';
+                    overlay.style.left = '0px';
+                    overlay.style.width = '100vw';
+                    overlay.style.height = '100vh';
+                    overlay.style.position = 'fixed';
+                    overlay.style.zIndex = '2000000000';
+                    existing.style.width = '400px';
+                    existing.style.height = '580px';
+                }
+            }
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:2000000000;visibility:visible;opacity:1;';
+                const backdrop = document.createElement('div');
+                backdrop.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;background:#fff;opacity:0.05;z-index:2000000000;';
+                const holder = document.createElement('div');
+                holder.style.cssText = 'position:relative;z-index:2000000000;width:400px;height:580px;';
+                const bframe = document.createElement('iframe');
+                bframe.src = 'https://www.google.com/recaptcha/api2/bframe?hl=en&k=6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
+                bframe.style.cssText = 'width:400px;height:580px;border:0;';
+                holder.appendChild(bframe);
+                overlay.appendChild(backdrop);
+                overlay.appendChild(holder);
+                document.body.appendChild(overlay);
+            }
+            overlay.setAttribute('data-test-bframe-overlay', '1');
+        });
+        let coveredBefore = null;
+        try {
+            await p.locator('#search').click({ timeout: 2500 });
+        } catch (e) {
+            coveredBefore = { code: e.code || null, message: String(e.message || e) };
+        }
+        const submitsBefore = await p.evaluate(() => window.__acceptedSubmits);
+        const solved = await neo.solveCaptcha(p);
+        const afterSolve = await p.evaluate(() => {
+            const field = document.querySelector('textarea[name="g-recaptcha-response"]');
+            const value = field ? field.value : '';
+            const callbacks = Array.isArray(window.__callbackTokens) ? window.__callbackTokens : [];
+            const last = callbacks.length > 0 ? callbacks[callbacks.length - 1] : '';
+            const overlay = document.querySelector('[data-test-bframe-overlay="1"]');
+            const form = document.getElementById('search-form');
+            const button = document.getElementById('search');
+            const anchor = document.querySelector('iframe[src*="/recaptcha/"][src*="/anchor"]');
+            const visible = (el) => {
+                if (!el) return false;
+                const s = getComputedStyle(el);
+                const r = el.getBoundingClientRect();
+                return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+            };
+            return {
+                tokenLength: value.length,
+                isStale: value === 'STALE-TOKEN',
+                freshName: value.startsWith('FRESH-') ? value : null,
+                callbackCount: callbacks.length,
+                lastCallbackFreshName:
+                    typeof last === 'string' && last.startsWith('FRESH-') ? last : null,
+                lastCallbackMatchesField: callbacks.length > 0 && last === value,
+                overlayDisplay: overlay ? getComputedStyle(overlay).display : null,
+                formVisible: visible(form),
+                buttonVisible: visible(button),
+                anchorVisible: visible(anchor),
+            };
+        });
+        await p.locator('#search').click();
+        const afterSubmit = await p.evaluate(() => ({
+            acceptedSubmits: window.__acceptedSubmits,
+            submittedTokens: window.__submittedTokens,
+        }));
+        await p.close();
+        return { coveredBefore, submitsBefore, solved, afterSolve, afterSubmit };
+"#;
+
+async fn solve_recaptcha_overlay(rig: &Rig, pages: &CaptchaPages) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let url = pages.url("/recaptcha-overlay");
+    let code = format!("const OVERLAY_URL = {url:?};\n{RECAPTCHA_OVERLAY_SCRIPT}");
+    let result = run(
+        &client,
+        &code,
+        &json!({ "taskId": "e2e-recaptcha-overlay" }),
+    )
+    .await?;
+    let observed = result
+        .structured_content
+        .as_ref()
+        .and_then(|content| content.get("value"))
+        .ok_or_else(|| format!("the reCAPTCHA overlay script returned a value: {result:?}"))?;
+    assert!(
+        !observed["coveredBefore"].is_null(),
+        "Search must be covered before solveCaptcha runs: {observed}"
+    );
+    assert_eq!(
+        observed.get("submitsBefore"),
+        Some(&json!(0)),
+        "Search must not submit while covered by the bframe overlay: {observed}"
+    );
+    assert_recaptcha_token_solve(
+        &observed["solved"],
+        &observed["afterSolve"],
+        "FRESH-1",
+        1,
+        "recaptcha overlay",
+        observed,
+    );
+    assert_eq!(
+        (
+            observed.pointer("/afterSolve/overlayDisplay"),
+            observed.pointer("/afterSolve/formVisible"),
+            observed.pointer("/afterSolve/buttonVisible"),
+            observed.pointer("/afterSolve/anchorVisible"),
+        ),
+        (
+            Some(&json!("none")),
+            Some(&json!(true)),
+            Some(&json!(true)),
+            Some(&json!(true)),
+        ),
+        "solveCaptcha must hide the covering bframe overlay while keeping the form, button, and anchor visible: {observed}"
+    );
+    assert_eq!(
+        (
+            observed.pointer("/afterSubmit/acceptedSubmits"),
+            observed.pointer("/afterSubmit/submittedTokens"),
+        ),
+        (Some(&json!(1)), Some(&json!(["FRESH-1"]))),
+        "normal Playwright click on Search must submit once with FRESH-1 after solveCaptcha: {observed}"
+    );
+    assert_eq!(
+        pages.minted_tasks(),
+        1,
+        "the overlay solve must mint exactly one fresh paid task"
+    );
+    client.cancel().await?;
+    Ok(())
+}
+
 /// Checks one token-first reCAPTCHA solve call: mints a fresh paid `FRESH-n` token from the stub,
 /// writes it into the textarea, invokes the callback, and never claims `already_passed` or
 /// `checkbox_passed`.

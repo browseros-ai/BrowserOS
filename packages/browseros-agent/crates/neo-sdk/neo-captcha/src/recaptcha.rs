@@ -62,7 +62,7 @@ const APPLY: &str = r#"
    const isBframe=f=>bframeRe.test(f.src||'')||(!!p.bframe&&f.src===p.bframe);
    const all=[...document.querySelectorAll('iframe')];
    const allAnchors=all.filter(f=>anchorRe.test(f.src||''));
-   const bframes=all.filter(f=>(!!p.bframe&&f.src===p.bframe)||(bframeRe.test(f.src||'')&&!hidden(f)));
+   const bframes=all.filter(f=>isBframe(f)&&!hidden(f));
    for(const bf of bframes){
      let target=bf;
      for(let cur=bf.parentElement;cur&&cur!==document.body&&cur!==document.documentElement;cur=cur.parentElement){
@@ -3594,6 +3594,44 @@ const inspect = () => ({{
         assert_eq!(result.attempts.token, 0);
         assert_eq!(result.paid_tasks, 0);
         assert_eq!(chain.paid_tasks(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_apply_leaves_already_hidden_prerendered_bframe_untouched() -> anyhow::Result<()> {
+        let anchor_src = "https://www.google.com/recaptcha/api2/anchor?k=test-site-key";
+        let bframe_src = "https://www.google.com/recaptcha/api2/bframe?hl=en&k=test-site-key";
+        let dom_setup = format!(
+            r#"
+const anchorFrame = el('iframe', {{ src: '{anchor_src}' }});
+const responseField = el('textarea', {{ name: 'g-recaptcha-response' }});
+const form = el('form', {{}}, [el('div', {{ class: 'g-recaptcha' }}, [anchorFrame, responseField])]);
+const bframe = el('iframe', {{ src: '{bframe_src}' }});
+const hiddenOverlay = el('div', {{ id: 'google-prerendered-bframe' }}, [el('div', {{}}, [bframe])], {{
+    style: {{ visibility: 'hidden', opacity: '0', display: 'block', pointerEvents: 'auto' }}
+}});
+append(body, form, hiddenOverlay);
+const inspect = () => ({{
+    overlayStyle: hiddenOverlay.style,
+    bframeStyle: bframe.style,
+    fieldValue: responseField.value,
+}});
+"#
+        );
+        let params = json!({
+            "anchor": anchor_src,
+            "bframe": bframe_src,
+            "key": "test-site-key",
+            "callback": null,
+            "token": "fresh-token"
+        });
+        let out = eval_apply_dom(&dom_setup, &params)?;
+        assert_eq!(out["applied"], json!({"written": true, "callback": false}));
+        assert_eq!(out["fieldValue"], json!("fresh-token"));
+        assert_eq!(out["overlayStyle"]["display"], json!("block"));
+        assert_eq!(out["overlayStyle"]["pointerEvents"], json!("auto"));
+        assert_eq!(out["bframeStyle"]["display"], json!("block"));
+        assert_eq!(out["bframeStyle"]["pointerEvents"], json!("auto"));
         Ok(())
     }
 }
