@@ -376,6 +376,12 @@ error_codes! {
 }
 
 impl ErrorCode {
+    /// Every code, in declaration order: the `error.type` values telemetry interns
+    /// against (`neo_telemetry::Vocabulary`).
+    pub(crate) fn all() -> impl Iterator<Item = Self> {
+        Self::KNOWN.iter().copied()
+    }
+
     /// The code named `name`, if it is one of claw-sdk's: how a refusal that a crate hands back
     /// as a string keeps its code.
     #[must_use]

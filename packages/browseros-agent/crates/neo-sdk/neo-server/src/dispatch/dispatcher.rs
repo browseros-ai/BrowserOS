@@ -51,9 +51,9 @@ struct RefreshedThrough {
 /// Playwright's page entry `{ page, url }` (`OpenedPage`) after reporting the page
 /// `PageChange::Opened`.
 const DEFAULT_PAGE_OPENER: &str = "context.newPage";
-/// How many characters of a method name its refusal keeps: a script can send any string. The
-/// trace writer clips the name its record keeps.
-const NAME_CHARS: usize = 128;
+/// How many characters of a method name its refusal, and its op's span, keep: a script can send
+/// any string. The trace writer clips the name its record keeps.
+pub(super) const NAME_CHARS: usize = 128;
 /// The spec recorded for a name with no method. `Write`, so an unknown call is never recorded
 /// as a harmless read.
 const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
@@ -1219,6 +1219,7 @@ fn read_only_admission(
 mod read_only_tests {
     use std::time::Duration;
 
+    use neo_telemetry::Telemetry;
     use neo_trace::{Delivery, Effect, RunAccess, RunId};
     use serde_json::json;
     use tokio::time::Instant;
@@ -1303,6 +1304,7 @@ mod read_only_tests {
                 default_page: None,
                 tabs_scope: TabsScope::Browser,
                 access: Some(RunAccess::Read),
+                telemetry: Telemetry::noop().internal_run(),
             },
         );
         run.opened(page.tab);

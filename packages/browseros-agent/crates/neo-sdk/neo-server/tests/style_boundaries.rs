@@ -482,3 +482,77 @@ fn level_name(value: &Value) -> String {
         _ => String::new(),
     }
 }
+
+/// The telemetry facade's tab hooks, and the one file that may call them: tab telemetry counts
+/// each tab once, with one close reason, only while its ledger is the only thing that reports
+/// tabs (the arch-tabs design; `src/browser/tab_life.rs` says why).
+const TAB_HOOKS: &[&str] = &[
+    "tab_opened",
+    "tab_closed",
+    "renderer_crashed",
+    "set_open_tabs",
+];
+const TAB_HOOKS_HOME: &str = "src/browser/tab_life.rs";
+
+#[test]
+fn only_the_tab_ledger_reports_tabs_to_telemetry() -> Result<(), Box<dyn Error>> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_rust_files(&src, &mut files)?;
+    files.sort();
+    let mut violations = Vec::new();
+    for path in &files {
+        let shown = format!("src/{}", path.strip_prefix(&src)?.display());
+        if shown == TAB_HOOKS_HOME {
+            continue;
+        }
+        let mut calls = TelemetryCalls::default();
+        calls.visit_file(&syn::parse_file(&fs::read_to_string(path)?)?);
+        for hook in TAB_HOOKS.iter().filter(|hook| calls.names.contains(**hook)) {
+            violations.push(format!(
+                "{shown}: calls `{hook}`; only {TAB_HOOKS_HOME} reports tabs to telemetry, so each tab counts once"
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "tab telemetry reported outside its ledger:\n{}",
+        violations.join("\n")
+    );
+    Ok(())
+}
+
+/// Every method a file calls on something named `telemetry` (a binding, a field, the registry's
+/// `telemetry()`), outside macro bodies. Without types the rule goes by that name, which every
+/// handle to the facade in this crate carries; other parts have methods named like the hooks (the
+/// host API's own `tab_closed`), on receivers named otherwise.
+#[derive(Default)]
+struct TelemetryCalls {
+    names: BTreeSet<String>,
+}
+
+impl<'ast> Visit<'ast> for TelemetryCalls {
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if names_telemetry(&node.receiver) {
+            self.names.insert(node.method.to_string());
+        }
+        visit::visit_expr_method_call(self, node);
+    }
+}
+
+/// Whether `receiver` is a value named `telemetry`, through references and parentheses.
+fn names_telemetry(receiver: &syn::Expr) -> bool {
+    use syn::{Expr, Member};
+    match receiver {
+        Expr::Path(path) => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "telemetry"),
+        Expr::Field(field) => matches!(&field.member, Member::Named(name) if name == "telemetry"),
+        Expr::MethodCall(call) => call.method == "telemetry",
+        Expr::Reference(reference) => names_telemetry(&reference.expr),
+        Expr::Paren(paren) => names_telemetry(&paren.expr),
+        _ => false,
+    }
+}

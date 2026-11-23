@@ -13,7 +13,8 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "2.16", default-features = false, features = ["napi5"] }
 napi-derive = "2.16"
-neo-server = { path = "../../../neo-server", features = ["hosted-run"] }
+# No `telemetry`: the hosted embedding's telemetry is always off, so the OpenTelemetry SDK stays out.
+neo-server = { path = "../../../neo-server", default-features = false, features = ["hosted-run"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time"] }
 
 [build-dependencies]

@@ -251,6 +251,20 @@ pub struct PlaywrightError {
     /// action/cover.rs): the prelude renders its snapshot under the message's "On top" line
     /// and gives the script the rest as `error.cover`. Hosts pass it as they pass `matcher`.
     cover: Option<Box<Value>>,
+    /// Why a navigation failed on the network, kept apart from the message so a host can count
+    /// it without parsing text a URL helped write. Boxed, as `matcher` and `cover` are.
+    net: Option<Box<NetFailure>>,
+}
+
+/// A navigation's failure on the network, as the browser reported it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NetFailure {
+    /// Chromium refused the navigation with this error text, such as
+    /// `net::ERR_NAME_NOT_RESOLVED`.
+    Named(Box<str>),
+    /// The browser committed its error page for the URL without naming the error (a reload or
+    /// a history step).
+    ErrorPage,
 }
 
 /// What failed: one of the crate's codes, or a host policy that refused.
@@ -276,6 +290,7 @@ impl PlaywrightError {
             outcome_lost: false,
             matcher: None,
             cover: None,
+            net: None,
         }
     }
 
@@ -368,6 +383,22 @@ impl PlaywrightError {
         self
     }
 
+    /// Why a navigation failed on the network; `None` for every other failure, a navigation's
+    /// timeout or interruption included.
+    #[must_use]
+    pub fn net_failure(&self) -> Option<&NetFailure> {
+        self.net.as_deref()
+    }
+
+    /// The same failure, carrying why the network refused its navigation (see
+    /// [`Self::net_failure`]). The crate's navigations set it; hosts build these only to test
+    /// their own mapping.
+    #[must_use]
+    pub fn with_net_failure(mut self, failure: NetFailure) -> Self {
+        self.net = Some(Box::new(failure));
+        self
+    }
+
     /// The same failure, raised after the op sent input it can no longer account for, such as
     /// a click whose verdict came back unreadable: the answer becomes ambiguous.
     #[must_use]
@@ -395,6 +426,7 @@ impl From<Refusal> for PlaywrightError {
             outcome_lost: false,
             matcher: None,
             cover: None,
+            net: None,
         }
     }
 }

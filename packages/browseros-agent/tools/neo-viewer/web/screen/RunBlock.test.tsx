@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { useState } from 'react'
-import type { RunDetail, RunSummary } from '../../shared/api'
+import type { RunDetail, RunSummary, RunTrace } from '../../shared/api'
 import { formatCode } from '../../shared/code-format'
 import { fire, installDom, type TestDom } from '../test-support/dom'
 import { operation, record } from '../test-support/operations'
 import { runDetail, runSummary } from '../test-support/runs'
+import { runTrace } from '../test-support/telemetry'
+import { SPANS_NOTICE } from './operation-output'
 import type { OperationSelection } from './operations'
 import { RunBlock } from './RunBlock'
 
@@ -427,5 +429,139 @@ describe("an open run's methods", () => {
     expect(dom.container.textContent).not.toContain(
       'Neo did not record values for this operation',
     )
+  })
+})
+
+describe("an open run's trace row", () => {
+  let dom: TestDom
+  afterEach(() => dom.restore())
+  // Traces read are kept per run (id and send time), so each case has a run of its own.
+  let run = runSummary(3, { code: 'return 1' })
+
+  async function block(
+    props: Partial<Parameters<typeof RunBlock>[0]>,
+    trace: RunTrace | null = runTrace('neo-run'),
+    seq = 3,
+  ) {
+    run = runSummary(seq, { code: 'return 1' })
+    dom = await installDom(new Map(), {
+      traces: new Map([[run.id, trace]]),
+    })
+    await dom.render(
+      <RunBlock
+        run={run}
+        formatted={formatCode(run.code)}
+        detail={runDetail(run)}
+        selected
+        selectedOperationId={null}
+        onSelect={() => {}}
+        onOpenFull={() => {}}
+        {...props}
+      />,
+    )
+  }
+  const rowOf = (label: string) =>
+    [...dom.container.querySelectorAll('div.h-7')].find((row) =>
+      row.querySelector('button')?.textContent?.startsWith(label),
+    ) as Element | undefined
+
+  it('is not there until Neo’s spans reach the viewer', async () => {
+    await block({ traceRev: null }, runTrace('neo-run'), 32)
+    expect(rowOf('Trace')).toBeUndefined()
+    expect(dom.fetched.some((path) => path.endsWith('/trace'))).toBe(false)
+  })
+
+  it("says what the run's trace holds, and shows it on the right when picked", async () => {
+    let picked = 0
+    await block({ traceRev: 4, onSelectTrace: () => picked++ })
+    const row = rowOf('Trace')
+    expect(row?.textContent).toBe(
+      'Trace4bf92f359 spans, 1 failed, 1.23 sOpen full',
+    )
+    const open = row?.querySelector('button')
+    if (!open) throw new Error('the trace row has its button')
+    await dom.interact(() => fire(open, 'click'))
+    expect(picked).toBe(1)
+  })
+
+  it('marks the trace row while the right panel shows the trace, and Model read no longer', async () => {
+    await block({ traceRev: 4, traceShown: true }, runTrace('neo-run'), 33)
+    expect(rowOf('Trace')?.className).toContain('bg-[#DCE6FB]')
+    expect(rowOf('Model read')?.className).not.toContain('bg-[#DCE6FB]')
+    expect(rowOf('Trace')?.textContent).toContain(', shown on the right')
+  })
+
+  it('says when a run has no spans, without asking again once none can come', async () => {
+    await block({ traceRev: 4 }, null, 31)
+    expect(rowOf('Trace')?.textContent).toBe(
+      'TraceNo spans from Neo for this run.',
+    )
+    const reads = dom.fetched.filter((path) => path.endsWith('/trace')).length
+    await dom.render(
+      <RunBlock
+        run={run}
+        formatted={formatCode(run.code)}
+        detail={runDetail(run)}
+        selected
+        selectedOperationId={null}
+        onSelect={() => {}}
+        onOpenFull={() => {}}
+        traceRev={5}
+      />,
+    )
+    expect(dom.fetched.filter((path) => path.endsWith('/trace'))).toHaveLength(
+      reads,
+    )
+  })
+})
+
+describe('a run whose record came from Neo’s spans', () => {
+  let dom: TestDom
+  beforeEach(async () => {
+    dom = await installDom()
+    selections = []
+  })
+  afterEach(() => dom.restore())
+
+  it('says once that spans carry no arguments or results, and opens a call to its outcome alone', async () => {
+    const run = runSummary(3, { code })
+    const fromSpans: RunDetail['neo'] = {
+      ...record(
+        [
+          {
+            ...fill,
+            kind: '',
+            effect: '',
+            args: null,
+            result: null,
+            notes: [],
+          },
+          {
+            ...failedClick,
+            kind: '',
+            effect: '',
+            args: null,
+            result: null,
+            notes: [],
+          },
+        ],
+        100,
+      ),
+      source: 'spans',
+    }
+    await dom.render(<Block run={run} detail={detailWith(run, fromSpans)} />)
+    const text = dom.container.textContent ?? ''
+    expect(text.split(SPANS_NOTICE)).toHaveLength(2)
+    const click = dom.container.querySelector(
+      'button[data-operation="11"]',
+    ) as Element
+    await dom.interact(() => fire(click, 'click'))
+    const detail = dom.container.textContent ?? ''
+    expect(detail).toContain('Outcome')
+    expect(detail).toContain(
+      "script / strict_mode_violationgetByRole('button') resolved to 2 elements",
+    )
+    expect(detail).not.toContain('Arguments')
+    expect(detail).not.toContain('No call log recorded.')
   })
 })

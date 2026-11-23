@@ -11,6 +11,8 @@ HostedRun}`. It builds the real trace store, browser link, Playwright
 facade, built-ins, dispatcher and tab janitor. It binds no listeners and disables the trace
 screenshot queue. Feature-off builds retain the product path.
 
+The default-on feature `telemetry` builds Neo's OpenTelemetry pipeline. The embedding's telemetry is always off, so an embedder that links this crate with `default-features = false` (as the Node add-on does) leaves the OpenTelemetry SDK, the OTLP exporters and their HTTP client out. Without it `Telemetry::new` is the no-op, `GET /v1/metrics` answers an empty exposition, and a set OTLP endpoint fails startup.
+
 Each connection owns an `App::runtime()` executor with the product's worker stack size.
 `open_run(timeout)` starts a real `RunCtx` and seeds the same tab listing as MCP runs.
 `invoke(name, json, site)` enters that executor and calls `Bridge::submit` synchronously; its
@@ -72,12 +74,13 @@ Chromium starts the binary with its launch JSON and reads the exit code.
 |---|---|
 | `--version` | Prints the version alone on stdout and exits 0. Reads no config and opens no state. |
 | `--config <launch.json>` | Serves until SIGTERM or SIGINT, then exits 0. |
+| `--check-config` | Reads the environment as `--config` would and exits 0, or prints the variable's error on stderr and exits 1. Needs no launch JSON and writes no state. The SDK image runs it before it starts the browser, so a bad value stops the container with that error. |
 | The agent port is taken | Exits 2, and Chromium relaunches Neo on the next port. Nothing else exits 2. |
 | Any other failure | Exits 1, bad arguments included. |
 
 From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`), `instance.browseros_version`, and `flags.script_cdp` (default false). It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
 
-`src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address or screen size fails the start with exit 1.
+`src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address, screen size or telemetry value fails the start with exit 1.
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -92,7 +95,9 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 | `CLAW_HOST_TCP` | unset | Also serves the host API on this TCP address. |
 | `CLAW_XVNC_ADDR` | `127.0.0.1:5900` | Xvnc, which a takeover fit resizes. |
 | `NEO_SCREEN` | `1600x1000` | Neo's screen size between fits. |
-| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | unset | CAPTCHA provider keys. Without a readable one, `neo.solveCaptcha` is unlisted and fails `host / captcha_unavailable`. neo-captcha also reads `BROWSEROS_CAPSOLVER_API_URL`, `BROWSEROS_2CAPTCHA_API_URL`, and `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` (default 100). |
+| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | unset | CAPTCHA provider keys. Without a readable one, `neo.solveCaptcha` is unlisted and fails `host / captcha_unavailable`. Every solve that returns an outcome is counted in `neo_captcha_solves_total` and `neo_captcha_reasons_total`, and what the providers charged in `neo_captcha_spend_total`, on both telemetry doors. neo-captcha also reads `BROWSEROS_CAPSOLVER_API_URL`, `BROWSEROS_2CAPTCHA_API_URL`, and `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` (default 100). |
+| `CLAW_TELEMETRY_SITE_DETAIL` | `none` | How much of a page's address an operation's span carries: `none`, `host` (`url.domain`), or `url` (`url.full` without userinfo, query, or fragment). Spans only: no metric carries an address. |
+| `OTEL_*` | unset | The standard OpenTelemetry variables, which turn on OTLP/HTTP push of spans and metrics: `OTEL_EXPORTER_OTLP_ENDPOINT` (or its `_TRACES_` and `_METRICS_` forms), `_PROTOCOL` (`http/protobuf` or `http/json`), `_HEADERS`, `OTEL_SERVICE_NAME` (default `browseros-neo`), `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER` and `_ARG`, `OTEL_METRIC_EXPORT_INTERVAL`, and `OTEL_BSP_SCHEDULE_DELAY`. `http/protobuf` bodies are always gzipped. `http/json` bodies go plain unless `OTEL_EXPORTER_OTLP_COMPRESSION` (or its `_TRACES_` and `_METRICS_` forms, which win over it) is `gzip`; `none` keeps them plain, and any other value, `zstd` included, is ignored rather than failing the start. A header's value is never logged or shown. A collector that is down loses spans and metrics, never a run; at SIGTERM telemetry gets the trace writer's 1 s to flush. The push names metrics the OpenTelemetry way, dotted with no unit or `_total` and with namespaced attribute keys (`neo.run.duration` with `neo.run.status`, `error.type` for an error code), and `GET /v1/metrics` serves the Prometheus names OpenTelemetry's compatibility rules derive from them (`neo_run_duration_seconds` with `neo_run_status`), the same ones a collector or Prometheus' own OTLP receiver gives a push; `neo-sdk-api/openapi.yaml` lists both. Neo sets neither `service.version` nor `service.instance.id`, both recommended resource attributes, so a deployment should set them in `OTEL_RESOURCE_ATTRIBUTES` (for example `service.version=<image tag>,service.instance.id=<cell name>`); keep the instance id stable across restarts, or a backend that turns resource attributes into labels opens new series each time Neo restarts. The Node embedding reads none of these: its telemetry is off. |
 
 Neo binds two listeners:
 
@@ -202,7 +207,9 @@ These commands fail `script / unsupported` before any send, even when enabled:
 While any takeover or host lock is held, every enabled `neo.cdp` call fails `host / owner_has_control` before send, with or without `page`. The same rules run again before send and before releasing page data, so a lock taken while a raw call waits can withhold its reply.
 While another operation's CAPTCHA solve holds a tab, enabled `neo.cdp` calls fail `script / page_busy` before send, with or without `page`. Calls already sent complete and release their answers.
 
-The host sends its ids and access in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData?, access? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
+The host sends its ids and access in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData?, access?, traceparent?, tracestate? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads. `traceparent` and `tracestate` are W3C trace context, which the run's `neo.run` span joins; the request's own `traceparent` and `tracestate` HTTP headers win over them. An invalid value is ignored, never refused: the run starts a trace of its own. An older Neo refuses the two keys, so a host that can set the headers sends those instead.
+
+With trace push on, each counted run is one `neo.run` span of kind SERVER, and each operation an INTERNAL child span named after the method (`page.goto`, or `unknown` for a name Neo does not serve). An operation span carries the name the script wrote as `neo.op.name` and, when the script called it, the call site in `code` as `code.line.number` and `code.column.number`, both from 1. A run that did not end ok, and an operation that failed, has status ERROR and `error.type` set to its error code, or to how it ended when it has none.
 
 A host's `taskId` is also a Neo task id and seeds the run's current task. Neo registers it when a run first opens a tab for it; `neo.task(hostId)` can then fetch it. After a restart of Neo's server it starts on the same tab as before (see below). The neo-viewer proxy still supplies the host's task metadata.
 
@@ -340,7 +347,7 @@ A host whose own scripts must reach every tab (resetting tabs, reading a kept ta
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus neo-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | Registers neo-playwright's ops on the process's one `Playwright`, `neo.solveCaptcha`, and the idle-tab janitor. `op_marks.rs` maps capability declarations to dispatch metadata; main-world answers and pulled events pass the takeover rules on their targeted tab. File uploads use Playwright's path handling, and navigation delegates URL handling to Chromium. |
+| `builtins` | Registers neo-playwright's ops on the process's one `Playwright`, `neo.solveCaptcha`, and the idle-tab janitor. `op_marks.rs` maps capability declarations to dispatch metadata; main-world answers and pulled events pass the takeover rules on their targeted tab. File uploads use Playwright's path handling, and navigation delegates URL handling to Chromium. `navigated.rs` and `captcha_solve.rs` turn a navigation's reply or network failure and a solve's outcome into the navigation and CAPTCHA metrics' closed labels, from the op's live result rather than its record, so the `trace` settings never change them. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |
@@ -362,7 +369,7 @@ A built-in is a private type in `src/builtins/` that implements `dispatch::Metho
 
 ## Test it
 
-`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, the SDK image's Python scripts (their tests, an import of each, and ruff where uv is installed), the Bun suites of `neo-playwright-js`, this package's conformance tables and `neo-captcha`'s test bed under the repository's pinned Bun (`BUN=/path/to/bun` names one), a `--locked` resolve of the spec corpus add-on's lock file, clippy with `-D warnings`, and `cargo test`, then clippy and tests again with the `hosted-run` feature, all on CI's pinned toolchain. The same rustfmt (with the workspace's defaults), clippy and tests run on every other crate under `crates/neo-sdk` too, such as `neo-takeover` and `neo-trace`; `neo-captcha`'s tests stay out until two flaky ones are fixed (`check.sh` names them). Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
+`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, the SDK image's Python scripts (their tests, an import of each, and ruff where uv is installed), the Bun suites of `neo-playwright-js`, this package's conformance tables and `neo-captcha`'s test bed under the repository's pinned Bun (`BUN=/path/to/bun` names one), a `--locked` resolve of the spec corpus add-on's lock file, clippy with `-D warnings`, and `cargo test`, then clippy and tests again with the `hosted-run` feature, then clippy and `neo-telemetry`'s tests without the `otel` feature, as the add-on builds, all on CI's pinned toolchain. The same rustfmt (with the workspace's defaults), clippy and tests run on every other crate under `crates/neo-sdk` too, such as `neo-takeover` and `neo-trace`; `neo-captcha`'s tests stay out until two flaky ones are fixed (`check.sh` names them). Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
 
 ```sh
 CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent/target/build-private" \

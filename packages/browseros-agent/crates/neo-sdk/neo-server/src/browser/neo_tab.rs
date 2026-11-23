@@ -13,7 +13,7 @@ use tokio::sync::{Mutex as AsyncMutex, SetOnce};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use super::{BrowserLink, TabEvent, TabRegistry};
+use super::{BrowserLink, OpenFor, OpenIntent, TabEvent, TabRegistry};
 
 /// What a blank tab shows: the browser's launch tab and a fresh tab both qualify.
 const BLANK_URLS: &[&str] = &["about:blank", "chrome://newtab/", "chrome://new-tab-page/"];
@@ -97,6 +97,11 @@ pub(crate) struct NeoTab {
     /// announces a tab a moment before Neo can mark it.
     making: AsyncMutex<()>,
     hand_back: SetOnce<HandBack>,
+    /// The open intent taken before the browser link's first listing
+    /// ([`NeoTab::set_attach_intent`]): the first ensure of [`NeoTab::follow`] claims it with the
+    /// tab it makes Neo's, adopted or opened, so tab telemetry counts that tab born `neo`
+    /// rather than `found`. Dropped unclaimed when that ensure makes none.
+    attach: Mutex<Option<OpenIntent>>,
 }
 
 impl NeoTab {
@@ -115,7 +120,15 @@ impl NeoTab {
             current: Mutex::default(),
             making: AsyncMutex::new(()),
             hand_back: SetOnce::new(),
+            attach: Mutex::default(),
         })
+    }
+
+    /// Hands over the open intent the app took before the browser link started, for the tab the
+    /// first ensure of [`NeoTab::follow`] makes Neo's. Until then, it holds the tabs the link's
+    /// first listing shows uncounted.
+    pub(crate) fn set_attach_intent(&self, intent: OpenIntent) {
+        *self.attach.lock().unwrap_or_else(PoisonError::into_inner) = Some(intent);
     }
 
     /// From now on a handed-back tab is announced to running scripts through `hand_back`. A
@@ -235,6 +248,8 @@ impl NeoTab {
             Adopt::Never => None,
         };
         let tab = match adopted {
+            // An adopted tab keeps the origin tab telemetry gave it at birth: `neo` at attach
+            // (`set_attach_intent`), else `found`.
             Some(tab) => {
                 tracing::info!(tab = tab.0, "Neo's blank tab: adopted a blank tab");
                 Some(tab)
@@ -268,11 +283,20 @@ impl NeoTab {
     /// connect, so no event is missed.
     pub(crate) async fn follow(self: Arc<Self>, shutdown: CancellationToken) {
         let mut events = self.link.tab_events();
+        // Dropped on every way out unclaimed, which lets the tabs it holds be born `found`.
+        let attach = self
+            .attach
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         tokio::select! {
             () = shutdown.cancelled() => return,
             _ = self.link.linked() => {}
         }
-        self.ensure(Adopt::Allowed).await;
+        // The tab Neo makes its own at attach, adopted or opened, is born `neo`.
+        if let (Some(tab), Some(attach)) = (self.ensure(Adopt::Allowed).await, attach) {
+            attach.claim(tab);
+        }
         let mut recheck = time::interval_at(time::Instant::now() + RECHECK, RECHECK);
         recheck.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
         loop {
@@ -330,6 +354,9 @@ impl NeoTab {
     /// budget of Neo's own: the browser may open the tab before a late reply, and only the reply
     /// says which tab is Neo's. CDP's request timeout bounds it.
     async fn open(&self, root: &ProtocolSession) -> Option<TabId> {
+        // Before the browser is asked: the tab watch may list the new tab before the reply names
+        // it, and holds it until then, so tab telemetry counts it born `neo`, not `found`.
+        let intent = self.tabs.life().expect_open(OpenFor::Neo);
         let opened: Result<browser::CreateTabResult, _> = root
             .send(
                 "Browser.createTab",
@@ -339,7 +366,9 @@ impl NeoTab {
         match opened {
             Ok(created) => {
                 tracing::info!(tab = created.tab.tab_id, "Neo's blank tab: opened");
-                Some(TabId(created.tab.tab_id))
+                let tab = TabId(created.tab.tab_id);
+                intent.claim(tab);
+                Some(tab)
             }
             Err(error) => {
                 tracing::warn!(%error, "Neo's blank tab: the browser did not open one");

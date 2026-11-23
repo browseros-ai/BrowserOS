@@ -23,10 +23,18 @@
  *
  * Formatted is that; Raw is always the recorded result as JSON. Each output carries one sentence
  * saying which it is, so the panel never passes a wire value off as the script's.
+ *
+ * A record folded from Neo's spans (`NeoRunRecord.source === 'spans'`, the viewer's only record
+ * with no host API) has no results at all: its outputs say so, once, instead of showing an empty
+ * value as if the call returned it.
  */
 
 import type { AriaSnapshotJSON } from '../../../../crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
-import type { NeoOperation, NeoOperationError } from '../../shared/api'
+import type {
+  NeoOperation,
+  NeoOperationError,
+  NeoRunRecord,
+} from '../../shared/api'
 import { OPERATION_VALUES_OFF_NOTICE } from '../../shared/trace-values'
 import { handleText } from './operation-values'
 import { isNeoInternal } from './operations'
@@ -59,6 +67,11 @@ export interface OperationOutput {
    * text comes from its pending record's arguments, which can be whole while its tree was cut.
    */
   rawCut: boolean
+  /**
+   * The record holds the call's outcome alone (one folded from spans): no arguments, call log or
+   * result, so its detail shows just the outcome.
+   */
+  outcomeOnly: boolean
 }
 
 type Shown = Pick<
@@ -66,15 +79,36 @@ type Shown = Pick<
   'formatted' | 'formattedText' | 'source' | 'cut'
 >
 
+/** Said once at the top of a run whose record was folded from Neo's spans. */
+export const SPANS_NOTICE =
+  "From Neo's spans (no host API): each call's name, line, time and outcome; spans carry no arguments, call logs or results."
+
+/**
+ * What a run's block says once about where its record came from: a record folded from spans
+ * has no values at all; null for Neo's own record.
+ */
+export function recordNotice(
+  record: Pick<NeoRunRecord, 'source'> | null,
+): string | null {
+  return record?.source === 'spans' ? SPANS_NOTICE : null
+}
+
+/** What a span-made record's call shows: spans carry no result. */
+export const SPANS_NO_RESULT =
+  "Neo's spans carry no result: with no host API, the viewer has only the call's name, place, time and outcome."
+
 /**
  * `operations`: the run's, which hold the `page.snapshotPending` a snapshot's text is in;
- * `traceGaps`: how many of its records Neo dropped, past which no text is paired.
+ * `traceGaps`: how many of its records Neo dropped, past which no text is paired; `source`:
+ * where the record came from (`NeoRunRecord.source`).
  */
 export function operationOutput(
   operation: NeoOperation,
   operations: NeoOperation[],
   traceGaps = 0,
+  source?: NeoRunRecord['source'],
 ): OperationOutput {
+  if (source === 'spans') return fromSpans(operation)
   const rawText = recorded(operation)
   return {
     ...shownOrRecord(operation, traceGaps > 0 ? null : operations),
@@ -84,6 +118,7 @@ export function operationOutput(
       operation.error || operation.values === 'off'
         ? false
         : operation.resultTruncated,
+    outcomeOnly: false,
   }
 }
 
@@ -121,6 +156,36 @@ function shownOrRecord(
       operation,
       "The viewer could not read this result, so this is Neo's record of it.",
     )
+  }
+}
+
+/** A call from a span-made record: its error when it failed, otherwise that there is no result. */
+function fromSpans(operation: NeoOperation): OperationOutput {
+  const shown: Shown = operation.error
+    ? thrown(
+        operation.error,
+        "The call failed: the error Neo's span recorded. Spans carry no result.",
+      )
+    : operation.outcome === null
+      ? {
+          ...toned('', 'muted'),
+          source: 'The call has not finished.',
+          cut: false,
+        }
+      : {
+          ...toned('(not in the spans)', 'muted'),
+          source: SPANS_NO_RESULT,
+          cut: false,
+        }
+  const rawText = operation.error
+    ? JSON.stringify(operation.error, null, 2)
+    : ''
+  return {
+    ...shown,
+    raw: rawText.split('\n').map(jsonLine),
+    rawText,
+    rawCut: false,
+    outcomeOnly: true,
   }
 }
 

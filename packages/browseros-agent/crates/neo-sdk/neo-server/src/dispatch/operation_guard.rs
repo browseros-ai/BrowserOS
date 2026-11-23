@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 
 use browseros_core::TabId;
+use neo_telemetry::OpSettled;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationSite,
     OperationStarted, Outcome, PageState, TraceSink, Values,
@@ -11,15 +13,18 @@ use neo_trace::{
 use serde_json::Value;
 use tokio::sync::oneshot;
 
+use super::dispatcher::NAME_CHARS;
 use super::op_ctx::OpState;
+use super::telemetry_verdict::{op_counting, op_delivery, op_failure, op_outcome, op_site, op_url};
 use super::{
     Answer, CallSite, ErrorCode, FrameVersion, LeafError, Lifetime, MethodSpec, Observation,
-    OpFailure, OpLine, OpReply, OperationError, PageFact, RunCtx, StopReason,
+    OpFailure, OpLine, OpReply, OperationError, PageFact, RunCtx, StopReason, clip,
 };
 use crate::browser::PageRef;
 
-/// Ends one op exactly once: the trace's `op_ended`, the run's ledger, and the caller's reply.
-/// The record and the reply carry the same outcome, as the method produced it.
+/// Ends one op exactly once: the trace's `op_ended`, the run's telemetry, the run's ledger, and
+/// the caller's reply. The record, the telemetry and the reply carry the same outcome, as the
+/// method produced it.
 ///
 /// [`OperationGuard::finish`] is the normal path and consumes the guard. `Drop` is the
 /// backstop for an op whose future went away without an answer: its task was aborted at
@@ -43,6 +48,12 @@ struct Open {
     run: Arc<RunCtx>,
     trace: TraceSink,
     reply: oneshot::Sender<OpReply>,
+    /// When the door opened the op: its telemetry's start and duration. Telemetry has no start
+    /// hook, so this and `raw_name` are all an op costs it before it settles.
+    opened_at: Instant,
+    /// The name as the caller wrote it, kept only when the door found no method under it (its
+    /// spec is then the door's `unknown`): the op's span names it, and no metric ever sees it.
+    raw_name: Option<String>,
 }
 
 /// What opening an op records. A plain data bag.
@@ -203,16 +214,14 @@ impl OperationGuard {
             site,
             reply,
         } = start;
+        // An unregistered name, kept for the span as the door's refusal shows it: clipped, since a
+        // script can send any string. A registered method's name is its spec's.
+        let raw_name = (name != spec.name)
+            .then(|| clip(name.chars().take(NAME_CHARS + 1).collect(), NAME_CHARS));
         let opened = Unsent {
             id: state.id(),
             parent: state.parent_id(),
-            // Background pulls must not borrow the script stack that started them. The
-            // subscription prelude supplies an explicit site for public listener changes
-            // and an empty site for its own pump and bookkeeping, so preserve that ownership.
-            site: match spec.lifetime {
-                Lifetime::Background if !neo_trace::is_subscription(spec.name) => None,
-                Lifetime::Operation | Lifetime::Background => site,
-            },
+            site: recorded_site(&spec, site),
             name,
             kind: spec.record,
             effect: spec.effect,
@@ -239,6 +248,8 @@ impl OperationGuard {
                 run: Arc::clone(run),
                 trace: trace.clone(),
                 reply,
+                opened_at: Instant::now(),
+                raw_name,
             }),
         }
     }
@@ -311,6 +322,8 @@ fn settle(
         run,
         trace,
         reply,
+        opened_at,
+        raw_name,
     } = open;
     // An op that ended before the door resolved its page (a gate, a stop, a page that would not
     // open) still has every op id on the record: its start goes first, with no tab.
@@ -321,27 +334,7 @@ fn settle(
     let sent_at = state.sent_at();
     let pumped = state.after_pump();
     let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
-    // Notes remain debug output, not stored values. The settings watcher flips this live
-    // flag before answering; check each line so a change also reaches operations in flight.
-    // The host's private typing keeps no call-log line at all, as it keeps no page address
-    // (ruling R35): a shared typing helper's note could name the page, or worse.
-    let notes = state.take_notes();
-    // A tab's frame tree that Neo could not read whole is never silent: its read's notes
-    // (neo-playwright `frame_tree::frames`) name the frame and the error, at warn, whatever the
-    // values policy. They hold no page value, only a frame id and a browser error.
-    if spec.name == "page.frames" {
-        for note in notes.iter().filter(|note| note.starts_with("frame tree ")) {
-            tracing::warn!(operation = %id, tab = ?tab, %note, "a tab's frame tree is not whole");
-        }
-    }
-    for note in notes
-        .into_iter()
-        .filter(|_| spec.record != OperationKind::Protected)
-    {
-        if trace.values() == Values::On {
-            tracing::debug!(operation = %id, method = spec.name, %note, "op note");
-        }
-    }
+    log_notes(&trace, &state, &spec, id, tab);
     let (result, error) = match &settlement.result {
         Settled::Value(value) => (Some(value.clone()), None),
         Settled::Failed(error) => (None, Some(error.record(settlement.retryable, Some(id)))),
@@ -368,6 +361,22 @@ fn settle(
         | OperationKind::Next { .. }
         | OperationKind::HostCall => recorded_page_state(&pages, tab),
     };
+    // The op's one telemetry report, from the values its record gets. Before the reply wakes the
+    // script, so a run that fails on this op's error ends after telemetry has it, and that error
+    // is counted once. The URL is the record's own: telemetry never asks the browser.
+    run.telemetry().op_settled(OpSettled {
+        op: spec.name,
+        raw_name: raw_name.as_deref(),
+        op_id: &id,
+        site: recorded_site(&spec, site).map(op_site),
+        tab_id: tab.map(|tab| tab.0),
+        started: opened_at,
+        outcome: op_outcome(settlement.outcome),
+        delivery: op_delivery(settlement.delivery),
+        counting: op_counting(spec.metrics, recorded_site(&spec, site)),
+        error: op_failure(&settlement.result),
+        url: op_url(spec.record, page_after.as_ref()),
+    });
     trace.op_ended(OperationEnded {
         id,
         outcome: settlement.outcome,
@@ -413,6 +422,47 @@ fn settle(
         completed_publications: state.take_publications(),
         frames,
     });
+}
+
+/// The op's call-log lines. Notes remain debug output, not stored values. The settings watcher
+/// flips the trace's live values flag before answering; each line checks it, so a change also
+/// reaches operations in flight. The host's private typing keeps no call-log line at all, as it
+/// keeps no page address (ruling R35): a shared typing helper's note could name the page, or
+/// worse.
+fn log_notes(
+    trace: &TraceSink,
+    state: &OpState,
+    spec: &MethodSpec,
+    id: OperationId,
+    tab: Option<TabId>,
+) {
+    let notes = state.take_notes();
+    // A tab's frame tree that Neo could not read whole is never silent: its read's notes
+    // (neo-playwright `frame_tree::frames`) name the frame and the error, at warn, whatever the
+    // values policy. They hold no page value, only a frame id and a browser error.
+    if spec.name == "page.frames" {
+        for note in notes.iter().filter(|note| note.starts_with("frame tree ")) {
+            tracing::warn!(operation = %id, tab = ?tab, %note, "a tab's frame tree is not whole");
+        }
+    }
+    for note in notes
+        .into_iter()
+        .filter(|_| spec.record != OperationKind::Protected)
+    {
+        if trace.values() == Values::On {
+            tracing::debug!(operation = %id, method = spec.name, %note, "op note");
+        }
+    }
+}
+
+/// The call site an op's records name. Background pulls must not borrow the script stack that
+/// started them: the subscription prelude supplies an explicit site for public listener changes
+/// and an empty site for its own pump and bookkeeping, so that ownership is preserved.
+fn recorded_site(spec: &MethodSpec, site: Option<CallSite>) -> Option<CallSite> {
+    match spec.lifetime {
+        Lifetime::Background if !neo_trace::is_subscription(spec.name) => None,
+        Lifetime::Operation | Lifetime::Background => site,
+    }
 }
 
 /// A missing target fact must not turn a related page into the operation's trace target.

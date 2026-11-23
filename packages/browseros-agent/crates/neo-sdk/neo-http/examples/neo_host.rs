@@ -218,6 +218,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tab_owner: Arc::new(|_| None),
         tab_task: Arc::new(|_| None),
         tab_opener: Arc::new(|_| None),
+        metrics: Arc::new(String::new),
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),

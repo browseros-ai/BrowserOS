@@ -79,12 +79,18 @@ name = "browseros-claw-sdk"
 path = "src/main.rs"
 
 [features]
+default = ["telemetry"]
+# Neo's telemetry pipeline (the OpenTelemetry SDK and the OTLP push door). Without it
+# `Telemetry::new` is the no-op, `GET /v1/metrics` answers an empty exposition, and setting an OTLP
+# endpoint fails startup. The Node add-on turns it off: its hosted embedding never turns telemetry
+# on. claw-server keeps it, since its engine child is `App::start` on the inherited environment.
+telemetry = ["neo-telemetry/otel"]
 # The real SDK door hosted by another JavaScript engine; no listeners or QuickJS realm.
 hosted-run = []
 # `neo_server::test_support`: the fake browser behind core's CDP seam. The dev-dependency on this
 # crate below turns it on for every test build, unit and integration; release builds never have
-# it.
-test-support = []
+# it. The telemetry tests read the live pipeline, so it needs `telemetry`.
+test-support = ["telemetry", "neo-telemetry/test-support"]
 
 [dependencies]
 # DOM URL parsing and form encoding for the agent realm; already in the workspace graph.
@@ -106,6 +112,9 @@ neo-http.workspace = true
 neo-takeover.workspace = true
 # `ts-rs`: an error's owner, delivery and operation id in the run envelope print as TypeScript.
 neo-trace = { workspace = true, features = ["ts-rs"] }
+# Runs, ops and tabs as OpenTelemetry metrics and spans, behind one facade: nothing here names
+# an OpenTelemetry, OTLP or Prometheus crate. `test-support` above adds its in-memory pipeline.
+neo-telemetry.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 # Stateless streamable HTTP for the one `run` tool; the server features only.
@@ -139,6 +148,12 @@ sqlx.workspace = true
 # MCP clients for tests/mcp_run.rs, on the legacy protocol and on 2026-07-28. Plain HTTP to
 # 127.0.0.1, so no TLS features.
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
+# The in-process OTLP collector the telemetry tests export to (src/telemetry_rig): gzip bodies,
+# OTLP protobuf (prost and opentelemetry-proto's messages); JSON reads through serde_json.
+# Already in the graph through neo-telemetry.
+flate2.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
 # Paused time for the connect loop's backoff and tab_watch's epoch check.
 tokio = { workspace = true, features = ["test-util"] }
 # Only for tests/style_boundaries.rs, which parses src/ and the lint tables.

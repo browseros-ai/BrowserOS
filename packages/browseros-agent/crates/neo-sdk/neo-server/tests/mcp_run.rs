@@ -783,6 +783,19 @@ fn the_agent_port_has_no_fill_route_and_the_run_tool_never_names_it() -> TestRes
     })
 }
 
+/// Neo's metrics are the host's (`GET /v1/metrics`, the telemetry's pull door), served only on
+/// the host listener: the agent's port has no such route. A 404, not the host router's 401, so
+/// the route is not there at all.
+#[test]
+fn the_agent_port_has_no_metrics_route() -> TestResult {
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        let reply = neo.get("/v1/metrics").await?;
+        assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+        Ok(())
+    })
+}
+
 /// The description's condition and permission behavior are exercised over the same MCP surface.
 #[test]
 fn the_read_only_sentence_matches_the_runs_actual_admission_rule() -> TestResult {

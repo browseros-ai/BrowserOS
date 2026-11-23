@@ -9,6 +9,7 @@ use neo_http::{
     HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, SettingsDefaults, TokenError,
 };
 use neo_takeover::Xvnc;
+use neo_telemetry::Telemetry;
 use neo_trace::{ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
@@ -63,6 +64,8 @@ pub(crate) struct HostInputs {
     pub(crate) settings_defaults: SettingsDefaults,
     /// The app's tab registry, whose task book `GET /v1/tabs` reads for each tab's `taskId`.
     pub(crate) tabs: Arc<TabRegistry>,
+    /// The process's telemetry, which `GET /v1/metrics` renders.
+    pub(crate) telemetry: Telemetry,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -166,6 +169,7 @@ impl HostApi {
             settings_file: _,
             settings_defaults: _,
             tabs,
+            telemetry,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,
@@ -191,6 +195,8 @@ impl HostApi {
                 let tabs = Arc::clone(&tabs);
                 Arc::new(move |tab| tabs.opener(tab))
             },
+            // `GET /v1/metrics`: the same meter provider OTLP pushes from, read at each scrape.
+            metrics: Arc::new(move || telemetry.render_prometheus()),
         });
         // Each tab the tab watch sees open reaches every active takeover at once, with its
         // opener as the browser announced it, for the release's `openedTabs`. Not through the

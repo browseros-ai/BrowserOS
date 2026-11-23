@@ -13,7 +13,7 @@ import {
 } from '../../shared/run-markdown'
 import { runTotals } from '../../web/screen/measures'
 import { clock, count, plural, seconds } from '../../web/screen/units'
-import type { ExportSource, RunFiles } from './write-export'
+import type { ExportSource, MetricsFiles, RunFiles } from './write-export'
 
 /** Characters of the reply a run's Markdown shows inline; the rest is in its reply file. */
 export const REPLY_INLINE_CHARS = 2_000
@@ -27,8 +27,9 @@ export function exportReadme(input: {
   now: number
   dir: string
   width: number
+  metricsFiles: MetricsFiles
 }): string {
-  const { source, runFiles, now, dir, width } = input
+  const { source, runFiles, now, dir, width, metricsFiles } = input
   const { info, runs } = source
   const totals = runTotals(runs)
   const failedRuns = runs.filter((run) => outcomeWord(run) === 'failed').length
@@ -95,8 +96,44 @@ export function exportReadme(input: {
       '',
       `Runs ${TABLE_ROWS + 1} to ${runs.length} are not listed here, to keep this file short: they are in \`session.json\` (\`runs\`), and their files in \`runs/\`.`,
     )
+  out.push('', ...metricsSection(source, metricsFiles))
   out.push('', ...HOW_TO_READ, '', ...QUESTIONS)
   return `${out.join('\n')}\n`
+}
+
+/** Neo's own numbers (its metrics), or why there are none. */
+function metricsSection(source: ExportSource, files: MetricsFiles): string[] {
+  const metrics = source.metrics
+  if (!metrics)
+    return [
+      '## Neo metrics',
+      '',
+      'None: Neo sent no metrics (an image older than its telemetry, or no host API and no OTLP push), so there is no `metrics/` folder.',
+    ]
+  const view = metrics.metrics
+  const since = metrics.health?.sinceClear
+  const errors = view.errors
+    .slice(0, 5)
+    .map((entry) => `\`${entry.owner}/${entry.code}\` ×${count(entry.count)}`)
+    .join(', ')
+  return [
+    '## Neo metrics',
+    '',
+    `From Neo's ${view.source === 'scrape' ? 'host API (`GET /v1/metrics`)' : 'OTLP push'} at ${localTime(view.observedAt)}; counts are since Neo started unless marked.`,
+    '',
+    '| | |',
+    '| --- | --: |',
+    `| Runs | ${count(view.runs.total)}${since ? ` (${count(since.runs)} since the last Clear, ${count(since.runErrors)} failed)` : ''} |`,
+    `| Operations | ${count(view.operations.reduce((total, op) => total + op.total, 0))}${since ? ` (${count(since.ops)} since the last Clear, ${count(since.opErrors)} failed)` : ''} |`,
+    `| Errors | ${errors || 'none'} |`,
+    `| Tabs open | ${count(Object.values(view.tabs.openByOrigin).reduce((total, n) => total + n, 0))} |`,
+    `| Renderer crashes | ${count(view.crashes)} |`,
+    '',
+    `Files: ${[files.summary, files.prometheus]
+      .filter((file): file is string => file !== null)
+      .map((file) => `\`${file}\``)
+      .join(', ')}.`,
+  ]
 }
 
 /** The run's tasks: the script's, then the host's marked "(host)"; "–" for none. */
@@ -149,6 +186,8 @@ const HOW_TO_READ = [
   "- **`runs/NNN.json`**: that run complete. `code` as sent; `request.raw`, the HTTP body the agent sent; `reply.raw`, the body Neo answered with (SSE framing included); `reply.text`, what the model read; `reply.structuredContent`, `reply.isError`, `reply.meta`, `reply.rpcError`, `reply.notifications`; `parsed` (`value`, the returned value when `valueIsJson`; `valueText`; `console`; `notes`, Neo's `[unknown outcome]`/`[not awaited]` lines); `neo`, Neo's record (null when there is none): `status`, `startedAt`/`endedAt` (epoch ms), `durationMs`, `complete`, `tabs`, `error`, and `operations[]` with each one's `seq`, `parentId`, `name`, `kind`, `effect`, `site` (`line`, `column`), `startOffsetMs`, `durationMs`, `tabId`, `args`, `result`, `argsTruncated`/`resultTruncated` (Neo bounds both), `outcome`, `delivery`, `error` (`owner`, `code`, `message`, `retryable`) and `notes` (its call log).",
   '- **`runs/NNN.reply.txt`** (`.reply.json` when the whole text is JSON): exactly the text the model read, alone, to grep. Absent when the model read nothing.',
   "- **`log.jsonl`**: the viewer's raw log since the last Clear, one JSON object per line: `log` (its start), `run-start`, `run-end`, `neo-run` (a later one replaces an earlier one for the same run), `tools-list`.",
+  "- **`metrics/metrics.prom`**: Neo's last answer to `GET /v1/metrics` (Prometheus text, byte for byte), the same sample `summary.json` reads; absent when those numbers came by push (no host API, or its scrape had gone quiet). **`metrics/summary.json`**: the same metrics read out: `health` (`sinceClear` counts since the last Clear; `runsInFlight`, `tabsOpen` live), `metrics` (runs by status with duration p50/p95, operations by name with errors and p50/p95, errors by owner and code, tabs by origin and close reason, crashes; cumulative since Neo started), `history` (one point a second, the last ten minutes, cumulative) and `families` (every metric as received). Absent when Neo sent no metrics.",
+  "- A run's `neo` record in `runs/NNN.json` says where it came from: `source: \"spans\"` when the viewer had no host API and built it from Neo's OpenTelemetry spans (no args, results or notes); absent when it is Neo's own `/v1/runs` record.",
 ]
 
 const QUESTIONS = [

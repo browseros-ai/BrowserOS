@@ -26,6 +26,7 @@ use std::sync::Arc;
 use neo_http::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb, TookPrivateText};
 use neo_sdk_api as api;
 use neo_takeover::NamedLock;
+use neo_telemetry::Telemetry;
 use neo_trace::{ErrorOwner, RunId, RunStatus};
 use serde::Deserialize;
 use serde_json::Value;
@@ -66,6 +67,8 @@ pub(crate) struct FillService {
     /// Which tabs the host API's camera withholds: a tab that took a fill while the host's
     /// `fill.pictures` is `never`.
     took: TookPrivateText,
+    /// The process's telemetry: each fill runs as one of Neo's own runs (`internal_run`).
+    telemetry: Telemetry,
 }
 
 /// What the fill service is built from. A plain data bag.
@@ -88,6 +91,8 @@ pub(crate) struct FillServiceParts {
     /// The facade's camera callback combines the host's current setting with restored tab
     /// membership, withholding every tab under `never` until recovery finishes.
     pub(crate) took: TookPrivateText,
+    /// The process's telemetry handle.
+    pub(crate) telemetry: Telemetry,
 }
 
 /// The check method's value, as the service reads it back.
@@ -109,6 +114,7 @@ impl FillService {
             pictures_never,
             shutdown,
             took,
+            telemetry,
         } = parts;
         Arc::new(Self {
             dispatcher,
@@ -119,6 +125,7 @@ impl FillService {
             pictures_never,
             shutdown,
             took,
+            telemetry,
         })
     }
 
@@ -182,6 +189,7 @@ impl FillService {
             filled: Arc::clone(&self.filled),
             pictures_never: Arc::clone(&self.pictures_never),
             shutdown: self.shutdown.clone(),
+            telemetry: self.telemetry.clone(),
         };
         match tokio::spawn(work.run(run, request, ticket)).await {
             Ok(answered) => answered,
@@ -204,6 +212,7 @@ impl FillService {
             filled: Arc::clone(&self.filled),
             pictures_never: Arc::clone(&self.pictures_never),
             shutdown: self.shutdown.clone(),
+            telemetry: self.telemetry.clone(),
         };
         tokio::spawn(work.check(request))
             .await
@@ -219,6 +228,7 @@ struct Fill {
     filled: Arc<FilledTabs>,
     pictures_never: PicturesNever,
     shutdown: CancellationToken,
+    telemetry: Telemetry,
 }
 
 impl Fill {
@@ -293,6 +303,8 @@ impl Fill {
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
                 access: None,
+                // The host's private typing is Neo's own run: not in the run metrics.
+                telemetry: self.telemetry.internal_run(),
             },
         );
         if let Some(lock) = lock {
@@ -365,6 +377,8 @@ impl Fill {
                 default_page: Some(PageRef { tab }),
                 tabs_scope: TabsScope::Browser,
                 access: None,
+                // The host's private typing is Neo's own run: not in the run metrics.
+                telemetry: self.telemetry.internal_run(),
             },
         );
         if let Some(lock) = lock {

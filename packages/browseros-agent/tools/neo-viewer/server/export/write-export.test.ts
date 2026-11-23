@@ -21,6 +21,9 @@ import {
 } from '../../shared/api'
 import { SNAPSHOT, TRAILED } from '../../web/test-support/replies'
 import { RunStore } from '../log/run-store'
+import type { TelemetryExport } from '../telemetry'
+import { fixtureFamilies, fixturePrometheus } from '../telemetry/fixtures'
+import { metricsView } from '../telemetry/metrics-view'
 import { runResult, sseEvent, startFakeNeo } from '../test-support/fake-neo'
 import { FAKE_TOKEN, startFakeNeoHost } from '../test-support/fake-neo-host'
 import { TWO_LINES, twoLineRecord } from '../test-support/neo-records'
@@ -48,6 +51,10 @@ const INFO: ViewerInfo = {
     name: 'neo-viewer-vp-test',
     image: 'neo-sdk:0.52.1.2-85d411378-arm64',
     up: true,
+  },
+  otlp: {
+    endpoint: 'http://127.0.0.1:27361/otlp',
+    containerEndpoint: 'http://host.docker.internal:27361/otlp',
   },
 }
 
@@ -127,6 +134,7 @@ async function sourceOf(
     runs,
     toolsList,
     rawLog: await rawLog,
+    metrics: null,
   }
 }
 
@@ -364,6 +372,7 @@ describe('an export stays one coherent, separate thing', () => {
         runs,
         toolsList,
         rawLog: await rawLog,
+        metrics: null,
       },
       { root: await tempDir('neo-viewer-export-root-') },
     )
@@ -468,6 +477,101 @@ describe('an export stays one coherent, separate thing', () => {
     ).toEqual({ code: -32602, message: 'Invalid params' })
     expect(await readFile(join(written.dir, 'runs/001.md'), 'utf8')).toContain(
       '## Error\n\nJSON-RPC error -32602: Invalid params',
+    )
+  })
+})
+
+describe("Neo's metrics in an export", () => {
+  const families = fixtureFamilies(2)
+  const exported = (prometheus: string | null): TelemetryExport => ({
+    prometheus,
+    metrics: metricsView(
+      families,
+      prometheus ? 'scrape' : 'push',
+      Date.parse('2026-11-20T12:00:00Z'),
+    ),
+    health: {
+      rev: 7,
+      observedAt: Date.parse('2026-11-20T12:00:00Z'),
+      source: prometheus ? 'scrape' : 'push',
+      spansSeen: true,
+      runsInFlight: 0,
+      tabsOpen: 3,
+      sinceClear: { runs: 2, runErrors: 0, ops: 16, opErrors: 2, crashes: 0 },
+    },
+    history: [
+      {
+        at: 1,
+        runs: 4,
+        runErrors: 1,
+        ops: 25,
+        opErrors: 4,
+        crashes: 0,
+        runsInFlight: 0,
+        tabsOpen: 3,
+      },
+    ],
+  })
+
+  test('metrics/metrics.prom is the last scrape byte for byte; metrics/summary.json reads it out', async () => {
+    const store = await storeWith(await tempDir('neo-viewer-export-state-'), [
+      { text: '1', neo: null },
+    ])
+    const text = fixturePrometheus(2)
+    const written = await writeExport(
+      { ...(await sourceOf(store)), metrics: exported(text) },
+      { root: await tempDir('neo-viewer-export-root-') },
+    )
+    expect(written.files).toContain('metrics/metrics.prom')
+    expect(written.files).toContain('metrics/summary.json')
+    expect(
+      await readFile(join(written.dir, 'metrics/metrics.prom'), 'utf8'),
+    ).toBe(text)
+    const summary = JSON.parse(
+      await readFile(join(written.dir, 'metrics/summary.json'), 'utf8'),
+    )
+    expect(summary).toMatchObject({
+      format: 1,
+      source: 'scrape',
+      observedAt: '2026-11-20T12:00:00.000Z',
+      health: { sinceClear: { runs: 2, opErrors: 2 } },
+      metrics: { runs: { total: 6 }, crashes: 0 },
+      history: [{ runs: 4 }],
+    })
+    expect(summary.families).toHaveLength(16)
+    const readme = await readFile(join(written.dir, 'README.md'), 'utf8')
+    expect(readme).toContain('## Neo metrics')
+    expect(readme).toContain('`metrics/summary.json`, `metrics/metrics.prom`')
+    expect(readme).toContain('(2 since the last Clear, 0 failed)')
+    const session = JSON.parse(
+      await readFile(join(written.dir, 'session.json'), 'utf8'),
+    )
+    expect(session.metrics).toEqual({
+      source: 'scrape',
+      observedAt: '2026-11-20T12:00:00.000Z',
+      files: {
+        prometheus: 'metrics/metrics.prom',
+        summary: 'metrics/summary.json',
+      },
+    })
+  })
+
+  test('pushed metrics only: a summary, no .prom; none at all: no folder, and README.md says why', async () => {
+    const store = await storeWith(await tempDir('neo-viewer-export-state-'), [
+      { text: '1', neo: null },
+    ])
+    const pushed = await writeExport(
+      { ...(await sourceOf(store)), metrics: exported(null) },
+      { root: await tempDir('neo-viewer-export-root-') },
+    )
+    expect(pushed.files).toContain('metrics/summary.json')
+    expect(pushed.files).not.toContain('metrics/metrics.prom')
+    const none = await writeExport(await sourceOf(store), {
+      root: await tempDir('neo-viewer-export-root-'),
+    })
+    expect(existsSync(join(none.dir, 'metrics'))).toBe(false)
+    expect(await readFile(join(none.dir, 'README.md'), 'utf8')).toContain(
+      'None: Neo sent no metrics',
     )
   })
 })

@@ -36,6 +36,8 @@ mod runtime;
 #[cfg(test)]
 mod surrogate_page_values_live;
 #[cfg(test)]
+mod telemetry_rig;
+#[cfg(test)]
 mod test_rig;
 #[cfg(feature = "test-support")]
 pub mod test_support;

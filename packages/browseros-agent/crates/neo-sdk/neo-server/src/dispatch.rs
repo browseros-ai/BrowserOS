@@ -24,6 +24,11 @@
 //! run, so an op can never run outside a recorded run. A stopped run's write-once
 //! [`StopReason`] names the owner of every op it cut short, but for a background pull: the
 //! run's end is how a pull ends, so a stop retires it with no error.
+//!
+//! Telemetry rides the same exactly-once ends rather than keeping guards of its own: an op's
+//! settle reports it through its run's `RunTelemetry`, and [`RunGuard`] finishes the run's
+//! span, each with the values its trace record gets ([`telemetry_verdict()`]). The door holds no
+//! telemetry handle and names no OpenTelemetry crate.
 
 mod close_release;
 mod dispatcher;
@@ -41,13 +46,14 @@ mod registry;
 mod run_ctx;
 mod run_tasks;
 mod tabs_named;
+mod telemetry_verdict;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use dispatcher::{
     Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PageFacts, PendingReply,
 };
-pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, PageScript, Visibility};
+pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, OpMetrics, PageScript, Visibility};
 pub(crate) use observation::{
     ActedTarget, ApprovedClose, Claim, EventLog, FrameVersion, Observation, Observer, WorkerFact,
 };
@@ -63,3 +69,4 @@ pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, 
 
 pub(crate) use run_tasks::{TabNote, TaskKind, TaskNote};
 pub(crate) use tabs_named::tabs_named;
+pub(crate) use telemetry_verdict::telemetry_verdict;

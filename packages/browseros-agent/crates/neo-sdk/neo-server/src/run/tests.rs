@@ -29,6 +29,8 @@ use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS, TaskKind};
 use crate::test_rig::{ManualClock, TestError, TestRig, on_neo_runtime, within};
 
+mod telemetry;
+
 /// Long enough that only the tests about orphans ever see it run out.
 const GRACE: Duration = Duration::from_secs(30);
 
@@ -373,6 +375,7 @@ fn meta(request: Option<&str>, task: Option<&str>) -> Result<RunMeta, TestError>
         task_id: task.map(TaskId::parse).transpose()?,
         host_data: None,
         access: None,
+        trace: None,
     })
 }
 

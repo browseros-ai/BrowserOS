@@ -28,18 +28,30 @@ pub struct HostedOptions {
 
 impl HostedOptions {
     pub(super) fn config(self) -> Result<AppConfig, HostedError> {
+        self.config_over(&|name| env::var(name).ok())
+    }
+
+    /// [`HostedOptions::config`] over `process_env`, Node's environment in production and a
+    /// test's map otherwise.
+    fn config_over(
+        self,
+        process_env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<AppConfig, HostedError> {
         if self.state_dir.as_os_str().is_empty() {
             return Err(HostedError(
                 "state_dir must name a private state directory".to_owned(),
             ));
         }
         // Read the product settings without mutating Node's process environment. The host
-        // owns its state root and states the browser's mode.
+        // owns its state root and states the browser's mode. The embedding's telemetry is off
+        // (`HostedStack`), so none of its variables are read: Node's own `OTEL_*` configure the
+        // host's SDK, not Neo, and a value Neo could not use must not fail the embedding's start.
         let hosted_mode = self.hosted_mode;
         let lookup = |name: &str| match name {
             "BROWSERCLAW_DIR" => Some("/".to_owned()),
             "BROWSERCLAW_HOSTED_MODE" => hosted_mode.then(|| "1".to_owned()),
-            _ => env::var(name).ok(),
+            name if name.starts_with("OTEL_") || name.starts_with("CLAW_TELEMETRY_") => None,
+            _ => process_env(name),
         };
         let mut env =
             EnvConfig::from_lookup(&lookup, &env::home_dir).map_err(HostedError::from_error)?;
@@ -68,8 +80,33 @@ mod tests {
     use std::error::Error;
     use std::path::PathBuf;
 
+    use neo_telemetry::TelemetryConfig;
+
     use super::HostedOptions;
     use crate::config::NeoHome;
+
+    /// Node hosts set `OTEL_*` for their own SDK, often to values Neo's push does not take
+    /// (`grpc`); the embedding's telemetry is off, so it reads none of them and still starts.
+    #[test]
+    fn the_node_embedding_reads_no_telemetry_variable() -> Result<(), Box<dyn Error>> {
+        let node_env = |name: &str| match name {
+            "CLAW_TELEMETRY_SITE_DETAIL" => Some("everything".to_owned()),
+            "OTEL_EXPORTER_OTLP_PROTOCOL" => Some("grpc".to_owned()),
+            "OTEL_EXPORTER_OTLP_ENDPOINT" => Some("not a url".to_owned()),
+            _ => None,
+        };
+        let config = HostedOptions {
+            state_dir: PathBuf::from("/tmp/neo-state"),
+            ..HostedOptions::default()
+        }
+        .config_over(&node_env)?;
+        assert_eq!(
+            config.env.telemetry,
+            TelemetryConfig::default(),
+            "the host's telemetry settings are its own"
+        );
+        Ok(())
+    }
 
     #[test]
     fn the_node_embedding_never_protects_its_home() -> Result<(), Box<dyn Error>> {

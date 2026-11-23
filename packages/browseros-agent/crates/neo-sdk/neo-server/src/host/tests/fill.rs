@@ -25,6 +25,7 @@ use neo_playwright::{
     BoxFacts, BoxLook, Compared, CoverIn, Drawing, Entry, EntryCode, EntryError, EntryOutcome,
     EntryRequest, LookRequest, OpEnv, Sending,
 };
+use neo_telemetry::Telemetry;
 use neo_trace::{Delivery, Effect, RunId};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -504,6 +505,7 @@ async fn script_call(
             default_page: None,
             tabs_scope: TabsScope::Browser,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
         },
     );
     let reply = host

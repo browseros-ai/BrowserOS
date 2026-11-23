@@ -1,5 +1,6 @@
 //! `BrowserLink` and `tab_watch` against the fake browser: the connect loop, the one session,
-//! closes noticed without anyone listing tabs, and the tab events the host API learns from.
+//! closes noticed without anyone listing tabs, the tab events the host API learns from, and what
+//! tab telemetry's ledger hears from the watch.
 
 use std::error::Error;
 use std::future;
@@ -7,14 +8,18 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_cdp::CdpError;
 use browseros_core::{NativeCapabilities, TabId, page_js};
+use neo_telemetry::{Telemetry, TelemetryConfig};
 use neo_trace::TaskId;
+use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::time;
 
 use crate::browser::{
     BrowserLink, LinkStatus, PageRef, RunScope, Sight, TabEvent, TabListing, TabRegistry, Watched,
 };
+use crate::telemetry_rig::Scrape;
 use crate::test_support::FakeCdp;
 
 #[derive(Default)]
@@ -417,5 +422,293 @@ async fn a_popup_that_opened_and_closed_between_two_listings_leaves_no_announcem
         Sight::Foreign,
         "the watch's confirmed close dropped the announcement"
     );
+    Ok(())
+}
+
+/// The tab metrics `telemetry` serves, as `name{labels} value` lines (the gauge left out).
+fn tab_counts(telemetry: &Telemetry) -> Result<Vec<String>, Box<dyn Error>> {
+    Ok(Scrape::of(telemetry)?.lines_of(&[
+        "neo_tab_opened_total",
+        "neo_tab_closed_total",
+        "neo_renderer_crashes_total",
+    ]))
+}
+
+/// The tab watch is the only writer of browser facts to tab telemetry: a tab open before Neo
+/// attached, the owner's tab and its popup are each born once; a renderer crash on an idle tab,
+/// no op on it, counts once and names its close; a reconnect to the same browser counts no tab
+/// again and closes the one that went meanwhile; a browser that comes back as another one closes
+/// every old tab as `shutdown`, even under a tab id it reused.
+#[tokio::test(start_paused = true)]
+async fn the_tab_watch_tells_tab_telemetry_what_the_browser_did() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let before = fake.open_tab("https://example.com/", "Example");
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let telemetry = telemetry.clone();
+        move || Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0, count, 0))
+    };
+    eventually(Duration::from_secs(5), found(1)).await?;
+    let owners = fake.open_tab("https://example.org/", "Other");
+    let popup = fake.open_popup(owners, "https://example.net/");
+    eventually(Duration::from_secs(5), found(3)).await?;
+
+    assert!(
+        fake.page_event(
+            owners,
+            "Target.targetCrashed",
+            json!({ "targetId": format!("target-{}", owners.0), "status": "crashed", "errorCode": 11 }),
+        ),
+        "the fake had the tab"
+    );
+    assert!(fake.close_tab(owners), "the fake had the tab");
+    eventually(Duration::from_secs(5), found(2)).await?;
+
+    fake.drop_connection();
+    assert!(fake.close_tab(popup), "closed while no socket hears of it");
+    fake.reconnect();
+    eventually(Duration::from_secs(5), found(1)).await?;
+    // A close nobody asked for waits two seconds; the socket stays up meanwhile,
+    // so it is the user's. A drop within the wait would have made it the shutdown's.
+    let user = r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 1"#;
+    eventually(Duration::from_secs(5), || {
+        tab_counts(&telemetry).is_ok_and(|counts| counts.iter().any(|line| line == user))
+    })
+    .await?;
+
+    // Restarted while Neo was away: every target is new, and tab number `before` came back.
+    fake.drop_connection();
+    assert!(fake.replace_target(before), "the fake had the tab");
+    fake.reconnect();
+    let shutdown =
+        r#"neo_tab_closed_total{neo_tab_close_reason="shutdown",neo_tab_origin="found"} 1"#;
+    eventually(Duration::from_secs(5), || {
+        tab_counts(&telemetry).is_ok_and(|counts| counts.iter().any(|line| line == shutdown))
+    })
+    .await?;
+    eventually(Duration::from_secs(5), found(1)).await?;
+
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        [
+            "neo_renderer_crashes_total 1",
+            r#"neo_tab_closed_total{neo_tab_close_reason="crash",neo_tab_origin="found"} 1"#,
+            shutdown,
+            r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 1"#,
+            r#"neo_tab_opened_total{neo_tab_origin="found"} 4"#,
+        ],
+        "three tabs found, each closed once (the crashed one as crash, the one gone while Neo \
+         was away as the user's, the restarted browser's as shutdown), the reborn tab found \
+         once more, and the crash counted once"
+    );
+    Ok(())
+}
+
+/// Review F7: after core's event channel dropped events, the watch rebuilds its map of live page
+/// targets with one `Target.getTargets` before the next listing. A tab sitting on an excluded page
+/// is neither closed by the lag nor counted again when it comes back, and the watch is not left
+/// without that map for the rest of the socket.
+#[tokio::test(start_paused = true)]
+async fn after_a_lag_the_watch_still_knows_a_tab_on_an_excluded_page() -> Result<(), Box<dyn Error>>
+{
+    let fake = FakeCdp::new();
+    let shown = fake.open_tab("https://example.com/", "Example");
+    let parked = fake.open_tab("https://example.org/", "Parked");
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let telemetry = telemetry.clone();
+        move || Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0, count, 0))
+    };
+    eventually(Duration::from_secs(5), found(2)).await?;
+    // The parked tab moves to an extension page: core's listing leaves it out from now on.
+    assert!(
+        fake.navigate_tab(parked, "chrome-extension://abc/page.html", "Extension"),
+        "the fake had the tab"
+    );
+    let page = |tab: TabId, url: &str| json!({ "targetId": format!("target-{}", tab.0), "type": "page", "tabId": tab.0, "url": url });
+
+    // Core's channel overflows while the watch waits on a listing.
+    let listings = fake.count("Browser.getTabs");
+    let target_listings = fake.count("Target.getTargets");
+    fake.hold_next("Browser.getTabs");
+    let lagger = fake.open_tab("https://example.net/", "Lagger");
+    fake.answer(
+        "Target.getTargets",
+        json!({ "targetInfos": [
+            page(shown, "https://example.com/"),
+            page(parked, "chrome-extension://abc/page.html"),
+            page(lagger, "https://example.net/"),
+        ] }),
+    );
+    eventually(Duration::from_secs(5), || {
+        fake.count("Browser.getTabs") > listings
+    })
+    .await?;
+    let changed =
+        json!({ "targetInfo": { "targetId": format!("target-{}", shown.0), "type": "page" } });
+    for _ in 0..1100 {
+        assert!(
+            fake.page_event(shown, "Target.targetInfoChanged", changed.clone()),
+            "the fake had the tab"
+        );
+    }
+    fake.release_held();
+    // Read after the lag: the watch rebuilt its map, then listed.
+    let first = fake.open_tab("https://example.edu/", "First");
+    eventually(Duration::from_secs(5), found(4)).await?;
+    assert!(
+        fake.count("Target.getTargets") > target_listings,
+        "the watch listed the targets after the lag"
+    );
+
+    // Back on a listed page: the same tab, not a new one.
+    assert!(
+        fake.navigate_tab(parked, "https://example.org/", "Back"),
+        "the fake had the tab"
+    );
+    let second = fake.open_tab("https://example.edu/two", "Second");
+    eventually(Duration::from_secs(5), found(5)).await?;
+    assert!(
+        fake.close_tab(first) && fake.close_tab(second),
+        "the fake had both tabs"
+    );
+    eventually(Duration::from_secs(5), found(3)).await?;
+    // The owner's two closes count once their wait is over.
+    let expected = [
+        r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 2"#,
+        r#"neo_tab_opened_total{neo_tab_origin="found"} 5"#,
+    ];
+    eventually(Duration::from_secs(5), || {
+        tab_counts(&telemetry).is_ok_and(|counts| counts == expected)
+    })
+    .await?;
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        expected,
+        "five tabs born once each, and only the two the owner closed closed: the parked tab was \
+         never closed nor born twice"
+    );
+    Ok(())
+}
+
+/// After a lag, a failed `Target.getTargets` leaves the watch without its live targets, so the
+/// ledger hears no listing until a later rebuild succeeds: a tab on an excluded page is never
+/// closed for it, and nothing is missed once the rebuild works.
+#[tokio::test(start_paused = true)]
+async fn a_failed_rebuild_after_a_lag_closes_no_tab() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let shown = fake.open_tab("https://example.com/", "Example");
+    let parked = fake.open_tab("https://example.org/", "Parked");
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let telemetry = telemetry.clone();
+        move || Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0, count, 0))
+    };
+    eventually(Duration::from_secs(5), found(2)).await?;
+    assert!(
+        fake.navigate_tab(parked, "chrome-extension://abc/page.html", "Extension"),
+        "the fake had the tab"
+    );
+    let page = |tab: TabId, url: &str| json!({ "targetId": format!("target-{}", tab.0), "type": "page", "tabId": tab.0, "url": url });
+
+    let listings = fake.count("Browser.getTabs");
+    let target_listings = fake.count("Target.getTargets");
+    fake.fail(
+        "Target.getTargets",
+        CdpError::Protocol {
+            code: -32000,
+            message: "target listing unavailable".to_owned(),
+        },
+    );
+    fake.hold_next("Browser.getTabs");
+    let lagger = fake.open_tab("https://example.net/", "Lagger");
+    eventually(Duration::from_secs(5), || {
+        fake.count("Browser.getTabs") > listings
+    })
+    .await?;
+    let changed =
+        json!({ "targetInfo": { "targetId": format!("target-{}", shown.0), "type": "page" } });
+    for _ in 0..1100 {
+        assert!(
+            fake.page_event(shown, "Target.targetInfoChanged", changed.clone()),
+            "the fake had the tab"
+        );
+    }
+    fake.release_held();
+    // Several failed rebuilds, each followed by a listing the ledger does not hear, and past
+    // the two seconds a close nobody asked for would wait.
+    eventually(Duration::from_secs(10), || {
+        fake.count("Target.getTargets") > target_listings + 2
+    })
+    .await?;
+    time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        [r#"neo_tab_opened_total{neo_tab_origin="found"} 3"#],
+        "the parked tab is not closed while the live targets are unknown"
+    );
+
+    let first = fake.open_tab("https://example.edu/", "First");
+    fake.answer(
+        "Target.getTargets",
+        json!({ "targetInfos": [
+            page(shown, "https://example.com/"),
+            page(parked, "chrome-extension://abc/page.html"),
+            page(lagger, "https://example.net/"),
+            page(first, "https://example.edu/"),
+        ] }),
+    );
+    fake.unfail("Target.getTargets");
+    eventually(Duration::from_secs(5), found(4)).await?;
+    time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        [r#"neo_tab_opened_total{neo_tab_origin="found"} 4"#],
+        "once a rebuild works the tab opened meanwhile counts, and the parked tab is still open"
+    );
+    Ok(())
+}
+
+/// Through the real watch: tabs that close and then lose their socket within the
+/// two-second wait were the browser exiting (`docker stop` quits the browser before Neo hears of
+/// it), so they count as `shutdown`. The gauge drops at once all the same.
+#[tokio::test(start_paused = true)]
+async fn closes_followed_by_a_socket_drop_count_as_shutdown() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let first = fake.open_tab("https://example.com/", "Example");
+    let second = fake.open_tab("https://example.org/", "Other");
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let _link = start(&fake, &tabs);
+    let found = |count: u64| {
+        let telemetry = telemetry.clone();
+        move || Scrape::of(&telemetry).is_ok_and(|scrape| scrape.open_tabs() == (0, count, 0))
+    };
+    eventually(Duration::from_secs(5), found(2)).await?;
+    assert!(
+        fake.close_tab(first) && fake.close_tab(second),
+        "the fake had both tabs"
+    );
+    eventually(Duration::from_secs(5), found(0)).await?;
+    assert_eq!(
+        tab_counts(&telemetry)?,
+        [r#"neo_tab_opened_total{neo_tab_origin="found"} 2"#],
+        "the closes wait for their reason"
+    );
+    fake.drop_connection();
+    let expected = [
+        r#"neo_tab_closed_total{neo_tab_close_reason="shutdown",neo_tab_origin="found"} 2"#,
+        r#"neo_tab_opened_total{neo_tab_origin="found"} 2"#,
+    ];
+    eventually(Duration::from_secs(5), || {
+        tab_counts(&telemetry).is_ok_and(|counts| counts == expected)
+    })
+    .await?;
     Ok(())
 }

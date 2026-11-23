@@ -14,6 +14,7 @@ use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
 use neo_http::{Settings, SettingsDefaults};
 use neo_playwright::FileAccess;
+use neo_telemetry::Telemetry;
 use neo_trace::{
     DiagnosticCode, Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore,
     WriterConfig, spawn_writer,
@@ -31,7 +32,7 @@ use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::builtins;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
+    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx, OpMetrics,
     OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
     RunStart,
 };
@@ -222,6 +223,22 @@ impl TestRig {
         )
     }
 
+    /// The run service over this rig, reporting its runs and their ops to `telemetry` (a test's
+    /// in-memory pipeline) instead of the no-op.
+    pub(crate) fn run_service_reporting(
+        &self,
+        orphan_grace: Duration,
+        telemetry: Telemetry,
+    ) -> Arc<RunService> {
+        let mut parts = self.service_parts(
+            Arc::clone(&self.dispatcher),
+            Arc::clone(&self.tabs),
+            orphan_grace,
+        );
+        parts.telemetry = telemetry;
+        RunService::new(parts)
+    }
+
     /// A run service as Neo has it after a restart of its server, the browser kept: no memory of
     /// requests, and a task book restored from the tab-holders file, over the same browser and
     /// the same trace. (The link's close hook and tab watch still feed the rig's first registry.)
@@ -295,6 +312,7 @@ impl TestRig {
             orphan_grace,
             blank_tab: None,
             holders: None,
+            telemetry: Telemetry::noop(),
         }
     }
 
@@ -348,6 +366,7 @@ impl TestRig {
             default_page: None,
             tabs_scope: scope,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -677,8 +696,9 @@ impl Method for Abortable {
     }
 }
 
-/// `test.pull`: a background pull, as neo-playwright's event pump is. It answers only when
-/// something happens, and here nothing does, so the run's end is what ends it.
+/// `test.pull`: a background pull, as neo-playwright's event pump is, and Neo's housekeeping as
+/// it is. It answers only when something happens, and here nothing does, so the run's end is
+/// what ends it.
 struct Pull;
 
 impl Method for Pull {
@@ -688,6 +708,7 @@ impl Method for Pull {
     fn spec(&self) -> MethodSpec {
         MethodSpec {
             lifetime: Lifetime::Background,
+            metrics: OpMetrics::Housekeeping,
             ..MethodSpec::new("test.pull", Effect::Read)
         }
     }

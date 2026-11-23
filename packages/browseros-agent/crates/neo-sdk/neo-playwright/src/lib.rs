@@ -81,7 +81,7 @@ pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
 pub use playwright::Playwright;
-pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
+pub use playwright_error::{Answer, ErrorCode, NetFailure, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
 pub use private_entry::{
     BoxFact, BoxFacts, BoxLook, BoxSpec, Compared, CoverIn, Drawing, Entry, EntryCode, EntryError,

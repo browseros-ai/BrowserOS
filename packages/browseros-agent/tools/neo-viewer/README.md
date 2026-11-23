@@ -9,9 +9,9 @@ tool under `tools/`: not shipped, and not part of the image.
 
 ```text
  agent ──MCP──▶ viewer (Bun, 127.0.0.1:7310/mcp) ──MCP──▶ Neo SDK image (127.0.0.1:<port>/mcp)
-                  │ records every call and reply,       ▲
-                  │ as sent and as received             │ host API: run records, live screen, takeovers
-                  ▼                                     │
+                  │ records every call and reply,       ▲ │
+                  │ as sent and as received             │ │ host API: run records, metrics, live screen, takeovers
+                  ▼                                     │ ▼ OpenTelemetry push (OTLP/HTTP JSON) to /otlp
                log.jsonl in the state folder ──▶ /api/* ──▶ the page at /
 ```
 
@@ -111,13 +111,32 @@ since Docker's port forward arrives from outside the container's loopback. When 
 pools are used up it names a /24 itself and says so. The command is the only control: the page
 shows the image and whether the container is up, read-only.
 
+The container also pushes its OpenTelemetry to the viewer (see Neo's telemetry):
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:<viewer port>/otlp`,
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, `OTEL_BSP_SCHEDULE_DELAY=500`,
+`OTEL_METRIC_EXPORT_INTERVAL=500` and `--add-host=host.docker.internal:host-gateway`; an image older
+than telemetry ignores them.
+
 ## The screen
 
 The page at `/` (the approved design, "Viewer C v2"):
 
 - **Top bar.** Whether the container is running and its image tag (read-only; with `--upstream`
   it says the image is managed outside the viewer and where MCP goes), the MCP URL with **Copy**,
-  **Clear**, **Export** (below), and **Take over** (below).
+  **Clear**, **Export** (below), and **Take over** (below). Once Neo's telemetry arrives (see
+  Neo's telemetry), Neo's health follows the container line: runs in flight, the run and
+  operation error rates and renderer crashes since the last Clear, tabs open, and how fresh
+  that is (**live**, `7 s ago`, or **no metrics** once no source has answered for 30 s). An image
+  older than telemetry shows none of it, nor anything below that comes from telemetry.
+- **Neo health.** Clicking the health opens Neo's metrics in place of the runs (the top bar,
+  the strip and the sidebar keep streaming; **← Runs** or Escape go back to the runs as they
+  were): runs by status, each operation's calls, failures, p50 and p95 with its duration
+  histogram (one column per bucket of Neo's own bounds, so reading down shows which op is slow),
+  navigations by HTTP status (a 4xx or 5xx in red, though its goto settled ok) and the ones the
+  network refused by net error, CAPTCHA solves by family and verdict, by reason and what
+  providers charged, errors by owner and code, tabs open and opened by origin and closed by reason
+  with their lifetimes, renderer crashes, and every metric family in Prometheus' text form,
+  folded. These counts are Neo's own since it started.
 - **Where the time went.** The wall clock since the last Clear, from the first call to the last
   reply (to now while a run is running): each run sits where it happened, its time in Neo in blue
   (red if it failed, amber while running) after a grey sliver for the time the viewer held the call.
@@ -148,7 +167,10 @@ The page at `/` (the approved design, "Viewer C v2"):
   timeout, the name the script used when it differs, a long string by its start), call log and
   outcome open under it, and what it returned shows on the right. Under the code, **Model read**:
   the reply in one line, its size, and **Open full**; clicking **Model read** shows the reply on
-  the right again. A run still running, or one without Neo's record, shows its code alone.
+  the right again. A run still running, or one without Neo's record, shows its code alone. With
+  no host API (`--upstream`) the record is folded from Neo's spans: the same rows, and one line
+  saying spans carry no arguments, call logs or results. Once Neo's spans reach the viewer, a
+  **Trace** row follows: the run's trace id, its spans, what failed and how long it took.
 - **The right panel.** The sidebar's lower half shows the selection. A selected call shows what
   it returned, titled where it sits (`page.ariaSnapshot · run 8 · line 7 · call 2 of 3`), with
   its size. **Formatted** is what the script's `await` got wherever that can be recovered: a
@@ -159,10 +181,21 @@ The page at `/` (the approved design, "Viewer C v2"):
   panel says which. **Raw** is Neo's record of the result, as JSON. Otherwise the panel is
   **What the model read**: the selected run's whole reply, exactly as the agent got it,
   formatted (keys aligned, a snapshot line by line) or raw. Until you click a row it follows the
-  newest run. Drag the handle between the runs and the sidebar to resize it.
+  newest run. Drag the handle between the runs and the sidebar to resize it. **Trace** shows the
+  run's OpenTelemetry waterfall there: `neo.run`, its operations' spans under it (one that ran
+  inside another a step further in), each a bar on the run's time with its duration, red when it
+  failed (as Neo says it: `neo.op.outcome` `error`; a cancelled op is not a failure). Neo's own
+  work for the run (operations with no source line: `page.frames`, `events.listen`, the
+  `events.next` long-poll, opening the task's page) folds under one quiet **Neo internal** row
+  after the script's calls, as in the run block. Beside it, the picked span's attributes exactly
+  as Neo emitted them, with whether any span
+  carries site detail (`url.*`), which is how redaction is checked. A span and its method row are
+  one operation (`neo.op.id`): picking a span opens its call in the block, and a call picked
+  while the trace shows marks its span.
 - **Open full.** The selection in a large pop-up with line numbers, find (Enter and Shift+Enter
   step through the matches), copy, and previous / next: the run's other calls for a call, the
-  other runs' outputs for a reply. Escape closes it.
+  other runs' outputs for a reply. Escape closes it. A trace's is the waterfall wide, the span's
+  attributes and Neo's resource beside it, and previous / next span (or ↑ ↓).
 - **The live screen.** The sidebar's upper half: Neo's screen, live. **Follow agent** watches the
   tab the agent's latest run used and moves with it; **Control** lets you click and type (the agent
   is not held). Docked, it is as wide as the sidebar (drag the handle to make it bigger) and keeps
@@ -178,8 +211,15 @@ beside it), kept for debugging.
 
 ## What the proxy changes
 
-Nothing, in either direction. Every method, path, header and body reaches Neo as the agent sent it,
-and every reply reaches the agent as Neo sent it, byte for byte, chunk by chunk as it streams; so
+One header at most, and only one way. Every method, path, header and body reaches Neo as the agent
+sent it, and every reply reaches the agent as Neo sent it, byte for byte, chunk by chunk as it
+streams. The one addition: a request whose single run call carries no W3C trace context gets a
+`traceparent` header the viewer mints (`00-<trace>-<span>-01`, sampled), so Neo's `neo.run` span
+hangs under a span id that is that run's alone (`server/proxy/trace-context.ts`). A caller's own
+`traceparent`, as a header or in `_meta["com.browseros.neo/run"]`, is never replaced or added to
+(a header would override the `_meta` one), and a JSON-RPC batch of several calls gets none. The run
+keeps its context either way (`RunSummary.trace`: trace id, span id, `injected`). The body is never
+touched; so
 Neo behaves exactly as it does without the viewer: a run that names no task gets a new tab of its
 own (plain Playwright), a script picks a task with `neo.createTask`/`neo.task(id)`, and a request's
 `_meta["com.browseros.neo/run"].taskId` (a host's task) keeps that task's tab (#3452).
@@ -236,6 +276,14 @@ for an agent to read, and shows its path with Copy path until dismissed; the ter
   log.jsonl            the raw log
 ```
 
+Two more when Neo sent metrics (none for an image older than telemetry):
+
+```text
+  metrics/metrics.prom   Neo's last GET /v1/metrics answer, byte for byte (when the summary is the scrape's)
+  metrics/summary.json   the metrics read out: health since the last Clear, runs, operations,
+                         errors, tabs, crashes, ten minutes of history, every family
+```
+
 It lives outside the state folder, so it survives the viewer stopping and Clear. An agent can start
 at one small file and open only what a question needs: README.md stays under about 300 lines however
 many runs there are. No host token or Authorization header is ever in an export. Screenshots are
@@ -261,9 +309,12 @@ it adds later) is shown under the value as the model read it, and never stops th
 | `GET /api/info` | `ViewerInfo`: the MCP URL, the upstream, the data folder, and the container the command started (`container: {name, image, up}`, null with `--upstream`) |
 | `GET /api/runs` | `RunsResponse`: every `RunSummary` since the last Clear, in order, and the log's totals (`LogSummary`) |
 | `GET /api/runs/:runId` | `RunResponse`: one `RunDetail`, request and reply as they crossed |
+| `GET /api/runs/:runId/trace` | `RunTraceResponse`: the run's spans for the waterfall (`trace: null` when none arrived) |
+| `GET /api/metrics` | `MetricsResponse`: Neo's metrics from the live source (`metrics: null` when none is live) |
 | `POST /api/clear` | `RunsResponse`, empty: starts a new log, keeps the previous as `log.prev.jsonl`; only from the viewer's own page |
 | `POST /api/export` | `ExportResponse` (`dir`, `files`, `runs`): writes the folder above; only from the viewer's own page |
-| `GET /api/events` | SSE: one `ViewerEvent` per change: `{type:'run'}`, `{type:'log'}` (totals), `{type:'clear'}` |
+| `GET /api/events` | SSE: one `StreamEvent` per change: `{type:'run'}`, `{type:'log'}` (totals), `{type:'clear'}`, and `{type:'health'}` (no `version`; keep the highest `health.rev`) |
+| `POST /otlp/v1/traces`, `/otlp/v1/metrics` | Neo's OpenTelemetry push (not the page's; see Neo's telemetry) |
 
 The tabs one browser has open on one viewer share one `/api/events` stream. A browser opens at
 most six HTTP/1.1 connections to one origin and a stream holds one for as long as its page is
@@ -293,6 +344,56 @@ the display, takeovers). `bun run neo:viewer` configures it with the container i
 - `hostWebSocketTarget(path)`: `{ url, headers }` for an upgrade route such as
   `/v1/display?mode=view`, opened server-side with `new WebSocket(url, { headers })`. Neo accepts
   the token only as a header, so it never goes in a URL and never reaches the browser.
+
+## Neo's telemetry
+
+Neo emits OpenTelemetry (wire-contract: 16 metrics, a `neo.run` span per run and a span per
+operation, named after the operation: `page.goto`, or `unknown` for a name Neo does not serve). The
+viewer tells the two apart by `neo.span.type` (`run` or `op`), never by name, and reads both of
+Neo's doors with no protobuf library (`server/telemetry/`, one module behind `startTelemetry`):
+
+- **Push**: `POST /otlp/v1/traces` and `/otlp/v1/metrics`, OTLP/HTTP JSON, plain or gzip. The viewer
+  stays on 127.0.0.1; its own container reaches it as `host.docker.internal`, because Docker Desktop
+  carries a container's connection to that name to the host's loopback (probed on this machine,
+  Docker Desktop 29.9.3: a container on its own network reached a server bound to 127.0.0.1, which
+  saw `Host: host.docker.internal:<port>` from 127.0.0.1). That is the least exposed way: no second
+  listener, nothing bound beyond loopback, no port published back. These routes are write-only and
+  keep their own guard instead of the page's: `Host` a loopback name or `host.docker.internal`, no
+  `Origin` (every browser POST has one, an exporter never does), `Content-Type: application/json`
+  only (protobuf gets a 415 that names `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`; a cross-site form
+  cannot send JSON without a preflight the viewer never answers), at most 4 MiB after gunzip. On a
+  Linux engine `host.docker.internal` is the bridge gateway, where a loopback viewer is not
+  listening: pushes do not arrive there, and the scrape below still does.
+- **Scrape**: `GET /v1/metrics` on the host API every 2 s. An image older than telemetry answers 404:
+  the poller stops for good, silently.
+- **Names**: the push sends OpenTelemetry names and keys (`neo.run.duration` with
+  `neo.run.status`, `error.type` for an error code); the scrape serves the Prometheus names
+  OpenTelemetry's compatibility rules derive from them (`neo_run_duration_seconds{neo_run_status}`).
+  The viewer applies the same rules to a pushed metric (`otlp-names.ts`), as a collector or
+  Prometheus' own OTLP receiver would, so the health bar, the Health view and an export read one
+  set of names, and push alone (`--upstream`) shows the same numbers. A navigation's HTTP status
+  arrives as the integer `http.response.status_code` and is filed as `http_response_status_code`.
+  An operation's source line arrives as `code.line.number` and `code.column.number`.
+- **Which numbers**: the scrape while it is at most 30 s old, else the push while it is, else none;
+  never blended (both read one meter provider). Health (`TelemetryHealth`: runs in flight, tabs
+  open, and counts since the last Clear with Neo restarts handled) goes to the page as an
+  unversioned `health` event at most once a second, and in the runs snapshot.
+- **Housekeeping**: Neo's operation metrics count the script's operations and the ones Neo runs for
+  it. Its own housekeeping, sent with no source line (frame-tree reads, the event pump, listener
+  bookkeeping), grows with open tabs, so Neo leaves it out of them; its spans still arrive and fold
+  under **Neo internal**.
+- **Which ops**: a run's op table is `RunDetail.neo`, from one source chosen at start. With a host
+  API, Neo's `/v1/runs/{id}`, as before, and spans are only the run's trace. Without one
+  (`--upstream`), the record is folded from the run's `neo.run` and operation spans
+  (`source: 'spans'`; spans carry no args, results or notes), so the Calls column, method rows,
+  Copy, export and a restart work the same. Spans are filed by Neo's run id (`neo.run.id`, the reply's `_meta` id),
+  never by trace id, which a caller may reuse; a run with no reply (cancelled) is found by the span
+  id the viewer minted for it.
+- **Older images**: no spans, no metrics: everything above stays empty and the page is as before.
+
+`bun server/telemetry/feed-fixture.ts serve` starts a stand-in Neo (MCP and host API) and
+`… feed --viewer <url>` sends one run through a viewer and then, as Neo would, its spans (eight
+operations, one failed) and the 16 metrics: telemetry to build the page against before Neo emits any.
 
 ## How the live screen works
 
@@ -337,10 +438,12 @@ script that opens displays and drops them mid-handshake can still block every di
 ## Layout and checks
 
 - `server/`: the Bun server. `main.ts` and `launch.ts` are the one command (`config.ts` its flags,
-  `dependencies.ts` the package check, `neo-container.ts` Docker); `proxy/` forwards and reads MCP,
-  `log/` the JSONL log and the in-memory store, `neo-runs.ts` joins Neo's run records, `hostApi.ts`
-  is the host API client, `export/` writes an export, `api/` the routes, `live-screen/` the display
-  relay and takeover routes.
+  `dependencies.ts` the package check, `neo-container.ts` Docker); `proxy/` forwards and reads MCP
+  (`trace-context.ts` the `traceparent` rule), `log/` the JSONL log and the in-memory store,
+  `neo-runs.ts` joins Neo's run records from one source, `hostApi.ts` is the host API client,
+  `telemetry/` Neo's OpenTelemetry (only `index.ts` is imported from outside it; `fixtures.ts` and
+  `feed-fixture.ts` play it), `export/` writes an export, `api/` the routes, `live-screen/` the
+  display relay and takeover routes.
 - `web/`: the page, React and Tailwind as in `apps/claw-app`: `web/screen/` the designed screen,
   `web/App.tsx` the plain list, `web/live-screen/` the live-screen panel. `server/page.ts` bundles it
   in memory when the viewer starts (`Bun.build`, about 40 ms), compiling Tailwind with the same

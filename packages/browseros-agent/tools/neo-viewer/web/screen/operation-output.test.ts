@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import type { NeoOperation } from '../../shared/api'
 import { operation, record } from '../test-support/operations'
-import { operationOutput } from './operation-output'
+import {
+  operationOutput,
+  recordNotice,
+  SPANS_NO_RESULT,
+  SPANS_NOTICE,
+} from './operation-output'
 import { argumentLines } from './operation-values'
 import { callPlaces, ordinal, placeOperations, placeText } from './operations'
 import { lineText } from './text-lines'
@@ -746,5 +751,50 @@ describe('where a call sits', () => {
       text: 'x'.repeat(5_000),
     }).map(lineText)
     expect(lines.join('\n')).toContain('… (4800 more chars)')
+  })
+})
+
+describe('a call from a record folded from spans', () => {
+  it('is the one place that knows: a block says it once, and its calls open to their outcome', () => {
+    expect(recordNotice({ source: 'spans' })).toBe(SPANS_NOTICE)
+    expect(recordNotice({ source: 'host' })).toBeNull()
+    expect(recordNotice({})).toBeNull()
+    expect(recordNotice(null)).toBeNull()
+    const call = operation(3, 'page.title')
+    expect(operationOutput(call, [call], 0, 'spans').outcomeOnly).toBe(true)
+    expect(operationOutput(call, [call], 0, 'host').outcomeOnly).toBe(false)
+    expect(operationOutput(call, [call]).outcomeOnly).toBe(false)
+  })
+
+  it('says spans carry no result instead of showing an empty one', () => {
+    const call = operation(3, 'locator.textContent', {
+      kind: '',
+      effect: '',
+      args: null,
+      result: null,
+    })
+    const output = operationOutput(call, [call], 0, 'spans')
+    expect(output.formattedText).toBe('(not in the spans)')
+    expect(output.source).toBe(SPANS_NO_RESULT)
+    expect(output.rawText).toBe('')
+  })
+
+  it("shows a failed call's error, as its span recorded it", () => {
+    const call = operation(7, 'locator.click', {
+      outcome: 'error',
+      result: null,
+      error: {
+        owner: 'script',
+        code: 'no_match',
+        message: 'locator.click: Timeout 500ms exceeded.',
+        retryable: false,
+      },
+    })
+    const output = operationOutput(call, [call], 0, 'spans')
+    expect(output.formattedText).toContain('no_match')
+    expect(output.source).toBe(
+      "The call failed: the error Neo's span recorded. Spans carry no result.",
+    )
+    expect(JSON.parse(output.rawText).code).toBe('no_match')
   })
 })

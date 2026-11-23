@@ -1,5 +1,6 @@
 //! `neo.solveCaptcha(page)` over neo-captcha (design D10).
 
+use std::panic;
 use std::sync::Arc;
 
 use browseros_core::CoreError;
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::captcha_claims::{self, CaptchaClaims};
+use super::captcha_solve;
 use crate::dispatch::{
     ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageTarget,
     RegistryBuilder, RegistryError,
@@ -119,19 +121,30 @@ impl Method for SolveCaptcha {
         // `page_script` stays `Isolated`: it decides how the door releases an agent script's
         // answer, and this solve returns none.
         op.mark_main_world();
-        // Boxed: the solver's future is about 25 KiB, and the op's own would carry it inline.
-        let solve = Box::pin(solver.solve(
-            op.run().view().clone(),
-            op.core_page()?.clone(),
-            op.cancel_token().clone(),
-            HumanHelp::Unavailable,
-        ));
+        let solver = Arc::clone(solver);
+        let view = op.run().view().clone();
+        let core_page = op.core_page()?.clone();
+        let cancel = op.cancel_token().clone();
+        let telemetry = op.run().telemetry().clone();
+        // Spawned, not run inside this op: the door drops the op the moment the run stops, but
+        // the solver watches the same stop through its token and returns at once with what it
+        // paid for. Its task still counts that outcome, the caller-cancelled one included.
+        let solve = tokio::spawn(async move {
+            let solved = solver
+                .solve(view, core_page, cancel, HumanHelp::Unavailable)
+                .await;
+            if let Ok(outcome) = &solved {
+                telemetry.captcha_solved(captcha_solve::captcha_solve(outcome));
+            }
+            solved
+        });
         // Raced like any browser call (STYLE.md P7): the run's stop wins ties, and a reconnect
         // during the solve makes its answer ambiguous, since the solver may have acted on
         // either socket.
         let outcome = op
             .race(async { Ok::<_, CoreError>(solve.await) })
             .await?
+            .unwrap_or_else(|error| panic::resume_unwind(error.into_panic()))
             .map_err(refused)?;
         for event in &outcome.events {
             op.note(event_line(event));

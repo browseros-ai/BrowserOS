@@ -45,6 +45,24 @@ describe('computeAffectedSuites', () => {
     ])
   })
 
+  it('maps a neo-viewer change to only the neo-viewer suite', () => {
+    expect(
+      computeAffectedSuites(
+        [pkg('@browseros/neo-viewer', 'tools/neo-viewer')],
+        [],
+      ),
+    ).toEqual([
+      {
+        suite: 'neo-viewer',
+        command:
+          'bun run ./scripts/run-bun-test.ts --cwd=./tools/neo-viewer ./tools/neo-viewer/server ./tools/neo-viewer/shared ./tools/neo-viewer/web',
+        junit_path: 'test-results/neo-viewer.xml',
+        needs_browser: false,
+        needs_rust: false,
+      },
+    ])
+  })
+
   it('maps the app package to the agent suite', () => {
     expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
   })
@@ -313,6 +331,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
       pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),
+      pkg('@browseros/neo-viewer', 'tools/neo-viewer'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(

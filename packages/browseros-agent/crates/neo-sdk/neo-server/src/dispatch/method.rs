@@ -62,6 +62,8 @@ pub(crate) struct MethodSpec {
     /// no picture of it (`neo-trace`'s screenshot rule), so only an `Internal` method that
     /// Neo's own Rust runs for the host may say so.
     pub(crate) record: OperationKind,
+    /// Whether its ops count on Neo's op metrics.
+    pub(crate) metrics: OpMetrics,
 }
 
 impl MethodSpec {
@@ -76,8 +78,21 @@ impl MethodSpec {
             lifetime: Lifetime::Operation,
             page_script: PageScript::Isolated,
             record: OperationKind::Builtin,
+            metrics: OpMetrics::Counted,
         }
     }
+}
+
+/// Whether a method's ops count on Neo's op metrics (`neo_operations_total`,
+/// `neo_operation_duration_seconds`, `neo_errors_total`). Every op keeps its span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpMetrics {
+    /// Every op counts.
+    Counted,
+    /// Neo's own housekeeping, which grows with open tabs rather than with the script's work:
+    /// an op the prelude sends with no call site is left out, so it cannot dilute op rates and
+    /// op error rates. One the script called (a `page.on` listener's `events.listen`) counts.
+    Housekeeping,
 }
 
 /// Who may call a method. A script naming an `Internal` method gets `method_unavailable`,
