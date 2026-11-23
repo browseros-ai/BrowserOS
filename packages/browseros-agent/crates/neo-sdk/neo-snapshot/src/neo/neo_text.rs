@@ -1,6 +1,4 @@
-use crate::cap::{
-    DEFAULT_MAX_TOKENS, about_tokens, as_number, cap, join, joined_units, number, partial_head,
-};
+use crate::cap::{Offer, about_tokens, as_number, cap, join, joined_units, number, partial_head};
 use crate::form::{Form, Passed, TextForm};
 use crate::snapshot::Snapshot;
 
@@ -8,9 +6,14 @@ use super::on_top::on_top_head;
 use super::unmarked_head::unmarked_head;
 use super::walk::{WalkForm, Walked, walk};
 
-/// The longest text form returned when the script did not choose: 3,000 tokens of four UTF-16
-/// units each.
-const TEXT_LIMIT_UNITS: usize = 3_000 * 4;
+/// The longest text form Neo's default format returns when the script did not choose, in tokens:
+/// past it the page's text is left out under the `# text left out:` notice. Part of the
+/// interface because the run description says it in words, and its test compares its prose with
+/// this value.
+pub const TEXT_LIMIT_TOKENS: u32 = 3_000;
+
+/// [`TEXT_LIMIT_TOKENS`] in UTF-16 units, four to a token, as the length rule measures the text.
+const TEXT_LIMIT_UNITS: usize = TEXT_LIMIT_TOKENS as usize * 4;
 
 /// One text in Neo's default format and how it was rendered. They travel together because a
 /// whole page's text is kept as the tab's baseline in the form of the very text the caller got.
@@ -47,7 +50,7 @@ pub(crate) fn neo_text(snapshot: &Snapshot, passed: &Passed) -> NeoText {
     let form = Form {
         text,
         urls,
-        max_tokens: passed.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        max_tokens: passed.max_tokens.unwrap_or_default(),
         inert,
     };
     NeoText {
@@ -60,6 +63,14 @@ pub(crate) fn neo_text(snapshot: &Snapshot, passed: &Passed) -> NeoText {
 /// again. `Kept` and `Always` print the page's text whatever its length, `LeftOut` prints the
 /// notice whatever its length, `Never` neither. A delta renders the new snapshot in its
 /// baseline's form, so the two differ only where the page does.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "a delta renders the new page in its baseline's form, and no delta is printed in \
+                  Rust yet; until then the tests are its only callers"
+    )
+)]
 pub(crate) fn neo_text_as(snapshot: &Snapshot, form: &Form) -> String {
     render_form(snapshot, form, None)
 }
@@ -115,6 +126,7 @@ fn render_form(snapshot: &Snapshot, form: &Form, walked: Option<Walked>) -> Stri
         pinned.as_slice(),
         &shown.lines,
         form.max_tokens.units(),
+        Offer::Neo,
     );
     let unmarked = unmarked_head(snapshot);
     join(

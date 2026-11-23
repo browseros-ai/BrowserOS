@@ -5,7 +5,9 @@
 //! at the start, inside and at the end of a key, a text, a url and a placeholder. A snapshot
 //! carries every fact a page can have beside its tree (layers on top, unread closed roots, an
 //! unfinished check for clickable elements) and, now and then, more text than Neo's format keeps,
-//! and a call passes every combination of Neo's options.
+//! and a call passes every combination of Neo's options. A cap is any number the prelude accepts,
+//! fractions and the extremes of a double included, and a page for `mode: 'full'` is now and then
+//! long enough to be cut at the default cap, with kept blocks and sections past the cut.
 
 use std::env;
 use std::error::Error;
@@ -176,6 +178,9 @@ const CAPS: &[f64] = &[
     0.1, 1.0, 2.5, 10.0, 25.0, 30.0, 75.0, 100.0, 250.0, 1_000.0, 3_000.0, 1e9,
 ];
 
+/// Caps at the edges of what the prelude accepts (`Number.isFinite(n) && n > 0`), in tokens.
+const EXTREME_CAPS: &[f64] = &[5e-324, f64::MIN_POSITIVE, 1e-9, 1e300, f64::MAX];
+
 /// The deepest level a generated tree reaches, the top level being 0.
 const MAX_DEPTH: usize = 4;
 
@@ -304,19 +309,52 @@ impl Generator {
 
     /// The options of one call in Neo's default format.
     pub(crate) fn passed(&mut self) -> Passed {
-        let max_tokens = if self.chance(30) {
-            None
-        } else if self.chance(80) {
-            MaxTokens::new(self.pick(CAPS))
-        } else {
-            MaxTokens::new(f64::from(self.small()) / 8.0 + 0.125)
-        };
+        let max_tokens = self.max_tokens();
         Passed {
             text: self.pick(&[None, Some(false), Some(true)]),
             urls: self.pick(&[None, Some(false), Some(true)]),
             max_tokens,
             inert: self.pick(&[None, Some(false), Some(true)]),
         }
+    }
+
+    /// A `maxTokens` as a script may pass it, or `None` for one left out: a round cap, a fraction
+    /// in eighths, an extreme double, or any positive finite double at all.
+    pub(crate) fn max_tokens(&mut self) -> Option<MaxTokens> {
+        match self.below(20) {
+            0..=5 => None,
+            6..=15 => MaxTokens::new(self.pick(CAPS)),
+            16 | 17 => MaxTokens::new(f64::from(self.small()) / 8.0 + 0.125),
+            18 => MaxTokens::new(self.pick(EXTREME_CAPS)),
+            _ => {
+                // A double's bits with the sign cleared, drawn again while not finite or zero.
+                let mut tokens = MaxTokens::new(f64::from_bits(self.draw() >> 1));
+                while tokens.is_none() {
+                    tokens = MaxTokens::new(f64::from_bits(self.draw() >> 1));
+                }
+                tokens
+            }
+        }
+    }
+
+    /// A snapshot for `mode: 'full'`: [`Generator::snapshot`]'s, and in one of four a page long
+    /// enough to pass the default cap of 32,000 units, three or four paragraphs of about 12,000
+    /// placed among its nodes, so that the cut falls inside it and the kept blocks and sections
+    /// after the paragraphs print past the cut or are offered.
+    pub(crate) fn full_snapshot(&mut self) -> Snapshot {
+        let mut snapshot = self.snapshot();
+        if self.chance(25) {
+            for _ in 0..3 + self.below(2) {
+                let at = self.below(snapshot.tree.len() + 1);
+                let paragraph = self.long_paragraph();
+                snapshot.tree.insert(at, paragraph);
+            }
+            for _ in 0..self.below(4) {
+                let more = self.subtree(0);
+                snapshot.tree.push(more);
+            }
+        }
+        snapshot
     }
 
     /// A layer on top, worded as neo-playwright words one or as any string. Its ref is often one

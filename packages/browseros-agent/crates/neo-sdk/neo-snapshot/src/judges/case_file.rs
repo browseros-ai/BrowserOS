@@ -12,9 +12,12 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use crate::aria_node::{AriaChild, AriaNode};
+use crate::call::Call;
 use crate::cap::MaxTokens;
 use crate::form::{Form, Passed, TextForm};
 use crate::snapshot::{ClosedRoots, Layer, PartialFrame, Snapshot, Unmarked};
+
+use super::expected::Expected;
 
 /// Upstream's printer's own text on trees with no Neo fact; kept for as long as the vendored
 /// printer is, and rewritten from it at every engine upgrade.
@@ -40,19 +43,19 @@ pub(crate) struct CaseFile {
 pub(crate) struct Case {
     pub(crate) name: String,
     pub(crate) snapshot: Option<String>,
-    pub(crate) call: CaseCall,
+    call: CaseCall,
     pub(crate) text: Option<String>,
     /// What a whole page in Neo's format keeps as the tab's pending baseline.
     pub(crate) pending: Option<Pending>,
 }
 
-/// Which text, by its one key, with that call's options. The options of `mode: 'full'` and of a
-/// delta are read by the pieces that print them.
+/// Which text, by its one key, with that call's options, decoded as `render` takes them. The
+/// options of a delta are read by the piece that prints it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) enum CaseCall {
+enum CaseCall {
     Playwright {},
-    Full {},
+    Full(CaseFull),
     /// A locator's snapshot in Neo's format.
     Element(CasePassed),
     /// A whole page in Neo's format.
@@ -61,14 +64,56 @@ pub(crate) enum CaseCall {
     Cover {},
 }
 
-/// The options a default-format call passed, each absent when left out.
+/// `mode: 'full'`'s one option: the cap, `None` when the case left it out. A `maxTokens` the
+/// prelude refuses is not a case, and fails the file's decode.
+#[derive(Deserialize)]
+#[serde(try_from = "FullJson")]
+struct CaseFull(Option<MaxTokens>);
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct CasePassed {
+struct FullJson {
+    max_tokens: Option<f64>,
+}
+
+impl TryFrom<FullJson> for CaseFull {
+    type Error = String;
+
+    fn try_from(full: FullJson) -> Result<Self, String> {
+        Ok(Self(full.max_tokens.map(max_tokens).transpose()?))
+    }
+}
+
+/// The options a default-format call passed, each `None` when left out.
+#[derive(Deserialize)]
+#[serde(try_from = "PassedJson")]
+struct CasePassed(Passed);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PassedJson {
     text: Option<bool>,
     urls: Option<bool>,
     max_tokens: Option<f64>,
     inert: Option<bool>,
+}
+
+impl TryFrom<PassedJson> for CasePassed {
+    type Error = String;
+
+    fn try_from(passed: PassedJson) -> Result<Self, String> {
+        Ok(Self(Passed {
+            text: passed.text,
+            urls: passed.urls,
+            max_tokens: passed.max_tokens.map(max_tokens).transpose()?,
+            inert: passed.inert,
+        }))
+    }
+}
+
+/// The cap as the renderer takes it, for a number the prelude accepts.
+fn max_tokens(tokens: f64) -> Result<MaxTokens, String> {
+    MaxTokens::new(tokens).ok_or_else(|| format!("maxTokens {tokens} is refused"))
 }
 
 /// A text and the form it was rendered in, as a baseline holds them.
@@ -171,21 +216,20 @@ impl CaseFile {
         Ok(files)
     }
 
-    /// The cases that ask for Playwright's format.
-    pub(crate) fn playwright_cases(&self) -> impl Iterator<Item = &Case> {
-        self.cases
-            .iter()
-            .filter(|case| matches!(case.call, CaseCall::Playwright {}))
-    }
-
-    /// The cases in Neo's default format, a locator's or a whole page's, with the options passed.
-    pub(crate) fn neo_cases(&self) -> impl Iterator<Item = (&Case, &CasePassed)> {
-        self.cases.iter().filter_map(|case| match &case.call {
-            CaseCall::Element(passed) | CaseCall::Page(passed) => Some((case, passed)),
-            CaseCall::Playwright {}
-            | CaseCall::Full {}
-            | CaseCall::Delta {}
-            | CaseCall::Cover {} => None,
+    /// The cases [`render`](crate::render) prints whose call `wanted` picks, each with its call
+    /// and its tree's name.
+    pub(crate) fn rendered_cases(
+        &self,
+        wanted: impl Fn(&Call<'_>) -> bool,
+    ) -> impl Iterator<Item = Result<(&Case, Call<'_>, &str), String>> {
+        self.cases.iter().filter_map(move |case| {
+            let call = case.call().filter(|call| wanted(call))?;
+            Some(
+                case.snapshot
+                    .as_deref()
+                    .map(|name| (case, call, name))
+                    .ok_or_else(|| format!("{} names no snapshot", case.name)),
+            )
         })
     }
 
@@ -247,27 +291,26 @@ impl CaseFile {
 }
 
 impl Case {
-    /// Whether the call keeps a pending baseline: a whole page in Neo's format does.
-    pub(crate) fn keeps_pending(&self) -> bool {
-        matches!(self.call, CaseCall::Page(_))
+    /// The case's call as `render` takes it; `None` for a delta, which `render` does not print
+    /// yet, and for a cover, which `cover_block` prints.
+    pub(crate) fn call(&self) -> Option<Call<'_>> {
+        match &self.call {
+            CaseCall::Playwright {} => Some(Call::Playwright),
+            CaseCall::Full(CaseFull(max_tokens)) => Some(Call::Full {
+                max_tokens: *max_tokens,
+            }),
+            CaseCall::Element(CasePassed(passed)) => Some(Call::Element(passed)),
+            CaseCall::Page(CasePassed(passed)) => Some(Call::Page(passed)),
+            CaseCall::Delta {} | CaseCall::Cover {} => None,
+        }
     }
-}
 
-impl CasePassed {
-    /// The options as the renderer takes them. A `maxTokens` the prelude refuses is not a case.
-    pub(crate) fn passed(&self) -> Result<Passed, String> {
-        let max_tokens = match self.max_tokens {
-            Some(tokens) => Some(
-                MaxTokens::new(tokens).ok_or_else(|| format!("maxTokens {tokens} is refused"))?,
-            ),
-            None => None,
-        };
-        Ok(Passed {
-            text: self.text,
-            urls: self.urls,
-            max_tokens,
-            inert: self.inert,
-        })
+    /// What today's renderer printed and kept for this case.
+    pub(crate) fn expected(&self) -> Expected<'_> {
+        Expected {
+            text: self.text.as_deref(),
+            pending: self.pending.as_ref(),
+        }
     }
 }
 
@@ -288,8 +331,7 @@ impl Pending {
                 CaseTextForm::Never => TextForm::Never,
             },
             urls: *urls,
-            max_tokens: MaxTokens::new(*max_tokens)
-                .ok_or_else(|| format!("maxTokens {max_tokens} is refused"))?,
+            max_tokens: self::max_tokens(*max_tokens)?,
             // The TypeScript writes the key only when it is true.
             inert: *inert == Some(true),
         })

@@ -101,9 +101,9 @@ impl<'a> OnTop<'a> {
     }
 }
 
-/// `onTopHead`: each layer's line, split at its line breaks, in layer order. Neo's formats print
-/// them before everything else and outside the cap.
-pub(super) fn on_top_head(snapshot: &Snapshot) -> impl Iterator<Item = &str> {
+/// `onTopHead`: each layer's line, split at its line breaks, in layer order. Neo's formats (the
+/// default format and `mode: 'full'`) print them before everything else and outside the cap.
+pub(crate) fn on_top_head(snapshot: &Snapshot) -> impl Iterator<Item = &str> {
     snapshot
         .layers
         .iter()

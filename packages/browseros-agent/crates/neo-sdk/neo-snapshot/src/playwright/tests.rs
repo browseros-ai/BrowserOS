@@ -1,6 +1,8 @@
-//! Playwright's text in Rust against its judges (`crate::judges`): the committed cases; the
-//! private sets of saved pages, where a folder names them; and, in QuickJS on seeded random nodes
-//! and trees, upstream's printer and today's TypeScript renderer.
+//! Playwright's text in Rust against its judges (`crate::judges`), through `render` with
+//! `Call::Playwright`: the committed cases; the private sets of saved pages, where a folder names
+//! them; and today's TypeScript renderer in QuickJS on seeded random trees. Upstream's printer
+//! judges `node_text` below the interface, one generated node at a time, since it prints one node
+//! and `render` never does.
 
 use std::error::Error;
 use std::{env, fs};
@@ -8,16 +10,22 @@ use std::{env, fs};
 use serde_json::json;
 
 use crate::aria_node::AriaNode;
+use crate::call::Call;
 use crate::judges::{
-    Bundles, CaseFile, Generator, NEO_CASES, PLAYWRIGHT_CASES, count, first_difference, seed,
+    Bundles, CaseFile, Generator, NEO_CASES, PLAYWRIGHT_CASES, Shown, count, seed,
 };
+use crate::render::render;
 use crate::snapshot::Snapshot;
 
-use super::{NodeAlone, node_text, tree_text};
+use super::{NodeAlone, node_text};
 
 /// How many random nodes and trees the gate's run draws.
 const GATE_NODES: usize = 3_000;
 const GATE_TREES: usize = 300;
+
+fn playwright(call: &Call<'_>) -> bool {
+    matches!(call, Call::Playwright)
+}
 
 #[test]
 fn tests_that_playwrights_format_prints_every_committed_case() -> Result<(), Box<dyn Error>> {
@@ -28,18 +36,11 @@ fn tests_that_playwrights_format_prints_every_committed_case() -> Result<(), Box
         let cases: CaseFile = serde_json::from_str(text)?;
         let mut printed = 0;
         let mut differing = Vec::new();
-        for case in cases.playwright_cases() {
-            let name = case
-                .snapshot
-                .as_deref()
-                .ok_or("a Playwright case names its snapshot")?;
-            let rust = tree_text(&cases.snapshot(name)?);
-            let expected = case.text.as_deref().ok_or("a Playwright case has a text")?;
-            if let Some((line, printed_line, expected_line)) = first_difference(&rust, expected) {
-                differing.push(format!(
-                    "{}: line {line}\n  printed:  {printed_line:?}\n  expected: {expected_line:?}",
-                    case.name
-                ));
+        for found in cases.rendered_cases(playwright) {
+            let (case, call, name) = found?;
+            let answer = render(&cases.snapshot(name)?, call);
+            if let Some(difference) = case.expected().difference(&call, &answer, Shown::Lines)? {
+                differing.push(format!("{}: {difference}", case.name));
             }
             printed += 1;
         }
@@ -80,20 +81,13 @@ fn tests_that_playwrights_format_prints_every_private_case() -> Result<(), Box<d
         let shown = file.file_name().unwrap_or_default().to_string_lossy();
         let cases: CaseFile = serde_json::from_str(&fs::read_to_string(file)?)?;
         let (mut file_texts, mut file_texts_identical) = (0, 0);
-        for (index, case) in cases.playwright_cases().enumerate() {
-            let name = case
-                .snapshot
-                .as_deref()
-                .ok_or("a Playwright case names its snapshot")?;
-            let rust = tree_text(&cases.snapshot(name)?);
-            let expected = case.text.as_deref().ok_or("a Playwright case has a text")?;
-            match first_difference(&rust, expected) {
+        for (index, found) in cases.rendered_cases(playwright).enumerate() {
+            let (case, call, name) = found?;
+            let answer = render(&cases.snapshot(name)?, call);
+            match case.expected().difference(&call, &answer, Shown::Lengths)? {
                 None => file_texts_identical += 1,
-                Some((line, _, _)) => differing.push(format!(
-                    "{shown}: Playwright-format case {index}: line {line} differs; {} bytes \
-                     printed, {} saved",
-                    rust.len(),
-                    expected.len()
+                Some(difference) => differing.push(format!(
+                    "{shown}: Playwright-format case {index}: {difference}"
                 )),
             }
             file_texts += 1;
@@ -103,15 +97,15 @@ fn tests_that_playwrights_format_prints_every_private_case() -> Result<(), Box<d
         let (mut file_trees, mut file_trees_identical) = (0, 0);
         for (index, name) in cases.snapshot_names().enumerate() {
             let snapshot = cases.snapshot(name)?;
-            let rust = tree_text(&snapshot);
-            let todays = bundles.todays_playwright_text(&snapshot)?;
-            match first_difference(&rust, &todays) {
+            let answer = render(&snapshot, Call::Playwright);
+            let todays = bundles.todays(&Call::Playwright, &snapshot)?;
+            match todays
+                .expected()
+                .difference(&Call::Playwright, &answer, Shown::Lengths)?
+            {
                 None => file_trees_identical += 1,
-                Some((line, _, _)) => differing.push(format!(
-                    "{shown}: tree {index}: line {line} differs; {} bytes printed, {} by \
-                     today's renderer",
-                    rust.len(),
-                    todays.len()
+                Some(difference) => differing.push(format!(
+                    "{shown}: tree {index}, against today's renderer: {difference}"
                 )),
             }
             file_trees += 1;
@@ -169,11 +163,15 @@ fn tests_that_playwrights_format_is_todays_on_generated_trees() -> Result<(), Bo
     let mut generator = Generator::new(seed);
     for index in 0..count("NEO_SNAPSHOT_DIFFERENTIAL_TREES", GATE_TREES)? {
         let snapshot = generator.snapshot();
-        assert_eq!(
-            tree_text(&snapshot),
-            bundles.todays_playwright_text(&snapshot)?,
-            "seed {seed:#x}, tree {index} prints today's renderer's text: {snapshot:?}"
-        );
+        let answer = render(&snapshot, Call::Playwright);
+        let todays = bundles.todays(&Call::Playwright, &snapshot)?;
+        if let Some(difference) =
+            todays
+                .expected()
+                .difference(&Call::Playwright, &answer, Shown::Lines)?
+        {
+            panic!("seed {seed:#x}, tree {index}: {difference}\n{snapshot:?}");
+        }
     }
     Ok(())
 }
@@ -195,7 +193,7 @@ fn tests_that_a_line_break_in_a_key_moves_its_colon_as_todays_renderer_does()
     };
     let todays = "- 'button [ref=a:\nb]'\n  - img";
     assert_eq!(
-        tree_text(&snapshot),
+        render(&snapshot, Call::Playwright).text(),
         todays,
         "the key's first line takes the colon, as the TypeScript splits a node's text at line breaks"
     );

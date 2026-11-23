@@ -1,19 +1,29 @@
-//! A page's aria snapshot as a typed tree, and the text a script receives for it, printed with
+//! A page's aria snapshot as a typed tree, and every text a script receives for it, printed with
 //! JavaScript's semantics.
 //!
-//! Its place in a snapshot's path is tree in, text out:
+//! Its place in a snapshot's path is tree in, text out, through one interface:
 //!
 //! ```text
-//!  a producer of the shape ─▶ Snapshot: the AriaNode tree, the frames not read, the layers on
-//!                                 │     top, the closed roots and the check for clickable elements
-//!                                 ▼
-//!            neo: Neo's default format, and its Form ─┐
-//!            cover_block: a covered click's lines     ├─▶ the text
-//!            playwright: Playwright's own text ───────┘
+//!  neo-playwright (effects)                              this crate (pure)
+//!  frames read, stitched ─▶ Snapshot ─┐
+//!  the script's options  ─▶ Call ─────┴─▶ render(&snapshot, call) ─▶ Answer ─▶ text()
+//!  the tab's pending baseline ◀────────────────────────────── pending() ◀──┘
+//!
+//!  render: Call::Playwright ─▶ playwright: Playwright's own text
+//!          Call::Full ───────▶ full_text: Playwright's lines under Neo's heads, cut
+//!          Call::Element ────▶ neo: Neo's default format
+//!          Call::Page ───────▶ neo: the same, kept in its Form
+//!  cover_block: a covered click's lines, by neo's format
 //!                                 │ every element line by playwright's printer; the size cap by
 //!                                 ▼ cap; every length, space, number and quote by
 //!                       js: JavaScript's rules
 //! ```
+//!
+//! [`render`] is the only way to a snapshot's text, and only it builds an [`Answer`]: so the
+//! snapshot operation can keep for the tab only a text this crate printed, in the [`Form`] it was
+//! printed in. Every walk, printer and line is private; the tests judge the crate through
+//! `render`, except two judges whose oracle has a finer grain: upstream's printer one node at a
+//! time, and `js` one rule at a time.
 //!
 //! The tree ([`AriaNode`]) is Playwright's `AriaNodeJSON` at 1.64.1 plus Neo's two marks, `inert`
 //! and `onTop`. Today the page's walk writes it, and neo-playwright reads it from each frame's
@@ -34,8 +44,10 @@
 //! | `playwright/yaml_escape.rs` | vendored `isomorphic/yaml.ts` |
 //! | `playwright/node_text.rs` | vendored `isomorphic/ariaSnapshotRenderer.ts` |
 //! | `playwright/tree_text.rs` | neo-playwright-js `prelude/snapshot.ts` (`treeLines`, `yamlLines`, `renderSnapshot`) |
+//! | `full_text.rs` | neo-playwright-js `prelude/snapshot.ts` (`renderFullSnapshot`, `printed`), `snapshot-inert.ts` |
 //! | `neo/*.rs` | neo-playwright-js `prelude/snapshot-v1.ts`, `snapshot-on-top.ts`, `snapshot-unmarked.ts` |
 //! | `cap.rs` | neo-playwright-js `prelude/snapshot-cap.ts` |
+//! | `render.rs`, `call.rs`, `answer.rs` | `Frame._ariaSnapshot` in neo-playwright-js `prelude/frame.ts`: which text a call gets, and what it keeps |
 //! | `cover_block.rs` | neo-playwright-js `prelude/cover.ts` (`snapshotLines`) |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
 //!
@@ -45,16 +57,9 @@
 //! Pure: no clock, no store, no browser and no async. The dependencies are serde and `serde_json`,
 //! so the build refuses printing that waits or sends.
 
+mod answer;
 mod aria_node;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production code prints a snapshot's text through this crate before the \
-                  snapshot operation calls it, so neither the cap nor Neo's format runs; until \
-                  then the tests are their only callers"
-    )
-)]
+mod call;
 mod cap;
 #[cfg_attr(
     not(test),
@@ -65,58 +70,24 @@ mod cap;
     )
 )]
 mod cover_block;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a form is built by Neo's format, which no production code calls before the \
-                  snapshot operation renders through this crate"
-    )
-)]
 mod form;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "only the printers call these, and no production code calls a printer before \
-                  the snapshot operation renders through this crate; until then the tests do"
-    )
-)]
+mod full_text;
 mod js;
 #[cfg(test)]
 mod judges;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        unused_imports,
-        reason = "no production code prints a snapshot's text through this crate before the \
-                  snapshot operation calls it; until then the tests and the covered block are \
-                  its only callers"
-    )
-)]
 mod neo;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        unused_imports,
-        reason = "no production code prints a snapshot's text through this crate before the \
-                  snapshot operation calls it; until then the tests are its only callers"
-    )
-)]
 mod playwright;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "a snapshot is built by the snapshot operation once it renders through this \
-                  crate; until then only the tests build one"
-    )
-)]
+mod render;
 mod snapshot;
 #[cfg(test)]
 mod split_mix64;
 
+pub use answer::{Answer, Pending};
 pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate};
+pub use call::Call;
+pub use cap::{DEFAULT_MAX_TOKENS, MaxTokens};
+pub use form::{Form, Passed, TextForm};
+pub use neo::{KEPT_ROLES, TEXT_LIMIT_TOKENS};
 pub use playwright::{PORTED_FROM, PortedFile};
+pub use render::render;
+pub use snapshot::{ClosedRoots, Layer, PartialFrame, Snapshot, Unmarked};
