@@ -678,16 +678,16 @@ fn assert_turnstile_token_solve(
     );
 }
 
-/// Proves that `neo.solveCaptcha` solves a stale-token reCAPTCHA v2 checkbox widget via the free
-/// checkbox click first, and on retry (box already checked with a response token present) mints a
-/// fresh paid token from the provider stub instead of reporting `already_passed` or
+/// Proves that `neo.solveCaptcha` solves a stale-token reCAPTCHA v2 widget token-first when a
+/// provider is configured (minting `FRESH-1` directly instead of clicking the checkbox), and on
+/// retry mints a second fresh paid token (`FRESH-2`) instead of reporting `already_passed` or
 /// `checkbox_passed`.
 ///
 /// Needs network access to load Google's public reCAPTCHA v2 test widget
 /// (`6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI`); kept as its own test so network failures isolate
 /// from the local tests.
 #[tokio::test(flavor = "multi_thread")]
-async fn solve_captcha_solves_stale_recaptcha_via_checkbox_then_mints_on_retry() -> TestResult {
+async fn solve_captcha_solves_stale_recaptcha_token_first_and_retries() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
@@ -764,64 +764,50 @@ async fn solve_stale_recaptcha(rig: &Rig, pages: &CaptchaPages) -> TestResult {
     if let Some(path) = env::var_os("CAPTCHA_STALE_RECAPTCHA_OUT") {
         fs::write(path, serde_json::to_vec_pretty(observed)?)?;
     }
-    assert_recaptcha_first(observed);
-    assert_recaptcha_retry(observed, pages);
+    assert_recaptcha_token_solve(
+        &observed["first"],
+        &observed["afterFirst"],
+        "FRESH-1",
+        1,
+        "recaptcha first",
+        observed,
+    );
+    assert_recaptcha_token_solve(
+        &observed["second"],
+        &observed["afterSecond"],
+        "FRESH-2",
+        2,
+        "recaptcha second",
+        observed,
+    );
+    assert_eq!(
+        pages.minted_tasks(),
+        2,
+        "both token-first solves on the stale reCAPTCHA page must mint a fresh paid task"
+    );
     client.cancel().await?;
     Ok(())
 }
 
-/// Checks the first reCAPTCHA call: clicks the unchecked box for free (`checkbox_passed`,
-/// `paidTasks: 0`) and replaces `STALE-TOKEN` with Google's widget token.
-fn assert_recaptcha_first(observed: &Value) {
-    let first = &observed["first"];
-    let after_first = &observed["afterFirst"];
-    assert_wire_invariants(first, "recaptcha first");
+/// Checks one token-first reCAPTCHA solve call: mints a fresh paid `FRESH-n` token from the stub,
+/// writes it into the textarea, invokes the callback, and never claims `already_passed` or
+/// `checkbox_passed`.
+fn assert_recaptcha_token_solve(
+    solved: &Value,
+    after: &Value,
+    expected_token: &str,
+    expected_callbacks: u64,
+    label: &str,
+    observed: &Value,
+) {
+    assert_wire_invariants(solved, label);
     assert_eq!(
         (
-            &first["attempted"],
-            &first["type"],
-            &first["method"],
-            &first["reason"],
-            &first["paidTasks"],
-            &first["provider"],
-        ),
-        (
-            &json!(true),
-            &json!("recaptcha_v2"),
-            &json!("checkbox"),
-            &json!("checkbox_passed"),
-            &json!(0),
-            &Value::Null,
-        ),
-        "first call must click the unchecked box and pass via checkbox without a paid task: {observed}"
-    );
-    assert_eq!(
-        (&after_first["isStale"], &after_first["freshName"]),
-        (&json!(false), &Value::Null),
-        "after checkbox_passed the textarea must hold Google's token, not the stale or stub token: {observed}"
-    );
-    assert!(
-        after_first
-            .get("tokenLength")
-            .and_then(Value::as_u64)
-            .is_some_and(|length| length > 0),
-        "after checkbox_passed the textarea must hold a non-empty widget token: {observed}"
-    );
-}
-
-/// Checks the retry reCAPTCHA call on an already-checked widget holding a token: must mint a
-/// fresh paid `FRESH-1` token from the stub and never claim `already_passed` or `checkbox_passed`.
-fn assert_recaptcha_retry(observed: &Value, pages: &CaptchaPages) {
-    let second = &observed["second"];
-    let after_second = &observed["afterSecond"];
-    assert_wire_invariants(second, "recaptcha second");
-    assert_eq!(
-        (
-            &second["attempted"],
-            &second["type"],
-            &second["method"],
-            &second["paidTasks"],
-            &second["provider"],
+            &solved["attempted"],
+            &solved["type"],
+            &solved["method"],
+            &solved["paidTasks"],
+            &solved["provider"],
         ),
         (
             &json!(true),
@@ -830,41 +816,38 @@ fn assert_recaptcha_retry(observed: &Value, pages: &CaptchaPages) {
             &json!(1),
             &json!("capsolver"),
         ),
-        "retry call on an already-checked widget must mint a fresh paid token: {observed}"
+        "{label} must mint a fresh paid reCAPTCHA token directly: {observed}"
     );
-    let second_reason = second
+    let reason = solved
         .get("reason")
         .and_then(Value::as_str)
         .unwrap_or_default();
     assert!(
-        matches!(second_reason, "awaiting_submit" | "token_accepted"),
-        "retry call reason must report token application: {observed}"
+        matches!(reason, "awaiting_submit" | "token_accepted"),
+        "{label} reason must report token application: {observed}"
     );
     assert!(
-        !matches!(second_reason, "already_passed" | "checkbox_passed"),
-        "retry call must never report already_passed or checkbox_passed: {observed}"
+        !matches!(reason, "already_passed" | "checkbox_passed"),
+        "{label} must never report already_passed or checkbox_passed: {observed}"
     );
     assert_eq!(
         (
-            &after_second["isStale"],
-            &after_second["freshName"],
-            &after_second["tokenLength"],
-            &after_second["lastCallbackFreshName"],
-            &after_second["lastCallbackMatchesField"],
+            &after["isStale"],
+            &after["freshName"],
+            &after["tokenLength"],
+            &after["callbackCount"],
+            &after["lastCallbackFreshName"],
+            &after["lastCallbackMatchesField"],
         ),
         (
             &json!(false),
-            &json!("FRESH-1"),
-            &json!("FRESH-1".len()),
-            &json!("FRESH-1"),
+            &json!(expected_token),
+            &json!(expected_token.len()),
+            &json!(expected_callbacks),
+            &json!(expected_token),
             &json!(true),
         ),
-        "retry call must write FRESH-1 into the textarea and invoke the callback: {observed}"
-    );
-    assert_eq!(
-        pages.minted_tasks(),
-        1,
-        "only the retry call after the checkbox check should mint a paid task"
+        "{label} must write {expected_token} into the textarea and invoke the callback: {observed}"
     );
 }
 
