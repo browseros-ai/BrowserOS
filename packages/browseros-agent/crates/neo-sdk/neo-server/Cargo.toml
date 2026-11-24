@@ -156,6 +156,10 @@ rmcp = { workspace = true, features = ["client", "transport-streamable-http-clie
 flate2.workspace = true
 opentelemetry-proto.workspace = true
 prost.workspace = true
+# The run description's tests compare its prose with the snapshot renderer's constants
+# (`DEFAULT_MAX_TOKENS`, `TEXT_LIMIT_TOKENS`, `KEPT_ROLES`). Already in the graph through
+# neo-playwright.
+neo-snapshot.workspace = true
 # Paused time for the connect loop's backoff and tab_watch's epoch check.
 tokio = { workspace = true, features = ["test-util"] }
 # Only for tests/style_boundaries.rs, which parses src/ and the lint tables.

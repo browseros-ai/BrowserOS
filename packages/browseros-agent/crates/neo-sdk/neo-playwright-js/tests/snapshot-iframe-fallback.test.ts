@@ -12,7 +12,7 @@ import { describe, expect, it } from 'bun:test'
 import { renderAriaSnapshotAsYaml } from '../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
 import { renderSnapshotV1 } from '../src/prelude/snapshot-v1'
 import type { SnapshotResult } from '../src/prelude/wire'
-import { loadPrelude, SEED } from './support/prelude-runtime'
+import { loadPrelude, oldPathPrelude, SEED } from './support/prelude-runtime'
 
 type Node = SnapshotResult['json'][number]
 
@@ -82,6 +82,7 @@ function secondIframe(result: SnapshotResult): Node {
 /** A run whose page snapshot answers `result`, and a locator snapshot its second iframe. */
 function snapshotting(result: SnapshotResult, upstreamSnapshots = false) {
   return loadPrelude({
+    prelude: oldPathPrelude(),
     seed: SEED,
     upstreamSnapshots,
     answer: (call) => {

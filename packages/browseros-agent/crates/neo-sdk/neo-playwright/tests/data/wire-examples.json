@@ -59,6 +59,12 @@
     "locator.ariaSnapshot": [
       "boxes",
       "clickable",
+      "compare",
+      "depth",
+      "format"
+    ],
+    "locator.ariaSnapshotJSON": [
+      "boxes",
       "depth"
     ],
     "locator.blur": [],
@@ -212,6 +218,12 @@
     "page.ariaSnapshot": [
       "boxes",
       "clickable",
+      "compare",
+      "depth",
+      "format"
+    ],
+    "page.ariaSnapshotJSON": [
+      "boxes",
       "depth"
     ],
     "page.close": [],
@@ -1061,6 +1073,474 @@
         "boxes": false,
         "clickable": true
       },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "neo": {}
+        }
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "default",
+        "format": "playwright"
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "full": {}
+        }
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "full": {
+            "maxTokens": 2.5
+          }
+        }
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": false,
+            "urls": true,
+            "maxTokens": 30,
+            "inert": true
+          }
+        }
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": true
+          }
+        }
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true,
+          "conformance": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "default",
+        "format": "playwright"
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true,
+          "conformance": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "full",
+        "format": "playwright"
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "neo": {}
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "default",
+        "format": "playwright",
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "full": {}
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "full": {
+            "maxTokens": 2.5
+          }
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": false,
+            "urls": true,
+            "maxTokens": 30,
+            "inert": true
+          }
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": true
+          }
+        },
+        "compare": true
+      }
+    ],
+    "locator.ariaSnapshotJSON": [
       {
         "call": {
           "api": "locator.ariaSnapshotJSON",
@@ -3142,7 +3622,37 @@
       },
       {
         "call": {
-          "api": "page.ariaSnapshotJSON",
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true,
+          "conformance": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default"
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "delta": false
+          }
+        }
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
           "timeoutMs": 30000,
           "timeoutBuiltIn": true
         },
@@ -3151,8 +3661,78 @@
           "tab": 1007
         },
         "mode": "default",
-        "depth": 1,
-        "boxes": false
+        "format": "playwright"
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "full": {}
+        }
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "full": {
+            "maxTokens": 2.5
+          }
+        }
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": false,
+            "urls": true,
+            "maxTokens": 30,
+            "inert": true,
+            "delta": false
+          }
+        }
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": true,
+            "delta": true
+          }
+        }
       },
       {
         "call": {
@@ -3165,7 +3745,145 @@
           "$neo": "page",
           "tab": 1007
         },
-        "mode": "default"
+        "mode": "default",
+        "format": "playwright"
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true,
+          "conformance": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "full",
+        "format": "playwright"
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "delta": false
+          }
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default",
+        "format": "playwright",
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "full": {}
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "full": {
+            "maxTokens": 2.5
+          }
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": false,
+            "urls": true,
+            "maxTokens": 30,
+            "inert": true,
+            "delta": false
+          }
+        },
+        "compare": true
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai",
+        "format": {
+          "neo": {
+            "text": true,
+            "delta": true
+          }
+        },
+        "compare": true
+      }
+    ],
+    "page.ariaSnapshotJSON": [
+      {
+        "call": {
+          "api": "page.ariaSnapshotJSON",
+          "timeoutMs": 30000,
+          "timeoutBuiltIn": true
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default",
+        "depth": 1,
+        "boxes": false
       }
     ],
     "page.close": [
@@ -3997,6 +4715,46 @@
         "text": "",
         "form": {
           "text": "kept",
+          "urls": false,
+          "maxTokens": 8000
+        },
+        "delta": true,
+        "returned": "# whole page: too much differs from your last snapshot to list as changes\n"
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "snapshotCall": 1,
+        "text": "",
+        "form": {
+          "text": "never",
+          "urls": true,
+          "maxTokens": 30,
+          "inert": true
+        },
+        "delta": false
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "snapshotCall": 1,
+        "text": "",
+        "form": {
+          "text": "always",
           "urls": false,
           "maxTokens": 8000
         },

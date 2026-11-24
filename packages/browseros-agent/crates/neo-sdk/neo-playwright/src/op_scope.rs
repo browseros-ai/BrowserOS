@@ -97,6 +97,11 @@ pub(crate) struct OpScope<'env> {
     /// The host remains delivery's authority; these facts only control the listener fence.
     crash_refused: AtomicBool,
     sent: AtomicBool,
+    /// Set by the one handler that takes the event wait inside itself, once that wait returned
+    /// (`snapshot_op.rs`, `order_events_inside`): `Playwright::invoke` then skips the generic
+    /// wait after the handler, so the op is held once. A handler that fails before it leaves this
+    /// unset, and the generic rule applies.
+    ordered_inside: AtomicBool,
     /// Set once the op passed its `MainWorld` gateway: every effect it sends from then on is
     /// the gateway's main-world script, so `send_effect` reports it to the host.
     main_world: AtomicBool,
@@ -206,6 +211,7 @@ impl<'env> OpScope<'env> {
             renderer: OnceLock::new(),
             crash_refused: AtomicBool::new(false),
             sent: AtomicBool::new(false),
+            ordered_inside: AtomicBool::new(false),
             main_world: AtomicBool::new(false),
         }
     }
@@ -628,6 +634,17 @@ impl<'env> OpScope<'env> {
     /// sent nothing has no such events to order before its reply.
     pub(crate) fn refused_crash_before_sending(&self) -> bool {
         self.crash_refused.load(Ordering::Relaxed) && !self.sent.load(Ordering::Relaxed)
+    }
+
+    /// The handler took the event wait inside itself, and it returned (`snapshot_op.rs`,
+    /// `order_events_inside`, its only caller): the generic wait after the handler is skipped.
+    pub(crate) fn mark_ordered_inside(&self) {
+        self.ordered_inside.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether the handler already took the event wait ([`OpScope::mark_ordered_inside`]).
+    pub(crate) fn ordered_inside(&self) -> bool {
+        self.ordered_inside.load(Ordering::Relaxed)
     }
 
     /// Tells the host this op is about to send script into a page's main world

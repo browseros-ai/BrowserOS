@@ -197,6 +197,9 @@ async fn evaluate<'js>(
             .catch(ctx)
             .map_err(|caught| fail("conformance switch", &caught))?;
     }
+    let comparisons = compare_switch(ctx)
+        .catch(ctx)
+        .map_err(|caught| fail("compare switch", &caught))?;
     install_web_globals::install_web_globals(ctx, JS_MEMORY_BYTES)
         .catch(ctx)
         .map_err(|caught| fail("web_globals.js", &caught))?;
@@ -233,11 +236,60 @@ async fn evaluate<'js>(
         .call((main, init.to_owned()))
         .catch(ctx)
         .map_err(|caught| fail("__neo.run", &caught))?;
-    promise
+    let settled = promise
         .into_future::<String>()
         .await
         .catch(ctx)
-        .map_err(|caught| fail("script", &caught))
+        .map_err(|caught| fail("script", &caught));
+    if let Some(counters) = comparisons {
+        report_comparisons(&counters);
+    }
+    settled
+}
+
+/// The environment variable that turns on the prelude's compare switch for every run of the
+/// live suites (design 2.3, layer 5): `1`. A test harness's, never a host's.
+const COMPARE_SNAPSHOTS: &str = "NEO_COMPARE_SNAPSHOTS";
+
+/// Under [`COMPARE_SNAPSHOTS`], hands the realm the counter object the prelude's compare switch
+/// counts into (`__neo_compare_snapshots`, neo-playwright-js `prelude/snapshot-text.ts`), set
+/// before the prelude starts, as the conformance switch is.
+fn compare_switch<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Option<Object<'js>>> {
+    if std::env::var_os(COMPARE_SNAPSHOTS).is_none_or(|value| value != "1") {
+        return Ok(None);
+    }
+    let counters = Object::new(ctx.clone())?;
+    for counter in ["compared", "noTime", "differed"] {
+        counters.set(counter, 0)?;
+    }
+    ctx.globals()
+        .set("__neo_compare_snapshots", counters.clone())?;
+    Ok(Some(counters))
+}
+
+/// Prints one run's comparisons, so a comparison that silently did not run cannot pass for one
+/// that did: live.py keeps each suite's output (`--nocapture`), and the line is summed across
+/// them. A difference also failed the call that met it.
+fn report_comparisons(counters: &Object<'_>) {
+    let count = |name: &str| counters.get::<_, f64>(name).unwrap_or(f64::NAN);
+    let line = format!(
+        "NEO_SNAPSHOT_COMPARISONS compared={} noTime={} differed={}\n",
+        count("compared"),
+        count("noTime"),
+        count("differed")
+    );
+    eprint!("{line}");
+    // The spec harness appends the same line to the same file (claw-loader.mjs).
+    if let Some(log) = std::env::var_os("NEO_COMPARE_SNAPSHOTS_LOG") {
+        let appended = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+        if let Err(error) = appended {
+            eprintln!("NEO_SNAPSHOT_COMPARISONS not logged: {error}");
+        }
+    }
 }
 
 /// Global code in strict mode, named `file` in stack frames, as `run_script.rs` evaluates every

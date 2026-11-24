@@ -7,25 +7,41 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, UpstreamCheck } from '../upstream-check'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
+import type { LocatorTreeInput } from './types/LocatorTreeInput'
 import type { PageSnapshotInput } from './types/PageSnapshotInput'
+import type { PageTreeInput } from './types/PageTreeInput'
+import type { SnapshotAnswer } from './types/SnapshotAnswer'
 import type { SnapshotBaseline } from './types/SnapshotBaseline'
 import type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
 import type { SnapshotPendingInput } from './types/SnapshotPendingInput'
-import type { SnapshotResult } from './types/SnapshotResult'
+import type { SnapshotTree } from './types/SnapshotTree'
 
 export type { ClosedRoots } from './types/ClosedRoots'
+export type { FullSnapshotFormat } from './types/FullSnapshotFormat'
+export type { LocatorSnapshotFormat } from './types/LocatorSnapshotFormat'
 export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
+export type { LocatorTreeInput } from './types/LocatorTreeInput'
+export type { NeoSnapshotFormat } from './types/NeoSnapshotFormat'
+export type { PageNeoSnapshotFormat } from './types/PageNeoSnapshotFormat'
+export type { PageSnapshotFormat } from './types/PageSnapshotFormat'
 export type { PageSnapshotInput } from './types/PageSnapshotInput'
+export type { PageTreeInput } from './types/PageTreeInput'
 export type { PartialFrame } from './types/PartialFrame'
+export type { RustPending } from './types/RustPending'
+export type { RustText } from './types/RustText'
+export type { SnapshotAnswer } from './types/SnapshotAnswer'
 export type { SnapshotBaseline } from './types/SnapshotBaseline'
 export type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
+export type { SnapshotCompared } from './types/SnapshotCompared'
 export type { SnapshotForm } from './types/SnapshotForm'
 export type { SnapshotPendingInput } from './types/SnapshotPendingInput'
 export type { SnapshotResult } from './types/SnapshotResult'
+export type { SnapshotText } from './types/SnapshotText'
 export type { SnapshotTop } from './types/SnapshotTop'
+export type { SnapshotTree } from './types/SnapshotTree'
 export type { TextForm } from './types/TextForm'
 export type { Unmarked } from './types/Unmarked'
 
@@ -33,14 +49,18 @@ export type { Unmarked } from './types/Unmarked'
 export type SnapshotInputs = {
   'page.ariaSnapshot': PageSnapshotInput
   'locator.ariaSnapshot': LocatorSnapshotInput
+  'page.ariaSnapshotJSON': PageTreeInput
+  'locator.ariaSnapshotJSON': LocatorTreeInput
   'page.snapshotBaseline': SnapshotBaselineInput
   'page.snapshotPending': SnapshotPendingInput
 }
 
 /** Each snapshot op's result. */
 export type SnapshotOutputs = {
-  'page.ariaSnapshot': SnapshotResult
-  'locator.ariaSnapshot': SnapshotResult
+  'page.ariaSnapshot': SnapshotAnswer
+  'locator.ariaSnapshot': SnapshotAnswer
+  'page.ariaSnapshotJSON': SnapshotTree
+  'locator.ariaSnapshotJSON': SnapshotTree
   'page.snapshotBaseline': SnapshotBaseline | null
   'page.snapshotPending': null
 }
@@ -62,13 +82,25 @@ export const SNAPSHOT_SEND = {
     call: CallHeader,
     input: PageSnapshotInput,
     signal?: SignalLike,
-  ): Promise<SnapshotResult> => invoke('page.ariaSnapshot', site, call, input, signal),
+  ): Promise<SnapshotAnswer> => invoke('page.ariaSnapshot', site, call, input, signal),
   'locator.ariaSnapshot': (
     site: CallSite,
     call: CallHeader,
     input: LocatorSnapshotInput,
     signal?: SignalLike,
-  ): Promise<SnapshotResult> => invoke('locator.ariaSnapshot', site, call, input, signal),
+  ): Promise<SnapshotAnswer> => invoke('locator.ariaSnapshot', site, call, input, signal),
+  'page.ariaSnapshotJSON': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageTreeInput,
+    signal?: SignalLike,
+  ): Promise<SnapshotTree> => invoke('page.ariaSnapshotJSON', site, call, input, signal),
+  'locator.ariaSnapshotJSON': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorTreeInput,
+    signal?: SignalLike,
+  ): Promise<SnapshotTree> => invoke('locator.ariaSnapshotJSON', site, call, input, signal),
   'page.snapshotBaseline': (
     site: CallSite,
     call: CallHeader,
@@ -86,12 +118,22 @@ export const SNAPSHOT_SEND = {
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
 // names the op and every key that differs without a reason, or whose reason went stale.
 // page.ariaSnapshot: Frame.ariaSnapshot
-//   adds clickable: Neo also marks elements Chromium reports clickable without a pointer cursor, so the condensed snapshot keeps their refs; read over CDP, never a script in the page
-type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshotInput, pw.FrameAriaSnapshotParams, 'clickable', never, never>>
-//   result: Each frame masks page-declared private field values outside conformance; Rust stitches the child frames and answers the JSON tree plus the frames it could not read, with `clickable` also marking `cursor: 'pointer'` on the elements Chromium reports clickable; the prelude renders the text, upstream's YAML for mode 'default' and Neo's condensed list of actionable lines for 'ai', each line upstream's own, and annotates the partial frames; a whole page's answer also names the document it read, for the delta baseline (no void check: Neo answers more than null on purpose)
+//   adds clickable: Neo also marks elements Chromium reports clickable without a pointer cursor, so the condensed snapshot keeps their refs; read over CDP, never a script in the page. The tree path's only: with a `format`, the format decides the marking
+//   adds format: which text Neo prints: Playwright's, `mode: 'full'` or Neo's condensed format, with the options the prelude checked; Rust prints it from the stitched tree, since the page's world must not hold cross-site frames' text
+//   adds compare: a test harness's switch while two engines print the text: the tree and Rust's text from one read, for the prelude to compare with its own
+type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshotInput, pw.FrameAriaSnapshotParams, 'clickable' | 'format' | 'compare', never, never>>
+//   result: Each frame masks page-declared private field values outside conformance, and Rust stitches the child frames. With a `format` it answers upstream's `{ snapshot }` text, Neo's formats marking what Chromium reports clickable; without one, the JSON tree plus the frames it could not read and, for a whole page, the document it read for the delta baseline, which the prelude renders (both until the prelude's renderer is removed); with `compare`, the tree and Rust's text beside it (no void check: Neo answers more than null on purpose)
 // locator.ariaSnapshot: Frame.ariaSnapshot
-//   adds clickable: Neo also marks elements Chromium reports clickable without a pointer cursor, so the condensed snapshot keeps their refs; read over CDP, never a script in the page
-type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, 'clickable', never, never>>
-//   result: Each frame masks page-declared private field values outside conformance; Rust stitches the child frames and answers the JSON tree plus the frames it could not read, with `clickable` also marking `cursor: 'pointer'` on the elements Chromium reports clickable; the prelude renders the text, upstream's YAML for mode 'default' and Neo's condensed list of actionable lines for 'ai', each line upstream's own, and annotates the partial frames; a whole page's answer also names the document it read, for the delta baseline (no void check: Neo answers more than null on purpose)
+//   adds clickable: Neo also marks elements Chromium reports clickable without a pointer cursor, so the condensed snapshot keeps their refs; read over CDP, never a script in the page. The tree path's only: with a `format`, the format decides the marking
+//   adds format: which text Neo prints: Playwright's, `mode: 'full'` or Neo's condensed format, with the options the prelude checked; Rust prints it from the stitched tree, since the page's world must not hold cross-site frames' text
+//   adds compare: a test harness's switch while two engines print the text: the tree and Rust's text from one read, for the prelude to compare with its own
+type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, 'clickable' | 'format' | 'compare', never, never>>
+//   result: Each frame masks page-declared private field values outside conformance, and Rust stitches the child frames. With a `format` it answers upstream's `{ snapshot }` text, Neo's formats marking what Chromium reports clickable; without one, the JSON tree plus the frames it could not read and, for a whole page, the document it read for the delta baseline, which the prelude renders (both until the prelude's renderer is removed); with `compare`, the tree and Rust's text beside it (no void check: Neo answers more than null on purpose)
+// page.ariaSnapshotJSON: Frame.ariaSnapshotJSON
+type _page_ariaSnapshotJSON = Assert<UpstreamCheck<'page.ariaSnapshotJSON', PageTreeInput, pw.FrameAriaSnapshotJSONParams, never, never, never>>
+type _page_ariaSnapshotJSON_result = Assert<VoidIsNull<'page.ariaSnapshotJSON', pw.FrameAriaSnapshotJSONResult, SnapshotTree>>
+// locator.ariaSnapshotJSON: Frame.ariaSnapshotJSON
+type _locator_ariaSnapshotJSON = Assert<UpstreamCheck<'locator.ariaSnapshotJSON', LocatorTreeInput, pw.FrameAriaSnapshotJSONParams, never, never, never>>
+type _locator_ariaSnapshotJSON_result = Assert<VoidIsNull<'locator.ariaSnapshotJSON', pw.FrameAriaSnapshotJSONResult, SnapshotTree>>
 // page.snapshotBaseline: Neo only: Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 text per tab on the host for ariaSnapshot({ delta: true }), since each run is a fresh realm and the page's world must not hold cross-site frames' text; it answers how that text was rendered too (its text option, urls and cap), since a delta takes the options it does not pass from it and the text alone does not say them
 // page.snapshotPending: Neo only: the delta baseline is the text the caller was given, which only the host knows when the run ends, so each whole-page v1 snapshot's text waits on the run's state until then, with how the prelude rendered it, which the baseline keeps for the next delta

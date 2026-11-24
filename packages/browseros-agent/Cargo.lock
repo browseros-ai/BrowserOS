@@ -2085,6 +2085,7 @@ dependencies = [
  "neo-playwright",
  "neo-sdk-api",
  "neo-server",
+ "neo-snapshot",
  "neo-takeover",
  "neo-telemetry",
  "neo-trace",

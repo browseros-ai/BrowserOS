@@ -364,7 +364,11 @@ impl Playwright {
         {
             let _ordered = self.order_tab(target).await;
         }
+        // Never both waits and never neither: a handler that took the wait inside itself
+        // (`OpScope::mark_ordered_inside`, a whole page's text in Neo's format, which must read
+        // and record its baseline after the wait) is not held again here.
         if !scope.refused_crash_before_sending()
+            && !scope.ordered_inside()
             && let Some(bound) = ordering_wait(op, &answered)
         {
             self.events_before_reply(&scope, bound).await;
@@ -392,7 +396,12 @@ impl Playwright {
     /// on a threadsafe function of its own, in no fixed order). A run with no listener has
     /// nothing to order and does not wait. An op that timed out does not wait either, except a
     /// `waitForFunction`, whose polls ran page script up to its deadline ([`ordering_wait`]).
-    async fn events_before_reply(&self, scope: &OpScope<'_>, bound: Duration) {
+    ///
+    /// `invoke` runs it after the handler. One handler runs it inside itself instead, at the
+    /// point after its last browser reply: a whole page's text in Neo's format, whose baseline
+    /// is read and recorded after the wait (`snapshot_op.rs`, `order_events_inside`). It is this
+    /// one function in both places, so the two waits cannot drift apart.
+    pub(crate) async fn events_before_reply(&self, scope: &OpScope<'_>, bound: Duration) {
         let run = scope.run_state();
         if !run.events.has_listeners() {
             return;
@@ -440,8 +449,18 @@ fn ends_unordered(op: Op, input: &Value) -> bool {
 fn ordering_wait(op: Op, answered: &Result<Value, PlaywrightError>) -> Option<Duration> {
     // Crash admission must not wait behind the renderer events that caused refusal. The
     // independent pump still delivers them; successful operations keep their ordering fence.
-    let timed_out = matches!(answered, Err(error) if error.timed_out() == TimedOut::Yes);
-    if !timed_out {
+    let timed_out = match answered {
+        Err(error) => error.timed_out(),
+        Ok(_) => TimedOut::No,
+    };
+    ordering_wait_for(op, timed_out)
+}
+
+/// [`ordering_wait`]'s rule by whether the op timed out: the one source of every event wait's
+/// bound, the generic wait's after the handler and the snapshot handler's own inside it, which
+/// asks with [`TimedOut::No`] since its tree is in hand.
+pub(crate) fn ordering_wait_for(op: Op, timed_out: TimedOut) -> Option<Duration> {
+    if timed_out == TimedOut::No {
         return Some(EVENTS_BEFORE_REPLY);
     }
     matches!(
@@ -776,7 +795,10 @@ mod tests {
 
     #[test]
     fn tests_that_only_an_op_that_timed_out_skips_the_ordering_wait() -> Result<(), String> {
-        use super::{EVENTS_BEFORE_REPLY, POLLED_EVENTS_BEFORE_TIMEOUT, ordering_wait};
+        use super::{
+            EVENTS_BEFORE_REPLY, POLLED_EVENTS_BEFORE_TIMEOUT, ordering_wait, ordering_wait_for,
+        };
+        use crate::TimedOut;
         let op = |name: &str| Op::from_name(name).ok_or(format!("no op {name}"));
         let timed_out = Err(PlaywrightError::new(
             ErrorCode::WaitTimeout,
@@ -799,6 +821,19 @@ mod tests {
             Some(EVENTS_BEFORE_REPLY),
             "a successful op keeps its listeners ahead of the script, even near its deadline"
         );
+        // The rule by itself, as the snapshot handler asks it for the wait inside it: the tree is
+        // in hand, so not timed out. `waitForFunction`'s timed-out wait is unchanged by that.
+        assert_eq!(
+            ordering_wait_for(op("page.ariaSnapshot")?, TimedOut::No),
+            Some(EVENTS_BEFORE_REPLY)
+        );
+        for wait in ["page.waitForFunction", "locator.waitForFunction"] {
+            assert_eq!(
+                ordering_wait_for(op(wait)?, TimedOut::Yes),
+                Some(POLLED_EVENTS_BEFORE_TIMEOUT),
+                "{wait}"
+            );
+        }
         let refused = Err(PlaywrightError::new(
             ErrorCode::ElementDetached,
             "e17 is not on the page any more".to_owned(),

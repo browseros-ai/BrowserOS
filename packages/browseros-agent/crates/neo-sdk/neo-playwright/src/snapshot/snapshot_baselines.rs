@@ -57,6 +57,52 @@ pub(crate) struct SnapshotForm {
     pub(crate) inert: bool,
 }
 
+/// The one conversion between the store's form and the renderer's (`neo_snapshot::Form`), both
+/// ways. The store keeps this type, which the prelude's path still sends through
+/// `page.snapshotPending` until piece 8; Rust's text path records the form `render` lent, and
+/// reads a stored form back to render a delta in it. The two must carry the same four facts, so
+/// they meet only here.
+impl SnapshotForm {
+    /// The form `render` printed a text in, as the store keeps it.
+    pub(crate) fn of(form: neo_snapshot::Form) -> Self {
+        Self {
+            text: match form.text {
+                neo_snapshot::TextForm::Kept => TextForm::Kept,
+                neo_snapshot::TextForm::LeftOut => TextForm::LeftOut,
+                neo_snapshot::TextForm::Always => TextForm::Always,
+                neo_snapshot::TextForm::Never => TextForm::Never,
+            },
+            urls: form.urls,
+            max_tokens: form.max_tokens.tokens(),
+            inert: form.inert,
+        }
+    }
+
+    /// The stored form as `render` takes it, or `None` for a cap no call can pass (not finite,
+    /// or not above zero): only a broken producer could have stored one.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a delta renders the page in its stored form once the delta is printed in \
+                      Rust; until then the round-trip row is its only caller"
+        )
+    )]
+    pub(crate) fn form(self) -> Option<neo_snapshot::Form> {
+        Some(neo_snapshot::Form {
+            text: match self.text {
+                TextForm::Kept => neo_snapshot::TextForm::Kept,
+                TextForm::LeftOut => neo_snapshot::TextForm::LeftOut,
+                TextForm::Always => neo_snapshot::TextForm::Always,
+                TextForm::Never => neo_snapshot::TextForm::Never,
+            },
+            urls: self.urls,
+            max_tokens: neo_snapshot::MaxTokens::new(self.max_tokens)?,
+            inert: self.inert,
+        })
+    }
+}
+
 /// The `text` option of the call that rendered a text, and, when the call left it out, what the
 /// length rule decided.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -400,6 +446,54 @@ mod tests {
                 "form": { "text": "leftOut", "urls": false, "maxTokens": 8000.0 },
             })
         );
+        Ok(())
+    }
+
+    /// The store's form and the renderer's are one form: every way a text can be decided, `inert`
+    /// absent, false and true on the wire, and a fractional cap cross to `neo_snapshot::Form` and
+    /// back unchanged, and the form the renderer lends is stored as it was printed.
+    #[test]
+    fn tests_that_a_stored_form_and_the_renderer_s_form_round_trip() -> Result<(), String> {
+        // A swap made both ways would still round-trip, so each name is held to its variant.
+        let texts = [
+            ("kept", neo_snapshot::TextForm::Kept),
+            ("leftOut", neo_snapshot::TextForm::LeftOut),
+            ("always", neo_snapshot::TextForm::Always),
+            ("never", neo_snapshot::TextForm::Never),
+        ];
+        let inerts = [None, Some(false), Some(true)];
+        for (text, variant) in texts {
+            for inert in inerts {
+                for urls in [false, true] {
+                    for max_tokens in [8000.0, 2.5, 0.1, 1e9] {
+                        let mut wire = serde_json::json!({
+                            "text": text, "urls": urls, "maxTokens": max_tokens,
+                        });
+                        if let Some(inert) = inert {
+                            wire["inert"] = serde_json::json!(inert);
+                        }
+                        let stored: SnapshotForm =
+                            serde_json::from_value(wire.clone()).map_err(|e| e.to_string())?;
+                        let printed = stored.form().ok_or(format!("{wire} is a form"))?;
+                        assert_eq!(printed.text, variant, "{wire}");
+                        assert_eq!(printed.max_tokens.tokens(), max_tokens, "{wire}");
+                        assert_eq!(printed.urls, urls, "{wire}");
+                        assert_eq!(printed.inert, inert == Some(true), "{wire}");
+                        assert_eq!(SnapshotForm::of(printed), stored, "{wire}");
+                        assert_eq!(SnapshotForm::of(printed).form(), Some(printed), "{wire}");
+                    }
+                }
+            }
+        }
+        for refused in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let stored = SnapshotForm {
+                text: TextForm::Kept,
+                urls: false,
+                max_tokens: refused,
+                inert: false,
+            };
+            assert_eq!(stored.form(), None, "a cap of {refused} is no call's");
+        }
         Ok(())
     }
 }

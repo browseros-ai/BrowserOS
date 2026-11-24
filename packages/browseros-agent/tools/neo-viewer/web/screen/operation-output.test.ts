@@ -268,6 +268,88 @@ describe('what a call gave the script', () => {
     expect(shown(after[2] as NeoOperation, after).lines).toEqual(['mine'])
   })
 
+  it("shows the text Rust printed from the snapshot's own result, which opens no pairing", () => {
+    const text = '- heading "One" [level=1]\n- button "Go" [ref=e2]'
+    const tree = { document: 4, partial: [], json: [] }
+    for (const [name, format] of [
+      ['page.ariaSnapshot', { neo: { delta: true } }],
+      ['locator.ariaSnapshot', { neo: {} }],
+      ['page.ariaSnapshot', { full: {} }],
+      ['page.ariaSnapshot', 'playwright'],
+    ] as const) {
+      const out = shown(
+        operation(1, name, {
+          line: 1,
+          args: { mode: 'ai', format },
+          result: { snapshot: text },
+        }),
+      )
+      expect(out.lines).toEqual(text.split('\n'))
+      expect(out.source).toContain('as the operation answered it')
+      expect(out.cut).toBe(false)
+    }
+    // A text-path call from the same line records nothing, so the tree-path call after it
+    // still owns the pending record that follows.
+    const all = [
+      operation(1, 'page.ariaSnapshot', {
+        line: 1,
+        args: { mode: 'ai', format: { neo: {} } },
+        result: { snapshot: 'printed by Rust' },
+      }),
+      operation(2, 'page.ariaSnapshot', { line: 1, result: tree }),
+      operation(3, 'page.snapshotPending', {
+        line: 1,
+        args: { document: 4, text: 'rendered by the run', delta: false },
+      }),
+    ]
+    expect(shown(all[0] as NeoOperation, all).lines).toEqual([
+      'printed by Rust',
+    ])
+    expect(shown(all[1] as NeoOperation, all).lines).toEqual([
+      'rendered by the run',
+    ])
+    const cut = shown(
+      operation(1, 'page.ariaSnapshot', {
+        args: { format: { neo: {} } },
+        result: { snapshot: '- main [ref=e1]…[+20 bytes]' },
+        resultTruncated: true,
+      }),
+    )
+    expect(cut.cut).toBe(true)
+  })
+
+  it("reads a compared call as the tree path: Neo's whole-page format pairs its pending text, others show the tree", () => {
+    const tree = {
+      document: 4,
+      partial: [],
+      json: [],
+      rust: { snapshot: 'the same text, printed by Rust' },
+    }
+    const all = [
+      operation(1, 'page.ariaSnapshot', {
+        line: 1,
+        args: { mode: 'ai', format: { neo: {} }, compare: true },
+        result: tree,
+      }),
+      operation(2, 'page.snapshotPending', {
+        line: 1,
+        args: { document: 4, text: 'rendered by the run', delta: false },
+      }),
+    ]
+    expect(shown(all[0] as NeoOperation, all).lines).toEqual([
+      'rendered by the run',
+    ])
+    const full = shown(
+      operation(1, 'page.ariaSnapshot', {
+        line: 1,
+        args: { mode: 'ai', format: { full: {} }, compare: true },
+        result: tree,
+      }),
+    )
+    expect(full.formattedText).toBe(JSON.stringify(tree, null, 2))
+    expect(full.source).toContain('that text is not recorded')
+  })
+
   it('closes a delta call whose stored baseline could not be read, so the next one keeps its text', () => {
     const tree = { document: 4, json: [] }
     const all = [
@@ -660,6 +742,21 @@ describe('a value no reading expected', () => {
     expect(refused.source).toContain(
       "The run's decoder refuses this recorded value",
     )
+  })
+
+  it("shows ariaSnapshotJSON's own operations' tree as the JSON the script got", () => {
+    const json = [{ role: 'heading', name: 'Hello', level: 1, children: [] }]
+    for (const name of ['page.ariaSnapshotJSON', 'locator.ariaSnapshotJSON']) {
+      const out = shown(
+        operation(1, name, {
+          args: { mode: 'default' },
+          result: { snapshot: json },
+        }),
+      )
+      expect(out.formattedText).toBe(JSON.stringify(json, null, 2))
+      expect(out.source).toContain('ariaSnapshotJSON() returns')
+      expect(out.cut).toBe(false)
+    }
   })
 
   it("shows ariaSnapshotJSON's tree as the JSON the script got, not as YAML", () => {

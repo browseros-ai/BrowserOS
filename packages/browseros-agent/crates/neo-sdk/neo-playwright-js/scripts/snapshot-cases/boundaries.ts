@@ -60,6 +60,22 @@ function longPage(paragraph: number) {
   })
 }
 
+/**
+ * 42 nested regions, each line `- region "<692 units>":` indented two units a level, holding one
+ * paragraph: `mode: 'full'` prints 31,623 units with a paragraph of 100, so a paragraph of 477
+ * ends the text at 32,000 units, the default cap of 8,000 tokens.
+ */
+function fullDefaultPage(paragraph: number) {
+  return chain({
+    depth: 43,
+    link: {
+      role: 'region',
+      name: 'Part of a long page. '.repeat(33).trimEnd(),
+    },
+    leaf: { role: 'paragraph', children: [filler(paragraph)] },
+  })
+}
+
 const banner = section('banner', 'e1', [link('Home', 'e2'), link('Cart', 'e3')])
 
 /** A call through both formats the cap reaches, at one limit. */
@@ -105,6 +121,12 @@ export const boundaries: Gap = {
     'boundaries/text-12000': longPage(244),
     // A text form of 12,001 units, an emoji in it: the text is left out under the notice.
     'boundaries/text-12001': longPage(245),
+    // `mode: 'full'` with no `maxTokens` on a text of exactly 32,000 units, an emoji in it:
+    // nothing is cut. With a default one token lower it would be.
+    'boundaries/full-default-at-limit': fullDefaultPage(477),
+    // The same text one unit longer: cut at the default. With a default one token higher it
+    // would be whole, so the pair pins the default in data.
+    'boundaries/full-default-past-limit': fullDefaultPage(478),
     // The limit (52 units) at the end of the second line: that line is taken.
     'boundaries/cap-line-at-limit': tree([
       button('One', 'e1'),
@@ -322,6 +344,8 @@ export const boundaries: Gap = {
   cases: [
     ...calls('boundaries/text-12000', { element: element() }),
     ...calls('boundaries/text-12001', { page: page() }),
+    ...calls('boundaries/full-default-at-limit', { full: full() }),
+    ...calls('boundaries/full-default-past-limit', { full: full() }),
     ...calls('boundaries/cap-line-at-limit', capped(13)),
     ...calls('boundaries/cap-line-past-limit', capped(13)),
     ...calls('boundaries/cap-whole-at-limit', {
