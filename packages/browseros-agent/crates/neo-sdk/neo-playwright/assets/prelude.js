@@ -8609,7 +8609,7 @@ ${changes}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-text.ts
-  var SNAPSHOT_TEXT = "prelude";
+  var SNAPSHOT_TEXT = "rust";
   var comparisons = (() => {
     const counters = Reflect.get(globalThis, "__neo_compare_snapshots");
     return typeof counters === "object" && counters !== null ? counters : null;

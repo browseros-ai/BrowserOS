@@ -31,7 +31,7 @@ import type { RustText, SnapshotForm } from './generated'
 import { NO_TIME } from './snapshot-delta'
 
 /** Which engine prints a snapshot's text (see above). */
-export const SNAPSHOT_TEXT: SnapshotEngine = 'prelude'
+export const SNAPSHOT_TEXT: SnapshotEngine = 'rust'
 
 export type SnapshotEngine = 'prelude' | 'rust'
 
