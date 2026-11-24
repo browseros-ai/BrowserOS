@@ -1812,6 +1812,46 @@ async fn a_task_continued_on_the_same_transport_keeps_the_conversations_group() 
     Ok(())
 }
 
+#[tokio::test]
+async fn delete_collapses_the_tasks_group_at_once() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let transport = initialize_mcp(&app).await?;
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(tabs_new_request(10)),
+        &[("mcp-session-id", &transport)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], false, "{body:?}");
+    let session = live_session(&app, &SessionId::new(transport.clone())).await?;
+    let ownership = app.state.sessions.ownership();
+    wait_for_group(&ownership, session.convo_id()).await?;
+
+    let (status, _headers, _body) = request_json_with_headers(
+        &app.router,
+        "DELETE",
+        "/mcp",
+        None,
+        &[("mcp-session-id", &transport)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    for _ in 0..100 {
+        if ownership.tab_group_collapsed(session.convo_id()).await {
+            drop(mock);
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    anyhow::bail!("the task's group was not collapsed after DELETE")
+}
+
 /// The stateless path continues only through the handle the agent passes back. A call
 /// without one is a new task and inherits nothing, whatever connection it arrives on.
 #[tokio::test]

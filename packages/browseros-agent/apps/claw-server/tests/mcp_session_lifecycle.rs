@@ -10,7 +10,8 @@ use browseros_core::NativeCapabilities;
 use claw_server::{
     AppState, build_router,
     config::{Behavior, Config, NativeIdentity, ServerMode},
-    ids::log_fingerprint,
+    ids::{SessionId, log_fingerprint},
+    services::sessions::RetirementCause,
 };
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -338,5 +339,135 @@ async fn transport_and_session_ends_are_logged_by_fingerprint_only() -> anyhow::
             "a full transport id was logged: {line}"
         );
     }
+    Ok(())
+}
+
+async fn call_tool(
+    router: &Router,
+    session: &str,
+    name: &str,
+    arguments: Value,
+) -> anyhow::Result<Value> {
+    let (status, _, body) = post(
+        router,
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name": name, "arguments": arguments}}),
+        &transport_headers(session),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let payload = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim)
+        .find(|data| !data.is_empty())
+        .unwrap_or(body.as_str());
+    Ok(serde_json::from_str(payload)?)
+}
+
+async fn wait_until_gone(app: &App, id: &SessionId) -> anyhow::Result<()> {
+    for _ in 0..100 {
+        if !app.state.sessions.contains(id).await {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    anyhow::bail!("session {id} is still live")
+}
+
+async fn wait_until_live(app: &App, id: &SessionId) -> anyhow::Result<()> {
+    for _ in 0..100 {
+        if app.state.sessions.contains(id).await {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    anyhow::bail!("session {id} never started")
+}
+
+#[tokio::test]
+async fn delete_ends_the_bound_task_at_once() -> anyhow::Result<()> {
+    let app = app(Clocks::default()).await?;
+    let session = legacy_transport(&app.router).await?;
+    let id = SessionId::new(session.clone());
+    wait_until_live(&app, &id).await?;
+
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/mcp")
+        .header(header::HOST, "localhost")
+        .header("mcp-session-id", session.as_str())
+        .header("mcp-protocol-version", LEGACY_VERSION)
+        .body(Body::empty())?;
+    let response = app.router.clone().oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    wait_until_gone(&app, &id).await?;
+    assert_eq!(
+        app.state.sessions.retirement_of(&id).await,
+        Some(RetirementCause::Closed)
+    );
+    let task = app
+        .state
+        .audit_log
+        .get_task_summary(&session)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no task row for the session"))?;
+    assert!(task.ended_at.is_some(), "the task was not ended: {task:?}");
+    assert_eq!(ping(&app.router, &session).await?, StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_quiet_task_completes_and_its_next_call_continues_it() -> anyhow::Result<()> {
+    let app = app(Clocks {
+        session_complete_idle: Duration::from_millis(200),
+        ..Clocks::default()
+    })
+    .await?;
+    let session = legacy_transport(&app.router).await?;
+    let first = SessionId::new(session.clone());
+    wait_until_live(&app, &first).await?;
+    call_tool(
+        &app.router,
+        &session,
+        "name_session",
+        json!({"name": "bbc headlines"}),
+    )
+    .await?;
+    let name = app
+        .state
+        .sessions
+        .lookup(&first)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the first task is not live"))?
+        .label()
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(app.state.sessions.sweep_idle().await?, 1);
+    assert!(!app.state.sessions.contains(&first).await);
+
+    let reply = call_tool(
+        &app.router,
+        &session,
+        "name_session",
+        json!({"name": "bbc headlines"}),
+    )
+    .await?;
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    let successor = app
+        .state
+        .sessions
+        .replacement_of(&first)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the next call minted no successor"))?;
+    let successor = app
+        .state
+        .sessions
+        .lookup(&successor)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the successor is not live"))?;
+    assert_eq!(successor.label().await, name);
     Ok(())
 }
