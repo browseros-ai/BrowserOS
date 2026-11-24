@@ -1,7 +1,11 @@
 //! The `run` tool's arguments, as the model writes them.
 
+use std::sync::Arc;
+
 use rmcp::model::JsonObject;
 use schemars::JsonSchema;
+use schemars::generate::SchemaSettings;
+use schemars::transform::RestrictFormats;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
@@ -24,6 +28,19 @@ pub(crate) struct RunArgs {
 }
 
 impl RunArgs {
+    /// The `run` tool's input schema: draft 2020-12, as MCP asks, with only the formats that
+    /// draft defines. schemars would mark `timeout` `"format": "uint64"`, which ajv-based
+    /// clients warn about at startup and refuse in strict mode; its `minimum` and `maximum`
+    /// already state the range.
+    #[must_use]
+    pub(crate) fn input_schema() -> Arc<JsonObject> {
+        let schema = SchemaSettings::draft2020_12()
+            .with_transform(RestrictFormats::default())
+            .into_generator()
+            .into_root_schema_for::<Self>();
+        Arc::new(schema.as_object().cloned().unwrap_or_default())
+    }
+
     /// Decodes the tool call's arguments. Every failure is the model's: `script /
     /// invalid_input`, naming the field.
     pub(crate) fn parse(arguments: Option<JsonObject>) -> Result<Self, OperationError> {
@@ -51,7 +68,6 @@ mod tests {
     use std::error::Error;
 
     use neo_trace::ErrorOwner;
-    use rmcp::handler::server::common::schema_for_type;
     use rmcp::model::JsonObject;
     use serde_json::{Value, json};
 
@@ -97,7 +113,7 @@ mod tests {
 
     #[test]
     fn the_input_schema_describes_exactly_these_arguments() {
-        let schema = schema_for_type::<RunArgs>();
+        let schema = RunArgs::input_schema();
         assert_eq!(schema.get("additionalProperties"), Some(&json!(false)));
         assert_eq!(schema.get("required"), Some(&json!(["code"])));
         let timeout = schema
@@ -109,12 +125,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_input_schema_states_no_format_a_validator_does_not_know() {
+        let schema = Value::Object(RunArgs::input_schema().as_ref().clone());
+        assert_eq!(schema.pointer("/properties/timeout/format"), None);
+        assert_eq!(
+            schema.pointer("/properties/timeout/minimum"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            schema.get("$schema"),
+            Some(&json!("https://json-schema.org/draft/2020-12/schema"))
+        );
+    }
+
     /// The schema's description is what a model reads about `timeout`, so its numbers are the
     /// run budget's own (`Defaults::RUN_TIMEOUT`, `RUN_TIMEOUT_MAX`), which `RunTimeout`
     /// enforces; the literals in the attribute and the doc comment cannot drift from them.
     #[test]
     fn the_schema_states_the_run_budgets_own_numbers() {
-        let schema = schema_for_type::<RunArgs>();
+        let schema = RunArgs::input_schema();
         let timeout = schema
             .get("properties")
             .and_then(|properties| properties.get("timeout"));
