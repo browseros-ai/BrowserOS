@@ -158,8 +158,11 @@ pub(crate) fn shifted(steps: Vec<InputStep>, by: Point) -> Vec<InputStep> {
 
 /// Whether every mouse event of `steps` happens at one point, so moving the burst into another
 /// frame's pixels by one shift moves each event where it was meant to be. A burst with moves on
-/// the way to its point (`steps` above 1) crosses whatever lies between.
+/// the way to its point (`steps` above 1) crosses whatever lies between. A one-step move lands
+/// on its point by upstream's arithmetic (`from + (to - from) * 1`), a rounding away from the
+/// press it leads (measured: 10.009999999999991 for 10.01), so points this close are one.
 pub(crate) fn one_point(steps: &[InputStep]) -> bool {
+    const SAME: f64 = 1e-6;
     let mut points = steps.iter().filter_map(|step| match step {
         InputStep::Dispatch(InputEvent::Mouse(event)) => Some(event.at()),
         _ => None,
@@ -167,7 +170,7 @@ pub(crate) fn one_point(steps: &[InputStep]) -> bool {
     let Some(first) = points.next() else {
         return false;
     };
-    points.all(|point| point == first)
+    points.all(|point| (point.x - first.x).abs() <= SAME && (point.y - first.y).abs() <= SAME)
 }
 
 /// How many of `steps` lead up to the burst's first mouse button: everything through the last
@@ -353,6 +356,24 @@ pub(crate) mod tests {
         assert!(
             !one_point(&[]),
             "a burst without a mouse event has no point"
+        );
+        let mut far = InputDevices::new(Platform::Linux);
+        drop(far.mouse.move_to(
+            Point {
+                x: 1000.0,
+                y: 1000.0,
+            },
+            1,
+            Modifiers::default(),
+        ));
+        let rounded = far.mouse.click(
+            Point { x: 10.01, y: 10.01 },
+            ClickOptions::default(),
+            Modifiers::default(),
+        );
+        assert!(
+            one_point(&rounded),
+            "a one-step move a rounding away from its press is at its point"
         );
     }
 

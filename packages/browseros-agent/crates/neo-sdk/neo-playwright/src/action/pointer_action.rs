@@ -15,15 +15,16 @@
 //!   that frame's own session, in its own pixels ([`FrameInput`]): the browser routes
 //!   root-session input by its own copy of the layout, which trails a scroll in another process,
 //!   and under that lag hands a press to the frame above. Where the burst must stay on the root
-//!   session (a drag, a transformed frame, a scaled tab), no button goes down until the frame saw
-//!   the attempt's move arrive ([`PointerRunner::route`]), `force` or not.
+//!   session (`force`, a drag, a transformed frame, a scaled tab), no button goes down until the
+//!   frame saw the attempt's move arrive ([`PointerRunner::route`]).
 
 use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_cdp::CdpError;
 use browseros_core::viewport::ViewportMode;
-use browseros_core::{ProtocolSession, SessionId};
+use browseros_core::{CoreError, ProtocolSession, SessionId};
 use serde::Deserialize;
 use tokio::time::Instant;
 use ts_rs::TS;
@@ -962,7 +963,7 @@ impl<'a> PointerRunner<'a> {
                     own_point,
                     page_point,
                 )
-                .filter(|_| !action.kind.is_drag() && input::one_point(&burst));
+                .filter(|_| !action.force && !action.kind.is_drag() && input::one_point(&burst));
             let route = match input::approach(&burst).filter(|_| {
                 into_frame.is_none() && self.browser_routes(located, root_id.as_ref(), req.hit)
             }) {
@@ -991,9 +992,17 @@ impl<'a> PointerRunner<'a> {
             let sending = match (into_frame, route) {
                 (Some(frame), _) => {
                     let steps = input::shifted(burst, frame.shift);
-                    input
-                        .send_planned_on(&sent, self.scope, planned, steps, &frame.session)
+                    match input
+                        .send_planned_mouse_on(&sent, self.scope, planned, steps, &frame.session)
                         .await
+                    {
+                        // The frame's target went away under the burst: its own press navigated
+                        // it into another process, or closed it. Root-session input would have
+                        // gone on to whatever took its place, and the verdict below reads a world
+                        // gone under it as input that landed; so does this.
+                        Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone))) => Ok(()),
+                        sent => sent,
+                    }
                 }
                 (None, None) => input.send_planned(&sent, self.scope, planned, burst).await,
                 (None, Some((before, approach))) => {
@@ -1125,9 +1134,10 @@ impl<'a> PointerRunner<'a> {
     /// session, a drop target or a touch preview (as [`PointerRunner::browser_routes`]), a point
     /// only the browser could map (a transformed frame), and a tab whose pointer scale is not 1,
     /// whose frames' pixels this session's coordinates are not known to share. The caller also
-    /// keeps `dragTo` there, whose button is held across two bursts and released on the root
-    /// session, and a burst with moves on the way to its point, which belong to the frames they
-    /// cross.
+    /// keeps there a forced action, which skipped the parents' hit tests, so a page above that
+    /// covers the frame must still take its input as upstream's does; `dragTo`, whose button is
+    /// held across two bursts and released on the root session; and a burst with moves on the
+    /// way to its point, which belong to the frames they cross.
     fn frame_input(
         &self,
         located: &Resolved,

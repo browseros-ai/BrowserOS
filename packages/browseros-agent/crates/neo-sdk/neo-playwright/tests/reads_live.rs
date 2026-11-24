@@ -1279,8 +1279,8 @@ async fn move_until_seen_at(
     live: &LiveBrowser,
     page: &TestPage,
     frame: &SessionId,
-    to: (f64, f64),
-    seen: (f64, f64),
+    to: Spot,
+    seen: Spot,
 ) -> TestResult<Vec<Value>> {
     let session = live.browser.pages.get_session(page.id.clone()).await?;
     let mut moves = Vec::new();
@@ -1289,7 +1289,7 @@ async fn move_until_seen_at(
             .session
             .send::<_, Value>("Page.bringToFront", json!({}))
             .await?;
-        mouse(live, page, "mouseMoved", to.0, to.1).await?;
+        mouse(live, page, "mouseMoved", to.x, to.y).await?;
         moves = serde_json::from_value(in_frame(live, frame, "__moves").await?)?;
         if moves.last().is_some_and(|moved| near(moved, seen)) {
             break;
@@ -1299,14 +1299,18 @@ async fn move_until_seen_at(
     Ok(moves)
 }
 
-/// Whether a logged `[x, y]` is `point`, within a pixel: a mouse event's client coordinates.
-fn near(moved: &Value, point: (f64, f64)) -> bool {
-    moved[0]
-        .as_f64()
-        .is_some_and(|x| (x - point.0).abs() <= 1.0)
-        && moved[1]
-            .as_f64()
-            .is_some_and(|y| (y - point.1).abs() <= 1.0)
+/// A point in one frame's CSS pixels: the main viewport's for input, a frame's own for what it
+/// logged.
+#[derive(Clone, Copy, Debug)]
+struct Spot {
+    x: f64,
+    y: f64,
+}
+
+/// Whether a logged `[x, y]` is `spot`, within a pixel: a mouse event's client coordinates.
+fn near(moved: &Value, spot: Spot) -> bool {
+    moved[0].as_f64().is_some_and(|x| (x - spot.x).abs() <= 1.0)
+        && moved[1].as_f64().is_some_and(|y| (y - spot.y).abs() <= 1.0)
 }
 
 /// One mouse event on the page's root session, in main-viewport CSS pixels.
@@ -1407,12 +1411,18 @@ async fn tests_that_a_box_in_a_nested_oopif_is_where_input_reaches_it() -> TestR
     );
 
     // Near the box's top-left corner, so a frame's border left out would miss the button.
-    let (x, y) = (field(&box_, "x")? + 3.0, field(&box_, "y")? + 3.0);
-    let corner = (field(&local, "x")? + 3.0, field(&local, "y")? + 3.0);
-    let moves = move_until_seen_at(&live, &page, &frame, (x, y), corner).await?;
+    let at = Spot {
+        x: field(&box_, "x")? + 3.0,
+        y: field(&box_, "y")? + 3.0,
+    };
+    let corner = Spot {
+        x: field(&local, "x")? + 3.0,
+        y: field(&local, "y")? + 3.0,
+    };
+    let moves = move_until_seen_at(&live, &page, &frame, at, corner).await?;
     assert!(
         moves.last().is_some_and(|moved| near(moved, corner)),
-        "a move to the box's corner ({x}, {y}) reached c4 at its button's corner {corner:?}: \
+        "a move to the box's corner {at:?} reached c4 at its button's corner {corner:?}: \
          c4 saw {moves:?} for {local}"
     );
     let (center_x, center_y) = (
