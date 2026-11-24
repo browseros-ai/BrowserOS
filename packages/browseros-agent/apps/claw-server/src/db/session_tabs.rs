@@ -14,8 +14,8 @@ use crate::{
 };
 use sea_orm::{
     ActiveValue::{NotSet, Set},
-    ColumnTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, Statement,
-    TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    Statement, TransactionTrait,
     sea_query::Expr,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -87,6 +87,12 @@ enum ClaimWrite {
         tab_id: i64,
         session_id: String,
         released_at: i64,
+    },
+    HandOverTabs {
+        from_session_id: String,
+        to_session_id: String,
+        to_agent_id: String,
+        claimed_at: i64,
     },
     Flush(oneshot::Sender<()>),
 }
@@ -262,6 +268,22 @@ impl SessionTabLedger {
             tab_id,
             session_id,
             released_at: now_epoch_ms(),
+        });
+    }
+
+    /// Re-claims for `to_session_id` the tabs `from_session_id` still held when it ended, so
+    /// a task that continues its predecessor keeps those tabs out of finished-tab cleanup.
+    pub fn enqueue_hand_over_tabs(
+        &self,
+        from_session_id: String,
+        to_session_id: String,
+        to_agent_id: String,
+    ) {
+        self.enqueue_claim_write(ClaimWrite::HandOverTabs {
+            from_session_id,
+            to_session_id,
+            to_agent_id,
+            claimed_at: now_epoch_ms(),
         });
     }
 
@@ -459,12 +481,59 @@ async fn run_claim_writes(db: Database, mut receiver: mpsc::UnboundedReceiver<Cl
             } => release_tab_for_session(db.connection(), *tab_id, session_id, *released_at)
                 .await
                 .map(|_| ()),
+            ClaimWrite::HandOverTabs {
+                from_session_id,
+                to_session_id,
+                to_agent_id,
+                claimed_at,
+            } => hand_over_tabs(
+                db.connection(),
+                from_session_id,
+                to_session_id,
+                to_agent_id,
+                *claimed_at,
+            )
+            .await
+            .map(|_| ()),
             ClaimWrite::Flush(_) => unreachable!(),
         };
         if let Err(error) = result {
             warn!(write = ?write, error = %error, "claim write failed");
         }
     }
+}
+
+/// The rows a session's end released together carry its last release time; tabs it closed or
+/// lost earlier were released before that and stay released. A tab another session holds
+/// meanwhile stays with that session.
+async fn hand_over_tabs(
+    db: &sea_orm::DatabaseConnection,
+    from_session_id: &str,
+    to_session_id: &str,
+    to_agent_id: &str,
+    claimed_at: i64,
+) -> AppResult<u64> {
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r#"INSERT INTO session_tabs (session_id, agent_id, tab_id, opened_target_id, claimed_at, released_at)
+               SELECT ?, ?, held.tab_id, MAX(held.opened_target_id), ?, NULL
+                 FROM session_tabs held
+                WHERE held.session_id = ?
+                  AND held.released_at = (SELECT MAX(released_at) FROM session_tabs WHERE session_id = ?)
+                  AND NOT EXISTS (SELECT 1 FROM session_tabs open_row
+                                   WHERE open_row.tab_id = held.tab_id AND open_row.released_at IS NULL)
+                GROUP BY held.tab_id"#,
+            [
+                to_session_id.into(),
+                to_agent_id.into(),
+                claimed_at.into(),
+                from_session_id.into(),
+                from_session_id.into(),
+            ],
+        ))
+        .await?;
+    Ok(result.rows_affected())
 }
 
 async fn claim_target_for_session(
@@ -647,6 +716,61 @@ mod tests {
             .await?
             .unwrap_or_else(|| panic!("queued claim missing"));
         assert!(claim.released_at.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_handed_over_session_keeps_only_the_tabs_it_held_at_its_end() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let ledger =
+            SessionTabLedger::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (tab_id, session) in [(7, "session-a"), (8, "session-a"), (9, "session-a")] {
+            ledger.enqueue_claim_tab_for_session(
+                tab_id,
+                Some(format!("target-{tab_id}")),
+                session.to_string(),
+                "agent-a".to_string(),
+                100,
+            );
+        }
+        // Tab 8 was closed before the task ended; tab 9 was taken by another task since.
+        ledger.enqueue_claim_write(ClaimWrite::ReleaseTabForSession {
+            tab_id: 8,
+            session_id: "session-a".to_string(),
+            released_at: 150,
+        });
+        ledger.enqueue_claim_write(ClaimWrite::ReleaseSession {
+            session_id: "session-a".to_string(),
+            released_at: 300,
+        });
+        ledger.enqueue_claim_tab_for_session(
+            9,
+            Some("target-9".to_string()),
+            "session-c".to_string(),
+            "agent-c".to_string(),
+            400,
+        );
+        ledger.enqueue_hand_over_tabs(
+            "session-a".to_string(),
+            "session-b".to_string(),
+            "agent-b".to_string(),
+        );
+        ledger.drain_writes().await;
+
+        let open: Vec<_> = SessionTabs::find()
+            .all(ledger.connection())
+            .await?
+            .into_iter()
+            .filter(|row| row.released_at.is_none())
+            .map(|row| (row.tab_id, row.session_id, row.agent_id))
+            .collect();
+        assert_eq!(
+            open,
+            vec![
+                (9, "session-c".to_string(), "agent-c".to_string()),
+                (7, "session-b".to_string(), "agent-b".to_string()),
+            ]
+        );
         Ok(())
     }
 

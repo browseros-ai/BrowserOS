@@ -71,6 +71,15 @@ struct Retired {
     /// call and agents have been observed resending the dead one regardless, so a stubborn
     /// agent must land in one session rather than minting one per call.
     replacement: Option<SessionId>,
+    /// What a successor takes over; absent for a handle this server never minted.
+    origin: Option<RetiredOrigin>,
+}
+
+#[derive(Clone)]
+struct RetiredOrigin {
+    convo: ConvoId,
+    /// The agent's own name for the task, if it gave one; a generated label is not carried.
+    declared_name: Option<String>,
 }
 
 /**
@@ -366,18 +375,76 @@ impl Sessions {
             at: Instant::now(),
             cause: RetirementCause::Closed,
             replacement: None,
+            origin: None,
         });
         entry.replacement.get_or_insert(candidate).clone()
     }
 
-    async fn retire(&self, id: &SessionId, cause: RetirementCause) {
+    async fn retire(&self, session: &Session, cause: RetirementCause) {
+        let label = session.label().await;
+        let origin = RetiredOrigin {
+            convo: session.convo_id().clone(),
+            declared_name: (label != session.generated_label()).then_some(label),
+        };
         self.retired.write().await.insert(
-            id.clone(),
+            session.id().clone(),
             Retired {
                 at: Instant::now(),
                 cause,
                 replacement: None,
+                origin: Some(origin),
             },
+        );
+    }
+
+    /// Lets the task that continues a finished one, on the same legacy transport session or
+    /// the same stateless handle, keep its predecessor's tab group, still-open tabs and the
+    /// name its agent gave it. Without this, every pause past `complete_after` left one
+    /// conversation with one more tab group. A call without either never comes here.
+    pub async fn hand_over(&self, retired: &SessionId, successor: &Session) {
+        let origin = self
+            .retired
+            .read()
+            .await
+            .get(retired)
+            .and_then(|entry| entry.origin.clone());
+        let Some(origin) = origin else {
+            return;
+        };
+        if &origin.convo == successor.convo_id() {
+            return;
+        }
+        {
+            // Both held through the move: a retained-group close already under way keeps the
+            // group, and one that starts afterwards finds nothing left under the old key.
+            let reaping = self.reaping_keys.lock().await;
+            if reaping.contains(&origin.convo) {
+                return;
+            }
+            let group_lock = self.ownership.group_operation_lock(&origin.convo).await;
+            let _group = group_lock.lock().await;
+            if self.retained.write().await.remove(&origin.convo).is_none() {
+                return;
+            }
+            self.ownership
+                .transfer(&origin.convo, successor.convo_id())
+                .await;
+        }
+        self.reserved_keys.lock().await.remove(&origin.convo);
+        self.session_tabs.enqueue_hand_over_tabs(
+            retired.as_str().to_string(),
+            successor.id().as_str().to_string(),
+            successor.convo_id().as_str().to_string(),
+        );
+        if let Some(name) = origin.declared_name
+            && successor.label().await == successor.generated_label()
+        {
+            successor.rename(name).await;
+        }
+        info!(
+            from = %retired.fingerprint(),
+            to = %successor.id().fingerprint(),
+            "a continuing task took over its predecessor's tab group"
         );
     }
 
@@ -448,8 +515,8 @@ impl Sessions {
             let removed = sessions
                 .remove(session_id)
                 .map(|session| (session, self.teardowns.begin()));
-            if removed.is_some() {
-                self.retire(session_id, RetirementCause::Cancelled).await;
+            if let Some((session, _)) = &removed {
+                self.retire(session, RetirementCause::Cancelled).await;
             }
             removed
         };
@@ -513,8 +580,8 @@ impl Sessions {
             let removed = sessions
                 .remove(id)
                 .map(|session| (session, self.teardowns.begin()));
-            if removed.is_some() {
-                self.retire(id, RetirementCause::Closed).await;
+            if let Some((session, _)) = &removed {
+                self.retire(session, RetirementCause::Closed).await;
             }
             removed
         };
@@ -1266,9 +1333,7 @@ mod tests {
             Instant::now(),
         );
         session.request_operator_stop();
-        registry
-            .retire(session.id(), RetirementCause::Cancelled)
-            .await;
+        registry.retire(&session, RetirementCause::Cancelled).await;
 
         registry
             .restore_pending_operator_stop(session.id(), session.clone())
@@ -2005,6 +2070,152 @@ mod tests {
                 RetainedGroupAction::Close
             ]
         );
+        Ok(())
+    }
+
+    fn codex_session(id: &str, label: &str) -> Arc<Session> {
+        Session::new(
+            SessionId::new(id),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ConversationIdentity::new("codex", label.to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        )
+    }
+
+    async fn registry_recording_closes(
+        dir: &tempfile::TempDir,
+    ) -> anyhow::Result<(
+        Arc<Sessions>,
+        Arc<StdMutex<Vec<(ConvoId, RetainedGroupAction)>>>,
+    )> {
+        let (audit_log, session_tabs) = repositories(dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        );
+        let actions = Arc::new(StdMutex::new(Vec::new()));
+        let hook_actions = actions.clone();
+        registry.set_retained_group_hook(Arc::new(move |ownership, key, action| {
+            let hook_actions = hook_actions.clone();
+            Box::pin(async move {
+                if action == RetainedGroupAction::Close {
+                    ownership.forget(&key).await;
+                }
+                hook_actions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((key, action));
+                true
+            })
+        }));
+        Ok((registry, actions))
+    }
+
+    #[tokio::test]
+    async fn a_handed_over_group_is_never_closed_by_its_predecessors_retention()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (registry, actions) = registry_recording_closes(&dir).await?;
+        let first = codex_session("s1", "agile-alpaca");
+        let first_key = first.convo_id().clone();
+        registry.insert_for_testing(first.clone()).await;
+        first.rename("bbc-headlines".to_string()).await;
+        registry
+            .ownership()
+            .claim_page(first_key.clone(), browseros_core::PageId(4))
+            .await;
+        registry
+            .ownership()
+            .set_tab_group_ref(first_key.clone(), Some("group-4".to_string()))
+            .await;
+        assert!(
+            registry
+                .remove(first.id(), "closed", Some("completed"))
+                .await?
+        );
+
+        let successor = codex_session("s2", "witty-dolphin");
+        registry.insert_for_testing(successor.clone()).await;
+        registry.hand_over(first.id(), &successor).await;
+
+        let ownership = registry.ownership();
+        assert_eq!(
+            ownership
+                .tab_group_ref(successor.convo_id())
+                .await
+                .as_deref(),
+            Some("group-4")
+        );
+        assert_eq!(
+            ownership.owner_of_page(&browseros_core::PageId(4)).await,
+            Some(successor.convo_id().clone())
+        );
+        assert_eq!(successor.label().await, "bbc-headlines");
+
+        // Well past the predecessor's retention: nothing of its is left to close.
+        registry
+            .reap_retained(Instant::now() + Duration::from_secs(60))
+            .await;
+        let closes: Vec<_> = actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|(_, action)| *action == RetainedGroupAction::Close)
+            .cloned()
+            .collect();
+        assert!(closes.is_empty(), "closed {closes:?}");
+        assert_eq!(
+            ownership
+                .tab_group_ref(successor.convo_id())
+                .await
+                .as_deref(),
+            Some("group-4")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_hand_over_after_the_group_closed_takes_nothing() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (registry, _actions) = registry_recording_closes(&dir).await?;
+        let first = codex_session("s1", "agile-alpaca");
+        let first_key = first.convo_id().clone();
+        registry.insert_for_testing(first.clone()).await;
+        registry
+            .ownership()
+            .set_tab_group_ref(first_key.clone(), Some("group-4".to_string()))
+            .await;
+        assert!(
+            registry
+                .remove(first.id(), "closed", Some("completed"))
+                .await?
+        );
+        assert_eq!(
+            registry
+                .reap_retained(Instant::now() + Duration::from_secs(60))
+                .await,
+            1
+        );
+
+        let successor = codex_session("s2", "witty-dolphin");
+        registry.insert_for_testing(successor.clone()).await;
+        registry.hand_over(first.id(), &successor).await;
+        assert_eq!(
+            registry
+                .ownership()
+                .tab_group_ref(successor.convo_id())
+                .await,
+            None
+        );
+        assert_eq!(successor.label().await, "witty-dolphin");
         Ok(())
     }
 

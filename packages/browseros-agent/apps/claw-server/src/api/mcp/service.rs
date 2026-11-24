@@ -1015,7 +1015,7 @@ impl ClawMcpService {
         if let Some(existing) = self.state.sessions.replacement_of(retired).await
             && let Some(session) = self.state.sessions.lookup(&existing).await
         {
-            self.inherit_target(retired, &existing).await?;
+            self.continue_task(retired, &session).await?;
             let agent_label = session.agent().label().to_string();
             return Ok((
                 StartedSession {
@@ -1032,14 +1032,14 @@ impl ClawMcpService {
             .adopt_replacement(retired, mine_handle.clone())
             .await;
         if winner == mine_handle {
-            self.inherit_target(retired, &mine_handle).await?;
+            self.continue_task(retired, &mine.session).await?;
             return Ok((mine, mine_handle));
         }
         // The winner inserted its session before it adopted, and adoption is serialized, so
         // a winner that is still live is visible here. One that is not was torn down in the
         // gap; keep mine rather than chase a chain of tombstones.
         let Some(session) = self.state.sessions.lookup(&winner).await else {
-            self.inherit_target(retired, &mine_handle).await?;
+            self.continue_task(retired, &mine.session).await?;
             return Ok((mine, mine_handle));
         };
         if let Err(error) = self
@@ -1051,7 +1051,7 @@ impl ClawMcpService {
             warn!(error = %error, "discarding a superseded replacement session failed");
         }
         let agent_label = session.agent().label().to_string();
-        self.inherit_target(retired, &winner).await?;
+        self.continue_task(retired, &session).await?;
         Ok((
             StartedSession {
                 session,
@@ -1059,6 +1059,18 @@ impl ClawMcpService {
             },
             winner,
         ))
+    }
+
+    /// The successor carries on the retired task: its browser target, and through
+    /// `Sessions::hand_over` its tab group, open tabs and name.
+    async fn continue_task(
+        &self,
+        retired: &SessionId,
+        successor: &Session,
+    ) -> Result<(), McpError> {
+        self.inherit_target(retired, successor.id()).await?;
+        self.state.sessions.hand_over(retired, successor).await;
+        Ok(())
     }
 
     async fn inherit_target(&self, from: &SessionId, to: &SessionId) -> Result<(), McpError> {
