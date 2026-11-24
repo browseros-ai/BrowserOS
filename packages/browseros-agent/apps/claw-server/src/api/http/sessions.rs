@@ -528,7 +528,7 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
 
 async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
     let name = match live {
-        Some(session) => session.label().await,
+        Some(session) => session.display_name(&task.title).await,
         None => task.title.clone(),
     };
     let token_usage = contract_token_usage(&task);

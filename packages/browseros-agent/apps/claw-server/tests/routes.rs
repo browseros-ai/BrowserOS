@@ -1896,6 +1896,103 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
     Ok(())
 }
 
+/// The generated label only identifies a conversation. A handle-less `name_session` runs in a
+/// hidden session of its own, so the task doing the work stays unnamed and its live row must
+/// show the stored task title, the name the row keeps once it ends.
+#[tokio::test]
+async fn an_unnamed_live_session_lists_its_task_title() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "bbc headlines" } }),
+        Some("claude-code"),
+    )
+    .await?;
+    let work = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "run", "arguments": { "code": "return 1" } }),
+        Some("claude-code"),
+    )
+    .await?;
+    let session_id = work["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing session handle: {work}"))?;
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(session_id))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing session"))?;
+    app.state.audit_worker.flush_session(session_id).await?;
+    let title = app
+        .state
+        .audit_log
+        .get_task_summary(session_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing task"))?
+        .title;
+
+    let (listed, live) = listed_session_names(&app, session_id).await?;
+    assert_ne!(listed, session.generated_label());
+    assert_eq!(listed, title);
+    assert_eq!(live, title);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_named_live_session_lists_the_agents_name() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let named = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "bbc headlines" } }),
+        Some("claude-code"),
+    )
+    .await?;
+    let session_id = named["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing session handle: {named}"))?;
+    stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "run", "arguments": { "code": "return 1", "session": session_id } }),
+        Some("claude-code"),
+    )
+    .await?;
+    app.state.audit_worker.flush_session(session_id).await?;
+
+    let (listed, live) = listed_session_names(&app, session_id).await?;
+    assert_eq!(listed, "bbc-headlines");
+    assert_eq!(live, "bbc-headlines");
+    Ok(())
+}
+
+/// The session's name in the history list and in the live list.
+async fn listed_session_names(app: &TestApp, session_id: &str) -> anyhow::Result<(String, String)> {
+    let mut names = Vec::with_capacity(2);
+    for uri in ["/api/v1/sessions", "/api/v1/sessions?status=live"] {
+        let (status, body) = request_json(&app.router, "GET", uri, None).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let name = body["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["sessionId"] == session_id))
+            .and_then(|item| item["name"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("{uri} does not list {session_id}: {body}"))?;
+        names.push(name.to_string());
+    }
+    let live = names.pop().unwrap_or_default();
+    let listed = names.pop().unwrap_or_default();
+    Ok((listed, live))
+}
+
 #[tokio::test]
 async fn historical_sessions_reconcile_stored_live_status() -> anyhow::Result<()> {
     let app = test_app().await?;

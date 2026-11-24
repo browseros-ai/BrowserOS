@@ -1376,7 +1376,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     let detail = json_body(&bytes)?;
-    assert_eq!(detail["session"]["name"], "research-browserclaw");
+    assert_eq!(detail["session"]["name"], "Session on Codex");
     assert_eq!(detail["dispatches"][0]["dispatchId"], 1);
     assert!(detail["dispatches"][0].get("screenshotId").is_none());
     assert!(detail["dispatches"][0].get("agentId").is_none());
