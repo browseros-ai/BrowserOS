@@ -7,7 +7,7 @@ use browseros_core::{
 };
 use futures_util::future::BoxFuture;
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotations};
-use schemars::{JsonSchema, generate::SchemaSettings};
+use schemars::{JsonSchema, generate::SchemaSettings, transform::RestrictFormats};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -859,10 +859,17 @@ where
     normalize_schema_object(object)
 }
 
+/// Pins draft 2020-12 with inlined subschemas, keeping only the formats that draft defines.
+///
+/// schemars names Rust number types as formats (`uint32`, `int64`, `double`) that no JSON Schema
+/// validator knows: ajv warns about each one at startup and refuses them in strict mode. The
+/// `minimum` and `maximum` bounds still carry the range.
 fn browseros_schema_settings() -> SchemaSettings {
-    SchemaSettings::draft2020_12().with(|settings| {
-        settings.inline_subschemas = true;
-    })
+    SchemaSettings::draft2020_12()
+        .with(|settings| {
+            settings.inline_subschemas = true;
+        })
+        .with_transform(RestrictFormats::default())
 }
 
 /// Rewrites generated JSON Schema into the object-only form expected by strict MCP clients.
@@ -1116,6 +1123,34 @@ mod tests {
             panic!("test schema should be an object");
         };
         Value::Object((*normalize_schema_object(object)).clone())
+    }
+
+    #[derive(JsonSchema)]
+    #[expect(dead_code, reason = "only its schema is read")]
+    struct FormatProbe {
+        count: u32,
+        offset: i64,
+        ratio: f64,
+        #[schemars(extend("format" = "uri"))]
+        link: String,
+    }
+
+    #[test]
+    fn generated_schemas_keep_standard_formats_and_drop_rust_number_formats() {
+        let schema = Value::Object((*input_schema::<FormatProbe>()).clone());
+
+        for field in ["count", "offset", "ratio"] {
+            assert_eq!(
+                schema.pointer(&format!("/properties/{field}/format")),
+                None,
+                "{field} should not carry a non-standard format"
+            );
+        }
+        assert_eq!(schema.pointer("/properties/count/minimum"), Some(&json!(0)));
+        assert_eq!(
+            schema.pointer("/properties/link/format"),
+            Some(&json!("uri"))
+        );
     }
 
     #[test]

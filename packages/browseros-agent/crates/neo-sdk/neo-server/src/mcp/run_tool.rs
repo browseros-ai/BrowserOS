@@ -1,6 +1,5 @@
 //! The `run` tool's definition, and a run's reply as MCP carries it.
 
-use rmcp::handler::server::common::schema_for_type;
 use rmcp::model::{CallToolResult, ContentBlock, MetaObject, Tool};
 use serde_json::{Map, Value, json};
 
@@ -31,7 +30,7 @@ impl RunTool {
             tool: Tool::new(
                 Self::NAME,
                 run_description(registry),
-                schema_for_type::<RunArgs>(),
+                RunArgs::input_schema(),
             ),
         }
     }
