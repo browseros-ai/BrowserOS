@@ -866,3 +866,134 @@ fn flatten(node: &Value, parent: Option<String>, out: &mut Vec<ComparedFrame>) {
         flatten(child, Some(id.clone()), out);
     }
 }
+
+/// A page whose buttons and keys insert an iframe synchronously, on its own site or another.
+const ORDER_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>order</title></head><body>
+<button id="same" style="width:120px;height:40px">same</button>
+<button id="cross" style="width:120px;height:40px">cross</button>
+<script>
+const add = (host) => {
+  const f = document.createElement('iframe');
+  f.className = 'added';
+  f.src = 'http://' + host + ':' + location.port + '/leaf.html';
+  document.body.append(f);
+};
+document.getElementById('same').addEventListener('click', () => add('127.0.0.1'));
+document.getElementById('cross').addEventListener('click', () => add('localhost'));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 's') add('127.0.0.1');
+  if (e.key === 'c') add('localhost');
+});
+</script></body></html>"#;
+
+/// Repetitions of each case of
+/// [`tests_that_frames_list_the_iframe_a_write_ops_handler_inserted_right_after_it`].
+const ORDER_REPS: usize = 20;
+
+/// After a write op that ends with no answer from its tab's renderer (a forced click, a raw mouse
+/// click, a raw key press), `page.frames` lists the iframe the op's handler inserted, same-site
+/// and cross-site, right after the op: the op pings the tab's source sessions before it answers,
+/// so every frame event the tab sent before is in the watcher's list, which `page.frames` reads.
+/// A regression row with no live negative: on the pinned browser the frame events arrived in
+/// order 180 of 180 times with no ping (OPTION-B piece 5); the ping's own rules have unit rows.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frames_list_the_iframe_a_write_ops_handler_inserted_right_after_it()
+-> TestResult {
+    let mut pages = nest_pages();
+    pages.insert("/order.html".to_owned(), Page::html(ORDER_PAGE));
+    pages.insert(
+        "/leaf.html".to_owned(),
+        Page::html("<!doctype html><title>leaf</title>"),
+    );
+    let server = FixtureServer::start(pages).await?;
+    let run = LiveRun::connect().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        goto(&run, &page, &server.url("127.0.0.1", "/order.html")).await?;
+        let brand = live_run::brand(&page);
+        let center = |id: &str| {
+            format!(
+                "(() => {{ const r = document.getElementById('{id}').getBoundingClientRect(); \
+                 return [r.x + r.width / 2, r.y + r.height / 2]; }})()"
+            )
+        };
+        let point = run.eval(&page, &center("cross")).await?;
+        let (x, y) = (
+            point.get(0).and_then(Value::as_f64).ok_or("x")?,
+            point.get(1).and_then(Value::as_f64).ok_or("y")?,
+        );
+        let handle = TestPage {
+            id: run.core_page(&page).await?,
+            tab: page.tab,
+        };
+        let target = locator(&handle, &[css("#same")], "locator('#same')");
+        let cases: [(&str, &str, Value); 4] = [
+            (
+                "a forced click",
+                "locator.click",
+                json!({ "call": { "api": "locator.click", "timeoutMs": 5000 },
+                        "target": target, "strict": "strict", "force": true }),
+            ),
+            (
+                "a raw mouse click",
+                "mouse.click",
+                json!({ "call": { "api": "mouse.click", "timeoutMs": 0 }, "page": brand,
+                        "x": x, "y": y }),
+            ),
+            (
+                "a raw key press, same-site",
+                "keyboard.press",
+                json!({ "call": { "api": "keyboard.press", "timeoutMs": 0 }, "page": brand,
+                        "key": "s" }),
+            ),
+            (
+                "a raw key press, cross-site",
+                "keyboard.press",
+                json!({ "call": { "api": "keyboard.press", "timeoutMs": 0 }, "page": brand,
+                        "key": "c" }),
+            ),
+        ];
+        for (case, op, input) in cases {
+            for rep in 0..ORDER_REPS {
+                let before = listed_frames(&run, &page).await?;
+                run.invoke(op, input.clone()).await?;
+                let after = listed_frames(&run, &page).await?;
+                if !after.iter().any(|id| !before.contains(id)) {
+                    return Err(format!(
+                        "{case}, try {rep}: page.frames right after the op lacks the iframe \
+                         its handler inserted: before {before:?}, after {after:?}"
+                    )
+                    .into());
+                }
+                run.eval(
+                    &page,
+                    "document.querySelectorAll('iframe.added').forEach((f) => f.remove()); true",
+                )
+                .await?;
+                time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
+}
+
+/// The frame ids `page.frames` answers for `page`.
+async fn listed_frames(run: &LiveRun, page: &live_run::TestPage) -> TestResult<Vec<String>> {
+    let frames = run
+        .invoke(
+            "page.frames",
+            json!({ "call": {}, "page": live_run::brand(page) }),
+        )
+        .await?;
+    Ok(frames
+        .get("frames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|frame| frame.get("id").and_then(Value::as_str).map(str::to_owned))
+        .collect())
+}
