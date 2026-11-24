@@ -51,6 +51,9 @@ Plan:
       minimum: 0
       nullable: true
       description: When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
+    trial:
+      type: boolean
+      description: Whether the plan is a free trial. Absent when the licence does not say.
     onKey:
       type: boolean
       description: Whether this computer is on a licence key. The key itself is never returned.

@@ -58,6 +58,8 @@ const STEP_COUNT_BUCKET: &str = "step_count_bucket";
 const REASON: &str = "reason";
 const STATUS: &str = "status";
 const RUNS_SINCE_VERIFIED: &str = "runs_since_verified";
+const ON: &str = "on";
+const TRIAL: &str = "trial";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -121,6 +123,10 @@ pub(crate) const RUN_REFUSAL_VALUES: [&str; 7] = [
     "needs_consent",
     "ultrafast_off",
 ];
+
+/// Why ultrafast turned on or off on this computer.
+pub(crate) const ULTRAFAST_CHANGE_REASON_VALUES: [&str; 4] =
+    ["plan_added", "plan_ended", "unpaid", "hosted"];
 
 /// Where a skill's fast flow stopped running.
 pub(crate) const PAUSED_FLOW_STATUS_VALUES: [&str; 2] = ["broken", "off"];
@@ -193,6 +199,7 @@ enum PropertyKind {
     Boolean,
     RunRefusal,
     PausedFlowStatus,
+    UltrafastChangeReason,
     HoldPhase,
     TakeOverVia,
     ToolName,
@@ -261,6 +268,9 @@ impl PropertyDefinition {
             PropertyKind::Boolean => value.as_bool().map(Value::Bool),
             PropertyKind::RunRefusal => normalize_token(value, &RUN_REFUSAL_VALUES),
             PropertyKind::PausedFlowStatus => normalize_token(value, &PAUSED_FLOW_STATUS_VALUES),
+            PropertyKind::UltrafastChangeReason => {
+                normalize_token(value, &ULTRAFAST_CHANGE_REASON_VALUES)
+            }
             PropertyKind::HoldPhase => normalize_token(value, &HOLD_PHASE_VALUES),
             PropertyKind::TakeOverVia => normalize_token(value, &TAKE_OVER_VIA_VALUES),
             PropertyKind::ToolName => {
@@ -613,7 +623,17 @@ pub const SKILL_FLOW_PAUSED: EventDefinition = EventDefinition::new(
     ],
 );
 
-pub const ALL: [EventDefinition; 19] = [
+/// Ultrafast turned on or off on this computer as its plan changed.
+pub const ULTRAFAST_STATE_CHANGED: EventDefinition = EventDefinition::new(
+    "ultrafast_state_changed",
+    &[
+        PropertyDefinition::new(ON, PropertyKind::Boolean),
+        PropertyDefinition::new(REASON, PropertyKind::UltrafastChangeReason),
+        PropertyDefinition::optional(TRIAL, PropertyKind::Boolean),
+    ],
+);
+
+pub const ALL: [EventDefinition; 20] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -633,6 +653,7 @@ pub const ALL: [EventDefinition; 19] = [
     RUN_SKILL_REFUSED,
     SKILL_FLOW_REPAIRED,
     SKILL_FLOW_PAUSED,
+    ULTRAFAST_STATE_CHANGED,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -694,7 +715,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 19);
+        assert_eq!(ALL.len(), 20);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -717,7 +738,12 @@ mod tests {
                 RUN_SKILL_REFUSED.name(),
                 SKILL_FLOW_REPAIRED.name(),
                 SKILL_FLOW_PAUSED.name(),
+                ULTRAFAST_STATE_CHANGED.name(),
             ]
+        );
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.property_names(),
+            vec!["on", "reason", "trial"]
         );
         assert_eq!(
             RUN_SKILL_REFUSED.property_names(),
@@ -927,6 +953,27 @@ mod tests {
                 "status": "degraded",
                 "runs_since_verified": 4,
             })),
+            None
+        );
+    }
+
+    #[test]
+    fn ultrafast_state_changes_carry_trial_only_when_known() {
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.sanitize(&json!({
+                "on": true,
+                "reason": "plan_added",
+                "trial": true,
+                "licence_key": "private",
+            })),
+            Some(json!({ "on": true, "reason": "plan_added", "trial": true }))
+        );
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.sanitize(&json!({ "on": false, "reason": "unpaid" })),
+            Some(json!({ "on": false, "reason": "unpaid" }))
+        );
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.sanitize(&json!({ "on": "yes", "reason": "plan_added" })),
             None
         );
     }

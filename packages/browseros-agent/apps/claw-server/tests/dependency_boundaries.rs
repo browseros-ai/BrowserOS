@@ -294,6 +294,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "run_skill_refused",
         "skill_flow_repaired",
         "skill_flow_paused",
+        "ultrafast_state_changed",
     ];
     let mut wire_locations = wire_names
         .iter()

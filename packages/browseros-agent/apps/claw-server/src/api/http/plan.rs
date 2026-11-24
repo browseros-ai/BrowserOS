@@ -327,7 +327,8 @@ fn fail(request_id: &RequestId, source: BillingError) -> Response {
 }
 
 fn to_plan(plan: PlanSnapshot) -> Plan {
-    Plan::new(
+    let trial = plan.trial;
+    let mut dto = Plan::new(
         plan.available,
         plan.plan,
         plan.plan_name,
@@ -345,7 +346,9 @@ fn to_plan(plan: PlanSnapshot) -> Plan {
         plan.on_key,
         plan.checked_at,
         plan.stale,
-    )
+    );
+    dto.trial = trial;
+    dto
 }
 
 fn to_key(key: Key) -> PlanKey {

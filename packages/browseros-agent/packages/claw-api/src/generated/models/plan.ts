@@ -106,6 +106,12 @@ export interface Plan {
      */
     graceUntil: number | null;
     /**
+     * Whether the plan is a free trial. Absent when the licence does not say.
+     * @type {boolean}
+     * @memberof Plan
+     */
+    trial?: boolean;
+    /**
      * Whether this computer is on a licence key. The key itself is never returned.
      * @type {boolean}
      * @memberof Plan

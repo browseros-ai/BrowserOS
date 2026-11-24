@@ -85,6 +85,20 @@ fn a_good_licence_reads_its_plan() -> anyhow::Result<()> {
 }
 
 #[test]
+fn a_trial_flag_is_read_when_the_gateway_sends_it() -> anyhow::Result<()> {
+    let plain = check(&signed(&payload())).map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(plain.trial, None);
+    let trial =
+        check(&signed(&with("trial", json!(true)))).map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(trial.trial, Some(true));
+    let mut ended = with("trial", json!(true));
+    ended["status"] = json!("none");
+    let none = check(&signed(&ended)).map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(none.trial, None, "no plan means no trial");
+    Ok(())
+}
+
+#[test]
 fn a_tampered_byte_is_refused() -> anyhow::Result<()> {
     let mut licence = signed(&payload());
     let mut bytes = URL_SAFE_NO_PAD.decode(&licence.licence)?;

@@ -98,6 +98,21 @@ pub struct AppState {
 
 pub use crate::services::billing::ULTRAFAST_FEATURE;
 
+/// Why the ultrafast switch moved, from where the plan stands now.
+fn ultrafast_change_reason(
+    on: bool,
+    hosted: bool,
+    status: crate::services::billing::licence::Status,
+) -> &'static str {
+    use crate::services::billing::licence::Status;
+    match (on, hosted, status) {
+        (true, ..) => "plan_added",
+        (false, true, _) => "hosted",
+        (false, false, Status::Unpaid) => "unpaid",
+        (false, false, _) => "plan_ended",
+    }
+}
+
 /// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
 /// non-looping agent never leaves a stale "needs you" request behind.
 const HELP_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
@@ -390,7 +405,13 @@ impl AppState {
     /// and the guide installed in connected agents follow, and those agents hear about it through
     /// their tool list. Returns whether it changed.
     pub async fn sync_ultrafast_with_plan(&self) -> bool {
-        let on = !self.config.mode.is_hosted() && self.billing.has_feature(ULTRAFAST_FEATURE).await;
+        let hosted = self.config.mode.is_hosted();
+        let plan = self.billing.plan().await;
+        let on = !hosted
+            && plan
+                .features
+                .iter()
+                .any(|enabled| enabled == ULTRAFAST_FEATURE);
         let changed = self.ultrafast.set(on);
         // Outside the change check: a switch pinned on at startup never reports a change, and the
         // guide only re-installs when its own state moves.
@@ -408,6 +429,17 @@ impl AppState {
         if !changed {
             return false;
         }
+        let mut properties = serde_json::json!({
+            "on": on,
+            "reason": ultrafast_change_reason(on, hosted, plan.status),
+        });
+        if let Some(trial) = plan.trial {
+            properties["trial"] = serde_json::json!(trial);
+        }
+        self.analytics.capture(
+            crate::analytics::events::ULTRAFAST_STATE_CHANGED,
+            properties,
+        );
         if let Err(error) = self.skills.sync_skill_md(self.ultrafast_enabled()).await {
             tracing::warn!(error = %error, "skill file sync failed");
         }
@@ -496,10 +528,30 @@ pub fn build_router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, resolve_user_home_with};
-    use crate::{config::Config, db::DATABASE_FILENAME};
+    use super::{AppState, resolve_user_home_with, ultrafast_change_reason};
+    use crate::{config::Config, db::DATABASE_FILENAME, services::billing::licence::Status};
     use std::{collections::BTreeMap, ffi::OsString, sync::Arc, time::Duration};
     use tempfile::tempdir;
+
+    #[test]
+    fn ultrafast_changes_say_why_from_the_plan() {
+        assert_eq!(
+            ultrafast_change_reason(true, false, Status::Active),
+            "plan_added"
+        );
+        assert_eq!(
+            ultrafast_change_reason(false, false, Status::None),
+            "plan_ended"
+        );
+        assert_eq!(
+            ultrafast_change_reason(false, false, Status::Unpaid),
+            "unpaid"
+        );
+        assert_eq!(
+            ultrafast_change_reason(false, true, Status::Active),
+            "hosted"
+        );
+    }
 
     #[tokio::test]
     async fn new_with_home_uses_browserclaw_database_without_touching_old_file()
