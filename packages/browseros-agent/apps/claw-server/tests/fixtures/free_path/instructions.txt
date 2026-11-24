@@ -137,6 +137,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
 Call request_human_help with the page that needs the person and a short reason (and
@@ -290,6 +298,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
 Call request_human_help with the page that needs the person and a short reason (and
@@ -431,6 +447,14 @@ task shows up on the user's /skills and re-runs as /neo-<name>.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
@@ -576,6 +600,14 @@ it was verified. When a skill says "Run it fast", call run_skill first.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
@@ -727,6 +759,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
 the user in your chat what you need. Do not keep retrying the block on your own.
@@ -875,6 +915,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
 the user in your chat what you need. Do not keep retrying the block on your own.
@@ -1011,6 +1059,14 @@ task shows up on the user's /skills and re-runs as /neo-<name>.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
@@ -1152,6 +1208,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
 the user in your chat what you need. Do not keep retrying the block on your own.
@@ -1287,6 +1351,14 @@ they are shared across your sessions on that host.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
@@ -1429,6 +1501,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
 Call request_human_help with the page that needs the person and a short reason (and
@@ -1562,6 +1642,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
 Call request_human_help with the page that needs the person and a short reason (and
@@ -1694,6 +1782,14 @@ they are shared across your sessions on that host.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
@@ -1836,6 +1932,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
 the user in your chat what you need. Do not keep retrying the block on your own.
@@ -1972,6 +2076,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
 the user in your chat what you need. Do not keep retrying the block on your own.
@@ -2099,6 +2211,14 @@ they are shared across your sessions on that host.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
@@ -2228,6 +2348,14 @@ If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
 
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
+
 If you are blocked by something only a person can do (a sign-in, a one-time code,
 a captcha, an account choice, or an approval you should not make), stop and tell
 the user in your chat what you need. Do not keep retrying the block on your own.
@@ -2352,6 +2480,14 @@ task shows up on the user's /skills and re-runs as /neo-<name>.
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new".
 
 Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.
