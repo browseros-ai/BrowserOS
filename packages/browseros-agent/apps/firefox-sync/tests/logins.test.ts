@@ -1,8 +1,17 @@
+import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { readFirefoxLogins } from '../src/firefox/logins'
 import { PrimaryPasswordError } from '../src/firefox/nss'
-import { type FixtureLogin, tempProfile, writeLoginStore } from './fixtures'
+import {
+  type FixtureLogin,
+  octets,
+  oid,
+  seq,
+  tempProfile,
+  writeLoginStore,
+} from './fixtures'
 
 const LOGINS: FixtureLogin[] = [
   {
@@ -84,6 +93,26 @@ describe('readFirefoxLogins', () => {
       'Primary Password is wrong',
     )
     expect(readFirefoxLogins(dir, 'secret').logins).toHaveLength(2)
+  })
+
+  test('a key4.db it cannot parse is not reported as a wrong Primary Password', () => {
+    const dir = profile()
+    writeLoginStore(dir, LOGINS)
+    const db = new Database(join(dir, 'key4.db'))
+    db.query("UPDATE metaData SET item2 = ? WHERE id = 'password'").run(
+      seq(seq(oid('1.2.3.4'), seq()), octets(Buffer.alloc(16))),
+    )
+    db.close()
+    let error: unknown
+    try {
+      readFirefoxLogins(dir)
+    } catch (e) {
+      error = e
+    }
+    expect(error).not.toBeInstanceOf(PrimaryPasswordError)
+    expect((error as Error).message).toContain(
+      'Unsupported key4.db algorithm 1.2.3.4',
+    )
   })
 
   test('a profile without logins.json yields nothing', () => {

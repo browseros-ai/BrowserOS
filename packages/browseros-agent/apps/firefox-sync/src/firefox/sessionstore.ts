@@ -20,6 +20,13 @@ import {
 } from './cookies'
 
 const MOZ_LZ4_MAGIC = 'mozLz40\0'
+const MOZ_LZ4_HEADER = 12
+/**
+ * LZ4 cannot expand data by more than about 255x (one 255 length byte per 255
+ * output bytes), so a declared size above that is a damaged header. Checking
+ * it first stops a bad header from allocating up to 4 GiB.
+ */
+const LZ4_MAX_RATIO = 255
 
 /** Decodes a raw LZ4 block (no frame header), as written by mozLz4. */
 export function lz4BlockDecompress(
@@ -64,14 +71,20 @@ export function lz4BlockDecompress(
 
 export function decodeMozLz4(buf: Uint8Array): string {
   const magic = Buffer.from(buf.subarray(0, 8)).toString('latin1')
-  if (magic !== MOZ_LZ4_MAGIC) throw new Error('Not a mozLz4 file')
+  if (magic !== MOZ_LZ4_MAGIC || buf.length < MOZ_LZ4_HEADER) {
+    throw new Error('Not a mozLz4 file')
+  }
   const size = new DataView(buf.buffer, buf.byteOffset + 8, 4).getUint32(
     0,
     true,
   )
-  return Buffer.from(lz4BlockDecompress(buf.subarray(12), size)).toString(
-    'utf8',
-  )
+  const block = buf.subarray(MOZ_LZ4_HEADER)
+  if (size > block.length * LZ4_MAX_RATIO) {
+    throw new Error(
+      `mozLz4: declared size ${size} is more than ${block.length} compressed bytes can hold`,
+    )
+  }
+  return Buffer.from(lz4BlockDecompress(block, size)).toString('utf8')
 }
 
 interface SessionCookie {

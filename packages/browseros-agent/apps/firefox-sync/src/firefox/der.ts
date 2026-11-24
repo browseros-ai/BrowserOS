@@ -37,6 +37,11 @@ function readNode(
     if (lengthBytes === 0 || lengthBytes > 4) {
       throw new Error('DER: unsupported length form')
     }
+    // Without this, reading past the end yields undefined, the length becomes
+    // NaN, and the node silently parses as empty instead of failing.
+    if (cursor + lengthBytes > buf.length) {
+      throw new Error('DER: truncated length')
+    }
     length = 0
     for (let i = 0; i < lengthBytes; i++) {
       length = length * 256 + buf[cursor + i]

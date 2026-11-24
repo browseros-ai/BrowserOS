@@ -127,6 +127,15 @@ describe('session store', () => {
     )
   })
 
+  test('rejects a declared size the compressed data cannot hold', () => {
+    const file = mozLz4('tiny')
+    file.writeUInt32LE(0xffff_ffff, 8)
+    expect(() => decodeMozLz4(file)).toThrow('declared size 4294967295')
+    expect(() => decodeMozLz4(Buffer.from('mozLz40\0\x01', 'latin1'))).toThrow(
+      'Not a mozLz4',
+    )
+  })
+
   test('reads session-only cookies of the default jar', () => {
     const dir = profile()
     writeSessionStore(dir, {

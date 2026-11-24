@@ -64,6 +64,13 @@ function hmacSha1(key: Uint8Array, data: Uint8Array): Buffer {
   return createHmac('sha1', key).update(data).digest()
 }
 
+/**
+ * The cipher rejected the padding: the key, and so the password behind it, is
+ * wrong. Kept apart from format errors so a damaged or unknown key4.db is not
+ * reported as a wrong Primary Password.
+ */
+class BadDecryptError extends Error {}
+
 function decipher(
   algorithm: 'aes-256-cbc' | 'des-ede3-cbc',
   key: Uint8Array,
@@ -71,7 +78,12 @@ function decipher(
   data: Uint8Array,
 ): Buffer {
   const d = createDecipheriv(algorithm, key, iv)
-  return Buffer.concat([d.update(data), d.final()])
+  const head = d.update(data)
+  try {
+    return Buffer.concat([head, d.final()])
+  } catch (error) {
+    throw new BadDecryptError(`${algorithm}: bad decrypt`, { cause: error })
+  }
 }
 
 /** NSS's legacy PKCS#12-style derivation (pbeWithSha1AndTripleDES-CBC). */
@@ -171,8 +183,13 @@ export function readLoginKeys(
   let check: Buffer
   try {
     check = decryptPbeBlob(meta.item2, meta.item1, password)
-  } catch {
-    throw new PrimaryPasswordError(primaryPassword !== undefined)
+  } catch (error) {
+    // Only a padding failure means the password is wrong; a DER or
+    // unsupported-algorithm error is a format problem and keeps its message.
+    if (error instanceof BadDecryptError) {
+      throw new PrimaryPasswordError(primaryPassword !== undefined)
+    }
+    throw error
   }
   if (!check.toString('latin1').startsWith(PASSWORD_CHECK)) {
     throw new PrimaryPasswordError(primaryPassword !== undefined)
