@@ -16,6 +16,7 @@ export const RENDERER = [
   'src/prelude/snapshot-late.ts',
   'src/prelude/snapshot-unmarked.ts',
   'src/prelude/cover.ts',
+  'scripts/snapshot-cases/snapshot-lines.ts',
   '../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer.ts',
   '../neo-playwright/third_party/playwright/packages/isomorphic/yaml.ts',
 ]
@@ -63,10 +64,10 @@ export const UNREACHED: Unreached[] = [
       'No input reaches it: `diff` matches the common head before the search, so the first lines of the middle differ, round 0’s snake is empty, and the walk back always ends at the start. A port may keep the loop; no case can tell.',
   },
   {
-    file: 'src/prelude/cover.ts',
+    file: 'scripts/snapshot-cases/snapshot-lines.ts',
     from: '} catch {',
     to: "return ''",
     reason:
-      'Only a tree outside Playwright’s types makes today’s renderer throw. Rust’s typed decode refuses such a tree before anything renders (the Rust snapshot renderer design, 1.4), so the Rust block has no failure to fall back from.',
+      'Only a tree outside Playwright’s types makes today’s renderer throw. Rust decodes the cover’s tree before it prints the block and leaves a tree that does not decode with no block (neo-playwright action/cover.rs `block`), so the Rust block has no failure to fall back from.',
   },
 ]

@@ -541,7 +541,7 @@ fn envelope(
                 fields.insert("matcher".to_owned(), matcher.clone());
             }
             // As production's ErrBody forwards a covered action's cover, for the prelude to
-            // render its snapshot into the message and leave the script the rest.
+            // place its block into the message and leave the script the rest.
             if let Some(cover) = error.cover_details()
                 && let Some(fields) = failure.as_object_mut()
             {

@@ -41,6 +41,18 @@ export const coveredBlock: Gap = {
     ),
     // A tree with no node: nothing renders, so the message carries no block.
     'covered-block/no-node': tree([]),
+    // A ref holding raw line breaks prints over three lines, the middle one blank to
+    // JavaScript's trim (a space, U+3000 and U+FEFF, which Rust's own trim keeps): it is not printed.
+    'covered-block/blank-line': tree([
+      {
+        role: 'dialog',
+        name: 'Cookies',
+        ref: 'e9',
+        children: [
+          { role: 'button', name: 'Accept', ref: 'e10\n \u3000\uFEFF\ne11' },
+        ],
+      },
+    ]),
     // A tree whose default form prints nothing (a separator alone): no block.
     'covered-block/prints-nothing': tree([
       { role: 'generic', children: [{ role: 'paragraph', children: ['|'] }] },
@@ -55,6 +67,7 @@ export const coveredBlock: Gap = {
       'room-one',
       'inside-character',
       'after-character',
+      'blank-line',
       'no-node',
       'prints-nothing',
     ].map((shape) => ({

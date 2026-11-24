@@ -18,6 +18,8 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use neo_snapshot::AriaNode;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
@@ -605,9 +607,22 @@ pub(crate) fn point_text(point: Point) -> String {
 }
 
 /// The error's `cover` field: what a script reads as `error.cover` (its ref, role, name, kind
-/// and controls) and, for the prelude alone, the cover's snapshot to render under "On top".
+/// and controls) and, for the prelude alone, `block`: the cover's own snapshot as the lines to
+/// print under "On top", absent when there is nothing to print.
+///
+/// ```text
+///  field ── cover ─▶ the script's error: the prelude's shapeCovered places `block` under
+///         │          "On top" and removes the key, so error.cover is { ref, role, name, kind,
+///         │          controls }
+///         └ cover ─▶ the operation's record: neo-server's recorded_cover removes `block`, so
+///                    the record keeps Rust's message and the cover without the cover's lines
+/// ```
+///
+/// The block stays out of Rust's message on purpose: a trace clips a message at 2,048 bytes,
+/// and 1,500 units of the cover's lines would push its controls, the "Do" line and the call log
+/// out of every covered operation's record.
 fn field(facts: &CoverFacts) -> Value {
-    json!({
+    let mut cover = json!({
         "ref": facts.r#ref,
         "role": facts.role,
         "name": facts.name.as_value(),
@@ -617,8 +632,25 @@ fn field(facts: &CoverFacts) -> Value {
             "role": control.role,
             "name": control.name.as_value(),
         })).collect::<Vec<_>>(),
-        "snapshot": facts.snapshot,
-    })
+    });
+    if let (Some(block), Value::Object(fields)) = (block(&facts.snapshot), &mut cover) {
+        fields.insert("block".to_owned(), Value::String(block));
+    }
+    cover
+}
+
+/// The cover's own snapshot printed as the covered block (`neo_snapshot::cover_block`), or
+/// `None`: for no tree (`null`, a cover that holds the control), for a tree that prints nothing,
+/// and for a tree that does not decode as snapshot nodes.
+///
+/// The tree is decoded here and not in the probe's reply. There, one value outside the node
+/// type would fail the whole reply and turn a `covered` answer into `internal`; here it only
+/// leaves the block out, as the prelude printed none when its renderer threw, and the message,
+/// the controls and the record stand without it. The reply's decode already bounded the tree's
+/// depth (`MAX_VALUE_DEPTH`), which bounds this decode's recursion.
+fn block(tree: &Value) -> Option<String> {
+    let tree = Vec::<AriaNode>::deserialize(tree).ok()?;
+    neo_snapshot::cover_block(tree)
 }
 
 fn kind_name(kind: &CoverKind) -> &'static str {

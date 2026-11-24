@@ -247,9 +247,10 @@ pub struct PlaywrightError {
     /// the expect prelude completes into Playwright's `error.matcherResult`. Hosts pass it to
     /// the script as it is; boxed, so every other error stays small.
     matcher: Option<Box<Value>>,
-    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`,
-    /// action/cover.rs): the prelude renders its snapshot under the message's "On top" line
-    /// and gives the script the rest as `error.cover`. Hosts pass it as they pass `matcher`.
+    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, block? }`,
+    /// action/cover.rs): the prelude places its block, the cover's own snapshot lines, under the
+    /// message's "On top" line and gives the script the rest as `error.cover`. Hosts pass it as
+    /// they pass `matcher`.
     cover: Option<Box<Value>>,
     /// Why a navigation failed on the network, kept apart from the message so a host can count
     /// it without parsing text a URL helped write. Boxed, as `matcher` and `cover` are.

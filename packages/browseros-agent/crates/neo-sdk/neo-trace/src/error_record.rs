@@ -90,8 +90,8 @@ pub struct ErrorRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,
     /// A `covered` pointer action's cover, as its error named it: its ref, role, name, kind and
-    /// controls (neo-playwright's action/cover.rs). The cover's own snapshot, which only the
-    /// script's prelude renders, is not kept.
+    /// controls (neo-playwright's action/cover.rs). The cover's own snapshot lines (`block`),
+    /// which only the script's error shows, are not kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<serde_json::Value>,
 }

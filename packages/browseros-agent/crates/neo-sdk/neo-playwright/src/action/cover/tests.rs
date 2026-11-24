@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::time::Duration;
 
 use browseros_core::{ProtocolSession, SessionId};
@@ -8,7 +9,7 @@ use tokio::time::{self, Instant};
 use super::{
     CoverWatch, EarlyStop, Lines, OnTopNote, Seat, Waiting, decide, field, on_top_line, same_cover,
 };
-use crate::probe::{CoverFacts, CoverMark, Point, ProbeTarget, Rect};
+use crate::probe::{CoverFacts, CoverMark, Point, ProbeReply, ProbeTarget, Rect, reply_of};
 use crate::test_env;
 use crate::world::{IsolatedWorld, Pin};
 
@@ -47,6 +48,19 @@ fn facts(value: Value) -> Result<CoverFacts, serde_json::Error> {
     serde_json::from_value(value)
 }
 
+/// The dialog's own snapshot as the probe reads it: its tree, with a paragraph and a button.
+fn dialog_tree() -> Value {
+    json!([{
+        "role": "dialog",
+        "name": "What You Need To Know",
+        "ref": "f2e297",
+        "children": [
+            { "role": "paragraph", "children": ["Resale prices often exceed face value."] },
+            { "role": "button", "name": "Dismiss", "ref": "f2e310" }
+        ]
+    }])
+}
+
 fn dialog(kind: &Value) -> Value {
     json!({
         "layer": 5,
@@ -54,7 +68,7 @@ fn dialog(kind: &Value) -> Value {
         "role": "dialog",
         "name": "What You Need To Know",
         "markup": "<div role=\"dialog\" class=\"modal\">…</div>",
-        "snapshot": { "role": "dialog", "name": "What You Need To Know" },
+        "snapshot": dialog_tree(),
         "controls": [
             { "role": "button", "name": "Accept & Continue", "ref": "f2e305" },
             { "role": "button", "name": "Dismiss", "ref": "f2e310" }
@@ -115,7 +129,7 @@ async fn tests_that_a_miss_takes_the_next_mark_and_counts_a_stopped_press() {
 }
 
 /// The lines in the keeper's order: on top, when it came, what was pressed, the controls, what to
-/// do. The prelude puts the cover's snapshot right under the first.
+/// do. The prelude puts the cover's block right under the first.
 #[test]
 fn tests_that_the_lines_say_the_facts_in_order() -> Result<(), serde_json::Error> {
     let facts = facts(dialog(&json!({ "is": "page" })))?;
@@ -289,9 +303,10 @@ fn tests_that_a_page_cover_says_its_state() -> Result<(), serde_json::Error> {
     Ok(())
 }
 
-/// The error's `cover` field: what the script reads, and the snapshot for the prelude.
+/// The error's `cover` field: what the script reads, and the cover's own snapshot printed as
+/// the block for the prelude to place, in place of the tree.
 #[test]
-fn tests_that_the_field_holds_the_cover_and_its_snapshot() -> Result<(), serde_json::Error> {
+fn tests_that_the_field_holds_the_cover_and_its_block() -> Result<(), serde_json::Error> {
     let facts = facts(dialog(&json!({ "is": "frame" })))?;
     assert_eq!(
         field(&facts),
@@ -304,9 +319,58 @@ fn tests_that_the_field_holds_the_cover_and_its_snapshot() -> Result<(), serde_j
                 { "ref": "f2e305", "role": "button", "name": "Accept & Continue" },
                 { "ref": "f2e310", "role": "button", "name": "Dismiss" }
             ],
-            "snapshot": { "role": "dialog", "name": "What You Need To Know" },
+            "block": "    - dialog \"What You Need To Know\" [ref=f2e297]:\
+                      \n      - text: Resale prices often exceed face value.\
+                      \n      - button \"Dismiss\" [ref=f2e310]",
         })
     );
+    Ok(())
+}
+
+/// The reviewer's row for a tree the crate cannot read: the cover's tree is decoded where the
+/// block is printed, never in the covered reply's own decode. So a tree holding a value outside
+/// the node type, like a tree that is no tree or prints nothing, still answers `covered`: the
+/// reply decodes, the message is the same, and the field has its ref, role, name, kind and
+/// controls with no `block` key, so the record, which drops only that key, is the same too.
+#[test]
+fn tests_that_a_tree_the_crate_cannot_read_prints_no_block_and_fails_nothing()
+-> Result<(), Box<dyn Error>> {
+    let readable = facts(dialog(&json!({ "is": "page" })))?;
+    let message = |facts: &CoverFacts| {
+        Lines {
+            facts,
+            action: "click",
+            since: None,
+            stopped: 0,
+            again: None,
+        }
+        .render()
+    };
+    let mut without_block = field(&readable);
+    if let Value::Object(fields) = &mut without_block {
+        fields.remove("block");
+    }
+    for tree in [
+        json!([{ "role": "dialog", "name": "What You Need To Know", "secret": "a field upstream lacks" }]),
+        json!([{ "role": "checkbox", "checked": "maybe" }]),
+        json!([{ "role": "dialog", "children": [{ "role": "button", "level": "two" }] }]),
+        json!({ "role": "dialog", "name": "What You Need To Know" }),
+        json!("a tree that is a string"),
+        Value::Null,
+        json!([]),
+        json!([{ "role": "generic", "children": [{ "role": "paragraph", "children": ["|"] }] }]),
+    ] {
+        let mut value = dialog(&json!({ "is": "page" }));
+        value["snapshot"] = tree.clone();
+        let text = json!({ "kind": "cover", "facts": value }).to_string();
+        let Ok(ProbeReply::Cover { facts: Some(read) }) =
+            reply_of(json!({ "result": { "value": text } }))
+        else {
+            panic!("a covered reply with the tree {tree} decodes, as any other covered reply");
+        };
+        assert_eq!(field(&read), without_block, "{tree}");
+        assert_eq!(message(&read), message(&readable), "{tree}");
+    }
     Ok(())
 }
 

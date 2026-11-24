@@ -147,8 +147,9 @@ message: string,
  */
 matcher?: unknown, 
 /**
- * A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`): the
- * bootstrap renders its snapshot into the message and puts the rest on the error as `cover`.
+ * A `covered` pointer action's cover (`{ ref, role, name, kind, controls, block? }`): the
+ * bootstrap places its block under the message's "On top" line and puts the rest on the
+ * error as `cover`.
  */
 cover?: unknown, };
 
