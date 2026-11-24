@@ -544,6 +544,14 @@ export function matchesQuery(
   )
 }
 
+/** A skill's fast flow as analytics reports it: its status, or `locked` once the plan ended. */
+export function ultrafastStateToken(
+  ultrafast: SkillUltrafast | undefined,
+): string {
+  if (!ultrafast) return 'none'
+  return ultrafast.locked ? 'locked' : ultrafast.status
+}
+
 /** How much a skill is used: the skill page's value row changes shape with it. */
 export type UsageLevel = 'never' | 'rare' | 'sometimes' | 'lot'
 

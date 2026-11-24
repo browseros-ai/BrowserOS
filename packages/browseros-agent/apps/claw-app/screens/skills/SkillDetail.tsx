@@ -24,7 +24,7 @@ import {
   UserRoundCheck,
   Wrench,
 } from 'lucide-react'
-import { type ReactNode, useId, useState } from 'react'
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router'
 import { CodeBlock } from '@/components/agents/code-block'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
@@ -51,6 +51,7 @@ import { UseSkill } from '@/components/skills/UseSkill'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useSkillFlow } from '@/modules/api/skills.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { useSkillDetailData } from './skill-detail.data'
@@ -68,6 +69,8 @@ import {
   runsChoice,
   skillValue,
   stuckWhile,
+  ultrafastStateToken,
+  usageLevel,
 } from './skills.helpers'
 
 const BACK = { to: '/skills', label: 'Skills' }
@@ -81,6 +84,18 @@ export function SkillDetail() {
   const { detail, agents, isLoading, isError, checking, nudge } =
     useSkillDetailData()
   const navigate = useNavigate()
+  const viewed = useRef<string | null>(null)
+  const viewedSkill = detail?.skill
+  // Counting a page view is a side effect of the page showing a skill; no handler runs then.
+  // The ref keeps a refetch of the same skill from counting twice.
+  useEffect(() => {
+    if (!viewedSkill || viewed.current === viewedSkill.name) return
+    viewed.current = viewedSkill.name
+    track(AnalyticsEvent.SkillPageViewed, {
+      usage_level: usageLevel(viewedSkill.runCount),
+      ultrafast_state: ultrafastStateToken(viewedSkill.ultrafast),
+    })
+  }, [viewedSkill])
 
   if (isError) {
     return (

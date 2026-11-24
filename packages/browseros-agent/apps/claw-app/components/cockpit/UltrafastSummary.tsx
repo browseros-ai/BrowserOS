@@ -13,6 +13,7 @@ import { ArrowRight, Copy } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { cn } from '@/lib/utils'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { ultrafastTime } from '@/screens/audit/audit.helpers'
 import {
   milestoneNote,
@@ -127,6 +128,7 @@ function Summary({
           trigger={
             <button
               type="button"
+              onClick={() => track(AnalyticsEvent.UltrafastDetailsOpened)}
               className={cn(
                 '-my-[5px] -mr-2 inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-lg px-2 font-semibold text-[13.5px] hover:bg-[rgb(238_243_255/0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9cc0ff] active:translate-y-px',
                 INK.ink,

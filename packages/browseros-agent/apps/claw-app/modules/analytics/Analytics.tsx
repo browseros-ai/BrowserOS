@@ -11,12 +11,15 @@
 
 import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router'
+import { usePlan } from '@/modules/api/plan.hooks'
+import { planContextFor } from '@/modules/plan/plan.helpers'
 import { AnalyticsEvent, screenEventForPath, track } from './events'
-import { applyTelemetry, isCapturing } from './posthog'
+import { applyTelemetry, isCapturing, setPlanContext } from './posthog'
 import { useTelemetryState } from './telemetry.hooks'
 
 export function Analytics() {
   const { data } = useTelemetryState()
+  const plan = usePlan()
   const location = useLocation()
   const appOpened = useRef(false)
   const lastViewedPath = useRef<string | null>(null)
@@ -30,6 +33,11 @@ export function Analytics() {
   //   - opting in later still sends `app_opened` (the guard was not
   //     burned while capture was a no-op).
   // Runs on telemetry state changes and on navigation.
+  // Tag events with the plan before any of them fires; posthog reads it at capture time.
+  useEffect(() => {
+    setPlanContext(planContextFor(plan.data))
+  }, [plan.data])
+
   useEffect(() => {
     if (!data) return
     applyTelemetry({ distinctId: data.distinctId, enabled: data.enabled })

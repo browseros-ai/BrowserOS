@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { PlanSavings, PlanSavingsPeriod } from '@browseros/claw-api'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
@@ -30,6 +30,15 @@ const globalDescriptors = new Map(
     Object.getOwnPropertyDescriptor(globalThis, name),
   ]),
 )
+
+const posthog = await import('@/modules/analytics/posthog')
+const captured: string[] = []
+mock.module('@/modules/analytics/posthog', () => ({
+  ...posthog,
+  capture: (event: string) => {
+    captured.push(event)
+  },
+}))
 
 const { UltrafastSummary } = await import('./UltrafastSummary')
 const { SavingsHero } = await import('@/screens/pro/SavingsHero')
@@ -328,5 +337,21 @@ describe('the ultrafast card on Home', () => {
       )?.[1]
     expect(figure('#card')).toBe('3.2M')
     expect(figure('#page')).toBe(figure('#card'))
+  })
+})
+
+describe('opening the ultrafast details', () => {
+  it('tests that clicking Details counts the details being opened once', async () => {
+    captured.length = 0
+    await render(query({}))
+    const button = details()
+    if (!button) throw new Error('no Details button')
+    await act(async () => {
+      button.dispatchEvent(new Event('click', { bubbles: true }))
+    })
+
+    expect(
+      captured.filter((event) => event === 'ultrafast_details_opened'),
+    ).toEqual(['ultrafast_details_opened'])
   })
 })

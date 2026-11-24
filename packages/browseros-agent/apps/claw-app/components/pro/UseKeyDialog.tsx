@@ -67,6 +67,10 @@ export function UseKeyDialog({
       if (change.key) queryClient.setQueryData(usePlanKey.getKey(), change.key)
       track(AnalyticsEvent.ProKeyActivated, {
         plan_ended: change.plan.status === 'none',
+        status: change.plan.status,
+        ...(change.plan.trial === undefined
+          ? {}
+          : { trial: change.plan.trial }),
       })
     },
     onError: (error) => {
