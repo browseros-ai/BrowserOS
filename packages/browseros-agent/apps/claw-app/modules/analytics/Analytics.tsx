@@ -41,7 +41,8 @@ export function Analytics() {
   useEffect(() => {
     if (!data) return
     applyTelemetry({ distinctId: data.distinctId, enabled: data.enabled })
-    if (!isCapturing()) return
+    // The first events wait for the plan, so they carry it; a failed plan read still lets them go.
+    if (!isCapturing() || plan.isPending) return
     if (!appOpened.current) {
       appOpened.current = true
       track(AnalyticsEvent.AppOpened)
@@ -51,7 +52,7 @@ export function Analytics() {
       const event = screenEventForPath(location.pathname)
       if (event) track(event)
     }
-  }, [data, location.pathname])
+  }, [data, location.pathname, plan.isPending])
 
   return null
 }

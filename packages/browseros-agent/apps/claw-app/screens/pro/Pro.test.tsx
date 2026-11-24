@@ -1120,6 +1120,7 @@ describe('Use a licence key', () => {
 
     expect(text()).toContain('ultrafast is on for this computer')
     expect(events('pro_key_activated')[0]?.properties).toEqual({
+      plan: 'ultrafast',
       plan_ended: false,
       status: 'active',
       trial: true,
@@ -1134,6 +1135,7 @@ describe('Use a licence key', () => {
 
     expect(text()).toContain('This key’s ultrafast plan has ended')
     expect(events('pro_key_activated')[0]?.properties).toEqual({
+      plan: 'free',
       plan_ended: true,
       status: 'none',
     })
