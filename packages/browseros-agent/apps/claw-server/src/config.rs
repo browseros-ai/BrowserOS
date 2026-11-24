@@ -17,8 +17,11 @@ use std::{
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
-const DEFAULT_SESSION_COMPLETE_IDLE_MS: u64 = 5 * 60 * 1000;
-const DEFAULT_MCP_TRANSPORT_IDLE_MS: u64 = 24 * 60 * 60 * 1000;
+/// How long a task's own dispatches may sit quiet before the sweep completes it.
+pub const SESSION_COMPLETE_IDLE: Duration = Duration::from_secs(5 * 60);
+/// How long rmcp keeps a legacy MCP transport session after its last request. It only bounds
+/// server memory, so it sits far above the session idle; `Config` never lets it fall below it.
+pub const MCP_TRANSPORT_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
@@ -279,12 +282,7 @@ impl Config {
             "CLAW_SESSION_IDLE_MS",
             DEFAULT_SESSION_IDLE_MS,
         ));
-        let mcp_transport_idle = Duration::from_millis(read_positive_ms(
-            env,
-            "CLAW_MCP_TRANSPORT_IDLE_MS",
-            DEFAULT_MCP_TRANSPORT_IDLE_MS,
-        ))
-        .max(session_idle);
+        let mcp_transport_idle = MCP_TRANSPORT_IDLE.max(session_idle);
 
         Ok(Self {
             server_port,
@@ -293,11 +291,7 @@ impl Config {
             resources_dir,
             browserclaw_dir,
             session_idle,
-            session_complete_idle: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_SESSION_COMPLETE_IDLE_MS",
-                DEFAULT_SESSION_COMPLETE_IDLE_MS,
-            )),
+            session_complete_idle: SESSION_COMPLETE_IDLE,
             mcp_transport_idle,
             session_retention: behavior.tab_close_after,
             session_sweep_interval: Duration::from_millis(read_positive_ms(
@@ -697,8 +691,8 @@ mod tests {
     }
 
     #[test]
-    fn mcp_transport_idle_defaults_to_a_day_and_never_undercuts_session_idle() -> anyhow::Result<()>
-    {
+    fn task_and_transport_idles_are_constants_and_the_transport_never_undercuts_session_idle()
+    -> anyhow::Result<()> {
         let dir = tempdir()?;
         let config_path = dir.path().join("sidecar.json");
         fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
@@ -711,23 +705,24 @@ mod tests {
             Config::load_with_env(&config_path, &ConfigEnv::with_vars(vars, home.clone()))
         };
 
+        let defaults = load(&[])?;
         assert_eq!(
-            load(&[])?.mcp_transport_idle,
+            defaults.mcp_transport_idle,
             Duration::from_secs(24 * 60 * 60)
         );
-        assert_eq!(
-            load(&[("CLAW_MCP_TRANSPORT_IDLE_MS", "7200000")])?.mcp_transport_idle,
-            Duration::from_secs(2 * 60 * 60)
-        );
-        assert_eq!(
-            load(&[("CLAW_MCP_TRANSPORT_IDLE_MS", "garbage")])?.mcp_transport_idle,
-            Duration::from_secs(24 * 60 * 60)
-        );
-        let floored = load(&[
+        assert_eq!(defaults.session_complete_idle, Duration::from_secs(5 * 60));
+        // Neither is read from the environment any more.
+        let ignored = load(&[
             ("CLAW_MCP_TRANSPORT_IDLE_MS", "1000"),
-            ("CLAW_SESSION_IDLE_MS", "60000"),
+            ("CLAW_SESSION_COMPLETE_IDLE_MS", "1000"),
         ])?;
-        assert_eq!(floored.mcp_transport_idle, Duration::from_secs(60));
+        assert_eq!(ignored.mcp_transport_idle, super::MCP_TRANSPORT_IDLE);
+        assert_eq!(ignored.session_complete_idle, super::SESSION_COMPLETE_IDLE);
+        let floored = load(&[("CLAW_SESSION_IDLE_MS", "90000000")])?;
+        assert_eq!(
+            floored.mcp_transport_idle,
+            Duration::from_millis(90_000_000)
+        );
         Ok(())
     }
 
