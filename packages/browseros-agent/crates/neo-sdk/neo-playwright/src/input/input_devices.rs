@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::keyboard::{KeyEvent, Keyboard, Platform};
-use super::mouse::{Mouse, MouseButton, MouseEvent};
+use super::mouse::{Mouse, MouseButton, MouseEvent, Point};
 
 /// What Playwright remembers about one page's input between calls: held keys and modifiers,
 /// and the mouse's position and held buttons. The page's state keeps it behind the page's
@@ -140,6 +140,36 @@ pub(crate) fn waits(steps: &[InputStep]) -> Duration {
         .fold(Duration::ZERO, Duration::saturating_add)
 }
 
+/// `steps` with every mouse position moved `by`, keys and waits as they are. A burst is planned
+/// in the main viewport's pixels, where the tab's mouse state lives; one sent on an
+/// out-of-process frame's own session goes out in that frame's pixels instead
+/// (`pointer_action.rs`, `FrameInput`).
+pub(crate) fn shifted(steps: Vec<InputStep>, by: Point) -> Vec<InputStep> {
+    steps
+        .into_iter()
+        .map(|step| match step {
+            InputStep::Dispatch(InputEvent::Mouse(event)) => {
+                InputStep::Dispatch(InputEvent::Mouse(event.shifted(by)))
+            }
+            other => other,
+        })
+        .collect()
+}
+
+/// Whether every mouse event of `steps` happens at one point, so moving the burst into another
+/// frame's pixels by one shift moves each event where it was meant to be. A burst with moves on
+/// the way to its point (`steps` above 1) crosses whatever lies between.
+pub(crate) fn one_point(steps: &[InputStep]) -> bool {
+    let mut points = steps.iter().filter_map(|step| match step {
+        InputStep::Dispatch(InputEvent::Mouse(event)) => Some(event.at()),
+        _ => None,
+    });
+    let Some(first) = points.next() else {
+        return false;
+    };
+    points.all(|point| point == first)
+}
+
 /// How many of `steps` lead up to the burst's first mouse button: everything through the last
 /// move before it, or through the last move of a burst without buttons. `None` without a move.
 /// A pointer action checks the pointer reached the element's frame right there, so no button
@@ -162,7 +192,7 @@ pub(crate) mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{InputDevices, InputStep, approach};
+    use super::{InputDevices, InputStep, approach, one_point, shifted};
     use crate::input::keyboard::{Modifier, Modifiers, Platform};
     use crate::input::mouse::{ClickOptions, MouseButton, Point};
 
@@ -260,6 +290,70 @@ pub(crate) mod tests {
             "a hover's approach is all its moves"
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_shifted_burst_moves_every_mouse_event_and_nothing_else()
+    -> Result<(), Box<dyn Error>> {
+        let mut devices = InputDevices::new(Platform::Linux);
+        let mut steps = devices.keyboard.down("Shift")?;
+        steps.extend(devices.mouse.click(
+            Point { x: 84.5, y: 483.75 },
+            ClickOptions::default(),
+            devices.keyboard.modifiers(),
+        ));
+        let before = sent(&steps);
+        let after = sent(&shifted(
+            steps,
+            Point {
+                x: -40.25,
+                y: -356.5,
+            },
+        ));
+        assert_eq!(after.len(), 4, "Shift down, move, press, release");
+        assert_eq!(after[0], before[0], "a key event has no position to move");
+        for (after, before) in after.iter().zip(&before).skip(1) {
+            assert_eq!(
+                (after["params"]["x"].as_f64(), after["params"]["y"].as_f64()),
+                (Some(44.25), Some(127.25)),
+                "{} lands at the frame's own point",
+                after["params"]["type"]
+            );
+            assert_eq!(
+                after["params"]["buttons"], before["params"]["buttons"],
+                "only the position changes"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_only_a_burst_at_one_point_counts_as_one_point() {
+        let mut devices = InputDevices::new(Platform::Linux);
+        let at = Point { x: 10.0, y: 20.0 };
+        let click = devices
+            .mouse
+            .click(at, ClickOptions::default(), Modifiers::default());
+        assert!(
+            one_point(&click),
+            "a click moves, presses and releases at one point"
+        );
+        let travelled = devices.mouse.click(
+            Point { x: 40.0, y: 50.0 },
+            ClickOptions {
+                steps: 3,
+                ..ClickOptions::default()
+            },
+            Modifiers::default(),
+        );
+        assert!(
+            !one_point(&travelled),
+            "moves on the way cross whatever lies between"
+        );
+        assert!(
+            !one_point(&[]),
+            "a burst without a mouse event has no point"
+        );
     }
 
     #[test]

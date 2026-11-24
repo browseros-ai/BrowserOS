@@ -143,7 +143,9 @@ impl PageInput {
     }
 
     /// [`PageInput::send_planned`] with every event on `session` instead of the tab's root
-    /// session. The private entry types into a box in a cross-site frame on that frame's own
+    /// session. A pointer action into an out-of-process frame sends its burst there, in that
+    /// frame's pixels, so no frame above can take it (`pointer_action.rs`, `FrameInput`). The
+    /// private entry types into a box in a cross-site frame on that frame's own
     /// session, so its text lands in that frame or nowhere: measured on main, a key and an
     /// `Input.insertText` on a frame's session typed nothing anywhere once the top page had
     /// taken the focus, where the root session handed them to the thief's box

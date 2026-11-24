@@ -19,6 +19,13 @@ pub(crate) enum PointerKind {
     DragTarget,
 }
 
+impl PointerKind {
+    /// `dragTo`'s halves, whose left button stays down from one burst to the next.
+    pub(crate) const fn is_drag(self) -> bool {
+        matches!(self, Self::DragSource | Self::DragTarget)
+    }
+}
+
 /// One row of D6.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Requirements {
