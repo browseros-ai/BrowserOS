@@ -32,10 +32,17 @@ const api = await import('@/modules/api/client')
 const posthog = await import('@/modules/analytics/posthog')
 
 const captured: { event: string; properties?: Record<string, unknown> }[] = []
+let capturing = true
+const captureListeners = new Set<() => void>()
 mock.module('@/modules/analytics/posthog', () => ({
   ...posthog,
+  isCapturing: () => capturing,
+  subscribeToCaptureState: (listener: () => void) => {
+    captureListeners.add(listener)
+    return () => captureListeners.delete(listener)
+  },
   capture: (event: string, properties?: Record<string, unknown>) => {
-    captured.push({ event, properties })
+    if (capturing) captured.push({ event, properties })
   },
 }))
 
@@ -181,6 +188,7 @@ function define(name: string, value: unknown) {
 
 beforeEach(async () => {
   captured.length = 0
+  capturing = true
   overrides = {}
   features = ['claw.ultrafast']
   runs = []
@@ -581,6 +589,21 @@ describe('counting skill page views', () => {
 
     expect(views()).toEqual([
       { usage_level: 'never', ultrafast_state: 'locked' },
+    ])
+  })
+
+  it('tests that a deep link opened before analytics starts still counts one view once it does', async () => {
+    capturing = false
+    await mount()
+    expect(views()).toEqual([])
+
+    capturing = true
+    await act(async () => {
+      for (const listener of captureListeners) listener()
+    })
+
+    expect(views()).toEqual([
+      { usage_level: 'sometimes', ultrafast_state: 'verified' },
     ])
   })
 })
