@@ -127,7 +127,7 @@ impl CockpitQuery {
                 label: profile
                     .map(|profile| profile.name.clone())
                     .unwrap_or_else(|| task.agent_label.clone()),
-                name: session.label().await,
+                name: session.display_name(&task.title).await,
                 profile_id: profile.map(|profile| profile.id.clone()),
                 harness: profile.map(|profile| profile.harness.to_string()),
                 color: hex_for_slug(session.agent().slug()).to_string(),

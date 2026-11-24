@@ -188,6 +188,16 @@ impl Session {
         self.identity.label().await
     }
 
+    /// The name an operator sees for this session. The generated label only identifies the
+    /// conversation, so until the agent names the session the stored task title stands in.
+    pub async fn display_name(&self, stored_title: &str) -> String {
+        let label = self.label().await;
+        if label == self.generated_label() && !stored_title.is_empty() {
+            return stored_title.to_owned();
+        }
+        label
+    }
+
     /// A new name is a new task, so pursue may take it even if it handed the last one back.
     pub async fn rename(&self, new_label: String) -> String {
         let old_label = self.identity.rename(new_label.clone()).await;
@@ -411,6 +421,21 @@ mod tests {
         );
         session.rename("flight search".to_string()).await;
         assert!(!session.pursue_handed_back(), "a new task starts fresh");
+    }
+
+    #[tokio::test]
+    async fn only_an_agent_given_name_outranks_the_stored_title() {
+        let session = test_session("session-display");
+        assert_eq!(
+            session.display_name("Browsed www.bbc.com").await,
+            "Browsed www.bbc.com"
+        );
+        assert_eq!(session.display_name("").await, "steady-otter");
+        session.rename("bbc-headlines".to_string()).await;
+        assert_eq!(
+            session.display_name("Browsed www.bbc.com").await,
+            "bbc-headlines"
+        );
     }
 
     #[tokio::test]
