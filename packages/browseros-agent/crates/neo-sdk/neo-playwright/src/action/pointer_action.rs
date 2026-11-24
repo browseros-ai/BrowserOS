@@ -1015,10 +1015,14 @@ impl<'a> PointerRunner<'a> {
                         .send_planned_mouse_on(&sent, self.scope, planned, steps, &frame.session)
                         .await
                     {
-                        // The frame's target went away under the burst after its press went out:
-                        // the press navigated it into another process, or closed it. Root-session
-                        // input would have gone on to whatever took its place, and the verdict
-                        // below reads a world gone under it as input that landed; so does this.
+                        // The frame's target went away under the burst once its press was on the
+                        // wire: the press navigated it into another process, or closed it.
+                        // Root-session input would have gone on to whatever took its place, and the
+                        // verdict below reads a world gone under it as input that landed; so does
+                        // this. A press whose own dispatch failed this way counts too, though the
+                        // frame may have gone just before the press arrived: the two fail alike,
+                        // and pressing again could click twice where a mousedown handler navigated
+                        // the frame, so that rare unclicked case is the one accepted.
                         Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone)))
                             if input.pressed() =>
                         {
