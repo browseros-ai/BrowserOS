@@ -879,7 +879,9 @@ fn tests_that_a_delta_reads_the_stored_text_only_in_time() -> TestResult {
     let passed = Passed::default();
     let late = Page::new()?;
     stored_page(&late)?;
-    let clock = Looks::of(vec![Ok(Look::Late)]);
+    // A second look is scripted in time, so a delta that read the stored text anyway answers
+    // from it here instead of failing on a look the script lacks.
+    let clock = Looks::of(vec![Ok(Look::Late), Ok(Look::InTime)]);
     let text = late.delta(&passed, &clock)?;
     assert!(
         text.starts_with(
@@ -887,7 +889,11 @@ fn tests_that_a_delta_reads_the_stored_text_only_in_time() -> TestResult {
         ),
         "{text}"
     );
-    assert_eq!(clock.left(), 0, "one look, none before a record");
+    assert_eq!(
+        clock.left(),
+        1,
+        "one look, and none before a record it does not make"
+    );
     assert_eq!(
         late.settled().map(|baseline| baseline.text),
         Some(printed(Call::Page(&passed))?),
@@ -1000,6 +1006,31 @@ async fn tests_that_a_delta_through_the_op_compares_with_the_stored_text() -> Te
     assert!(
         compared.run_state().full_snapshot_repeats().is_empty(),
         "the compared call records nothing"
+    );
+    Ok(())
+}
+
+/// A delta never compares with a text pending in its own run: the whole page this run took is
+/// not the tab's baseline until the run ends with it in the caller's hands, so a delta later in
+/// the same run finds no stored text, and after a committed one it compares with that.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_delta_never_compares_with_a_text_pending_in_its_own_run() -> TestResult {
+    let tab = ScriptedTab::new(OneMain::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let page = op("page.ariaSnapshot")?;
+    let whole = json!({ "mode": "ai", "format": { "neo": {} } });
+    let delta = json!({ "mode": "ai", "format": { "neo": { "delta": true } } });
+    run.playwright
+        .invoke(&run.env, page, page_input(&run, 0, &whole))
+        .await?;
+    let answer = run
+        .playwright
+        .invoke(&run.env, page, page_input(&run, 0, &delta))
+        .await?;
+    let text = answer["snapshot"].as_str().unwrap_or_default();
+    assert!(
+        text.starts_with("# whole page: no earlier snapshot of this page\n"),
+        "the run's own whole page is pending, not stored: {text}"
     );
     Ok(())
 }
