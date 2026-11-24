@@ -1,0 +1,15 @@
+{
+  "name": "@browseros/firefox-sync",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Copies Firefox passwords and signed-in sessions into a running BrowserOS neo, repeatably",
+  "bin": {
+    "browseros-firefox-sync": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "test": "bun test ./tests",
+    "typecheck": "tsc --noEmit"
+  }
+}

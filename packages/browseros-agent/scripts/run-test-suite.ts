@@ -48,6 +48,11 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
+      label: 'firefox-sync tests',
+      cwd: resolve(projectRoot, 'apps/firefox-sync'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
       label: 'claw MCP suite unit tests',
       argv: [
         bun,
