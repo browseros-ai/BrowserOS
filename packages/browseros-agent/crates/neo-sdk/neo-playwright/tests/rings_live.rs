@@ -10,7 +10,6 @@
 )]
 mod live_run;
 #[path = "support/page_server.rs"]
-#[expect(dead_code, reason = "the slow page's delay serves other suites")]
 mod page_server;
 
 use std::error::Error;
