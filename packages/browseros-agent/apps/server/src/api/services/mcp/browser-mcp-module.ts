@@ -28,6 +28,7 @@ export { BROWSEROS_TOOL_LEASE_HEADER } from '../../../lib/browser-tool-lease'
 
 export interface BrowserMcpModuleDeps {
   version: string
+  nativeBrowserosVersion?: string
   browserSession: BrowserSession
   conversationRuns: Pick<ConversationRuns, 'activeRun'>
   klavis?: KlavisService
@@ -147,6 +148,7 @@ export class BrowserMcpModule {
       name: 'browseros_mcp',
       title: 'BrowserOS MCP server',
       version: this.deps.version,
+      nativeBrowserosVersion: this.deps.nativeBrowserosVersion,
       browserSession: this.deps.browserSession,
       defaultWindowId: lease?.browserContext?.windowId,
       instructions: MCP_INSTRUCTIONS,

@@ -30,6 +30,9 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+#[path = "tab_group_tests.rs"]
+mod tab_group_tests;
+
 #[path = "tool_guard_tests.rs"]
 mod tool_guard_tests;
 

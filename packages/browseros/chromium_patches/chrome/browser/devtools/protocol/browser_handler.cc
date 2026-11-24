@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f697b01f6 100644
+index 6af060d287872bf2ae881ff013c124eb7508c839..30594fabfb53dae65dabae516b273146276a7fca 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -4,24 +4,41 @@
+@@ -4,24 +4,45 @@
  
  #include "chrome/browser/devtools/protocol/browser_handler.h"
  
@@ -15,6 +15,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
 +#include "base/memory/raw_ptr.h"
  #include "base/memory/ref_counted_memory.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/uuid.h"
 +#include "build/build_config.h"
  #include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/browser_process.h"
@@ -24,6 +25,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
  #include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window.h"
@@ -35,6 +37,8 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
 +#include "chrome/browser/ui/tabs/tab_group_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
++#include "components/saved_tab_groups/public/saved_tab_group.h"
++#include "components/saved_tab_groups/public/tab_group_sync_service.h"
 +#include "components/sessions/content/session_tab_helper.h"
  #include "components/sessions/core/session_id.h"
 +#include "components/tab_groups/tab_group_color.h"
@@ -44,7 +48,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -35,6 +52,49 @@ using protocol::Response;
+@@ -35,6 +56,49 @@ using protocol::Response;
  
  namespace {
  
@@ -94,7 +98,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -76,6 +136,418 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -76,6 +140,418 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -513,7 +517,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  }  // namespace
  
  BrowserHandler::BrowserHandler(protocol::UberDispatcher* dispatcher,
-@@ -126,6 +598,67 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -126,6 +602,67 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -581,7 +585,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -305,3 +838,767 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -305,3 +842,847 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -1120,6 +1124,86 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f
 +
 +  *out_groups = std::move(groups);
 +  return Response::Success();
++}
++
++Response BrowserHandler::GetClosedTabGroups(
++    std::unique_ptr<protocol::Array<protocol::Browser::ClosedTabGroupInfo>>*
++        out_groups) {
++  auto groups = std::make_unique<
++      protocol::Array<protocol::Browser::ClosedTabGroupInfo>>();
++  ProfileManager* profile_manager = g_browser_process->profile_manager();
++  if (!profile_manager) {
++    return Response::ServerError("Profile manager unavailable");
++  }
++  auto& manager = DevToolsBrowserContextManager::GetInstance();
++  for (Profile* profile : profile_manager->GetLoadedProfiles()) {
++    auto profile_id = manager.GetBrowserProfileId(profile);
++    if (!profile_id) {
++      continue;
++    }
++    auto* service =
++        tab_groups::TabGroupSyncServiceFactory::GetForProfile(profile);
++    if (!service) {
++      continue;
++    }
++    for (const auto* group : service->ReadAllGroups()) {
++      if (group->local_group_id().has_value()) {
++        continue;
++      }
++      groups->push_back(
++          protocol::Browser::ClosedTabGroupInfo::Create()
++              .SetSavedGroupId(group->saved_guid().AsLowercaseString())
++              .SetBrowserProfileId(*profile_id)
++              .SetTitle(base::UTF16ToUTF8(group->title()))
++              .SetColor(TabGroupColorToString(group->color()))
++              .SetTabCount(static_cast<int>(group->saved_tabs().size()))
++              .SetShared(group->is_shared_tab_group())
++              .Build());
++    }
++  }
++  *out_groups = std::move(groups);
++  return Response::Success();
++}
++
++Response BrowserHandler::DeleteClosedTabGroup(
++    const std::string& browser_profile_id,
++    const std::string& saved_group_id) {
++  const base::Uuid guid = base::Uuid::ParseCaseInsensitive(saved_group_id);
++  if (!guid.is_valid()) {
++    return Response::InvalidParams("Invalid saved group ID");
++  }
++  ProfileManager* profile_manager = g_browser_process->profile_manager();
++  if (!profile_manager) {
++    return Response::ServerError("Profile manager unavailable");
++  }
++  auto& manager = DevToolsBrowserContextManager::GetInstance();
++  for (Profile* profile : profile_manager->GetLoadedProfiles()) {
++    if (manager.GetBrowserProfileId(profile) != browser_profile_id) {
++      continue;
++    }
++    auto* service =
++        tab_groups::TabGroupSyncServiceFactory::GetForProfile(profile);
++    auto group = service ? service->GetGroup(guid) : std::nullopt;
++    if (!group || group->is_hidden()) {
++      return Response::ServerError("Saved tab group not found");
++    }
++    // Recheck native state on the UI thread immediately before deletion. A
++    // group listed as closed may have been reopened or shared since that
++    // listing.
++    if (group->local_group_id().has_value()) {
++      return Response::ServerError(
++          "Tab group is open; close it before deleting its saved record");
++    }
++    if (group->is_shared_tab_group() || group->is_transitioning_to_shared() ||
++        group->is_transitioning_to_saved()) {
++      return Response::ServerError(
++          "Shared or transitioning tab groups cannot be deleted through CDP");
++    }
++    service->RemoveGroup(guid);
++    return Response::Success();
++  }
++  return Response::InvalidParams(
++      "browserProfileId must identify a loaded eligible regular profile");
 +}
 +
 +Response BrowserHandler::CreateTabGroup(

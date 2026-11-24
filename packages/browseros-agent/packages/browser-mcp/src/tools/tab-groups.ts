@@ -1,5 +1,8 @@
+import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { TabGroup } from '@browseros/browser-core/tab-groups'
+import type { ClosedTabGroupInfo } from '@browseros/cdp-protocol/domains/browser'
 import { z } from 'zod/v4'
+import { supportsClosedTabGroups } from '../native-browseros-version'
 import { defineTool, errorResult, textResult } from './framework'
 
 const TAB_GROUP_COLORS = [
@@ -24,15 +27,33 @@ function formatGroup(group: TabGroupWithPages): string {
   return `[${group.groupId}] "${group.title || '(unnamed)'}" (${group.color})${collapsed} pages: ${pages}`
 }
 
+function formatClosedGroup(group: ClosedTabGroupInfo): string {
+  return `[saved:${group.savedGroupId}] "${group.title}" (${group.color}) [CLOSED${group.shared ? ', SHARED' : ''}] profile: ${group.browserProfileId} tabs: ${group.tabCount}`
+}
+
 export const tab_groups = defineTool({
   name: 'tab_groups',
   description:
-    'Manage tab groups: list groups, group pages, update a group (title/color/collapsed), ungroup pages, or close a group. Page ids come from the tabs tool.',
+    'Manage tab groups: list groups, group pages, update a group (title/color/collapsed), ungroup pages, or close a group (preserving its saved record). List with includeClosed=true to see closed saved groups in loaded profiles; delete removes one closed non-shared saved group using savedGroupId and browserProfileId. These closed-group operations require BrowserOS 0.52.2.0 or newer. Deletion also syncs to other devices. Page ids come from the tabs tool.',
   input: z
     .object({
       action: z
-        .enum(['list', 'create', 'update', 'ungroup', 'close'])
+        .enum(['list', 'create', 'update', 'ungroup', 'close', 'delete'])
         .default('list'),
+      includeClosed: z
+        .boolean()
+        .optional()
+        .describe(
+          'Include closed saved groups from loaded profiles when listing.',
+        ),
+      savedGroupId: z
+        .string()
+        .optional()
+        .describe('Saved group UUID from closedGroups, required for delete.'),
+      browserProfileId: z
+        .string()
+        .optional()
+        .describe('Profile handle from closedGroups, required for delete.'),
       pages: z
         .array(z.number().int())
         .optional()
@@ -63,6 +84,13 @@ export const tab_groups = defineTool({
     openWorldHint: true,
   },
   handler: async (args, ctx) => {
+    const versionError = closedTabGroupsVersionError(
+      args.includeClosed,
+      args.action,
+      ctx.nativeBrowserosVersion,
+    )
+    if (versionError) return versionError
+
     const { pages } = ctx.session
 
     // The tools speak page ids; the CDP tab-group API speaks tab ids. Convert in both directions.
@@ -101,7 +129,20 @@ export const tab_groups = defineTool({
         const text = resolved.length
           ? resolved.map(formatGroup).join('\n')
           : '(no tab groups)'
-        return textResult(text, { groups: resolved, count: resolved.length })
+        if (!args.includeClosed) {
+          return textResult(text, { groups: resolved, count: resolved.length })
+        }
+        const { groups: closedGroups } = (await ctx.session.cdp(
+          'Browser.getClosedTabGroups',
+        )) as {
+          groups: ClosedTabGroupInfo[]
+        }
+        const closedText = closedGroups.map(formatClosedGroup)
+        return textResult([text, ...closedText].join('\n'), {
+          groups: resolved,
+          count: resolved.length,
+          closedGroups,
+        })
       }
 
       case 'create': {
@@ -170,6 +211,9 @@ export const tab_groups = defineTool({
         })
       }
 
+      case 'delete':
+        return deleteClosedGroup(args, ctx.session)
+
       case 'close': {
         if (!args.groupId) {
           return errorResult('tab_groups close: groupId is required.')
@@ -184,3 +228,41 @@ export const tab_groups = defineTool({
     }
   },
 })
+
+async function deleteClosedGroup(
+  args: { groupId?: string; savedGroupId?: string; browserProfileId?: string },
+  session: BrowserSession,
+) {
+  if (args.groupId !== undefined) {
+    return errorResult(
+      'tab_groups delete: use savedGroupId and browserProfileId from list with includeClosed=true, not groupId.',
+    )
+  }
+  if (!args.savedGroupId || !args.browserProfileId) {
+    return errorResult(
+      'tab_groups delete: savedGroupId and browserProfileId are required.',
+    )
+  }
+  await session.cdp('Browser.deleteClosedTabGroup', {
+    savedGroupId: args.savedGroupId,
+    browserProfileId: args.browserProfileId,
+  })
+  return textResult(`deleted closed saved tab group ${args.savedGroupId}`, {
+    savedGroupId: args.savedGroupId,
+    browserProfileId: args.browserProfileId,
+  })
+}
+
+function closedTabGroupsVersionError(
+  includeClosed: boolean | undefined,
+  action: string,
+  nativeBrowserosVersion: string | undefined,
+) {
+  if (!includeClosed && action !== 'delete') return undefined
+  if (supportsClosedTabGroups(nativeBrowserosVersion)) return undefined
+
+  const reportedVersion = nativeBrowserosVersion?.trim() || 'unknown'
+  return errorResult(
+    `tab_groups: closed saved groups require BrowserOS 0.52.2.0 or newer; connected browser version is ${reportedVersion}.`,
+  )
+}

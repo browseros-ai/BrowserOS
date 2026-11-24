@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.h b/chrome/browser/devtools/protocol/browser_handler_android.h
-index 83bec7125e1fb966a61450bf93fc3aca6f46d438..4b28161eaf7de76a82aa032f21a2a01ceb6af383 100644
+index 83bec7125e1fb966a61450bf93fc3aca6f46d438..6dc33574abb57c38711bb178319fe2136ab2e5dd 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.h
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.h
 @@ -58,6 +58,14 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
@@ -17,7 +17,7 @@ index 83bec7125e1fb966a61450bf93fc3aca6f46d438..4b28161eaf7de76a82aa032f21a2a01c
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -76,6 +84,116 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
+@@ -76,6 +84,122 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
@@ -108,6 +108,12 @@ index 83bec7125e1fb966a61450bf93fc3aca6f46d438..4b28161eaf7de76a82aa032f21a2a01c
 +      std::optional<int> window_id,
 +      std::unique_ptr<protocol::Array<protocol::Browser::TabGroupInfo>>*
 +          out_groups) override;
++  protocol::Response GetClosedTabGroups(
++      std::unique_ptr<protocol::Array<protocol::Browser::ClosedTabGroupInfo>>*
++          out_groups) override;
++  protocol::Response DeleteClosedTabGroup(
++      const std::string& browser_profile_id,
++      const std::string& saved_group_id) override;
 +  protocol::Response CreateTabGroup(
 +      std::unique_ptr<protocol::Array<int>> tab_ids,
 +      std::optional<std::string> title,
