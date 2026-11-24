@@ -1,7 +1,8 @@
 use crate::{
-    CdpError, CdpEvent, ConnectionLoss, EventStream, SessionId, TargetedEvents,
+    CdpError, CdpEvent, ConnectionLoss, EventStream, RawReply, SessionId, TargetedEvents,
     discovery::discover_websocket_url,
-    inbound::{self, Envelope, Unreadable},
+    inbound::{self, Envelope, Inbound, Unreadable},
+    raw_reply::UNREADABLE_REPLY,
 };
 use futures_util::{
     SinkExt, StreamExt,
@@ -28,7 +29,7 @@ use tokio::{
 use tokio_tungstenite::{
     WebSocketStream, client_async_with_config,
     tungstenite::{
-        Message,
+        Message, Utf8Bytes,
         client::IntoClientRequest,
         protocol::{CloseFrame, WebSocketConfig},
     },
@@ -39,7 +40,7 @@ use url::{Host, Url};
 type WsStream = WebSocketStream<TcpStream>;
 type WsSink = SplitSink<WsStream, Message>;
 type WsReader = SplitStream<WsStream>;
-type PendingSender = oneshot::Sender<Result<Value, CdpError>>;
+type PendingSender = oneshot::Sender<Result<RawReply, CdpError>>;
 
 /// A request waiting for its reply, with the flattened session it was sent on. Chromium never
 /// answers a command whose session detached before it replied, so the reader fails those
@@ -241,13 +242,17 @@ impl CdpClient {
             .and_then(|since| since.map(|at| at.elapsed()))
     }
 
+    /// Sends one command and returns its result as a `Value`, decoded in the caller's task from
+    /// the text the reader loop kept ([`RawReply`]).
     pub async fn send(
         &self,
         method: &str,
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
-        self.send_with_epoch(None, method, params, session).await
+        self.send_with_epoch(None, method, params, session)
+            .await?
+            .decode()
     }
 
     /// Sends only on the socket incarnation used to resolve the caller's IDs.
@@ -261,6 +266,32 @@ impl CdpClient {
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
         self.send_with_epoch(Some(expected_epoch), method, params, session)
+            .await?
+            .decode()
+    }
+
+    /// Sends one command and returns its result as the text the browser wrote, for a caller
+    /// that decodes it into its own type ([`RawReply::decode`]). A large result is then never
+    /// built as a `Value`, and its decode runs in the caller's task, not on the reader loop that
+    /// every other reply and event on the connection waits for.
+    pub async fn send_raw(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<RawReply, CdpError> {
+        self.send_with_epoch(None, method, params, session).await
+    }
+
+    /// [`Self::send_raw`] on the socket incarnation `expected_epoch`, as [`Self::send_at_epoch`].
+    pub async fn send_raw_at_epoch(
+        &self,
+        expected_epoch: u64,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<RawReply, CdpError> {
+        self.send_with_epoch(Some(expected_epoch), method, params, session)
             .await
     }
 
@@ -270,7 +301,7 @@ impl CdpClient {
         method: &str,
         params: Value,
         session: Option<&SessionId>,
-    ) -> Result<Value, CdpError> {
+    ) -> Result<RawReply, CdpError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let mut frame = serde_json::Map::new();
         frame.insert("id".to_string(), Value::from(id));
@@ -292,6 +323,7 @@ impl CdpClient {
         .await
     }
 
+    /// Sends one command and decodes its result straight into `R`, in the caller's task.
     pub async fn send_typed<P, R>(
         &self,
         method: &str,
@@ -303,10 +335,12 @@ impl CdpClient {
         R: DeserializeOwned,
     {
         let value = serde_json::to_value(params)?;
-        let response = self.send(method, value, session).await?;
-        serde_json::from_value(response).map_err(CdpError::from)
+        self.send_raw(method, value, session).await?.decode()
     }
 
+    /// Sends parameters already encoded as JSON, and returns the result as the browser's text,
+    /// with only lone UTF-16 halves repaired ([`RawReply::into_json`]). The text is not parsed, so
+    /// a result serde cannot read (nesting past its limit) fails the caller's own parse.
     pub async fn send_raw_json(
         &self,
         method: &str,
@@ -357,7 +391,7 @@ impl CdpClient {
                 Message::Text(frame.into()),
             )
             .await?;
-        serde_json::to_string(&response).map_err(CdpError::from)
+        Ok(response.into_json())
     }
 
     /// Every event no targeted subscriber took, shared with every other receiver. Check
@@ -431,7 +465,7 @@ impl CdpClient {
         method: &str,
         session: Option<&SessionId>,
         message: Message,
-    ) -> Result<Value, CdpError> {
+    ) -> Result<RawReply, CdpError> {
         let (reply, rx) = oneshot::channel();
         let pending = Pending {
             session: session.cloned(),
@@ -614,9 +648,9 @@ async fn reader_loop(inner: Arc<Inner>, mut reader: WsReader) {
             break ConnectionLoss::Ended;
         };
         match message {
-            Ok(Message::Text(text)) => handle_text_message(&inner, text.as_str()).await,
-            Ok(Message::Binary(bytes)) => match std::str::from_utf8(&bytes) {
-                Ok(text) => handle_text_message(&inner, text).await,
+            Ok(Message::Text(text)) => handle_text_message(&inner, &text).await,
+            Ok(Message::Binary(bytes)) => match Utf8Bytes::try_from(bytes) {
+                Ok(text) => handle_text_message(&inner, &text).await,
                 Err(err) => debug!("ignoring non-utf8 CDP binary frame: {err}"),
             },
             Ok(Message::Close(frame)) => break closed(frame),
@@ -647,52 +681,28 @@ fn closed(frame: Option<CloseFrame>) -> ConnectionLoss {
 }
 
 /// Routes one message from the browser: a reply to its pending request, an event to its
-/// targeted subscribers or else the broadcast. The parsed tree is taken apart, not copied: a
-/// reply's `result` and an event's `params` move out of it whole.
-async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
-    let mut message = match inbound::read(text) {
-        Ok(Value::Object(message)) => message,
-        Ok(_) => return,
+/// targeted subscribers or else the broadcast.
+///
+/// This runs on the reader loop, so every other reply and event on the connection waits while
+/// it does. A reply's result is handed over as the browser's text and decoded by its caller
+/// ([`RawReply`]); an event's params are parsed here and move into the event whole.
+async fn handle_text_message(inner: &Arc<Inner>, text: &Utf8Bytes) {
+    let event = match inbound::read(text) {
+        Ok(Inbound::Reply { id, outcome }) => {
+            if let Some(pending) = inner.pending.lock().await.remove(&id) {
+                let _ = pending.reply.send(outcome);
+            }
+            return;
+        }
+        Ok(Inbound::Event(event)) => event,
+        Ok(Inbound::Neither) => return,
         Err(unreadable) => return fail_unreadable(inner, text.len(), unreadable).await,
     };
-
-    if let Some(id) = message.get("id").and_then(Value::as_u64) {
-        let result = match message.remove("error") {
-            Some(error) => {
-                let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
-                let message = error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown CDP protocol error")
-                    .to_string();
-                Err(CdpError::from_protocol(code, message))
-            }
-            None => Ok(message.remove("result").unwrap_or_else(|| json!({}))),
-        };
-        if let Some(pending) = inner.pending.lock().await.remove(&id) {
-            let _ = pending.reply.send(result);
-        }
-        return;
-    }
-
-    let Some(Value::String(method)) = message.remove("method") else {
-        return;
-    };
-    let params = message.remove("params").unwrap_or_else(|| json!({}));
-    let session_id = match message.remove("sessionId") {
-        Some(Value::String(session)) => Some(SessionId(session)),
-        _ => None,
-    };
-    if method == "Target.detachedFromTarget"
-        && let Some(detached) = params.get("sessionId").and_then(Value::as_str)
+    if event.method == "Target.detachedFromTarget"
+        && let Some(detached) = event.params.get("sessionId").and_then(Value::as_str)
     {
         reject_detached(inner, detached).await;
     }
-    let event = CdpEvent {
-        method,
-        params,
-        session_id,
-    };
     let Some(event) = inner.targeted.deliver(event) else {
         return;
     };
@@ -704,10 +714,6 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
     // Sent under the count's lock, so `events_counted` subscribes between two events.
     let _ = inner.events_tx.send(Arc::new(event));
 }
-
-/// JSON-RPC's "Parse error", the code Chromium gives a command it cannot parse; here the client
-/// could not parse the browser's reply.
-const UNREADABLE_REPLY: i64 = -32700;
 
 /// A message that stays unreadable after [`inbound::read`]'s repair cannot be delivered. Its
 /// request fails now, with serde's reason, instead of waiting out its timeout for an answer
