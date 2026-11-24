@@ -38,6 +38,10 @@ pub type RetainedGroupHook = Arc<
         + Sync,
 >;
 
+/// How long a continuing task waits for its predecessor's teardown before it gives up on
+/// taking over the predecessor's tab group.
+const HAND_OVER_WAIT: Duration = Duration::from_secs(5);
+
 /// Receives a session only after its end audit row is durable.
 pub type SessionCompletionHook = Arc<dyn Fn(String) + Send + Sync>;
 
@@ -140,6 +144,9 @@ pub struct Sessions {
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     // One retained-group close per key may be in flight; failed attempts remain retryable.
     reaping_keys: Mutex<HashSet<ConvoId>>,
+    /// Conversations whose task was removed but whose teardown has not yet left its tab group
+    /// retained, so a successor arriving in that window can wait for it.
+    ending: Mutex<HashMap<ConvoId, Arc<Notify>>>,
     /// Serializes retries per session through terminal persistence without coupling unrelated Stops.
     cancellation_transitions: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
@@ -195,6 +202,7 @@ impl Sessions {
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
+            ending: Mutex::new(HashMap::new()),
             cancellation_transitions: Mutex::new(HashMap::new()),
             retained_group_hook: OnceLock::new(),
             audit_flush_hook: OnceLock::new(),
@@ -414,6 +422,18 @@ impl Sessions {
         if &origin.convo == successor.convo_id() {
             return;
         }
+        // A call can land between the predecessor's removal and the end of its teardown; its
+        // group is only retained, and so only handed over, once that teardown has finished.
+        if !self.retained.read().await.contains_key(&origin.convo)
+            && !self.wait_until_ended(&origin.convo).await
+        {
+            warn!(
+                from = %retired.fingerprint(),
+                to = %successor.id().fingerprint(),
+                "the task being continued was still ending; its tab group stays with it"
+            );
+            return;
+        }
         {
             // Both held through the move: a retained-group close already under way keeps the
             // group, and one that starts afterwards finds nothing left under the old key.
@@ -582,11 +602,19 @@ impl Sessions {
                 .map(|session| (session, self.teardowns.begin()));
             if let Some((session, _)) = &removed {
                 self.retire(session, RetirementCause::Closed).await;
+                self.ending
+                    .lock()
+                    .await
+                    .insert(session.convo_id().clone(), Arc::new(Notify::new()));
             }
             removed
         };
         if let Some((session, _teardown)) = session {
-            return match self.teardown(session.clone(), kind, reason).await {
+            let result = self.teardown(session.clone(), kind, reason).await;
+            if let Some(ending) = self.ending.lock().await.remove(session.convo_id()) {
+                ending.notify_waiters();
+            }
+            return match result {
                 Ok(_) => Ok(true),
                 Err(error) => {
                     self.restore_pending_operator_stop(id, session).await;
@@ -595,6 +623,22 @@ impl Sessions {
             };
         }
         Ok(false)
+    }
+
+    /// Waits, at most [`HAND_OVER_WAIT`], for a removed task whose teardown is still running,
+    /// which is what leaves its tab group retained and ready to hand over. False if it is
+    /// still ending after the wait.
+    async fn wait_until_ended(&self, convo: &ConvoId) -> bool {
+        let Some(ending) = self.ending.lock().await.get(convo).cloned() else {
+            return true;
+        };
+        let ended = ending.notified();
+        tokio::pin!(ended);
+        ended.as_mut().enable();
+        if !self.ending.lock().await.contains_key(convo) {
+            return true;
+        }
+        tokio::time::timeout(HAND_OVER_WAIT, ended).await.is_ok()
     }
 
     async fn restore_pending_operator_stop(&self, id: &SessionId, session: Arc<Session>) {
@@ -2182,6 +2226,58 @@ mod tests {
         assert!(closes.is_empty(), "closed {closes:?}");
         assert_eq!(
             ownership
+                .tab_group_ref(successor.convo_id())
+                .await
+                .as_deref(),
+            Some("group-4")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_hand_over_during_the_predecessors_teardown_waits_for_it() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (registry, _actions) = registry_recording_closes(&dir).await?;
+        // Holds the predecessor's teardown open, as a slow audit flush would.
+        let release = Arc::new(tokio::sync::Notify::new());
+        let hook_release = release.clone();
+        registry.set_audit_flush_hook(Arc::new(move |_| {
+            let hook_release = hook_release.clone();
+            Box::pin(async move {
+                hook_release.notified().await;
+                Ok(())
+            })
+        }));
+        let first = codex_session("s1", "agile-alpaca");
+        registry.insert_for_testing(first.clone()).await;
+        registry
+            .ownership()
+            .set_tab_group_ref(first.convo_id().clone(), Some("group-4".to_string()))
+            .await;
+        let removing = tokio::spawn({
+            let registry = registry.clone();
+            let id = first.id().clone();
+            async move { registry.remove(&id, "closed", Some("completed")).await }
+        });
+        while registry.contains(first.id()).await {
+            tokio::task::yield_now().await;
+        }
+
+        let successor = codex_session("s2", "witty-dolphin");
+        registry.insert_for_testing(successor.clone()).await;
+        let handing = tokio::spawn({
+            let registry = registry.clone();
+            let retired = first.id().clone();
+            let successor = successor.clone();
+            async move { registry.hand_over(&retired, &successor).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release.notify_one();
+        handing.await?;
+        assert!(removing.await??);
+        assert_eq!(
+            registry
+                .ownership()
                 .tab_group_ref(successor.convo_id())
                 .await
                 .as_deref(),
