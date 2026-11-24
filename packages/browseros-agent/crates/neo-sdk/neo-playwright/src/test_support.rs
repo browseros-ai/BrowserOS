@@ -262,6 +262,10 @@ pub(crate) trait TabScript: Send + Sync + 'static {
         false
     }
 
+    /// Sees every command before it is answered, with the session it went out on (`None`: the
+    /// browser's own), for a script that checks where input went.
+    fn seen(&self, _method: &str, _params: &Value, _session: Option<&SessionId>) {}
+
     /// A raw protocol reply outside the DOM probe, such as encoded screenshot bytes.
     /// Returning None retains the scripted browser's ordinary infrastructure responses.
     fn cdp_reply(&self, _method: &str, _params: &Value) -> Option<Value> {
@@ -476,6 +480,7 @@ impl<S: TabScript> ScriptedTab<S> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(method.to_owned());
+        self.script.seen(method, params, session);
         if self.script.outlasts_client(method) {
             let _slowed = Slowed::new(&self.slowed);
             time::sleep(client_timeout()).await;

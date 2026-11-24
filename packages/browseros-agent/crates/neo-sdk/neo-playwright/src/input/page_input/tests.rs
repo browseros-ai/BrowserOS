@@ -291,3 +291,73 @@ async fn tests_that_a_burst_held_at_its_approach_repeats_only_the_move_and_owes_
     );
     Ok(())
 }
+
+/// A pointer burst into an out-of-process frame (`pointer_action.rs`, `FrameInput`): its mouse
+/// events on the frame's session, its modifier keys on the tab's root session, which hands them
+/// to the focused frame as upstream's keyboard does. Stopped inside the click's delay, it owes
+/// the button's release on the frame's session and Shift's on the root, and the next holder
+/// sends both there before anything else.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_burst_into_a_frame_sends_its_mouse_there_and_its_keys_on_the_root()
+-> Result<(), Box<dyn Error>> {
+    let recording = Arc::new(Recording::default());
+    let root = recording.session("tab");
+    let frame = recording.session("frame");
+    let tab = Arc::new(Mutex::new(TabInput::new(Platform::Linux)));
+    let env = TestEnv::new();
+    let op = Op::from_name("locator.click").ok_or("locator.click is an op")?;
+    let header = CallHeader {
+        api: None,
+        timeout_ms: Some(100),
+        conformance: false,
+        timeout_built_in: false,
+    };
+    let scope = OpScope::new(&env, op, header);
+    let sent = scope.send_effect()?;
+
+    let mut input = PageInput::hold(Arc::clone(&tab), root.clone(), 1.0).await;
+    let mut planned = input.plan();
+    let shift = Modifiers::default().with(Modifier::Shift);
+    let (restore, mut steps) = planned.keyboard.ensure_modifiers(shift)?;
+    let held = planned.keyboard.modifiers();
+    steps.extend(planned.mouse.click(
+        Point { x: 5.0, y: 5.0 },
+        ClickOptions {
+            delay: Duration::from_secs(1),
+            ..ClickOptions::default()
+        },
+        held,
+    ));
+    steps.extend(planned.keyboard.ensure_modifiers(restore)?.1);
+    let stopped = input
+        .send_planned_mouse_on(&sent, &scope, planned, steps, &frame)
+        .await;
+    assert!(
+        matches!(stopped, Err(BurstFailure::Expired)),
+        "the op's 100 ms ran out inside the click's 1 s delay"
+    );
+    assert!(input.pressed(), "the press went out before the delay");
+    drop(input);
+    let _next = PageInput::hold(tab, root, 1.0).await;
+
+    let sent: Vec<String> = recording
+        .sent_on()
+        .into_iter()
+        .map(|(method, params, session)| {
+            let kind = params["type"].as_str().unwrap_or("");
+            format!("{method} {kind} on {}", session.unwrap_or_default())
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            "Input.dispatchKeyEvent rawKeyDown on tab",
+            "Input.dispatchMouseEvent mouseMoved on frame",
+            "Input.dispatchMouseEvent mousePressed on frame",
+            "Input.dispatchMouseEvent mouseReleased on frame",
+            "Input.dispatchKeyEvent keyUp on tab",
+        ],
+        "each event on its own session, the owed releases too"
+    );
+    Ok(())
+}

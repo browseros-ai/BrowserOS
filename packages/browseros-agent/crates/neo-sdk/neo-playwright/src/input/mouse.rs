@@ -130,6 +130,20 @@ impl MouseEvent {
         matches!(self.kind, MouseEventKind::Moved { .. })
     }
 
+    /// Where this event happens, in the pixels it was planned in.
+    pub(super) fn at(&self) -> Point {
+        self.at
+    }
+
+    /// The same event `by` CSS pixels away, for a burst sent into a frame's own pixels.
+    pub(super) fn shifted(self, by: Point) -> Self {
+        let at = Point {
+            x: self.at.x + by.x,
+            y: self.at.y + by.y,
+        };
+        Self { at, ..self }
+    }
+
     /// The CDP params, with the position times core's `pointer_scale`. Wheel deltas are not
     /// positions and stay unscaled, as core's own scrolling sends them.
     pub(crate) fn params(&self, pointer_scale: f64) -> Value {

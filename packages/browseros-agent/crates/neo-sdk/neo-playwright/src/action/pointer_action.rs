@@ -11,17 +11,20 @@
 //!   and buttons are released by [`PageInput`] on every exit, the host dropping the future
 //!   included; `dragTo`'s button, held between its halves, by its [`Drag`]; the focus lease is
 //!   restored by its guard in `action_op.rs`.
-//! - **No button before the route.** In an out-of-process frame no button goes down until the
-//!   frame saw the attempt's move arrive ([`PointerRunner::route`]), `force` or not. The browser
-//!   routes root-session input by its own copy of the layout, which trails a scroll in another
-//!   process.
+//! - **No frame above takes the input.** An element in an out-of-process frame gets its burst on
+//!   that frame's own session, in its own pixels ([`FrameInput`]): the browser routes
+//!   root-session input by its own copy of the layout, which trails a scroll in another process,
+//!   and under that lag hands a press to the frame above. Where the burst must stay on the root
+//!   session (`force`, a drag, a transformed frame, a scaled tab), no button goes down until the
+//!   frame saw the attempt's move arrive ([`PointerRunner::route`]).
 
 use std::future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::SessionId;
+use browseros_cdp::CdpError;
 use browseros_core::viewport::ViewportMode;
+use browseros_core::{CoreError, ProtocolSession, SessionId};
 use serde::Deserialize;
 use tokio::time::Instant;
 use ts_rs::TS;
@@ -160,6 +163,44 @@ pub(crate) enum WaitAfter {
     /// `click({ noWaitAfter: true })`, upstream's `false`: neither. The interceptor is still
     /// stopped, and a miss is not retried.
     Nothing,
+}
+
+/// A burst sent on an out-of-process frame's own session ([`PointerRunner::frame_input`]).
+///
+/// Root-session input reaches such a frame only through the browser's targeting, which follows
+/// its own copy of every frame's layout. That copy trails a scroll in another process, and
+/// while a scroll changes how much of an out-of-process frame shows, the frame's new surface
+/// has no hit-test data for about a frame: Chromium then asks the renderers, cannot square
+/// their answer with its stale transforms (the async hit test's coordinate check, Chromium
+/// 666763b5e), and gives the event to the frame above. Measured on F8 (four frames down, after
+/// the click's own scroll of a3): the approach move reached c4 at its button, and 1.7 ms later
+/// the press went to a3, on its `<iframe>`, in 21 of 200 runs; the interceptor saw only the
+/// release and read the click as done. A burst on the frame's own session is targeted from
+/// that frame down, so nothing above it can take it.
+struct FrameInput {
+    session: ProtocolSession,
+    /// From the main viewport's pixels, where the burst is planned and the tab's mouse state
+    /// stays, to the frame's own.
+    shift: PagePoint,
+}
+
+/// [`PointerRunner::frame_input`]'s rule, without the runner: the shift from the main viewport's
+/// pixels to the element's own session's, when the browser would otherwise pick the frame
+/// (`browser_routes`), the tab's pointer scale is 1 and the placement gave a point in that frame.
+fn frame_shift(
+    browser_routes: bool,
+    scale: f64,
+    own: Option<PagePoint>,
+    page: PagePoint,
+) -> Option<PagePoint> {
+    let own = own?;
+    if !browser_routes || (scale - 1.0).abs() > f64::EPSILON {
+        return None;
+    }
+    Some(PagePoint {
+        x: own.x - page.x,
+        y: own.y - page.y,
+    })
 }
 
 /// Where the route check left the attempt.
@@ -694,12 +735,13 @@ impl<'a> PointerRunner<'a> {
                 },
                 None => own.insert(self.hold().await?),
             };
-            let (mut page_point, browser_mapped) =
+            let (mut page_point, browser_mapped, mut own_point) =
                 match self.place(located, pin, measured, action).await? {
                     Placed::At {
                         point,
                         browser_mapped,
-                    } => (point, browser_mapped),
+                        own,
+                    } => (point, browser_mapped, own),
                     Placed::Covered { by, cover, hop, at } => {
                         self.log_hit_refused(&req, by);
                         self.saw_above(located, hop, at, cover)?;
@@ -772,12 +814,13 @@ impl<'a> PointerRunner<'a> {
                         // at that case's point, and the input goes there (a transformed frame gets
                         // no such press).
                         if press.is_some() && point != measured.point {
-                            let moved = if located.path().hops().is_empty() {
+                            let (moved, moved_own) = if located.path().hops().is_empty() {
                                 // A point of the same frame moves on the page by the same offset.
-                                PagePoint {
+                                let moved = PagePoint {
                                     x: page_point.x + point.x - measured.point.x,
                                     y: page_point.y + point.y - measured.point.y,
-                                }
+                                };
+                                (moved, None)
                             } else {
                                 // The parent pages were hit-tested at the measured point, and a
                                 // same-process frame gets no route check: the new point is placed
@@ -786,7 +829,7 @@ impl<'a> PointerRunner<'a> {
                                 // is cleared only once the point is clear.
                                 let at = Measurement { point, ..measured };
                                 match self.place(located, pin, at, action).await? {
-                                    Placed::At { point, .. } => point,
+                                    Placed::At { point, own, .. } => (point, own),
                                     Placed::Covered { by, cover, hop, at } => {
                                         drop(armed);
                                         self.log_hit_refused(&req, by);
@@ -811,6 +854,7 @@ impl<'a> PointerRunner<'a> {
                             };
                             planned = input.plan();
                             page_point = moved;
+                            own_point = moved_own;
                             burst = self::burst(&mut planned, page_point, action)?;
                         }
                         self.covers.cleared();
@@ -924,11 +968,24 @@ impl<'a> PointerRunner<'a> {
 
             // ③④⑤ The input. `send_effect` runs here, right before the first event, on every
             // attempt; a refusal returns before anything is marked or sent.
-            // The frame's count of trusted moves before the approach, which the route check
-            // waits to see grow. It needs no interceptor: a forced press waits for it too.
-            let route = match input::approach(&burst)
-                .filter(|_| self.browser_routes(located, root_id.as_ref(), req.hit))
-            {
+            // An element in an out-of-process frame takes its whole burst on that frame's own
+            // session, so the browser never picks the frame (`FrameInput`). Otherwise, where the
+            // browser picks it, the frame's count of trusted moves before the approach, which
+            // the route check waits to see grow. It needs no interceptor: a forced press waits
+            // for it too.
+            let into_frame = self
+                .frame_input(
+                    located,
+                    root_id.as_ref(),
+                    req.hit,
+                    scale,
+                    own_point,
+                    page_point,
+                )
+                .filter(|_| !action.force && !action.kind.is_drag() && input::one_point(&burst));
+            let route = match input::approach(&burst).filter(|_| {
+                into_frame.is_none() && self.browser_routes(located, root_id.as_ref(), req.hit)
+            }) {
                 None => None,
                 Some(approach) => match self.call(located, &ProbeRequest::Moves).await? {
                     Called::Reply(ProbeReply::Moves { moves }) => Some((moves, approach)),
@@ -951,9 +1008,36 @@ impl<'a> PointerRunner<'a> {
                 RequestedNavigations::watch(self.pw.browser().cdp_events(), sessions)
             });
             self.scope.log(format!("  performing {} action", req.name));
-            let sending = match route {
-                None => input.send_planned(&sent, self.scope, planned, burst).await,
-                Some((before, approach)) => {
+            let sending = match (into_frame, route) {
+                (Some(frame), _) => {
+                    let steps = input::shifted(burst, frame.shift);
+                    match input
+                        .send_planned_mouse_on(&sent, self.scope, planned, steps, &frame.session)
+                        .await
+                    {
+                        // The frame's target went away under the burst once its press was on the
+                        // wire: the press navigated it into another process, or closed it.
+                        // Root-session input would have gone on to whatever took its place, and the
+                        // verdict below reads a world gone under it as input that landed; so does
+                        // this. A press whose own dispatch failed this way counts too, though the
+                        // frame may have gone just before the press arrived: the two fail alike,
+                        // and pressing again could click twice where a mousedown handler navigated
+                        // the frame, so that rare unclicked case is the one accepted.
+                        Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone)))
+                            if input.pressed() =>
+                        {
+                            Ok(())
+                        }
+                        // It went away before the press: nothing was clicked, and the element is
+                        // looked for again, as when its world goes before the input.
+                        Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone))) => {
+                            return self.subject.lost(located).map(|()| Inner::Reresolve);
+                        }
+                        sent => sent,
+                    }
+                }
+                (None, None) => input.send_planned(&sent, self.scope, planned, burst).await,
+                (None, Some((before, approach))) => {
                     if let Err(failure) = input.send_first(&sent, self.scope, burst, approach).await
                     {
                         return Err(self.burst_failed(failure, dialogs_from));
@@ -1073,6 +1157,33 @@ impl<'a> PointerRunner<'a> {
             .within(held)
             .await
             .map_err(|_expired| self.timed_out())
+    }
+
+    /// Where this element's burst goes when it lives in an out-of-process frame, or a frame
+    /// inside one: that frame's own session, in its own pixels (`own`, from the placement), so
+    /// the browser starts its targeting at that frame and can never hand an event to a frame
+    /// above. `None` keeps the root session and its route check: an element on the root
+    /// session, a drop target or a touch preview (as [`PointerRunner::browser_routes`]), a point
+    /// only the browser could map (a transformed frame), and a tab whose pointer scale is not 1,
+    /// whose frames' pixels this session's coordinates are not known to share. The caller also
+    /// keeps there a forced action, which skipped the parents' hit tests, so a page above that
+    /// covers the frame must still take its input as upstream's does; `dragTo`, whose button is
+    /// held across two bursts and released on the root session; and a burst with moves on the
+    /// way to its point, which belong to the frames they cross.
+    fn frame_input(
+        &self,
+        located: &Resolved,
+        root: Option<&SessionId>,
+        hit: HitAction,
+        scale: f64,
+        own: Option<PagePoint>,
+        page: PagePoint,
+    ) -> Option<FrameInput> {
+        let shift = frame_shift(self.browser_routes(located, root, hit), scale, own, page)?;
+        Some(FrameInput {
+            session: located.world().session().clone(),
+            shift,
+        })
     }
 
     /// Whether the browser, not the page, picks the frame this element's input goes to: the
@@ -1262,12 +1373,19 @@ impl<'a> PointerRunner<'a> {
             return Err(self.timed_out());
         };
         match projected? {
-            Projection::At(_) if !measured.in_view => Ok(Placed::Outside),
-            Projection::At(at) => {
-                let at = frame_projection::round_point(at);
+            Projection::At { .. } if !measured.in_view => Ok(Placed::Outside),
+            Projection::At { page, levels } => {
+                let at = frame_projection::round_point(page);
+                let own = frame_projection::round_point(frame_projection::own_session_point(
+                    located.path(),
+                    located.world(),
+                    measured.point,
+                    &levels,
+                ));
                 Ok(Placed::At {
                     point: PagePoint { x: at.x, y: at.y },
                     browser_mapped: false,
+                    own: Some(PagePoint { x: own.x, y: own.y }),
                 })
             }
             Projection::Covered { by, cover, hop, at } => {
@@ -1292,6 +1410,7 @@ impl<'a> PointerRunner<'a> {
                         Ok(Placed::At {
                             point: PagePoint { x: at.x, y: at.y },
                             browser_mapped: true,
+                            own: None,
                         })
                     }
                     Ok(QuadPlacement::Outside) => Ok(Placed::Outside),
@@ -1427,6 +1546,10 @@ enum Placed {
     At {
         point: PagePoint,
         browser_mapped: bool,
+        /// The same point in the pixels of the topmost frame on the element's own session
+        /// ([`frame_projection::own_session_point`]); `None` for a browser-mapped point, which
+        /// only the main viewport has.
+        own: Option<PagePoint>,
     },
     /// Browser-mapped quads leave no substantial area inside the root viewport.
     Outside,

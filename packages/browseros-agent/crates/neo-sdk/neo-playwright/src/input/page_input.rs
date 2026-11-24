@@ -82,6 +82,9 @@ pub(crate) struct PageInput {
     /// The tab's root session, which routes keys to the focused frame and the mouse by hit
     /// testing, out-of-process iframes included.
     session: ProtocolSession,
+    /// For the burst [`PageInput::send_planned_mouse_on`] is sending: the frame session its
+    /// mouse events go to, while its keys stay on [`PageInput::session`].
+    mouse_session: Option<ProtocolSession>,
     /// Core's factor for this tab's root session (`BrowserView::pointer_scale`).
     pointer_scale: f64,
     /// What the current burst pressed and has not released, and its unsent rest.
@@ -89,6 +92,9 @@ pub(crate) struct PageInput {
     rest: VecDeque<InputStep>,
     /// The last event sent, for [`PageInput::repeat_move`].
     last: Option<InputEvent>,
+    /// Whether the current burst put a mouse button down on the wire, for a caller that must
+    /// tell a burst that stopped before its press from one that stopped after it.
+    pressed: bool,
 }
 
 /// Why a burst stopped part-way.
@@ -112,10 +118,12 @@ impl PageInput {
         Self {
             tab,
             session,
+            mouse_session: None,
             pointer_scale,
             held: Vec::new(),
             rest: VecDeque::new(),
             last: None,
+            pressed: false,
         }
     }
 
@@ -143,7 +151,9 @@ impl PageInput {
     }
 
     /// [`PageInput::send_planned`] with every event on `session` instead of the tab's root
-    /// session. The private entry types into a box in a cross-site frame on that frame's own
+    /// session. A pointer action into an out-of-process frame sends its burst there, in that
+    /// frame's pixels, so no frame above can take it (`pointer_action.rs`, `FrameInput`). The
+    /// private entry types into a box in a cross-site frame on that frame's own
     /// session, so its text lands in that frame or nowhere: measured on main, a key and an
     /// `Input.insertText` on a frame's session typed nothing anywhere once the top page had
     /// taken the focus, where the root session handed them to the thief's box
@@ -172,6 +182,42 @@ impl PageInput {
         burst
     }
 
+    /// [`PageInput::send_planned`] with the mouse events on `session`, an out-of-process frame's
+    /// own, and every key on the tab's root session. A pointer action into such a frame sends its
+    /// burst this way, its mouse events in that frame's pixels, so no frame above can take them
+    /// (`pointer_action.rs`, `FrameInput`), while the modifiers it holds still reach the focused
+    /// frame, as upstream's keyboard does. A burst that stops part-way owes each release on the
+    /// session of its press.
+    pub(crate) async fn send_planned_mouse_on(
+        &mut self,
+        sent: &Sent<'_>,
+        scope: &OpScope<'_>,
+        planned: InputDevices,
+        steps: Vec<InputStep>,
+        session: &ProtocolSession,
+    ) -> Result<(), BurstFailure> {
+        self.mouse_session = Some(session.clone());
+        let burst = self.send_planned(sent, scope, planned, steps).await;
+        // If the op is dropped before this line, `Drop` still finds `mouse_session` in place.
+        if burst.is_err() {
+            for event in self.owed() {
+                let session = self.session_for(&event).clone();
+                self.tab.owed.push((session, event));
+            }
+        }
+        self.mouse_session = None;
+        burst
+    }
+
+    /// Where `event` goes: a mouse event of a [`PageInput::send_planned_mouse_on`] burst to its
+    /// frame session, anything else to [`PageInput::session`].
+    fn session_for(&self, event: &InputEvent) -> &ProtocolSession {
+        match (&self.mouse_session, event) {
+            (Some(session), InputEvent::Mouse(_)) => session,
+            _ => &self.session,
+        }
+    }
+
     /// Sends the first `count` of `steps` and keeps the rest for [`PageInput::resume`]. The rest
     /// stays the burst's: dropped before it went out, it still releases what the first part
     /// pressed. The tab's devices stay as they were until the rest goes out, so a burst given up
@@ -185,7 +231,14 @@ impl PageInput {
         count: usize,
     ) -> Result<(), BurstFailure> {
         self.rest = steps.into();
+        self.pressed = false;
         self.drain(scope, count).await
+    }
+
+    /// Whether the burst sent last put a mouse button down, its reply or not: a burst into a
+    /// frame whose target went away under it pressed nothing when this is false.
+    pub(crate) fn pressed(&self) -> bool {
+        self.pressed
     }
 
     /// Makes `planned`, the devices [`PageInput::send_first`]'s burst was built on, the tab's,
@@ -232,8 +285,9 @@ impl PageInput {
         let Some(event) = self.last.as_ref().filter(|event| event.is_mouse_move()) else {
             return Ok(());
         };
-        let crash = scope.begin_protocol(&self.session);
-        let dispatched = dispatch(&self.session, self.pointer_scale, event);
+        let session = self.session_for(event);
+        let crash = scope.begin_protocol(session);
+        let dispatched = dispatch(session, self.pointer_scale, event);
         scope
             .within(dispatched)
             .await
@@ -258,8 +312,9 @@ impl PageInput {
                 InputStep::Dispatch(event) => {
                     // Counted before the reply: the event is on the wire once sent.
                     self.note(&event);
-                    let crash = scope.begin_protocol(&self.session);
-                    let dispatched = dispatch(&self.session, self.pointer_scale, &event);
+                    let session = self.session_for(&event).clone();
+                    let crash = scope.begin_protocol(&session);
+                    let dispatched = dispatch(&session, self.pointer_scale, &event);
                     let replied = scope.within(dispatched).await;
                     self.last = Some(event);
                     replied
@@ -276,7 +331,10 @@ impl PageInput {
 
     fn note(&mut self, event: &InputEvent) {
         match event.hold() {
-            Some(Hold::Press(held)) => self.held.push(held),
+            Some(Hold::Press(held)) => {
+                self.pressed |= matches!(held, Held::Button(_));
+                self.held.push(held);
+            }
             Some(Hold::Release(held)) => {
                 if let Some(at) = self.held.iter().position(|pressed| *pressed == held) {
                     self.held.remove(at);
@@ -308,11 +366,10 @@ impl PageInput {
 /// await, and the lock is released right after this.
 impl Drop for PageInput {
     fn drop(&mut self) {
-        let owed = self.owed();
-        let session = self.session.clone();
-        self.tab
-            .owed
-            .extend(owed.into_iter().map(|event| (session.clone(), event)));
+        for event in self.owed() {
+            let session = self.session_for(&event).clone();
+            self.tab.owed.push((session, event));
+        }
         if self.tab.owed.is_empty() {
             return;
         }

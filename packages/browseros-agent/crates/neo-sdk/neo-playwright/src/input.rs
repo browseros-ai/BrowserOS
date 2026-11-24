@@ -22,7 +22,7 @@ mod typed;
 mod us_keyboard_layout;
 
 pub(crate) use click_cursor::ClickCursor;
-pub(crate) use input_devices::{InputDevices, InputStep, approach, waits};
+pub(crate) use input_devices::{InputDevices, InputStep, approach, one_point, shifted, waits};
 pub(crate) use input_op::{InputOp, burst_failed, hold, millis};
 pub(crate) use keyboard::{Keyboard, Modifiers, Platform, UnknownKey};
 pub(crate) use mouse::{ClickOptions, MouseButton, Point};

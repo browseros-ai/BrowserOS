@@ -342,8 +342,11 @@ async fn tests_that_frame_locator_chains_three_and_four_deep_resolve_and_click()
             (frame.button, log.clone(), log)
         })
         .collect();
-    // The first click scrolls B1 and the second C2, each in another process than the button's
-    // frame: a press the browser routed by its old layout shows up in an ancestor's presses.
+    // The first click scrolls c2, b1 and the top, the second a3, each in another process than
+    // the button's frame. A press the browser targeted from the root under its lagging copy of
+    // that layout shows up in an ancestor's presses, on its `IFRAME`, while the target's own
+    // interceptor saw only the release (measured on root-session input: 21 of 200 runs, the
+    // press 1.7 ms after a move that had reached the button).
     assert_eq!(
         logged, expected,
         "A3 and C4 each logged exactly one press and one click, and no other frame saw a press"

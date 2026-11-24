@@ -383,7 +383,7 @@ async fn pages_above(
 /// under the asking leaves a page above unasked.
 fn above_of(projected: Result<Projection, PlaywrightError>) -> Result<Above, EntryCode> {
     Ok(match projected {
-        Ok(Projection::At(_)) => Above::Clear,
+        Ok(Projection::At { .. }) => Above::Clear,
         Ok(Projection::Covered { .. }) => Above::Refused(EntryCode::BoxCovered(CoverIn::PageAbove)),
         Ok(Projection::Transformed) => Above::Refused(EntryCode::CoverUnread(Unread::SizeOrAngle)),
         Ok(Projection::Unseen) => Above::Refused(EntryCode::CoverUnread(Unread::OutOfView)),
@@ -703,7 +703,13 @@ mod tests {
         let banner: PageText = serde_json::from_value(json!("<div class=\"banner\">"))?;
         let failed = |code| Err(PlaywrightError::new(code, "frameBox: failed".to_owned()));
         let point = Point { x: 140.0, y: 147.0 };
-        assert_eq!(above_of(Ok(Projection::At(point))), Ok(Above::Clear));
+        assert_eq!(
+            above_of(Ok(Projection::At {
+                page: point,
+                levels: Vec::new(),
+            })),
+            Ok(Above::Clear)
+        );
         assert_eq!(
             above_of(Ok(Projection::Covered {
                 by: banner,

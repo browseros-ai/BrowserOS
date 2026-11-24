@@ -1266,6 +1266,53 @@ async fn click_until_seen(
     Err(format!("no click at ({x}, {y}) reached the frame").into())
 }
 
+/// Moves to `to` on the page's root session, with the tab in front, until the fixture frame
+/// `frame` saw its latest move at `seen` (its own pixels, within a pixel), and returns every move
+/// it saw (`window.__moves`). The browser routes root-session input into a frame by its own copy
+/// of every frame's layout, which trails a scroll in another process and refreshes only for the
+/// tab in front, which a parallel test's new tab may take. Until it catches up, a move can reach
+/// the frame at the old offset (measured after the nested row's four scrolls: [11, 15] for the
+/// corner (11, 119.875), one frame's 104.875 px scroll missing), so the first move the frame
+/// sees proves nothing; one at `seen` does, and a box that left out a frame's origin or border
+/// never gets there.
+async fn move_until_seen_at(
+    live: &LiveBrowser,
+    page: &TestPage,
+    frame: &SessionId,
+    to: Spot,
+    seen: Spot,
+) -> TestResult<Vec<Value>> {
+    let session = live.browser.pages.get_session(page.id.clone()).await?;
+    let mut moves = Vec::new();
+    for _ in 0..20 {
+        session
+            .session
+            .send::<_, Value>("Page.bringToFront", json!({}))
+            .await?;
+        mouse(live, page, "mouseMoved", to.x, to.y).await?;
+        moves = serde_json::from_value(in_frame(live, frame, "__moves").await?)?;
+        if moves.last().is_some_and(|moved| near(moved, seen)) {
+            break;
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(moves)
+}
+
+/// A point in one frame's CSS pixels: the main viewport's for input, a frame's own for what it
+/// logged.
+#[derive(Clone, Copy, Debug)]
+struct Spot {
+    x: f64,
+    y: f64,
+}
+
+/// Whether a logged `[x, y]` is `spot`, within a pixel: a mouse event's client coordinates.
+fn near(moved: &Value, spot: Spot) -> bool {
+    moved[0].as_f64().is_some_and(|x| (x - spot.x).abs() <= 1.0)
+        && moved[1].as_f64().is_some_and(|y| (y - spot.y).abs() <= 1.0)
+}
+
 /// One mouse event on the page's root session, in main-viewport CSS pixels.
 async fn mouse(live: &LiveBrowser, page: &TestPage, kind: &str, x: f64, y: f64) -> TestResult {
     let session = live.browser.pages.get_session(page.id.clone()).await?;
@@ -1364,32 +1411,19 @@ async fn tests_that_a_box_in_a_nested_oopif_is_where_input_reaches_it() -> TestR
     );
 
     // Near the box's top-left corner, so a frame's border left out would miss the button.
-    // The browser routes input into a frame by hit-test data it refreshes after the scroll, and
-    // only for the tab in front, which a parallel test's new tab may take: the tab comes to
-    // the front and the move is sent again until c4 has seen one.
-    let (x, y) = (field(&box_, "x")? + 3.0, field(&box_, "y")? + 3.0);
-    let session = live.browser.pages.get_session(page.id.clone()).await?;
-    let mut moves = Value::Null;
-    for _ in 0..20 {
-        session
-            .session
-            .send::<_, Value>("Page.bringToFront", json!({}))
-            .await?;
-        mouse(&live, &page, "mouseMoved", x, y).await?;
-        moves = in_frame(&live, &frame, "__moves").await?;
-        if moves.as_array().is_some_and(|moves| !moves.is_empty()) {
-            break;
-        }
-        time::sleep(Duration::from_millis(50)).await;
-    }
-    let reached = moves[0].clone();
-    let (Some(reached_x), Some(reached_y)) = (reached[0].as_f64(), reached[1].as_f64()) else {
-        return Err(format!("a move at the box's corner ({x}, {y}) never reached c4").into());
+    let at = Spot {
+        x: field(&box_, "x")? + 3.0,
+        y: field(&box_, "y")? + 3.0,
     };
+    let corner = Spot {
+        x: field(&local, "x")? + 3.0,
+        y: field(&local, "y")? + 3.0,
+    };
+    let moves = move_until_seen_at(&live, &page, &frame, at, corner).await?;
     assert!(
-        (reached_x - (field(&local, "x")? + 3.0)).abs() <= 1.0
-            && (reached_y - (field(&local, "y")? + 3.0)).abs() <= 1.0,
-        "a move to the box's corner reached c4 at its button's corner: {reached} for {local}"
+        moves.last().is_some_and(|moved| near(moved, corner)),
+        "a move to the box's corner {at:?} reached c4 at its button's corner {corner:?}: \
+         c4 saw {moves:?} for {local}"
     );
     let (center_x, center_y) = (
         field(&box_, "x")? + field(&box_, "width")? / 2.0,

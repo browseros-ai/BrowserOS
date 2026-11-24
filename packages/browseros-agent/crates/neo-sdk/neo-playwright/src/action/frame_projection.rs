@@ -22,6 +22,7 @@ use crate::probe::{
     ProbeTarget,
 };
 use crate::resolve::{self, FramePath, Hop, HopIframe};
+use crate::world::IsolatedWorld;
 use crate::{ErrorCode, PlaywrightError};
 
 /// Who asks the parents. A click keeps upstream's frame rules. The private look asks with ruling
@@ -37,8 +38,10 @@ pub(crate) enum Asker {
 /// Where the element's point lands in the page.
 #[derive(Debug)]
 pub(crate) enum Projection {
-    /// The point in the main viewport's CSS pixels.
-    At(Point),
+    /// The point in the main viewport's CSS pixels (`page`), and in each hop's parent from the
+    /// main frame down (`levels`, `levels[0]` being `page`; empty in the main frame), for
+    /// [`own_session_point`].
+    At { page: Point, levels: Vec<Point> },
     /// An element of a parent frame receives events at the point instead of the iframe:
     /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent;
     /// which cover it is, for a click's count; and where it was seen, for its facts: the
@@ -102,7 +105,10 @@ pub(crate) async fn project(
     at_level.reverse();
     let at_page = at_level.first().copied().unwrap_or(point);
     if !hit_test || hops.is_empty() {
-        return Ok(Projection::At(at_page));
+        return Ok(Projection::At {
+            page: at_page,
+            levels: at_level,
+        });
     }
     let hits = future::join_all(
         hops.iter()
@@ -129,7 +135,34 @@ pub(crate) async fn project(
             }
         }
     }
-    Ok(Projection::At(at_page))
+    Ok(Projection::At {
+        page: at_page,
+        levels: at_level,
+    })
+}
+
+/// Where the element's `point` (in its own frame's pixels) sits in the topmost frame of its
+/// world's session: the out-of-process frame whose own CDP session carries input straight into
+/// it. A same-process frame below that frame shares its widget, so its origins are added; the
+/// frames above, in other processes, are left out. `levels` is [`Projection::At`]'s.
+pub(crate) fn own_session_point(
+    path: &FramePath,
+    world: &IsolatedWorld,
+    point: Point,
+    levels: &[Point],
+) -> Point {
+    let session = world.session_id();
+    let hops = path.hops();
+    // Frame i (i < hops.len()) is hop i's parent; the element's frame is the last.
+    let mut top = hops.len();
+    while top > 0
+        && hops
+            .get(top - 1)
+            .is_some_and(|hop| hop.parent.session_id() == session)
+    {
+        top -= 1;
+    }
+    levels.get(top).copied().unwrap_or(point)
 }
 
 /// One parent's answer.
