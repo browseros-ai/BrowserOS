@@ -392,16 +392,23 @@ enum Reading {
     Compare(TextAsk),
 }
 
+/// The input's two switches beside its format: the tree path's `clickable`, and `compare`.
+#[derive(Clone, Copy, Debug)]
+struct Switches {
+    clickable: bool,
+    compare: bool,
+}
+
 impl Reading {
     /// The pairs the prelude sends; any other is a broken producer, refused as `internal`
     /// before the page is admitted.
     fn of(
         scope: &OpScope<'_>,
         mode: SnapshotMode,
-        clickable: bool,
         ask: Option<TextAsk>,
-        compare: bool,
+        switches: Switches,
     ) -> Result<Self, PlaywrightError> {
+        let Switches { clickable, compare } = switches;
         let refused = |message: &str| Err(scope.fail(ErrorCode::Internal, message));
         match ask {
             None if compare => refused("`compare` compares a text, so it comes with a `format`"),
@@ -444,7 +451,11 @@ async fn page_snapshot(
         .format
         .map(|format| TextAsk::page(scope, input.mode, format))
         .transpose()?;
-    let reading = Reading::of(scope, input.mode, input.clickable, ask, input.compare)?;
+    let switches = Switches {
+        clickable: input.clickable,
+        compare: input.compare,
+    };
+    let reading = Reading::of(scope, input.mode, ask, switches)?;
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
     if input.mode == SnapshotMode::Ai {
         scope.run_state().opened_tabs.refs_issued(page.tab());
@@ -583,7 +594,11 @@ async fn locator_snapshot(
         .format
         .map(|format| TextAsk::locator(scope, input.mode, format))
         .transpose()?;
-    let reading = Reading::of(scope, input.mode, input.clickable, ask, input.compare)?;
+    let switches = Switches {
+        clickable: input.clickable,
+        compare: input.compare,
+    };
+    let reading = Reading::of(scope, input.mode, ask, switches)?;
     let read = TreeRead {
         mode: input.mode,
         depth: input.depth,

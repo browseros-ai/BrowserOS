@@ -32,10 +32,12 @@
 //! [`run_script`].
 
 use std::collections::HashMap;
-use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+use std::{env, fmt};
 
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
@@ -255,7 +257,7 @@ const COMPARE_SNAPSHOTS: &str = "NEO_COMPARE_SNAPSHOTS";
 /// counts into (`__neo_compare_snapshots`, neo-playwright-js `prelude/snapshot-text.ts`), set
 /// before the prelude starts, as the conformance switch is.
 fn compare_switch<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Option<Object<'js>>> {
-    if std::env::var_os(COMPARE_SNAPSHOTS).is_none_or(|value| value != "1") {
+    if env::var_os(COMPARE_SNAPSHOTS).is_none_or(|value| value != "1") {
         return Ok(None);
     }
     let counters = Object::new(ctx.clone())?;
@@ -270,6 +272,10 @@ fn compare_switch<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Option<Object<'js>>> 
 /// Prints one run's comparisons, so a comparison that silently did not run cannot pass for one
 /// that did: live.py keeps each suite's output (`--nocapture`), and the line is summed across
 /// them. A difference also failed the call that met it.
+#[expect(
+    clippy::print_stderr,
+    reason = "the harness's count of comparisons is read from the suite's output"
+)]
 fn report_comparisons(counters: &Object<'_>) {
     let count = |name: &str| counters.get::<_, f64>(name).unwrap_or(f64::NAN);
     let line = format!(
@@ -280,12 +286,12 @@ fn report_comparisons(counters: &Object<'_>) {
     );
     eprint!("{line}");
     // The spec harness appends the same line to the same file (claw-loader.mjs).
-    if let Some(log) = std::env::var_os("NEO_COMPARE_SNAPSHOTS_LOG") {
-        let appended = std::fs::OpenOptions::new()
+    if let Some(log) = env::var_os("NEO_COMPARE_SNAPSHOTS_LOG") {
+        let appended = OpenOptions::new()
             .create(true)
             .append(true)
             .open(log)
-            .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+            .and_then(|mut file| file.write_all(line.as_bytes()));
         if let Err(error) = appended {
             eprintln!("NEO_SNAPSHOT_COMPARISONS not logged: {error}");
         }

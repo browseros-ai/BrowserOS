@@ -65,9 +65,9 @@ pub(crate) use page_event::PageEvent;
 // hold it with one (`snapshot/snapshot_text/tests.rs`).
 #[cfg(test)]
 pub(crate) use page_event::BindingCalled;
+pub(crate) use run_downloads::RunDownloads;
 #[cfg(test)]
 pub(crate) use run_events::QueuedCall;
-pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub use target_watcher::EventFence;

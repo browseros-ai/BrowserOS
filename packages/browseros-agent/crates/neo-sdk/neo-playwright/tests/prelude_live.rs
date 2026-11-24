@@ -29,8 +29,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
-use std::{env, fs, mem};
+use std::{env, fs};
 
 use browseros_core::TabId;
 use fixture_server::{FixtureServer, Page};
@@ -40,7 +39,6 @@ use live_run::{LiveRun, TestPage, TestResult};
 use neo_playwright::{ErrorCode, PlaywrightError};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
-use tokio::time;
 
 /// The goldens recorded from playwright-core 1.64.1: each expression's selector and `toString()`.
 const SELECTOR_GOLDENS: &str =
@@ -700,82 +698,21 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
     Ok(())
 }
 
-/// The live browser, with each whole-page snapshot's reply held for `hold` after the browser
-/// answered, as Rust's reply path held run 2's in the owner's export of 12 November (the
-/// event-ordering wait after the handler, up to two seconds, and the reply's observation). Every
-/// op name is recorded.
-struct LateTrees {
-    run: Arc<LiveRun>,
-    hold: Mutex<Duration>,
-    sent: Mutex<Vec<String>>,
-}
-
-impl LateTrees {
-    fn new(run: Arc<LiveRun>) -> Arc<Self> {
-        Arc::new(Self {
-            run,
-            hold: Mutex::new(Duration::ZERO),
-            sent: Mutex::default(),
-        })
-    }
-
-    fn hold(&self, hold: Duration) {
-        *self.hold.lock().unwrap_or_else(PoisonError::into_inner) = hold;
-    }
-
-    /// The op names sent since the last call.
-    fn sent(&self) -> Vec<String> {
-        mem::take(&mut *self.sent.lock().unwrap_or_else(PoisonError::into_inner))
-    }
-}
-
-impl OpHost for LateTrees {
-    fn invoke<'a>(
-        &'a self,
-        name: &'a str,
-        input: Value,
-    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
-        Box::pin(async move {
-            self.sent
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(name.to_owned());
-            let answer = OpHost::invoke(&*self.run, name, input).await;
-            if name == "page.ariaSnapshot" && answer.is_ok() {
-                let hold = *self.hold.lock().unwrap_or_else(PoisonError::into_inner);
-                time::sleep(hold).await;
-            }
-            answer
-        })
-    }
-
-    fn event_head(&self) -> u64 {
-        OpHost::event_head(&*self.run)
-    }
-
-    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
-        OpHost::page_facts(&*self.run, tabs)
-    }
-
-    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
-        OpHost::gesture(&*self.run, page, expression)
-    }
-}
-
-/// Run 2 of the owner's export of 12 November: the browser took a whole-page snapshot in time,
-/// its reply reached the realm after the call's deadline, and the call threw `TimeoutError` with
-/// no op behind it, which the run reported as the script's own error. On a real engine, with the
-/// reply held 1.3 s past the browser's answer and a 1 s timeout, under the committed choice (A,
-/// `snapshot-late.ts`): the call returns the snapshot, records no baseline (no
-/// `page.snapshotPending`), and the next run's delta is the whole page. Through the raw ops, a
-/// record naming a held call whose 1 s passed is refused by Rust's own clock as that call's
-/// timeout, naming the phase (the decision B would surface), and the same record naming a call
-/// with 10 s is taken: no script can make Rust give that timeout for a call whose time had not
-/// passed. A slow page alone does not cross: Rust's own op shares the call's timeout and times
-/// out first, which is the verdict that governs a tree that never came.
+/// Run 2 of the owner's export of 12 November: a whole page's call whose time runs out. A slow
+/// page (its main thread busy for 3 s) cannot hand Rust its tree within the call's 1 s, so Rust's
+/// own op times out first and the call fails with that timeout, which governs a tree that never
+/// came, on either path of `SNAPSHOT_TEXT`; the next run's delta is the whole page, and the one
+/// after it unchanged. The reply held past the timeout after its tree arrived is no longer a live
+/// row: with one op the record is made inside it, before any hold a host adds after it, so the
+/// window is pinned on a scripted clock and through the real handler with the deadline passing
+/// during its event wait (`snapshot/snapshot_text/tests.rs`).
+///
+/// Through the raw tree-path ops, a record naming a call whose 1 s passed is refused by Rust's
+/// own clock as that call's timeout, naming the phase, and the same record naming a call with
+/// 10 s is taken: no script can make Rust give that timeout for a call whose time had not passed.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_snapshot_whose_reply_lands_after_its_deadline_is_returned_on_a_live_browser()
+async fn tests_that_a_snapshot_whose_tree_misses_its_deadline_times_out_in_rust_on_a_live_browser()
 -> TestResult {
     let page = Page::html(include_str!("data/prelude/delta.html"))
         .with_header("cache-control", "no-store");
@@ -783,48 +720,50 @@ async fn tests_that_a_snapshot_whose_reply_lands_after_its_deadline_is_returned_
         FixtureServer::start(HashMap::from([("/prelude/delta.html".to_owned(), page)])).await?;
     let url = json!(server.url("127.0.0.1", "/prelude/delta.html"));
     let run = Arc::new(LiveRun::connect().await?);
-    let late = LateTrees::new(Arc::clone(&run));
-    let host: Arc<dyn OpHost> = Arc::clone(&late) as Arc<dyn OpHost>;
-
-    late.hold(Duration::from_millis(1_300));
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
     let opened = js_runner::run_script(
         &host,
         &json!({ "page": null }),
         &format!(
             "await page.goto({url})\n\
+             await page.ariaSnapshotJSON()\n\
+             const busy = page.evaluate(() => {{ const until = performance.now() + 3000; while (performance.now() < until) {{}} }})\n\
+             await new Promise(resolve => setTimeout(resolve, 200))\n\
              const started = Date.now()\n\
-             const text = await page.ariaSnapshot({{ timeout: 1000 }})\n\
+             const slow = await page.ariaSnapshot({{ timeout: 1000 }}).then(() => 'answered', error => [error.name, error.code, error.message.split('\\n')[0]])\n\
              const took = Date.now() - started\n\
+             await busy\n\
              // A text the run never returns, so the host never makes it the tab's baseline.\n\
              const PROBE = 'a probe text this run never returns'\n\
              const op = async (name, input) => JSON.parse(await __neo_invoke(name, JSON.stringify(input), ''))\n\
              const record = async (timeoutMs) => {{\n\
                const tree = await op('page.ariaSnapshot', {{ call: {{ api: 'page.ariaSnapshot', timeoutMs }}, page: page.toJSON(), mode: 'ai' }})\n\
+               if (timeoutMs < 10000) await new Promise(resolve => setTimeout(resolve, timeoutMs + 300))\n\
                const reply = await op('page.snapshotPending', {{ call: {{ api: 'page.ariaSnapshot', timeoutMs: 0 }}, page: page.toJSON(),\n\
                  document: tree.ok.document, snapshotCall: tree.ok.snapshotCall, text: PROBE,\n\
                  form: {{ text: 'kept', urls: false, maxTokens: 8000 }}, delta: false }})\n\
                return reply.err ? [reply.err.code, reply.err.message] : 'recorded'\n\
              }}\n\
-             return {{ text, took, tab: page.toJSON().tab, late: await record(1000), inTime: await record(10000) }}"
+             return {{ slow, took, tab: page.toJSON().tab, late: await record(1000), inTime: await record(10000) }}"
         ),
     )
     .await?;
     run.end_run(Some(&opened));
     let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
-    let text = opened["text"].as_str().ok_or("the late snapshot")?;
-    assert!(text.starts_with("- main [ref="), "the snapshot: {text}");
-    assert!(
-        opened["took"].as_i64().is_some_and(|took| took >= 1_000),
-        "the reply crossed the deadline: {opened}"
-    );
-    let sent = late.sent();
     assert_eq!(
-        sent.iter()
-            .filter(|name| name.as_str() == "page.snapshotPending")
-            .count(),
-        2,
-        "the prelude recorded no baseline for the late text; both pending ops are the script's \
-         own: {sent:?}"
+        opened["slow"],
+        json!([
+            "TimeoutError",
+            "wait_timeout",
+            "page.ariaSnapshot: Timeout 1000ms exceeded."
+        ]),
+        "Rust's op timed out first: {opened}"
+    );
+    assert!(
+        opened["took"]
+            .as_i64()
+            .is_some_and(|took| (1_000..2_000).contains(&took)),
+        "at the call's own timeout, not after the busy page: {opened}"
     );
     assert_eq!(
         opened["late"][0],
@@ -846,9 +785,8 @@ async fn tests_that_a_snapshot_whose_reply_lands_after_its_deadline_is_returned_
         "the same record for a call with 10 s is taken: Rust holds each call to its own deadline"
     );
 
-    // The next runs, on time: the late text was never a baseline, so the first delta is whole;
-    // that one was given in time and is the baseline for the next.
-    late.hold(Duration::ZERO);
+    // The next runs, on time: the call that timed out was never a baseline, so the first delta
+    // is whole; that one was given in time and is the baseline for the next.
     let at_tab = json!({ "page": { "$neo": "page", "tab": tab } });
     let first = js_runner::run_script(
         &host,
@@ -862,12 +800,6 @@ async fn tests_that_a_snapshot_whose_reply_lands_after_its_deadline_is_returned_
         first.starts_with("# whole page: no earlier snapshot of this page\n- main [ref="),
         "{first}"
     );
-    assert!(
-        late.sent()
-            .iter()
-            .any(|name| name == "page.snapshotPending"),
-        "an in-time snapshot records its baseline"
-    );
     let again = js_runner::run_script(
         &host,
         &at_tab,
@@ -877,6 +809,56 @@ async fn tests_that_a_snapshot_whose_reply_lands_after_its_deadline_is_returned_
     assert_eq!(
         again,
         json!("# no change since your last snapshot of this tab")
+    );
+    Ok(())
+}
+
+/// The promise of the event wait (design 1.7, 5.6): a console message the page logs before the
+/// snapshot's last browser reply is heard by its listener before the script continues past the
+/// snapshot. The page logs `tick N` and then writes it into its button every few milliseconds,
+/// so the tree the snapshot read names a tick whose message was logged before that read; the
+/// listener must hold it when the call returns, on either path of `SNAPSHOT_TEXT`. On a real
+/// engine the run's pump is usually first anyway, so this row is the promise, not a forcing of
+/// the race the wait closes: the wait's own rows hold a pump in flight and measure the one wait
+/// a whole page's call takes inside its handler (`snapshot/snapshot_text/tests.rs`).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_console_message_logged_before_the_snapshot_is_heard_before_the_script_continues()
+-> TestResult {
+    let page = Page::html(
+        "<button>tick 0</button><script>let n = 0; setInterval(() => { n += 1; \
+         console.log(`tick ${n}`); document.querySelector('button').textContent = `tick ${n}` \
+         }, 4)</script>",
+    )
+    .with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([("/ticks.html".to_owned(), page)])).await?;
+    let url = json!(server.url("127.0.0.1", "/ticks.html"));
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let heard = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "const heard = new Set()\n\
+             page.on('console', message => heard.add(message.text()))\n\
+             await page.goto({url})\n\
+             const missed = []\n\
+             for (let round = 0; round < 20; round += 1) {{\n\
+               for (const text of [await page.ariaSnapshot(), await page.ariaSnapshot({{ text: true }})]) {{\n\
+                 const tick = /tick \\d+/.exec(text)?.[0]\n\
+                 if (!tick) throw new Error(`no tick in ${{text}}`)\n\
+                 if (!heard.has(tick)) missed.push(tick)\n\
+               }}\n\
+             }}\n\
+             try {{ return {{ missed, heard: heard.size }} }} finally {{ await page.close() }}"
+        ),
+    )
+    .await?;
+    run.end_run(Some(&heard));
+    assert_eq!(heard["missed"], json!([]), "{heard}");
+    assert!(
+        heard["heard"].as_u64().is_some_and(|heard| heard >= 40),
+        "{heard}"
     );
     Ok(())
 }

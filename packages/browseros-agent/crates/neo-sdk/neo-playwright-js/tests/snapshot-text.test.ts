@@ -52,7 +52,8 @@ describe("the 'rust' path", () => {
         return null
       },
     })
-  const sent = (calls: Call[]) =>
+  // Keys left out on the wire are compared as absent.
+  const sent = (calls: Call[]): Record<string, unknown>[] =>
     calls.map(({ name, input }) => ({
       name,
       mode: input.mode,

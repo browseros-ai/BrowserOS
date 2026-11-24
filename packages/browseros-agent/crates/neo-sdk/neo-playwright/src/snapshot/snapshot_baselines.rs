@@ -465,7 +465,7 @@ mod tests {
         for (text, variant) in texts {
             for inert in inerts {
                 for urls in [false, true] {
-                    for max_tokens in [8000.0, 2.5, 0.1, 1e9] {
+                    for max_tokens in [8000.0_f64, 2.5, 0.1, 1e9] {
                         let mut wire = serde_json::json!({
                             "text": text, "urls": urls, "maxTokens": max_tokens,
                         });
@@ -476,7 +476,11 @@ mod tests {
                             serde_json::from_value(wire.clone()).map_err(|e| e.to_string())?;
                         let printed = stored.form().ok_or(format!("{wire} is a form"))?;
                         assert_eq!(printed.text, variant, "{wire}");
-                        assert_eq!(printed.max_tokens.tokens(), max_tokens, "{wire}");
+                        assert_eq!(
+                            printed.max_tokens.tokens().to_bits(),
+                            max_tokens.to_bits(),
+                            "{wire}"
+                        );
                         assert_eq!(printed.urls, urls, "{wire}");
                         assert_eq!(printed.inert, inert == Some(true), "{wire}");
                         assert_eq!(SnapshotForm::of(printed), stored, "{wire}");

@@ -22,7 +22,7 @@ use tokio::time::{self, Instant};
 use super::{CallClock, Finish, Look, finish_page_text};
 use crate::events::{BindingCalled, PageEventKind, QueuedCall, Subscription};
 use crate::probe::PROBE_PROTOCOL;
-use crate::snapshot::{SnapshotBaselines, SnapshotForm};
+use crate::snapshot::{Baseline, SnapshotBaselines, SnapshotForm, TextForm as StoredTextForm};
 use crate::test_env::TestEnv;
 use crate::test_support::{ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript};
 use crate::{ErrorCode, Op, OpEnv, PlaywrightError, RunState, TimedOut};
@@ -154,7 +154,7 @@ fn held_listener<'run>(run: &ScriptedRun, env: &'run TestEnv) -> impl Sized + 'r
 
 /// What the tab's store holds for its current document once `env`'s run ended ok with every
 /// text in its reply.
-fn settled(run: &ScriptedRun, env: &TestEnv) -> Option<crate::snapshot::Baseline> {
+fn settled(run: &ScriptedRun, env: &TestEnv) -> Option<Baseline> {
     env.run_state().settle_snapshot_baselines(true, &|_| true);
     let store = run.playwright.snapshot_baselines();
     let target = TargetId(SCRIPTED_MAIN.to_owned());
@@ -288,7 +288,10 @@ async fn tests_that_pairs_the_prelude_never_sends_fail_before_the_page_is_read()
             json!({ "mode": "ai", "clickable": true, "format": { "neo": {} } }),
             ErrorCode::Internal,
         ),
-        (json!({ "mode": "ai", "compare": true }), ErrorCode::Internal),
+        (
+            json!({ "mode": "ai", "compare": true }),
+            ErrorCode::Internal,
+        ),
         (
             json!({ "mode": "default", "format": { "neo": {} } }),
             ErrorCode::Internal,
@@ -312,7 +315,12 @@ async fn tests_that_pairs_the_prelude_never_sends_fail_before_the_page_is_read()
             .await
             .err()
             .ok_or(format!("{rest} is refused"))?;
-        assert_eq!(error.error_code(), Some(code), "{rest}: {}", error.message());
+        assert_eq!(
+            error.error_code(),
+            Some(code),
+            "{rest}: {}",
+            error.message()
+        );
     }
     let error = run
         .playwright
@@ -354,7 +362,7 @@ async fn tests_that_a_whole_page_records_its_text_and_a_repeat_notes_the_tip() -
     assert_eq!(
         stored.form,
         SnapshotForm {
-            text: crate::snapshot::TextForm::Kept,
+            text: StoredTextForm::Kept,
             urls: false,
             max_tokens: 8000.0,
             inert: false,
@@ -474,7 +482,11 @@ async fn tests_that_a_handler_that_fails_before_the_fence_keeps_the_generic_rule
     let started = Instant::now();
     let error = run
         .playwright
-        .invoke(&run.env, op("page.ariaSnapshot")?, page_input(&run, 0, &neo))
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshot")?,
+            page_input(&run, 0, &neo),
+        )
         .await
         .err()
         .ok_or("the frame's read fails")?;
@@ -535,7 +547,11 @@ async fn sent_during_the_wait(
     assert!(time::timeout(WAIT / 2, call.as_mut()).await.is_err());
     let parked = tab.sent_methods().len();
     call.await?;
-    Ok(tab.sent_methods().get(parked..).unwrap_or_default().to_vec())
+    Ok(tab
+        .sent_methods()
+        .get(parked..)
+        .unwrap_or_default()
+        .to_vec())
 }
 
 /// Nothing is sent to the browser between the fence and the reply. A `mode: 'full'` call's
@@ -561,7 +577,11 @@ async fn tests_that_nothing_is_sent_between_the_fence_and_the_reply() -> TestRes
         &json!({ "mode": "ai", "format": { "neo": { "delta": false } } }),
     )
     .await?;
-    assert_eq!(tab.script().reads.load(Ordering::SeqCst), 2, "each tree is in");
+    assert_eq!(
+        tab.script().reads.load(Ordering::SeqCst),
+        2,
+        "each tree is in"
+    );
     assert_eq!(inside, control, "the op sent after its fence");
     assert!(
         inside.iter().all(|method| method == "Browser.getTabs"),
@@ -591,7 +611,11 @@ async fn a_send_after_the_fence_is_counted() -> TestResult {
             json!({ "page": run.page }),
         )
         .await?;
-    let admitted = tab.sent_methods().get(before..).unwrap_or_default().to_vec();
+    let admitted = tab
+        .sent_methods()
+        .get(before..)
+        .unwrap_or_default()
+        .to_vec();
     assert!(
         admitted.iter().any(|method| method != "Browser.getTabs"),
         "an admission sends: {admitted:?}"
@@ -717,7 +741,7 @@ impl Page {
     }
 
     /// The tab's baseline once the run settled ok with every text given.
-    fn settled(&self) -> Option<crate::snapshot::Baseline> {
+    fn settled(&self) -> Option<Baseline> {
         self.run.settle_snapshot_baselines(true, &|_| true);
         self.store.stored(&self.tab, self.document)
     }
@@ -750,7 +774,7 @@ fn tests_that_a_whole_page_records_only_in_time() -> TestResult {
         })
     );
     let late = Page::new()?;
-    let older = crate::snapshot::Baseline {
+    let older = Baseline {
         text: "older".to_owned(),
         form: SnapshotForm::of(Form {
             text: TextForm::Kept,
@@ -760,8 +784,14 @@ fn tests_that_a_whole_page_records_only_in_time() -> TestResult {
         }),
     };
     late.store.commit(&late.tab, late.document, older.clone());
-    assert_eq!(late.finish(&passed, &Looks::of(vec![Ok(Look::Late)]))?, text);
-    assert!(late.run.full_snapshot_repeats().is_empty(), "no tip when late");
+    assert_eq!(
+        late.finish(&passed, &Looks::of(vec![Ok(Look::Late)]))?,
+        text
+    );
+    assert!(
+        late.run.full_snapshot_repeats().is_empty(),
+        "no tip when late"
+    );
     assert_eq!(late.settled(), Some(older), "the older baseline stays");
     let aborted = Page::new()?;
     let abort = PlaywrightError::new(ErrorCode::Aborted, "page.ariaSnapshot: stop".to_owned());
@@ -781,14 +811,17 @@ fn tests_that_the_tip_is_noted_in_time_on_a_stored_text_only() -> TestResult {
     let passed = Passed::default();
     let first = Page::new()?;
     first.finish(&passed, &Looks::of(vec![Ok(Look::InTime)]))?;
-    assert!(first.run.full_snapshot_repeats().is_empty(), "nothing stored yet");
+    assert!(
+        first.run.full_snapshot_repeats().is_empty(),
+        "nothing stored yet"
+    );
     let repeat = Page::new()?;
     let stored = repeat.settled();
     assert_eq!(stored, None);
     repeat.store.commit(
         &repeat.tab,
         repeat.document,
-        crate::snapshot::Baseline {
+        Baseline {
             text: "kept".to_owned(),
             form: SnapshotForm::of(Form {
                 text: TextForm::Kept,
