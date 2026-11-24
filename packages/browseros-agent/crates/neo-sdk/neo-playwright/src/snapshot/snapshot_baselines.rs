@@ -80,14 +80,6 @@ impl SnapshotForm {
 
     /// The stored form as `render` takes it, or `None` for a cap no call can pass (not finite,
     /// or not above zero): only a broken producer could have stored one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a delta renders the page in its stored form once the delta is printed in \
-                      Rust; until then the round-trip row is its only caller"
-        )
-    )]
     pub(crate) fn form(self) -> Option<neo_snapshot::Form> {
         Some(neo_snapshot::Form {
             text: match self.text {
@@ -126,6 +118,17 @@ pub(crate) struct Baseline {
     pub(crate) text: String,
     /// How `text` was rendered.
     pub(crate) form: SnapshotForm,
+}
+
+impl Baseline {
+    /// The stored text as a delta compares with it (`neo_snapshot::Earlier::Text`), through the
+    /// form's one conversion; `None` for a form no call can have printed.
+    pub(crate) fn printed(self) -> Option<neo_snapshot::Baseline> {
+        Some(neo_snapshot::Baseline {
+            form: self.form.form()?,
+            text: self.text,
+        })
+    }
 }
 
 /// Every tab's baseline, by the tab's target (a tab's main frame keeps its target's id across

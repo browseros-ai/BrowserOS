@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use browseros_core::{TabId, TargetId};
 use neo_snapshot::{
-    Answer, Call, ClosedRoots, Layer, MaxTokens, PartialFrame, Passed, Snapshot, Unmarked,
+    Answer, Call, ClosedRoots, Earlier, Layer, MaxTokens, PartialFrame, Passed, Snapshot, Unmarked,
 };
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
@@ -463,12 +463,25 @@ pub(super) fn finish_page_text(
     finish: &Finish<'_>,
     clock: &dyn CallClock,
 ) -> Result<String, PlaywrightError> {
-    if finish.delta {
-        // `Call::Delta` and `Earlier` arrive with the delta's printer (piece 5), which reads the
-        // store's text here, after the first look: late, `Earlier::NotRead`.
-        return Err(not_printed_yet());
-    }
-    let answer = neo_snapshot::render(finish.snapshot, Call::Page(finish.passed));
+    let at = TabStore {
+        store: finish.store,
+        tab: finish.tab,
+        document: finish.document,
+    };
+    // Read at the first look, and alive across the render, which borrows it.
+    let stored = finish
+        .delta
+        .then(|| StoredRead::at(&at, clock))
+        .transpose()?;
+    let call = match &stored {
+        Some(stored) => Call::Delta {
+            passed: finish.passed,
+            earlier: stored.earlier(),
+        },
+        None => Call::Page(finish.passed),
+    };
+    let answer = neo_snapshot::render(finish.snapshot, call);
+    // A delta that did not read the stored text keeps nothing, so it looks no second time.
     if let Some(pending) = answer.pending() {
         match clock.look()? {
             // Returned, not recorded: the older baseline stays.
@@ -493,6 +506,56 @@ pub(super) fn finish_page_text(
     Ok(answer.into_text())
 }
 
+/// Where a whole page's stored text is: the store, the tab's target and the document generation
+/// read before the tree.
+#[derive(Clone, Copy)]
+pub(super) struct TabStore<'a> {
+    pub(super) store: &'a SnapshotBaselines,
+    pub(super) tab: &'a TargetId,
+    pub(super) document: u32,
+}
+
+/// The tab's stored text as a delta reads it, at a look of the call's clock.
+enum StoredRead {
+    /// The call's time is gone (design 1.7's second window): nothing stored is read, and the
+    /// delta answers that no time was left to look.
+    Late,
+    /// The stored text of the document read before the tree, if there is one. Never a text
+    /// pending in this run: those wait in the run's state until it ends.
+    Read(Option<neo_snapshot::Baseline>),
+}
+
+impl StoredRead {
+    fn at(at: &TabStore<'_>, clock: &dyn CallClock) -> Result<Self, PlaywrightError> {
+        Ok(match clock.look()? {
+            Look::Late => Self::Late,
+            Look::InTime => Self::Read(
+                at.store
+                    .stored(at.tab, at.document)
+                    .map(|baseline| {
+                        baseline.printed().ok_or_else(|| {
+                            PlaywrightError::new(
+                                ErrorCode::Internal,
+                                "page.ariaSnapshot: the tab's stored snapshot has a cap no call \
+                                 can pass"
+                                    .to_owned(),
+                            )
+                        })
+                    })
+                    .transpose()?,
+            ),
+        })
+    }
+
+    fn earlier(&self) -> Earlier<'_> {
+        match self {
+            Self::Late => Earlier::NotRead,
+            Self::Read(None) => Earlier::Nothing,
+            Self::Read(Some(baseline)) => Earlier::Text(baseline),
+        }
+    }
+}
+
 /// A text that keeps nothing for the tab: Playwright's format, `mode: 'full'`, and a locator's in
 /// Neo's format ([`Call::Element`]). A whole page in Neo's format is [`finish_page_text`]'s.
 pub(super) fn plain_text(snapshot: &Snapshot, ask: TextAsk) -> String {
@@ -507,29 +570,28 @@ fn plain(snapshot: &Snapshot, ask: TextAsk) -> Answer {
     }
 }
 
-/// Rust's text of a compared call (`page` for a whole page): what the call would answer, by the
-/// same rules, with nothing recorded. A delta reads the stored text itself, under the same clock.
+/// Rust's text of a compared call: what the call would answer, by the same rules, with nothing
+/// recorded. `page` is where a whole page's stored text is, `None` for a locator. A delta reads
+/// the stored text itself, under the same clock.
 pub(super) fn compared_text(
     snapshot: &Snapshot,
     ask: TextAsk,
-    page: bool,
-    _clock: &dyn CallClock,
+    page: Option<TabStore<'_>>,
+    clock: &dyn CallClock,
 ) -> Result<RustText, PlaywrightError> {
-    let answer = match ask {
-        TextAsk::Neo {
-            passed,
-            delta: false,
-        } if page => neo_snapshot::render(snapshot, Call::Page(&passed)),
-        TextAsk::Neo { delta: true, .. } if page => return Err(not_printed_yet()),
-        other => plain(snapshot, other),
+    let answer = match (ask, page) {
+        (TextAsk::Neo { passed, delta }, Some(at)) => {
+            let stored = delta.then(|| StoredRead::at(&at, clock)).transpose()?;
+            let call = match &stored {
+                Some(stored) => Call::Delta {
+                    passed: &passed,
+                    earlier: stored.earlier(),
+                },
+                None => Call::Page(&passed),
+            };
+            neo_snapshot::render(snapshot, call)
+        }
+        (other, _) => plain(snapshot, other),
     };
     Ok(RustText::of(&answer))
-}
-
-/// The delta's printer is piece 5's.
-fn not_printed_yet() -> PlaywrightError {
-    PlaywrightError::new(
-        ErrorCode::Internal,
-        "page.ariaSnapshot: a delta is not printed in Rust yet".to_owned(),
-    )
 }

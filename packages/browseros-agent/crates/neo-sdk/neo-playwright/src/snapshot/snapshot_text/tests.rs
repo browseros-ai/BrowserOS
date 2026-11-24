@@ -726,11 +726,24 @@ impl Page {
     }
 
     fn finish(&self, passed: &Passed, clock: &dyn CallClock) -> Result<String, PlaywrightError> {
+        self.call(passed, false, clock)
+    }
+
+    fn delta(&self, passed: &Passed, clock: &dyn CallClock) -> Result<String, PlaywrightError> {
+        self.call(passed, true, clock)
+    }
+
+    fn call(
+        &self,
+        passed: &Passed,
+        delta: bool,
+        clock: &dyn CallClock,
+    ) -> Result<String, PlaywrightError> {
         finish_page_text(
             &Finish {
                 snapshot: &self.snapshot,
                 passed,
-                delta: false,
+                delta,
                 tab: &self.tab,
                 tab_id: TabId(7),
                 document: self.document,
@@ -834,5 +847,159 @@ fn tests_that_the_tip_is_noted_in_time_on_a_stored_text_only() -> TestResult {
     );
     repeat.finish(&passed, &Looks::of(vec![Ok(Look::InTime)]))?;
     assert_eq!(repeat.run.full_snapshot_repeats(), vec![TabId(7)]);
+    Ok(())
+}
+
+/// The tab's text for the page in its default form, stored for the tab's document.
+fn stored_page(page: &Page) -> TestResult<String> {
+    let text = printed(Call::Page(&Passed::default()))?;
+    page.store.commit(
+        &page.tab,
+        page.document,
+        Baseline {
+            text: text.clone(),
+            form: SnapshotForm::of(Form {
+                text: TextForm::Kept,
+                urls: false,
+                max_tokens: MaxTokens::default(),
+                inert: false,
+            }),
+        },
+    );
+    Ok(text)
+}
+
+/// Design 1.7's second window on a scripted clock: a delta looks before it reads the stored
+/// text. Late there, the stored text is not read: the whole page under the no-time line, nothing
+/// recorded and no second look. In time, it compares with the stored text (or says there is
+/// none), and records the page in the stored form with its answer as what the reply must show,
+/// unless the second look is late. An abort at the first look fails the call.
+#[test]
+fn tests_that_a_delta_reads_the_stored_text_only_in_time() -> TestResult {
+    let passed = Passed::default();
+    let late = Page::new()?;
+    stored_page(&late)?;
+    let clock = Looks::of(vec![Ok(Look::Late)]);
+    let text = late.delta(&passed, &clock)?;
+    assert!(
+        text.starts_with(
+            "# whole page: no time was left to look for an earlier snapshot of this page\n"
+        ),
+        "{text}"
+    );
+    assert_eq!(clock.left(), 0, "one look, none before a record");
+    assert_eq!(
+        late.settled().map(|baseline| baseline.text),
+        Some(printed(Call::Page(&passed))?),
+        "the stored text stays"
+    );
+
+    let unchanged = Page::new()?;
+    let stored = stored_page(&unchanged)?;
+    let clock = Looks::of(vec![Ok(Look::InTime), Ok(Look::InTime)]);
+    let answer = unchanged.delta(&passed, &clock)?;
+    assert_eq!(answer, "# no change since your last snapshot of this tab");
+    assert_eq!(clock.left(), 0);
+    assert!(
+        unchanged.run.full_snapshot_repeats().is_empty(),
+        "a delta is no tip"
+    );
+    // The page in the stored form is kept, if the reply shows the answer.
+    unchanged
+        .run
+        .settle_snapshot_baselines(true, &|shown| shown == answer);
+    assert_eq!(
+        unchanged
+            .store
+            .stored(&unchanged.tab, unchanged.document)
+            .map(|baseline| baseline.text),
+        Some(stored)
+    );
+
+    let first = Page::new()?;
+    let answer = first.delta(
+        &passed,
+        &Looks::of(vec![Ok(Look::InTime), Ok(Look::InTime)]),
+    )?;
+    assert!(
+        answer.starts_with("# whole page: no earlier snapshot of this page\n"),
+        "{answer}"
+    );
+    assert!(
+        first.settled().is_some(),
+        "the whole page is the first baseline"
+    );
+
+    let late_record = Page::new()?;
+    stored_page(&late_record)?;
+    let answer = late_record.delta(
+        &Passed {
+            text: Some(false),
+            ..Passed::default()
+        },
+        &Looks::of(vec![Ok(Look::InTime), Ok(Look::Late)]),
+    )?;
+    assert!(
+        answer.starts_with("# whole page:"),
+        "options that disagree: {answer}"
+    );
+    assert_eq!(
+        late_record.settled().map(|baseline| baseline.form.text),
+        Some(StoredTextForm::Kept),
+        "returned, not recorded: the stored text stays"
+    );
+
+    let aborted = Page::new()?;
+    stored_page(&aborted)?;
+    let abort = PlaywrightError::new(ErrorCode::Aborted, "page.ariaSnapshot: stop".to_owned());
+    let error = aborted
+        .delta(&passed, &Looks::of(vec![Err(abort)]))
+        .err()
+        .ok_or("an abort fails the delta")?;
+    assert_eq!(error.error_code(), Some(ErrorCode::Aborted));
+    Ok(())
+}
+
+/// Through the op: a delta after a whole page the run's reply showed compares with it, and under
+/// the compare switch Rust reads the stored text itself and answers the same, recording nothing.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_delta_through_the_op_compares_with_the_stored_text() -> TestResult {
+    let tab = ScriptedTab::new(OneMain::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let page = op("page.ariaSnapshot")?;
+    run.playwright
+        .invoke(
+            &run.env,
+            page,
+            page_input(&run, 0, &json!({ "mode": "ai", "format": { "neo": {} } })),
+        )
+        .await?;
+    assert!(settled(&run, &run.env).is_some());
+    let delta = json!({ "mode": "ai", "format": { "neo": { "delta": true } } });
+    let next = next_env(&run);
+    let answer = run
+        .playwright
+        .invoke(&next, page, page_input(&run, 0, &delta))
+        .await?;
+    assert_eq!(
+        answer,
+        json!({ "snapshot": "# no change since your last snapshot of this tab" })
+    );
+    let compared = next_env(&run);
+    let mut input = page_input(&run, 0, &delta);
+    input["compare"] = json!(true);
+    let answer = run.playwright.invoke(&compared, page, input).await?;
+    assert_eq!(
+        answer["rust"]["snapshot"],
+        json!("# no change since your last snapshot of this tab")
+    );
+    assert_eq!(answer["json"], tree());
+    compared
+        .run_state()
+        .settle_snapshot_baselines(true, &|_| true);
+    assert!(
+        compared.run_state().full_snapshot_repeats().is_empty(),
+        "the compared call records nothing"
+    );
     Ok(())
 }

@@ -52,7 +52,7 @@ use super::aria_snapshot::{
 use super::clickable_targets::{Feed, Marking};
 use super::snapshot_text::{
     self, Finish, LocatorFormat, PageFormat, ScopeClock, SnapshotAnswer, SnapshotCompared,
-    SnapshotText, TextAsk,
+    SnapshotText, TabStore, TextAsk,
 };
 use super::{Baseline, SnapshotForm};
 use crate::action::{self, OnTopNote};
@@ -495,7 +495,12 @@ async fn page_snapshot(
         })),
         Reading::Compare(ask) => {
             let snapshot = snapshot_text::facts(stitched);
-            let rust = snapshot_text::compared_text(&snapshot, ask, true, &ScopeClock(scope))?;
+            let at = TabStore {
+                store: pw.snapshot_baselines(),
+                tab: page.target_id(),
+                document,
+            };
+            let rust = snapshot_text::compared_text(&snapshot, ask, Some(at), &ScopeClock(scope))?;
             let tree = with_call(scope, snapshot_text::tree_of(snapshot), document);
             Ok(SnapshotAnswer::Compared(SnapshotCompared { tree, rust }))
         }
@@ -613,7 +618,7 @@ async fn locator_snapshot(
         }),
         Reading::Compare(ask) => {
             let snapshot = snapshot_text::facts(tree);
-            let rust = snapshot_text::compared_text(&snapshot, ask, false, &ScopeClock(scope))?;
+            let rust = snapshot_text::compared_text(&snapshot, ask, None, &ScopeClock(scope))?;
             SnapshotAnswer::Compared(SnapshotCompared {
                 tree: snapshot_text::tree_of(snapshot),
                 rust,
