@@ -108,6 +108,23 @@ fn refused(reason: Refusal, name: &str, detail: &str) -> ToolResult {
     )
 }
 
+/// Whether a run that is still going caused a flow change. Its run is recorded only when its
+/// session ends, so a count read now would leave it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InFlight {
+    None,
+    OneRun,
+}
+
+impl InFlight {
+    fn with(self, recorded: usize) -> usize {
+        match self {
+            Self::None => recorded,
+            Self::OneRun => recorded + 1,
+        }
+    }
+}
+
 /// The reason a `run_skill` result refused to run, read back from its structured reply.
 fn refusal_reason(result: &ToolResult) -> Option<&str> {
     let structured = result.structured_content.as_ref()?;
@@ -1144,6 +1161,7 @@ impl ClawMcpService {
                                 crate::analytics::events::SKILL_FLOW_REPAIRED,
                                 None,
                                 verified_before,
+                                InFlight::None,
                             )
                             .await;
                         }
@@ -1251,6 +1269,7 @@ impl ClawMcpService {
                         crate::analytics::events::SKILL_FLOW_PAUSED,
                         Some(next.status),
                         verified_before,
+                        InFlight::None,
                     )
                     .await;
                 }
@@ -1333,11 +1352,13 @@ impl ClawMcpService {
             return;
         }
         if next.status == FlowStatus::Broken && before.status != FlowStatus::Broken {
+            // A run event: its own run is recorded only when the session ends.
             self.report_flow_change(
                 name,
                 crate::analytics::events::SKILL_FLOW_PAUSED,
                 Some(next.status),
                 row.verified_at,
+                InFlight::OneRun,
             )
             .await;
         }
@@ -1396,14 +1417,16 @@ impl ClawMcpService {
         event: crate::analytics::events::EventDefinition,
         status: Option<FlowStatus>,
         verified_at: Option<i64>,
+        in_flight: InFlight,
     ) {
         let skills = &self.state.skills;
-        let (Ok(Some(origin)), Ok(runs)) = (
+        let (Ok(Some(origin)), Ok(recorded)) = (
             skills.origin(name).await,
             skills.runs_since(name, verified_at).await,
         ) else {
             return;
         };
+        let runs = in_flight.with(recorded);
         let mut properties = json!({ "origin": origin, "runs_since_verified": runs });
         if let Some(status) = status {
             properties["status"] = json!(status.as_str());
@@ -1950,6 +1973,13 @@ mod tests {
         let text = run_failed_next(&flow(Effects::Read, None), "neo-shop-add", "timed out");
         assert!(text.contains("follow the skill's steps"), "{text}");
         assert!(!text.contains("write"), "{text}");
+    }
+
+    #[test]
+    fn a_run_that_breaks_its_flow_counts_itself() {
+        // Two earlier runs are recorded; the third hands back and breaks the flow mid-session.
+        assert_eq!(InFlight::OneRun.with(2), 3);
+        assert_eq!(InFlight::None.with(2), 2);
     }
 
     #[test]
