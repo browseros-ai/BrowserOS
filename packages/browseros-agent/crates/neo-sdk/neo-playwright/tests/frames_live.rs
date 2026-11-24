@@ -720,7 +720,17 @@ async fn agree(
     let mut last = String::new();
     let agreed = time::timeout(LIST_AGREES_BOUND, async {
         loop {
-            let tree = browser_frames(transport, target.as_str()).await?;
+            // An iframe target the browser just listed can go before the read attaches to it (a
+            // step that drops a subtree destroys its targets): the tree is still changing, so it
+            // is read again, and a read that keeps failing ends the step at the bound.
+            let tree = match browser_frames(transport, target.as_str()).await {
+                Ok(tree) => tree,
+                Err(error) => {
+                    last = format!("the browser's tree read failed: {error}");
+                    time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
             let listed = run.tab_frames(target);
             let compared: Option<Vec<ComparedFrame>> = listed.as_ref().map(|list| {
                 list.frames
@@ -741,7 +751,7 @@ async fn agree(
                     && list.iter().collect::<BTreeSet<_>>() == tree.iter().collect::<BTreeSet<_>>()
             });
             if ready(&tree) && whole && same {
-                return Ok::<usize, Box<dyn Error>>(tree.len());
+                return tree.len();
             }
             last = format!("(whole {whole})\nlist: {compared:#?}\ntree: {tree:#?}");
             time::sleep(Duration::from_millis(100)).await;
@@ -753,7 +763,7 @@ async fn agree(
             eprintln!(
                 "FRAME_LIST step={step} agreed={:?} frames={}",
                 started.elapsed(),
-                frames?
+                frames
             );
             Ok(())
         }
