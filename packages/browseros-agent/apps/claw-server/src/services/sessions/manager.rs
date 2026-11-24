@@ -803,6 +803,12 @@ impl Sessions {
 
         let mut reaped = 0;
         for key in expired {
+            let had_groups = self
+                .ownership
+                .groups(&key)
+                .await
+                .iter()
+                .any(|group| group.group_ref.is_some() && !group.borrowed);
             let closed = match self.retained_group_hook.get() {
                 Some(hook) => {
                     hook(
@@ -815,7 +821,9 @@ impl Sessions {
                 None => self.ownership.tab_group_ref(&key).await.is_none(),
             };
             if closed && self.retained.write().await.remove(&key).is_some() {
-                info!(convo = %key, "closed a finished task's tab group");
+                if had_groups {
+                    info!(convo = %key, "closed a finished task's tab group");
+                }
                 self.ownership.forget(&key).await;
                 self.reserved_keys.lock().await.remove(&key);
                 reaped += 1;
