@@ -1,0 +1,22 @@
+[package]
+name = "snapshot-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Times neo-snapshot's render beside today's TypeScript renderer in QuickJS, on generated trees shaped like the measured pages"
+
+# Its own workspace, outside the SDK's lint set and its gate, as the spec add-on is
+# (neo-playwright-tests/node/claw-addon): a measuring tool run by hand on the pool, never a test.
+[workspace]
+
+[dependencies]
+neo-snapshot = { path = "../../neo-snapshot" }
+# The version the SDK's lockfile holds, its -core and -sys pinned the same in this lockfile, so
+# the old engine is the QuickJS the server runs. `rust-alloc` routes QuickJS's own allocations
+# through Rust's global allocator, which this binary counts, so one counter reads both engines.
+rquickjs = { version = "=0.12.1", default-features = false, features = ["std", "rust-alloc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[profile.release]
+# Timings are taken from an optimized build; a panic still names its file and line.
+debug = 0
