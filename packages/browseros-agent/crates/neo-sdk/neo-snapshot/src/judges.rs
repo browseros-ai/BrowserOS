@@ -30,4 +30,4 @@ pub(crate) use bundles::Bundles;
 pub(crate) use case_file::{CaseFile, NEO_CASES, PLAYWRIGHT_CASES};
 pub(crate) use expected::Shown;
 pub(crate) use first_difference::first_difference;
-pub(crate) use generator::{Generator, count, seed};
+pub(crate) use generator::{EarlierKind, Generator, count, seed};

@@ -13,6 +13,8 @@
 //!          Call::Full ───────▶ full_text: Playwright's lines under Neo's heads, cut
 //!          Call::Element ────▶ neo: Neo's default format
 //!          Call::Page ───────▶ neo: the same, kept in its Form
+//!          Call::Delta ──────▶ delta: what changed since the tab's stored text, from the
+//!                              page rendered in that text's Form, kept in it
 //!  cover_block: a covered click's lines, by neo's format
 //!                                 │ every element line by playwright's printer; the size cap by
 //!                                 ▼ cap; every length, space, number and quote by
@@ -49,6 +51,7 @@
 //! | `cap.rs` | neo-playwright-js `prelude/snapshot-cap.ts` |
 //! | `render.rs`, `call.rs`, `answer.rs` | `Frame._ariaSnapshot` in neo-playwright-js `prelude/frame.ts`: which text a call gets, and what it keeps |
 //! | `cover_block.rs` | neo-playwright-js `scripts/snapshot-cases/snapshot-lines.ts` (`snapshotLines`, the prelude's `cover.ts` until Rust rendered the block) |
+//! | `delta/*.rs` | neo-playwright-js `prelude/snapshot-delta.ts`, and `onTopDelta` in `neo/on_top.rs` |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
 //!
 //! [`PORTED_FROM`] holds the vendored files' hashes at the port, which neo-playwright's tests
@@ -62,6 +65,7 @@ mod aria_node;
 mod call;
 mod cap;
 mod cover_block;
+mod delta;
 mod form;
 mod full_text;
 mod js;
@@ -79,6 +83,7 @@ pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Trist
 pub use call::Call;
 pub use cap::{DEFAULT_MAX_TOKENS, MaxTokens};
 pub use cover_block::cover_block;
+pub use delta::{Baseline, Earlier};
 pub use form::{Form, Passed, TextForm};
 pub use neo::{KEPT_ROLES, TEXT_LIMIT_TOKENS};
 pub use playwright::{PORTED_FROM, PortedFile};

@@ -49,17 +49,8 @@ mod unmarked_head;
 mod walk;
 
 pub use neo_text::TEXT_LIMIT_TOKENS;
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "a delta renders the new page in its baseline's form, and no delta is printed in \
-                  Rust yet; until then the tests are its only callers"
-    )
-)]
-pub(crate) use neo_text::neo_text_as;
-pub(crate) use neo_text::{NeoText, neo_text};
-pub(crate) use on_top::on_top_head;
+pub(crate) use neo_text::{NeoText, neo_text, neo_text_as};
+pub(crate) use on_top::{is_on_top_line, on_top_delta, on_top_head};
 pub use rule::KEPT_ROLES;
 pub(crate) use rule::{SECTION, section_label, shown_text};
-pub(crate) use unmarked_head::unmarked_head;
+pub(crate) use unmarked_head::{is_unmarked_line, unmarked_head};

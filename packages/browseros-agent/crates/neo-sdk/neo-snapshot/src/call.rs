@@ -1,4 +1,5 @@
 use crate::cap::MaxTokens;
+use crate::delta::Earlier;
 use crate::form::Passed;
 
 /// Which text [`render`](crate::render) prints: one variant per row of today's
@@ -25,4 +26,14 @@ pub enum Call<'a> {
     /// Neo's default format for a whole page. Its text, in its own form, may become the tab's
     /// baseline: the answer's [`pending`](crate::Answer::pending) lends both.
     Page(&'a Passed),
+    /// A whole page with `{ delta: true }`: what changed since the text the tab's store holds,
+    /// as the snapshot operation read it under the call's clock. Only [`Earlier`] says what there
+    /// is to compare with, so a text pending in this run can never be compared. Its answer keeps
+    /// the page for the tab unless the stored text was not read.
+    Delta {
+        /// The options the script passed; what it left out is taken from the stored form.
+        passed: &'a Passed,
+        /// What the tab held when the call looked.
+        earlier: Earlier<'a>,
+    },
 }

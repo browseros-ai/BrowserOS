@@ -2,12 +2,14 @@ use std::error::Error;
 use std::time::Duration;
 
 use browseros_core::{ProtocolSession, SessionId};
+use neo_snapshot::{AriaNode, Baseline, Call, Earlier, Layer, Passed, Snapshot, render};
 use serde_json::{Value, json};
 
 use tokio::time::{self, Instant};
 
 use super::{
-    CoverWatch, EarlyStop, Lines, OnTopNote, Seat, Waiting, decide, field, on_top_line, same_cover,
+    CoverWatch, EarlyStop, Lines, NAME_CHARS, OnTopNote, Seat, Waiting, decide, field, node_named,
+    on_top_line, same_cover,
 };
 use crate::probe::{CoverFacts, CoverMark, Point, ProbeReply, ProbeTarget, Rect, reply_of};
 use crate::test_env;
@@ -456,6 +458,149 @@ fn tests_that_on_top_words_are_only_for_an_unnamed_layer_without_controls() {
         ..note
     };
     assert!(!on_top_line(&with_name).contains(", says "));
+}
+
+/// Design 5.6's row for the on-top words, which have two owners: `on_top_line` writes them here,
+/// and neo-snapshot's delta reads them back from the text the caller was given. Every form the
+/// writer prints, once its layer is gone, comes back as `# no longer on top:` with the same words
+/// up to and with its ref.
+#[test]
+fn tests_that_every_on_top_form_comes_back_as_no_longer_on_top() -> Result<(), Box<dyn Error>> {
+    let quoted = json!(r#"Say "hi" \ to [ref=e2] now"#);
+    let long = json!("a".repeat(NAME_CHARS + 5));
+    let empty = json!("");
+    let spaces = json!("   ");
+    let name = json!("Cookies");
+    let accept = json!("Accept");
+    let controls = [("button", &accept, "e10")];
+    let named = OnTopNote {
+        role: "dialog",
+        name: &name,
+        reference: "e9",
+        blank: false,
+        loading: false,
+        whole_view: true,
+        controls: &[],
+        first_words: None,
+    };
+    let forms = [
+        (
+            "a name with quotes, a backslash and a ref-shaped word",
+            OnTopNote {
+                name: &quoted,
+                ..named
+            },
+        ),
+        (
+            "a clipped name",
+            OnTopNote {
+                name: &long,
+                ..named
+            },
+        ),
+        (
+            "no name",
+            OnTopNote {
+                name: &empty,
+                ..named
+            },
+        ),
+        (
+            "a name of spaces only",
+            OnTopNote {
+                name: &spaces,
+                ..named
+            },
+        ),
+        (
+            "blank",
+            OnTopNote {
+                role: "generic",
+                name: &empty,
+                reference: "n4",
+                blank: true,
+                whole_view: false,
+                ..named
+            },
+        ),
+        (
+            "loading",
+            OnTopNote {
+                loading: true,
+                whole_view: false,
+                ..named
+            },
+        ),
+        (
+            "says",
+            OnTopNote {
+                role: "generic",
+                name: &empty,
+                first_words: Some(r#"Get "10%" off"#),
+                ..named
+            },
+        ),
+        (
+            "its controls",
+            OnTopNote {
+                controls: &controls,
+                ..named
+            },
+        ),
+    ];
+    for (form, note) in &forms {
+        let line = on_top_line(note);
+        assert_eq!(
+            delta_after_the_layer_went(&line, note)?,
+            format!(
+                "# no change since your last snapshot of this tab\n# no longer on top: {}",
+                node_named(note.role, note.name, note.reference, NAME_CHARS)
+            ),
+            "{form}: a layer that went is named by the words it was written with, its ref \
+             included, and the page under it did not change; it was written {line:?}"
+        );
+    }
+    Ok(())
+}
+
+/// A page under the layer `line` words, kept as the tab's baseline the way a whole-page snapshot
+/// keeps it, then the delta of the same page once the layer is gone.
+fn delta_after_the_layer_went(line: &str, note: &OnTopNote<'_>) -> Result<String, Box<dyn Error>> {
+    let tree: Vec<AriaNode> = serde_json::from_value(
+        json!([{ "role": "main", "ref": "e1", "children": ["Two mugs left."] }]),
+    )?;
+    let passed = Passed::default();
+    let covered = Snapshot {
+        tree: tree.clone(),
+        layers: vec![Layer {
+            r#ref: note.reference.to_owned(),
+            line: line.to_owned(),
+            whole_view: note.whole_view,
+        }],
+        ..Snapshot::default()
+    };
+    let page = render(&covered, Call::Page(&passed));
+    let kept = page.pending().ok_or("a whole page keeps its text")?;
+    assert!(
+        kept.text.starts_with(line),
+        "the page opens with the layer's words"
+    );
+    let baseline = Baseline {
+        text: kept.text.to_owned(),
+        form: kept.form,
+    };
+    let uncovered = Snapshot {
+        tree,
+        ..Snapshot::default()
+    };
+    let delta = render(
+        &uncovered,
+        Call::Delta {
+            passed: &passed,
+            earlier: Earlier::Text(&baseline),
+        },
+    );
+    Ok(delta.into_text())
 }
 
 /// Covered-click C: a press may go through a wrapper only as the cover that stood four checks and
