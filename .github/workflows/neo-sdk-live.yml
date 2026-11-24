@@ -113,7 +113,28 @@ jobs:
         run: python3 -m unittest discover -s crates/neo-sdk/tests -p test_live.py
 
       - name: Run every live SDK suite
+        env:
+          # The prelude's compare switch (design 2.3, layer 5; neo-playwright-js
+          # prelude/snapshot-text.ts), a test harness's and never a host's. While both snapshot
+          # engines exist, every text the prelude renders on its path is held to Rust's text of
+          # the same read, and a difference fails the call. Each run appends its counts here.
+          NEO_COMPARE_SNAPSHOTS: "1"
+          NEO_COMPARE_SNAPSHOTS_LOG: ${{ runner.temp }}/neo-sdk-live/snapshot-comparisons.log
         run: python3 crates/neo-sdk/live.py --output "$RUNNER_TEMP/neo-sdk-live"
+
+      # A comparison that silently did not run is not a pass, so the totals are printed. Zero is
+      # not a failure: once Rust prints the product's text (SNAPSHOT_TEXT 'rust'), the prelude's
+      # path, and with it the comparison, no longer runs.
+      - name: Count the snapshot comparisons
+        if: always()
+        env:
+          COMPARISONS: ${{ runner.temp }}/neo-sdk-live/snapshot-comparisons.log
+        run: |
+          set -euo pipefail
+          touch "$COMPARISONS"
+          awk '/^NEO_SNAPSHOT_COMPARISONS/ { runs++; for (i = 2; i <= NF; i++) { split($i, kv, "="); total[kv[1]] += kv[2] } }
+            END { printf "SNAPSHOT COMPARISON TOTALS runs=%d compared=%d noTime=%d differed=%d\n", runs, total["compared"], total["noTime"], total["differed"]
+                  exit total["differed"] > 0 }' "$COMPARISONS" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the live results and browser cleanup receipts
         if: always()
