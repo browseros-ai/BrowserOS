@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
-use browseros_core::{FrameId, ProtocolSession, SessionId, TabId};
+use browseros_core::{FrameId, ProtocolSession, SessionId, TabId, TargetId};
 
 use crate::events::{EventHub, PageEvent};
 
@@ -79,7 +79,11 @@ impl FrameRoutes {
             let page = pages.get(&tab).filter(|page| page.root == *root)?;
             (page.since, page.frames.get(frame)?.clone())
         };
-        let read = events.read_after(since);
+        // The root's tab (a main frame has its tab's target id) plus the no-tab ring, where a
+        // frame record the watcher could not place lands: either may retire this route, and only
+        // their loss, never another tab's, leaves it unproven.
+        let tab = TargetId(root.frame.as_str().to_owned());
+        let read = events.read_tab_after(&tab, since);
         if read.lost > 0
             || read.records.iter().any(|record| match &record.event {
                 PageEvent::FrameDetached(id) | PageEvent::FrameSwapped(id) => {

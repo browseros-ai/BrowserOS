@@ -60,6 +60,29 @@ pub(crate) enum PageEvent {
 }
 
 impl PageEvent {
+    /// The tab whose ring keeps this record (`event_hub.rs`): the page it names, or a popup's
+    /// opener, since `page.on('popup')` reads the opener's ring (the log files a popup under its
+    /// own ring instead once the opener is known closed, `EventLog::ring_of`). `None` for a download of no
+    /// page, and for the kinds that carry only a frame id (`Navigation`, `FrameDetached`,
+    /// `FrameSwapped`): the watcher files those under the tab it resolved for their session
+    /// (`EventWriter::record_in`), or in the no-tab ring, which every one-tab read includes.
+    pub(crate) fn tab(&self) -> Option<&TargetId> {
+        match self {
+            Self::Navigation(_) | Self::FrameDetached(_) | Self::FrameSwapped(_) => None,
+            Self::Worker { target, .. }
+            | Self::Load { target, .. }
+            | Self::Closed(target)
+            | Self::Crashed(target) => Some(target),
+            Self::FrameLifecycle(frame) => Some(&frame.target),
+            Self::Opened(opened) => Some(opened.opener.as_ref().unwrap_or(&opened.target)),
+            Self::Dialog(dialog) | Self::DialogClosed(dialog) => Some(&dialog.target),
+            Self::Console(message) => Some(&message.target),
+            Self::PageError(error) => Some(&error.target),
+            Self::Download(download) => download.page.as_ref(),
+            Self::FileChooser(chooser) => Some(&chooser.target),
+        }
+    }
+
     /// Whether this is an event of `kind` for the page whose target is `target`.
     pub(crate) fn concerns(&self, kind: PageEventKind, target: &TargetId) -> bool {
         match (kind, self) {

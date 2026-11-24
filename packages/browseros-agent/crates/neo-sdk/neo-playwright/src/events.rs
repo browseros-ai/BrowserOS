@@ -3,7 +3,7 @@
 //!
 //! ```text
 //!  CDP events ─▶ TargetWatcher (one task per Playwright) ─▶ EventWriter ─▶ EventHub log
-//!                 raw facts: target ids, never PageIds         one writer   ring of 1,024
+//!                 raw facts: target ids, never PageIds         one writer   a ring per tab
 //!                 holds dialogs for listening runs (DialogTable)            + Notify
 //!                 tracks each download to its end (DownloadTable)              │
 //!                                                                              │

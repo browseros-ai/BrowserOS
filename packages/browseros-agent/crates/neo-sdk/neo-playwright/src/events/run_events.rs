@@ -14,7 +14,7 @@ use browseros_core::{TabId, TargetId};
 use tokio::sync::Notify;
 use tokio::time;
 
-use crate::events::event_hub::LOG_CAPACITY;
+use crate::events::event_hub::LOG_TOTAL;
 use crate::events::log_lease::ReportingLease;
 use crate::events::page_event::BindingCalled;
 use crate::events::{EventScope, ListenerKey, PageEventKind, Subscription};
@@ -316,7 +316,8 @@ impl RunEvents {
     }
 
     /// Retain only identities approved by this run's view. The journal bounds how much
-    /// history can still be delivered, so the identity cache follows the same capacity.
+    /// history can still be delivered: `LOG_TOTAL` records across its rings, so no more pages
+    /// than that can have one left. The identity cache follows the same bound.
     pub(crate) fn remember_page(&self, target: &TargetId, tab: TabId) {
         let mut inner = self.lock();
         inner.known_pages.retain(|page| page.target != *target);
@@ -324,7 +325,7 @@ impl RunEvents {
             target: target.clone(),
             tab,
         });
-        while inner.known_pages.len() > LOG_CAPACITY {
+        while inner.known_pages.len() > LOG_TOTAL {
             inner.known_pages.pop_front();
         }
     }

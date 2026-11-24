@@ -287,6 +287,12 @@ impl TabFrames {
     }
 
     /// Forgets `tab`'s version and tab id, with its recorded close.
+    /// Whether `tab`'s tab id is known: from the watcher's listing until its close. The event log
+    /// reads it to tell a live tab with no ring yet from one whose ring was removed.
+    pub(crate) fn knows(&self, tab: &TargetId) -> bool {
+        self.tab_ids.contains_key(tab)
+    }
+
     pub(crate) fn closed(&mut self, tab: &TargetId) {
         self.versions.remove(tab);
         self.tab_ids.remove(tab);

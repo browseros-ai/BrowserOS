@@ -4211,45 +4211,56 @@ impl Method for InFlightClose {
     }
 }
 
-/// Fills the page-event ring while preserving every event on the fake CDP transport.
-async fn fill_event_ring(
+/// Pushes the closes of `targets` out of the event log, the way the log lets one go. Each tab
+/// keeps its own ring, so another tab's records never push a close out; a closed tab's ring goes
+/// only once `CLOSED_RINGS` (1,024) later tabs closed (neo-playwright's `event_hub.rs`). So this
+/// opens, reports and closes owner tabs in batches until no ring holds a close of `targets`.
+///
+/// It counts no records: the watcher's passes attach observers to the churned tabs, and can
+/// attach again a target the test destroyed by event alone (the fake still lists its tab), all
+/// of which write records of their own. Each batch instead waits for its last tab's close: the
+/// watcher applies a tab's URL before its destroy, and its events in order, so by then every
+/// tab of the batch was reported and closed. A close written after its ring went is dropped, so
+/// the answer stays.
+async fn push_closes_out_of_the_log(
     harness: &Harness,
-    noise: &PageRef,
-    close_seq: u64,
+    targets: &[&TargetId],
 ) -> Result<(), Box<dyn Error>> {
+    const BATCH: u64 = 25;
+    /// Well past `CLOSED_RINGS`, so a close that will not leave fails here, not by hanging.
+    const MOST: u64 = 4_000;
     let pw = harness.playwright.get().await;
-    // The generic fake returns an empty Target.getTargetInfo for opener reads. Supply the
-    // attachment event that a real browser uses to bind this console stream to its target.
-    let noise_target = harness
-        .link
-        .page(noise.tab)
-        .await
-        .ok_or("noise cached")?
-        .target_id;
-    assert!(harness.fake.page_event(
-        noise.tab,
-        "Target.attachedToTarget",
-        json!({
-            "sessionId": format!("session-{}", noise_target.as_str()),
-            "targetInfo": {"targetId":noise_target, "type":"page", "url":"https://noise.example/"}
-        })
-    ));
-    for batch in 1..=64 {
-        for call in 0..16 {
-            // Each call its own stamp, as Chromium's are: identical reports are one replayed.
-            assert!(harness.fake.page_event(
-                noise.tab,
-                "Runtime.consoleAPICalled",
-                json!({
-                    "type":"log", "args":[{"type":"string","value":"noise"}],
-                    "executionContextId":1, "timestamp": batch * 16 + call
-                })
-            ));
+    let mut churned = 0;
+    while targets
+        .iter()
+        .any(|target| pw.closed_target(target).is_some())
+    {
+        if churned >= MOST {
+            return Err(format!("a close stayed in the log past {MOST} later closes").into());
         }
-        // Backpressure the fake's transport so this tests event-log eviction, with every
-        // record delivered to the watcher, independently of transport-ring capacity.
+        let mut tabs = Vec::new();
+        for slot in 0..BATCH {
+            let url = format!("https://closed-{}.example/", churned + slot);
+            // Straight on the fake, not through core's listing, which would also let discovery
+            // report again a target the test destroyed by event alone.
+            let tab = harness.fake.open_tab(&url, "Closed");
+            // The fake announces a target with no URL, named `target-<tab>` (`FakeCdp`); this
+            // event makes the watcher report it.
+            let target = TargetId(format!("target-{}", tab.0));
+            assert!(harness.fake.page_event(
+                tab,
+                "Target.targetInfoChanged",
+                json!({ "targetInfo": {"targetId":target,"type":"page","url":url} })
+            ));
+            tabs.push((tab, target));
+        }
+        churned += BATCH;
+        for (tab, _) in &tabs {
+            assert!(harness.fake.close_tab(*tab));
+        }
+        let last = tabs.last().map(|(_, target)| target).ok_or("a batch")?;
         within(async {
-            while pw.event_head() < close_seq + batch * 16 {
+            while pw.closed_target(last).is_none() {
                 time::sleep(Duration::from_millis(1)).await;
             }
         })
@@ -4330,7 +4341,7 @@ async fn evicted_close_case(name: &'static str, rebind: bool) -> Result<(), Box<
     let (run, _guard) = harness.run()?;
     let EventTabs {
         page,
-        noise,
+        noise: _,
         target,
     } = prepare_event_tabs(&harness, &run).await?;
     let pw = harness.playwright.get().await;
@@ -4361,7 +4372,7 @@ async fn evicted_close_case(name: &'static str, rebind: bool) -> Result<(), Box<
     let close_seq = pw
         .closed_target(&target)
         .ok_or("copied close is retained")?;
-    fill_event_ring(&harness, &noise, close_seq).await?;
+    push_closes_out_of_the_log(&harness, &[&target]).await?;
     assert_eq!(
         pw.closed_target(&target),
         None,
@@ -4658,7 +4669,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
     let (run, _guard) = harness.run()?;
     let EventTabs {
         page,
-        noise,
+        noise: _,
         target: old,
     } = prepare_event_tabs(&harness, &run).await?;
     let pw = harness.playwright.get().await;
@@ -4719,8 +4730,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
     })?;
     let pending = door.submit(&run, Call::script("events.next".into(), json!({}), None));
     within(copied.notified()).await?;
-    let head = pw.event_head();
-    fill_event_ring(&harness, &noise, head).await?;
+    push_closes_out_of_the_log(&harness, &[&old, &current]).await?;
     assert!(pw.closed_target(&old).is_none() && pw.closed_target(&current).is_none());
     resume.notify_one();
     let reply = pending.wait().await;
@@ -4862,7 +4872,7 @@ async fn withheld_close_keeps_internal_evidence_without_releasing_lifecycle()
             .is_none_or(|at| at.closes.is_empty())
     );
     assert_eq!(harness.tabs.gone_target(page.tab), Some(target.clone()));
-    fill_event_ring(&harness, &noise, pw.event_head()).await?;
+    push_closes_out_of_the_log(&harness, &[&target]).await?;
     assert!(pw.closed_target(&target).is_none());
     harness.locks.unlock_host(lock.id)?;
     let later = harness
