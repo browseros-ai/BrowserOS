@@ -1812,6 +1812,75 @@ async fn a_task_continued_on_the_same_transport_keeps_the_conversations_group() 
     Ok(())
 }
 
+/// Agents resend old handles. After two pauses, the first handle must still find the
+/// group, which by then belongs to the second task of the line.
+#[tokio::test]
+async fn an_older_handle_after_two_pauses_still_continues_with_the_group() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let tabs = |action: &str, session: Option<&str>| {
+        let mut arguments = json!({ "action": action });
+        if action == "new" {
+            arguments["url"] = json!("https://example.com");
+        }
+        if let Some(session) = session {
+            arguments["session"] = json!(session);
+        }
+        json!({ "name": "tabs", "arguments": arguments })
+    };
+    let handle_of = |reply: &Value| -> anyhow::Result<String> {
+        Ok(reply["result"]["_meta"]["com.browseros.neo/session"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("no handle: {reply}"))?
+            .to_string())
+    };
+    let opened = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs("new", None),
+        Some("claude-code"),
+    )
+    .await?;
+    let first = handle_of(&opened)?;
+    let first_task = live_session(&app, &SessionId::new(first.clone())).await?;
+    let ownership = app.state.sessions.ownership();
+    let group = wait_for_group(&ownership, first_task.convo_id()).await?;
+
+    complete_task(&app, &first_task).await?;
+    let resumed = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs("list", Some(&first)),
+        Some("claude-code"),
+    )
+    .await?;
+    let second_task = live_session(&app, &SessionId::new(handle_of(&resumed)?)).await?;
+    assert_eq!(
+        ownership.tab_group_ref(second_task.convo_id()).await,
+        Some(group.clone())
+    );
+
+    complete_task(&app, &second_task).await?;
+    let again = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs("list", Some(&first)),
+        Some("claude-code"),
+    )
+    .await?;
+    let third_task = live_session(&app, &SessionId::new(handle_of(&again)?)).await?;
+    assert_ne!(third_task.id(), second_task.id());
+    assert_eq!(
+        ownership.tab_group_ref(third_task.convo_id()).await,
+        Some(group),
+        "the oldest handle lost the group after the second pause"
+    );
+    drop(mock);
+    Ok(())
+}
+
 #[tokio::test]
 async fn delete_collapses_the_tasks_group_at_once() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;

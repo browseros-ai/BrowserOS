@@ -1068,8 +1068,18 @@ impl ClawMcpService {
         retired: &SessionId,
         successor: &Session,
     ) -> Result<(), McpError> {
+        // The handle presented can be any earlier one in this task's line: agents resend old
+        // handles. What a successor takes over sits with the latest task of the line, which
+        // the persisted task record names, not with the task the handle was minted for.
+        let latest = self
+            .state
+            .targets
+            .current_session(retired)
+            .await
+            .filter(|latest| latest != successor.id())
+            .unwrap_or_else(|| retired.clone());
         self.inherit_target(retired, successor.id()).await?;
-        self.state.sessions.hand_over(retired, successor).await;
+        self.state.sessions.hand_over(&latest, successor).await;
         Ok(())
     }
 
