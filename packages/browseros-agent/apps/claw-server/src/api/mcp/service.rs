@@ -148,6 +148,9 @@ pub struct ClawMcpService {
 struct ServiceLifecycle {
     client_info: Option<ClientInfo>,
     session_id: Option<SessionId>,
+    /// The legacy transport session this service serves, kept apart from `session_id`,
+    /// which moves to a successor task when the first one ends.
+    transport: Option<SessionId>,
     started: bool,
     /// Whether this connection has already been told its session went away.
     ///
@@ -1132,9 +1135,20 @@ impl ClawMcpService {
         &self,
         context: &RequestContext<RoleServer>,
     ) -> Result<StartedSession, McpError> {
-        let session_id = session_id_from_extensions(&context.extensions)
-            .unwrap_or_else(|| self.fallback_session_id.clone());
+        let transport = session_id_from_extensions(&context.extensions);
+        self.remember_transport(transport.as_ref()).await;
+        let session_id = transport.unwrap_or_else(|| self.fallback_session_id.clone());
         self.ensure_session_started(session_id).await
+    }
+
+    async fn remember_transport(&self, transport: Option<&SessionId>) {
+        if let Some(transport) = transport {
+            self.lifecycle
+                .lock()
+                .await
+                .transport
+                .get_or_insert_with(|| transport.clone());
+        }
     }
 
     async fn learn_session_from_notification(&self, context: &NotificationContext<RoleServer>) {
@@ -1153,6 +1167,7 @@ impl ClawMcpService {
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return;
         };
+        self.remember_transport(Some(&session_id)).await;
         if let Err(error) = self.ensure_session_started(session_id).await {
             warn!(error = %error, "mcp session start failed");
         }
@@ -1170,13 +1185,19 @@ impl Drop for ClawMcpService {
             return;
         };
         handle.spawn(async move {
-            let session_id = {
+            let (transport, session_id) = {
                 let lifecycle = lifecycle.lock().await;
-                lifecycle
-                    .started
-                    .then(|| lifecycle.session_id.clone())
-                    .flatten()
+                (
+                    lifecycle.transport.clone(),
+                    lifecycle
+                        .started
+                        .then(|| lifecycle.session_id.clone())
+                        .flatten(),
+                )
             };
+            if let Some(transport) = transport {
+                state.sessions.transports().ended(transport.as_str()).await;
+            }
             let Some(session_id) = session_id else {
                 return;
             };

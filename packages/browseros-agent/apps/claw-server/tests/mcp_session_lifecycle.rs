@@ -10,10 +10,15 @@ use browseros_core::NativeCapabilities;
 use claw_server::{
     AppState, build_router,
     config::{Behavior, Config, NativeIdentity, ServerMode},
+    ids::log_fingerprint,
 };
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    io::Write,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -219,5 +224,119 @@ async fn a_transport_outlives_its_finished_task() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(600)).await;
     app.state.sessions.sweep_idle().await?;
     assert_eq!(ping(&app.router, &session).await?, StatusCode::OK);
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl Logs {
+    fn text(&self) -> String {
+        let bytes = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    async fn wait_for(&self, needle: &str) -> String {
+        for _ in 0..50 {
+            let text = self.text();
+            if text.contains(needle) {
+                return text;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        self.text()
+    }
+}
+
+impl Write for Logs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+// Process-wide, because the tests in this file run on parallel threads and a thread-local
+// subscriber misses events whose callsite another thread cached first.
+fn captured_info_logs() -> &'static Logs {
+    static LOGS: OnceLock<Logs> = OnceLock::new();
+    LOGS.get_or_init(|| {
+        let logs = Logs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber);
+        logs
+    })
+}
+
+#[tokio::test]
+async fn transport_and_session_ends_are_logged_by_fingerprint_only() -> anyhow::Result<()> {
+    let logs = captured_info_logs();
+    let app = app(Clocks {
+        mcp_transport_idle: Duration::from_millis(1_000),
+        ..Clocks::default()
+    })
+    .await?;
+    let session = legacy_transport(&app.router).await?;
+    let fingerprint = log_fingerprint(&session);
+
+    tokio::time::sleep(Duration::from_millis(1_600)).await;
+    assert_eq!(ping(&app.router, &session).await?, StatusCode::NOT_FOUND);
+    let text = logs.wait_for("claw session ended").await;
+    assert!(
+        text.contains("mcp transport session ended") && text.contains(&fingerprint),
+        "{text}"
+    );
+    assert!(
+        text.contains("mcp request for an ended transport session"),
+        "{text}"
+    );
+    assert!(
+        text.contains("claw session ended") && text.contains("transport closed"),
+        "{text}"
+    );
+
+    let never_issued = "never-issued-transport";
+    assert_eq!(
+        ping(&app.router, never_issued).await?,
+        StatusCode::NOT_FOUND
+    );
+    let text = logs.wait_for("unknown transport session").await;
+    assert!(
+        text.contains("mcp request for an unknown transport session")
+            && text.contains(&log_fingerprint(never_issued)),
+        "{text}"
+    );
+
+    // rmcp's own "create new session" line and the existing session-start line still carry the
+    // full id; the lines this server adds for transport and task ends must not.
+    for line in text.lines().filter(|line| {
+        [
+            "mcp transport session ended",
+            "transport session; the client must re-initialize",
+            "claw session ended",
+        ]
+        .iter()
+        .any(|message| line.contains(message))
+    }) {
+        assert!(
+            !line.contains(&session) && !line.contains(never_issued),
+            "a full transport id was logged: {line}"
+        );
+    }
     Ok(())
 }

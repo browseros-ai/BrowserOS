@@ -4,17 +4,19 @@ use super::mcp::streamable_http_service;
 use crate::{
     AppState,
     error::{AppError, CanonicalError, RequestId},
+    ids::log_fingerprint,
+    services::sessions::TransportFate,
 };
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Request},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
 use std::time::Instant;
-use tracing::{Instrument, info_span};
+use tracing::{Instrument, info, info_span};
 use ulid::Ulid;
 
 pub(crate) mod audit;
@@ -159,7 +161,8 @@ pub fn router(state: AppState) -> Router<AppState> {
         .nest_service(
             "/mcp",
             Router::new()
-                .fallback_service(streamable_http_service(state))
+                .fallback_service(streamable_http_service(state.clone()))
+                .layer(middleware::from_fn_with_state(state, mcp_transport_log))
                 .layer(middleware::from_fn(mcp_request_hygiene)),
         )
         .fallback(route_fallback)
@@ -183,6 +186,44 @@ pub(super) fn internal(request_id: &RequestId, source: AppError) -> CanonicalErr
         "internal_error",
         "internal server error",
     )
+}
+
+/// Follows legacy transport ids so a 404 can say whether the transport expired or never
+/// existed. The spec has the client re-initialize after a 404; the line is for whoever reads
+/// the log afterwards, and it carries only a fingerprint of the id.
+async fn mcp_transport_log(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let transport = req
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let method = req.method().clone();
+    let response = next.run(req).await;
+    let Some(transport) = transport else {
+        return response;
+    };
+    let transports = state.sessions.transports();
+    if response.status() != StatusCode::NOT_FOUND {
+        transports.touch(&transport).await;
+        return response;
+    }
+    let fingerprint = log_fingerprint(&transport);
+    match transports.fate(&transport).await {
+        TransportFate::Ended(ago) => info!(
+            transport = %fingerprint,
+            %method,
+            ended_ago = ?ago,
+            "mcp request for an ended transport session; the client must re-initialize"
+        ),
+        TransportFate::Unknown => info!(
+            transport = %fingerprint,
+            %method,
+            "mcp request for an unknown transport session; the client must re-initialize"
+        ),
+    }
+    response
 }
 
 /// Rejects browser-page requests to the loopback MCP endpoint. Browser fetches

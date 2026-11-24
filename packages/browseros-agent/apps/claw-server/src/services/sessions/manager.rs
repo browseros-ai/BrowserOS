@@ -1,4 +1,4 @@
-use super::{PageOwnership, Session, TargetBindings};
+use super::{PageOwnership, Session, TargetBindings, TransportLog};
 use crate::{
     analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     db::{AuditLog, SessionTabLedger},
@@ -23,7 +23,7 @@ use tokio::{
     time::{Instant, MissedTickBehavior, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -137,6 +137,7 @@ pub struct Sessions {
     audit_flush_hook: OnceLock<SessionAuditFlushHook>,
     completion_hook: OnceLock<SessionCompletionHook>,
     target_bindings: OnceLock<Arc<TargetBindings>>,
+    transports: TransportLog,
     idle_after: Duration,
     complete_after: Duration,
     retention: Duration,
@@ -190,6 +191,7 @@ impl Sessions {
             audit_flush_hook: OnceLock::new(),
             completion_hook: OnceLock::new(),
             target_bindings: OnceLock::new(),
+            transports: TransportLog::default(),
             idle_after,
             complete_after,
             retention,
@@ -200,6 +202,12 @@ impl Sessions {
     #[must_use]
     pub fn ownership(&self) -> Arc<PageOwnership> {
         self.ownership.clone()
+    }
+
+    /// Legacy MCP transports, for telling an expired id from one never seen.
+    #[must_use]
+    pub fn transports(&self) -> &TransportLog {
+        &self.transports
     }
 
     /// Installs browser-backed retained-group collapse and close operations.
@@ -631,6 +639,12 @@ impl Sessions {
         }
         self.session_tabs
             .enqueue_release_claims_for_session(session.id().as_str().to_string());
+        info!(
+            session = %session.id().fingerprint(),
+            kind,
+            reason = reason.unwrap_or_default(),
+            "claw session ended"
+        );
         let audit_result = self
             .audit_log
             .record_session_end(session.id().as_str(), kind, reason)
@@ -734,6 +748,7 @@ impl Sessions {
                 None => self.ownership.tab_group_ref(&key).await.is_none(),
             };
             if closed && self.retained.write().await.remove(&key).is_some() {
+                info!(convo = %key, "closed a finished task's tab group");
                 self.ownership.forget(&key).await;
                 self.reserved_keys.lock().await.remove(&key);
                 reaped += 1;
