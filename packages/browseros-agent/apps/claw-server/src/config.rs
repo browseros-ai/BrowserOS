@@ -642,14 +642,14 @@ mod tests {
                 "garbage",
                 "-500",
                 Duration::from_secs(30 * 60),
-                Duration::from_millis(3_600_000),
+                Duration::from_millis(1_800_000),
                 Duration::from_millis(60_000),
             ),
             (
                 "0",
                 "0x10",
                 Duration::from_secs(30 * 60),
-                Duration::from_millis(3_600_000),
+                Duration::from_millis(1_800_000),
                 Duration::from_millis(60_000),
             ),
             // Number.parseInt parity: integer prefix wins, trailing garbage
@@ -691,7 +691,7 @@ mod tests {
             &ConfigEnv::with_vars(BTreeMap::new(), home.clone()),
         )?;
         assert_eq!(cfg.session_idle, Duration::from_secs(30 * 60));
-        assert_eq!(cfg.session_retention, Duration::from_millis(3_600_000));
+        assert_eq!(cfg.session_retention, Duration::from_millis(1_800_000));
         assert_eq!(cfg.session_sweep_interval, Duration::from_millis(60_000));
         Ok(())
     }
@@ -952,9 +952,8 @@ mod tests {
     }
 
     #[test]
-    fn tab_close_grace_defaults_to_30_minutes_when_hosted_and_one_hour_on_desktop()
-    -> anyhow::Result<()> {
-        for (mode, expected_seconds) in [("1", 1_800), ("0", 3_600)] {
+    fn tab_close_grace_defaults_to_30_minutes_in_both_modes() -> anyhow::Result<()> {
+        for (mode, expected_seconds) in [("1", 1_800), ("0", 1_800)] {
             let config = load_native("{}", &[(HOSTED_MODE_ENV, mode)])?;
             assert_eq!(
                 config.session_retention,

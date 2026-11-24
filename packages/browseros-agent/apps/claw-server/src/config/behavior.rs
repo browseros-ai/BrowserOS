@@ -46,10 +46,9 @@ impl Behavior {
                 ServerMode::Desktop => TabGrouping::Automatic,
                 ServerMode::Hosted => TabGrouping::Explicit,
             },
-            tab_close_after: Duration::from_secs(match mode {
-                ServerMode::Desktop => 60 * 60,
-                ServerMode::Hosted => 30 * 60,
-            }),
+            // A conversation that resumes takes its group back, so a finished group only
+            // needs to outlast a short pause before it stops crowding the tab strip.
+            tab_close_after: Duration::from_secs(30 * 60),
             isolated_world: true,
             // A hosted harness drives tabs nobody sits in front of.
             working_overlay: match mode {
