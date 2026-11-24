@@ -139,6 +139,22 @@ const RECOVERY_OBSERVE_WAIT: Duration = Duration::from_secs(1);
 /// it. Cut off, the command still reaches the renderer; only the wait for its answer ends.
 const OBSERVER_ARM_WAIT: Duration = Duration::from_secs(1);
 
+/// How long each of a tab's source sessions may take to answer the ordering ping ([`Order::Ping`])
+/// after a write op that ended with no answer from the tab's renderer. A renderer sends its events
+/// and its answers on one session in order, so once the ping is back every frame event the tab
+/// sent before it is read. A renderer busy past this, or held by a pending cross-document
+/// navigation, lets the reply go on without that guarantee; its events still move the tab's
+/// version when they come.
+pub(crate) const ORDERING_PING_BUDGET: Duration = Duration::from_millis(ORDERING_PING_BUDGET_MS);
+const ORDERING_PING_BUDGET_MS: u64 = 50;
+
+/// How long a reseed ([`Order::Reseed`]) leaves alone a session whose last tree read failed, unless
+/// its tab's frame version moved since: a frame whose renderer never answers then costs its tab's
+/// line one read (up to [`TREE_READ_WAIT`]) a second at most, though every settle step's
+/// `page.frames` asks again, and a list still becomes whole within a second of the renderer
+/// answering.
+const RESEED_BACKOFF: Duration = Duration::from_secs(1);
+
 /// How many times a session's tree is read again after reads that failed or missed
 /// [`TREE_READ_WAIT`], one per later tick ([`Watcher::retry_reads`]), before it waits for its
 /// tab's next load event or main-frame commit. A read that brings a tree ends the streak.
@@ -188,11 +204,27 @@ struct WatcherRequest {
     done: oneshot::Sender<()>,
 }
 
+/// Work an op asks of the watcher that waits for nothing on the watcher's loop: the loop only
+/// looks up sessions and starts reads or pings on tasks of their own.
+#[derive(Debug)]
+enum Order {
+    /// Read again each session of the tab whose tree has not landed, and the tab's own tree
+    /// whatever landed when `own_tree` ([`Watcher::reseed`]).
+    Reseed { tab: TargetId, own_tree: bool },
+    /// Ping each source session of the tab and say whether all answered ([`Watcher::ping`]).
+    Ping {
+        tab: TargetId,
+        done: oneshot::Sender<bool>,
+    },
+}
+
 /// The asking side of the watcher's request channel, shared by [`TargetWatcher`] and every
 /// [`WatcherHandle`]. It reads fences from the same session the watcher reads events from.
 #[derive(Clone)]
 struct Requests {
     sender: UnboundedSender<WatcherRequest>,
+    /// Work asked of the watcher that waits for nothing on its loop ([`Order`]).
+    orders: UnboundedSender<Order>,
     /// `None` only for a test handle no watcher answers.
     browser: Option<Arc<BrowserSession>>,
 }
@@ -265,9 +297,11 @@ impl WatcherHandle {
     #[cfg(test)]
     pub(crate) fn detached() -> Self {
         let (sender, _gone) = mpsc::unbounded_channel();
+        let (orders, _unread) = mpsc::unbounded_channel();
         Self {
             requests: Requests {
                 sender,
+                orders,
                 browser: None,
             },
         }
@@ -303,6 +337,32 @@ impl TargetWatcher {
         self.requests.ask(closed, None, fence, scope).await
     }
 
+    /// Asks the watcher to read again each session of `tab` whose tree has not landed, so its
+    /// list can become whole ([`Watcher::reseed`]). Fire and forget: nothing waits for the loop or
+    /// for the read, which goes through the tab's line as any seed does.
+    pub(crate) fn reseed(&self, tab: TargetId, own_tree: bool) {
+        let _ = self.requests.orders.send(Order::Reseed { tab, own_tree });
+    }
+
+    /// Pings every source session of `tab` with a renderer no-op and waits for the answers,
+    /// at most [`ORDERING_PING_BUDGET`] for each ([`Watcher::ping`]): once it returns `true`,
+    /// every frame event the tab's renderers sent before the op's end has been read, so a fence
+    /// taken now covers it. `false` when a session did not answer in time, or no watcher runs.
+    pub(crate) async fn order(&self, tab: TargetId) -> bool {
+        let (done, answered) = oneshot::channel();
+        if self
+            .requests
+            .orders
+            .send(Order::Ping { tab, done })
+            .is_err()
+        {
+            return false;
+        }
+        time::timeout(ORDERING_PING_BUDGET * 2, answered)
+            .await
+            .is_ok_and(|answered| answered.unwrap_or(false))
+    }
+
     /// Records `target`'s tab as opened at `url`, after every event received until now: the
     /// host stopped keeping it for itself (`Playwright::hand_back`). Whether the watcher
     /// answered in time.
@@ -326,8 +386,10 @@ impl TargetWatcher {
         crashes: Arc<TargetCrashes>,
     ) -> Self {
         let (sender, pending) = mpsc::unbounded_channel();
+        let (orders, ordered) = mpsc::unbounded_channel();
         let requests = Requests {
             sender,
+            orders,
             browser: Some(Arc::clone(&browser)),
         };
         let Ok(runtime) = Handle::try_current() else {
@@ -340,7 +402,7 @@ impl TargetWatcher {
         let (watcher, found) =
             Watcher::new(browser, writer, attach_log, progress, baselines, crashes);
         Self {
-            task: Some(runtime.spawn(watcher.run(found, pending))),
+            task: Some(runtime.spawn(watcher.run(found, pending, ordered))),
             requests,
         }
     }
@@ -414,6 +476,9 @@ struct Watcher {
     seeded: Option<UnboundedSender<SeededTree>>,
     /// The sessions whose last tree read failed or missed [`TREE_READ_WAIT`], to be read again.
     read_retries: HashMap<SessionId, ReadRetry>,
+    /// When each session's last tree read failed, and its tab's frame version then: a reseed backs
+    /// off such a session ([`Watcher::may_reread`]).
+    failed_reads: HashMap<SessionId, FailedRead>,
     /// Download begins waiting for the tree reads that were out when they were read, oldest first.
     /// Each is let go only when [`Self::advance_lines`] pops a read (`release_downloads`), so its
     /// release depends on every read in a line being popped, as each is once its answer comes back
@@ -520,6 +585,15 @@ enum TreeRead {
     /// An out-of-process frame's session, or a tab's root observer: nothing else turns `Page`
     /// on there.
     Frame,
+}
+
+/// A session's last failed tree read ([`Watcher::failed_reads`]).
+struct FailedRead {
+    at: Instant,
+    /// The tab's frame version when it failed.
+    version: u64,
+    /// Whether the session sent an event since.
+    heard: bool,
 }
 
 /// A session to read again after reads that failed or missed [`TREE_READ_WAIT`] (a renderer
@@ -844,6 +918,7 @@ impl Watcher {
             lines: HashMap::new(),
             seeded: None,
             read_retries: HashMap::new(),
+            failed_reads: HashMap::new(),
             unowned_downloads: Vec::new(),
             attaching: HashMap::new(),
             deferred: Vec::new(),
@@ -856,6 +931,7 @@ impl Watcher {
         mut self,
         mut found: UnboundedReceiver<OpenedPage>,
         mut requests: UnboundedReceiver<WatcherRequest>,
+        mut orders: UnboundedReceiver<Order>,
     ) {
         // Counters and subscriptions are captured together: progress excludes messages
         // that arrived before this watcher subscribed, including the binding stream.
@@ -925,6 +1001,7 @@ impl Watcher {
                     self.answer_deferred();
                 }
                 Some(opened) = found.recv() => self.found(opened),
+                Some(order) = orders.recv() => self.order(order).await,
                 Some(proof) = recovered.recv() => self.recovery_replies.push(proof),
                 Some(seeded) = trees.recv() => {
                     self.seeded_tree(seeded);
@@ -991,6 +1068,7 @@ impl Watcher {
         self.sessions.remove(session);
         self.page_sessions.remove(session);
         self.read_retries.remove(session);
+        self.failed_reads.remove(session);
     }
 
     /// Events were dropped: rediscover, which records what closed meanwhile, and tell the frame
@@ -1185,6 +1263,7 @@ impl Watcher {
             self.sessions.clear();
             self.lifecycle_sources = LifecycleSources::default();
             self.read_retries.clear();
+            self.failed_reads.clear();
             self.frames.clear();
             self.contexts.clear();
             self.pending_dialogs.clear();
@@ -1233,6 +1312,7 @@ impl Watcher {
             params,
             session_id,
         } = event;
+        self.heard_from(session_id.as_ref());
         match method.as_str() {
             "Page.frameAttached"
             | "Page.frameNavigated"
@@ -1274,9 +1354,7 @@ impl Watcher {
             }
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
-                    self.dialog_closed(&session_id);
-                    self.session_detached(&session_id);
-                    self.lifecycle_sources.detach(&session_id);
+                    self.detached(&session_id).await;
                 }
             }
             "Page.loadEventFired" | "Page.domContentEventFired" => {
@@ -1898,6 +1976,7 @@ impl Watcher {
                 if let Some(parent) = parent
                     && let Some(tab) = self.target_of(parent).await
                 {
+                    let frame = FrameId(target_info.target_id.clone());
                     self.lifecycle_sources
                         .attach(&session_id, &TargetId(target_info.target_id.clone()));
                     self.frames.insert(target_info.target_id, tab.clone());
@@ -1906,6 +1985,9 @@ impl Watcher {
                     self.writer.frames_changed(tab.clone());
                     self.frame_logs.insert(session_id.clone(), FrameLog::Off);
                     if self.lifecycle_sources.accepts(&session_id) {
+                        // Its frames from before its `Page` went on come only from its seed: the
+                        // tab's list is not whole until that lands (`TabFrames::session_attached`).
+                        self.writer.frame_session_attached(&tab, frame);
                         self.start_seed(&tab, &session_id, TreeRead::Frame).await;
                     }
                     self.lease_frame_log(&session_id).await;
@@ -2305,6 +2387,151 @@ impl Watcher {
         }
     }
 
+    /// `Target.detachedFromTarget`: the session's dialog, its bookkeeping, and its place among
+    /// its target's lifecycle sources. A frame session that leaves no other to take over: nothing
+    /// reads that frame's subtree now, so it holds its tab's list from whole no longer. One whose
+    /// session in waiting takes over as the frame's source: that session read nothing, and its
+    /// `Page` may be off (a session in waiting is sent no `Page.enable`), so the list is not whole
+    /// until the frame is read through it, which turns its `Page` on too.
+    async fn detached(&mut self, session: &SessionId) {
+        let frame_source = self.frame_source(session);
+        let was_source = frame_source
+            .as_ref()
+            .is_some_and(|(_, frame)| self.lifecycle_sources.primary.get(frame) == Some(session));
+        self.dialog_closed(session);
+        self.session_detached(session);
+        self.lifecycle_sources.detach(session);
+        let Some((tab, frame)) = frame_source else {
+            return;
+        };
+        match self.lifecycle_sources.primary.get(&frame).cloned() {
+            None => self.writer.frame_session_ended(&tab, &FrameId(frame.0)),
+            Some(next) if was_source => {
+                self.writer
+                    .frame_session_attached(&tab, FrameId(frame.0.clone()));
+                self.start_seed(&tab, &next, TreeRead::Frame).await;
+            }
+            // A session in waiting went; the source stays.
+            Some(_) => {}
+        }
+    }
+
+    /// The tab and frame of an out-of-process frame's session (`frame_logs` holds exactly those).
+    fn frame_source(&self, session: &SessionId) -> Option<(TargetId, TargetId)> {
+        if !self.frame_logs.contains_key(session) {
+            return None;
+        }
+        let tab = self.sessions.get(session)?.clone();
+        let frame = self.lifecycle_sources.targets.get(session)?.clone();
+        Some((tab, frame))
+    }
+
+    async fn order(&mut self, order: Order) {
+        match order {
+            Order::Reseed { tab, own_tree } => self.reseed(&tab, own_tree).await,
+            Order::Ping { tab, done } => self.ping(&tab, done),
+        }
+    }
+
+    /// Reads again each session of `tab` whose tree has not landed, and the tab's own tree when
+    /// `own_tree` (its list names no main frame, or a frame whose parent it does not know),
+    /// through `start_seed`'s rules: one read in flight per session, off the loop, behind the tab's
+    /// line, and none on a page the door refuses. A reader asks for it when it found the list
+    /// short (`page.frames`), so a tab whose reads all failed while its renderer was busy becomes
+    /// whole on its first read after that renderer answers, and never by inference from its
+    /// events. A session whose last read failed is read again only once [`RESEED_BACKOFF`] passed
+    /// or its tab's version moved since (`may_reread`).
+    async fn reseed(&mut self, tab: &TargetId, own_tree: bool) {
+        let missing = self.writer.hub().missing_seeds(tab);
+        if missing.is_none() && !own_tree {
+            return;
+        }
+        let missing = missing.unwrap_or_default();
+        if (missing.own_tree || own_tree)
+            && let Some(source) = self.lifecycle_sources.primary.get(tab).cloned()
+            && self.may_reread(tab, &source)
+        {
+            let read = if self.root_observers.contains_key(&source) {
+                TreeRead::Frame
+            } else {
+                TreeRead::Page
+            };
+            self.start_seed(tab, &source, read).await;
+        }
+        for frame in missing.frames {
+            if let Some(source) = self
+                .lifecycle_sources
+                .primary
+                .get(&TargetId(frame.0))
+                .cloned()
+                && self.may_reread(tab, &source)
+            {
+                self.start_seed(tab, &source, TreeRead::Frame).await;
+            }
+        }
+    }
+
+    /// Whether a reseed may read `session` again: its last read did not fail, or it failed at
+    /// least [`RESEED_BACKOFF`] ago, or it showed signs of life since. For an out-of-process
+    /// frame's session that is an event of its own (`heard_from`): the tab's version moves on any
+    /// frame's event, so on a page whose other frames churn it would lift a stuck frame's backoff
+    /// at nearly every step. For the tab's own source it is a move of the tab's version, which
+    /// that source's own frame events make.
+    fn may_reread(&self, tab: &TargetId, session: &SessionId) -> bool {
+        self.failed_reads.get(session).is_none_or(|failed| {
+            let alive = if self.frame_logs.contains_key(session) {
+                failed.heard
+            } else {
+                failed.version != self.writer.hub().frame_version(tab)
+            };
+            failed.at + RESEED_BACKOFF <= Instant::now() || alive
+        })
+    }
+
+    /// `session` sent an event: if its last tree read failed, it is answering again, so a reseed
+    /// may read it at once (`may_reread`).
+    fn heard_from(&mut self, session: Option<&SessionId>) {
+        if let Some(failed) = session.and_then(|session| self.failed_reads.get_mut(session)) {
+            failed.heard = true;
+        }
+    }
+
+    /// Sends `Page.getFrameTree` on `tab`'s source session and on each of its out-of-process
+    /// frames' source sessions, on a task of its own, and answers `done` once all answered or
+    /// [`ORDERING_PING_BUDGET`] passed. Only sources: the watcher applies a frame's events from its
+    /// source alone, and a session's answers are ordered only with that session's own events,
+    /// so a ping on core's session orders nothing while a root observer is the source. Another
+    /// tab is never pinged, and a tab on a page the door refuses is sent nothing. The answers are
+    /// discarded: never applied as a seed, and a ping takes no session's one-read-in-flight slot
+    /// in its tab's line, so a ping a pending navigation holds (for the navigation's whole time,
+    /// measured) never holds up a re-read of that session.
+    fn ping(&self, tab: &TargetId, done: oneshot::Sender<bool>) {
+        let frames = self
+            .frames
+            .iter()
+            .filter(|(_, owner)| *owner == tab)
+            .map(|(frame, _)| TargetId(frame.clone()));
+        let sessions: Vec<ProtocolSession> = iter::once(tab.clone())
+            .chain(frames)
+            .filter_map(|target| self.lifecycle_sources.primary.get(&target).cloned())
+            .map(|session| self.browser.protocol_session(session))
+            .collect();
+        if sessions.is_empty() || self.door_verdict(tab) == Some(true) {
+            let _ = done.send(true);
+            return;
+        }
+        drop(tokio::spawn(async move {
+            let answers = future::join_all(sessions.iter().map(|session| {
+                time::timeout(
+                    ORDERING_PING_BUDGET,
+                    session.send_value("Page.getFrameTree", json!({})),
+                )
+            }))
+            .await;
+            let _ = done.send(answers.iter().all(|answer| matches!(answer, Ok(Ok(_)))));
+        }));
+    }
+
     /// Reads `session`'s frame tree into the tracker, so the tab's frames that existed before the
     /// session reported events still carry a real Frame payload when they go. The read goes out
     /// on a task of its own, and the tab's events read from now on wait in its line until the
@@ -2671,12 +2898,19 @@ impl Watcher {
                 } => {
                     if let TreeAnswer::Back(Some(tree)) = answer {
                         self.writer.seed_frames(&tab, tree);
+                        self.failed_reads.remove(&session);
                         self.read_retries.remove(&session);
                         if let Some(observer) = self.root_observers.get_mut(&session) {
                             observer.recovery = RecoveryObservation::On;
                         }
                     } else if self.sessions.contains_key(&session) {
                         // A session gone with its tab, or detached, has nothing to read again.
+                        let failed = FailedRead {
+                            at: Instant::now(),
+                            version: self.writer.hub().frame_version(&tab),
+                            heard: false,
+                        };
+                        self.failed_reads.insert(session.clone(), failed);
                         self.retry_later(&tab, session, read);
                     }
                     self.release_downloads().await;
@@ -4905,10 +5139,11 @@ mod seed_tests {
     use tokio::{task, time};
 
     use super::{
-        CONTEXT_ATTACH_WAIT, DIALOG_GRACE, EventFence, FrameId, PageState, REAP, SeededTree, TICK,
-        TREE_READ_WAIT, Watcher, WatcherRequest,
+        CONTEXT_ATTACH_WAIT, DIALOG_GRACE, EventFence, FrameId, ORDERING_PING_BUDGET, Order,
+        PageState, REAP, RESEED_BACKOFF, SeededTree, TICK, TREE_READ_WAIT, Watcher, WatcherRequest,
     };
     use crate::DownloadState;
+    use crate::events::tab_frames::MissingSeeds;
     use crate::events::{
         EventHub, EventScope, PageEvent, PageEventKind, Subscription, WatcherProgress,
     };
@@ -5116,6 +5351,417 @@ mod seed_tests {
         );
         assert_eq!(watcher.progress.applied_through(&EventScope::Every), 4);
         assert!(watcher.lines.is_empty());
+        Ok(())
+    }
+
+    /// The `Page.getFrameTree` calls `connection` received from `from` on, by session.
+    fn tree_reads_since(
+        connection: &TestConnection,
+        from: usize,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        Ok(connection
+            .calls()?
+            .into_iter()
+            .skip(from)
+            .filter(|call| call.method == "Page.getFrameTree")
+            .map(|call| {
+                call.session
+                    .map(|session| session.as_str().to_owned())
+                    .unwrap_or_default()
+            })
+            .collect())
+    }
+
+    /// A tab `t` (session `t-page`) with an out-of-process frame `tf` whose own session `tf` is
+    /// its source.
+    async fn tab_with_frame_session(watcher: &mut Watcher) {
+        read(watcher, page_attached("t-page", "t")).await;
+        let frame = json!({ "sessionId": "tf",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(watcher, on("t-page", "Target.attachedToTarget", frame)).await;
+    }
+
+    /// A reseed reads only what a tab's list lacks before it is whole: the tab's own tree when it
+    /// never landed, and the subtree of each frame session whose own never landed, each through
+    /// its source. Once the list is whole it reads nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_reseed_reads_only_what_a_list_lacks() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", json!({}))?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        settle().await;
+        for session in ["t-page", "tf"] {
+            watcher.seeded_tree(SeededTree {
+                session: SessionId::from(session),
+                tree: None,
+            });
+        }
+        watcher.advance_lines().await;
+        let t = TargetId("t".to_owned());
+        assert_eq!(
+            hub.missing_seeds(&t),
+            Some(MissingSeeds {
+                own_tree: true,
+                frames: vec![FrameId("tf".to_owned())],
+            }),
+            "both first reads failed"
+        );
+        time::advance(RESEED_BACKOFF).await;
+
+        let before = connection.calls()?.len();
+        watcher
+            .order(Order::Reseed {
+                tab: t.clone(),
+                own_tree: false,
+            })
+            .await;
+        // Each read goes out on a task of its own.
+        settle().await;
+        assert_eq!(tree_reads_since(&connection, before)?, ["t-page", "tf"]);
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        let tf = json!({ "frameTree": { "frame": { "id": "tf", "parentId": "t",
+            "url": "https://tf.test/" } } });
+        answer(&mut watcher, "tf", tf).await;
+        assert_eq!(hub.missing_seeds(&t), None);
+        assert!(hub.tab_frames(&t).is_some_and(|list| list.whole));
+
+        let before = connection.calls()?.len();
+        watcher
+            .order(Order::Reseed {
+                tab: t,
+                own_tree: false,
+            })
+            .await;
+        settle().await;
+        assert!(
+            tree_reads_since(&connection, before)?.is_empty(),
+            "a whole list reads nothing"
+        );
+        Ok(())
+    }
+
+    /// A reseed reads again a session whose last read failed only once [`RESEED_BACKOFF`]
+    /// passed or its tab's frame version moved since: a frame that never answers costs its tab's
+    /// line one read a second at most, though every settle step asks, and a list still heals
+    /// within a second of its renderer answering.
+    #[tokio::test(start_paused = true)]
+    async fn a_reseed_backs_off_a_session_whose_read_just_failed() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        settle().await;
+        let fail = |watcher: &mut Watcher| {
+            watcher.seeded_tree(SeededTree {
+                session: SessionId::from("t-page"),
+                tree: None,
+            });
+        };
+        fail(&mut watcher);
+        watcher.advance_lines().await;
+        let t = TargetId("t".to_owned());
+        let reseed = |own_tree| Order::Reseed {
+            tab: t.clone(),
+            own_tree,
+        };
+        let before = connection.calls()?.len();
+        watcher.order(reseed(false)).await;
+        settle().await;
+        assert!(
+            tree_reads_since(&connection, before)?.is_empty(),
+            "its read just failed and nothing moved"
+        );
+        time::advance(RESEED_BACKOFF).await;
+        watcher.order(reseed(false)).await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["t-page"],
+            "past the backoff"
+        );
+        fail(&mut watcher);
+        watcher.advance_lines().await;
+        watcher.order(reseed(false)).await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["t-page"],
+            "two asks inside the backoff with no version move read once"
+        );
+        let commit =
+            json!({ "frame": { "id": "t", "loaderId": "next", "url": "https://a.test/next" } });
+        read(&mut watcher, on("t-page", "Page.frameNavigated", commit)).await;
+        watcher.order(reseed(false)).await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["t-page", "t-page"],
+            "a version move lets it read at once"
+        );
+        Ok(())
+    }
+
+    /// A frame session whose read failed is read again before the backoff passed only once it
+    /// sent an event of its own: another frame's event moves the tab's version, and on a page whose
+    /// other frames churn it would read the stuck frame at nearly every step.
+    #[tokio::test(start_paused = true)]
+    async fn a_reseed_reads_a_stuck_frame_again_only_once_it_speaks() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", json!({}))?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        settle().await;
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from("tf"),
+            tree: None,
+        });
+        watcher.advance_lines().await;
+        let t = TargetId("t".to_owned());
+        let reseed = || Order::Reseed {
+            tab: t.clone(),
+            own_tree: false,
+        };
+        let sibling = json!({ "frameId": "sibling", "parentFrameId": "t" });
+        read(&mut watcher, on("t-page", "Page.frameAttached", sibling)).await;
+        let before = connection.calls()?.len();
+        watcher.order(reseed()).await;
+        settle().await;
+        assert!(
+            tree_reads_since(&connection, before)?.is_empty(),
+            "another frame's event moved the tab's version, and tf said nothing"
+        );
+        let own = json!({ "frame": { "id": "tf", "parentId": "t", "loaderId": "next",
+            "url": "https://tf.test/next" } });
+        read(&mut watcher, on("tf", "Page.frameNavigated", own)).await;
+        watcher.order(reseed()).await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["tf"],
+            "tf sent an event of its own"
+        );
+        Ok(())
+    }
+
+    /// A session in waiting that takes over as a frame's source has read nothing, and its `Page`
+    /// may be off: the tab's list is not whole again until the frame is read through it, and that
+    /// read goes out as it takes over.
+    #[tokio::test]
+    async fn a_frame_session_that_takes_over_reads_its_frame_again() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", json!({}))?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        settle().await;
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        let tf = json!({ "frameTree": { "frame": { "id": "tf", "parentId": "t",
+            "url": "https://tf.test/" } } });
+        answer(&mut watcher, "tf", tf.clone()).await;
+        let t = TargetId("t".to_owned());
+        assert_eq!(hub.missing_seeds(&t), None, "whole");
+        let copy = json!({ "sessionId": "tf2",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", copy)).await;
+        let before = connection.calls()?.len();
+        let detach = json!({ "sessionId": "tf" });
+        read(
+            &mut watcher,
+            on("t-page", "Target.detachedFromTarget", detach),
+        )
+        .await;
+        settle().await;
+        assert!(
+            hub.missing_seeds(&t)
+                .is_some_and(|missing| missing.frames == [FrameId("tf".to_owned())]),
+            "tf2 took over and has read nothing yet"
+        );
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["tf2"],
+            "read through tf2"
+        );
+        answer(&mut watcher, "tf2", tf).await;
+        assert_eq!(hub.missing_seeds(&t), None, "whole again");
+        Ok(())
+    }
+
+    /// A list whose seeds all landed but which names a frame with no known parent has its tab's
+    /// own tree read again when the reader asks for it; without that ask, a whole list reads
+    /// nothing.
+    #[tokio::test]
+    async fn a_reseed_for_an_orphaned_list_reads_the_tabs_own_tree() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        settle().await;
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        let t = TargetId("t".to_owned());
+        assert_eq!(hub.missing_seeds(&t), None, "whole");
+        let before = connection.calls()?.len();
+        watcher
+            .order(Order::Reseed {
+                tab: t.clone(),
+                own_tree: false,
+            })
+            .await;
+        settle().await;
+        assert!(tree_reads_since(&connection, before)?.is_empty());
+        watcher
+            .order(Order::Reseed {
+                tab: t,
+                own_tree: true,
+            })
+            .await;
+        settle().await;
+        assert_eq!(tree_reads_since(&connection, before)?, ["t-page"]);
+        Ok(())
+    }
+
+    /// The ordering ping goes to the source of the tab and of each of its out-of-process frames,
+    /// and to no other tab, and answers once they all answered.
+    #[tokio::test]
+    async fn a_ping_goes_to_each_source_of_its_tab_and_to_no_other_tab() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", tree("t", "https://a.test/"))?;
+        connection.always("Page.enable", json!({}))?;
+        let (_hub, mut watcher, mut answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        read(&mut watcher, page_attached("u-page", "u")).await;
+        for _ in 0..3 {
+            answer_next(&mut watcher, &mut answers).await?;
+        }
+        let before = connection.calls()?.len();
+        let (done, answered) = oneshot::channel();
+        watcher
+            .order(Order::Ping {
+                tab: TargetId("t".to_owned()),
+                done,
+            })
+            .await;
+        assert!(
+            time::timeout(Duration::from_secs(5), answered).await??,
+            "every source answered"
+        );
+        let mut pinged = tree_reads_since(&connection, before)?;
+        pinged.sort();
+        assert_eq!(pinged, ["t-page", "tf"], "the tab's sources, never u's");
+        Ok(())
+    }
+
+    /// The ping's answer is discarded: it is never applied as a seed and takes no session's
+    /// one-read-in-flight slot, so a ping held by a renderer (a pending navigation holds one for
+    /// the navigation's whole time) never stops a re-read of that session.
+    #[tokio::test(start_paused = true)]
+    async fn a_ping_out_on_a_session_leaves_its_read_free() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        settle().await;
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from("t-page"),
+            tree: None,
+        });
+        watcher.advance_lines().await;
+        time::advance(RESEED_BACKOFF).await;
+        let t = TargetId("t".to_owned());
+        let before = connection.calls()?.len();
+        let (done, _answered) = oneshot::channel();
+        watcher
+            .order(Order::Ping {
+                tab: t.clone(),
+                done,
+            })
+            .await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["t-page"],
+            "the ping is out"
+        );
+        watcher
+            .order(Order::Reseed {
+                tab: t.clone(),
+                own_tree: false,
+            })
+            .await;
+        settle().await;
+        assert_eq!(
+            tree_reads_since(&connection, before)?,
+            ["t-page", "t-page"],
+            "the re-read goes out beside it"
+        );
+        Ok(())
+    }
+
+    /// A source that does not answer the ping (a renderer busy, or held by a pending
+    /// navigation) lets the reply go on at [`ORDERING_PING_BUDGET`], without the guarantee.
+    #[tokio::test(start_paused = true)]
+    async fn a_ping_a_source_never_answers_gives_up_at_its_budget() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        let (_hub, mut watcher, _answers) = watcher(&connection);
+        read(&mut watcher, page_attached("t-page", "t")).await;
+        let (done, answered) = oneshot::channel();
+        let started = time::Instant::now();
+        watcher
+            .order(Order::Ping {
+                tab: TargetId("t".to_owned()),
+                done,
+            })
+            .await;
+        assert!(!answered.await?, "not every source answered");
+        assert_eq!(started.elapsed(), ORDERING_PING_BUDGET);
+        Ok(())
+    }
+
+    /// A frame session's end takes its hold off the tab's list only when no other session waits
+    /// to take over as the frame's source: one that takes over has read nothing yet.
+    #[tokio::test]
+    async fn a_frame_sessions_end_lets_its_list_go_whole_unless_another_takes_over() -> TestResult {
+        let connection = TestConnection::new([]);
+        connection.always("Page.getFrameTree", cdp_pending())?;
+        connection.always("Page.enable", json!({}))?;
+        let (hub, mut watcher, _answers) = watcher(&connection);
+        tab_with_frame_session(&mut watcher).await;
+        answer(&mut watcher, "t-page", tree("t", "https://a.test/")).await;
+        // tf's own read fails: its line lets the tab's events go, and tf stays unread.
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from("tf"),
+            tree: None,
+        });
+        watcher.advance_lines().await;
+        let copy = json!({ "sessionId": "tf2",
+            "targetInfo": { "targetId": "tf", "type": "iframe", "url": "https://tf.test/" } });
+        read(&mut watcher, on("t-page", "Target.attachedToTarget", copy)).await;
+        let t = TargetId("t".to_owned());
+        let detach = |session: &str| {
+            on(
+                "t-page",
+                "Target.detachedFromTarget",
+                json!({ "sessionId": session }),
+            )
+        };
+        read(&mut watcher, detach("tf")).await;
+        assert!(
+            hub.missing_seeds(&t)
+                .is_some_and(|missing| missing.frames == [FrameId("tf".to_owned())]),
+            "tf2 took over and its read has not landed"
+        );
+        // tf2's read fails, so its line lets its own detach through.
+        watcher.seeded_tree(SeededTree {
+            session: SessionId::from("tf2"),
+            tree: None,
+        });
+        watcher.advance_lines().await;
+        read(&mut watcher, detach("tf2")).await;
+        assert_eq!(hub.missing_seeds(&t), None, "no session reads tf now");
         Ok(())
     }
 

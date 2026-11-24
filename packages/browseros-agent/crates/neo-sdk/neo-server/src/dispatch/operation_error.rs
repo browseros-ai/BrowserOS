@@ -41,8 +41,8 @@ pub(crate) struct OperationError {
     /// trace does not store them.
     matcher: Option<Box<Value>>,
     /// A `covered` pointer action's cover from neo-playwright (action/cover.rs): the script's
-    /// error carries it as `cover`, the prelude renders its snapshot into the message, and the
-    /// operation's record keeps it without that snapshot.
+    /// error carries it as `cover`, the prelude places its block (the cover's own snapshot,
+    /// printed by Rust) into the message, and the operation's record keeps it without the block.
     cover: Option<Box<Value>>,
 }
 
@@ -172,12 +172,14 @@ impl OperationError {
     }
 }
 
-/// A cover as the record keeps it: what the error named, without the cover's own snapshot,
-/// which only the script's prelude renders.
+/// A cover as the record keeps it: what the error named, without `block`, the cover's own
+/// snapshot lines, which only the script's error shows. The record's message is Rust's, without
+/// the block too: a trace clips a message at 2,048 bytes, and the block would push the cover's
+/// controls, the "Do" line and the call log out of it.
 fn recorded_cover(cover: &Value) -> Value {
     let mut kept = cover.clone();
     if let Value::Object(fields) = &mut kept {
-        fields.remove("snapshot");
+        fields.remove("block");
     }
     kept
 }
@@ -471,5 +473,89 @@ impl From<TaskError> for OperationError {
             TaskError::Full => Self::neo(ErrorCode::TASK_LIMIT_REACHED, error),
             TaskError::InvalidId(_) => Self::neo(ErrorCode::INTERNAL_ERROR, error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use serde_json::{Value, json};
+
+    use super::{ErrorCode, OperationError};
+
+    /// The lines neo-playwright's `cover_block` printed for the cover, which the script's error
+    /// shows under "On top" and the record never keeps.
+    const BLOCK: &str = "    - dialog \"Terms\" [ref=e1]:\n      - text: Read these terms.\n      \
+                         - button \"I agree\" [ref=e3]";
+
+    /// A covered action's failure as neo-playwright hands it over (action/cover.rs): Rust's own
+    /// message, which has no line of the cover's snapshot, and the cover with its block in
+    /// place of the tree.
+    fn covered() -> OperationError {
+        OperationError::website(
+            ErrorCode::COVERED,
+            "locator.click: Timeout 1500ms exceeded.\n  On top: dialog \"Terms\" [ref=e1] <div \
+             role=\"dialog\">…</div>\n  It has been there since this click began.\n  Nothing \
+             was pressed.\n  Its controls:\n    - button \"I agree\" [ref=e3]\n  Do: answer or \
+             close it with one of its controls, then try again.\nCall log:\n  - attempting \
+             click action",
+        )
+        .timed_out()
+        .with_cover(json!({
+            "ref": "e1",
+            "role": "dialog",
+            "name": "Terms",
+            "kind": "page",
+            "controls": [{ "ref": "e3", "role": "button", "name": "I agree" }],
+            "block": BLOCK,
+        }))
+    }
+
+    /// The covered answer's first new row (design 5.6): the record's message is Rust's, and no
+    /// line of the cover's snapshot is in it, so a trace's clip at 2,048 bytes keeps the
+    /// controls, the "Do" line and the call log.
+    #[test]
+    fn tests_that_a_covered_records_message_holds_no_line_of_the_covers_snapshot() {
+        let failure = covered();
+        let record = failure.record(false, None);
+        assert_eq!(record.message, failure.message());
+        for line in BLOCK.lines() {
+            assert!(
+                !record.message.contains(line),
+                "the record's message holds the cover's line {line:?}: {}",
+                record.message
+            );
+        }
+    }
+
+    /// The second row: the record's cover is what the error named, without the block and
+    /// without a tree, while the script's error still carries the block for the prelude.
+    #[test]
+    fn tests_that_a_covered_records_cover_has_neither_the_tree_nor_the_block()
+    -> Result<(), Box<dyn Error>> {
+        let failure = covered();
+        let cover = failure
+            .record(false, None)
+            .cover
+            .ok_or("a covered failure's record keeps its cover")?;
+        assert_eq!(cover.get("block"), None, "{cover}");
+        assert_eq!(cover.get("snapshot"), None, "{cover}");
+        assert_eq!(
+            cover,
+            json!({
+                "ref": "e1",
+                "role": "dialog",
+                "name": "Terms",
+                "kind": "page",
+                "controls": [{ "ref": "e3", "role": "button", "name": "I agree" }],
+            })
+        );
+        assert_eq!(
+            failure.cover().and_then(|cover| cover.get("block")),
+            Some(&Value::from(BLOCK)),
+            "the script's error keeps the block"
+        );
+        Ok(())
     }
 }

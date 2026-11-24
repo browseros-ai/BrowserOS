@@ -1,9 +1,16 @@
-use std::{future::Future, time::Duration};
+use std::{collections::VecDeque, future::Future, time::Duration};
 
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::time::{Instant, timeout_at};
 use url::Url;
+
+/// Per-child-frame DOM scan timeout so one stalled sibling frame cannot starve readable CAPTCHA
+/// frames behind it within `detect`'s budget.
+const CHILD_SCAN_TIMEOUT: Duration = Duration::from_millis(750);
+/// Maximum concurrent child-frame DOM scans inside `detect::scan`.
+const MAX_CONCURRENT_CHILD_SCANS: usize = 16;
 
 use super::{
     page::CaptchaPage,
@@ -526,8 +533,17 @@ async fn scan(
         addresses.extend(probe.addresses.into_iter().map(|url| (url, None)));
         top_url = probe.url;
     }
-    let frames =
-        partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
+    let frames_budget = deadline.saturating_duration_since(Instant::now()) / 2;
+    let frames = match partial(
+        bounded(deadline, page.scan_frames(Some(frames_budget))).await,
+        &mut complete,
+    )? {
+        Some(list) => {
+            complete &= list.complete;
+            list.frames
+        }
+        None => Vec::new(),
+    };
     let parents = partial(
         bounded(deadline, page.frame_parent_ids()).await,
         &mut complete,
@@ -551,41 +567,75 @@ async fn scan(
         }
     }
     let dom = dom_script(None);
-    for frame in &frames {
-        if is_top(frame, None) {
-            probes.push(None);
-            continue;
-        }
+    let mut child_probes: Vec<Option<Probe>> = (0..frames.len()).map(|_| None).collect();
+    let mut pending_children: VecDeque<(usize, &FrameRef)> = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, frame)| !is_top(frame, None))
+        .collect();
+    let mut active_children = FuturesUnordered::new();
+    let mut child_complete = true;
+    loop {
         if Instant::now() >= deadline {
-            complete = false;
-            probes.push(None);
-            continue;
-        }
-        let mut probe = partial(
-            bounded(deadline, page.scan_dom(Some(frame), &dom))
-                .await
-                .and_then(decode_probe),
-            &mut complete,
-        )?;
-        if let Some(probe) = &probe {
-            complete &= probe.complete;
-        }
-        if let Some(probe) = probe.as_mut().filter(|p| !p.top) {
-            if !probe.candidates.is_empty()
-                && let Some(gate) = partial(
-                    bounded(deadline, page.eval_in_frame_main(frame, VENDOR_GATE))
-                        .await
-                        .and_then(decode::<Gate>),
-                    &mut complete,
-                )?
-                && gate.goku
-            {
-                for mut candidate in probe.candidates.drain(..) {
-                    let key = &mut candidate.challenge.sitekey;
-                    *key = key.take().or_else(|| gate.aws_key.clone());
-                    probe.widgets.push(candidate);
-                }
+            if !pending_children.is_empty() {
+                child_complete = false;
+                pending_children.clear();
             }
+        } else {
+            while active_children.len() < MAX_CONCURRENT_CHILD_SCANS
+                && let Some((index, frame)) = pending_children.pop_front()
+            {
+                let child_deadline = (Instant::now() + CHILD_SCAN_TIMEOUT).min(deadline);
+                let dom_ref = dom.as_str();
+                active_children.push(async move {
+                    let probe = bounded(child_deadline, page.scan_dom(Some(frame), dom_ref))
+                        .await
+                        .and_then(decode_probe);
+                    match probe {
+                        Ok(mut probe) => {
+                            let mut ok_complete = probe.complete;
+                            if !probe.top && !probe.candidates.is_empty() {
+                                match bounded(
+                                    child_deadline,
+                                    page.eval_in_frame_main(frame, VENDOR_GATE),
+                                )
+                                .await
+                                .and_then(decode::<Gate>)
+                                {
+                                    Ok(gate) if gate.goku => {
+                                        for mut candidate in probe.candidates.drain(..) {
+                                            let key = &mut candidate.challenge.sitekey;
+                                            *key = key.take().or_else(|| gate.aws_key.clone());
+                                            probe.widgets.push(candidate);
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(error @ (PageError::Closed | PageError::Cancelled)) => {
+                                        return Err(error);
+                                    }
+                                    Err(_) => {
+                                        ok_complete = false;
+                                    }
+                                }
+                            }
+                            Ok((index, Some(probe), ok_complete))
+                        }
+                        Err(error @ (PageError::Closed | PageError::Cancelled)) => Err(error),
+                        Err(_) => Ok((index, None, false)),
+                    }
+                });
+            }
+        }
+        let Some(outcome) = active_children.next().await else {
+            break;
+        };
+        let (index, probe, ok_complete) = outcome?;
+        child_complete &= ok_complete;
+        child_probes[index] = probe;
+    }
+    complete &= child_complete;
+    for (frame, mut probe) in frames.iter().zip(child_probes) {
+        if let Some(probe) = probe.as_mut().filter(|p| !p.top) {
             append_probe(
                 probe,
                 Some(frame.clone()),
@@ -796,24 +846,43 @@ async fn scan(
             continue;
         }
         let sitekey = param(&url, "k");
-        if !widgets.iter().any(|w| {
+        let enterprise = url.path().contains("/enterprise/");
+        let matches_v2 = |w: &Widget| {
             w.challenge.kind == CaptchaKind::RecaptchaV2
                 && (sitekey.is_none() || w.challenge.sitekey == sitekey)
-        }) {
-            let mut widget = Widget::new(CaptchaKind::RecaptchaV2);
-            widget.challenge.sitekey = sitekey.clone();
-            widget.challenge.enterprise = url.path().contains("/enterprise/");
-            widgets.push(widget);
+        };
+        let matches_v3 = |w: &Widget| {
+            w.challenge.kind == CaptchaKind::RecaptchaV3
+                && (sitekey.is_none() || w.challenge.sitekey == sitekey)
+        };
+        if !widgets.iter().any(matches_v2) {
+            let v3_indices: Vec<usize> = widgets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, w)| matches_v3(w).then_some(index))
+                .collect();
+            match v3_indices.as_slice() {
+                [index] => {
+                    let widget = &mut widgets[*index];
+                    widget.challenge.kind = CaptchaKind::RecaptchaV2;
+                    widget.challenge.sitekey = widget.challenge.sitekey.take().or(sitekey.clone());
+                    widget.challenge.enterprise |= enterprise;
+                }
+                _ => {
+                    if v3_indices.len() > 1 {
+                        complete = false;
+                    }
+                    let mut widget = Widget::new(CaptchaKind::RecaptchaV2);
+                    widget.challenge.sitekey = sitekey.clone();
+                    widget.challenge.enterprise = enterprise;
+                    widgets.push(widget);
+                }
+            }
         }
-        let mut candidates: Vec<_> = widgets
-            .iter_mut()
-            .filter(|w| {
-                w.challenge.kind == CaptchaKind::RecaptchaV2
-                    && (sitekey.is_none() || w.challenge.sitekey == sitekey)
-            })
-            .collect();
+        let mut candidates: Vec<_> = widgets.iter_mut().filter(|w| matches_v2(w)).collect();
         if let [widget] = candidates.as_mut_slice() {
             widget.challenge.challenge_frame = Some(frame.clone());
+            widget.challenge.enterprise |= enterprise;
             widget.challenge.state = ChallengeState::Active;
         } else {
             complete = false;
@@ -1112,11 +1181,16 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome};
+    use crate::{
+        page::FrameList,
+        types::{CaptchaKind, ChallengeState, DocumentId, FrameRef, Rect, ScanOutcome},
+    };
 
     struct FakePage {
         main: Mutex<VecDeque<Value>>,
         frames: Vec<FrameRef>,
+        frames_complete: bool,
+        frames_error: Option<PageError>,
         frame_result: Result<Value, PageError>,
         documents: Mutex<VecDeque<DocumentId>>,
         frame_delay: Duration,
@@ -1127,6 +1201,7 @@ mod tests {
         gate_calls: Mutex<Vec<String>>,
         parent_ids: std::collections::HashMap<String, String>,
         frame_results: std::collections::HashMap<String, Value>,
+        frame_delays: std::collections::HashMap<String, Duration>,
     }
 
     fn document(loader: &str) -> DocumentId {
@@ -1162,6 +1237,8 @@ mod tests {
             Self {
                 main: Mutex::new(VecDeque::from([probe(widgets)])),
                 frames: vec![],
+                frames_complete: true,
+                frames_error: None,
                 frame_result: Ok(probe(json!([]))),
                 documents: Mutex::new(VecDeque::from([document("a")])),
                 frame_delay: Duration::ZERO,
@@ -1172,6 +1249,7 @@ mod tests {
                 gate_calls: Mutex::new(vec![]),
                 parent_ids: Default::default(),
                 frame_results: Default::default(),
+                frame_delays: Default::default(),
             }
         }
 
@@ -1213,6 +1291,9 @@ mod tests {
                 .map_err(|e| PageError::Browser(e.to_string()))?
                 .push((frame.map(|f| f.frame_id.clone()), function.into()));
             if let Some(frame) = frame {
+                if let Some(delay) = self.frame_delays.get(&frame.frame_id).copied() {
+                    tokio::time::sleep(delay).await;
+                }
                 return self
                     .frame_results
                     .get(&frame.frame_id)
@@ -1233,7 +1314,17 @@ mod tests {
 
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
             tokio::time::sleep(self.frame_delay).await;
+            if let Some(error) = &self.frames_error {
+                return Err(error.clone());
+            }
             Ok(self.frames.clone())
+        }
+
+        async fn scan_frames(&self, _budget: Option<Duration>) -> Result<FrameList, PageError> {
+            Ok(FrameList {
+                frames: self.frames().await?,
+                complete: self.frames_complete,
+            })
         }
 
         async fn frame_parent_ids(
@@ -3339,6 +3430,9 @@ console.log(JSON.stringify(scan([], false)));
             async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
                 self.0.frames().await
             }
+            async fn scan_frames(&self, budget: Option<Duration>) -> Result<FrameList, PageError> {
+                self.0.scan_frames(budget).await
+            }
             async fn frame_parent_ids(
                 &self,
             ) -> Result<std::collections::HashMap<String, String>, PageError> {
@@ -3807,6 +3901,269 @@ roots.push(el('div', {{id: 'box'}}, [
                 );
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_incomplete_frame_scan_preserves_active_recaptcha_and_never_claims_none()
+    -> anyhow::Result<()> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        use browseros_core::PageId;
+        use tokio_util::sync::CancellationToken;
+
+        use crate::{
+            CaptchaSolver, SolveCtx, SolveDriver,
+            config::CaptchaConfig,
+            events::CaptchaEventBus,
+            providers::{CaptchaBackend, ProviderChain},
+            types::{Attempts, FlowResult, SolveMethod, SolveReason, SolveStatus},
+        };
+
+        struct SolverPage<'a>(&'a FakePage);
+        impl CaptchaPage for SolverPage<'_> {
+            async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+                if expression == "navigator.userAgent" {
+                    return Ok(json!("fake-agent"));
+                }
+                self.0.eval_main(expression).await
+            }
+            async fn scan_dom(
+                &self,
+                frame: Option<&FrameRef>,
+                function: &str,
+            ) -> Result<Value, PageError> {
+                self.0.scan_dom(frame, function).await
+            }
+            async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
+                self.0.frames().await
+            }
+            async fn scan_frames(&self, budget: Option<Duration>) -> Result<FrameList, PageError> {
+                self.0.scan_frames(budget).await
+            }
+            async fn frame_parent_ids(
+                &self,
+            ) -> Result<std::collections::HashMap<String, String>, PageError> {
+                self.0.frame_parent_ids().await
+            }
+            async fn eval_in_frame(
+                &self,
+                frame: &FrameRef,
+                expression: &str,
+            ) -> Result<Value, PageError> {
+                self.0.eval_in_frame(frame, expression).await
+            }
+            async fn eval_in_frame_main(
+                &self,
+                frame: &FrameRef,
+                expression: &str,
+            ) -> Result<Value, PageError> {
+                self.0.eval_in_frame_main(frame, expression).await
+            }
+            async fn document(&self) -> Result<DocumentId, PageError> {
+                self.0.document().await
+            }
+            async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
+                self.0.click_at(x, y).await
+            }
+            async fn screenshot_clip(&self, rect: Rect) -> Result<String, PageError> {
+                self.0.screenshot_clip(rect).await
+            }
+            async fn query_rect_in_frame(
+                &self,
+                frame: &FrameRef,
+                selector: &str,
+            ) -> Result<Option<Rect>, PageError> {
+                self.0.query_rect_in_frame(frame, selector).await
+            }
+        }
+
+        struct RecordingDriver {
+            solve_calls: AtomicU32,
+        }
+        impl SolveDriver for RecordingDriver {
+            async fn detect<P: CaptchaPage>(&self, page: &P) -> Result<Detection, PageError> {
+                detect(page, Duration::from_secs(2)).await
+            }
+            async fn solve<P: CaptchaPage, B: CaptchaBackend>(
+                &self,
+                _: &SolveCtx<'_, P, B>,
+                challenge: &Challenge,
+            ) -> FlowResult {
+                self.solve_calls.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(challenge.kind, CaptchaKind::RecaptchaV2);
+                assert_eq!(challenge.state, ChallengeState::Active);
+                FlowResult {
+                    status: SolveStatus::Solved,
+                    method: SolveMethod::Checkbox,
+                    reason: SolveReason::CheckboxPassed,
+                    attempts: Attempts {
+                        checkbox: 1,
+                        ..Default::default()
+                    },
+                    paid_tasks: 0,
+                    provider: None,
+                    cost_usd: 0.0,
+                    callback_ran: false,
+                    message: "solved".into(),
+                }
+            }
+        }
+
+        let service = CaptchaSolver {
+            providers: ProviderChain::new(&CaptchaConfig::default()),
+            reservations: Default::default(),
+            events: CaptchaEventBus::new(),
+            forced_method: None,
+        };
+
+        // 1. Partial frame scan + readable active reCAPTCHA -> Active detected, complete == false,
+        //    and CaptchaSolver solves it instead of returning ScanIncomplete.
+        let mut active_page = FakePage::recaptcha(false);
+        active_page.frames_complete = false;
+        let detection = scan(&active_page).await?;
+        assert!(!detection.complete);
+        assert_eq!(detection.outcome, ScanOutcome::Detected);
+        assert_eq!(detection.challenges.len(), 1);
+        assert_eq!(detection.challenges[0].kind, CaptchaKind::RecaptchaV2);
+        assert_eq!(detection.challenges[0].state, ChallengeState::Active);
+
+        let driver = RecordingDriver {
+            solve_calls: AtomicU32::new(0),
+        };
+        let outcome = service
+            .solve_with(
+                &SolverPage(&active_page),
+                PageId(1),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(2),
+                &driver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(driver.solve_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            (outcome.status, outcome.reason),
+            (SolveStatus::Solved, SolveReason::CheckboxPassed)
+        );
+
+        // 2. Partial frame scan + no CAPTCHA -> complete == false, ScanOutcome::Unknown, and
+        //    CaptchaSolver returns ScanIncomplete (never NoCaptcha).
+        let mut empty_page = FakePage::new(json!([]));
+        empty_page.frames_complete = false;
+        let detection = scan(&empty_page).await?;
+        assert!(!detection.complete);
+        assert_eq!(detection.outcome, ScanOutcome::Unknown);
+        assert!(detection.challenges.is_empty());
+
+        let empty_driver = RecordingDriver {
+            solve_calls: AtomicU32::new(0),
+        };
+        let empty_outcome = service
+            .solve_with(
+                &SolverPage(&empty_page),
+                PageId(2),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(2),
+                &empty_driver,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(empty_driver.solve_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            (empty_outcome.status, empty_outcome.reason),
+            (SolveStatus::Failed, SolveReason::ScanIncomplete)
+        );
+
+        // 3. Fatal errors from `scan_frames` still abort detection immediately.
+        for fatal in [PageError::Closed, PageError::Cancelled] {
+            let mut fatal_page = FakePage::new(json!([]));
+            fatal_page.frames_error = Some(fatal.clone());
+            assert_eq!(scan(&fatal_page).await, Err(fatal));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_hung_sibling_frame_in_scan_dom_does_not_starve_recaptcha_anchor()
+    -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        let hung = frame("hung-ad", "https://ads.example.test/stuck");
+        let anchor = page.frames.remove(0);
+        // Place the hung sibling BEFORE the reCAPTCHA anchor so a sequential scan_dom loop would
+        // burn the remaining detect budget and leave the anchor unprobed (`Unknown`).
+        page.frames = vec![hung.clone(), anchor];
+        page.frame_delays
+            .insert(hung.frame_id.clone(), Duration::from_secs(10));
+
+        let result = detect(&page, Duration::from_secs(2)).await?;
+        assert!(!result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Detected);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV2);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("anchor")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_open_bframe_promotes_matching_recaptcha_v3_widget_preserving_metadata()
+    -> Result<(), PageError> {
+        let anchor_url =
+            "https://www.google.com/recaptcha/enterprise/anchor?k=ent-key&size=invisible&sa=login";
+        let bframe_url = "https://www.google.com/recaptcha/enterprise/bframe?hl=en&k=ent-key";
+        let mut badge = widget("recaptcha_v3", "widget_only");
+        badge["sitekey"] = json!("ent-key");
+        badge["invisible"] = json!(true);
+        badge["enterprise"] = json!(true);
+        badge["callback"] = json!("<inline>");
+        badge["action"] = json!("login");
+        badge["recaptchaS"] = json!("s-token");
+        let mut main = probe(json!([badge]));
+        main["frames"] = json!([
+            {"url": anchor_url, "visible": false},
+            {"url": bframe_url, "visible": true}
+        ]);
+        let mut page = FakePage::new(json!([]));
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames = vec![frame("anchor", anchor_url), frame("tiles", bframe_url)];
+        page.frame_result = Ok(
+            json!({"widgets": [], "frames": [], "checked": false, "expired": false, "complete": true}),
+        );
+
+        let result = scan(&page).await?;
+        assert!(result.complete);
+        assert_eq!(result.outcome, ScanOutcome::Detected);
+        assert_eq!(result.challenges.len(), 1);
+        let challenge = &result.challenges[0];
+        assert_eq!(challenge.kind, CaptchaKind::RecaptchaV2);
+        assert_eq!(challenge.state, ChallengeState::Active);
+        assert_eq!(challenge.sitekey.as_deref(), Some("ent-key"));
+        assert!(challenge.invisible);
+        assert!(challenge.enterprise);
+        assert_eq!(challenge.callback.as_deref(), Some("<inline>"));
+        assert_eq!(challenge.action.as_deref(), Some("login"));
+        assert_eq!(challenge.recaptcha_s.as_deref(), Some("s-token"));
+        assert_eq!(
+            challenge.frame.as_ref().map(|f| f.frame_id.as_str()),
+            Some("anchor")
+        );
+        assert_eq!(
+            challenge
+                .challenge_frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("tiles")
+        );
         Ok(())
     }
 }

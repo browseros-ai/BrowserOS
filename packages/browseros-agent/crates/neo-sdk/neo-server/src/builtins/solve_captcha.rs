@@ -220,9 +220,7 @@ fn attempted(outcome: &SolveOutcome) -> bool {
         | SolveReason::AlreadyPassed
         | SolveReason::UnsupportedType
         | SolveReason::ScanIncomplete => false,
-        SolveReason::NoProvider
-        | SolveReason::ProviderUnavailable
-        | SolveReason::SpendLimitReached => acted,
+        SolveReason::NoProvider | SolveReason::SpendLimitReached => acted,
         SolveReason::AutoPassed
         | SolveReason::CheckboxPassed
         | SolveReason::TilesAccepted
@@ -232,7 +230,8 @@ fn attempted(outcome: &SolveOutcome) -> bool {
         | SolveReason::TilesExhausted
         | SolveReason::ChallengeNotPassed
         | SolveReason::DeadlineExceeded => true,
-        SolveReason::ProviderError
+        SolveReason::ProviderUnavailable
+        | SolveReason::ProviderError
         | SolveReason::BrowserError
         | SolveReason::CallerCancelled
         | SolveReason::TabClosed
@@ -414,9 +413,15 @@ fn what_neo_did(
         SolveReason::NoProvider => {
             format!("Neo requested no token: no provider of this Neo solves {name}")
         }
-        SolveReason::ProviderUnavailable => {
-            "Neo requested no token: the CAPTCHA provider is unavailable".to_owned()
-        }
+        SolveReason::ProviderUnavailable => match attempt {
+            Attempt::Ran => format!(
+                "Neo asked a CAPTCHA provider for {article} {label} answer and the provider was \
+                 unavailable"
+            ),
+            Attempt::Skipped => {
+                "Neo requested no token: the CAPTCHA provider is unavailable".to_owned()
+            }
+        },
         SolveReason::TilesExhausted => {
             format!("Neo tried the {label} image challenge and every round failed")
         }
@@ -635,11 +640,7 @@ mod tests {
             assert!(!attempted(&sample), "{reason:?} stays false with counters");
         }
 
-        let only_if_acted = [
-            SolveReason::NoProvider,
-            SolveReason::ProviderUnavailable,
-            SolveReason::SpendLimitReached,
-        ];
+        let only_if_acted = [SolveReason::NoProvider, SolveReason::SpendLimitReached];
         for reason in only_if_acted {
             let idle = outcome(SolveStatus::NeedsHuman, reason);
             assert!(!attempted(&idle), "{reason:?} idle must be false");
@@ -687,6 +688,7 @@ mod tests {
         }
 
         let acted_or_method_or_token = [
+            SolveReason::ProviderUnavailable,
             SolveReason::ProviderError,
             SolveReason::BrowserError,
             SolveReason::CallerCancelled,
@@ -948,5 +950,44 @@ mod tests {
             solve_value(&outcome(SolveStatus::Cancelled, SolveReason::TabClosed)).is_some(),
             "the page's own cancel (closed, navigated) is still a value"
         );
+    }
+
+    #[test]
+    fn refused_token_provider_unavailable_reports_attempted_and_honest_wording()
+    -> Result<(), Box<dyn Error>> {
+        let mut refused = outcome(SolveStatus::NeedsHuman, SolveReason::ProviderUnavailable);
+        refused.kind = Some(CaptchaKind::RecaptchaV2);
+        refused.method = SolveMethod::Token;
+        refused.attempts.token = 1;
+        let output = solve_value(&refused).ok_or("provider_unavailable returns a value")?;
+        assert!(
+            output.attempted,
+            "a refused token request must report attempted = true"
+        );
+        assert_eq!(
+            output.message,
+            format!(
+                "Neo asked a CAPTCHA provider for a reCAPTCHA answer and the provider was \
+                 unavailable; {CLOSING_ATTEMPTED}"
+            )
+        );
+        assert!(
+            !output.message.contains("requested no token"),
+            "must not claim no token was requested after sending a provider request: {}",
+            output.message
+        );
+
+        let mut skipped = outcome(SolveStatus::NeedsHuman, SolveReason::ProviderUnavailable);
+        skipped.kind = Some(CaptchaKind::RecaptchaV2);
+        let skipped_out = solve_value(&skipped).ok_or("provider_unavailable returns a value")?;
+        assert!(!skipped_out.attempted);
+        assert_eq!(
+            skipped_out.message,
+            format!(
+                "Neo requested no token: the CAPTCHA provider is unavailable; \
+                 {CLOSING_NOT_ATTEMPTED}"
+            )
+        );
+        Ok(())
     }
 }

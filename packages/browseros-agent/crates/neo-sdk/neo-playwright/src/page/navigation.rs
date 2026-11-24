@@ -13,21 +13,28 @@
 //! standard reason phrase for the status. A net error reads as Playwright's
 //! `page.goto: net::ERR_NAME_NOT_RESOLVED at <url>`.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use browseros_cdp::CdpError;
-use browseros_core::{CoreError, FrameId, PageJs, ProtocolSession, SessionId, TabId};
+use browseros_core::{
+    CoreError, FrameId, PageId, PageJs, ProtocolSession, SessionId, TabId, TargetId,
+};
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::time;
 use ts_rs::TS;
 
+use crate::events::EventScope;
+use crate::events::tab_frames::TabFrameList;
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
 use crate::page::document_watch::{
     Arrival, CommitOutcome, DocumentWatch, Expect, FrameTreeReply, WatchError, decode,
 };
-use crate::page::frame_routes::RootAttachment;
+use crate::page::frame_routes::{self, RootAttachment};
 use crate::page::frame_tree::{FrameInfo, FrameTree};
+use crate::page::known_host::{self, RouteSource};
 use crate::page::{LoadState, frame_tree, subtree_load};
 use crate::target::PageRef;
 use crate::wire::options;
@@ -600,7 +607,11 @@ pub(crate) async fn wait_for_load_state(
 }
 
 /// The session that hosts child frame `frame`: the page's own session for a same-process
-/// frame, else the frame's own, which core's frame registry attaches or already holds.
+/// frame, else the frame's own, which core's frame registry attaches or already holds. A cached
+/// route answers first; without one the host is resolved from what the browser and the target
+/// watcher know (`known_host`), with no renderer read, and remembered as a route beside the
+/// tab's others. Only a child whose chain the watcher's list lacks, or whose host cannot be
+/// resolved, falls back to reading the whole tree.
 pub(crate) async fn frame_host(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -625,7 +636,67 @@ pub(crate) async fn frame_host(
             .ok_or_else(|| scope.fail(ErrorCode::Internal, "the frame has no session"))?;
         return Ok((session_id, session));
     }
+    let routes = LiveRoutes {
+        pw,
+        core_page: admitted.core_page.clone(),
+    };
+    let known = known_host::known_host(
+        &routes,
+        &admitted.session.target_id,
+        &root.1,
+        frame,
+        |route| frame_routes::retired(&attachment, frame, route, pw.events()),
+    )
+    .await;
+    if let Some(route) = known
+        && let Some(session_id) = route.session.session_id().cloned()
+    {
+        let session = route.session.clone();
+        scope
+            .run_state()
+            .frames
+            .insert(page, attachment, frame.clone(), route);
+        return Ok((session_id, session));
+    }
     fresh_frame_host(pw, scope, page, root, frame).await
+}
+
+/// What `known_host` reads, on the live browser: the watcher's progress and list through
+/// Playwright, the browser's iframe targets, and core's frame registry for the admitted tab.
+struct LiveRoutes<'a> {
+    pw: &'a Playwright,
+    core_page: PageId,
+}
+
+impl RouteSource for LiveRoutes<'_> {
+    fn caught_up<'a>(&'a self, tab: &'a TargetId) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let fence = self.pw.event_fence();
+            self.pw
+                .synchronize_events(fence, &EventScope::Tabs(vec![tab.clone()]))
+                .await
+        })
+    }
+
+    fn frames_at(&self, tab: &TargetId) -> (u64, Option<TabFrameList>) {
+        self.pw.event_hub().frames_at(tab)
+    }
+
+    fn iframe_targets(&self) -> BoxFuture<'_, Option<HashSet<String>>> {
+        Box::pin(async move { frame_tree::iframe_targets(self.pw.browser()).await.ok() })
+    }
+
+    fn frame_session<'a>(&'a self, frame: &'a FrameId) -> BoxFuture<'a, Option<ProtocolSession>> {
+        Box::pin(async move {
+            self.pw
+                .browser()
+                .frames()
+                .resolve_frame_target(self.core_page.clone(), Some(frame.clone()), None, true)
+                .await
+                .ok()
+                .and_then(known_host::own_session)
+        })
+    }
 }
 
 /// Discover through the owning page, bypassing hints after a known renderer swap.

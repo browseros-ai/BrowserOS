@@ -48,7 +48,7 @@
 //! | `neo/*.rs` | neo-playwright-js `prelude/snapshot-v1.ts`, `snapshot-on-top.ts`, `snapshot-unmarked.ts` |
 //! | `cap.rs` | neo-playwright-js `prelude/snapshot-cap.ts` |
 //! | `render.rs`, `call.rs`, `answer.rs` | `Frame._ariaSnapshot` in neo-playwright-js `prelude/frame.ts`: which text a call gets, and what it keeps |
-//! | `cover_block.rs` | neo-playwright-js `prelude/cover.ts` (`snapshotLines`) |
+//! | `cover_block.rs` | neo-playwright-js `scripts/snapshot-cases/snapshot-lines.ts` (`snapshotLines`, the prelude's `cover.ts` until Rust rendered the block) |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
 //!
 //! [`PORTED_FROM`] holds the vendored files' hashes at the port, which neo-playwright's tests
@@ -61,14 +61,6 @@ mod answer;
 mod aria_node;
 mod call;
 mod cap;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the covered answer takes its block from here once neo-playwright's covered \
-                  click calls it; until then the tests are its only callers"
-    )
-)]
 mod cover_block;
 mod form;
 mod full_text;
@@ -86,6 +78,7 @@ pub use answer::{Answer, Pending};
 pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate};
 pub use call::Call;
 pub use cap::{DEFAULT_MAX_TOKENS, MaxTokens};
+pub use cover_block::cover_block;
 pub use form::{Form, Passed, TextForm};
 pub use neo::{KEPT_ROLES, TEXT_LIMIT_TOKENS};
 pub use playwright::{PORTED_FROM, PortedFile};

@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -11,14 +12,23 @@ use browseros_core::{
     page_js,
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport},
 };
+use futures_util::{
+    future::BoxFuture,
+    stream::{FuturesUnordered, StreamExt},
+};
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, time::Instant};
 
 use super::types::{DocumentId, FrameRef, PageError, Rect};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// Chromium-side limit on one widget evaluation, inside the request timeout above.
 const EVAL_TIMEOUT: Duration = Duration::from_secs(2);
+/// Per-child-iframe inspection timeout during frame enumeration so a hung third-party or ad
+/// iframe cannot starve readable sibling iframes past a caller's detection budget.
+const CHILD_FRAME_TIMEOUT: Duration = Duration::from_millis(750);
+/// Maximum concurrent child iframe inspections / child OOPIF DOM reads during frame enumeration.
+const MAX_CONCURRENT_CHILD_FRAMES: usize = 16;
 // Turnstile overlays a transparent input on its visible checkbox.
 const VISIBLE_RECT: &str = r"function(selector) {
     for (const element of this.querySelectorAll(selector)) {
@@ -46,10 +56,31 @@ fn scan_nonce() -> String {
     ulid::Ulid::new().to_string()
 }
 
+/// Enumerated frames together with whether every child iframe on the page could be inspected.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameList {
+    pub frames: Vec<FrameRef>,
+    pub complete: bool,
+}
+
 pub trait CaptchaPage: Send + Sync {
     fn eval_main(&self, expression: &str) -> impl Future<Output = Result<Value, PageError>> + Send;
     /// Hidden and zero-size frames retain their measured rect; callers must not click or capture them.
     fn frames(&self) -> impl Future<Output = Result<Vec<FrameRef>, PageError>> + Send;
+    /// Enumerates frames along with whether every child iframe was readable. When `budget` is
+    /// `Some`, child enumeration stops waiting on slow or hung children once that budget elapses,
+    /// returning readable frames with `complete == false`.
+    fn scan_frames(
+        &self,
+        _budget: Option<Duration>,
+    ) -> impl Future<Output = Result<FrameList, PageError>> + Send {
+        async {
+            Ok(FrameList {
+                frames: self.frames().await?,
+                complete: true,
+            })
+        }
+    }
     fn frame_parent_ids(
         &self,
     ) -> impl Future<Output = Result<HashMap<String, String>, PageError>> + Send {
@@ -114,6 +145,10 @@ pub struct LivePage {
     pub page: PageId,
     last_point: Mutex<(f64, f64)>,
     frame_parents: Mutex<HashMap<String, String>>,
+    /// Set when the latest frame enumeration encountered an unresponsive child iframe so clicks
+    /// jump directly to the verified target instead of sweeping intermediate hover points across
+    /// a hung OOPIF.
+    unresponsive_child_frame: AtomicBool,
     dom: DomWorld,
 }
 
@@ -132,6 +167,7 @@ impl LivePage {
             page,
             last_point: Mutex::new((0.0, 0.0)),
             frame_parents: Mutex::new(HashMap::new()),
+            unresponsive_child_frame: AtomicBool::new(false),
             dom,
         }
     }
@@ -166,6 +202,281 @@ impl LivePage {
         )
         .await
     }
+    async fn inspect_child_frame(
+        &self,
+        parent: &ProtocolSession,
+        origin: Option<Rect>,
+        id: String,
+        deadline: Instant,
+    ) -> Result<(FrameRef, Option<ProtocolSession>), PageError> {
+        tokio::time::timeout_at(
+            deadline,
+            self.frame_operation(async {
+                let session = self.frame(&id).await?;
+                let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+                let frame = find_frame(&tree["frameTree"], &id)
+                    .ok_or_else(|| bad("Frame missing from its session tree"))?;
+                let url = text(frame, "url")?;
+                let measured = async {
+                    let owner = send(parent, "DOM.getFrameOwner", json!({"frameId": id})).await?;
+                    let model = send(
+                        parent,
+                        "DOM.getBoxModel",
+                        json!({"backendNodeId": owner["backendNodeId"]}),
+                    )
+                    .await?;
+                    quad_rect(&model["model"]["content"])
+                }
+                .await;
+                let rect = match measured {
+                    // CDP quads are relative to the session root, including same-process nesting.
+                    Ok(local) => origin.map(|origin| translate(local, origin)),
+                    Err(PageError::Browser(_)) => None,
+                    Err(error) => return Err(error),
+                };
+                let next_oopif = (!session.same_session(parent)).then_some(session);
+                Ok((
+                    FrameRef {
+                        frame_id: id,
+                        url,
+                        rect,
+                    },
+                    next_oopif,
+                ))
+            }),
+        )
+        .await
+        .map_err(|_| PageError::Timeout)?
+    }
+    async fn scan_oopif_dom(
+        &self,
+        session: &ProtocolSession,
+        deadline: Instant,
+    ) -> Result<Value, PageError> {
+        tokio::time::timeout_at(
+            deadline,
+            self.frame_operation(async {
+                let dom = send(
+                    session,
+                    "DOM.getDocument",
+                    json!({"depth":-1,"pierce":true}),
+                )
+                .await?;
+                dom.get("root")
+                    .filter(|root| root.is_object())
+                    .cloned()
+                    .ok_or_else(|| bad("Missing child document root"))
+            }),
+        )
+        .await
+        .map_err(|_| PageError::Timeout)?
+    }
+    fn run_child_work(
+        &self,
+        work: ChildWork,
+        deadline: Instant,
+    ) -> BoxFuture<'_, Result<ChildOutcome, PageError>> {
+        Box::pin(async move {
+            match work {
+                ChildWork::Inspect {
+                    order,
+                    parent,
+                    origin,
+                    id,
+                } => {
+                    let (frame, next_oopif) = self
+                        .inspect_child_frame(&parent, origin, id, deadline)
+                        .await?;
+                    Ok(ChildOutcome::Inspected {
+                        order,
+                        frame,
+                        next_oopif,
+                    })
+                }
+                ChildWork::ScanOopif {
+                    order,
+                    session,
+                    origin,
+                    frame_id,
+                } => {
+                    let root = self.scan_oopif_dom(&session, deadline).await?;
+                    Ok(ChildOutcome::ScannedOopif {
+                        order,
+                        session,
+                        origin,
+                        frame_id,
+                        root,
+                    })
+                }
+            }
+        })
+    }
+    async fn enumerate_frames(&self, budget: Option<Duration>) -> Result<FrameList, PageError> {
+        let child_deadline = budget.map(|budget| Instant::now() + budget);
+        let top = self.top().await?;
+        let tree = send(&top, "Page.getFrameTree", json!({})).await?;
+        let main = &tree["frameTree"]["frame"];
+        let viewport = self
+            .eval_main("({width:innerWidth,height:innerHeight})")
+            .await?;
+        let origin = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: number(&viewport, "width")?,
+            height: number(&viewport, "height")?,
+        };
+        let root_id = text(main, "id")?;
+        let root_frame = FrameRef {
+            frame_id: root_id.clone(),
+            url: text(main, "url")?,
+            rect: Some(origin),
+        };
+        let top_dom = send(&top, "DOM.getDocument", json!({"depth":-1,"pierce":true})).await?;
+
+        let mut seen_frames = HashSet::from([root_id.clone()]);
+        let mut seen_sessions = HashSet::from([top.session_id().cloned()]);
+        let mut parents = HashMap::new();
+        collect_frame_parents(&top_dom["root"], &root_id, &mut parents);
+        let mut owners = Vec::new();
+        collect_owners(&top_dom["root"], &mut owners);
+
+        let mut queued = VecDeque::new();
+        for (idx, id) in owners.into_iter().enumerate() {
+            if seen_frames.insert(id.clone()) {
+                queued.push_back(ChildWork::Inspect {
+                    order: vec![idx],
+                    parent: top.clone(),
+                    origin: Some(origin),
+                    id,
+                });
+            }
+        }
+
+        let mut discovered: Vec<(Vec<usize>, FrameRef)> = Vec::new();
+        let mut active: FuturesUnordered<BoxFuture<'_, Result<ChildOutcome, PageError>>> =
+            FuturesUnordered::new();
+        let mut complete = true;
+
+        loop {
+            if child_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                if !queued.is_empty() {
+                    complete = false;
+                    queued.clear();
+                }
+            } else {
+                while active.len() < MAX_CONCURRENT_CHILD_FRAMES
+                    && let Some(work) = queued.pop_front()
+                {
+                    let task_deadline = match child_deadline {
+                        Some(overall) => (Instant::now() + CHILD_FRAME_TIMEOUT).min(overall),
+                        None => Instant::now() + CHILD_FRAME_TIMEOUT,
+                    };
+                    active.push(self.run_child_work(work, task_deadline));
+                }
+            }
+
+            let Some(outcome) = active.next().await else {
+                break;
+            };
+
+            match outcome {
+                Ok(ChildOutcome::Inspected {
+                    order,
+                    frame,
+                    next_oopif,
+                }) => {
+                    if let Some(session) = next_oopif
+                        && seen_sessions.insert(session.session_id().cloned())
+                    {
+                        queued.push_back(ChildWork::ScanOopif {
+                            order: order.clone(),
+                            session,
+                            origin: frame.rect,
+                            frame_id: frame.frame_id.clone(),
+                        });
+                    }
+                    discovered.push((order, frame));
+                }
+                Ok(ChildOutcome::ScannedOopif {
+                    order,
+                    session,
+                    origin,
+                    frame_id,
+                    root,
+                }) => {
+                    collect_frame_parents(&root, &frame_id, &mut parents);
+                    let mut child_owners = Vec::new();
+                    collect_owners(&root, &mut child_owners);
+                    for (idx, id) in child_owners.into_iter().enumerate() {
+                        if seen_frames.insert(id.clone()) {
+                            let mut child_order = order.clone();
+                            child_order.push(idx);
+                            queued.push_back(ChildWork::Inspect {
+                                order: child_order,
+                                parent: session.clone(),
+                                origin,
+                                id,
+                            });
+                        }
+                    }
+                }
+                Err(error) if is_fatal_child_error(&error) => return Err(error),
+                Err(_) => {
+                    complete = false;
+                }
+            }
+        }
+
+        discovered.sort_by(|(a, _), (b, _)| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        let mut result = Vec::with_capacity(1 + discovered.len());
+        result.push(root_frame);
+        result.extend(discovered.into_iter().map(|(_, frame)| frame));
+
+        *self.frame_parents.lock().await = parents;
+        self.unresponsive_child_frame
+            .store(!complete, Ordering::Relaxed);
+        Ok(FrameList {
+            frames: result,
+            complete,
+        })
+    }
+}
+
+enum ChildWork {
+    Inspect {
+        order: Vec<usize>,
+        parent: ProtocolSession,
+        origin: Option<Rect>,
+        id: String,
+    },
+    ScanOopif {
+        order: Vec<usize>,
+        session: ProtocolSession,
+        origin: Option<Rect>,
+        frame_id: String,
+    },
+}
+
+enum ChildOutcome {
+    Inspected {
+        order: Vec<usize>,
+        frame: FrameRef,
+        next_oopif: Option<ProtocolSession>,
+    },
+    ScannedOopif {
+        order: Vec<usize>,
+        session: ProtocolSession,
+        origin: Option<Rect>,
+        frame_id: String,
+        root: Value,
+    },
+}
+
+fn is_fatal_child_error(error: &PageError) -> bool {
+    match error {
+        PageError::Closed | PageError::Navigated | PageError::Cancelled => true,
+        PageError::Timeout | PageError::Browser(_) => false,
+    }
 }
 
 impl CaptchaPage for LivePage {
@@ -180,81 +491,10 @@ impl CaptchaPage for LivePage {
         .await
     }
     async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
-        self.frame_operation(async {
-            let top = self.top().await?;
-            let tree = send(&top, "Page.getFrameTree", json!({})).await?;
-            let main = &tree["frameTree"]["frame"];
-            let viewport = self
-                .eval_main("({width:innerWidth,height:innerHeight})")
-                .await?;
-            let origin = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: number(&viewport, "width")?,
-                height: number(&viewport, "height")?,
-            };
-            let mut result = vec![FrameRef {
-                frame_id: text(main, "id")?,
-                url: text(main, "url")?,
-                rect: Some(origin),
-            }];
-            let mut seen_frames = HashSet::from([result[0].frame_id.clone()]);
-            let mut seen_sessions = HashSet::new();
-            let mut parents = HashMap::new();
-            let mut pending = vec![(top, Some(origin), result[0].frame_id.clone())];
-            while let Some((parent, origin, parent_id)) = pending.pop() {
-                if !seen_sessions.insert(parent.session_id().cloned()) {
-                    continue;
-                }
-                let dom = send(
-                    &parent,
-                    "DOM.getDocument",
-                    json!({"depth":-1,"pierce":true}),
-                )
-                .await?;
-                collect_frame_parents(&dom["root"], &parent_id, &mut parents);
-                let mut owners = Vec::new();
-                collect_owners(&dom["root"], &mut owners);
-                for id in owners {
-                    if !seen_frames.insert(id.clone()) {
-                        continue;
-                    }
-                    let session = self.frame(&id).await?;
-                    let tree = send(&session, "Page.getFrameTree", json!({})).await?;
-                    let frame = find_frame(&tree["frameTree"], &id)
-                        .ok_or_else(|| bad("Frame missing from its session tree"))?;
-                    let measured = async {
-                        let owner =
-                            send(&parent, "DOM.getFrameOwner", json!({"frameId":id})).await?;
-                        let model = send(
-                            &parent,
-                            "DOM.getBoxModel",
-                            json!({"backendNodeId":owner["backendNodeId"]}),
-                        )
-                        .await?;
-                        quad_rect(&model["model"]["content"])
-                    }
-                    .await;
-                    let rect = match measured {
-                        // CDP quads are relative to the session root, including same-process nesting.
-                        Ok(local) => origin.map(|origin| translate(local, origin)),
-                        Err(PageError::Browser(_)) => None,
-                        Err(error) => return Err(error),
-                    };
-                    result.push(FrameRef {
-                        frame_id: id.clone(),
-                        url: text(frame, "url")?,
-                        rect,
-                    });
-                    if !session.same_session(&parent) {
-                        pending.push((session, rect, id));
-                    }
-                }
-            }
-            *self.frame_parents.lock().await = parents;
-            Ok(result)
-        })
-        .await
+        self.scan_frames(None).await.map(|list| list.frames)
+    }
+    async fn scan_frames(&self, budget: Option<Duration>) -> Result<FrameList, PageError> {
+        Box::pin(self.enumerate_frames(budget)).await
     }
     async fn frame_parent_ids(&self) -> Result<HashMap<String, String>, PageError> {
         Ok(self.frame_parents.lock().await.clone())
@@ -370,14 +610,16 @@ impl CaptchaPage for LivePage {
         }
         let mut last = self.last_point.lock().await;
         let input = browser(self.view.input(self.page.clone())).await?;
+        let humanlike_from =
+            (!self.unresponsive_child_frame.load(Ordering::Relaxed)).then_some(Point {
+                x: last.0,
+                y: last.1,
+            });
         browser(input.click_at(
             x,
             y,
             ClickOptions {
-                humanlike_from: Some(Point {
-                    x: last.0,
-                    y: last.1,
-                }),
+                humanlike_from,
                 ..Default::default()
             },
         ))
@@ -704,9 +946,15 @@ mod tests {
         widget_url: &'static str,
         calls: Mutex<Vec<Call>>,
         evaluations: Mutex<VecDeque<Result<Value, CdpError>>>,
+        session_evaluations: Mutex<HashMap<String, VecDeque<Result<Value, CdpError>>>>,
         function_results: Mutex<VecDeque<Result<Value, CdpError>>>,
         same_process: AtomicBool,
         child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
+        session_failures: Mutex<HashMap<(String, String), (bool, CdpError)>>,
+        session_delays: Mutex<HashMap<(String, String), Duration>>,
+        child_urls: Mutex<HashMap<String, String>>,
+        child_sessions_missing_frame: Mutex<HashSet<String>>,
+        child_documents: Mutex<HashMap<String, Value>>,
         document: Mutex<Option<Value>>,
         top_document: Mutex<Option<Value>>,
         isolated_refused: AtomicBool,
@@ -721,9 +969,15 @@ mod tests {
                 widget_url,
                 calls: Mutex::new(Vec::new()),
                 evaluations: Mutex::new(VecDeque::new()),
+                session_evaluations: Mutex::new(HashMap::new()),
                 function_results: Mutex::new(VecDeque::new()),
                 same_process: AtomicBool::new(false),
                 child_failure: Mutex::new(None),
+                session_failures: Mutex::new(HashMap::new()),
+                session_delays: Mutex::new(HashMap::new()),
+                child_urls: Mutex::new(HashMap::new()),
+                child_sessions_missing_frame: Mutex::new(HashSet::new()),
+                child_documents: Mutex::new(HashMap::new()),
                 document: Mutex::new(None),
                 top_document: Mutex::new(None),
                 isolated_refused: AtomicBool::new(false),
@@ -745,7 +999,24 @@ mod tests {
                 session.cloned(),
                 tokio::time::Instant::now(),
             ));
-            let child = session.is_some_and(|id| id.as_str() == "s-widget");
+            let session_str = session.map(SessionId::as_str);
+            if let Some(sid) = session_str
+                && let Some((close_page, error)) = self
+                    .session_failures
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .get(&(sid.to_owned(), method.to_owned()))
+                    .cloned()
+            {
+                if close_page {
+                    self.page_open.store(false, Ordering::SeqCst);
+                }
+                return Err(error);
+            }
+            let child_frame_id = session_str
+                .and_then(|id| id.strip_prefix("s-"))
+                .filter(|id| *id != "page");
+            let child = child_frame_id.is_some();
             if child {
                 let mut failure = self
                     .child_failure
@@ -792,14 +1063,25 @@ mod tests {
                 });
             }
             if method == "DOM.getDocument"
-                && child
-                && let Some(document) = self
+                && let Some(frame_id) = child_frame_id
+            {
+                if let Some(document) = self
+                    .child_documents
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .get(frame_id)
+                    .cloned()
+                {
+                    return Ok(json!({"root":document}));
+                }
+                if let Some(document) = self
                     .document
                     .lock()
                     .map_err(|_| CdpError::SessionGone)?
                     .clone()
-            {
-                return Ok(json!({"root":document}));
+                {
+                    return Ok(json!({"root":document}));
+                }
             }
             let tab = json!({"tabId":1,"targetId":"page","url":"http://fixture.test","title":"fixture","isActive":true,"isLoading":false,"loadProgress":1.0,"isPinned":false,"isHidden":false,"windowId":1});
             Ok(match method {
@@ -816,7 +1098,21 @@ mod tests {
                     json!({"sessionId":format!("s-{}",params["targetId"].as_str().unwrap_or_default())})
                 }
                 "Page.getFrameTree" if child => {
-                    json!({"frameTree":{"frame":{"id":"widget","parentId":"root","url":self.widget_url,"loaderId":"widget-loader"}}})
+                    let frame_id = child_frame_id.unwrap_or("widget");
+                    let missing = self
+                        .child_sessions_missing_frame
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .contains(frame_id);
+                    let reported_id = if missing { "other" } else { frame_id };
+                    let url = self
+                        .child_urls
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .get(frame_id)
+                        .cloned()
+                        .unwrap_or_else(|| self.widget_url.to_owned());
+                    json!({"frameTree":{"frame":{"id":reported_id,"parentId":"root","url":url,"loaderId":format!("{frame_id}-loader")}}})
                 }
                 "Page.getFrameTree" => {
                     let mut tree = json!({"frameTree":{"frame":{"id":"root","url":"http://fixture.test","loaderId":"main-loader"}}});
@@ -850,6 +1146,16 @@ mod tests {
                 "DOM.getBoxModel" => json!({"model":{"content":[30,40,330,40,330,105,30,105]}}),
                 "Page.createIsolatedWorld" => json!({"executionContextId":77}),
                 "Runtime.evaluate" => {
+                    if let Some(sid) = session_str
+                        && let Some(result) = self
+                            .session_evaluations
+                            .lock()
+                            .map_err(|_| CdpError::SessionGone)?
+                            .get_mut(sid)
+                            .and_then(VecDeque::pop_front)
+                    {
+                        return result;
+                    }
                     if let Some(result) = self
                         .evaluations
                         .lock()
@@ -919,7 +1225,19 @@ mod tests {
             params: Value,
             session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
-            Box::pin(async move { self.reply(method, params, session) })
+            Box::pin(async move {
+                let delay = session.and_then(|sid| {
+                    self.session_delays.lock().ok().and_then(|delays| {
+                        delays
+                            .get(&(sid.as_str().to_owned(), method.to_owned()))
+                            .copied()
+                    })
+                });
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                self.reply(method, params, session)
+            })
         }
         fn send_raw_json<'a>(
             &'a self,
@@ -1478,8 +1796,7 @@ mod tests {
                 *native.child_failure.lock().map_err(|_| "poisoned")? =
                     Some((method, close_page, CdpError::SessionGone));
                 let result = match method {
-                    "Page.getFrameTree" => page.frames().await.map(|_| ()),
-                    "DOM.getDocument" | "Runtime.callFunctionOn" => page
+                    "Page.getFrameTree" | "DOM.getDocument" | "Runtime.callFunctionOn" => page
                         .query_rect_in_frame(&widget(), "input[type=checkbox]")
                         .await
                         .map(|_| ()),
@@ -1495,6 +1812,466 @@ mod tests {
                     assert!(page.document().await.is_ok());
                 }
             }
+        }
+        // Frame enumeration isolates a detached child when the page stays open, and still aborts
+        // with `PageError::Closed` when the page itself closed.
+        for close_page in [false, true] {
+            let (native, page) = fixture();
+            *native.child_failure.lock().map_err(|_| "poisoned")? =
+                Some(("Page.getFrameTree", close_page, CdpError::SessionGone));
+            let result = page.scan_frames(None).await;
+            if close_page {
+                assert_eq!(result, Err(PageError::Closed));
+            } else {
+                let list = result?;
+                assert!(!list.complete);
+                assert_eq!(list.frames.len(), 1);
+                assert_eq!(list.frames[0].frame_id, "root");
+                assert!(page.document().await.is_ok());
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_failing_child_iframe_is_isolated_while_sibling_is_returned() -> TestResult {
+        let recaptcha_url = "https://www.google.com/recaptcha/api2/anchor?k=instacart-key";
+        enum FailureCase {
+            Protocol,
+            Detached,
+            MissingFromTree,
+            Timeout,
+            ChildDomProtocol,
+        }
+        for case in [
+            FailureCase::Protocol,
+            FailureCase::Detached,
+            FailureCase::MissingFromTree,
+            FailureCase::Timeout,
+            FailureCase::ChildDomProtocol,
+        ] {
+            let (native, page) = fixture();
+            *native.top_document.lock().map_err(|_| "poisoned")? = Some(json!({
+                "nodeType": 9,
+                "backendNodeId": 1,
+                "children": [
+                    {"nodeName": "IFRAME", "frameId": "broken-ad", "backendNodeId": 5},
+                    {"nodeName": "IFRAME", "frameId": "recaptcha", "backendNodeId": 6}
+                ]
+            }));
+            native
+                .child_urls
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert("broken-ad".into(), "https://ads.example.test/slot".into());
+            native
+                .child_urls
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert("recaptcha".into(), recaptcha_url.into());
+            match case {
+                FailureCase::Protocol => {
+                    native
+                        .session_failures
+                        .lock()
+                        .map_err(|_| "poisoned")?
+                        .insert(
+                            ("s-broken-ad".into(), "Page.getFrameTree".into()),
+                            (
+                                false,
+                                CdpError::Protocol {
+                                    code: -32000,
+                                    message: "Target crashed".into(),
+                                },
+                            ),
+                        );
+                }
+                FailureCase::Detached => {
+                    native
+                        .session_failures
+                        .lock()
+                        .map_err(|_| "poisoned")?
+                        .insert(
+                            ("s-broken-ad".into(), "Page.getFrameTree".into()),
+                            (false, CdpError::SessionGone),
+                        );
+                }
+                FailureCase::MissingFromTree => {
+                    native
+                        .child_sessions_missing_frame
+                        .lock()
+                        .map_err(|_| "poisoned")?
+                        .insert("broken-ad".into());
+                }
+                FailureCase::Timeout => {
+                    native
+                        .session_failures
+                        .lock()
+                        .map_err(|_| "poisoned")?
+                        .insert(
+                            ("s-broken-ad".into(), "Page.getFrameTree".into()),
+                            (
+                                false,
+                                CdpError::Timeout {
+                                    method: "Page.getFrameTree".into(),
+                                },
+                            ),
+                        );
+                }
+                FailureCase::ChildDomProtocol => {
+                    native
+                        .session_failures
+                        .lock()
+                        .map_err(|_| "poisoned")?
+                        .insert(
+                            ("s-broken-ad".into(), "DOM.getDocument".into()),
+                            (
+                                false,
+                                CdpError::Protocol {
+                                    code: -32000,
+                                    message: "Document unavailable".into(),
+                                },
+                            ),
+                        );
+                }
+            }
+
+            let list = page.scan_frames(None).await?;
+            assert!(!list.complete);
+            assert_eq!(list.frames[0].frame_id, "root");
+            let recaptcha = list
+                .frames
+                .iter()
+                .find(|f| f.frame_id == "recaptcha")
+                .ok_or("sibling recaptcha frame was dropped")?;
+            assert_eq!(recaptcha.url, recaptcha_url);
+            assert!(recaptcha.rect.is_some());
+            if matches!(case, FailureCase::ChildDomProtocol) {
+                assert!(list.frames.iter().any(|f| f.frame_id == "broken-ad"));
+            } else {
+                assert!(!list.frames.iter().any(|f| f.frame_id == "broken-ad"));
+            }
+
+            // `frames()` callers (recaptcha / turnstile flows) also receive readable frames.
+            let frames = page.frames().await?;
+            assert!(frames.iter().any(|f| f.frame_id == "recaptcha"));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_hung_child_iframe_does_not_starve_sibling_or_nested_frames() -> TestResult {
+        let (native, page) = fixture();
+        let direct_url = "https://www.google.com/recaptcha/api2/anchor?k=direct-key";
+        let nested_url = "https://www.google.com/recaptcha/api2/anchor?k=nested-key";
+        *native.top_document.lock().map_err(|_| "poisoned")? = Some(json!({
+            "nodeType": 9,
+            "backendNodeId": 1,
+            "children": [
+                {"nodeName": "IFRAME", "frameId": "hung-ad", "backendNodeId": 5},
+                {"nodeName": "IFRAME", "frameId": "hung-dom-ad", "backendNodeId": 6},
+                {"nodeName": "IFRAME", "frameId": "wrapper", "backendNodeId": 7},
+                {"nodeName": "IFRAME", "frameId": "direct-recaptcha", "backendNodeId": 8}
+            ]
+        }));
+        {
+            let mut urls = native.child_urls.lock().map_err(|_| "poisoned")?;
+            urls.insert("hung-ad".into(), "https://ads.example.test/hung".into());
+            urls.insert(
+                "hung-dom-ad".into(),
+                "https://ads.example.test/hung-dom".into(),
+            );
+            urls.insert(
+                "wrapper".into(),
+                "https://checkout.example.test/frame".into(),
+            );
+            urls.insert("direct-recaptcha".into(), direct_url.into());
+            urls.insert("nested-recaptcha".into(), nested_url.into());
+        }
+        native
+            .child_documents
+            .lock()
+            .map_err(|_| "poisoned")?
+            .insert(
+                "wrapper".into(),
+                json!({
+                    "nodeType": 9,
+                    "backendNodeId": 40,
+                    "children": [
+                        {"nodeName": "IFRAME", "frameId": "nested-recaptcha", "backendNodeId": 45}
+                    ]
+                }),
+            );
+        {
+            let mut delays = native.session_delays.lock().map_err(|_| "poisoned")?;
+            delays.insert(
+                ("s-hung-ad".into(), "Page.getFrameTree".into()),
+                Duration::from_secs(10),
+            );
+            delays.insert(
+                ("s-hung-dom-ad".into(), "DOM.getDocument".into()),
+                Duration::from_secs(10),
+            );
+        }
+
+        let started = Instant::now();
+        let list = page.scan_frames(Some(Duration::from_millis(900))).await?;
+        let elapsed = started.elapsed();
+
+        assert!(!list.complete);
+        assert!(elapsed <= CHILD_FRAME_TIMEOUT + Duration::from_millis(50));
+        let ids: Vec<&str> = list.frames.iter().map(|f| f.frame_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "root",
+                "hung-dom-ad",
+                "wrapper",
+                "direct-recaptcha",
+                "nested-recaptcha"
+            ]
+        );
+        assert_eq!(list.frames[3].url, direct_url);
+        assert_eq!(list.frames[4].url, nested_url);
+        assert_eq!(
+            page.frame_parent_ids()
+                .await?
+                .get("nested-recaptcha")
+                .map(String::as_str),
+            Some("wrapper")
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_fatal_child_errors_abort_frame_enumeration_immediately() -> TestResult {
+        assert!(is_fatal_child_error(&PageError::Closed));
+        assert!(is_fatal_child_error(&PageError::Navigated));
+        assert!(is_fatal_child_error(&PageError::Cancelled));
+        assert!(!is_fatal_child_error(&PageError::Timeout));
+        assert!(!is_fatal_child_error(&PageError::Browser("boom".into())));
+
+        for (close_page, cdp_error, expected) in [
+            (true, CdpError::SessionGone, PageError::Closed),
+            (
+                false,
+                CdpError::Protocol {
+                    code: -32800,
+                    message: "cancelled".into(),
+                },
+                PageError::Cancelled,
+            ),
+        ] {
+            let (native, page) = fixture();
+            *native.top_document.lock().map_err(|_| "poisoned")? = Some(json!({
+                "nodeType": 9,
+                "backendNodeId": 1,
+                "children": [
+                    {"nodeName": "IFRAME", "frameId": "hung-ad", "backendNodeId": 5},
+                    {"nodeName": "IFRAME", "frameId": "fatal-child", "backendNodeId": 6}
+                ]
+            }));
+            native
+                .session_delays
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(
+                    ("s-hung-ad".into(), "Page.getFrameTree".into()),
+                    Duration::from_secs(10),
+                );
+            native
+                .session_failures
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(
+                    ("s-fatal-child".into(), "Page.getFrameTree".into()),
+                    (close_page, cdp_error),
+                );
+
+            let started = Instant::now();
+            let result = page.scan_frames(None).await;
+            assert_eq!(result, Err(expected));
+            assert!(
+                started.elapsed() < CHILD_FRAME_TIMEOUT,
+                "fatal error waited for hung sibling ({:?})",
+                started.elapsed()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_top_document_failures_remain_fatal() -> TestResult {
+        let (native, page) = fixture();
+        native
+            .session_failures
+            .lock()
+            .map_err(|_| "poisoned")?
+            .insert(
+                ("s-page".into(), "DOM.getDocument".into()),
+                (
+                    false,
+                    CdpError::Protocol {
+                        code: -32000,
+                        message: "top DOM failed".into(),
+                    },
+                ),
+            );
+        assert!(matches!(
+            page.scan_frames(None).await,
+            Err(PageError::Browser(_))
+        ));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_live_detect_finds_active_recaptcha_alongside_hung_ad_iframe() -> TestResult
+    {
+        use super::super::{
+            detect::detect,
+            types::{CaptchaKind, ChallengeState, ScanOutcome},
+        };
+
+        let anchor_url = "https://www.google.com/recaptcha/api2/anchor?k=instacart-key";
+
+        // Case 1: Hung ad iframe + readable active reCAPTCHA iframe -> detected as Active within
+        // the 2s scan budget, with complete == false.
+        {
+            let (native, page) = fixture();
+            *native.top_document.lock().map_err(|_| "poisoned")? = Some(json!({
+                "nodeType": 9,
+                "backendNodeId": 1,
+                "children": [
+                    {"nodeName": "IFRAME", "frameId": "hung-ad", "backendNodeId": 5},
+                    {"nodeName": "IFRAME", "frameId": "recaptcha", "backendNodeId": 6}
+                ]
+            }));
+            {
+                let mut urls = native.child_urls.lock().map_err(|_| "poisoned")?;
+                urls.insert("hung-ad".into(), "https://ads.example.test/hung".into());
+                urls.insert("recaptcha".into(), anchor_url.into());
+            }
+            native
+                .session_delays
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(
+                    ("s-hung-ad".into(), "Page.getFrameTree".into()),
+                    Duration::from_secs(10),
+                );
+            {
+                let mut evals = native.session_evaluations.lock().map_err(|_| "poisoned")?;
+                evals.insert(
+                    "s-page".into(),
+                    VecDeque::from([
+                        Ok(json!({"result": {"value": {"complete": true}}})),
+                        Ok(json!({"result": {"value": {
+                            "widgets": [{
+                                "kind": "recaptcha_v2",
+                                "state": "unknown",
+                                "invisible": false,
+                                "enterprise": false,
+                                "sitekey": "instacart-key"
+                            }],
+                            "candidates": [],
+                            "frames": [{"url": anchor_url, "visible": true}],
+                            "addresses": [],
+                            "checked": null,
+                            "expired": false,
+                            "complete": true,
+                            "top": true,
+                            "url": "http://fixture.test"
+                        }}})),
+                    ]),
+                );
+                evals.insert(
+                    "s-recaptcha".into(),
+                    VecDeque::from([Ok(json!({"result": {"value": {
+                        "widgets": [],
+                        "candidates": [],
+                        "frames": [],
+                        "addresses": [],
+                        "checked": false,
+                        "expired": false,
+                        "complete": true,
+                        "top": false,
+                        "url": anchor_url
+                    }}}))]),
+                );
+            }
+
+            let started = Instant::now();
+            let detection = detect(&page, Duration::from_secs(2)).await?;
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(!detection.complete);
+            assert_eq!(detection.outcome, ScanOutcome::Detected);
+            assert_eq!(detection.challenges.len(), 1);
+            assert_eq!(detection.challenges[0].kind, CaptchaKind::RecaptchaV2);
+            assert_eq!(detection.challenges[0].state, ChallengeState::Active);
+            assert_eq!(
+                detection.challenges[0].sitekey.as_deref(),
+                Some("instacart-key")
+            );
+            assert_eq!(
+                detection.challenges[0]
+                    .frame
+                    .as_ref()
+                    .map(|f| f.frame_id.as_str()),
+                Some("recaptcha")
+            );
+        }
+
+        // Case 2: Hung ad iframe + no CAPTCHA -> complete == false, ScanOutcome::Unknown (never None).
+        {
+            let (native, page) = fixture();
+            *native.top_document.lock().map_err(|_| "poisoned")? = Some(json!({
+                "nodeType": 9,
+                "backendNodeId": 1,
+                "children": [
+                    {"nodeName": "IFRAME", "frameId": "hung-ad", "backendNodeId": 5}
+                ]
+            }));
+            native
+                .child_urls
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert("hung-ad".into(), "https://ads.example.test/hung".into());
+            native
+                .session_delays
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(
+                    ("s-hung-ad".into(), "Page.getFrameTree".into()),
+                    Duration::from_secs(10),
+                );
+            native
+                .session_evaluations
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(
+                    "s-page".into(),
+                    VecDeque::from([
+                        Ok(json!({"result": {"value": {"complete": true}}})),
+                        Ok(json!({"result": {"value": {
+                            "widgets": [],
+                            "candidates": [],
+                            "frames": [],
+                            "addresses": [],
+                            "checked": null,
+                            "expired": false,
+                            "complete": true,
+                            "top": true,
+                            "url": "http://fixture.test"
+                        }}})),
+                    ]),
+                );
+
+            let started = Instant::now();
+            let detection = detect(&page, Duration::from_secs(2)).await?;
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(!detection.complete);
+            assert_eq!(detection.outcome, ScanOutcome::Unknown);
+            assert!(detection.challenges.is_empty());
         }
         Ok(())
     }
@@ -1640,6 +2417,29 @@ mod tests {
             &calls[6..],
             &[(50.0, 70.0), (40.0, 50.0), (30.0, 30.0), (20.0, 10.0)],
         );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_click_at_skips_intermediate_hover_sweep_after_incomplete_frame_scan()
+    -> TestResult {
+        let (native, page) = fixture();
+        page.unresponsive_child_frame.store(true, Ordering::Relaxed);
+        page.click_at(60.0, 90.0).await?;
+        let calls = native.calls("Input.dispatchMouseEvent")?;
+        assert_eq!(
+            calls.len(),
+            3,
+            "direct click should skip intermediate hover points over a hung child frame: {calls:?}"
+        );
+        assert_eq!(calls[0].1, json!({"type":"mouseMoved","x":60.0,"y":90.0}));
+        assert_eq!(calls[1].1["type"], "mousePressed");
+        assert_eq!(calls[1].1["x"], 60.0);
+        assert_eq!(calls[1].1["y"], 90.0);
+        assert_eq!(calls[2].1["type"], "mouseReleased");
+        assert_eq!(calls[2].1["x"], 60.0);
+        assert_eq!(calls[2].1["y"], 90.0);
+        assert_eq!(*page.last_point.lock().await, (60.0, 90.0));
         Ok(())
     }
 

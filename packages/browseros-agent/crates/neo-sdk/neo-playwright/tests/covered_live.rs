@@ -1141,8 +1141,9 @@ async fn tests_that_conformance_keeps_upstreams_answer() -> TestResult {
     result
 }
 
-/// The prelude renders the cover's own snapshot under "On top", in a script's default snapshot
-/// form, and leaves the script `error.cover` without it.
+/// The script's message shows the cover's own snapshot under "On top", in a script's default
+/// snapshot form (Rust prints the block, the prelude places it), and `error.cover` carries
+/// neither the tree nor the block.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_script_sees_the_covers_snapshot_and_field() -> TestResult {
@@ -1178,6 +1179,7 @@ async fn tests_that_the_script_sees_the_covers_snapshot_and_field() -> TestResul
     let cover = seen.get("cover").ok_or("error.cover")?;
     assert_eq!(cover.get("kind"), Some(&json!("page")));
     assert!(cover.get("snapshot").is_none(), "{cover}");
+    assert!(cover.get("block").is_none(), "{cover}");
     Ok(())
 }
 
@@ -1253,11 +1255,11 @@ async fn tests_that_a_dialog_in_an_open_shadow_root_is_named_with_its_buttons() 
             message.contains("\n  On top: dialog \"Privacy choices\" [ref="),
             "{message}"
         );
-        let snapshot = cover
-            .get("snapshot")
-            .map(Value::to_string)
+        let block = cover
+            .get("block")
+            .and_then(Value::as_str)
             .unwrap_or_default();
-        assert!(snapshot.contains("Privacy choices"), "{snapshot}");
+        assert!(block.contains("Privacy choices"), "{block}");
         assert!(!message.contains("blank layer"), "{message}");
         assert!(!message.contains("Do: a blank layer"), "{message}");
         let reject = cover

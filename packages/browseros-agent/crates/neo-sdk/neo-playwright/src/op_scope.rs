@@ -274,6 +274,13 @@ impl<'env> OpScope<'env> {
         self.page.get().map(|admitted| admitted.tab)
     }
 
+    /// The page target the op admitted, once it did: the tab it acted on.
+    pub(crate) fn admitted_target(&self) -> Option<TargetId> {
+        self.page
+            .get()
+            .map(|admitted| admitted.session.target_id.clone())
+    }
+
     /// The run's admitted view, for what core does on the run's behalf: listing, opening and
     /// closing tabs, captures. A page this op acts on is still admitted once with
     /// [`OpScope::admit`], and a write through the view still follows [`OpScope::send_effect`].
