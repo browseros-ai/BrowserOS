@@ -209,8 +209,9 @@ impl LivePage {
         id: String,
         deadline: Instant,
     ) -> Result<(FrameRef, Option<ProtocolSession>), PageError> {
-        self.frame_operation(async {
-            tokio::time::timeout_at(deadline, async {
+        tokio::time::timeout_at(
+            deadline,
+            self.frame_operation(async {
                 let session = self.frame(&id).await?;
                 let tree = send(&session, "Page.getFrameTree", json!({})).await?;
                 let frame = find_frame(&tree["frameTree"], &id)
@@ -242,19 +243,19 @@ impl LivePage {
                     },
                     next_oopif,
                 ))
-            })
-            .await
-            .map_err(|_| PageError::Timeout)?
-        })
+            }),
+        )
         .await
+        .map_err(|_| PageError::Timeout)?
     }
     async fn scan_oopif_dom(
         &self,
         session: &ProtocolSession,
         deadline: Instant,
     ) -> Result<Value, PageError> {
-        self.frame_operation(async {
-            tokio::time::timeout_at(deadline, async {
+        tokio::time::timeout_at(
+            deadline,
+            self.frame_operation(async {
                 let dom = send(
                     session,
                     "DOM.getDocument",
@@ -265,11 +266,10 @@ impl LivePage {
                     .filter(|root| root.is_object())
                     .cloned()
                     .ok_or_else(|| bad("Missing child document root"))
-            })
-            .await
-            .map_err(|_| PageError::Timeout)?
-        })
+            }),
+        )
         .await
+        .map_err(|_| PageError::Timeout)?
     }
     fn run_child_work(
         &self,

@@ -59,10 +59,18 @@ const APPLY: &str = r#"
  try{if(typeof fn==='function'){fn.call(owner,p.token);cb=true}}catch{}
  try{
    const bframeRe=/\/recaptcha\/.*\/bframe(?:\?|#|$)/,anchorRe=/\/recaptcha\/.*\/anchor(?:\?|$)/;
-   const isBframe=f=>bframeRe.test(f.src||'')||(!!p.bframe&&f.src===p.bframe);
+   const keyOf=src=>{try{return new URL(src,globalThis.location?.href||'https://example.invalid/').searchParams.get('k')}catch{return null}};
    const all=[...document.querySelectorAll('iframe')];
    const allAnchors=all.filter(f=>anchorRe.test(f.src||''));
-   const bframes=all.filter(f=>isBframe(f)&&!hidden(f));
+   const visibleBframes=all.filter(f=>((!!p.bframe&&f.src===p.bframe)||bframeRe.test(f.src||''))&&!hidden(f));
+   let bframes=[];
+   if(p.bframe){
+     bframes=visibleBframes.filter(f=>f.src===p.bframe);
+   }else{
+     const byKey=p.key?visibleBframes.filter(f=>keyOf(f.src||'')===p.key):[];
+     bframes=byKey.length===1?byKey:(visibleBframes.length===1&&allAnchors.length<=1?visibleBframes:[]);
+   }
+   const isSelected=f=>bframes.includes(f);
    for(const bf of bframes){
      let target=bf;
      for(let cur=bf.parentElement;cur&&cur!==document.body&&cur!==document.documentElement;cur=cur.parentElement){
@@ -71,7 +79,7 @@ const APPLY: &str = r#"
          ||allAnchors.some(x=>cur===x||cur.contains(x))
          ||fields.some(x=>cur===x||cur.contains(x))
          ||cur.querySelector('form,button,input,select,textarea,main,nav,header,footer,article,section,a[href]')
-         ||[...cur.querySelectorAll('iframe')].some(x=>!isBframe(x)))break;
+         ||[...cur.querySelectorAll('iframe')].some(x=>!isSelected(x)))break;
        target=cur;
      }
      if(target.style){target.style.display='none';target.style.visibility='hidden';target.style.pointerEvents='none'}
@@ -873,10 +881,17 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
     async fn run(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
         let mut v = self.read().await?;
         self.snapshot_prior(&v);
-        if self.ctx.forced_method == Some(ForcedMethod::Token)
-            || (self.ctx.backend.has_paid_budget() && self.sitekey().is_some() && v.main.present)
-        {
+        if self.ctx.forced_method == Some(ForcedMethod::Token) {
             return self.token(Some(v)).await;
+        }
+        if self.ctx.backend.has_paid_budget() && self.sitekey().is_some() && v.main.present {
+            match self.token(Some(v)).await {
+                Err(Stop(_, SolveReason::SpendLimitReached, _)) if self.out.paid_tasks == 0 => {
+                    self.out.method = SolveMethod::None;
+                    v = self.read().await?;
+                }
+                other => return other,
+            }
         }
         // If the page or caller already triggered the checkbox before this
         // solve started, give Google's check the same bounded grace without
@@ -3633,5 +3648,76 @@ const inspect = () => ({{
         assert_eq!(out["bframeStyle"]["display"], json!("block"));
         assert_eq!(out["bframeStyle"]["pointerEvents"], json!("auto"));
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_apply_only_hides_selected_widgets_bframe_when_another_widget_is_open()
+    -> anyhow::Result<()> {
+        let anchor_a = "https://www.google.com/recaptcha/api2/anchor?k=key-a";
+        let anchor_b = "https://www.google.com/recaptcha/api2/anchor?k=key-b";
+        let bframe_a = "https://www.google.com/recaptcha/api2/bframe?hl=en&k=key-a";
+        let bframe_b = "https://www.google.com/recaptcha/api2/bframe?hl=en&k=key-b";
+        for pass_bframe in [true, false] {
+            let dom_setup = format!(
+                r#"
+const anchorA = el('iframe', {{ src: '{anchor_a}' }});
+const fieldA = el('textarea', {{ name: 'g-recaptcha-response' }});
+const anchorB = el('iframe', {{ src: '{anchor_b}' }});
+const fieldB = el('textarea', {{ name: 'g-recaptcha-response' }});
+const form = el('form', {{}}, [
+    el('div', {{ class: 'g-recaptcha' }}, [anchorA, fieldA]),
+    el('div', {{ class: 'g-recaptcha' }}, [anchorB, fieldB]),
+]);
+const bfA = el('iframe', {{ src: '{bframe_a}' }});
+const bfB = el('iframe', {{ src: '{bframe_b}' }});
+const overlayA = el('div', {{ id: 'overlay-a' }}, [el('div', {{}}, [bfA])]);
+const overlayB = el('div', {{ id: 'overlay-b' }}, [el('div', {{}}, [bfB])]);
+append(body, form, overlayA, overlayB);
+const inspect = () => ({{
+    overlayAStyle: overlayA.style,
+    overlayBStyle: overlayB.style,
+    bfBStyle: bfB.style,
+}});
+"#
+            );
+            let params = json!({
+                "anchor": anchor_a,
+                "bframe": pass_bframe.then_some(bframe_a),
+                "key": "key-a",
+                "callback": null,
+                "token": "fresh-a"
+            });
+            let out = eval_apply_dom(&dom_setup, &params)?;
+            assert_eq!(out["applied"], json!({"written": true, "callback": false}));
+            assert_eq!(out["overlayAStyle"]["display"], json!("none"));
+            assert_ne!(out["overlayBStyle"]["display"], json!("none"));
+            assert_ne!(out["overlayBStyle"]["pointerEvents"], json!("none"));
+            assert_ne!(out["bfBStyle"]["display"], json!("none"));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_spend_limit_race_on_token_first_falls_back_to_free_checkbox() {
+        let page = FakePage::new(false);
+        let mut backend = FakeBackend::new(vec![]);
+        backend.push_reply(Err(ProviderError {
+            provider: Some(ProviderName::Capsolver),
+            kind: ProviderErrorKind::SpendLimit,
+            message: "paid-task limit reached".into(),
+            charged: false,
+        }));
+        let result = attempt(&page, &backend).await;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Solved,
+                SolveMethod::Checkbox,
+                SolveReason::CheckboxPassed
+            )
+        );
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.paid_tasks, 0);
+        assert_eq!(page.read(|s| s.clicks.len()), 1);
     }
 }
