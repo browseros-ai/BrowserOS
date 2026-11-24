@@ -129,13 +129,17 @@ fn prepare(name: &'static str, tree: Vec<AriaNode>, runs: usize) -> Result<Shape
     })
 }
 
+/// Times `runs` renders. The first is also the one whose memory is counted, so Rust's first run
+/// is a first render, as the old engine's is.
 fn rust_row(snapshot: &Snapshot, call: Call<'_>, runs: usize) -> RustRow {
+    let mut times = Vec::with_capacity(runs);
     let before = counting::reset_peak();
+    let started = Instant::now();
     let answer = render(snapshot, call);
+    times.push(started.elapsed());
     let above_tree = counting::peak().saturating_sub(before);
     let text = answer.into_text();
-    let mut times = Vec::with_capacity(runs);
-    for _ in 0..runs {
+    for _ in 1..runs {
         let started = Instant::now();
         let answer = render(snapshot, call);
         times.push(started.elapsed());
@@ -187,6 +191,9 @@ fn row(
     }
 }
 
+/// The names `--only` takes.
+const SHAPES: &[&str] = &["thread", "article", "grid", "delta"];
+
 struct Options {
     runs: usize,
     only: Option<Vec<String>>,
@@ -213,7 +220,13 @@ fn options() -> Result<Options, String> {
                 let names = args
                     .next()
                     .ok_or("--only takes thread,article,grid,delta")?;
-                options.only = Some(names.split(',').map(str::to_owned).collect());
+                let names: Vec<String> = names.split(',').map(str::to_owned).collect();
+                if let Some(unknown) = names.iter().find(|name| !SHAPES.contains(&name.as_str())) {
+                    return Err(format!(
+                        "--only: no shape {unknown}; the shapes are thread,article,grid,delta"
+                    ));
+                }
+                options.only = Some(names);
             }
             "--out" => options.out = Some(args.next().ok_or("--out takes a file")?),
             other => return Err(format!("unknown argument {other}")),
@@ -233,8 +246,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs every row and prints the report. `Ok(false)` when an old engine's text differed from
-/// Rust's on any row that ran: a timing of two different outputs measures nothing.
+/// Runs every row and prints the report. `Ok(false)` when any row's old engine failed, or printed
+/// other bytes than Rust: a row that compared nothing, or compared two different outputs,
+/// measures nothing. The report still says what each row did.
 fn run() -> Result<bool, String> {
     let options = options()?;
     let machine = machine();
@@ -330,7 +344,7 @@ fn run() -> Result<bool, String> {
     }
     Ok(rows
         .iter()
-        .all(|row| !matches!(row.old, OldRow::Ran { same: false, .. })))
+        .all(|row| matches!(row.old, OldRow::Ran { same: true, .. })))
 }
 
 fn report(

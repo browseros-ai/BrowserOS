@@ -19,8 +19,8 @@ renderer is removed. Nothing in a gate runs it or asserts a time.
      (today's renderer, built by neo-playwright-js `scripts/build.ts`) in QuickJS, with a run's
      limits (128 MiB heap, 512 KiB stack). `JSON.parse` of the result is timed apart from the
      render.
-   Every old run's text is compared with Rust's; a row whose bytes differ says so and the
-   process exits 1.
+   Every old run's text is compared with Rust's. A row whose bytes differ, or whose old engine
+   failed, says so, and the process exits 1.
 4. The delta's worst case: a page of 33,301 one-line nodes and a copy with 500 links renamed
    from the first line to the last (1,000 changed lines), under `maxTokens: 1e9`. Once with
    every line distinct, once with every unchanged line one of two, so the search meets the most
