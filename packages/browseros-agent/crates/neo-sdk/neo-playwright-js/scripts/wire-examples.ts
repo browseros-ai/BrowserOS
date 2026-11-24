@@ -285,6 +285,15 @@ const SNAPSHOT_TEXTS = `
   }
 `
 
+/**
+ * The same under the conformance switch, where every mode is Playwright's text of the mode as
+ * passed; `mode: 'full'` is left out, since the op refuses it there as Playwright's server does.
+ */
+const UPSTREAM_TEXTS = `
+  const l = page.getByRole('button')
+  await page.ariaSnapshot(); await page.ariaSnapshot({ mode: 'ai' }); await l.ariaSnapshot({ mode: 'ai' })
+`
+
 /** Rust's text for a `format` call, and its tree and text for a compared one. */
 function textAnswer(call: Call): unknown {
   if (!call.name.endsWith('.ariaSnapshot')) return cannedAnswer(call.name)
@@ -362,7 +371,7 @@ export async function recordEveryOp(built?: string): Promise<Call[]> {
       now: RECORDED_AT,
       prelude: withSnapshotText('rust', built),
     })
-    await rust.run(SNAPSHOT_TEXTS)
+    await rust.run(upstreamSnapshots ? UPSTREAM_TEXTS : SNAPSHOT_TEXTS)
     texts.push(...rust.calls)
   }
   // The compare switch's inputs: a stub's text differs from the prelude's, so each call's

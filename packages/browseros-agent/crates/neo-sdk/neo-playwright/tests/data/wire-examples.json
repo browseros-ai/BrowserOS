@@ -1300,38 +1300,7 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "mode": "default",
-        "format": "playwright"
-      },
-      {
-        "call": {
-          "api": "locator.ariaSnapshot",
-          "timeoutMs": 30000,
-          "timeoutBuiltIn": true,
-          "conformance": true
-        },
-        "target": {
-          "$neo": "locator",
-          "page": {
-            "$neo": "page",
-            "tab": 1007
-          },
-          "frame": null,
-          "chunks": [
-            {
-              "parts": [
-                {
-                  "name": "internal:role",
-                  "body": "button",
-                  "source": "button"
-                }
-              ]
-            }
-          ],
-          "display": "getByRole('button')"
-        },
-        "strict": "strict",
-        "mode": "full",
+        "mode": "ai",
         "format": "playwright"
       },
       {
@@ -3759,7 +3728,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "mode": "full",
+        "mode": "ai",
         "format": "playwright"
       },
       {
