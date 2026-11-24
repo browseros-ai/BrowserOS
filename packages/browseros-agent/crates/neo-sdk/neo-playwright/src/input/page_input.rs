@@ -92,6 +92,9 @@ pub(crate) struct PageInput {
     rest: VecDeque<InputStep>,
     /// The last event sent, for [`PageInput::repeat_move`].
     last: Option<InputEvent>,
+    /// Whether the current burst put a mouse button down on the wire, for a caller that must
+    /// tell a burst that stopped before its press from one that stopped after it.
+    pressed: bool,
 }
 
 /// Why a burst stopped part-way.
@@ -120,6 +123,7 @@ impl PageInput {
             held: Vec::new(),
             rest: VecDeque::new(),
             last: None,
+            pressed: false,
         }
     }
 
@@ -227,7 +231,14 @@ impl PageInput {
         count: usize,
     ) -> Result<(), BurstFailure> {
         self.rest = steps.into();
+        self.pressed = false;
         self.drain(scope, count).await
+    }
+
+    /// Whether the burst sent last put a mouse button down, its reply or not: a burst into a
+    /// frame whose target went away under it pressed nothing when this is false.
+    pub(crate) fn pressed(&self) -> bool {
+        self.pressed
     }
 
     /// Makes `planned`, the devices [`PageInput::send_first`]'s burst was built on, the tab's,
@@ -274,8 +285,9 @@ impl PageInput {
         let Some(event) = self.last.as_ref().filter(|event| event.is_mouse_move()) else {
             return Ok(());
         };
-        let crash = scope.begin_protocol(&self.session);
-        let dispatched = dispatch(&self.session, self.pointer_scale, event);
+        let session = self.session_for(event);
+        let crash = scope.begin_protocol(session);
+        let dispatched = dispatch(session, self.pointer_scale, event);
         scope
             .within(dispatched)
             .await
@@ -319,7 +331,10 @@ impl PageInput {
 
     fn note(&mut self, event: &InputEvent) {
         match event.hold() {
-            Some(Hold::Press(held)) => self.held.push(held),
+            Some(Hold::Press(held)) => {
+                self.pressed |= matches!(held, Held::Button(_));
+                self.held.push(held);
+            }
             Some(Hold::Release(held)) => {
                 if let Some(at) = self.held.iter().position(|pressed| *pressed == held) {
                     self.held.remove(at);

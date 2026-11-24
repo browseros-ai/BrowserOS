@@ -184,6 +184,25 @@ struct FrameInput {
     shift: PagePoint,
 }
 
+/// [`PointerRunner::frame_input`]'s rule, without the runner: the shift from the main viewport's
+/// pixels to the element's own session's, when the browser would otherwise pick the frame
+/// (`browser_routes`), the tab's pointer scale is 1 and the placement gave a point in that frame.
+fn frame_shift(
+    browser_routes: bool,
+    scale: f64,
+    own: Option<PagePoint>,
+    page: PagePoint,
+) -> Option<PagePoint> {
+    let own = own?;
+    if !browser_routes || (scale - 1.0).abs() > f64::EPSILON {
+        return None;
+    }
+    Some(PagePoint {
+        x: own.x - page.x,
+        y: own.y - page.y,
+    })
+}
+
 /// Where the route check left the attempt.
 enum Route {
     /// The element's frame saw the move: its buttons may follow.
@@ -996,11 +1015,20 @@ impl<'a> PointerRunner<'a> {
                         .send_planned_mouse_on(&sent, self.scope, planned, steps, &frame.session)
                         .await
                     {
-                        // The frame's target went away under the burst: its own press navigated
-                        // it into another process, or closed it. Root-session input would have
-                        // gone on to whatever took its place, and the verdict below reads a world
-                        // gone under it as input that landed; so does this.
-                        Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone))) => Ok(()),
+                        // The frame's target went away under the burst after its press went out:
+                        // the press navigated it into another process, or closed it. Root-session
+                        // input would have gone on to whatever took its place, and the verdict
+                        // below reads a world gone under it as input that landed; so does this.
+                        Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone)))
+                            if input.pressed() =>
+                        {
+                            Ok(())
+                        }
+                        // It went away before the press: nothing was clicked, and the element is
+                        // looked for again, as when its world goes before the input.
+                        Err(BurstFailure::Cdp(CoreError::Cdp(CdpError::SessionGone))) => {
+                            return self.subject.lost(located).map(|()| Inner::Reresolve);
+                        }
                         sent => sent,
                     }
                 }
@@ -1147,16 +1175,10 @@ impl<'a> PointerRunner<'a> {
         own: Option<PagePoint>,
         page: PagePoint,
     ) -> Option<FrameInput> {
-        let own = own?;
-        if !self.browser_routes(located, root, hit) || (scale - 1.0).abs() > f64::EPSILON {
-            return None;
-        }
+        let shift = frame_shift(self.browser_routes(located, root, hit), scale, own, page)?;
         Some(FrameInput {
             session: located.world().session().clone(),
-            shift: PagePoint {
-                x: own.x - page.x,
-                y: own.y - page.y,
-            },
+            shift,
         })
     }
 
