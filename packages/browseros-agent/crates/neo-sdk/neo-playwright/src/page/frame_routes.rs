@@ -143,9 +143,10 @@ mod tests {
     use std::collections::HashMap;
 
     use browseros_core::testing::TestConnection;
-    use browseros_core::{FrameId, ProtocolSession, SessionId, TabId};
+    use browseros_core::{FrameId, ProtocolSession, SessionId, TabId, TargetId};
 
     use super::{FrameRoute, FrameRoutes, RootAttachment};
+    use crate::events::event_hub::LOG_CAPACITY;
     use crate::events::{EventHub, PageEvent};
 
     #[test]
@@ -211,6 +212,54 @@ mod tests {
         assert!(routes.cached(TabId(7), &root, &child, &hub).is_none());
         routes.forget(TabId(7));
         assert!(routes.cached(TabId(7), &root, &child, &hub).is_none());
+    }
+
+    /// A route reads its root tab's ring and the no-tab ring only: another tab losing records
+    /// leaves it standing, and a frame record the watcher could not place under a tab still
+    /// retires it.
+    #[test]
+    fn a_route_reads_only_its_own_tabs_ring_and_the_no_tab_ring() {
+        let routes = FrameRoutes::default();
+        let root = RootAttachment {
+            session: SessionId::from("root".to_owned()),
+            frame: FrameId("main".to_owned()),
+            epoch: 10,
+        };
+        let (child, parent) = (FrameId("child".to_owned()), FrameId("parent".to_owned()));
+        let (hub, mut writer) = EventHub::new();
+        routes.insert(
+            TabId(7),
+            root.clone(),
+            child.clone(),
+            FrameRoute {
+                session: ProtocolSession::for_session(
+                    TestConnection::new([]),
+                    SessionId::from("oopif".to_owned()),
+                ),
+                ancestors: vec![parent.clone(), child.clone()],
+                since: hub.head(),
+            },
+        );
+        let busy = TargetId("busy".to_owned());
+        for _ in 0..=LOG_CAPACITY {
+            writer.record_in(
+                Some(busy.clone()),
+                PageEvent::FrameDetached(FrameId("ad".to_owned())),
+            );
+        }
+        assert!(
+            hub.read_after(0).lost > 0,
+            "the busy tab's ring lost records"
+        );
+        assert!(
+            routes.cached(TabId(7), &root, &child, &hub).is_some(),
+            "another tab's loss is not this route's"
+        );
+        writer.record_in(None, PageEvent::FrameSwapped(parent));
+        assert!(
+            routes.cached(TabId(7), &root, &child, &hub).is_none(),
+            "an unplaced swap of an ancestor retires it"
+        );
     }
 
     /// Each route is checked against what happened after it was made: an ancestor's new document
