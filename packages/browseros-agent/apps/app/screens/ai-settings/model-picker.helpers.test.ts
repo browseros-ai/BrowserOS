@@ -84,6 +84,7 @@ describe('servesUserLoadedModels', () => {
   it('covers the endpoints that serve locally loaded or proxied models', () => {
     expect(servesUserLoadedModels('lmstudio')).toBe(true)
     expect(servesUserLoadedModels('ollama')).toBe(true)
+    expect(servesUserLoadedModels('rapid-mlx')).toBe(true)
     expect(servesUserLoadedModels('openai-compatible')).toBe(true)
   })
 

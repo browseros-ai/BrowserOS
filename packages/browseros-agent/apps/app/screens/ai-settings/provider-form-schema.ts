@@ -14,6 +14,7 @@ const providerTypeEnum = z.enum([
   'azure',
   'ollama',
   'lmstudio',
+  'rapid-mlx',
   'bedrock',
   'chatgpt-pro',
   'github-copilot',

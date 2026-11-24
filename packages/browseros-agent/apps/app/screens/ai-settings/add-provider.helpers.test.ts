@@ -29,6 +29,7 @@ describe('categoryForTemplate', () => {
   it('groups the on-device runtimes as local', () => {
     expect(categoryForTemplate('ollama')).toBe('local')
     expect(categoryForTemplate('lmstudio')).toBe('local')
+    expect(categoryForTemplate('rapid-mlx')).toBe('local')
   })
 
   it('falls back to api-key for an unknown template', () => {

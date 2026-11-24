@@ -184,6 +184,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.AZURE]: createAzureModel,
   [LLM_PROVIDERS.OLLAMA]: createOllamaModel,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioModel,
+  [LLM_PROVIDERS.RAPID_MLX]: createOpenAICompatibleModel,
   [LLM_PROVIDERS.BEDROCK]: createBedrockModel,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleModel,
   [LLM_PROVIDERS.MOONSHOT]: createMoonshotModel,

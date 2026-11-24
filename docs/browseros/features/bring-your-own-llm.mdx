@@ -267,6 +267,22 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
 
 ---
 
+### Rapid-MLX
+
+[Rapid-MLX](https://github.com/raullenchai/Rapid-MLX) runs local models on Apple Silicon.
+Install it with the guided installer, then start a model:
+
+```bash
+curl -fsSL https://rapidmlx.com/install.sh | bash
+rapid-mlx serve qwen3.5-4b-4bit --port 8000
+```
+
+In **Settings → AI → Add Provider**, choose **Rapid-MLX** under **Runs on this machine**.
+Use `http://localhost:8000/v1` as the base URL and `mlx-community/Qwen3.5-4B-MLX-4bit`
+as the model ID. Leave the API key empty, click **Test Connection**, then **Save**.
+For a different model, use its ID from `http://localhost:8000/v1/models` and adjust
+**Supports Images** and **Context Window** to match the model.
+
 ## Switching Between Models
 
 Use the model switcher in the Assistant panel to change providers anytime. The default provider is highlighted.
