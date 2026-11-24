@@ -1020,6 +1020,40 @@ fn catalog_schemas_are_inlined() {
     }
 }
 
+fn has_uint32_format(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.get("format") == Some(&json!("uint32")) || object.values().any(has_uint32_format)
+        }
+        Value::Array(items) => items.iter().any(has_uint32_format),
+        _ => false,
+    }
+}
+
+#[test]
+fn catalog_schemas_do_not_emit_unregistered_uint32_format() {
+    // ajv-validating MCP clients warn on every unregistered `format`; see issue 3837.
+    for tool in catalog() {
+        let input_schema = Value::Object(tool.input_schema.as_ref().clone());
+        assert!(
+            !has_uint32_format(&input_schema),
+            "{} inputSchema",
+            tool.name
+        );
+        if let Some(output_schema) = tool.output_schema {
+            let output_schema = Value::Object(output_schema.as_ref().clone());
+            assert!(
+                !has_uint32_format(&output_schema),
+                "{} outputSchema",
+                tool.name
+            );
+        }
+    }
+    // Dropping the format keeps the numeric constraint.
+    let tabs = tool_by_name("tabs");
+    assert_eq!(tabs.input_schema["properties"]["page"]["minimum"], 0);
+}
+
 #[test]
 fn run_has_compat_output_schema() {
     let run = catalog()

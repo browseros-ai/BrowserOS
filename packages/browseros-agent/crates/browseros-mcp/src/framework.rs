@@ -891,6 +891,16 @@ fn normalize_schema_value(value: &mut Value) {
 
             collapse_nullable_enum(object);
 
+            // schemars emits `format: "uint32"` for `u32`, which is not a registered JSON Schema
+            // format, so ajv-validating clients warn on every startup. `minimum: 0` already
+            // carries the constraint.
+            if object
+                .get("format")
+                .is_some_and(|format| format == "uint32")
+            {
+                object.remove("format");
+            }
+
             for key in [
                 "additionalItems",
                 "additionalProperties",
