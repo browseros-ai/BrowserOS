@@ -554,13 +554,14 @@ async fn sent_during_the_wait(
         .to_vec())
 }
 
-/// Nothing is sent to the browser between the fence and the reply. A `mode: 'full'` call's
-/// handler has returned before its generic wait, so what the browser receives during that wait
-/// is the browser side's own traffic (the page registry's listings); a whole page in Neo's
-/// format, parked in the wait inside its handler, must add nothing to it. The planted break of
-/// the wait's review, an admission after the fence (which can attach to the page and send, as
-/// each baseline op of the prelude's path did), adds what `a_send_after_the_fence_is_counted`
-/// shows an admission sends.
+/// Nothing is sent to the browser between the fence and the reply. The guarantee is structural:
+/// `finish_page_text`, everything after the fence, is given no page, world or sender. This row
+/// is its regression guard, for the handler around it. A `mode: 'full'` call's handler has
+/// returned before its generic wait, so what the browser receives during that wait is the
+/// browser side's own traffic (the page registry's listings); a whole page in Neo's format,
+/// parked in the wait inside its handler, must add nothing to it. An admission after the fence
+/// (which can attach to the page and send, as each baseline op of the prelude's path did) adds
+/// what `a_send_after_the_fence_is_counted` shows an admission sends.
 #[tokio::test(start_paused = true)]
 async fn tests_that_nothing_is_sent_between_the_fence_and_the_reply() -> TestResult {
     let tab = ScriptedTab::new(OneMain::default());
