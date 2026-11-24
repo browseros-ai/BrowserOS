@@ -191,9 +191,7 @@ impl PropertyDefinition {
             PropertyKind::TakeOverVia => normalize_token(value, &TAKE_OVER_VIA_VALUES),
             PropertyKind::ToolName => {
                 let raw = value.as_str()?;
-                known_tool_names()
-                    .contains(raw)
-                    .then(|| Value::String(raw.to_string()))
+                is_reported_tool(raw).then(|| Value::String(raw.to_string()))
             }
             PropertyKind::UnsignedInteger => value
                 .as_u64()
@@ -208,7 +206,7 @@ impl PropertyDefinition {
                 is_calendar_day(raw).then(|| Value::String(raw.to_string()))
             }
             PropertyKind::ToolCounts => normalize_counts(value, |tool| {
-                if known_tool_names().contains(tool) || SERVER_TOOL_NAMES.contains(&tool) {
+                if is_reported_tool(tool) {
                     tool.to_string()
                 } else {
                     OTHER_TOOL.to_string()
@@ -270,8 +268,8 @@ fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
         .then(|| Value::String(raw.to_string()))
 }
 
-/// Tools the server registers next to the shared browser catalog. Daily counts keep their names;
-/// anything else is reported as `other`.
+/// Tools the server registers next to the shared browser catalog. Usage reports keep their names;
+/// anything else is dropped or reported as `other`.
 const SERVER_TOOL_NAMES: [&str; 7] = [
     "save_skill",
     "mark_skill_run",
@@ -281,6 +279,10 @@ const SERVER_TOOL_NAMES: [&str; 7] = [
     "solve_captcha",
     "pursue",
 ];
+
+fn is_reported_tool(name: &str) -> bool {
+    known_tool_names().contains(name) || SERVER_TOOL_NAMES.contains(&name)
+}
 
 fn known_tool_names() -> &'static HashSet<&'static str> {
     static KNOWN_TOOL_NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
@@ -932,6 +934,26 @@ mod tests {
                 "max_duration_ms": 12,
             }))
         );
+
+        for tool_name in SERVER_TOOL_NAMES {
+            assert_eq!(
+                AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                    "client_name": "Codex",
+                    "tool_name": tool_name,
+                    "dispatch_count": 2,
+                    "total_duration_ms": 30,
+                    "max_duration_ms": 20,
+                })),
+                Some(json!({
+                    "client_name": "codex",
+                    "tool_name": tool_name,
+                    "dispatch_count": 2,
+                    "total_duration_ms": 30,
+                    "max_duration_ms": 20,
+                })),
+                "{tool_name} usage should be reported"
+            );
+        }
 
         for tool_name in ["unknown", "https://private.example", "user@example.com"] {
             assert_eq!(
