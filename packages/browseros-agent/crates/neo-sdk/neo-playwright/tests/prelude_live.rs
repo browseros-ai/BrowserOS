@@ -823,6 +823,10 @@ async fn tests_that_a_snapshot_whose_tree_misses_its_deadline_times_out_in_rust_
 /// a whole page's call takes inside its handler (`snapshot/snapshot_text/tests.rs`).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "the row's counts are read from the suite's output, on either snapshot path"
+)]
 async fn tests_that_a_console_message_logged_before_the_snapshot_is_heard_before_the_script_continues()
 -> TestResult {
     let page = Page::html(
@@ -843,22 +847,36 @@ async fn tests_that_a_console_message_logged_before_the_snapshot_is_heard_before
              page.on('console', message => heard.add(message.text()))\n\
              await page.goto({url})\n\
              const missed = []\n\
-             for (let round = 0; round < 20; round += 1) {{\n\
-               for (const text of [await page.ariaSnapshot(), await page.ariaSnapshot({{ text: true }})]) {{\n\
-                 const tick = /tick \\d+/.exec(text)?.[0]\n\
-                 if (!tick) throw new Error(`no tick in ${{text}}`)\n\
-                 if (!heard.has(tick)) missed.push(tick)\n\
-               }}\n\
+             let fresh = 0, previous = -1, first = null, last = 0\n\
+             const started = Date.now()\n\
+             for (let call = 0; call < 40; call += 1) {{\n\
+               const text = await page.ariaSnapshot(call % 2 === 0 ? {{}} : {{ text: true }})\n\
+               // Checked at once, before another call can give the listener more time.\n\
+               const tick = /tick (\\d+)/.exec(text)\n\
+               if (!tick) throw new Error(`no tick in ${{text}}`)\n\
+               if (!heard.has(tick[0])) missed.push(tick[0])\n\
+               const n = Number(tick[1])\n\
+               if (n > previous) fresh += 1\n\
+               previous = n; first ??= n; last = n\n\
              }}\n\
-             try {{ return {{ missed, heard: heard.size }} }} finally {{ await page.close() }}"
+             const seconds = (Date.now() - started) / 1000\n\
+             const ticksPerSecond = Math.round((last - first) / seconds)\n\
+             try {{ return {{ missed, fresh, ticksPerSecond, heard: heard.size }} }} finally {{ await page.close() }}"
         ),
     )
     .await?;
     run.end_run(Some(&heard));
+    eprintln!("CONSOLE_BEFORE_SNAPSHOT {heard}");
     assert_eq!(heard["missed"], json!([]), "{heard}");
+    // Not vacuous: enough snapshots must show a tick newer than the one before, logged while the
+    // script was snapshotting, or the row only proves that old messages arrive. The floor does
+    // not hang on the timer's exact rate, and the message gives the rate, so a slow runner reads
+    // as one.
     assert!(
-        heard["heard"].as_u64().is_some_and(|heard| heard >= 40),
-        "{heard}"
+        heard["fresh"].as_u64().is_some_and(|fresh| fresh >= 10),
+        "fewer than 10 of 40 snapshots showed a new tick; the page's timer gave about {} ticks a \
+         second: {heard}",
+        heard["ticksPerSecond"]
     );
     Ok(())
 }
