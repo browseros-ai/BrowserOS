@@ -1113,6 +1113,21 @@ describe('Use a licence key', () => {
     expectNoKeyAnywhere()
   })
 
+  it('tests that a trial key reports its plan status and that it is a trial', async () => {
+    server.activate = async () => ({ plan: { ...PRO, trial: true }, key: KEY })
+    await openDialog()
+    await turnOn(PASTED)
+
+    expect(text()).toContain('ultrafast is on for this computer')
+    expect(events('pro_key_activated')[0]?.properties).toEqual({
+      plan: 'ultrafast',
+      plan_ended: false,
+      status: 'active',
+      trial: true,
+    })
+    expectNoKeyAnywhere()
+  })
+
   it('tests that a key whose ultrafast ended offers Get ultrafast again on that key', async () => {
     server.activate = async () => ({ plan: planOf({ onKey: true }), key: KEY })
     await openDialog()
@@ -1120,7 +1135,9 @@ describe('Use a licence key', () => {
 
     expect(text()).toContain('This key’s ultrafast plan has ended')
     expect(events('pro_key_activated')[0]?.properties).toEqual({
+      plan: 'free',
       plan_ended: true,
+      status: 'none',
     })
     await click('Get ultrafast again')
 

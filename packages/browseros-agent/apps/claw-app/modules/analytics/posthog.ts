@@ -45,6 +45,7 @@ const STRIPPED_PROPS = [
 ]
 
 let initialised = false
+let planContext: PlanContext | null = null
 const captureStateListeners = new Set<() => void>()
 let lastCaptureState = false
 
@@ -55,11 +56,27 @@ function notifyCaptureStateListeners(): void {
   for (const listener of captureStateListeners) listener()
 }
 
+/** The plan every event is tagged with: a plan id and, when the licence says, a trial flag. */
+export interface PlanContext {
+  plan: 'ultrafast' | 'free'
+  trial?: boolean
+}
+
+/** Sets the plan the next events are tagged with; `null` until the plan is known. */
+export function setPlanContext(context: PlanContext | null): void {
+  planContext = context
+}
+
 export function sanitizeProperties(
   properties: Record<string, unknown>,
 ): Record<string, unknown> {
   const cleaned = { ...properties }
   for (const key of STRIPPED_PROPS) delete cleaned[key]
+  // An event that names its own plan keeps it; every other event gets the current one.
+  if (planContext && cleaned.plan === undefined) cleaned.plan = planContext.plan
+  if (planContext?.trial !== undefined && cleaned.trial === undefined) {
+    cleaned.trial = planContext.trial
+  }
   // Read the installed package at capture time: persisted super-properties can
   // outlive an extension update, while identity reset clears registered ones.
   // Web development has no extension manifest, so omit its version.

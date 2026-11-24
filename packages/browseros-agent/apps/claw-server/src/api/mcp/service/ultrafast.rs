@@ -108,6 +108,31 @@ fn refused(reason: Refusal, name: &str, detail: &str) -> ToolResult {
     )
 }
 
+/// Whether a run that is still going caused a flow change. Its run is recorded only when its
+/// session ends, so a count read now would leave it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InFlight {
+    None,
+    OneRun,
+}
+
+impl InFlight {
+    fn with(self, recorded: usize) -> usize {
+        match self {
+            Self::None => recorded,
+            Self::OneRun => recorded + 1,
+        }
+    }
+}
+
+/// The reason a `run_skill` result refused to run, read back from its structured reply.
+fn refusal_reason(result: &ToolResult) -> Option<&str> {
+    let structured = result.structured_content.as_ref()?;
+    (structured.get("status").and_then(Value::as_str) == Some("refused"))
+        .then(|| structured.get("reason").and_then(Value::as_str))
+        .flatten()
+}
+
 /// The browser half of a flow run, bound to the session that asked for it.
 pub(super) struct SessionFlowExec<'s> {
     pub service: &'s ClawMcpService,
@@ -302,6 +327,9 @@ impl ClawMcpService {
         }
         let started_at = StdInstant::now();
         let result = self.run_skill(started, raw_args, client_cancel).await;
+        if let Some(reason) = refusal_reason(&result) {
+            self.report_refused(started, reason);
+        }
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {
@@ -330,6 +358,7 @@ impl ClawMcpService {
         client_cancel: CancellationToken,
     ) -> ToolResult {
         if !self.ultrafast() {
+            self.report_refused(started, "ultrafast_off");
             return ToolResult::error("ultrafast skills are not enabled on this server");
         }
         let Some(raw_name) = raw_args.get("name").and_then(Value::as_str) else {
@@ -1097,6 +1126,7 @@ impl ClawMcpService {
             site_failures: row.site_failures,
         };
         let now = now_epoch_ms();
+        let verified_before = row.verified_at;
         match verdict {
             Ok(pass) => {
                 let next = lifecycle::next(state, Event::FlowPassed);
@@ -1124,6 +1154,16 @@ impl ClawMcpService {
                     Ok(Publish::Saved) => {
                         if first_verify {
                             self.report_flow_verified(name, pass.p50_ms).await;
+                        }
+                        if matches!(before, FlowStatus::Degraded | FlowStatus::Broken) {
+                            self.report_flow_change(
+                                name,
+                                crate::analytics::events::SKILL_FLOW_REPAIRED,
+                                None,
+                                verified_before,
+                                InFlight::None,
+                            )
+                            .await;
                         }
                     }
                     Ok(Publish::StepsChanged) => {
@@ -1221,6 +1261,18 @@ impl ClawMcpService {
                 if let Err(error) = self.state.skills.put_flow_row(row).await {
                     return ToolResult::error(error.to_string());
                 }
+                if next.status != before
+                    && matches!(next.status, FlowStatus::Broken | FlowStatus::Off)
+                {
+                    self.report_flow_change(
+                        name,
+                        crate::analytics::events::SKILL_FLOW_PAUSED,
+                        Some(next.status),
+                        verified_before,
+                        InFlight::None,
+                    )
+                    .await;
+                }
                 if next.status == FlowStatus::Broken
                     && before != FlowStatus::Broken
                     && let Err(error) = self.state.skills.rerender(name, SkillMd::Repair).await
@@ -1299,6 +1351,17 @@ impl ClawMcpService {
             warn!(error = %error, "recording the flow status failed");
             return;
         }
+        if next.status == FlowStatus::Broken && before.status != FlowStatus::Broken {
+            // A run event: its own run is recorded only when the session ends.
+            self.report_flow_change(
+                name,
+                crate::analytics::events::SKILL_FLOW_PAUSED,
+                Some(next.status),
+                row.verified_at,
+                InFlight::OneRun,
+            )
+            .await;
+        }
         if next.status != before.status {
             let labels = match self.state.skills.get(name).await {
                 Ok(detail) => prose::prose_steps(&detail.body),
@@ -1336,6 +1399,39 @@ impl ClawMcpService {
         if let Err(error) = self.state.skills.add_flow_example(name, example).await {
             warn!(error = %error, "saving the handover example failed");
         }
+    }
+
+    /// Counts a `run_skill` call that ran nothing, by the reason it gave the agent.
+    fn report_refused(&self, started: &StartedSession, reason: &str) {
+        self.state.analytics.capture(
+            crate::analytics::events::RUN_SKILL_REFUSED,
+            json!({ "reason": reason, "client_name": started.session.client_name() }),
+        );
+    }
+
+    /// Counts a fast flow being repaired or paused, with how many runs it had since it last
+    /// verified.
+    async fn report_flow_change(
+        &self,
+        name: &str,
+        event: crate::analytics::events::EventDefinition,
+        status: Option<FlowStatus>,
+        verified_at: Option<i64>,
+        in_flight: InFlight,
+    ) {
+        let skills = &self.state.skills;
+        let (Ok(Some(origin)), Ok(recorded)) = (
+            skills.origin(name).await,
+            skills.runs_since(name, verified_at).await,
+        ) else {
+            return;
+        };
+        let runs = in_flight.with(recorded);
+        let mut properties = json!({ "origin": origin, "runs_since_verified": runs });
+        if let Some(status) = status {
+            properties["status"] = json!(status.as_str());
+        }
+        self.state.analytics.capture(event, properties);
     }
 
     /// Counts a skill's first verified flow, with how many runs it took to get there.
@@ -1877,5 +1973,49 @@ mod tests {
         let text = run_failed_next(&flow(Effects::Read, None), "neo-shop-add", "timed out");
         assert!(text.contains("follow the skill's steps"), "{text}");
         assert!(!text.contains("write"), "{text}");
+    }
+
+    #[test]
+    fn a_run_that_breaks_its_flow_counts_itself() {
+        // Two earlier runs are recorded; the third hands back and breaks the flow mid-session.
+        assert_eq!(InFlight::OneRun.with(2), 3);
+        assert_eq!(InFlight::None.with(2), 2);
+    }
+
+    #[test]
+    fn every_refusal_reports_the_reason_the_agent_was_given() {
+        for reason in [
+            Refusal::NoFlow,
+            Refusal::FlowBroken,
+            Refusal::InputsInvalid,
+            Refusal::WithAgent,
+            Refusal::AlwaysWithAgent,
+        ] {
+            let result = refused(
+                reason,
+                "neo-shop-add",
+                "the flow file is unreadable: /private",
+            );
+            let reported = refusal_reason(&result);
+            assert_eq!(reported, Some(reason.as_str()));
+            assert!(
+                crate::analytics::events::RUN_SKILL_REFUSED
+                    .sanitize(&json!({ "reason": reported, "client_name": "Codex" }))
+                    .is_some(),
+                "{reported:?} should be a catalog token"
+            );
+        }
+        let consent = ToolResult::text(
+            "refused (needs_consent): nothing ran.",
+            Some(json!({ "status": "refused", "reason": "needs_consent" })),
+        );
+        assert_eq!(refusal_reason(&consent), Some("needs_consent"));
+
+        let done = ToolResult::text("done in 12 ms", Some(json!({ "status": "done" })));
+        assert_eq!(refusal_reason(&done), None);
+        assert_eq!(
+            refusal_reason(&ToolResult::error("name must be a skill name")),
+            None
+        );
     }
 }

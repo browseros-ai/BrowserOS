@@ -64,6 +64,8 @@ export const AnalyticsEvent = {
   FreeMakeSkillDialogShown: 'free_make_skill_dialog_shown',
   FreeMakeSkillPhraseCopied: 'free_make_skill_phrase_copied',
   SkillCopied: 'skill_copied',
+  SkillPageViewed: 'skill_page_viewed',
+  UltrafastDetailsOpened: 'ultrafast_details_opened',
 } as const
 
 export type AnalyticsEventName =

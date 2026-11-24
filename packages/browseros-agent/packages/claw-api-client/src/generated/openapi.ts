@@ -1777,6 +1777,8 @@ export interface components {
        * @description When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
        */
       graceUntil: number | null
+      /** @description Whether the plan is a free trial. Absent when the licence does not say. */
+      trial?: boolean
       /** @description Whether this computer is on a licence key. The key itself is never returned. */
       onKey: boolean
       /**

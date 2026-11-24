@@ -66,6 +66,9 @@ pub struct Plan {
     /// When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
     #[serde(rename = "graceUntil", deserialize_with = "Option::deserialize")]
     pub grace_until: Option<i64>,
+    /// Whether the plan is a free trial. Absent when the licence does not say.
+    #[serde(rename = "trial", skip_serializing_if = "Option::is_none")]
+    pub trial: Option<bool>,
     /// Whether this computer is on a licence key. The key itself is never returned.
     #[serde(rename = "onKey")]
     pub on_key: bool,
@@ -101,6 +104,7 @@ impl Plan {
             period_end,
             ends_at,
             grace_until,
+            trial: None,
             on_key,
             checked_at,
             stale,

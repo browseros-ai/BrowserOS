@@ -29,6 +29,22 @@ import type { Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
 const api = await import('@/modules/api/client')
+const posthog = await import('@/modules/analytics/posthog')
+
+const captured: { event: string; properties?: Record<string, unknown> }[] = []
+let capturing = true
+const captureListeners = new Set<() => void>()
+mock.module('@/modules/analytics/posthog', () => ({
+  ...posthog,
+  isCapturing: () => capturing,
+  subscribeToCaptureState: (listener: () => void) => {
+    captureListeners.add(listener)
+    return () => captureListeners.delete(listener)
+  },
+  capture: (event: string, properties?: Record<string, unknown>) => {
+    if (capturing) captured.push({ event, properties })
+  },
+}))
 
 let ultrafast: SkillUltrafast
 let overrides: Partial<Skill> = {}
@@ -171,6 +187,8 @@ function define(name: string, value: unknown) {
 }
 
 beforeEach(async () => {
+  captured.length = 0
+  capturing = true
   overrides = {}
   features = ['claw.ultrafast']
   runs = []
@@ -544,5 +562,48 @@ describe('using a skill from its page', () => {
 
     await openMore()
     expect(text()).toContain('ultrafast is off on this computer')
+  })
+})
+
+describe('counting skill page views', () => {
+  const views = () =>
+    captured
+      .filter((entry) => entry.event === 'skill_page_viewed')
+      .map((entry) => entry.properties)
+
+  it('tests that opening a skill counts one view with how much it is used and its ultrafast state', async () => {
+    overrides = { runCount: 12, lastRunAt: Date.now() }
+    await mount()
+    await mount()
+
+    expect(views()).toEqual([
+      { usage_level: 'lot', ultrafast_state: 'verified' },
+    ])
+  })
+
+  it('tests that a skill on a free plan counts as locked, and a new one as never used', async () => {
+    features = []
+    overrides = { runCount: 0 }
+    ultrafast = { ...ultrafast, locked: true }
+    await mount()
+
+    expect(views()).toEqual([
+      { usage_level: 'never', ultrafast_state: 'locked' },
+    ])
+  })
+
+  it('tests that a deep link opened before analytics starts still counts one view once it does', async () => {
+    capturing = false
+    await mount()
+    expect(views()).toEqual([])
+
+    capturing = true
+    await act(async () => {
+      for (const listener of captureListeners) listener()
+    })
+
+    expect(views()).toEqual([
+      { usage_level: 'sometimes', ultrafast_state: 'verified' },
+    ])
   })
 })

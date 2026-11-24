@@ -63,6 +63,8 @@ pub struct Licence {
     pub period_end: Option<i64>,
     pub ends_at: Option<i64>,
     pub grace_until: Option<i64>,
+    /// Whether the plan is a free trial; `None` when the gateway does not say.
+    pub trial: Option<bool>,
     pub issued_at: i64,
     pub expires_at: i64,
 }
@@ -115,6 +117,8 @@ struct Payload {
     ends_at: Option<i64>,
     #[serde(default)]
     grace_until: Option<i64>,
+    #[serde(default)]
+    trial: Option<bool>,
     issued_at: i64,
     expires_at: i64,
 }
@@ -175,6 +179,7 @@ pub fn verify(
         period_end: payload.period_end,
         ends_at: payload.ends_at,
         grace_until: payload.grace_until,
+        trial: payload.trial.filter(|_| status != Status::None),
         issued_at: payload.issued_at,
         expires_at: payload.expires_at,
     })
