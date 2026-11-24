@@ -73,7 +73,7 @@ pub fn browser_mcp_service(state: AppState) -> ClawMcpService {
 pub fn streamable_http_service(
     state: AppState,
 ) -> StreamableHttpService<ClawMcpService, LocalSessionManager> {
-    let transport_sessions = transport_session_manager(state.config.session_idle);
+    let transport_sessions = transport_session_manager(state.config.mcp_transport_idle);
     StreamableHttpService::new(
         move || Ok(browser_mcp_service(state.clone())),
         Arc::new(transport_sessions),
@@ -81,11 +81,12 @@ pub fn streamable_http_service(
     )
 }
 
-// rmcp drops a transport session after its own 5-minute keep-alive, which 404s a
-// legacy client long before our session idle sweep would retire it.
-fn transport_session_manager(session_idle: Duration) -> LocalSessionManager {
+// rmcp's own default drops a transport 5 minutes after its last request, and an open SSE
+// stream does not count as activity. A dropped transport costs a legacy client a 404 and a
+// re-initialize while its task and tabs are fine, so the transport gets its own, longer clock.
+fn transport_session_manager(transport_idle: Duration) -> LocalSessionManager {
     let mut sessions = LocalSessionManager::default();
-    sessions.session_config.keep_alive = Some(session_idle);
+    sessions.session_config.keep_alive = Some(transport_idle);
     sessions
 }
 
@@ -94,7 +95,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transport_keep_alive_follows_configured_session_idle() {
+    fn transport_keep_alive_follows_configured_transport_idle() {
         let idle = Duration::from_secs(1017);
         let sessions = transport_session_manager(idle);
         assert_eq!(sessions.session_config.keep_alive, Some(idle));

@@ -18,6 +18,7 @@ const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
 const DEFAULT_SESSION_COMPLETE_IDLE_MS: u64 = 5 * 60 * 1000;
+const DEFAULT_MCP_TRANSPORT_IDLE_MS: u64 = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
@@ -85,6 +86,10 @@ pub struct Config {
     /// each other. Sits beneath `session_idle` (the 30-min abandonment ceiling). Set equal to
     /// `session_idle` to disable early completion.
     pub session_complete_idle: Duration,
+    /// How long rmcp keeps a legacy MCP transport session after its last request. Tasks and
+    /// tab groups have their own clocks, so this only bounds server memory; it never sits below
+    /// `session_idle`, because an expired transport costs the client a 404 and a re-initialize.
+    pub mcp_transport_idle: Duration,
     /// The resolved `behavior.tab_close_after`, shared by retained-session/group cleanup
     /// and durable individual-tab cleanup so neither can close tabs before the chosen grace.
     pub session_retention: Duration,
@@ -269,22 +274,31 @@ impl Config {
             ignored: behavior_ignored,
         } = resolve_behavior(env, mode)?;
 
+        let session_idle = Duration::from_millis(read_positive_ms(
+            env,
+            "CLAW_SESSION_IDLE_MS",
+            DEFAULT_SESSION_IDLE_MS,
+        ));
+        let mcp_transport_idle = Duration::from_millis(read_positive_ms(
+            env,
+            "CLAW_MCP_TRANSPORT_IDLE_MS",
+            DEFAULT_MCP_TRANSPORT_IDLE_MS,
+        ))
+        .max(session_idle);
+
         Ok(Self {
             server_port,
             cdp_port,
             proxy_port,
             resources_dir,
             browserclaw_dir,
-            session_idle: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_SESSION_IDLE_MS",
-                DEFAULT_SESSION_IDLE_MS,
-            )),
+            session_idle,
             session_complete_idle: Duration::from_millis(read_positive_ms(
                 env,
                 "CLAW_SESSION_COMPLETE_IDLE_MS",
                 DEFAULT_SESSION_COMPLETE_IDLE_MS,
             )),
+            mcp_transport_idle,
             session_retention: behavior.tab_close_after,
             session_sweep_interval: Duration::from_millis(read_positive_ms(
                 env,
@@ -679,6 +693,41 @@ mod tests {
         assert_eq!(cfg.session_idle, Duration::from_secs(30 * 60));
         assert_eq!(cfg.session_retention, Duration::from_millis(3_600_000));
         assert_eq!(cfg.session_sweep_interval, Duration::from_millis(60_000));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_transport_idle_defaults_to_a_day_and_never_undercuts_session_idle() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let config_path = dir.path().join("sidecar.json");
+        fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
+        let home = dir.path().join("home");
+        let load = |vars: &[(&str, &str)]| {
+            let vars = vars
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect();
+            Config::load_with_env(&config_path, &ConfigEnv::with_vars(vars, home.clone()))
+        };
+
+        assert_eq!(
+            load(&[])?.mcp_transport_idle,
+            Duration::from_secs(24 * 60 * 60)
+        );
+        assert_eq!(
+            load(&[("CLAW_MCP_TRANSPORT_IDLE_MS", "7200000")])?.mcp_transport_idle,
+            Duration::from_secs(2 * 60 * 60)
+        );
+        assert_eq!(
+            load(&[("CLAW_MCP_TRANSPORT_IDLE_MS", "garbage")])?.mcp_transport_idle,
+            Duration::from_secs(24 * 60 * 60)
+        );
+        let floored = load(&[
+            ("CLAW_MCP_TRANSPORT_IDLE_MS", "1000"),
+            ("CLAW_SESSION_IDLE_MS", "60000"),
+        ])?;
+        assert_eq!(floored.mcp_transport_idle, Duration::from_secs(60));
         Ok(())
     }
 

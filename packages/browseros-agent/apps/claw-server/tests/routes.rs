@@ -106,6 +106,7 @@ async fn test_app_with_behavior(
         browserclaw_dir: root,
         session_idle: Duration::from_secs(300),
         session_complete_idle: Duration::from_secs(300),
+        mcp_transport_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
