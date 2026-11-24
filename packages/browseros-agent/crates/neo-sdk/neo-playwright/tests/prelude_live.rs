@@ -2001,8 +2001,12 @@ for (const element of document.querySelectorAll('.item, .story, .menu'))
 </script>
 </body></html>"##;
 
-/// The live browser with marking switched off: the same ops without `clickable`, so the prelude
-/// renders the same v1 text from an unmarked snapshot.
+/// The live browser with marking switched off, on either path of the prelude's `SNAPSHOT_TEXT`.
+/// On the prelude's path the same ops go without `clickable`, so the prelude renders the same
+/// v1 text from an unmarked snapshot (under the compare switch, without `compare` either, since
+/// Rust's text of a marked read is no twin of this one). On Rust's path, where a format decides
+/// the marking, a whole page's text call reads the unmarked tree through the tree path instead
+/// and prints it here with the same renderer, `neo_snapshot::render`.
 struct Unmarked(Arc<LiveRun>);
 
 impl OpHost for Unmarked {
@@ -2011,8 +2015,13 @@ impl OpHost for Unmarked {
         name: &'a str,
         mut input: Value,
     ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
-        if let Some(input) = input.as_object_mut() {
-            input.remove("clickable");
+        if let Some(fields) = input.as_object_mut() {
+            fields.remove("clickable");
+            let compared = fields.remove("compare").is_some();
+            let format = fields.remove("format");
+            if let (Some(format), false) = (format, compared) {
+                return Box::pin(unmarked_text(&self.0, name, input, format));
+            }
         }
         OpHost::invoke(&*self.0, name, input)
     }
@@ -2028,6 +2037,66 @@ impl OpHost for Unmarked {
     fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
         OpHost::gesture(&*self.0, page, expression)
     }
+}
+
+/// Rust's text of `name`'s unmarked tree in Neo's default format, as the text path answers it:
+/// `{ snapshot }`. The marking rows ask only that of a whole page.
+async fn unmarked_text(
+    run: &LiveRun,
+    name: &str,
+    input: Value,
+    format: Value,
+) -> Result<Value, PlaywrightError> {
+    let unexpected = |what: &str| {
+        PlaywrightError::new(
+            ErrorCode::Internal,
+            format!("the unmarked host prints a whole page in Neo's format only: {what}"),
+        )
+    };
+    let neo = format.get("neo").filter(|_| name == "page.ariaSnapshot");
+    let Some(neo) = neo.filter(|neo| neo.get("delta") != Some(&json!(true))) else {
+        return Err(unexpected(&format!("{name} {format}")));
+    };
+    let max_tokens = neo
+        .get("maxTokens")
+        .and_then(Value::as_f64)
+        .map(|tokens| neo_snapshot::MaxTokens::new(tokens).ok_or_else(|| unexpected("maxTokens")))
+        .transpose()?;
+    let passed = neo_snapshot::Passed {
+        text: neo.get("text").and_then(Value::as_bool),
+        urls: neo.get("urls").and_then(Value::as_bool),
+        max_tokens,
+        inert: neo.get("inert").and_then(Value::as_bool),
+    };
+    let tree = OpHost::invoke(run, name, input).await?;
+    let nodes = serde_json::from_value(tree.get("json").cloned().unwrap_or_default())
+        .map_err(|error| unexpected(&error.to_string()))?;
+    let field = |frame: &Value, key: &str| {
+        frame
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let partial = tree
+        .get("partial")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|frame| neo_snapshot::PartialFrame {
+            r#ref: field(frame, "ref"),
+            frame: field(frame, "frame"),
+            reason: field(frame, "reason"),
+        })
+        .collect();
+    // An unmarked read surveys nothing on top and runs no clickable check.
+    let snapshot = neo_snapshot::Snapshot {
+        tree: nodes,
+        partial,
+        ..neo_snapshot::Snapshot::default()
+    };
+    let text = neo_snapshot::render(&snapshot, neo_snapshot::Call::Page(&passed)).into_text();
+    Ok(json!({ "snapshot": text }))
 }
 
 /// Every ref a snapshot text prints, v1 or full.
