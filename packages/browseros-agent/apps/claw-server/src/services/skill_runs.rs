@@ -172,22 +172,42 @@ impl SkillRunService {
             handover_step: mark.handover_step,
             handover_cause: mark.handover_cause.clone(),
         };
-        let recorded = self.repo.insert_run_if_absent(row).await?;
-        if recorded && run_number == 1 {
-            self.report_first_run(skill_name).await?;
+        let recorded = self.repo.insert_run_if_absent(row.clone()).await?;
+        if recorded {
+            self.report_run(&row).await?;
         }
         Ok(recorded)
     }
 
-    async fn report_first_run(&self, skill_name: &str) -> AppResult<()> {
-        let Some(skill) = self.repo.get(skill_name).await? else {
+    async fn report_run(&self, run: &skill_runs::Model) -> AppResult<()> {
+        let Some(skill) = self.repo.get(&run.skill_name).await? else {
             return Ok(());
         };
-        let days = (now_ms() - skill.created_at).max(0) / DAY_MS;
-        self.analytics.capture(
-            events::SKILL_FIRST_RUN,
-            json!({ "origin": skill.origin, "days_since_saved": days }),
-        );
+        if run.run_number == 1 {
+            let days = (now_ms() - skill.created_at).max(0) / DAY_MS;
+            self.analytics.capture(
+                events::SKILL_FIRST_RUN,
+                json!({ "origin": skill.origin, "days_since_saved": days }),
+            );
+        }
+        let mut properties = json!({
+            "mode": run.mode,
+            "origin": skill.origin,
+            "run_number_bucket": events::run_number_bucket(run.run_number),
+            "duration_bucket": events::p50_bucket(run.duration_ms.unwrap_or(0)),
+            "tool_count": run.tool_count.unwrap_or(0).max(0),
+            "clean": run.clean,
+        });
+        if let Some(step) = run.handover_step {
+            properties["handover_step"] = json!(step.max(0));
+        }
+        if let Some(cause) = run.handover_cause.as_deref() {
+            properties["handover_cause"] = json!(match cause {
+                "site_changed" | "input_only" | "transient" => cause,
+                _ => "unknown",
+            });
+        }
+        self.analytics.capture(events::SKILL_RUN, properties);
         Ok(())
     }
 }
@@ -279,13 +299,88 @@ mod tests {
         assert!(finished_run(&audit_log, &service, "run-1", "neo-phones").await?);
         assert!(finished_run(&audit_log, &service, "run-2", "neo-phones").await?);
 
+        let first_runs: Vec<_> = analytics
+            .names()
+            .into_iter()
+            .filter(|(name, _)| *name == events::SKILL_FIRST_RUN.name())
+            .collect();
         assert_eq!(
-            analytics.names(),
+            first_runs,
             vec![(
                 events::SKILL_FIRST_RUN.name(),
                 json!({ "origin": "history", "days_since_saved": 2 })
             )]
         );
+        Ok(())
+    }
+
+    fn runs(analytics: &RecordingAnalytics) -> Vec<Value> {
+        analytics
+            .names()
+            .into_iter()
+            .filter(|(name, _)| *name == events::SKILL_RUN.name())
+            .map(|(_, properties)| properties)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn every_recorded_run_is_reported_with_how_it_ran() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let repo = SkillsRepository::new(db.clone());
+        repo.try_insert(skill("neo-phones", "agent")).await?;
+        let audit_log = Arc::new(AuditLog::new(db.clone()));
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service =
+            SkillRunService::new_with_analytics(repo, audit_log.clone(), analytics.clone());
+
+        assert!(finished_run(&audit_log, &service, "run-1", "neo-phones").await?);
+        audit_log
+            .record_session_start("run-2", "convo", "codex", "codex/run", "codex", "1")
+            .await?;
+        audit_log
+            .record_session_end("run-2", "closed", None)
+            .await?;
+        service
+            .mark_as(
+                "run-2",
+                "neo-phones",
+                &RunMode::handed_back(3, "site_changed"),
+            )
+            .await?;
+        assert!(service.finalize("run-2").await?);
+        // Finalizing again records nothing and reports nothing.
+        assert!(!service.finalize("run-2").await?);
+
+        assert_eq!(
+            runs(&analytics),
+            vec![
+                json!({
+                    "mode": "agent",
+                    "origin": "agent",
+                    "run_number_bucket": "1",
+                    "duration_bucket": "under_2s",
+                    "tool_count": 0,
+                    "clean": true,
+                }),
+                json!({
+                    "mode": "handed_back",
+                    "origin": "agent",
+                    "run_number_bucket": "2_to_5",
+                    "duration_bucket": "under_2s",
+                    "tool_count": 0,
+                    "clean": true,
+                    "handover_step": 3,
+                    "handover_cause": "site_changed",
+                }),
+            ]
+        );
+        for properties in runs(&analytics) {
+            assert!(
+                events::SKILL_RUN.sanitize(&properties).as_ref() == Some(&properties),
+                "{properties} should pass the catalog unchanged"
+            );
+        }
         Ok(())
     }
 }

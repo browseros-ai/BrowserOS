@@ -208,11 +208,14 @@ impl AppState {
         let skill_drafts = Arc::new(crate::services::skill_draft::SkillDraftService::new(
             SkillsRepository::new(database.clone()),
         ));
-        let skills = Arc::new(SkillService::new(
-            SkillsRepository::new(database.clone()),
-            harness.clone(),
-            config.browserclaw_dir.join("skills"),
-        ));
+        let skills = Arc::new(
+            SkillService::new(
+                SkillsRepository::new(database.clone()),
+                harness.clone(),
+                config.browserclaw_dir.join("skills"),
+            )
+            .with_analytics(analytics_sink.clone()),
+        );
         let skill_runs = Arc::new(SkillRunService::new_with_analytics(
             SkillsRepository::new(database.clone()),
             audit_log.clone(),

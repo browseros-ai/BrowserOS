@@ -289,6 +289,8 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "tool_calls_daily",
         "skill_first_run",
         "skill_flow_verified",
+        "skill_run",
+        "skill_saved",
     ];
     let mut wire_locations = wire_names
         .iter()
