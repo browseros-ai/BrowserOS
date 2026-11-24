@@ -317,6 +317,32 @@ fn html(title: &str, body: &str, setup: &str) -> String {
     )
 }
 
+/// Unpoisoned Google reCAPTCHA v2 test checkbox widget inside a guarded search form so
+/// `e2e_browseros` can prove `neo.solveCaptcha` dismisses an open `bframe` challenge overlay
+/// covering the Search button without hiding the form or widget.
+const RECAPTCHA_OVERLAY_BODY: &str = r#"<form id="search-form">
+  <div class="g-recaptcha" data-sitekey="6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI" data-callback="onRecaptchaToken"></div>
+  <button id="search" type="submit" style="margin-top:16px;padding:10px 24px">Search</button>
+</form>
+<script>
+window.__callbackTokens = [];
+window.__acceptedSubmits = 0;
+window.__submittedTokens = [];
+window.onRecaptchaToken = function(token) {
+  window.__callbackTokens.push(token);
+};
+document.getElementById('search-form').addEventListener('submit', function(event) {
+  event.preventDefault();
+  const field = document.querySelector('textarea[name="g-recaptcha-response"]');
+  const token = field ? field.value.trim() : '';
+  if (token.length > 0) {
+    window.__acceptedSubmits += 1;
+    window.__submittedTokens.push(token);
+  }
+});
+</script>
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>"#;
+
 fn unpoisoned_html(title: &str, body: &str) -> String {
     format!("<!doctype html><title>{title}</title><body>{body}</body>")
 }
@@ -421,6 +447,7 @@ window.onRecaptchaToken = function(token) {
 </script>
 <script src="https://www.google.com/recaptcha/api.js" async defer></script>"#,
         ),
+        "/recaptcha-overlay" => unpoisoned_html("reCAPTCHA v2 overlay", RECAPTCHA_OVERLAY_BODY),
         _ => return None,
     })
 }

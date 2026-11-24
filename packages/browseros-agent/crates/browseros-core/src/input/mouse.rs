@@ -58,6 +58,10 @@ pub async fn dispatch_click_with_options(
     dispatch_click_at_rest(session, x, y, opts, modifiers).await
 }
 
+/// Cap on each intermediate hover step in a human-like path so crossing an unresponsive OOPIF
+/// cannot stall the click before the pointer reaches the destination.
+const INTERMEDIATE_HOVER_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// Movement precedes the ref click's final hit test: hover handlers may reveal a
 /// menu over the destination. Coordinate clicks use the same movement without a ref check.
 pub(super) async fn move_to_click(
@@ -67,16 +71,25 @@ pub(super) async fn move_to_click(
     opts: &ClickOptions,
 ) -> Result<(), CoreError> {
     if let Some(from) = opts.humanlike_from {
-        for step in 1..=4 {
+        for step in 1..=3 {
             let fraction = f64::from(step) / 4.0;
-            dispatch_hover(
-                session,
-                from.x + (x - from.x) * fraction,
-                from.y + (y - from.y) * fraction,
+            let moved = tokio::time::timeout(
+                INTERMEDIATE_HOVER_TIMEOUT,
+                dispatch_hover(
+                    session,
+                    from.x + (x - from.x) * fraction,
+                    from.y + (y - from.y) * fraction,
+                ),
             )
-            .await?;
-            tokio::time::sleep(Duration::from_millis(12)).await;
+            .await;
+            match moved {
+                Ok(Ok(())) => tokio::time::sleep(Duration::from_millis(12)).await,
+                Ok(Err(error)) => return Err(error),
+                Err(_) => break,
+            }
         }
+        dispatch_hover(session, x, y).await?;
+        tokio::time::sleep(Duration::from_millis(12)).await;
     } else {
         dispatch_hover(session, x, y).await?;
     }

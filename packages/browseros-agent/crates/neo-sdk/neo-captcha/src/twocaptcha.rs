@@ -14,6 +14,9 @@ use super::{
     },
 };
 
+// Human workers frequently take 20–45+ s; ProviderChain still clamps each attempt to the overall deadline.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
 pub struct TwoCaptchaClient {
     config: ProviderConfig,
     http: reqwest::Client,
@@ -271,13 +274,13 @@ impl VendorClient for TwoCaptchaClient {
     }
     fn attempt_budget(&self, task: &SolveTask) -> Duration {
         match task {
-            SolveTask::RecaptchaTiles(_) => Duration::from_secs(30),
-            SolveTask::RecaptchaToken(_)
+            SolveTask::RecaptchaTiles(_)
+            | SolveTask::RecaptchaToken(_)
             | SolveTask::TurnstileToken(_)
             | SolveTask::GeetestV3(_)
             | SolveTask::GeetestV4(_)
             | SolveTask::AwsWaf(_)
-            | SolveTask::Arkose(_) => Duration::from_secs(90),
+            | SolveTask::Arkose(_) => ATTEMPT_TIMEOUT,
         }
     }
     fn solve<'a>(
@@ -671,10 +674,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_two_captcha_attempt_budgets_depend_on_task() -> anyhow::Result<()> {
+    async fn tests_that_two_captcha_attempt_budgets_are_capped_at_120s() -> anyhow::Result<()> {
         let mock = mock_server(vec![]).await?;
         let client: &dyn VendorClient = &mock.client;
-        for task in [
+        let mut tasks = vec![
             token_task(false),
             token_task(true),
             SolveTask::TurnstileToken(TurnstileParams {
@@ -683,13 +686,109 @@ mod tests {
                 action: None,
                 cdata: None,
             }),
-        ] {
-            assert_eq!(client.attempt_budget(&task), Duration::from_secs(90));
-        }
-        assert_eq!(
-            client.attempt_budget(&tiles(TileGrid::ThreeByThree)),
-            Duration::from_secs(30)
+            tiles(TileGrid::Single),
+            tiles(TileGrid::ThreeByThree),
+            tiles(TileGrid::FourByFour),
+        ];
+        tasks.extend(
+            super::super::types::new_token_tasks()
+                .into_iter()
+                .map(|(_, task, _)| task),
         );
+        for task in tasks {
+            assert_eq!(
+                client.attempt_budget(&task),
+                Duration::from_secs(120),
+                "{}",
+                task.label()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_two_captcha_chain_attempt_budget_allows_slow_tiles_and_respects_deadline()
+    -> anyhow::Result<()> {
+        use super::super::providers::{CaptchaBackend, ProviderChain};
+        struct DelayedTwoCaptcha {
+            inner: TwoCaptchaClient,
+            delay: Duration,
+        }
+        impl VendorClient for DelayedTwoCaptcha {
+            fn name(&self) -> ProviderName {
+                self.inner.name()
+            }
+            fn supports(&self, task: &SolveTask) -> bool {
+                self.inner.supports(task)
+            }
+            fn attempt_budget(&self, task: &SolveTask) -> Duration {
+                self.inner.attempt_budget(task)
+            }
+            fn solve<'a>(
+                &'a self,
+                task: &'a SolveTask,
+                deadline: Instant,
+                cancel: &'a CancellationToken,
+            ) -> BoxFuture<'a, Result<ProviderAnswer, ProviderError>> {
+                Box::pin(async move {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => Err(error(ProviderErrorKind::Cancelled, "CANCELLED", "solve cancelled", true)),
+                        _ = tokio::time::sleep_until(deadline) => Err(error(ProviderErrorKind::Timeout, "DEADLINE", "solve deadline exceeded", true)),
+                        _ = tokio::time::sleep(self.delay) => Ok(ProviderAnswer {
+                            provider: ProviderName::TwoCaptcha,
+                            answer: if matches!(task, SolveTask::RecaptchaTiles(_)) {
+                                SolveAnswer::Tiles(vec![0])
+                            } else {
+                                SolveAnswer::Token("slow-token".into())
+                            },
+                            task_id: Some("42".into()),
+                            cost_usd: Some(0.002),
+                        }),
+                    }
+                })
+            }
+        }
+        let key = tempfile::NamedTempFile::new()?;
+        std::fs::write(key.path(), "secret-test-key")?;
+        let config = CaptchaConfig::from_lookup(|name| match name {
+            CAPSOLVER_KEY_FILE_ENV => Some(key.path().to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .capsolver
+        .ok_or_else(|| anyhow::anyhow!("missing test config"))?;
+        for (task, delay, overall, elapsed, succeeds) in [
+            (tiles(TileGrid::ThreeByThree), 45, 120, 45, true),
+            (tiles(TileGrid::FourByFour), 95, 120, 95, true),
+            (token_task(false), 100, 120, 100, true),
+            (tiles(TileGrid::ThreeByThree), 130, 180, 120, false),
+            (token_task(false), 130, 180, 120, false),
+            (tiles(TileGrid::ThreeByThree), 80, 50, 50, false),
+        ] {
+            let chain = ProviderChain::with_clients(
+                vec![Box::new(DelayedTwoCaptcha {
+                    inner: TwoCaptchaClient::new(&config)?,
+                    delay: Duration::from_secs(delay),
+                })],
+                1,
+            );
+            let started = Instant::now();
+            let result = chain
+                .solve(
+                    &task,
+                    started + Duration::from_secs(overall),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert_eq!(result.is_ok(), succeeds, "{}", task.label());
+            if !succeeds {
+                let err = result
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("expected timeout"))?;
+                assert_eq!((err.kind, err.charged), (ProviderErrorKind::Timeout, true));
+            }
+            assert_eq!(started.elapsed(), Duration::from_secs(elapsed));
+        }
         Ok(())
     }
 
