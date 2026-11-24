@@ -55,6 +55,9 @@ const CLEAN: &str = "clean";
 const HANDOVER_STEP: &str = "handover_step";
 const HANDOVER_CAUSE: &str = "handover_cause";
 const STEP_COUNT_BUCKET: &str = "step_count_bucket";
+const REASON: &str = "reason";
+const STATUS: &str = "status";
+const RUNS_SINCE_VERIFIED: &str = "runs_since_verified";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -107,6 +110,20 @@ pub(crate) const RUN_MODE_VALUES: [&str; 3] = ["ultrafast", "handed_back", "agen
 /// Why an ultrafast run handed the task back to the agent.
 pub(crate) const HANDOVER_CAUSE_VALUES: [&str; 4] =
     ["site_changed", "input_only", "transient", "unknown"];
+
+/// Why `run_skill` ran nothing, as the tool reports it to the agent.
+pub(crate) const RUN_REFUSAL_VALUES: [&str; 7] = [
+    "no_flow",
+    "flow_broken",
+    "inputs_invalid",
+    "with_agent",
+    "always_with_agent",
+    "needs_consent",
+    "ultrafast_off",
+];
+
+/// Where a skill's fast flow stopped running.
+pub(crate) const PAUSED_FLOW_STATUS_VALUES: [&str; 2] = ["broken", "off"];
 
 /// Which run of a skill this is, in buckets, so reuse shows without exact counts.
 pub(crate) const RUN_NUMBER_BUCKET_VALUES: [&str; 4] = ["1", "2_to_5", "6_to_20", "over_20"];
@@ -174,6 +191,8 @@ enum PropertyKind {
     RunNumberBucket,
     StepCountBucket,
     Boolean,
+    RunRefusal,
+    PausedFlowStatus,
     HoldPhase,
     TakeOverVia,
     ToolName,
@@ -240,6 +259,8 @@ impl PropertyDefinition {
             PropertyKind::RunNumberBucket => normalize_token(value, &RUN_NUMBER_BUCKET_VALUES),
             PropertyKind::StepCountBucket => normalize_token(value, &STEP_COUNT_BUCKET_VALUES),
             PropertyKind::Boolean => value.as_bool().map(Value::Bool),
+            PropertyKind::RunRefusal => normalize_token(value, &RUN_REFUSAL_VALUES),
+            PropertyKind::PausedFlowStatus => normalize_token(value, &PAUSED_FLOW_STATUS_VALUES),
             PropertyKind::HoldPhase => normalize_token(value, &HOLD_PHASE_VALUES),
             PropertyKind::TakeOverVia => normalize_token(value, &TAKE_OVER_VIA_VALUES),
             PropertyKind::ToolName => {
@@ -564,7 +585,35 @@ pub const SKILL_SAVED: EventDefinition = EventDefinition::new(
     ],
 );
 
-pub const ALL: [EventDefinition; 16] = [
+/// `run_skill` ran nothing, and why.
+pub const RUN_SKILL_REFUSED: EventDefinition = EventDefinition::new(
+    "run_skill_refused",
+    &[
+        PropertyDefinition::new(REASON, PropertyKind::RunRefusal),
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+    ],
+);
+
+/// A skill's broken or degraded fast flow passed verification again.
+pub const SKILL_FLOW_REPAIRED: EventDefinition = EventDefinition::new(
+    "skill_flow_repaired",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(RUNS_SINCE_VERIFIED, PropertyKind::UnsignedInteger),
+    ],
+);
+
+/// A skill's fast flow stopped running: broken by site changes, or off after failed tries.
+pub const SKILL_FLOW_PAUSED: EventDefinition = EventDefinition::new(
+    "skill_flow_paused",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(STATUS, PropertyKind::PausedFlowStatus),
+        PropertyDefinition::new(RUNS_SINCE_VERIFIED, PropertyKind::UnsignedInteger),
+    ],
+);
+
+pub const ALL: [EventDefinition; 19] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -581,6 +630,9 @@ pub const ALL: [EventDefinition; 16] = [
     SKILL_FLOW_VERIFIED,
     SKILL_RUN,
     SKILL_SAVED,
+    RUN_SKILL_REFUSED,
+    SKILL_FLOW_REPAIRED,
+    SKILL_FLOW_PAUSED,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -642,7 +694,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 16);
+        assert_eq!(ALL.len(), 19);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -662,7 +714,18 @@ mod tests {
                 SKILL_FLOW_VERIFIED.name(),
                 SKILL_RUN.name(),
                 SKILL_SAVED.name(),
+                RUN_SKILL_REFUSED.name(),
+                SKILL_FLOW_REPAIRED.name(),
+                SKILL_FLOW_PAUSED.name(),
             ]
+        );
+        assert_eq!(
+            RUN_SKILL_REFUSED.property_names(),
+            vec!["reason", "client_name"]
+        );
+        assert_eq!(
+            SKILL_FLOW_PAUSED.property_names(),
+            vec!["origin", "status", "runs_since_verified"]
         );
         assert_eq!(
             SKILL_RUN.property_names(),
@@ -832,6 +895,40 @@ mod tests {
         assert_eq!(step_count_bucket(0), "0");
         assert_eq!(step_count_bucket(3), "1_to_3");
         assert_eq!(step_count_bucket(8), "over_7");
+    }
+
+    #[test]
+    fn refusals_and_flow_changes_are_closed_token_sets() {
+        for reason in RUN_REFUSAL_VALUES {
+            assert_eq!(
+                RUN_SKILL_REFUSED.sanitize(&json!({ "reason": reason, "client_name": "Codex" })),
+                Some(json!({ "reason": reason, "client_name": "codex" }))
+            );
+        }
+        assert_eq!(
+            RUN_SKILL_REFUSED.sanitize(&json!({
+                "reason": "the flow file is unreadable: /private/path",
+                "client_name": "Codex",
+            })),
+            None
+        );
+        assert_eq!(
+            SKILL_FLOW_PAUSED.sanitize(&json!({
+                "origin": "agent",
+                "status": "broken",
+                "runs_since_verified": 4,
+                "status_reason": "the site changed 3 times without a passing repair",
+            })),
+            Some(json!({ "origin": "agent", "status": "broken", "runs_since_verified": 4 }))
+        );
+        assert_eq!(
+            SKILL_FLOW_PAUSED.sanitize(&json!({
+                "origin": "agent",
+                "status": "degraded",
+                "runs_since_verified": 4,
+            })),
+            None
+        );
     }
 
     #[test]

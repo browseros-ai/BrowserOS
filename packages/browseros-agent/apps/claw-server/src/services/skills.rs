@@ -526,6 +526,15 @@ impl SkillService {
         Ok(self.repo.runs_for(name).await?.len())
     }
 
+    /// How many runs of the skill were recorded at or after `since`, or in all when it is unset.
+    pub async fn runs_since(&self, name: &str, since: Option<i64>) -> AppResult<usize> {
+        let runs = self.repo.runs_for(name).await?;
+        Ok(match since {
+            Some(since) => runs.iter().filter(|run| run.created_at >= since).count(),
+            None => runs.len(),
+        })
+    }
+
     async fn view_of(&self, model: skills::Model) -> AppResult<SkillView> {
         let runs = self.repo.runs_for(&model.name).await?;
         let linked_agents = parse_linked_agents(&model.linked_agents_json);
