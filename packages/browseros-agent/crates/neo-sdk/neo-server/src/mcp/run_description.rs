@@ -23,13 +23,13 @@ Each run starts with fresh JavaScript; tabs stay open between runs.";
 /// chained past a click that opened a dialog, snapshots sliced until the dialog was cut off.
 ///
 /// What it says the snapshot prints is the snapshot design's, and its author approved each
-/// sentence. The prelude's v1 text (`neo-playwright-js/src/prelude/snapshot-v1.ts`) prints refs
-/// only on what can be acted on and on sections, and the page's text while the whole stays under
-/// `TEXT_LIMIT_CHARS` (a test reads the number from there). A field with no size or no pointer
-/// gets no ref, and `fill` waits out its whole timeout on one with no size and names nothing, so
-/// that sentence stays. The cap (`snapshot-cap.ts`) prints a dialog, alertdialog, alert or status
-/// block whole past its cut and drops every other cover, so the text says "popup" for what a page
-/// shows and names the roles for what survives.
+/// sentence. Neo's default snapshot format prints refs only on what can be acted on and on
+/// sections, and the page's text while the whole stays under `neo_snapshot::TEXT_LIMIT_TOKENS`
+/// (the tests compare the numbers here with the renderer's constants). A field with no size or no
+/// pointer gets no ref, and `fill` waits out its whole timeout on one with no size and names
+/// nothing, so that sentence stays. The cap prints a block of a role in `neo_snapshot::KEPT_ROLES`
+/// (dialog, alertdialog, alert, status) whole past its cut and drops every other cover, so the
+/// text says "popup" for what a page shows and names the roles for what survives.
 /// A ref resolves from `page` in any frame: the resolver jumps to the document that printed it
 /// (`neo-playwright/src/resolve/resolver.rs`). A model that knows Playwright doubts that for a
 /// frame's content, and in a real run guessed a locator beside a printed frame ref, so the text
@@ -330,44 +330,28 @@ mod tests {
     }
 
     /// The cap keeps these four roles whole past its cut, and only these: what the text says
-    /// survives a small `maxTokens` must be what the cap keeps.
+    /// survives a small `maxTokens` must be what the cap keeps. Held to the renderer's own list.
     #[test]
     fn the_roles_said_to_survive_a_cut_are_the_caps() {
-        const V1: &str = include_str!("../../../neo-playwright-js/src/prelude/snapshot-v1.ts");
-        let kept = V1
-            .split("export const KEPT = new Set<string>([")
-            .nth(1)
-            .and_then(|rest| rest.split("])").next())
-            .unwrap_or_default();
-        for role in ["'dialog'", "'alertdialog'", "'alert'", "'status'"] {
-            assert!(kept.contains(role), "the cap keeps {role}: {kept}");
-        }
+        let mut kept = neo_snapshot::KEPT_ROLES.to_vec();
+        kept.sort_unstable();
+        assert_eq!(kept, ["alert", "alertdialog", "dialog", "status"]);
         assert!(LOOP.contains("a dialog or alert role survives the cut"));
     }
 
-    /// The text-length rule's number and the default cap are the prelude's, read rather than
-    /// repeated, here and in `agent.d.ts`. The limit is written there as tokens times
-    /// `CHARS_PER_TOKEN`; a change of that form fails here first.
+    /// The text-length rule's number and the default cap, said here and in `agent.d.ts`, are the
+    /// renderer's constants by value: a cap or limit moved by a single token fails here.
     #[test]
-    fn the_described_text_limit_is_the_preludes() -> Result<(), Box<dyn Error>> {
-        const V1: &str = include_str!("../../../neo-playwright-js/src/prelude/snapshot-v1.ts");
+    fn the_described_text_limit_is_the_renderers() {
         const AGENT_D_TS: &str = include_str!("../../../agent.d.ts");
-        let line = V1
-            .lines()
-            .find(|line| line.contains("const TEXT_LIMIT_CHARS = "))
-            .ok_or("snapshot-v1.ts has no TEXT_LIMIT_CHARS")?;
-        assert!(
-            line.trim_end().ends_with("* CHARS_PER_TOKEN"),
-            "the limit is tokens times CHARS_PER_TOKEN: {line}"
-        );
-        let tokens = ts_number(V1, "TEXT_LIMIT_CHARS")?;
+        let tokens = u64::from(neo_snapshot::TEXT_LIMIT_TOKENS);
+        let cap = u64::from(neo_snapshot::DEFAULT_MAX_TOKENS);
         let said = format!(
             "while the whole stays under about {} tokens",
             grouped(tokens)
         );
         assert!(LOOP.contains(&said), "the loop says: {said}");
         let handout = prose(AGENT_D_TS);
-        let cap = ts_number(V1, "DEFAULT_MAX_TOKENS")?;
         for said in [
             format!(
                 "while the whole stays under about {} tokens",
@@ -377,7 +361,6 @@ mod tests {
         ] {
             assert!(handout.contains(&said), "agent.d.ts says: {said}");
         }
-        Ok(())
     }
 
     /// The description's wait times are the prelude's defaults, read from `timeouts.ts` rather

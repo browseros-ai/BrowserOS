@@ -16,6 +16,7 @@ import { EventEmitter } from './emitter'
 import {
   abortedError,
   clientError,
+  internalError,
   plainError,
   unsupportedError,
 } from './errors'
@@ -30,7 +31,10 @@ import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
 import {
   type GeneratedInputs,
+  type LocatorSnapshotFormat,
   OPTION_KEYS,
+  type PageSnapshotFormat,
+  type SnapshotAnswer,
   type Strictness,
   send,
 } from './generated'
@@ -58,6 +62,12 @@ import {
 } from './snapshot'
 import { renderDelta, renderUncompared } from './snapshot-delta'
 import { baselineOp, LATE_SNAPSHOT } from './snapshot-late'
+import {
+  compareEngines,
+  compareSnapshots,
+  type PreludeText,
+  SNAPSHOT_TEXT,
+} from './snapshot-text'
 import {
   DEFAULT_MAX_TOKENS,
   type PassedV1Options,
@@ -228,6 +238,60 @@ function snapshotV1Options(
     maxTokens: maxTokensOption(api, maxTokens),
     delta: delta ?? false,
     inert,
+  }
+}
+
+/**
+ * What a snapshot op is asked to answer (`Frame._snapshot`): the tree, marked or not by
+ * `clickable`; or, with a `format`, the text Rust prints, and with `compare`, both.
+ */
+type SnapshotAsk =
+  | { clickable?: boolean }
+  | { format: PageSnapshotFormat; compare?: boolean }
+
+/** A locator's ask: the same, its format without the `delta` only a whole page takes. */
+function locatorAsk(
+  ask: SnapshotAsk,
+):
+  | { clickable?: boolean }
+  | { format: LocatorSnapshotFormat; compare?: boolean } {
+  if (!('format' in ask)) return ask
+  const { format, compare } = ask
+  if (format === 'playwright' || 'full' in format) return { format, compare }
+  const { text, urls, maxTokens, inert } = format.neo
+  return { format: { neo: { text, urls, maxTokens, inert } }, compare }
+}
+
+/**
+ * One `ariaSnapshot()` call's text, its options checked here in today's order and with today's
+ * messages, whichever engine prints it: the tree the op reads, and the text (`format`), each
+ * option left out as the script left it out. Under the conformance switch every mode is
+ * Playwright's text of the mode as the script passed it, `'full'` included: only Neo's own
+ * format knows that mode, so the op refuses any value Playwright's server does not take.
+ * `mode: 'full'` and Neo's format read the `'ai'` tree; a locator's `delta` is checked and
+ * dropped, since a section is never a baseline.
+ */
+function textCall(
+  api: string,
+  selector: string | null,
+  options: AriaSnapshotOptions,
+): { mode: 'ai' | 'default'; format: PageSnapshotFormat } {
+  const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
+  if (upstreamSnapshots)
+    return { mode: mode as 'ai' | 'default', format: 'playwright' }
+  if (mode === 'default') return { mode, format: 'playwright' }
+  if (mode === 'full')
+    // Read before the op, as the v1 options are; text, urls and delta are not read at all.
+    return {
+      mode: 'ai',
+      format: { full: { maxTokens: maxTokensOption(api, options.maxTokens) } },
+    }
+  if (mode !== 'ai')
+    throw clientError(api, 'mode: expected one of (ai|default|full)')
+  const { delta, ...passed } = snapshotV1Options(api, options)
+  return {
+    mode,
+    format: { neo: selector === null ? { ...passed, delta } : passed },
   }
 }
 
@@ -1400,50 +1464,64 @@ export class Frame extends EventEmitter {
   }
 
   /**
-   * A snapshot rooted at `selector`, or at the page when `selector` is null, in `mode`: the
-   * caller decides what an absent mode means (the text and JSON paths differ). `clickable`
-   * asks Rust to mark what Chromium reports clickable without a pointer cursor (its
-   * `clickable_targets`); only the v1 format asks. The captured spec switch is the only source
-   * of the internal value-masking bypass, shared by page and locator snapshots.
+   * Where a snapshot op points: the locator's target, or the page. A child frame with no
+   * selector is refused before any op is sent. Call it after reading the options: resolving a
+   * locator's page can await opening its tab, and the script may change its object meanwhile.
+   */
+  async _snapshotAt(
+    api: string,
+    selector: string | null,
+  ): Promise<{ locator: TargetArgs } | { page: PageHandle }> {
+    if (selector !== null)
+      return { locator: await this._targetArgs(api, selector, true) }
+    if (this._id !== null)
+      throw unsupportedError(
+        api,
+        "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()",
+      )
+    return { page: await this._page._brand(api) }
+  }
+
+  /**
+   * One snapshot op rooted at `selector`, or at the page when `selector` is null, in `mode`: the
+   * caller decides what an absent mode means (the text and JSON paths differ). `ask` says what it
+   * answers: the tree, marked as `clickable` asks Rust to mark what Chromium reports clickable
+   * without a pointer cursor (its `clickable_targets`); or, with a `format`, the text Rust
+   * prints, the format deciding the marking (and with `compare`, both). The captured spec switch
+   * is the only source of the internal value-masking bypass, shared by page and locator
+   * snapshots.
    */
   async _snapshot(
     api: string,
     selector: string | null,
     options: Omit<SnapshotOptions, 'mode'>,
     mode: NonNullable<SnapshotOptions['mode']>,
-    clickable = false,
-  ): Promise<SnapshotResult> {
+    ask: SnapshotAsk = {},
+  ): Promise<SnapshotAnswer> {
     const site = captureSite()
     // Capture options before resolving a locator's page, which can await opening its tab.
     const { depth, boxes } = options
-    const marking = clickable ? { clickable } : {}
     const wait = this._wait(api, options)
-    if (selector !== null) {
-      const addressed = await this._targetArgs(api, selector, true)
+    const at = await this._snapshotAt(api, selector)
+    if ('locator' in at)
       return await send['locator.ariaSnapshot'](
         site,
         this._call(api, wait),
-        { ...addressed, mode, depth, boxes, ...marking },
+        { ...at.locator, mode, depth, boxes, ...locatorAsk(ask) },
         wait.signal,
-      )
-    }
-    if (this._id !== null)
-      throw unsupportedError(
-        api,
-        "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()",
       )
     return await send['page.ariaSnapshot'](
       site,
       this._call(api, wait),
-      {
-        page: await this._page._brand(api),
-        mode,
-        depth,
-        boxes,
-        ...marking,
-      },
+      { page: at.page, mode, depth, boxes, ...ask },
       wait.signal,
     )
+  }
+
+  /** The tree a tree-path call asked for: a text here is Rust's broken contract. */
+  _tree(api: string, answer: SnapshotAnswer): SnapshotResult {
+    if ('json' in answer) return answer
+    throw internalError(api, 'the snapshot op answered a text for a tree')
   }
 
   /**
@@ -1457,7 +1535,9 @@ export class Frame extends EventEmitter {
    * touches the delta baseline. Any other mode is refused before an op is sent, except under
    * the switch, where the op refuses it as upstream's server does.
    *
-   * A whole page's v1 text may then become the tab's delta baseline:
+   * `SNAPSHOT_TEXT` (snapshot-text.ts) says who prints it. Under 'rust' the one op answers the
+   * text, and a whole page's baseline is read and recorded inside it. Under 'prelude' the op
+   * answers the tree and a whole page's v1 text may then become the tab's delta baseline:
    *
    *   page.ariaSnapshot      → { json, partial, document }
    *   no delta               → v1 text by the call's options, capped, and how it was rendered
@@ -1472,7 +1552,7 @@ export class Frame extends EventEmitter {
    * delta always compares against text the caller holds, never against a snapshot taken
    * earlier in the same run. A locator's text is one section, so it never touches the
    * baseline, and Playwright's YAML is another format, so neither does `mode: 'default'` or the
-   * switch.
+   * switch. Under the compare switch the prelude's path also holds its text to Rust's.
    */
   async _ariaSnapshot(
     api: string,
@@ -1480,27 +1560,57 @@ export class Frame extends EventEmitter {
     options: AriaSnapshotOptions = {},
   ): Promise<string> {
     const site = captureSite()
-    const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
-    if (upstreamSnapshots)
-      // The script's value as it passed it, `'full'` included: only Neo's own format knows
-      // that mode, so the op refuses any value Playwright's server does not take.
-      return renderSnapshot(
-        await this._snapshot(api, selector, options, mode as 'ai' | 'default'),
-      )
-    if (mode === 'default')
-      return renderSnapshot(await this._snapshot(api, selector, options, mode))
-    if (mode === 'full') {
-      // Read before the op, as the v1 options are; text, urls and delta are not read at all.
-      const maxTokens =
-        maxTokensOption(api, options.maxTokens) ?? DEFAULT_MAX_TOKENS
-      return renderFullSnapshot(
-        await this._snapshot(api, selector, options, 'ai', true),
-        maxTokens,
-      )
+    const { mode, format } = textCall(api, selector, options)
+    if (SNAPSHOT_TEXT === 'rust') {
+      const answer = await this._snapshot(api, selector, options, mode, {
+        format,
+      })
+      if ('snapshot' in answer) return answer.snapshot
+      throw internalError(api, 'the snapshot op answered a tree for a text')
     }
-    if (mode !== 'ai')
-      throw clientError(api, 'mode: expected one of (ai|default|full)')
-    const { delta, ...passed } = snapshotV1Options(api, options)
+    // Under the compare switch the one tree op also answers Rust's text of that read.
+    const marked = (clickable: boolean): SnapshotAsk =>
+      compareEngines
+        ? { format, compare: true }
+        : clickable
+          ? { clickable }
+          : {}
+    const compared = (answer: SnapshotAnswer, prelude: PreludeText): string => {
+      if ('rust' in answer) compareSnapshots(api, answer.rust, prelude)
+      return prelude.text
+    }
+    if (format === 'playwright') {
+      const answer = await this._snapshot(
+        api,
+        selector,
+        options,
+        mode,
+        marked(false),
+      )
+      return compared(answer, {
+        text: renderSnapshot(this._tree(api, answer)),
+        pending: null,
+      })
+    }
+    if ('full' in format) {
+      const answer = await this._snapshot(
+        api,
+        selector,
+        options,
+        mode,
+        marked(true),
+      )
+      return compared(answer, {
+        text: renderFullSnapshot(
+          this._tree(api, answer),
+          format.full.maxTokens ?? DEFAULT_MAX_TOKENS,
+        ),
+        pending: null,
+      })
+    }
+    const { delta = false, ...passed } = format.neo as PassedV1Options & {
+      delta?: boolean
+    }
     // The script's timeout and signal cover the whole call, the baseline ops included.
     const wait = this._wait(api, options)
     const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
@@ -1508,9 +1618,19 @@ export class Frame extends EventEmitter {
     // the tab's delta baseline; when the call's timeout passes during it, Rust decides so and
     // `LATE_SNAPSHOT` chooses whether the call returns its snapshot or fails (snapshot-late.ts).
     // The realm never raises that timeout itself.
-    const result = await this._snapshot(api, selector, options, mode, true)
+    const answer = await this._snapshot(
+      api,
+      selector,
+      options,
+      mode,
+      marked(true),
+    )
+    const result = this._tree(api, answer)
     if (selector !== null)
-      return renderSnapshotV1(result, withDefaults(passed)).text
+      return compared(answer, {
+        text: renderSnapshotV1(result, withDefaults(passed)).text,
+        pending: null,
+      })
     // `snapshotCall` names this call to Rust, which holds both baseline ops to its own deadline.
     const { document, snapshotCall } = result
     const page = await this._page._brand(api)
@@ -1525,7 +1645,11 @@ export class Frame extends EventEmitter {
           wait.signal,
         ),
       )
-      if (stored === null) return renderUncompared(result, passed)
+      if (stored === null)
+        return compared(answer, {
+          text: renderUncompared(result, passed),
+          pending: null,
+        })
       ;({ returned, baseline } = renderDelta(stored.value, result, passed))
     } else {
       baseline = renderSnapshotV1(result, withDefaults(passed))
@@ -1549,7 +1673,12 @@ export class Frame extends EventEmitter {
         wait.signal,
       ),
     )
-    return returned
+    // What each engine would keep, whether or not the clock let the record through: Rust's
+    // compared answer records nothing and looks at no clock for it.
+    return compared(answer, {
+      text: returned,
+      pending: { text: baseline.text, form: baseline.form },
+    })
   }
 
   /** The tree itself, in upstream's default mode when the script names none. */
@@ -1558,9 +1687,26 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: SnapshotOptions = {},
   ): Promise<AriaSnapshotJSON> {
-    return (
-      await this._snapshot(api, selector, options, options.mode ?? 'default')
-    ).json
+    const site = captureSite()
+    const { depth, boxes } = options
+    const mode = options.mode ?? 'default'
+    const wait = this._wait(api, options)
+    const at = await this._snapshotAt(api, selector)
+    const answer =
+      'locator' in at
+        ? await send['locator.ariaSnapshotJSON'](
+            site,
+            this._call(api, wait),
+            { ...at.locator, mode, depth, boxes },
+            wait.signal,
+          )
+        : await send['page.ariaSnapshotJSON'](
+            site,
+            this._call(api, wait),
+            { page: at.page, mode, depth, boxes },
+            wait.signal,
+          )
+    return answer.snapshot
   }
 
   async _screenshot(

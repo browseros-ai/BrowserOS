@@ -12,7 +12,12 @@ import type {
   SnapshotForm,
   SnapshotResult,
 } from '../src/prelude/wire'
-import { type Call, loadPrelude, SEED } from './support/prelude-runtime'
+import {
+  type Call,
+  loadPrelude,
+  oldPathPrelude,
+  SEED,
+} from './support/prelude-runtime'
 
 const TAB = 1007
 
@@ -89,6 +94,7 @@ class Host {
   /** One run in a fresh realm; its end commits the last given text per tab, with its form. */
   async run(code: string): Promise<unknown> {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: (call) => this.answer(call),
     })

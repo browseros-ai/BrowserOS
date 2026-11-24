@@ -181,7 +181,8 @@ The page at `/` (the approved design, "Viewer C v2"):
 - **The right panel.** The sidebar's lower half shows the selection. A selected call shows what
   it returned, titled where it sits (`page.ariaSnapshot · run 8 · line 7 · call 2 of 3`), with
   its size. **Formatted** is what the script's `await` got wherever that can be recovered: a
-  whole-page snapshot's text (recorded by the `page.snapshotPending` after it), an `evaluate`
+  snapshot's text as the operation answered it when Rust printed it, or, when the run rendered
+  it, a whole-page snapshot's text recorded by the `page.snapshotPending` after it; an `evaluate`
   value decoded from the page's serialized form, a string as lines, and `mode: 'default'`'s
   YAML rebuilt from the recorded tree as the run builds it; a locator's v1 snapshot (its options
   never reach the wire) shows the recorded tree, and any other result Neo's record of it, and the

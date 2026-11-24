@@ -9,6 +9,7 @@ import type { SnapshotForm, SnapshotResult } from '../src/prelude/wire'
 import {
   type Call,
   loadPrelude,
+  oldPathPrelude,
   refusalCall,
   SEED,
 } from './support/prelude-runtime'
@@ -81,6 +82,7 @@ class Host {
   /** One run in a fresh realm; its end commits or drops its pending texts. */
   async run(code: string): Promise<unknown> {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: (call) => this.answer(call),
     })
@@ -189,6 +191,7 @@ describe('the baseline is the last text the caller was given', () => {
     const host = new Host()
     const calls: string[] = []
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: (call) => {
         calls.push(call.name)
@@ -207,6 +210,7 @@ describe('the baseline is the last text the caller was given', () => {
 
   it("tests that mode 'default' ignores delta and sends no baseline op", async () => {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: (call) =>
         call.name === 'page.ariaSnapshot' ? tree('Open') : null,
@@ -222,6 +226,7 @@ describe('the baseline is the last text the caller was given', () => {
 
   it('tests that under the conformance switch delta is ignored and no baseline op is sent', async () => {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       upstreamSnapshots: true,
       answer: (call) =>
@@ -239,6 +244,7 @@ describe('the baseline is the last text the caller was given', () => {
 describe('what the baseline ops are sent', () => {
   it("tests that a full call records its text once, with the snapshot's document and timeout", async () => {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: (call) =>
         call.name === 'page.ariaSnapshot' ? tree('Open') : null,
@@ -273,6 +279,7 @@ describe('what the baseline ops are sent', () => {
 
   it('tests that a delta call reads the stored baseline, then records its text and its delta', async () => {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: (call) => {
         if (call.name === 'page.ariaSnapshot') return tree('Close')
@@ -315,6 +322,7 @@ describe('what the baseline ops are sent', () => {
 
   it('tests that the script aborting while the baseline is read rejects the snapshot', async () => {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       answer: async (call) => {
         if (call.name === 'page.ariaSnapshot') return tree('Open')
@@ -356,7 +364,7 @@ describe('what the baseline ops are sent', () => {
   })
 
   it('tests that delta of the wrong type is refused before any op is sent', async () => {
-    const runtime = loadPrelude({ seed: SEED })
+    const runtime = loadPrelude({ prelude: oldPathPrelude(), seed: SEED })
     const thrown = await runtime
       .run("await page.ariaSnapshot({ delta: 'yes' })")
       .then(

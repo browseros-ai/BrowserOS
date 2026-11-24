@@ -61,7 +61,13 @@ pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
 pub(crate) use navigation_event::NavigationEvent;
 pub(crate) use page_event::PageEvent;
+// A queued binding call holds an op's event wait while a pump is in flight: the snapshot rows
+// hold it with one (`snapshot/snapshot_text/tests.rs`).
+#[cfg(test)]
+pub(crate) use page_event::BindingCalled;
 pub(crate) use run_downloads::RunDownloads;
+#[cfg(test)]
+pub(crate) use run_events::QueuedCall;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub use target_watcher::EventFence;

@@ -1,6 +1,7 @@
-//! The snapshot ops: `page.ariaSnapshot` and `locator.ariaSnapshot`, every frame read by its
-//! own probe in its own isolated world, as upstream's server reads them
-//! (`ariaSnapshotJSONForFrame`, server/page.ts at v1.64.1).
+//! The snapshot ops: `page.ariaSnapshot` and `locator.ariaSnapshot`, and their JSON twins
+//! `page.ariaSnapshotJSON` and `locator.ariaSnapshotJSON`, every frame read by its own probe in
+//! its own isolated world, as upstream's server reads them (`ariaSnapshotJSONForFrame`,
+//! server/page.ts at v1.64.1).
 //!
 //! ```text
 //!  root frame   snapshot { root }       the op: its own retry loop and Playwright timeout
@@ -11,21 +12,27 @@
 //!          read      → the same below it, each grandchild on a fresh budget
 //!          not read  → PartialFrame { ref, frame: src, reason }; the iframe keeps its ref
 //!  aria_snapshot::stitch: merge, the name rule → { json, partial }
+//!
+//!  then, by the input:
+//!    no `format`          the stitched tree, which the prelude renders   (until piece 8)
+//!    `format`             the text, printed by neo_snapshot::render (snapshot_text.rs)
+//!    `format`, `compare`  both, from this one read (test harnesses only)
+//!    ariaSnapshotJSON     `{ snapshot: tree }`, never marked
 //! ```
 //!
-//! With `clickable` in mode `ai` (the prelude's v1 text asks for it), each frame's snapshot call
-//! also carries that frame's clickable targets and the seeds of its closed shadow roots
-//! (`clickable_targets`), read before it; a locator's own frame resolves its element first, so
-//! they come from the world it landed in.
+//! Marked (`clickable` on the tree path, Neo's format or `mode: 'full'` on the text path, in
+//! mode `ai` only), each frame's snapshot call also carries that frame's clickable targets and
+//! the seeds of its closed shadow roots (`clickable_targets`), read before it; a locator's own
+//! frame resolves its element first, so they come from the world it landed in.
 //!
 //! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
 //! prints no iframes to follow: it reads one frame, as upstream's does.
 //!
-//! `page.snapshotBaseline` and `page.snapshotPending` are Neo's own, behind
-//! `ariaSnapshot({ delta: true })`. After the prelude renders a whole page's v1 text, a delta
-//! call reads the tab's stored baseline to diff against, and every whole-page v1 call records its
-//! text, and the string it returned, as pending on the run's state; the host commits or drops
-//! that when the run ends (`snapshot_baselines.rs`, `pending_baselines.rs`).
+//! The tab's delta baseline (`snapshot_baselines.rs`, `pending_baselines.rs`): on the text path a
+//! whole page in Neo's format reads the stored text and records its own as pending itself, after
+//! the event wait it takes inside the handler (`snapshot_text.rs`). On the tree path the prelude
+//! does both through `page.snapshotBaseline` and `page.snapshotPending`, Neo's own ops, once it
+//! has rendered the text; the host commits or drops what is pending when the run ends.
 
 use std::borrow::Cow;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -34,13 +41,19 @@ use std::{fmt, mem};
 
 use futures_util::future::{self, BoxFuture};
 use neo_snapshot::AriaNode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::time::{self, Instant};
 use ts_rs::TS;
 
-use super::aria_snapshot::{self, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame, Unmarked};
+use super::aria_snapshot::{
+    self, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame, SnapshotResult, Unmarked,
+};
 use super::clickable_targets::{Feed, Marking};
+use super::snapshot_text::{
+    self, Finish, LocatorFormat, PageFormat, ScopeClock, SnapshotAnswer, SnapshotCompared,
+    SnapshotText, TabStore, TextAsk,
+};
 use super::{Baseline, SnapshotForm};
 use crate::action::{self, OnTopNote};
 use crate::backoff::Backoff;
@@ -61,11 +74,13 @@ use crate::world::{IsolatedWorld, Pin, Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
-    /// Aria snapshots of a whole page (every frame stitched in) or of one element, and the
-    /// tab's delta baseline: read, and a run's text recorded as pending.
+    /// Aria snapshots of a whole page (every frame stitched in) or of one element, as text or as
+    /// the tree, and the tab's delta baseline: read, and a run's text recorded as pending.
     pub(crate) enum SnapshotOp {
         Page,
         Locator,
+        PageJson,
+        LocatorJson,
         Baseline,
         Pending,
     }
@@ -83,14 +98,27 @@ impl SnapshotOp {
             Self::Page => OpSpec::read(
                 "page.ariaSnapshot",
                 PAGE,
-                "the page's aria snapshot with its frames stitched in; mode 'ai' mints refs, and \
-                 `clickable` marks what Chromium reports clickable",
+                "the page's aria snapshot with its frames stitched in, as the text `format` \
+                 names, or the tree without one; mode 'ai' mints refs, and Neo's formats (or \
+                 `clickable`) mark what Chromium reports clickable",
             ),
             Self::Locator => OpSpec::read(
                 "locator.ariaSnapshot",
                 TARGET,
-                "an aria snapshot rooted at one element; mode 'ai' mints refs, and `clickable` \
-                 marks what Chromium reports clickable",
+                "an aria snapshot rooted at one element, as the text `format` names, or the tree \
+                 without one; mode 'ai' mints refs, and Neo's formats (or `clickable`) mark \
+                 what Chromium reports clickable",
+            ),
+            Self::PageJson => OpSpec::read(
+                "page.ariaSnapshotJSON",
+                PAGE,
+                "the page's aria snapshot tree with its frames stitched in, unmarked; mode 'ai' \
+                 mints refs",
+            ),
+            Self::LocatorJson => OpSpec::read(
+                "locator.ariaSnapshotJSON",
+                TARGET,
+                "the aria snapshot tree rooted at one element, unmarked; mode 'ai' mints refs",
             ),
             // Reads: they touch only text Neo keeps, never the page.
             Self::Baseline => OpSpec::read(
@@ -117,21 +145,34 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
             (
                 "clickable",
                 "Neo also marks elements Chromium reports clickable without a pointer cursor, so \
-                 the condensed snapshot keeps their refs; read over CDP, never a script in the page",
+                 the condensed snapshot keeps their refs; read over CDP, never a script in the \
+                 page. The tree path's only: with a `format`, the format decides the marking",
+            ),
+            (
+                "format",
+                "which text Neo prints: Playwright's, `mode: 'full'` or Neo's condensed format, \
+                 with the options the prelude checked; Rust prints it from the stitched tree, \
+                 since the page's world must not hold cross-site frames' text",
+            ),
+            (
+                "compare",
+                "a test harness's switch while two engines print the text: the tree and Rust's \
+                 text from one read, for the prelude to compare with its own",
             ),
         ])
         .result(
-            "Each frame masks page-declared private field values outside conformance; Rust \
-             stitches the child frames and answers the JSON tree plus the frames it could \
-             not read, with `clickable` also marking `cursor: 'pointer'` on the elements \
-             Chromium reports clickable; the prelude renders the text, upstream's YAML for mode \
-             'default' and Neo's condensed list of actionable lines for 'ai', each line \
-             upstream's own, and annotates the partial frames; a whole page's answer also names \
-             the document it read, for the delta baseline",
+            "Each frame masks page-declared private field values outside conformance, and Rust \
+             stitches the child frames. With a `format` it answers upstream's `{ snapshot }` \
+             text, Neo's formats marking what Chromium reports clickable; without one, the \
+             JSON tree plus the frames it could not read and, for a whole page, the document it \
+             read for the delta baseline, which the prelude renders (both until the prelude's \
+             renderer is removed); with `compare`, the tree and Rust's text beside it",
         );
     match op {
         SnapshotOp::Page => r.op(command, page_snapshot),
         SnapshotOp::Locator => r.op(command, locator_snapshot),
+        SnapshotOp::PageJson => r.op(wire::command("Frame.ariaSnapshotJSON"), page_tree),
+        SnapshotOp::LocatorJson => r.op(wire::command("Frame.ariaSnapshotJSON"), locator_tree),
         SnapshotOp::Baseline => r.op(
             wire::neo_only(
                 "Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 \
@@ -178,10 +219,20 @@ struct PageInput {
     #[ts(optional, as = "Option<bool>")]
     boxes: bool,
     /// Neo's clickable marking, in mode `ai` only: the prelude asks for it in its condensed
-    /// format, never under the spec harness's conformance switch (`clickable_targets`).
+    /// format, never under the spec harness's conformance switch (`clickable_targets`). The
+    /// tree path's only.
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     clickable: bool,
+    /// The text to answer, printed in Rust; left out, the op answers the tree.
+    #[serde(default)]
+    #[ts(optional)]
+    format: Option<PageFormat>,
+    /// With `format`: answer the tree and Rust's text beside it, record nothing and take no
+    /// event wait inside (a test harness's compare switch).
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    compare: bool,
 }
 // Snapshots have always sent flat fields, not a nested `options` bag. Keep that wire shape;
 // there is no options bag for the generator's option-key probe to describe.
@@ -206,8 +257,59 @@ struct LocatorInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     clickable: bool,
+    /// The text to answer, as on `page.ariaSnapshot`, without `delta`.
+    #[serde(default)]
+    #[ts(optional)]
+    format: Option<LocatorFormat>,
+    /// As on `page.ariaSnapshot`.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    compare: bool,
 }
 options!(LocatorInput);
+
+/// `page.ariaSnapshotJSON`: upstream's params, the tree never marked.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "PageTreeInput")]
+struct PageTreeInput {
+    page: PageRef,
+    #[ts(type = "import('../../../probe/protocol').SnapshotMode")]
+    mode: SnapshotMode,
+    #[serde(default)]
+    #[ts(optional)]
+    depth: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    boxes: bool,
+}
+options!(PageTreeInput);
+
+/// `locator.ariaSnapshotJSON`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "LocatorTreeInput")]
+struct LocatorTreeInput {
+    target: Target,
+    strict: Strictness,
+    #[ts(type = "import('../../../probe/protocol').SnapshotMode")]
+    mode: SnapshotMode,
+    #[serde(default)]
+    #[ts(optional)]
+    depth: Option<i64>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    boxes: bool,
+}
+options!(LocatorTreeInput);
+
+/// Upstream's `FrameAriaSnapshotJSONResult`: the tree, for `ariaSnapshotJSON()`.
+#[derive(Debug, Serialize, TS)]
+struct SnapshotTree {
+    // As on `SnapshotResult`: the nodes' type lives in neo-snapshot, which knows nothing of ts-rs.
+    #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
+    snapshot: Vec<AriaNode>,
+}
 
 /// `page.snapshotBaseline`.
 #[derive(Debug, Deserialize, TS)]
@@ -258,7 +360,8 @@ struct PendingInput {
 }
 options!(PendingInput);
 
-/// Runs one snapshot op; its output is `aria_snapshot::SnapshotResult`, `{ json, partial }`.
+/// Runs one snapshot op: the tree (`aria_snapshot::SnapshotResult`), a text, or both
+/// ([`SnapshotAnswer`]), the tree alone for the JSON ops, or a baseline op's answer.
 pub(crate) async fn invoke(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -268,30 +371,195 @@ pub(crate) async fn invoke(
     route(op, Run { pw, scope, args }).await
 }
 
-/// The page's snapshot from the main frame's body. The main frame is the op: while its
-/// document has no body yet, or its world went away under a navigation, it tries again on the
-/// outer backoff until the op's timeout, as upstream polls for the body. Its child frames never
-/// make it wait.
+/// What one tree read asks of every frame.
+#[derive(Clone, Copy, Debug)]
+struct TreeRead {
+    mode: SnapshotMode,
+    depth: Option<i64>,
+    boxes: bool,
+    /// Neo's marks: clickable marking, the cover survey and the inert marks.
+    marked: bool,
+}
+
+/// How a snapshot call answers, decided from its input before anything is sent.
+#[derive(Clone, Copy, Debug)]
+enum Reading {
+    /// No `format`: the stitched tree, for the prelude to render, marked as `clickable` asks.
+    Tree { marked: bool },
+    /// The text the format names.
+    Text(TextAsk),
+    /// The tree and Rust's text, from the same read.
+    Compare(TextAsk),
+}
+
+/// The input's two switches beside its format: the tree path's `clickable`, and `compare`.
+#[derive(Clone, Copy, Debug)]
+struct Switches {
+    clickable: bool,
+    compare: bool,
+}
+
+impl Reading {
+    /// The pairs the prelude sends; any other is a broken producer, refused as `internal`
+    /// before the page is admitted.
+    fn of(
+        scope: &OpScope<'_>,
+        mode: SnapshotMode,
+        ask: Option<TextAsk>,
+        switches: Switches,
+    ) -> Result<Self, PlaywrightError> {
+        let Switches { clickable, compare } = switches;
+        let refused = |message: &str| Err(scope.fail(ErrorCode::Internal, message));
+        match ask {
+            None if compare => refused("`compare` compares a text, so it comes with a `format`"),
+            None => Ok(Self::Tree {
+                marked: marks(mode, clickable),
+            }),
+            Some(_) if clickable => {
+                refused("with a `format`, the format decides the marking, not `clickable`")
+            }
+            Some(ask) if compare => Ok(Self::Compare(ask)),
+            Some(ask) => Ok(Self::Text(ask)),
+        }
+    }
+
+    fn marked(self) -> bool {
+        match self {
+            Self::Tree { marked } => marked,
+            Self::Text(ask) | Self::Compare(ask) => ask.marks(),
+        }
+    }
+}
+
+/// `page.ariaSnapshot`: the whole page's tree, then its text when the input names a format.
+///
+/// ```text
+///   admit the page; note that refs were issued (mode ai)
+///   document = generation(tab)                       BEFORE the tree
+///   tree     = the main frame within the call's timeout; children stitched, each on its budget
+///   ── the op's last reply from the browser is in ───────────────────────────────── the fence
+///   Neo's format: the event wait, here (order_events_inside), then finish_page_text,
+///                 which cannot send: the clock, the stored text, render, the clock, the record
+///   mode 'full', Playwright's format: render; the generic wait follows in Playwright::invoke
+/// ```
 async fn page_snapshot(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageInput,
-) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
-    let page = input.page.tab();
-    let page = OpPage::admit(pw, scope, page).await?;
+) -> Result<SnapshotAnswer, PlaywrightError> {
+    let ask = input
+        .format
+        .map(|format| TextAsk::page(scope, input.mode, format))
+        .transpose()?;
+    let switches = Switches {
+        clickable: input.clickable,
+        compare: input.compare,
+    };
+    let reading = Reading::of(scope, input.mode, ask, switches)?;
+    let page = OpPage::admit(pw, scope, input.page.tab()).await?;
     if input.mode == SnapshotMode::Ai {
         scope.run_state().opened_tabs.refs_issued(page.tab());
     }
     // Before the tree: a document that commits after this makes the text stale for the
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
-    let request = ProbeRequest::Snapshot {
-        survey_covers: marks(input.mode, input.clickable),
-        mark_inert: marks(input.mode, input.clickable),
-        root: ProbeTarget::Document,
+    let read = TreeRead {
         mode: input.mode,
         depth: input.depth,
         boxes: input.boxes,
+        marked: reading.marked(),
+    };
+    let stitched = read_page(scope, &page, read).await?;
+    match reading {
+        Reading::Tree { .. } => Ok(SnapshotAnswer::Tree(with_call(scope, stitched, document))),
+        Reading::Text(TextAsk::Neo { passed, delta }) => {
+            let snapshot = snapshot_text::facts(stitched);
+            // The fence: every browser send of this call is behind it. The wait runs outside
+            // any `scope.within`, so the call's deadline cannot cut it.
+            snapshot_text::order_events_inside(pw, scope).await;
+            let finish = Finish {
+                snapshot: &snapshot,
+                passed: &passed,
+                delta,
+                tab: page.target_id(),
+                tab_id: page.tab(),
+                document,
+                store: pw.snapshot_baselines(),
+                run: scope.run_state(),
+            };
+            let snapshot = snapshot_text::finish_page_text(&finish, &ScopeClock(scope))?;
+            Ok(SnapshotAnswer::Text(SnapshotText { snapshot }))
+        }
+        Reading::Text(ask) => Ok(SnapshotAnswer::Text(SnapshotText {
+            snapshot: snapshot_text::plain_text(&snapshot_text::facts(stitched), ask),
+        })),
+        Reading::Compare(ask) => {
+            let snapshot = snapshot_text::facts(stitched);
+            let at = TabStore {
+                store: pw.snapshot_baselines(),
+                tab: page.target_id(),
+                document,
+            };
+            let rust = snapshot_text::compared_text(&snapshot, ask, Some(at), &ScopeClock(scope))?;
+            let tree = with_call(scope, snapshot_text::tree_of(snapshot), document);
+            Ok(SnapshotAnswer::Compared(SnapshotCompared { tree, rust }))
+        }
+    }
+}
+
+/// `page.ariaSnapshotJSON`: the stitched tree, unmarked, as upstream's command answers it.
+async fn page_tree(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PageTreeInput,
+) -> Result<SnapshotTree, PlaywrightError> {
+    let page = OpPage::admit(pw, scope, input.page.tab()).await?;
+    if input.mode == SnapshotMode::Ai {
+        scope.run_state().opened_tabs.refs_issued(page.tab());
+    }
+    let read = TreeRead {
+        mode: input.mode,
+        depth: input.depth,
+        boxes: input.boxes,
+        marked: false,
+    };
+    let stitched = read_page(scope, &page, read).await?;
+    Ok(SnapshotTree {
+        snapshot: stitched.json,
+    })
+}
+
+/// A whole page's tree as the prelude's path takes it: with the document read before the tree,
+/// and the id of this call, which the baseline ops after it name so Rust holds them to this
+/// call's own deadline (`snapshot_calls.rs`).
+fn with_call(scope: &OpScope<'_>, tree: SnapshotResult, document: u32) -> SnapshotResult {
+    let call = scope
+        .run_state()
+        .snapshot_calls
+        .taken(scope.timeout(), scope.deadline());
+    SnapshotResult {
+        document: Some(document),
+        snapshot_call: Some(call),
+        ..tree
+    }
+}
+
+/// The page's snapshot from the main frame's body. The main frame is the op: while its
+/// document has no body yet, or its world went away under a navigation, it tries again on the
+/// outer backoff until the op's timeout, as upstream polls for the body. Its child frames never
+/// make it wait.
+async fn read_page(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    read: TreeRead,
+) -> Result<SnapshotResult, PlaywrightError> {
+    let request = ProbeRequest::Snapshot {
+        survey_covers: read.marked,
+        mark_inert: read.marked,
+        root: ProbeTarget::Document,
+        mode: read.mode,
+        depth: read.depth,
+        boxes: read.boxes,
         closed_roots: 0,
     };
     let backoff = Backoff::outer(scope.timeout());
@@ -302,51 +570,100 @@ async fn page_snapshot(
         // Each attempt captures afresh: a document read before its body existed has no targets.
         let snapshotter = Snapshotter {
             scope,
-            page: &page,
-            mode: input.mode,
-            boxes: input.boxes,
-            marking: marks(input.mode, input.clickable).then(Marking::new),
+            page,
+            mode: read.mode,
+            boxes: read.boxes,
+            marking: read.marked.then(Marking::new),
             reading: Mutex::default(),
         };
-        let Ok(read) = scope.within(snapshotter.main_frame(&request)).await else {
+        let Ok(main) = scope.within(snapshotter.main_frame(&request)).await else {
             snapshotter.cut_off();
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         };
-        if let Some(root) = read? {
-            let stitched = snapshotter.stitched(root, input.depth).await?;
-            // The call this tree answers, and when its timeout passes, for the baseline ops
-            // the prelude may send after it (`snapshot_calls.rs`).
-            let call = scope
-                .run_state()
-                .snapshot_calls
-                .taken(scope.timeout(), scope.deadline());
-            return Ok(aria_snapshot::SnapshotResult {
-                document: Some(document),
-                snapshot_call: Some(call),
-                ..stitched
-            });
+        if let Some(root) = main? {
+            return snapshotter.stitched(root, read.depth).await;
         }
     }
     Err(scope.timed_out(ErrorCode::WaitTimeout))
 }
 
-/// One element's snapshot, with the frames inside it. It waits for the locator's one element
-/// in both modes, as upstream's default mode does, through the resolver's frame hops and ref
-/// jumps; a strict violation, a stale ref and an error the page throws end it at once.
+/// `locator.ariaSnapshot`: one element's tree, then its text when the input names a format. A
+/// locator's text is never a baseline and has no survey of what is on top, so it keeps the
+/// generic event wait after the handler.
 async fn locator_snapshot(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: LocatorInput,
-) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
-    let Target::Locator(target) = &input.target else {
+) -> Result<SnapshotAnswer, PlaywrightError> {
+    let ask = input
+        .format
+        .map(|format| TextAsk::locator(scope, input.mode, format))
+        .transpose()?;
+    let switches = Switches {
+        clickable: input.clickable,
+        compare: input.compare,
+    };
+    let reading = Reading::of(scope, input.mode, ask, switches)?;
+    let read = TreeRead {
+        mode: input.mode,
+        depth: input.depth,
+        boxes: input.boxes,
+        marked: reading.marked(),
+    };
+    let tree = read_locator(pw, scope, &input.target, input.strict, read).await?;
+    Ok(match reading {
+        Reading::Tree { .. } => SnapshotAnswer::Tree(tree),
+        Reading::Text(ask) => SnapshotAnswer::Text(SnapshotText {
+            snapshot: snapshot_text::plain_text(&snapshot_text::facts(tree), ask),
+        }),
+        Reading::Compare(ask) => {
+            let snapshot = snapshot_text::facts(tree);
+            let rust = snapshot_text::compared_text(&snapshot, ask, None, &ScopeClock(scope))?;
+            SnapshotAnswer::Compared(SnapshotCompared {
+                tree: snapshot_text::tree_of(snapshot),
+                rust,
+            })
+        }
+    })
+}
+
+/// `locator.ariaSnapshotJSON`: the element's stitched tree, unmarked.
+async fn locator_tree(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: LocatorTreeInput,
+) -> Result<SnapshotTree, PlaywrightError> {
+    let read = TreeRead {
+        mode: input.mode,
+        depth: input.depth,
+        boxes: input.boxes,
+        marked: false,
+    };
+    let tree = read_locator(pw, scope, &input.target, input.strict, read).await?;
+    Ok(SnapshotTree {
+        snapshot: tree.json,
+    })
+}
+
+/// One element's snapshot, with the frames inside it. It waits for the locator's one element
+/// in both modes, as upstream's default mode does, through the resolver's frame hops and ref
+/// jumps; a strict violation, a stale ref and an error the page throws end it at once.
+async fn read_locator(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    target: &Target,
+    strict: Strictness,
+    read: TreeRead,
+) -> Result<SnapshotResult, PlaywrightError> {
+    let Target::Locator(target) = target else {
         return Err(scope.not_built());
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
-    if input.mode == SnapshotMode::Ai {
+    if read.mode == SnapshotMode::Ai {
         scope.run_state().opened_tabs.refs_issued(page.tab());
     }
-    let marked = marks(input.mode, input.clickable);
-    let resolver = Resolver::new(&page, scope, target, input.strict);
+    let marked = read.marked;
+    let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("waiting for {}", target.display));
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
@@ -356,8 +673,8 @@ async fn locator_snapshot(
         let snapshotter = Snapshotter {
             scope,
             page: &page,
-            mode: input.mode,
-            boxes: input.boxes,
+            mode: read.mode,
+            boxes: read.boxes,
             marking: marked.then(Marking::new),
             reading: Mutex::default(),
         };
@@ -372,7 +689,7 @@ async fn locator_snapshot(
                     want: Want::Element,
                 }
             } else {
-                snapshotter.request(root, input.depth)
+                snapshotter.request(root, read.depth)
             }
         };
         let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
@@ -384,7 +701,7 @@ async fn locator_snapshot(
         let SnapshotRead { reply, unmarked } = match reply {
             ProbeReply::Element { pin, .. } => {
                 let parent = path.hops().last().map(|hop| &hop.parent);
-                let pinned = snapshotter.pinned(&world, parent, pin, input.depth);
+                let pinned = snapshotter.pinned(&world, parent, pin, read.depth);
                 let Ok(pinned) = scope.within(pinned).await else {
                     return Err(scope.timed_out(ErrorCode::NoMatch));
                 };
@@ -403,7 +720,7 @@ async fn locator_snapshot(
                     on_top: Vec::new(),
                     unmarked,
                 };
-                return snapshotter.stitched(root, input.depth).await;
+                return snapshotter.stitched(root, read.depth).await;
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
             other => return Err(resolver.refused(other)),
@@ -821,7 +1138,7 @@ impl Snapshotter<'_> {
         &self,
         mut root: FrameReply,
         depth: Option<i64>,
-    ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
+    ) -> Result<SnapshotResult, PlaywrightError> {
         let on_top = mem::take(&mut root.on_top);
         let unmarked = root.unmarked.take();
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);

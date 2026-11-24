@@ -10,7 +10,7 @@ import {
 } from '../src/prelude/snapshot-delta'
 import { renderSnapshotV1, withDefaults } from '../src/prelude/snapshot-v1'
 import type { SnapshotResult } from '../src/prelude/wire'
-import { loadPrelude, SEED } from './support/prelude-runtime'
+import { loadPrelude, oldPathPrelude, SEED } from './support/prelude-runtime'
 
 const background = Object.assign(
   {
@@ -47,6 +47,7 @@ it('lists only live controls and explains the exact omitted lines and refs', () 
 
 it('the public inert option restores the original bytes without an omission notice', async () => {
   const runtime = loadPrelude({
+    prelude: oldPathPrelude(),
     seed: SEED,
     answer: (call) => (call.name === 'page.ariaSnapshot' ? tree : null),
   })
@@ -83,6 +84,7 @@ it('pins the omission explanation outside the cap without taking space from live
 
 it('full mode keeps the original tree and adds only its inert explanation', async () => {
   const runtime = loadPrelude({
+    prelude: oldPathPrelude(),
     seed: SEED,
     answer: (call) => (call.name === 'page.ariaSnapshot' ? tree : null),
   })
@@ -152,6 +154,7 @@ it('delta carries the inert option and returns full reads across modal opening a
 
 it('full mode always keeps the inert notice at every small cap', async () => {
   const runtime = loadPrelude({
+    prelude: oldPathPrelude(),
     seed: SEED,
     answer: (call) => (call.name === 'page.ariaSnapshot' ? tree : null),
   })
@@ -189,6 +192,7 @@ it('pins inertness before the text notice without moving the partial warning', (
 it('conformance and mode default keep upstream bytes and never request marking', async () => {
   for (const upstreamSnapshots of [true, false]) {
     const runtime = loadPrelude({
+      prelude: oldPathPrelude(),
       seed: SEED,
       upstreamSnapshots,
       answer: (call) => (call.name === 'page.ariaSnapshot' ? tree : null),

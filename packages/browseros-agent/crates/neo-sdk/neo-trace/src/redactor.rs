@@ -367,21 +367,41 @@ mod tests {
     #[test]
     fn a_value_setting_keeps_a_snapshot_whole_and_leaves_everything_else_alone()
     -> Result<(), Box<dyn Error>> {
-        // A whole-page snapshot's text, as `page.snapshotPending` records it: one long string.
+        // A whole-page snapshot's text: one long string, the snapshot row's own result
+        // (`{ snapshot }`, upstream's `FrameAriaSnapshotResult`) once Rust prints it.
         let text = "- link \"Story\" [ref=e1]\n".repeat(1_000);
-        let args = json!({ "text": text, "form": "text" });
+        let result = json!({ "snapshot": text });
         let defaults = redactor(RedactionLimits::default());
-        assert_eq!(defaults.args(&args).truncation, Truncation::Cut);
+        let stored = defaults.result(&result);
+        assert_eq!(stored.truncation, Truncation::Cut);
+        let kept = stored.value["snapshot"]
+            .as_str()
+            .ok_or("the text stays a string")?;
+        let (start, marker) = kept.split_once('…').ok_or("the cut is marked")?;
+        assert!(text.starts_with(start), "the start is kept: {kept}");
+        assert!(marker.starts_with("[+") && marker.ends_with(" bytes]"));
+        // One string is cut at `string`, 1,024 bytes by default, as JSON with its quotes and
+        // escapes, the marker included.
+        let quoted = serde_json::to_string(kept)?.len();
+        assert!(
+            (1_024 - 64..=1_024 + 2).contains(&quoted),
+            "{quoted} bytes stored"
+        );
 
         let limits = RedactionLimits::new_with_value_bytes(256 * 1024);
         let raised = redactor(limits);
         assert_eq!(
-            raised.args(&args),
+            raised.result(&result),
             Bounded {
-                value: args.clone(),
+                value: result.clone(),
                 truncation: Truncation::Whole,
             }
         );
+        // The same text as the run's tree path records it, until that path goes:
+        // `page.snapshotPending`'s arguments.
+        let args = json!({ "text": text, "form": "text" });
+        assert_eq!(defaults.args(&args).truncation, Truncation::Cut);
+        assert_eq!(raised.args(&args).truncation, Truncation::Whole);
         assert_eq!(raised.result(&json!(text)).truncation, Truncation::Whole);
         assert_eq!(
             raised.result(&json!("x".repeat(300 * 1024))).truncation,

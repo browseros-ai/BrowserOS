@@ -204,6 +204,16 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'page.ariaSnapshotJSON': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'locator.ariaSnapshotJSON': {
+    effect: 'read',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'page.snapshotBaseline': {
     effect: 'read',
     target: 'page',

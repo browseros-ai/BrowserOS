@@ -6,7 +6,13 @@
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderAriaSnapshotAsYaml } from '../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
-import { json, loadPrelude, refusalCall, SEED } from './support/prelude-runtime'
+import {
+  json,
+  loadPrelude,
+  oldPathPrelude,
+  refusalCall,
+  SEED,
+} from './support/prelude-runtime'
 
 const fixture: {
   result: {
@@ -18,12 +24,27 @@ const fixture: {
   readFileSync(new URL('./data/snapshot-render.json', import.meta.url), 'utf8'),
 )
 
+/** Rust's answers to the prelude's path: the tree, and `{ snapshot: tree }` for the JSON ops. */
+const answering =
+  (result: unknown) =>
+  (call: { name: string }): unknown => {
+    if (call.name.endsWith('.ariaSnapshot')) return result
+    if (call.name.endsWith('.ariaSnapshotJSON'))
+      return { snapshot: (result as { json: unknown }).json }
+    return null
+  }
+
+/** These rows pin the path whose renderer runs in the realm, whichever engine is committed. */
 function snapshotting(result: unknown) {
   return loadPrelude({
     seed: SEED,
-    answer: (call) => (call.name.endsWith('.ariaSnapshot') ? result : null),
+    prelude: oldPathPrelude(),
+    answer: answering(result),
   })
 }
+
+/** A snapshot op's name, the JSON twins included. */
+const SNAPSHOT_OP = /\.ariaSnapshot(JSON)?$/
 
 it("tests that a default-mode snapshot without partial frames is the vendored renderer's YAML, byte for byte", async () => {
   const whole = { json: fixture.result.json, partial: [] }
@@ -111,7 +132,7 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       target: undefined,
     },
     {
-      name: 'page.ariaSnapshot',
+      name: 'page.ariaSnapshotJSON',
       call: {
         api: 'page.ariaSnapshotJSON',
         timeoutMs: 30000,
@@ -136,7 +157,7 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
   `
   const asked = (runtime: ReturnType<typeof snapshotting>) =>
     runtime.calls
-      .filter((call) => call.name.endsWith('.ariaSnapshot'))
+      .filter((call) => SNAPSHOT_OP.test(call.name))
       .map((call) => ({
         name: call.name,
         mode: call.input.mode,
@@ -148,7 +169,7 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
   await v1.run(script)
   expect(
     v1.calls
-      .filter((call) => call.name.endsWith('.ariaSnapshot'))
+      .filter((call) => SNAPSHOT_OP.test(call.name))
       .every((call) => !Object.hasOwn(call.input, 'conformance')),
   ).toBe(true)
   expect(asked(v1)).toEqual([
@@ -157,14 +178,14 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
     { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
     { name: 'locator.ariaSnapshot', mode: 'ai', clickable: true },
     { name: 'locator.ariaSnapshot', mode: 'default', clickable: 'absent' },
-    { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },
-    { name: 'locator.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+    { name: 'page.ariaSnapshotJSON', mode: 'ai', clickable: 'absent' },
+    { name: 'locator.ariaSnapshotJSON', mode: 'ai', clickable: 'absent' },
   ])
   const upstream = loadPrelude({
     seed: SEED,
     upstreamSnapshots: true,
-    answer: (call) =>
-      call.name.endsWith('.ariaSnapshot') ? fixture.result : null,
+    prelude: oldPathPrelude(),
+    answer: answering(fixture.result),
   })
   await upstream.run(script)
   expect(
@@ -178,8 +199,8 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
     { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
     { name: 'locator.ariaSnapshot', mode: 'ai', clickable: 'absent' },
     { name: 'locator.ariaSnapshot', mode: 'default', clickable: 'absent' },
-    { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },
-    { name: 'locator.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+    { name: 'page.ariaSnapshotJSON', mode: 'ai', clickable: 'absent' },
+    { name: 'locator.ariaSnapshotJSON', mode: 'ai', clickable: 'absent' },
   ])
 })
 
@@ -195,7 +216,7 @@ it("tests that boxes go to Rust as the script passed them, upstream's option", a
       boxes: call.input.boxes,
     })),
   ).toEqual([
-    { name: 'page.ariaSnapshot', boxes: true },
+    { name: 'page.ariaSnapshotJSON', boxes: true },
     { name: 'locator.ariaSnapshot', boxes: false },
   ])
 })
@@ -234,6 +255,7 @@ it("tests that the conformance switch keeps upstream's modes and text, and ignor
   const runtime = loadPrelude({
     seed: SEED,
     upstreamSnapshots: true,
+    prelude: oldPathPrelude(),
     answer: (call) => (call.name.endsWith('.ariaSnapshot') ? small : null),
   })
   expect(
@@ -261,7 +283,7 @@ it('tests that a script setting the switch itself changes nothing: it is read on
   ).toBe(smallV1)
   expect(
     runtime.calls
-      .filter((call) => call.name.endsWith('.ariaSnapshot'))
+      .filter((call) => SNAPSHOT_OP.test(call.name))
       .map((call) => ({
         mode: call.input.mode,
         conformance: Object.hasOwn(call.input, 'conformance'),

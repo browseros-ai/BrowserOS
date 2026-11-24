@@ -44,10 +44,19 @@ export async function openClaw(
   // forward its uncaught rejections while it lives, without changing Promise or SDK objects.
   const onRejection = (error) => uncaught(error)
   process.on('unhandledRejection', onRejection)
+  // The prelude's compare switch (src/prelude/snapshot-text.ts, design 2.3 layer 5), a test
+  // harness's and never a host's: with NEO_COMPARE_SNAPSHOTS=1 every snapshot text the prelude
+  // renders is held to Rust's text of the same read, and counted here, then printed when the run
+  // closes, so a comparison that silently did not run cannot pass for one that did.
+  const comparisons =
+    process.env.NEO_COMPARE_SNAPSHOTS === '1'
+      ? { compared: 0, noTime: 0, differed: 0 }
+      : null
   async function close() {
     try {
       await runtime?.close()
     } finally {
+      if (comparisons) reportComparisons(comparisons)
       process.removeListener('unhandledRejection', onRejection)
       if (!options.stateDir)
         fs.rmSync(stateDir, { recursive: true, force: true })
@@ -74,6 +83,7 @@ export async function openClaw(
       // its exact snapshot text, so here `ariaSnapshot()` keeps upstream's modes and output
       // instead of Neo's condensed v1 format. Production hosts never set it.
       __neo_upstream_snapshots: upstreamSnapshots,
+      ...(comparisons ? { __neo_compare_snapshots: comparisons } : {}),
     }
     const sources = {}
     for (const file of files) {
@@ -169,4 +179,15 @@ export async function openClaw(
       { cause: error },
     )
   }
+}
+
+/**
+ * One run's snapshot comparisons, on stderr and, with NEO_COMPARE_SNAPSHOTS_LOG, appended to that
+ * file, which a job sums across every run (the Rust live harness writes the same line).
+ */
+function reportComparisons({ compared, noTime, differed }) {
+  const line = `NEO_SNAPSHOT_COMPARISONS compared=${compared} noTime=${noTime} differed=${differed}\n`
+  process.stderr.write(line)
+  const log = process.env.NEO_COMPARE_SNAPSHOTS_LOG
+  if (log) fs.appendFileSync(log, line)
 }

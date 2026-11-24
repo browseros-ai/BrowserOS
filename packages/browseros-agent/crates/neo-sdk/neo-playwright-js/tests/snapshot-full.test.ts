@@ -12,6 +12,7 @@ import type { SnapshotBaseline, SnapshotResult } from '../src/prelude/wire'
 import {
   type Call,
   loadPrelude,
+  oldPathPrelude,
   refusalCall,
   SEED,
 } from './support/prelude-runtime'
@@ -93,12 +94,16 @@ const DIALOG = [
 /** A run whose snapshot ops answer `result` (a locator's without the page's document). */
 function snapshotting(result: SnapshotResult, upstreamSnapshots = false) {
   const { document: _document, ...section } = result
+  // These rows pin the path whose renderer runs in the realm, whichever engine is committed.
   return loadPrelude({
     seed: SEED,
     upstreamSnapshots,
+    prelude: oldPathPrelude(),
     answer: (call) => {
       if (call.name === 'page.ariaSnapshot') return result
       if (call.name === 'locator.ariaSnapshot') return section
+      if (call.name.endsWith('.ariaSnapshotJSON'))
+        return { snapshot: result.json }
       return null
     },
   })
@@ -399,6 +404,7 @@ describe('the delta baseline', () => {
       }[] = []
       const runtime = loadPrelude({
         seed: SEED,
+        prelude: oldPathPrelude(),
         answer: (call: Call) => {
           sent.push(call.name)
           if (call.name === 'page.ariaSnapshot') return PAGE
@@ -483,7 +489,7 @@ describe('the modes', () => {
         'locator.ariaSnapshot: mode: expected one of (ai|default|full)',
       ),
       expect.objectContaining({
-        name: 'page.ariaSnapshot',
+        name: 'page.ariaSnapshotJSON',
         input: expect.objectContaining({ mode: 'full' }),
       }),
     ])

@@ -3,17 +3,22 @@
  * records an operation's result as it crossed between the prelude (the SDK's JavaScript in the
  * run) and Rust, which is not always what the script's `await` got (frame.ts, evaluation.ts):
  *
- *   page.ariaSnapshot       the engine's tree `{ json, partial, document }`. In the v1 form the
- *                           run renders the text, and the whole page's `page.snapshotPending`
- *                           that follows records it (a delta call's delta as `returned`); the
- *                           script got it only if that operation succeeded.
+ *   page.ariaSnapshot,      with a `format` in its arguments, Rust prints the text and the
+ *   locator.ariaSnapshot    operation answers it, `{ snapshot }`: the very string the script got.
+ *                           Without one (the run renders, and every trace before Rust printed),
+ *                           the engine's tree `{ json, partial, document }`, read as follows.
+ *   page.ariaSnapshot tree  in the v1 form the run renders the text, and the whole page's
+ *                           `page.snapshotPending` that follows records it (a delta call's delta
+ *                           as `returned`); the script got it only if that operation succeeded.
  *   mode: 'default'         Playwright's YAML, rebuilt from the recorded tree as the prelude's
  *                           `renderSnapshot` builds it (`snapshot-yaml.ts`), unread frames' comments
  *                           included.
  *   locator.ariaSnapshot    v1 text rendered with options the wire does not carry: the tree,
- *                           saying the text was not recorded. So is `mode: 'full'`, which goes
+ *   tree                    saying the text was not recorded. So is `mode: 'full'`, which goes
  *                           out as `'ai'` and is rendered by the run with no record of its text;
  *                           when one line made both kinds, its v1 text is not paired at all.
+ *   page.ariaSnapshotJSON,  `{ snapshot }`, the tree the script got. Older traces recorded
+ *   locator.ariaSnapshotJSON ariaSnapshotJSON() as `page.ariaSnapshot`, named by its `call.api`.
  *   page.evaluate           `{ value, frames }`; the evaluate methods below it the serialized
  *                           value itself; page.waitForFunction `{ value, preview }`, which the
  *                           script gets as a JSHandle. Each decoded as the run decodes it
@@ -241,18 +246,17 @@ function snapshot(
   operation: NeoOperation,
   operations: NeoOperation[] | null,
 ): Shown | null {
-  if (!operation.name.endsWith('.ariaSnapshot')) return null
   const result = operation.result
-  // ariaSnapshotJSON() runs the same operation and returns the tree itself.
+  if (operation.name.endsWith('.ariaSnapshotJSON')) {
+    return jsonTree(operation, isRecord(result) ? result.snapshot : result)
+  }
+  if (!operation.name.endsWith('.ariaSnapshot')) return null
+  // Before ariaSnapshotJSON() had operations of its own, it ran this one and returned its tree.
   if (apiOf(operation).endsWith('ariaSnapshotJSON')) {
-    return {
-      ...json(isRecord(result) ? result.json : result),
-      source:
-        "The tree the script's await got: ariaSnapshotJSON() returns the page's JSON itself.",
-      cut: operation.resultTruncated,
-    }
+    return jsonTree(operation, isRecord(result) ? result.json : result)
   }
   const text =
+    printed(operation) ??
     rendered(operation) ??
     (operation.name === 'page.ariaSnapshot'
       ? operations
@@ -269,6 +273,31 @@ function snapshot(
       "The tree the page answered, as Neo recorded it. The run rendered the script's text from it, and that text is not recorded here.",
     )
   )
+}
+
+/** The tree ariaSnapshotJSON() returns, which the script got as it is. */
+function jsonTree(operation: NeoOperation, tree: unknown): Shown {
+  return {
+    ...json(tree),
+    source:
+      "The tree the script's await got: ariaSnapshotJSON() returns the page's JSON itself.",
+    cut: operation.resultTruncated,
+  }
+}
+
+/**
+ * The text Rust printed, as the operation answered it (`{ snapshot }`): no run-side render and no
+ * bookkeeping record stand between it and the script's await.
+ */
+function printed(operation: NeoOperation): Shown | null {
+  const result = operation.result
+  if (!isRecord(result) || typeof result.snapshot !== 'string') return null
+  return {
+    ...lines(result.snapshot),
+    source:
+      "The snapshot text the script's await got, as the operation answered it.",
+    cut: operation.resultTruncated,
+  }
 }
 
 /** `mode: 'default'` with every frame read: the run's own YAML renderer on the recorded tree. */
@@ -343,12 +372,18 @@ function pendingOf(
 
 /**
  * A snapshot that records its text with a `page.snapshotPending`: a whole page's v1 text that the
- * engine answered. `mode: 'default'`, `ariaSnapshotJSON()` and a failed call never do.
+ * engine answered. `mode: 'default'`, `ariaSnapshotJSON()` and a failed call never do. With a
+ * `format` the operation answers Rust's text and records nothing the run can see, except when a
+ * test harness's comparison asked it for the tree beside that text (`compare`): then the run
+ * renders and records Neo's whole-page format as before.
  */
 function recordsText(operation: NeoOperation): boolean {
+  if (operation.name !== 'page.ariaSnapshot' || operation.outcome !== 'ok')
+    return false
+  const { format, compare } = argsOf(operation)
+  if (format !== undefined)
+    return compare === true && isRecord(format) && 'neo' in format
   return (
-    operation.name === 'page.ariaSnapshot' &&
-    operation.outcome === 'ok' &&
     modeOf(operation) !== 'default' &&
     !apiOf(operation).endsWith('ariaSnapshotJSON')
   )

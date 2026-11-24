@@ -5,7 +5,7 @@ import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderSnapshotV1 } from '../src/prelude/snapshot-v1'
 import type { SnapshotResult } from '../src/prelude/wire'
-import { loadPrelude, SEED } from './support/prelude-runtime'
+import { loadPrelude, oldPathPrelude, SEED } from './support/prelude-runtime'
 
 const blindData = (name: string): string =>
   readFileSync(
@@ -19,6 +19,7 @@ const blind = JSON.parse(blindData('blind.json')) as SnapshotResult
 
 it('tests that the blind page prints its expected text by default and with text: false', async () => {
   const runtime = loadPrelude({
+    prelude: oldPathPrelude(),
     seed: SEED,
     answer: (call) => (call.name === 'page.ariaSnapshot' ? blind : null),
   })
