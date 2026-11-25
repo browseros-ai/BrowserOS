@@ -62,7 +62,17 @@ function hasSensitiveInput(value: unknown, depth = 0): boolean {
   return false;
 }
 function forbiddenTool(name: string): boolean {
-  return /(cookie|password|credential|secret|storage|local.?storage|session.?storage|evaluate.?in.?page|(^|_)run($|_)|fill|type|submit|upload|payment|checkout)/i.test(name);
+  return /(cookie|password|credential|secret|storage|local.?storage|session.?storage|evaluate.?in.?page|(^|_)run($|_)|fill|type|submit|upload|payment|checkout|purchase|delete|remove|publish|send)/i.test(name);
+}
+function hasConsequentialInput(value: unknown, depth = 0): boolean {
+  if (depth > 12) return true;
+  if (Array.isArray(value)) return value.some((v) => hasConsequentialInput(v, depth + 1));
+  if (!value || typeof value !== "object") return false;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof child === "string" && /(buy now|pay now|purchase|checkout|submit|send message|send email|publish|delete|remove account|confirm payment)/i.test(child)) return true;
+    if (hasConsequentialInput(child, depth + 1)) return true;
+  }
+  return false;
 }
 async function signAccessToken(env: Env, claims: AccessClaims): Promise<string> {
   const header = b64url(encoder.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
@@ -187,7 +197,7 @@ export class GatewayState {
     } satisfies AuthRequest);
     const hidden = '<input type="hidden" name="transaction" value="' + html(transaction) + '">';
     const scopeLabel = safeScope.join(", ");
-    const page = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pair BrowserOS</title><style>body{font:16px system-ui;max-width:520px;margin:12vh auto;padding:24px;background:#090909;color:#f5f5f5}form{display:grid;gap:14px}input,button{font:inherit;padding:12px;border:1px solid #555;border-radius:0;background:#111;color:#fff}button{background:#fff;color:#000;font-weight:700}small{color:#aaa}</style></head><body><h1>Connect ChatGPT to BrowserOS</h1><p>Enter the one-time pairing code displayed by your local BrowserOS app. The code proves control of that local device.</p><form method="post" action="/authorize">' + hidden + '<label>BrowserOS pairing code<input name="pairing_code" autocomplete="off" required minlength="8" maxlength="24"></label><label><input type="checkbox" name="approve" value="yes" required> I approve this ChatGPT connection.</label><p><small>Browser cookies, passwords and browser login tokens are not requested or transferred by this gateway. MCP page content may still be visible to ChatGPT.</small></p><button type="submit">Approve connection</button></form></body></html>';
+    const page = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pair BrowserOS</title><style>body{font:16px system-ui;max-width:520px;margin:12vh auto;padding:24px;background:#090909;color:#f5f5f5}form{display:grid;gap:14px}input,button{font:inherit;padding:12px;border:1px solid #555;border-radius:0;background:#111;color:#fff}button{background:#fff;color:#000;font-weight:700}small{color:#aaa}</style></head><body><h1>Connect ChatGPT to BrowserOS</h1><p>Enter the one-time pairing code displayed by your local BrowserOS app. The code proves control of that local device.</p><form method="post" action="/authorize">' + hidden + '<label>BrowserOS pairing code<input name="pairing_code" autocomplete="off" required minlength="8" maxlength="24"></label><label><input type="checkbox" name="approve" value="yes" required> I approve this ChatGPT connection.</label><p>Requested permissions: ' + html(scopeLabel) + '</p><p><small>Browser cookies, passwords and browser login tokens are not requested or transferred by this gateway. MCP page content may still be visible to ChatGPT.</small></p><button type="submit">Approve connection</button></form></body></html>';
     return noStoreHtml(page);
   }
 
@@ -261,7 +271,7 @@ export class GatewayState {
     if (method === "tools/call") {
       if (!claims.scope.split(/\s+/).includes("browser:control")) return json({ error: "insufficient_scope" }, 403);
       const name = message?.params?.name;
-      if (typeof name !== "string" || !tools.has(name) || forbiddenTool(name) || hasSensitiveInput(message?.params?.arguments)) {
+      if (typeof name !== "string" || !tools.has(name) || forbiddenTool(name) || hasSensitiveInput(message?.params?.arguments) || hasConsequentialInput(message?.params?.arguments)) {
         return json({ error: "tool_not_allowed", message: "Tool is not allowlisted or its arguments contain a blocked sensitive field." }, 403);
       }
     }
