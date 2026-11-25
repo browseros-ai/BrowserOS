@@ -1,0 +1,728 @@
+{
+  "fixture": "private-forms",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "CA92EE9463BAA052E8941F70E72A3C27",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/private-forms.html",
+      "elements": [
+        {
+          "backendNodeId": 24,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 26,
+          "role": "heading",
+          "name": "heading: private forms",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "form",
+          "name": "form: sign-in",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "group",
+          "name": "group: password fields",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "textbox",
+          "name": "textbox: input type=password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "textbox",
+          "name": "textbox: show-password field, typed as password, then shown",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "button",
+          "name": "Show password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 20,
+          "role": "group",
+          "name": "group: autocomplete tokens on input type=text",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "textbox: input autocomplete=current-password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "textbox",
+          "name": "textbox: input autocomplete=new-password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "textbox",
+          "name": "textbox: input autocomplete=one-time-code",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "textbox",
+          "name": "textbox: input autocomplete=cc-number",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 11,
+          "role": "textbox",
+          "name": "textbox: input autocomplete=cc-csc",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 21,
+          "role": "group",
+          "name": "group: autocomplete tokens on textarea",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "textbox",
+          "name": "textbox: textarea autocomplete=current-password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "textbox",
+          "name": "textbox: textarea autocomplete=new-password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "textbox",
+          "name": "textbox: textarea autocomplete=one-time-code",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "textbox",
+          "name": "textbox: textarea autocomplete=cc-number",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "textbox",
+          "name": "textbox: textarea autocomplete=cc-csc",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "textbox",
+          "name": "textbox: plain input with a public value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "button",
+          "name": "button: submit sign-in",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 25,
+        "e10": 48,
+        "e11": 6,
+        "e12": 19,
+        "e13": 20,
+        "e14": 30,
+        "e15": 31,
+        "e16": 54,
+        "e17": 7,
+        "e18": 32,
+        "e19": 57,
+        "e2": 26,
+        "e20": 8,
+        "e21": 33,
+        "e22": 60,
+        "e23": 9,
+        "e24": 34,
+        "e25": 63,
+        "e26": 10,
+        "e27": 35,
+        "e28": 66,
+        "e29": 11,
+        "e3": 4,
+        "e30": 21,
+        "e31": 36,
+        "e32": 37,
+        "e33": 70,
+        "e34": 12,
+        "e35": 38,
+        "e36": 73,
+        "e37": 13,
+        "e38": 39,
+        "e39": 76,
+        "e4": 18,
+        "e40": 14,
+        "e41": 40,
+        "e42": 79,
+        "e43": 15,
+        "e44": 41,
+        "e45": 82,
+        "e46": 16,
+        "e47": 42,
+        "e48": 85,
+        "e49": 17,
+        "e5": 27,
+        "e50": 22,
+        "e6": 28,
+        "e7": 45,
+        "e8": 5,
+        "e9": 29
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "heading: private forms",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "ref": "e7",
+                            "role": "generic",
+                            "text": "textbox: input type=password"
+                          },
+                          {
+                            "name": "textbox: input type=password",
+                            "ref": "e8",
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
+                          }
+                        ],
+                        "ref": "e6",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e10",
+                            "role": "generic",
+                            "text": "textbox: show-password field, typed as password, then shown"
+                          },
+                          {
+                            "name": "textbox: show-password field, typed as password, then shown",
+                            "ref": "e11",
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
+                          },
+                          {
+                            "name": "Show password",
+                            "pressed": true,
+                            "ref": "e12",
+                            "role": "button"
+                          }
+                        ],
+                        "ref": "e9",
+                        "role": "generic"
+                      }
+                    ],
+                    "name": "group: password fields",
+                    "ref": "e4",
+                    "role": "group"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "ref": "e16",
+                            "role": "generic",
+                            "text": "textbox: input autocomplete=current-password"
+                          },
+                          {
+                            "name": "textbox: input autocomplete=current-password",
+                            "ref": "e17",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e15",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e19",
+                            "role": "generic",
+                            "text": "textbox: input autocomplete=new-password"
+                          },
+                          {
+                            "name": "textbox: input autocomplete=new-password",
+                            "ref": "e20",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e18",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e22",
+                            "role": "generic",
+                            "text": "textbox: input autocomplete=one-time-code"
+                          },
+                          {
+                            "name": "textbox: input autocomplete=one-time-code",
+                            "ref": "e23",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e21",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e25",
+                            "role": "generic",
+                            "text": "textbox: input autocomplete=cc-number"
+                          },
+                          {
+                            "name": "textbox: input autocomplete=cc-number",
+                            "ref": "e26",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e24",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e28",
+                            "role": "generic",
+                            "text": "textbox: input autocomplete=cc-csc"
+                          },
+                          {
+                            "name": "textbox: input autocomplete=cc-csc",
+                            "ref": "e29",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e27",
+                        "role": "generic"
+                      }
+                    ],
+                    "name": "group: autocomplete tokens on input type=text",
+                    "ref": "e13",
+                    "role": "group"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "ref": "e33",
+                            "role": "generic",
+                            "text": "textbox: textarea autocomplete=current-password"
+                          },
+                          {
+                            "name": "textbox: textarea autocomplete=current-password",
+                            "ref": "e34",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e32",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e36",
+                            "role": "generic",
+                            "text": "textbox: textarea autocomplete=new-password"
+                          },
+                          {
+                            "name": "textbox: textarea autocomplete=new-password",
+                            "ref": "e37",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e35",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e39",
+                            "role": "generic",
+                            "text": "textbox: textarea autocomplete=one-time-code"
+                          },
+                          {
+                            "name": "textbox: textarea autocomplete=one-time-code",
+                            "ref": "e40",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e38",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e42",
+                            "role": "generic",
+                            "text": "textbox: textarea autocomplete=cc-number"
+                          },
+                          {
+                            "name": "textbox: textarea autocomplete=cc-number",
+                            "ref": "e43",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e41",
+                        "role": "generic"
+                      },
+                      {
+                        "children": [
+                          {
+                            "ref": "e45",
+                            "role": "generic",
+                            "text": "textbox: textarea autocomplete=cc-csc"
+                          },
+                          {
+                            "name": "textbox: textarea autocomplete=cc-csc",
+                            "ref": "e46",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e44",
+                        "role": "generic"
+                      }
+                    ],
+                    "name": "group: autocomplete tokens on textarea",
+                    "ref": "e30",
+                    "role": "group"
+                  },
+                  {
+                    "children": [
+                      {
+                        "ref": "e48",
+                        "role": "generic",
+                        "text": "textbox: plain input with a public value"
+                      },
+                      {
+                        "name": "textbox: plain input with a public value",
+                        "ref": "e49",
+                        "role": "textbox",
+                        "text": "plain: public note"
+                      }
+                    ],
+                    "ref": "e47",
+                    "role": "generic"
+                  },
+                  {
+                    "name": "button: submit sign-in",
+                    "ref": "e50",
+                    "role": "button"
+                  }
+                ],
+                "name": "form: sign-in",
+                "ref": "e3",
+                "role": "form"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "heading: private forms",
+            "role": "heading"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  "group: password fields textbox: input type=password",
+                  {
+                    "name": "textbox: input type=password",
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
+                  },
+                  "textbox: show-password field, typed as password, then shown",
+                  {
+                    "name": "textbox: show-password field, typed as password, then shown",
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
+                  },
+                  {
+                    "name": "Show password",
+                    "pressed": true,
+                    "role": "button"
+                  }
+                ],
+                "name": "group: password fields",
+                "role": "group"
+              },
+              {
+                "children": [
+                  "group: autocomplete tokens on input type=text textbox: input autocomplete=current-password",
+                  {
+                    "name": "textbox: input autocomplete=current-password",
+                    "role": "textbox"
+                  },
+                  "textbox: input autocomplete=new-password",
+                  {
+                    "name": "textbox: input autocomplete=new-password",
+                    "role": "textbox"
+                  },
+                  "textbox: input autocomplete=one-time-code",
+                  {
+                    "name": "textbox: input autocomplete=one-time-code",
+                    "role": "textbox"
+                  },
+                  "textbox: input autocomplete=cc-number",
+                  {
+                    "name": "textbox: input autocomplete=cc-number",
+                    "role": "textbox"
+                  },
+                  "textbox: input autocomplete=cc-csc",
+                  {
+                    "name": "textbox: input autocomplete=cc-csc",
+                    "role": "textbox"
+                  }
+                ],
+                "name": "group: autocomplete tokens on input type=text",
+                "role": "group"
+              },
+              {
+                "children": [
+                  "group: autocomplete tokens on textarea textbox: textarea autocomplete=current-password",
+                  {
+                    "name": "textbox: textarea autocomplete=current-password",
+                    "role": "textbox"
+                  },
+                  "textbox: textarea autocomplete=new-password",
+                  {
+                    "name": "textbox: textarea autocomplete=new-password",
+                    "role": "textbox"
+                  },
+                  "textbox: textarea autocomplete=one-time-code",
+                  {
+                    "name": "textbox: textarea autocomplete=one-time-code",
+                    "role": "textbox"
+                  },
+                  "textbox: textarea autocomplete=cc-number",
+                  {
+                    "name": "textbox: textarea autocomplete=cc-number",
+                    "role": "textbox"
+                  },
+                  "textbox: textarea autocomplete=cc-csc",
+                  {
+                    "name": "textbox: textarea autocomplete=cc-csc",
+                    "role": "textbox"
+                  }
+                ],
+                "name": "group: autocomplete tokens on textarea",
+                "role": "group"
+              },
+              "textbox: plain input with a public value",
+              {
+                "name": "textbox: plain input with a public value",
+                "role": "textbox",
+                "text": "plain: public note"
+              },
+              {
+                "name": "button: submit sign-in",
+                "role": "button"
+              }
+            ],
+            "name": "form: sign-in",
+            "role": "form"
+          }
+        ]
+      }
+    }
+  ]
+}

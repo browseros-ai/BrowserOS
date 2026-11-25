@@ -1,8 +1,15 @@
-//! Named HTML edge fixtures and CDP capture helpers shared by fixture recording and live tests.
+//! The fixture registry and the CDP steps that load a fixture page and capture it, shared by the
+//! recorder (`examples/record_fixtures.rs`), the live tests and the offline oracle tests.
 //!
-//! Each fixture isolates one APC edge case (deep cross-site OOPIFs, open/closed shadow DOM with
-//! slots, zero-size checkboxes with labels, occluded buttons behind dialogs, sensitive form
-//! redaction, and a hung cross-site subframe).
+//! Each fixture isolates APC edge cases: deep cross-site OOPIFs, open and closed shadow DOM,
+//! zero-size controls, browser-made shadow content, the role, name and state tables, private
+//! form fields, covered and inert content, and a hung cross-site subframe. One page load serves
+//! both recorded files:
+//!
+//! ```text
+//!  load_fixture: new tab ─▶ focus emulation ─▶ navigate ─▶ ready ─▶ type secrets
+//!  recorder:     ─▶ oracle (oracle_capture.rs) ─▶ before_capture ─▶ APC capture ─▶ close
+//! ```
 
 use std::collections::HashMap;
 use std::env;
@@ -17,20 +24,189 @@ use browseros_cdp::runtime::{self, EvaluateParams};
 use browseros_cdp::target::{self, AttachToTargetParams};
 use browseros_cdp::{CdpClient, ConnectOptions, SessionId};
 use neo_snapshot_apc::{AnnotatedPageContent, decode, decode_reply_json};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
 use crate::fixture_server::{FixtureServer, Page};
 
-/// All seven named APC edge fixtures recorded against Chromium 158.
-pub(crate) const ALL_FIXTURES: &[&str] = &[
-    "nested-cross-site-frames",
-    "shadow-dom",
-    "zero-size-checkbox",
-    "covered-button",
-    "sensitive-form",
-    "hung-subframe",
-    "deep-nesting",
+/// One recorded page: where it is served, when it is ready, and what runs before APC reads it.
+/// `name` is the stem of its `tests/fixtures/<name>.pb` and `<name>.oracle.json`.
+#[derive(Debug)]
+pub(crate) struct Fixture {
+    /// Registry name and fixture file stem.
+    pub(crate) name: &'static str,
+    /// The page the tab opens, as a path on `127.0.0.1`.
+    pub(crate) entry: &'static str,
+    /// A JavaScript predicate on the entry document that is true once every frame has loaded.
+    pub(crate) ready: &'static str,
+    /// The documents the fixture server serves for this fixture.
+    pub(crate) serve: Serve,
+    /// What happens between the oracle read and the APC capture.
+    pub(crate) before_capture: BeforeCapture,
+}
+
+/// How a fixture's documents reach the fixture server.
+#[derive(Debug)]
+pub(crate) enum Serve {
+    /// One HTML file, served at the entry path.
+    File(&'static str),
+    /// One document built in code, served at the entry path.
+    Built(fn() -> Page),
+    /// Several documents at their own paths: a frame tree spread over three loopback sites.
+    Site(fn(&mut HashMap<String, Page>)),
+}
+
+/// The step after the oracle and before the APC capture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BeforeCapture {
+    /// APC reads the page as loaded and typed.
+    Nothing,
+    /// The `[::1]` child's renderer enters a busy loop, so APC hits its subframe timeout. It
+    /// must follow the oracle: a spinning renderer answers no script, so the oracle could not
+    /// read that frame.
+    SpinHungFrame,
+}
+
+/// Whether the browser under test carries BrowserOS's APC contract (Chromium PR C1 on). Fields
+/// marked `data-typed="contract"` hold secrets only the contract withholds, so they get one only
+/// when it is present: stock APC would write the typed value into the `.pb`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ApcContract {
+    /// Stock Chromium: only fields stock APC withholds are typed into.
+    Absent,
+    /// A build carrying the contract: `data-typed="contract"` fields are typed into too.
+    Present,
+}
+
+/// Every typed secret starts with this, so one byte search over a recorded file finds any leak,
+/// even a truncated one.
+pub(crate) const CANARY_PREFIX: &str = "NEO-SECRET-CANARY";
+
+/// The readiness predicate of a page that raises `window.__fixtureReady` itself.
+const FLAG_READY: &str = "document.readyState === 'complete' && window.__fixtureReady === true";
+
+/// Every recorded fixture. Each needs a `.pb` and an `.oracle.json` under `tests/fixtures/`
+/// (tests/oracles.rs checks).
+pub(crate) const FIXTURES: &[Fixture] = &[
+    // Design 3.8 row 1: the 8-frame, 3-site tree of neo-playwright's tests/data/nest/*.
+    Fixture {
+        name: "nested-cross-site-frames",
+        entry: "/nested/top.html",
+        ready: "document.readyState === 'complete' && (window.__loadedFrames || 0) >= 7",
+        serve: Serve::Site(insert_nested_cross_site_pages),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "shadow-dom",
+        entry: "/shadow-dom/index.html",
+        ready: FLAG_READY,
+        serve: Serve::Built(shadow_dom_page),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "zero-size-checkbox",
+        entry: "/zero-size-checkbox/index.html",
+        ready: FLAG_READY,
+        serve: Serve::Built(zero_size_checkbox_page),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "covered-button",
+        entry: "/covered-button/index.html",
+        ready: FLAG_READY,
+        serve: Serve::Built(covered_button_page),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "sensitive-form",
+        entry: "/sensitive-form/index.html",
+        ready: FLAG_READY,
+        serve: Serve::Built(sensitive_form_page),
+        before_capture: BeforeCapture::Nothing,
+    },
+    // Design 3.8 row 1's `?hang`.
+    Fixture {
+        name: "hung-subframe",
+        entry: "/hung-subframe/top.html",
+        ready: "document.readyState === 'complete' && window.__healthyReady === true && window.__hangReady === true",
+        serve: Serve::Site(insert_hung_subframe_pages),
+        before_capture: BeforeCapture::SpinHungFrame,
+    },
+    Fixture {
+        name: "deep-nesting",
+        entry: "/deep-nesting/index.html",
+        ready: FLAG_READY,
+        serve: Serve::Built(deep_nesting_page),
+        before_capture: BeforeCapture::Nothing,
+    },
+    // The edge pack (design 3.8 kind 3).
+    Fixture {
+        name: "shadow-roots",
+        entry: "/edge/shadow-roots.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/shadow-roots.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "zero-size-controls",
+        entry: "/edge/zero-size-controls.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/zero-size-controls.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    // neo-playwright's zero-size control page, verbatim. It raises no ready flag.
+    Fixture {
+        name: "nosize",
+        entry: "/prelude/nosize.html",
+        ready: "document.readyState === 'complete'",
+        serve: Serve::File(include_str!(
+            "../../../neo-playwright/tests/data/prelude/nosize.html"
+        )),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "ua-shadow",
+        entry: "/edge/ua-shadow.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/ua-shadow.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "roles",
+        entry: "/edge/roles.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/roles.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "names",
+        entry: "/edge/names.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/names.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "states",
+        entry: "/edge/states.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/states.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "private-forms",
+        entry: "/edge/private-forms.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/private-forms.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
+    Fixture {
+        name: "modal-inert",
+        entry: "/edge/modal-inert.html",
+        ready: FLAG_READY,
+        serve: Serve::File(include_str!("../pages/modal-inert.html")),
+        before_capture: BeforeCapture::Nothing,
+    },
 ];
 
 /// Default CDP port when `BROWSEROS_CDP_PORT` is unset.
@@ -45,6 +221,14 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 /// Delay after posting `'spin'` so the hung OOPIF renderer enters its busy loop before APC runs.
 const SPIN_SETTLE_DELAY: Duration = Duration::from_millis(200);
 
+/// The registry entry named `name`.
+pub(crate) fn fixture(name: &str) -> Result<&'static Fixture, Box<dyn Error>> {
+    FIXTURES
+        .iter()
+        .find(|fixture| fixture.name == name)
+        .ok_or_else(|| format!("unknown fixture name: {name}").into())
+}
+
 /// Connects a [`CdpClient`] to `BROWSEROS_CDP_PORT` (default `9005`) with a 45-second request
 /// timeout.
 pub(crate) async fn connect_cdp() -> Result<CdpClient, Box<dyn Error>> {
@@ -58,40 +242,21 @@ pub(crate) async fn connect_cdp() -> Result<CdpClient, Box<dyn Error>> {
     Ok(client)
 }
 
-/// Builds the full path-to-page map serving all six APC edge fixtures.
+/// The path-to-page map serving every fixture in [`FIXTURES`].
 pub(crate) fn all_fixture_pages() -> HashMap<String, Page> {
     let mut pages = HashMap::new();
-    insert_nested_cross_site_pages(&mut pages);
-    pages.insert("/shadow-dom/index.html".to_owned(), shadow_dom_page());
-    pages.insert(
-        "/zero-size-checkbox/index.html".to_owned(),
-        zero_size_checkbox_page(),
-    );
-    pages.insert(
-        "/covered-button/index.html".to_owned(),
-        covered_button_page(),
-    );
-    pages.insert(
-        "/sensitive-form/index.html".to_owned(),
-        sensitive_form_page(),
-    );
-    insert_hung_subframe_pages(&mut pages);
-    pages.insert("/deep-nesting/index.html".to_owned(), deep_nesting_page());
-    pages
-}
-
-/// Returns the entry path on `127.0.0.1` for `name`.
-pub(crate) fn fixture_entry_path(name: &str) -> Result<&'static str, Box<dyn Error>> {
-    match name {
-        "nested-cross-site-frames" => Ok("/nested/top.html"),
-        "shadow-dom" => Ok("/shadow-dom/index.html"),
-        "zero-size-checkbox" => Ok("/zero-size-checkbox/index.html"),
-        "covered-button" => Ok("/covered-button/index.html"),
-        "sensitive-form" => Ok("/sensitive-form/index.html"),
-        "hung-subframe" => Ok("/hung-subframe/top.html"),
-        "deep-nesting" => Ok("/deep-nesting/index.html"),
-        other => Err(format!("unknown fixture name: {other}").into()),
+    for fixture in FIXTURES {
+        match fixture.serve {
+            Serve::File(html) => {
+                pages.insert(fixture.entry.to_owned(), Page::html(html));
+            }
+            Serve::Built(build) => {
+                pages.insert(fixture.entry.to_owned(), build());
+            }
+            Serve::Site(insert) => insert(&mut pages),
+        }
     }
+    pages
 }
 
 /// Captures `name` through the typed `browseros_cdp::page::get_annotated_page_content` command,
@@ -101,22 +266,13 @@ pub(crate) async fn capture_fixture_typed(
     server: &FixtureServer,
     name: &str,
 ) -> Result<(Vec<u8>, AnnotatedPageContent), Box<dyn Error>> {
-    let (target_id, session) = open_and_prepare_fixture(client, server, name).await?;
+    let loaded = load_fixture(client, server, fixture(name)?, ApcContract::Absent).await?;
     let captured = async {
-        let reply = page::get_annotated_page_content(
-            client,
-            GetAnnotatedPageContentParams {
-                include_actionable_information: Some(true),
-            },
-            Some(&session),
-        )
-        .await?;
-        let raw_bytes = STANDARD.decode(&reply.content)?;
-        let apc = decode(&reply.content)?;
-        Ok((raw_bytes, apc))
+        loaded.before_capture(client).await?;
+        loaded.capture_apc(client).await
     }
     .await;
-    close_target_best_effort(client, &target_id).await;
+    loaded.close(client).await;
     captured
 }
 
@@ -127,32 +283,46 @@ pub(crate) async fn capture_fixture_raw_json(
     server: &FixtureServer,
     name: &str,
 ) -> Result<(String, AnnotatedPageContent), Box<dyn Error>> {
-    let (target_id, session) = open_and_prepare_fixture(client, server, name).await?;
+    let loaded = load_fixture(client, server, fixture(name)?, ApcContract::Absent).await?;
     let captured = async {
+        loaded.before_capture(client).await?;
         let raw_reply = client
             .send_raw(
                 "Page.getAnnotatedPageContent",
                 json!({ "includeActionableInformation": true }),
-                Some(&session),
+                Some(&loaded.session),
             )
             .await?;
         let apc = decode_reply_json(raw_reply.get())?;
         Ok((raw_reply.into_json(), apc))
     }
     .await;
-    close_target_best_effort(client, &target_id).await;
+    loaded.close(client).await;
     captured
 }
 
-/// Opens a fresh target tab, attaches a flattened session, navigates to `name`, waits for fixture
-/// readiness, and starts the spin loop for `hung-subframe`.
-async fn open_and_prepare_fixture(
+/// A fixture loaded, ready and typed into, in a tab of its own. Its owner reads it (oracle, APC)
+/// and must [`LoadedFixture::close`] it, on failure too.
+#[derive(Debug)]
+pub(crate) struct LoadedFixture {
+    /// The registry entry this tab shows.
+    pub(crate) fixture: &'static Fixture,
+    /// The tab's target id, which is also its main frame's id.
+    pub(crate) target_id: String,
+    /// The flattened session attached to the tab.
+    pub(crate) session: SessionId,
+    /// Each canary typed into the page, in document order of the fields that took them.
+    pub(crate) typed: Vec<String>,
+}
+
+/// Opens `fixture` in a fresh tab and brings it to the state both recorded files describe:
+/// loaded, ready and typed into. The tab is closed again if any step fails.
+pub(crate) async fn load_fixture(
     client: &CdpClient,
     server: &FixtureServer,
-    name: &str,
-) -> Result<(String, SessionId), Box<dyn Error>> {
-    let entry_path = fixture_entry_path(name)?;
-    let url = server.url("127.0.0.1", entry_path);
+    fixture: &'static Fixture,
+    contract: ApcContract,
+) -> Result<LoadedFixture, Box<dyn Error>> {
     let created = client
         .send("Target.createTarget", json!({ "url": "about:blank" }), None)
         .await?;
@@ -174,36 +344,37 @@ async fn open_and_prepare_fixture(
         .await?;
         let session = SessionId::from(attached.session_id);
         page::enable(client, EnableParams::default(), Some(&session)).await?;
+        // Before navigating: a background tab's document has no focus, so `active` and
+        // `document.hasFocus()` would depend on which tab the browser last raised.
+        client
+            .send(
+                "Emulation.setFocusEmulationEnabled",
+                json!({ "enabled": true }),
+                Some(&session),
+            )
+            .await?;
         page::navigate(
             client,
             NavigateParams {
-                url,
+                url: server.url("127.0.0.1", fixture.entry),
                 ..NavigateParams::default()
             },
             Some(&session),
         )
         .await?;
-        wait_for_ready(client, &session, name).await?;
-        if name == "hung-subframe" {
-            let triggered = eval_bool(
-                client,
-                &session,
-                "(() => { const f = document.getElementById('hung-frame'); \
-                 if (!f || !f.contentWindow) return false; \
-                 f.contentWindow.postMessage('spin', '*'); return true; })()",
-            )
-            .await?;
-            if !triggered {
-                return Err("hung-subframe failed to locate #hung-frame to start spin loop".into());
-            }
-            time::sleep(SPIN_SETTLE_DELAY).await;
-        }
-        Ok(session)
+        wait_for_ready(client, &session, fixture).await?;
+        let typed = type_secrets(client, &session, fixture, contract).await?;
+        Ok::<_, Box<dyn Error>>((session, typed))
     }
     .await;
 
     match prepared {
-        Ok(session) => Ok((target_id, session)),
+        Ok((session, typed)) => Ok(LoadedFixture {
+            fixture,
+            target_id,
+            session,
+            typed,
+        }),
         Err(error) => {
             close_target_best_effort(client, &target_id).await;
             Err(error)
@@ -211,24 +382,178 @@ async fn open_and_prepare_fixture(
     }
 }
 
+impl LoadedFixture {
+    /// Runs the fixture's [`BeforeCapture`] step. Call it after the oracle and before APC.
+    pub(crate) async fn before_capture(&self, client: &CdpClient) -> Result<(), Box<dyn Error>> {
+        match self.fixture.before_capture {
+            BeforeCapture::Nothing => Ok(()),
+            BeforeCapture::SpinHungFrame => {
+                let triggered = eval_bool(
+                    client,
+                    &self.session,
+                    "(() => { const f = document.getElementById('hung-frame'); \
+                     if (!f || !f.contentWindow) return false; \
+                     f.contentWindow.postMessage('spin', '*'); return true; })()",
+                )
+                .await?;
+                if !triggered {
+                    return Err(format!(
+                        "{} failed to locate #hung-frame to start spin loop",
+                        self.fixture.name
+                    )
+                    .into());
+                }
+                time::sleep(SPIN_SETTLE_DELAY).await;
+                Ok(())
+            }
+        }
+    }
+
+    /// Reads the page with `Page.getAnnotatedPageContent`, returning the protobuf wire bytes and
+    /// their decoded tree.
+    pub(crate) async fn capture_apc(
+        &self,
+        client: &CdpClient,
+    ) -> Result<(Vec<u8>, AnnotatedPageContent), Box<dyn Error>> {
+        let reply = page::get_annotated_page_content(
+            client,
+            GetAnnotatedPageContentParams {
+                include_actionable_information: Some(true),
+            },
+            Some(&self.session),
+        )
+        .await?;
+        let raw_bytes = STANDARD.decode(&reply.content)?;
+        let apc = decode(&reply.content)?;
+        Ok((raw_bytes, apc))
+    }
+
+    /// Closes the tab, ignoring errors so cleanup never masks the read's own result.
+    pub(crate) async fn close(self, client: &CdpClient) {
+        close_target_best_effort(client, &self.target_id).await;
+    }
+}
+
+/// A `data-typed` field's mode: whether stock APC already withholds what is typed into it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TypedField {
+    /// `data-typed`: stock withholds it (a password field, or one toggled from password).
+    Always,
+    /// `data-typed="contract"`: only the BrowserOS contract withholds it.
+    Contract,
+}
+
+/// Types one canary into each `[data-typed]` field of the main document that `contract` allows,
+/// then lets the page react (`window.__afterTyping`, which flips a show-password field to text)
+/// and blurs the field typed last. Returns the canaries typed.
+///
+/// Keyboard input, as a host types a secret, rather than a script's value write, so the recorded
+/// state is the one privacy has to hold for.
+async fn type_secrets(
+    client: &CdpClient,
+    session: &SessionId,
+    fixture: &Fixture,
+    contract: ApcContract,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let modes: Vec<Option<String>> = serde_json::from_value(
+        evaluate(
+            client,
+            session,
+            "Array.from(document.querySelectorAll('[data-typed]'), \
+             (field) => field.getAttribute('data-typed'))",
+        )
+        .await?,
+    )?;
+    let mut typed = Vec::new();
+    for (index, mode) in modes.iter().enumerate() {
+        let mode = match mode.as_deref() {
+            Some("contract") => TypedField::Contract,
+            _ => TypedField::Always,
+        };
+        if mode == TypedField::Contract && contract == ApcContract::Absent {
+            continue;
+        }
+        let focused = evaluate(
+            client,
+            session,
+            &format!(
+                "(() => {{ const field = document.querySelectorAll('[data-typed]')[{index}]; \
+                 field.focus(); return document.activeElement === field; }})()"
+            ),
+        )
+        .await?;
+        if focused != Value::Bool(true) {
+            return Err(format!(
+                "{}: data-typed field {index} did not take focus, so no canary was typed",
+                fixture.name
+            )
+            .into());
+        }
+        let canary = format!("{CANARY_PREFIX}-{}-{index}", fixture.name);
+        client
+            .send("Input.insertText", json!({ "text": canary }), Some(session))
+            .await?;
+        typed.push(canary);
+    }
+    if !typed.is_empty() {
+        // Only after typing: a page typed into nothing keeps the element it focused itself
+        // (states.html pins `active` that way).
+        evaluate(
+            client,
+            session,
+            "(async () => { await window.__afterTyping?.(); document.activeElement?.blur(); })()",
+        )
+        .await?;
+    }
+    Ok(typed)
+}
+
+/// `Runtime.evaluate`'s reply, as far as the typing steps read it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Evaluated {
+    result: EvaluatedValue,
+    exception_details: Option<Value>,
+}
+
+/// The by-value result of [`Evaluated`].
+#[derive(Deserialize)]
+struct EvaluatedValue {
+    #[serde(default)]
+    value: Value,
+}
+
+/// Evaluates `expression` in the page's main world, awaiting a promise, and returns its value;
+/// a thrown exception is an error that quotes it.
+async fn evaluate(
+    client: &CdpClient,
+    session: &SessionId,
+    expression: &str,
+) -> Result<Value, Box<dyn Error>> {
+    let reply: Evaluated = serde_json::from_value(
+        client
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }),
+                Some(session),
+            )
+            .await?,
+    )?;
+    if let Some(exception) = reply.exception_details {
+        return Err(format!("page script threw: {exception}").into());
+    }
+    Ok(reply.result.value)
+}
+
 /// Polls the fixture's readiness predicate until it returns `true` or times out.
 async fn wait_for_ready(
     client: &CdpClient,
     session: &SessionId,
-    name: &str,
+    fixture: &Fixture,
 ) -> Result<(), Box<dyn Error>> {
-    let expr = match name {
-        "nested-cross-site-frames" => {
-            "document.readyState === 'complete' && (window.__loadedFrames || 0) >= 7"
-        }
-        "hung-subframe" => {
-            "document.readyState === 'complete' && window.__healthyReady === true && window.__hangReady === true"
-        }
-        _ => "document.readyState === 'complete' && window.__fixtureReady === true",
-    };
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        if eval_bool(client, session, expr).await? {
+        if eval_bool(client, session, fixture.ready).await? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -246,7 +571,8 @@ async fn wait_for_ready(
             .and_then(|reply| reply.result.value)
             .unwrap_or(Value::Null);
             return Err(format!(
-                "fixture {name} did not become ready within {READY_TIMEOUT:?} (diag={diag})"
+                "fixture {} did not become ready within {READY_TIMEOUT:?} (diag={diag})",
+                fixture.name
             )
             .into());
         }

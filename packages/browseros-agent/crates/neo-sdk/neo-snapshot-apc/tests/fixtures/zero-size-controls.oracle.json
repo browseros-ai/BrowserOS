@@ -1,0 +1,424 @@
+{
+  "fixture": "zero-size-controls",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "8E9BE0741352A934421AE30363E0803E",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/zero-size-controls.html",
+      "elements": [
+        {
+          "backendNodeId": 5,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "heading",
+          "name": "heading: zero-size controls",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "group",
+          "name": "group: zero-size controls",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 39,
+          "role": "checkbox",
+          "name": "checkbox: zero-size, label by for, checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 40,
+          "role": "checkbox",
+          "name": "checkbox: zero-size, nested in label, unchecked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 41,
+          "role": "radio",
+          "name": "radio: zero-size, label by for, unchecked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 42,
+          "role": "radio",
+          "name": "radio: zero-size, nested in label, checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 43,
+          "role": "button",
+          "name": "button: zero-size file input, label by for",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 44,
+          "role": "button",
+          "name": "button: zero-size file input, nested in label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "group",
+          "name": "group: normal-size controls",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 30,
+          "role": "checkbox",
+          "name": "checkbox: normal size, label by for, unchecked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 32,
+          "role": "radio",
+          "name": "radio: normal size, nested in label, checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 34,
+          "role": "button",
+          "name": "button: normal-size file input, label by for",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 6,
+        "e10": 67,
+        "e11": 14,
+        "e12": 15,
+        "e13": 71,
+        "e14": 16,
+        "e15": 17,
+        "e16": 18,
+        "e17": 30,
+        "e18": 19,
+        "e19": 78,
+        "e2": 7,
+        "e20": 32,
+        "e21": 20,
+        "e22": 34,
+        "e3": 8,
+        "e4": 9,
+        "e5": 10,
+        "e6": 11,
+        "e7": 63,
+        "e8": 12,
+        "e9": 13
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "heading: zero-size controls",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "checkbox: zero-size, label by for, checked",
+                        "role": "checkbox"
+                      },
+                      "checkbox: zero-size, label by for, checked"
+                    ],
+                    "ref": "e5",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "checkbox: zero-size, nested in label, unchecked",
+                        "role": "checkbox"
+                      },
+                      "checkbox: zero-size, nested in label, unchecked"
+                    ],
+                    "ref": "e7",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "radio: zero-size, label by for, unchecked",
+                        "role": "radio"
+                      },
+                      "radio: zero-size, label by for, unchecked"
+                    ],
+                    "ref": "e8",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "radio: zero-size, nested in label, checked",
+                        "role": "radio"
+                      },
+                      "radio: zero-size, nested in label, checked"
+                    ],
+                    "ref": "e10",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "button: zero-size file input, label by for",
+                        "role": "button"
+                      },
+                      "button: zero-size file input, label by for"
+                    ],
+                    "ref": "e11",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "button: zero-size file input, nested in label",
+                        "role": "button"
+                      },
+                      "button: zero-size file input, nested in label"
+                    ],
+                    "ref": "e13",
+                    "role": "generic"
+                  }
+                ],
+                "name": "group: zero-size controls",
+                "ref": "e3",
+                "role": "group"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "checkbox: normal size, label by for, unchecked",
+                        "ref": "e17",
+                        "role": "checkbox"
+                      },
+                      "checkbox: normal size, label by for, unchecked"
+                    ],
+                    "ref": "e16",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "radio: normal size, nested in label, checked",
+                        "ref": "e20",
+                        "role": "radio"
+                      },
+                      "radio: normal size, nested in label, checked"
+                    ],
+                    "ref": "e19",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "button: normal-size file input, label by for",
+                        "ref": "e22",
+                        "role": "button"
+                      },
+                      "button: normal-size file input, label by for"
+                    ],
+                    "ref": "e21",
+                    "role": "generic"
+                  }
+                ],
+                "name": "group: normal-size controls",
+                "ref": "e14",
+                "role": "group"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "heading: zero-size controls",
+            "role": "heading"
+          },
+          {
+            "children": [
+              "group: zero-size controls",
+              {
+                "checked": true,
+                "name": "checkbox: zero-size, label by for, checked",
+                "role": "checkbox"
+              },
+              "checkbox: zero-size, label by for, checked",
+              {
+                "name": "checkbox: zero-size, nested in label, unchecked",
+                "role": "checkbox"
+              },
+              "checkbox: zero-size, nested in label, unchecked",
+              {
+                "name": "radio: zero-size, label by for, unchecked",
+                "role": "radio"
+              },
+              "radio: zero-size, label by for, unchecked",
+              {
+                "checked": true,
+                "name": "radio: zero-size, nested in label, checked",
+                "role": "radio"
+              },
+              "radio: zero-size, nested in label, checked",
+              {
+                "name": "button: zero-size file input, label by for",
+                "role": "button"
+              },
+              "button: zero-size file input, label by for",
+              {
+                "name": "button: zero-size file input, nested in label",
+                "role": "button"
+              },
+              "button: zero-size file input, nested in label"
+            ],
+            "name": "group: zero-size controls",
+            "role": "group"
+          },
+          {
+            "children": [
+              "group: normal-size controls",
+              {
+                "name": "checkbox: normal size, label by for, unchecked",
+                "role": "checkbox"
+              },
+              "checkbox: normal size, label by for, unchecked",
+              {
+                "checked": true,
+                "name": "radio: normal size, nested in label, checked",
+                "role": "radio"
+              },
+              "radio: normal size, nested in label, checked",
+              {
+                "name": "button: normal-size file input, label by for",
+                "role": "button"
+              },
+              "button: normal-size file input, label by for"
+            ],
+            "name": "group: normal-size controls",
+            "role": "group"
+          }
+        ]
+      }
+    }
+  ]
+}

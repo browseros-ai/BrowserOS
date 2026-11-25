@@ -339,6 +339,9 @@ fn stock_chromium_replies_decode_with_no_contract() -> Result<(), Box<dyn Error>
         );
         checked += 1;
     }
-    assert_eq!(checked, 7, "all seven recorded stock replies are checked");
+    assert_eq!(
+        checked, 16,
+        "all sixteen recorded stock replies are checked (tests/fixtures/README.md lists them)"
+    );
     Ok(())
 }

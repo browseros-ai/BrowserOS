@@ -1,0 +1,4068 @@
+{
+  "fixture": "states",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "0D72284FC81072AF8A2FC5EBDAB6BD55",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/states.html",
+      "elements": [
+        {
+          "backendNodeId": 41,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 43,
+          "role": "region",
+          "name": "region: states block",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 28,
+          "role": "checkbox",
+          "name": "checkbox: unchecked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 29,
+          "role": "checkbox",
+          "name": "checkbox: checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 30,
+          "role": "checkbox",
+          "name": "checkbox: indeterminate, set from script",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": "mixed",
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 52,
+          "role": "checkbox",
+          "name": "checkbox: role=checkbox aria-checked=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 54,
+          "role": "checkbox",
+          "name": "checkbox: role=checkbox aria-checked=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 56,
+          "role": "checkbox",
+          "name": "checkbox: role=checkbox aria-checked=mixed",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": "mixed",
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 31,
+          "role": "radio",
+          "name": "radio: checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 32,
+          "role": "radio",
+          "name": "radio: unchecked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 62,
+          "role": "switch",
+          "name": "switch: aria-checked=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 64,
+          "role": "switch",
+          "name": "switch: aria-checked=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 33,
+          "role": "switch",
+          "name": "switch: input checkbox role=switch, checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 68,
+          "role": "menu",
+          "name": "menu: checkable items",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 69,
+          "role": "menuitemcheckbox",
+          "name": "menuitemcheckbox: checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 70,
+          "role": "menuitemcheckbox",
+          "name": "menuitemcheckbox: unchecked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 71,
+          "role": "menuitemradio",
+          "name": "menuitemradio: checked",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 75,
+          "role": "listbox",
+          "name": "listbox: aria options",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 76,
+          "role": "option",
+          "name": "option: aria-selected=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 77,
+          "role": "option",
+          "name": "option: aria-selected=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 78,
+          "role": "option",
+          "name": "option: aria-selected unset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "listbox",
+          "name": "listbox: select size=3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 82,
+          "role": "option",
+          "name": "option: selected",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 83,
+          "role": "option",
+          "name": "option: not selected",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 84,
+          "role": "option",
+          "name": "option: disabled",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": true,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "combobox",
+          "name": "combobox: disabled select",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 374,
+          "role": "option",
+          "name": "option: in a disabled select",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 88,
+          "role": "button",
+          "name": "button: aria-pressed=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 90,
+          "role": "button",
+          "name": "button: aria-pressed=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 92,
+          "role": "button",
+          "name": "button: aria-pressed=mixed",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": "mixed",
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 94,
+          "role": "button",
+          "name": "button: aria-pressed unset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 96,
+          "role": "button",
+          "name": "button: aria-expanded=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 98,
+          "role": "button",
+          "name": "button: aria-expanded=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 100,
+          "role": "button",
+          "name": "button: aria-expanded unset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "combobox",
+          "name": "combobox: input aria-expanded=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "combobox",
+          "name": "combobox: input aria-expanded=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 104,
+          "role": "listbox",
+          "name": "listbox: combobox popup",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 105,
+          "role": "option",
+          "name": "option: combobox popup entry",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 107,
+          "role": "tablist",
+          "name": "tablist: tabs",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 108,
+          "role": "tab",
+          "name": "tab: aria-selected=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 109,
+          "role": "tab",
+          "name": "tab: aria-selected=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 112,
+          "role": "tree",
+          "name": "tree: treeitems",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 113,
+          "role": "treeitem",
+          "name": "treeitem: level 1, expanded, selected",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "expanded": true,
+            "level": 1,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 114,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 115,
+          "role": "treeitem",
+          "name": "treeitem: level 2, not selected",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "level": 2,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 116,
+          "role": "treeitem",
+          "name": "treeitem: level 1, collapsed",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "expanded": false,
+            "level": 1,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 123,
+          "role": "heading",
+          "name": "heading: h1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 125,
+          "role": "heading",
+          "name": "heading: h2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 127,
+          "role": "heading",
+          "name": "heading: h3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 129,
+          "role": "heading",
+          "name": "heading: h4",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 4,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 131,
+          "role": "heading",
+          "name": "heading: h5",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 5,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 133,
+          "role": "heading",
+          "name": "heading: h6",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 6,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 135,
+          "role": "heading",
+          "name": "heading: h2 with aria-level=5, tag wins",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 137,
+          "role": "heading",
+          "name": "heading: role=heading aria-level=3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 139,
+          "role": "heading",
+          "name": "heading: role=heading without aria-level",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 141,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 142,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 143,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 148,
+          "role": "button",
+          "name": "button: disabled",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "textbox",
+          "name": "textbox: disabled input",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 153,
+          "role": "group",
+          "name": "group: disabled fieldset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "textbox",
+          "name": "textbox: in the first legend of a disabled fieldset, enabled",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 11,
+          "role": "textbox",
+          "name": "textbox: in a disabled fieldset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 159,
+          "role": "button",
+          "name": "button: in a disabled fieldset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 161,
+          "role": "button",
+          "name": "button: aria-disabled=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 163,
+          "role": "group",
+          "name": "group: aria-disabled=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 165,
+          "role": "button",
+          "name": "button: inherits aria-disabled from its group",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 167,
+          "role": "button",
+          "name": "button: own aria-disabled=false inside an aria-disabled group",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 169,
+          "role": "button",
+          "name": "button: under an aria-disabled=false wrapper inside an aria-disabled group",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=true",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=grammar",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": "grammar",
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=spelling",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": "spelling",
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=false",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "textbox: focused at load in the top block only",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": true
+          }
+        },
+        {
+          "backendNodeId": 45,
+          "role": "region",
+          "name": "region: states block (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 34,
+          "role": "checkbox",
+          "name": "checkbox: unchecked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 35,
+          "role": "checkbox",
+          "name": "checkbox: checked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 36,
+          "role": "checkbox",
+          "name": "checkbox: indeterminate, set from script (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": "mixed",
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 192,
+          "role": "checkbox",
+          "name": "checkbox: role=checkbox aria-checked=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 194,
+          "role": "checkbox",
+          "name": "checkbox: role=checkbox aria-checked=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 196,
+          "role": "checkbox",
+          "name": "checkbox: role=checkbox aria-checked=mixed (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": "mixed",
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 37,
+          "role": "radio",
+          "name": "radio: checked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 38,
+          "role": "radio",
+          "name": "radio: unchecked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 202,
+          "role": "switch",
+          "name": "switch: aria-checked=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 204,
+          "role": "switch",
+          "name": "switch: aria-checked=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 39,
+          "role": "switch",
+          "name": "switch: input checkbox role=switch, checked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 208,
+          "role": "menu",
+          "name": "menu: checkable items (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 209,
+          "role": "menuitemcheckbox",
+          "name": "menuitemcheckbox: checked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 210,
+          "role": "menuitemcheckbox",
+          "name": "menuitemcheckbox: unchecked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 211,
+          "role": "menuitemradio",
+          "name": "menuitemradio: checked (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 215,
+          "role": "listbox",
+          "name": "listbox: aria options (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 216,
+          "role": "option",
+          "name": "option: aria-selected=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 217,
+          "role": "option",
+          "name": "option: aria-selected=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 218,
+          "role": "option",
+          "name": "option: aria-selected unset (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "listbox",
+          "name": "listbox: select size=3 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 222,
+          "role": "option",
+          "name": "option: selected (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 223,
+          "role": "option",
+          "name": "option: not selected (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 224,
+          "role": "option",
+          "name": "option: disabled (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": true,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "combobox",
+          "name": "combobox: disabled select (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 456,
+          "role": "option",
+          "name": "option: in a disabled select (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 228,
+          "role": "button",
+          "name": "button: aria-pressed=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 230,
+          "role": "button",
+          "name": "button: aria-pressed=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 232,
+          "role": "button",
+          "name": "button: aria-pressed=mixed (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": "mixed",
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 234,
+          "role": "button",
+          "name": "button: aria-pressed unset (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 236,
+          "role": "button",
+          "name": "button: aria-expanded=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 238,
+          "role": "button",
+          "name": "button: aria-expanded=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 240,
+          "role": "button",
+          "name": "button: aria-expanded unset (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "combobox",
+          "name": "combobox: input aria-expanded=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "combobox",
+          "name": "combobox: input aria-expanded=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "expanded": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 244,
+          "role": "listbox",
+          "name": "listbox: combobox popup (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 245,
+          "role": "option",
+          "name": "option: combobox popup entry (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 247,
+          "role": "tablist",
+          "name": "tablist: tabs (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 248,
+          "role": "tab",
+          "name": "tab: aria-selected=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 249,
+          "role": "tab",
+          "name": "tab: aria-selected=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 252,
+          "role": "tree",
+          "name": "tree: treeitems (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 253,
+          "role": "treeitem",
+          "name": "treeitem: level 1, expanded, selected (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "expanded": true,
+            "level": 1,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 254,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 255,
+          "role": "treeitem",
+          "name": "treeitem: level 2, not selected (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "level": 2,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 256,
+          "role": "treeitem",
+          "name": "treeitem: level 1, collapsed (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "expanded": false,
+            "level": 1,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 263,
+          "role": "heading",
+          "name": "heading: h1 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 265,
+          "role": "heading",
+          "name": "heading: h2 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 267,
+          "role": "heading",
+          "name": "heading: h3 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 269,
+          "role": "heading",
+          "name": "heading: h4 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 4,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 271,
+          "role": "heading",
+          "name": "heading: h5 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 5,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 273,
+          "role": "heading",
+          "name": "heading: h6 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 6,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 275,
+          "role": "heading",
+          "name": "heading: h2 with aria-level=5, tag wins (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 277,
+          "role": "heading",
+          "name": "heading: role=heading aria-level=3 (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 279,
+          "role": "heading",
+          "name": "heading: role=heading without aria-level (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 281,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 282,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 283,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 288,
+          "role": "button",
+          "name": "button: disabled (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 20,
+          "role": "textbox",
+          "name": "textbox: disabled input (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 293,
+          "role": "group",
+          "name": "group: disabled fieldset (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 21,
+          "role": "textbox",
+          "name": "textbox: in the first legend of a disabled fieldset, enabled (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "textbox",
+          "name": "textbox: in a disabled fieldset (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 299,
+          "role": "button",
+          "name": "button: in a disabled fieldset (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 301,
+          "role": "button",
+          "name": "button: aria-disabled=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 303,
+          "role": "group",
+          "name": "group: aria-disabled=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 305,
+          "role": "button",
+          "name": "button: inherits aria-disabled from its group (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": true,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 307,
+          "role": "button",
+          "name": "button: own aria-disabled=false inside an aria-disabled group (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 309,
+          "role": "button",
+          "name": "button: under an aria-disabled=false wrapper inside an aria-disabled group (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 23,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=true (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 24,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=grammar (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": "grammar",
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 25,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=spelling (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": "spelling",
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 26,
+          "role": "textbox",
+          "name": "textbox: aria-invalid=false (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 27,
+          "role": "textbox",
+          "name": "textbox: focused at load in the top block only (below)",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 42,
+        "e10": 54,
+        "e100": 37,
+        "e101": 200,
+        "e102": 38,
+        "e103": 202,
+        "e104": 204,
+        "e105": 206,
+        "e106": 39,
+        "e107": 208,
+        "e108": 209,
+        "e109": 210,
+        "e11": 56,
+        "e110": 211,
+        "e111": 215,
+        "e112": 216,
+        "e113": 217,
+        "e114": 218,
+        "e115": 16,
+        "e116": 222,
+        "e117": 223,
+        "e118": 224,
+        "e119": 17,
+        "e12": 58,
+        "e120": 228,
+        "e121": 230,
+        "e122": 232,
+        "e123": 234,
+        "e124": 236,
+        "e125": 238,
+        "e126": 240,
+        "e127": 18,
+        "e128": 19,
+        "e129": 244,
+        "e13": 31,
+        "e130": 245,
+        "e131": 247,
+        "e132": 248,
+        "e133": 249,
+        "e134": 252,
+        "e135": 253,
+        "e136": 254,
+        "e137": 255,
+        "e138": 256,
+        "e139": 263,
+        "e14": 60,
+        "e140": 265,
+        "e141": 267,
+        "e142": 269,
+        "e143": 271,
+        "e144": 273,
+        "e145": 275,
+        "e146": 277,
+        "e147": 279,
+        "e148": 281,
+        "e149": 282,
+        "e15": 32,
+        "e150": 283,
+        "e151": 288,
+        "e152": 290,
+        "e153": 20,
+        "e154": 293,
+        "e155": 294,
+        "e156": 21,
+        "e157": 22,
+        "e158": 299,
+        "e159": 301,
+        "e16": 62,
+        "e160": 303,
+        "e161": 305,
+        "e162": 307,
+        "e163": 304,
+        "e164": 309,
+        "e165": 311,
+        "e166": 23,
+        "e167": 314,
+        "e168": 24,
+        "e169": 317,
+        "e17": 64,
+        "e170": 25,
+        "e171": 320,
+        "e172": 26,
+        "e173": 323,
+        "e174": 27,
+        "e18": 66,
+        "e19": 33,
+        "e2": 43,
+        "e20": 68,
+        "e21": 69,
+        "e22": 70,
+        "e23": 71,
+        "e24": 75,
+        "e25": 76,
+        "e26": 77,
+        "e27": 78,
+        "e28": 5,
+        "e29": 82,
+        "e3": 46,
+        "e30": 83,
+        "e31": 84,
+        "e32": 6,
+        "e33": 88,
+        "e34": 90,
+        "e35": 92,
+        "e36": 94,
+        "e37": 96,
+        "e38": 98,
+        "e39": 100,
+        "e4": 28,
+        "e40": 7,
+        "e41": 8,
+        "e42": 104,
+        "e43": 105,
+        "e44": 107,
+        "e45": 108,
+        "e46": 109,
+        "e47": 112,
+        "e48": 113,
+        "e49": 114,
+        "e5": 48,
+        "e50": 115,
+        "e51": 116,
+        "e52": 123,
+        "e53": 125,
+        "e54": 127,
+        "e55": 129,
+        "e56": 131,
+        "e57": 133,
+        "e58": 135,
+        "e59": 137,
+        "e6": 29,
+        "e60": 139,
+        "e61": 141,
+        "e62": 142,
+        "e63": 143,
+        "e64": 148,
+        "e65": 150,
+        "e66": 9,
+        "e67": 153,
+        "e68": 154,
+        "e69": 10,
+        "e7": 50,
+        "e70": 11,
+        "e71": 159,
+        "e72": 161,
+        "e73": 163,
+        "e74": 165,
+        "e75": 167,
+        "e76": 164,
+        "e77": 169,
+        "e78": 171,
+        "e79": 12,
+        "e8": 30,
+        "e80": 174,
+        "e81": 13,
+        "e82": 177,
+        "e83": 14,
+        "e84": 180,
+        "e85": 15,
+        "e86": 183,
+        "e87": 4,
+        "e88": 44,
+        "e89": 45,
+        "e9": 52,
+        "e90": 186,
+        "e91": 34,
+        "e92": 188,
+        "e93": 35,
+        "e94": 190,
+        "e95": 36,
+        "e96": 192,
+        "e97": 194,
+        "e98": 196,
+        "e99": 198
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "checkbox: unchecked",
+                        "ref": "e4",
+                        "role": "checkbox"
+                      },
+                      "checkbox: unchecked"
+                    ],
+                    "ref": "e3",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "checkbox: checked",
+                        "ref": "e6",
+                        "role": "checkbox"
+                      },
+                      "checkbox: checked"
+                    ],
+                    "ref": "e5",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": "mixed",
+                        "name": "checkbox: indeterminate, set from script",
+                        "ref": "e8",
+                        "role": "checkbox"
+                      },
+                      "checkbox: indeterminate, set from script"
+                    ],
+                    "ref": "e7",
+                    "role": "generic"
+                  },
+                  {
+                    "checked": true,
+                    "name": "checkbox: role=checkbox aria-checked=true",
+                    "ref": "e9",
+                    "role": "checkbox"
+                  },
+                  {
+                    "name": "checkbox: role=checkbox aria-checked=false",
+                    "ref": "e10",
+                    "role": "checkbox"
+                  },
+                  {
+                    "checked": "mixed",
+                    "name": "checkbox: role=checkbox aria-checked=mixed",
+                    "ref": "e11",
+                    "role": "checkbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "radio: checked",
+                        "ref": "e13",
+                        "role": "radio"
+                      },
+                      "radio: checked"
+                    ],
+                    "ref": "e12",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "radio: unchecked",
+                        "ref": "e15",
+                        "role": "radio"
+                      },
+                      "radio: unchecked"
+                    ],
+                    "ref": "e14",
+                    "role": "generic"
+                  },
+                  {
+                    "checked": true,
+                    "name": "switch: aria-checked=true",
+                    "ref": "e16",
+                    "role": "switch"
+                  },
+                  {
+                    "name": "switch: aria-checked=false",
+                    "ref": "e17",
+                    "role": "switch"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "switch: input checkbox role=switch, checked",
+                        "ref": "e19",
+                        "role": "switch"
+                      },
+                      "switch: input checkbox role=switch, checked"
+                    ],
+                    "ref": "e18",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "menuitemcheckbox: checked",
+                        "ref": "e21",
+                        "role": "menuitemcheckbox"
+                      },
+                      {
+                        "name": "menuitemcheckbox: unchecked",
+                        "ref": "e22",
+                        "role": "menuitemcheckbox"
+                      },
+                      {
+                        "checked": true,
+                        "name": "menuitemradio: checked",
+                        "ref": "e23",
+                        "role": "menuitemradio"
+                      }
+                    ],
+                    "name": "menu: checkable items",
+                    "ref": "e20",
+                    "role": "menu"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: aria-selected=true",
+                        "ref": "e25",
+                        "role": "option",
+                        "selected": true
+                      },
+                      {
+                        "name": "option: aria-selected=false",
+                        "ref": "e26",
+                        "role": "option"
+                      },
+                      {
+                        "name": "option: aria-selected unset",
+                        "ref": "e27",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "listbox: aria options",
+                    "ref": "e24",
+                    "role": "listbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: selected",
+                        "ref": "e29",
+                        "role": "option",
+                        "selected": true
+                      },
+                      {
+                        "name": "option: not selected",
+                        "ref": "e30",
+                        "role": "option"
+                      },
+                      {
+                        "disabled": true,
+                        "name": "option: disabled",
+                        "ref": "e31",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "listbox: select size=3",
+                    "ref": "e28",
+                    "role": "listbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: in a disabled select",
+                        "role": "option",
+                        "selected": true
+                      }
+                    ],
+                    "disabled": true,
+                    "name": "combobox: disabled select",
+                    "ref": "e32",
+                    "role": "combobox"
+                  },
+                  {
+                    "name": "button: aria-pressed=true",
+                    "pressed": true,
+                    "ref": "e33",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-pressed=false",
+                    "ref": "e34",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-pressed=mixed",
+                    "pressed": "mixed",
+                    "ref": "e35",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-pressed unset",
+                    "ref": "e36",
+                    "role": "button"
+                  },
+                  {
+                    "expanded": true,
+                    "name": "button: aria-expanded=true",
+                    "ref": "e37",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-expanded=false",
+                    "ref": "e38",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-expanded unset",
+                    "ref": "e39",
+                    "role": "button"
+                  },
+                  {
+                    "name": "combobox: input aria-expanded=false",
+                    "ref": "e40",
+                    "role": "combobox"
+                  },
+                  {
+                    "expanded": true,
+                    "name": "combobox: input aria-expanded=true",
+                    "ref": "e41",
+                    "role": "combobox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: combobox popup entry",
+                        "ref": "e43",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "listbox: combobox popup",
+                    "ref": "e42",
+                    "role": "listbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "tab: aria-selected=true",
+                        "ref": "e45",
+                        "role": "tab",
+                        "selected": true
+                      },
+                      {
+                        "name": "tab: aria-selected=false",
+                        "ref": "e46",
+                        "role": "tab"
+                      }
+                    ],
+                    "name": "tablist: tabs",
+                    "ref": "e44",
+                    "role": "tablist"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          "treeitem: level 1, expanded, selected",
+                          {
+                            "children": [
+                              {
+                                "level": 2,
+                                "name": "treeitem: level 2, not selected",
+                                "ref": "e50",
+                                "role": "treeitem"
+                              }
+                            ],
+                            "ref": "e49",
+                            "role": "group"
+                          }
+                        ],
+                        "expanded": true,
+                        "level": 1,
+                        "name": "treeitem: level 1, expanded, selected",
+                        "ref": "e48",
+                        "role": "treeitem",
+                        "selected": true
+                      },
+                      {
+                        "level": 1,
+                        "name": "treeitem: level 1, collapsed",
+                        "ref": "e51",
+                        "role": "treeitem"
+                      }
+                    ],
+                    "name": "tree: treeitems",
+                    "ref": "e47",
+                    "role": "tree"
+                  },
+                  {
+                    "level": 1,
+                    "name": "heading: h1",
+                    "ref": "e52",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 2,
+                    "name": "heading: h2",
+                    "ref": "e53",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 3,
+                    "name": "heading: h3",
+                    "ref": "e54",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 4,
+                    "name": "heading: h4",
+                    "ref": "e55",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 5,
+                    "name": "heading: h5",
+                    "ref": "e56",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 6,
+                    "name": "heading: h6",
+                    "ref": "e57",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 2,
+                    "name": "heading: h2 with aria-level=5, tag wins",
+                    "ref": "e58",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 3,
+                    "name": "heading: role=heading aria-level=3",
+                    "ref": "e59",
+                    "role": "heading"
+                  },
+                  {
+                    "name": "heading: role=heading without aria-level",
+                    "ref": "e60",
+                    "role": "heading"
+                  },
+                  {
+                    "children": [
+                      {
+                        "level": 2,
+                        "ref": "e62",
+                        "role": "listitem",
+                        "text": "listitem: aria-level=2"
+                      },
+                      {
+                        "ref": "e63",
+                        "role": "listitem",
+                        "text": "listitem: aria-level unset"
+                      }
+                    ],
+                    "ref": "e61",
+                    "role": "list"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "button: disabled",
+                    "ref": "e64",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      "textbox: disabled input",
+                      {
+                        "disabled": true,
+                        "name": "textbox: disabled input",
+                        "ref": "e66",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e65",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          "group: disabled fieldset",
+                          {
+                            "name": "textbox: in the first legend of a disabled fieldset, enabled",
+                            "ref": "e69",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e68",
+                        "role": "generic"
+                      },
+                      {
+                        "disabled": true,
+                        "name": "textbox: in a disabled fieldset",
+                        "ref": "e70",
+                        "role": "textbox"
+                      },
+                      {
+                        "disabled": true,
+                        "name": "button: in a disabled fieldset",
+                        "ref": "e71",
+                        "role": "button"
+                      }
+                    ],
+                    "ref": "e67",
+                    "role": "group"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "button: aria-disabled=true",
+                    "ref": "e72",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      {
+                        "disabled": true,
+                        "name": "button: inherits aria-disabled from its group",
+                        "ref": "e74",
+                        "role": "button"
+                      },
+                      {
+                        "name": "button: own aria-disabled=false inside an aria-disabled group",
+                        "ref": "e75",
+                        "role": "button"
+                      },
+                      {
+                        "name": "button: under an aria-disabled=false wrapper inside an aria-disabled group",
+                        "ref": "e77",
+                        "role": "button"
+                      }
+                    ],
+                    "disabled": true,
+                    "name": "group: aria-disabled=true",
+                    "ref": "e73",
+                    "role": "group"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=true",
+                      {
+                        "invalid": true,
+                        "name": "textbox: aria-invalid=true",
+                        "ref": "e79",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e78",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=grammar",
+                      {
+                        "invalid": "grammar",
+                        "name": "textbox: aria-invalid=grammar",
+                        "ref": "e81",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e80",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=spelling",
+                      {
+                        "invalid": "spelling",
+                        "name": "textbox: aria-invalid=spelling",
+                        "ref": "e83",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e82",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=false",
+                      {
+                        "name": "textbox: aria-invalid=false",
+                        "ref": "e85",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e84",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: focused at load in the top block only",
+                      {
+                        "active": true,
+                        "name": "textbox: focused at load in the top block only",
+                        "ref": "e87",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e86",
+                    "role": "generic"
+                  }
+                ],
+                "name": "region: states block",
+                "ref": "e2",
+                "role": "region"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "checkbox: unchecked (below)",
+                        "ref": "e91",
+                        "role": "checkbox"
+                      },
+                      "checkbox: unchecked (below)"
+                    ],
+                    "ref": "e90",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "checkbox: checked (below)",
+                        "ref": "e93",
+                        "role": "checkbox"
+                      },
+                      "checkbox: checked (below)"
+                    ],
+                    "ref": "e92",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": "mixed",
+                        "name": "checkbox: indeterminate, set from script (below)",
+                        "ref": "e95",
+                        "role": "checkbox"
+                      },
+                      "checkbox: indeterminate, set from script (below)"
+                    ],
+                    "ref": "e94",
+                    "role": "generic"
+                  },
+                  {
+                    "checked": true,
+                    "name": "checkbox: role=checkbox aria-checked=true (below)",
+                    "ref": "e96",
+                    "role": "checkbox"
+                  },
+                  {
+                    "name": "checkbox: role=checkbox aria-checked=false (below)",
+                    "ref": "e97",
+                    "role": "checkbox"
+                  },
+                  {
+                    "checked": "mixed",
+                    "name": "checkbox: role=checkbox aria-checked=mixed (below)",
+                    "ref": "e98",
+                    "role": "checkbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "radio: checked (below)",
+                        "ref": "e100",
+                        "role": "radio"
+                      },
+                      "radio: checked (below)"
+                    ],
+                    "ref": "e99",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "radio: unchecked (below)",
+                        "ref": "e102",
+                        "role": "radio"
+                      },
+                      "radio: unchecked (below)"
+                    ],
+                    "ref": "e101",
+                    "role": "generic"
+                  },
+                  {
+                    "checked": true,
+                    "name": "switch: aria-checked=true (below)",
+                    "ref": "e103",
+                    "role": "switch"
+                  },
+                  {
+                    "name": "switch: aria-checked=false (below)",
+                    "ref": "e104",
+                    "role": "switch"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "switch: input checkbox role=switch, checked (below)",
+                        "ref": "e106",
+                        "role": "switch"
+                      },
+                      "switch: input checkbox role=switch, checked (below)"
+                    ],
+                    "ref": "e105",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "menuitemcheckbox: checked (below)",
+                        "ref": "e108",
+                        "role": "menuitemcheckbox"
+                      },
+                      {
+                        "name": "menuitemcheckbox: unchecked (below)",
+                        "ref": "e109",
+                        "role": "menuitemcheckbox"
+                      },
+                      {
+                        "checked": true,
+                        "name": "menuitemradio: checked (below)",
+                        "ref": "e110",
+                        "role": "menuitemradio"
+                      }
+                    ],
+                    "name": "menu: checkable items (below)",
+                    "ref": "e107",
+                    "role": "menu"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: aria-selected=true (below)",
+                        "ref": "e112",
+                        "role": "option",
+                        "selected": true
+                      },
+                      {
+                        "name": "option: aria-selected=false (below)",
+                        "ref": "e113",
+                        "role": "option"
+                      },
+                      {
+                        "name": "option: aria-selected unset (below)",
+                        "ref": "e114",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "listbox: aria options (below)",
+                    "ref": "e111",
+                    "role": "listbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: selected (below)",
+                        "ref": "e116",
+                        "role": "option",
+                        "selected": true
+                      },
+                      {
+                        "name": "option: not selected (below)",
+                        "ref": "e117",
+                        "role": "option"
+                      },
+                      {
+                        "disabled": true,
+                        "name": "option: disabled (below)",
+                        "ref": "e118",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "listbox: select size=3 (below)",
+                    "ref": "e115",
+                    "role": "listbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: in a disabled select (below)",
+                        "role": "option",
+                        "selected": true
+                      }
+                    ],
+                    "disabled": true,
+                    "name": "combobox: disabled select (below)",
+                    "ref": "e119",
+                    "role": "combobox"
+                  },
+                  {
+                    "name": "button: aria-pressed=true (below)",
+                    "pressed": true,
+                    "ref": "e120",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-pressed=false (below)",
+                    "ref": "e121",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-pressed=mixed (below)",
+                    "pressed": "mixed",
+                    "ref": "e122",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-pressed unset (below)",
+                    "ref": "e123",
+                    "role": "button"
+                  },
+                  {
+                    "expanded": true,
+                    "name": "button: aria-expanded=true (below)",
+                    "ref": "e124",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-expanded=false (below)",
+                    "ref": "e125",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: aria-expanded unset (below)",
+                    "ref": "e126",
+                    "role": "button"
+                  },
+                  {
+                    "name": "combobox: input aria-expanded=false (below)",
+                    "ref": "e127",
+                    "role": "combobox"
+                  },
+                  {
+                    "expanded": true,
+                    "name": "combobox: input aria-expanded=true (below)",
+                    "ref": "e128",
+                    "role": "combobox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: combobox popup entry (below)",
+                        "ref": "e130",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "listbox: combobox popup (below)",
+                    "ref": "e129",
+                    "role": "listbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "tab: aria-selected=true (below)",
+                        "ref": "e132",
+                        "role": "tab",
+                        "selected": true
+                      },
+                      {
+                        "name": "tab: aria-selected=false (below)",
+                        "ref": "e133",
+                        "role": "tab"
+                      }
+                    ],
+                    "name": "tablist: tabs (below)",
+                    "ref": "e131",
+                    "role": "tablist"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          "treeitem: level 1, expanded, selected (below)",
+                          {
+                            "children": [
+                              {
+                                "level": 2,
+                                "name": "treeitem: level 2, not selected (below)",
+                                "ref": "e137",
+                                "role": "treeitem"
+                              }
+                            ],
+                            "ref": "e136",
+                            "role": "group"
+                          }
+                        ],
+                        "expanded": true,
+                        "level": 1,
+                        "name": "treeitem: level 1, expanded, selected (below)",
+                        "ref": "e135",
+                        "role": "treeitem",
+                        "selected": true
+                      },
+                      {
+                        "level": 1,
+                        "name": "treeitem: level 1, collapsed (below)",
+                        "ref": "e138",
+                        "role": "treeitem"
+                      }
+                    ],
+                    "name": "tree: treeitems (below)",
+                    "ref": "e134",
+                    "role": "tree"
+                  },
+                  {
+                    "level": 1,
+                    "name": "heading: h1 (below)",
+                    "ref": "e139",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 2,
+                    "name": "heading: h2 (below)",
+                    "ref": "e140",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 3,
+                    "name": "heading: h3 (below)",
+                    "ref": "e141",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 4,
+                    "name": "heading: h4 (below)",
+                    "ref": "e142",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 5,
+                    "name": "heading: h5 (below)",
+                    "ref": "e143",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 6,
+                    "name": "heading: h6 (below)",
+                    "ref": "e144",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 2,
+                    "name": "heading: h2 with aria-level=5, tag wins (below)",
+                    "ref": "e145",
+                    "role": "heading"
+                  },
+                  {
+                    "level": 3,
+                    "name": "heading: role=heading aria-level=3 (below)",
+                    "ref": "e146",
+                    "role": "heading"
+                  },
+                  {
+                    "name": "heading: role=heading without aria-level (below)",
+                    "ref": "e147",
+                    "role": "heading"
+                  },
+                  {
+                    "children": [
+                      {
+                        "level": 2,
+                        "ref": "e149",
+                        "role": "listitem",
+                        "text": "listitem: aria-level=2 (below)"
+                      },
+                      {
+                        "ref": "e150",
+                        "role": "listitem",
+                        "text": "listitem: aria-level unset (below)"
+                      }
+                    ],
+                    "ref": "e148",
+                    "role": "list"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "button: disabled (below)",
+                    "ref": "e151",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      "textbox: disabled input (below)",
+                      {
+                        "disabled": true,
+                        "name": "textbox: disabled input (below)",
+                        "ref": "e153",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e152",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          "group: disabled fieldset (below)",
+                          {
+                            "name": "textbox: in the first legend of a disabled fieldset, enabled (below)",
+                            "ref": "e156",
+                            "role": "textbox"
+                          }
+                        ],
+                        "ref": "e155",
+                        "role": "generic"
+                      },
+                      {
+                        "disabled": true,
+                        "name": "textbox: in a disabled fieldset (below)",
+                        "ref": "e157",
+                        "role": "textbox"
+                      },
+                      {
+                        "disabled": true,
+                        "name": "button: in a disabled fieldset (below)",
+                        "ref": "e158",
+                        "role": "button"
+                      }
+                    ],
+                    "ref": "e154",
+                    "role": "group"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "button: aria-disabled=true (below)",
+                    "ref": "e159",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      {
+                        "disabled": true,
+                        "name": "button: inherits aria-disabled from its group (below)",
+                        "ref": "e161",
+                        "role": "button"
+                      },
+                      {
+                        "name": "button: own aria-disabled=false inside an aria-disabled group (below)",
+                        "ref": "e162",
+                        "role": "button"
+                      },
+                      {
+                        "name": "button: under an aria-disabled=false wrapper inside an aria-disabled group (below)",
+                        "ref": "e164",
+                        "role": "button"
+                      }
+                    ],
+                    "disabled": true,
+                    "name": "group: aria-disabled=true (below)",
+                    "ref": "e160",
+                    "role": "group"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=true (below)",
+                      {
+                        "invalid": true,
+                        "name": "textbox: aria-invalid=true (below)",
+                        "ref": "e166",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e165",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=grammar (below)",
+                      {
+                        "invalid": "grammar",
+                        "name": "textbox: aria-invalid=grammar (below)",
+                        "ref": "e168",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e167",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=spelling (below)",
+                      {
+                        "invalid": "spelling",
+                        "name": "textbox: aria-invalid=spelling (below)",
+                        "ref": "e170",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e169",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: aria-invalid=false (below)",
+                      {
+                        "name": "textbox: aria-invalid=false (below)",
+                        "ref": "e172",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e171",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: focused at load in the top block only (below)",
+                      {
+                        "name": "textbox: focused at load in the top block only (below)",
+                        "ref": "e174",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e173",
+                    "role": "generic"
+                  }
+                ],
+                "name": "region: states block (below)",
+                "ref": "e89",
+                "role": "region"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "children": [
+              {
+                "name": "checkbox: unchecked",
+                "role": "checkbox"
+              },
+              "checkbox: unchecked",
+              {
+                "checked": true,
+                "name": "checkbox: checked",
+                "role": "checkbox"
+              },
+              "checkbox: checked",
+              {
+                "checked": "mixed",
+                "name": "checkbox: indeterminate, set from script",
+                "role": "checkbox"
+              },
+              "checkbox: indeterminate, set from script",
+              {
+                "checked": true,
+                "name": "checkbox: role=checkbox aria-checked=true",
+                "role": "checkbox"
+              },
+              {
+                "name": "checkbox: role=checkbox aria-checked=false",
+                "role": "checkbox"
+              },
+              {
+                "checked": "mixed",
+                "name": "checkbox: role=checkbox aria-checked=mixed",
+                "role": "checkbox"
+              },
+              {
+                "checked": true,
+                "name": "radio: checked",
+                "role": "radio"
+              },
+              "radio: checked",
+              {
+                "name": "radio: unchecked",
+                "role": "radio"
+              },
+              "radio: unchecked",
+              {
+                "checked": true,
+                "name": "switch: aria-checked=true",
+                "role": "switch"
+              },
+              {
+                "name": "switch: aria-checked=false",
+                "role": "switch"
+              },
+              {
+                "checked": true,
+                "name": "switch: input checkbox role=switch, checked",
+                "role": "switch"
+              },
+              "switch: input checkbox role=switch, checked",
+              {
+                "children": [
+                  {
+                    "checked": true,
+                    "name": "menuitemcheckbox: checked",
+                    "role": "menuitemcheckbox"
+                  },
+                  {
+                    "name": "menuitemcheckbox: unchecked",
+                    "role": "menuitemcheckbox"
+                  },
+                  {
+                    "checked": true,
+                    "name": "menuitemradio: checked",
+                    "role": "menuitemradio"
+                  }
+                ],
+                "name": "menu: checkable items",
+                "role": "menu"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: aria-selected=true",
+                    "role": "option",
+                    "selected": true
+                  },
+                  {
+                    "name": "option: aria-selected=false",
+                    "role": "option"
+                  },
+                  {
+                    "name": "option: aria-selected unset",
+                    "role": "option"
+                  }
+                ],
+                "name": "listbox: aria options",
+                "role": "listbox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: selected",
+                    "role": "option",
+                    "selected": true
+                  },
+                  {
+                    "name": "option: not selected",
+                    "role": "option"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "option: disabled",
+                    "role": "option"
+                  }
+                ],
+                "name": "listbox: select size=3",
+                "role": "listbox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: in a disabled select",
+                    "role": "option",
+                    "selected": true
+                  }
+                ],
+                "disabled": true,
+                "name": "combobox: disabled select",
+                "role": "combobox"
+              },
+              {
+                "name": "button: aria-pressed=true",
+                "pressed": true,
+                "role": "button"
+              },
+              {
+                "name": "button: aria-pressed=false",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-pressed=mixed",
+                "pressed": "mixed",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-pressed unset",
+                "role": "button"
+              },
+              {
+                "expanded": true,
+                "name": "button: aria-expanded=true",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-expanded=false",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-expanded unset",
+                "role": "button"
+              },
+              {
+                "name": "combobox: input aria-expanded=false",
+                "role": "combobox"
+              },
+              {
+                "expanded": true,
+                "name": "combobox: input aria-expanded=true",
+                "role": "combobox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: combobox popup entry",
+                    "role": "option"
+                  }
+                ],
+                "name": "listbox: combobox popup",
+                "role": "listbox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "tab: aria-selected=true",
+                    "role": "tab",
+                    "selected": true
+                  },
+                  {
+                    "name": "tab: aria-selected=false",
+                    "role": "tab"
+                  }
+                ],
+                "name": "tablist: tabs",
+                "role": "tablist"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "treeitem: level 1, expanded, selected",
+                      {
+                        "children": [
+                          {
+                            "level": 2,
+                            "name": "treeitem: level 2, not selected",
+                            "role": "treeitem"
+                          }
+                        ],
+                        "role": "group"
+                      }
+                    ],
+                    "expanded": true,
+                    "level": 1,
+                    "name": "treeitem: level 1, expanded, selected",
+                    "role": "treeitem",
+                    "selected": true
+                  },
+                  {
+                    "level": 1,
+                    "name": "treeitem: level 1, collapsed",
+                    "role": "treeitem"
+                  }
+                ],
+                "name": "tree: treeitems",
+                "role": "tree"
+              },
+              {
+                "level": 1,
+                "name": "heading: h1",
+                "role": "heading"
+              },
+              {
+                "level": 2,
+                "name": "heading: h2",
+                "role": "heading"
+              },
+              {
+                "level": 3,
+                "name": "heading: h3",
+                "role": "heading"
+              },
+              {
+                "level": 4,
+                "name": "heading: h4",
+                "role": "heading"
+              },
+              {
+                "level": 5,
+                "name": "heading: h5",
+                "role": "heading"
+              },
+              {
+                "level": 6,
+                "name": "heading: h6",
+                "role": "heading"
+              },
+              {
+                "level": 2,
+                "name": "heading: h2 with aria-level=5, tag wins",
+                "role": "heading"
+              },
+              {
+                "level": 3,
+                "name": "heading: role=heading aria-level=3",
+                "role": "heading"
+              },
+              {
+                "name": "heading: role=heading without aria-level",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "level": 2,
+                    "role": "listitem",
+                    "text": "listitem: aria-level=2"
+                  },
+                  {
+                    "role": "listitem",
+                    "text": "listitem: aria-level unset"
+                  }
+                ],
+                "role": "list"
+              },
+              {
+                "disabled": true,
+                "name": "button: disabled",
+                "role": "button"
+              },
+              "textbox: disabled input",
+              {
+                "disabled": true,
+                "name": "textbox: disabled input",
+                "role": "textbox"
+              },
+              {
+                "children": [
+                  "group: disabled fieldset",
+                  {
+                    "name": "textbox: in the first legend of a disabled fieldset, enabled",
+                    "role": "textbox"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "textbox: in a disabled fieldset",
+                    "role": "textbox"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "button: in a disabled fieldset",
+                    "role": "button"
+                  }
+                ],
+                "name": "group: disabled fieldset",
+                "role": "group"
+              },
+              {
+                "disabled": true,
+                "name": "button: aria-disabled=true",
+                "role": "button"
+              },
+              {
+                "children": [
+                  {
+                    "disabled": true,
+                    "name": "button: inherits aria-disabled from its group",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: own aria-disabled=false inside an aria-disabled group",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: under an aria-disabled=false wrapper inside an aria-disabled group",
+                    "role": "button"
+                  }
+                ],
+                "disabled": true,
+                "name": "group: aria-disabled=true",
+                "role": "group"
+              },
+              "textbox: aria-invalid=true",
+              {
+                "invalid": true,
+                "name": "textbox: aria-invalid=true",
+                "role": "textbox"
+              },
+              "textbox: aria-invalid=grammar",
+              {
+                "invalid": "grammar",
+                "name": "textbox: aria-invalid=grammar",
+                "role": "textbox"
+              },
+              "textbox: aria-invalid=spelling",
+              {
+                "invalid": "spelling",
+                "name": "textbox: aria-invalid=spelling",
+                "role": "textbox"
+              },
+              "textbox: aria-invalid=false",
+              {
+                "name": "textbox: aria-invalid=false",
+                "role": "textbox"
+              },
+              "textbox: focused at load in the top block only",
+              {
+                "name": "textbox: focused at load in the top block only",
+                "role": "textbox"
+              }
+            ],
+            "name": "region: states block",
+            "role": "region"
+          },
+          {
+            "children": [
+              {
+                "name": "checkbox: unchecked (below)",
+                "role": "checkbox"
+              },
+              "checkbox: unchecked (below)",
+              {
+                "checked": true,
+                "name": "checkbox: checked (below)",
+                "role": "checkbox"
+              },
+              "checkbox: checked (below)",
+              {
+                "checked": "mixed",
+                "name": "checkbox: indeterminate, set from script (below)",
+                "role": "checkbox"
+              },
+              "checkbox: indeterminate, set from script (below)",
+              {
+                "checked": true,
+                "name": "checkbox: role=checkbox aria-checked=true (below)",
+                "role": "checkbox"
+              },
+              {
+                "name": "checkbox: role=checkbox aria-checked=false (below)",
+                "role": "checkbox"
+              },
+              {
+                "checked": "mixed",
+                "name": "checkbox: role=checkbox aria-checked=mixed (below)",
+                "role": "checkbox"
+              },
+              {
+                "checked": true,
+                "name": "radio: checked (below)",
+                "role": "radio"
+              },
+              "radio: checked (below)",
+              {
+                "name": "radio: unchecked (below)",
+                "role": "radio"
+              },
+              "radio: unchecked (below)",
+              {
+                "checked": true,
+                "name": "switch: aria-checked=true (below)",
+                "role": "switch"
+              },
+              {
+                "name": "switch: aria-checked=false (below)",
+                "role": "switch"
+              },
+              {
+                "checked": true,
+                "name": "switch: input checkbox role=switch, checked (below)",
+                "role": "switch"
+              },
+              "switch: input checkbox role=switch, checked (below)",
+              {
+                "children": [
+                  {
+                    "checked": true,
+                    "name": "menuitemcheckbox: checked (below)",
+                    "role": "menuitemcheckbox"
+                  },
+                  {
+                    "name": "menuitemcheckbox: unchecked (below)",
+                    "role": "menuitemcheckbox"
+                  },
+                  {
+                    "checked": true,
+                    "name": "menuitemradio: checked (below)",
+                    "role": "menuitemradio"
+                  }
+                ],
+                "name": "menu: checkable items (below)",
+                "role": "menu"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: aria-selected=true (below)",
+                    "role": "option",
+                    "selected": true
+                  },
+                  {
+                    "name": "option: aria-selected=false (below)",
+                    "role": "option"
+                  },
+                  {
+                    "name": "option: aria-selected unset (below)",
+                    "role": "option"
+                  }
+                ],
+                "name": "listbox: aria options (below)",
+                "role": "listbox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: selected (below)",
+                    "role": "option",
+                    "selected": true
+                  },
+                  {
+                    "name": "option: not selected (below)",
+                    "role": "option"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "option: disabled (below)",
+                    "role": "option"
+                  }
+                ],
+                "name": "listbox: select size=3 (below)",
+                "role": "listbox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: in a disabled select (below)",
+                    "role": "option",
+                    "selected": true
+                  }
+                ],
+                "disabled": true,
+                "name": "combobox: disabled select (below)",
+                "role": "combobox"
+              },
+              {
+                "name": "button: aria-pressed=true (below)",
+                "pressed": true,
+                "role": "button"
+              },
+              {
+                "name": "button: aria-pressed=false (below)",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-pressed=mixed (below)",
+                "pressed": "mixed",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-pressed unset (below)",
+                "role": "button"
+              },
+              {
+                "expanded": true,
+                "name": "button: aria-expanded=true (below)",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-expanded=false (below)",
+                "role": "button"
+              },
+              {
+                "name": "button: aria-expanded unset (below)",
+                "role": "button"
+              },
+              {
+                "name": "combobox: input aria-expanded=false (below)",
+                "role": "combobox"
+              },
+              {
+                "expanded": true,
+                "name": "combobox: input aria-expanded=true (below)",
+                "role": "combobox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "option: combobox popup entry (below)",
+                    "role": "option"
+                  }
+                ],
+                "name": "listbox: combobox popup (below)",
+                "role": "listbox"
+              },
+              {
+                "children": [
+                  {
+                    "name": "tab: aria-selected=true (below)",
+                    "role": "tab",
+                    "selected": true
+                  },
+                  {
+                    "name": "tab: aria-selected=false (below)",
+                    "role": "tab"
+                  }
+                ],
+                "name": "tablist: tabs (below)",
+                "role": "tablist"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "treeitem: level 1, expanded, selected (below)",
+                      {
+                        "children": [
+                          {
+                            "level": 2,
+                            "name": "treeitem: level 2, not selected (below)",
+                            "role": "treeitem"
+                          }
+                        ],
+                        "role": "group"
+                      }
+                    ],
+                    "expanded": true,
+                    "level": 1,
+                    "name": "treeitem: level 1, expanded, selected (below)",
+                    "role": "treeitem",
+                    "selected": true
+                  },
+                  {
+                    "level": 1,
+                    "name": "treeitem: level 1, collapsed (below)",
+                    "role": "treeitem"
+                  }
+                ],
+                "name": "tree: treeitems (below)",
+                "role": "tree"
+              },
+              {
+                "level": 1,
+                "name": "heading: h1 (below)",
+                "role": "heading"
+              },
+              {
+                "level": 2,
+                "name": "heading: h2 (below)",
+                "role": "heading"
+              },
+              {
+                "level": 3,
+                "name": "heading: h3 (below)",
+                "role": "heading"
+              },
+              {
+                "level": 4,
+                "name": "heading: h4 (below)",
+                "role": "heading"
+              },
+              {
+                "level": 5,
+                "name": "heading: h5 (below)",
+                "role": "heading"
+              },
+              {
+                "level": 6,
+                "name": "heading: h6 (below)",
+                "role": "heading"
+              },
+              {
+                "level": 2,
+                "name": "heading: h2 with aria-level=5, tag wins (below)",
+                "role": "heading"
+              },
+              {
+                "level": 3,
+                "name": "heading: role=heading aria-level=3 (below)",
+                "role": "heading"
+              },
+              {
+                "name": "heading: role=heading without aria-level (below)",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "level": 2,
+                    "role": "listitem",
+                    "text": "listitem: aria-level=2 (below)"
+                  },
+                  {
+                    "role": "listitem",
+                    "text": "listitem: aria-level unset (below)"
+                  }
+                ],
+                "role": "list"
+              },
+              {
+                "disabled": true,
+                "name": "button: disabled (below)",
+                "role": "button"
+              },
+              "textbox: disabled input (below)",
+              {
+                "disabled": true,
+                "name": "textbox: disabled input (below)",
+                "role": "textbox"
+              },
+              {
+                "children": [
+                  "group: disabled fieldset (below)",
+                  {
+                    "name": "textbox: in the first legend of a disabled fieldset, enabled (below)",
+                    "role": "textbox"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "textbox: in a disabled fieldset (below)",
+                    "role": "textbox"
+                  },
+                  {
+                    "disabled": true,
+                    "name": "button: in a disabled fieldset (below)",
+                    "role": "button"
+                  }
+                ],
+                "name": "group: disabled fieldset (below)",
+                "role": "group"
+              },
+              {
+                "disabled": true,
+                "name": "button: aria-disabled=true (below)",
+                "role": "button"
+              },
+              {
+                "children": [
+                  {
+                    "disabled": true,
+                    "name": "button: inherits aria-disabled from its group (below)",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: own aria-disabled=false inside an aria-disabled group (below)",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: under an aria-disabled=false wrapper inside an aria-disabled group (below)",
+                    "role": "button"
+                  }
+                ],
+                "disabled": true,
+                "name": "group: aria-disabled=true (below)",
+                "role": "group"
+              },
+              "textbox: aria-invalid=true (below)",
+              {
+                "invalid": true,
+                "name": "textbox: aria-invalid=true (below)",
+                "role": "textbox"
+              },
+              "textbox: aria-invalid=grammar (below)",
+              {
+                "invalid": "grammar",
+                "name": "textbox: aria-invalid=grammar (below)",
+                "role": "textbox"
+              },
+              "textbox: aria-invalid=spelling (below)",
+              {
+                "invalid": "spelling",
+                "name": "textbox: aria-invalid=spelling (below)",
+                "role": "textbox"
+              },
+              "textbox: aria-invalid=false (below)",
+              {
+                "name": "textbox: aria-invalid=false (below)",
+                "role": "textbox"
+              },
+              "textbox: focused at load in the top block only (below)",
+              {
+                "name": "textbox: focused at load in the top block only (below)",
+                "role": "textbox"
+              }
+            ],
+            "name": "region: states block (below)",
+            "role": "region"
+          }
+        ]
+      }
+    }
+  ]
+}
