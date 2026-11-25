@@ -2122,6 +2122,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-snapshot-apc"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "browseros-cdp",
+ "prost",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "neo-takeover"
 version = "0.1.0"
 dependencies = [
