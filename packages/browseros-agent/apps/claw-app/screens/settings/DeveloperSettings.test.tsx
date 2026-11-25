@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'bun:test'
+import type { Plan } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { usePlanDevTools } from '@/modules/api/plan.hooks'
-import { DeveloperSettings } from './DeveloperSettings'
+import { usePlan, usePlanDevTools } from '@/modules/api/plan.hooks'
+import { DeveloperSettings, forgetCallbacks } from './DeveloperSettings'
 import { forgetPlanMemory } from './developer-settings.helpers'
 
 function render(developmentBuild: boolean, offered?: boolean): string {
@@ -59,6 +60,41 @@ describe('Developer settings', () => {
 
   it('shows nothing in a release build of the app', () => {
     expect(render(false)).toBe('')
+  })
+
+  it('reloads the page after the licence is removed, and not when it fails', () => {
+    const free: Plan = {
+      available: true,
+      plan: null,
+      planName: null,
+      features: [],
+      status: 'none',
+      periodEnd: null,
+      endsAt: null,
+      graceUntil: null,
+      onKey: false,
+      checkedAt: null,
+      stale: false,
+    }
+    const client = new QueryClient()
+    let reloads = 0
+    let closes = 0
+    const callbacks = forgetCallbacks(
+      client,
+      () => {
+        closes += 1
+      },
+      () => {
+        reloads += 1
+      },
+    )
+    callbacks.onError(new Error('offline'))
+    expect(reloads).toBe(0)
+    callbacks.onSuccess(free)
+    expect<unknown>(client.getQueryData(usePlan.getKey())).toEqual(free)
+    expect(closes).toBe(1)
+    expect(reloads).toBe(1)
+    client.clear()
   })
 
   it('forgets only what the app remembers about the plan', () => {

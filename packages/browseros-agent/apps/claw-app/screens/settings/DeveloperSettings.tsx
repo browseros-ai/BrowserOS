@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { skipToken, useQueryClient } from '@tanstack/react-query'
+import type { Plan } from '@browseros/claw-api'
+import {
+  type QueryClient,
+  skipToken,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/motion/button/base'
@@ -69,6 +74,31 @@ export function DeveloperSettings({
   )
 }
 
+/**
+ * What happens after the removal. The page reloads on success: notes the app keeps in memory for
+ * this page load (a skill reminder already seen, a bar already closed) would otherwise stay
+ * hidden though their saved copies are gone. A failure leaves the page as it is.
+ */
+export function forgetCallbacks(
+  queryClient: QueryClient,
+  onClose: () => void,
+  reload: () => void = () => window.location.reload(),
+) {
+  return {
+    onSuccess: (plan: Plan) => {
+      queryClient.setQueryData(usePlan.getKey(), plan)
+      queryClient.removeQueries({ queryKey: usePlanPricing.getKey() })
+      queryClient.removeQueries({ queryKey: usePlanKey.getKey() })
+      forgetPlanMemory()
+      toastSuccess('Removed. This computer is on Free now.')
+      onClose()
+      reload()
+    },
+    onError: (error: Error) =>
+      toastApiError('Couldn’t remove the licence from this computer', error),
+  }
+}
+
 function ForgetDialog({
   open,
   onClose,
@@ -77,18 +107,7 @@ function ForgetDialog({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
-  const forget = useForgetThisComputer({
-    onSuccess: (plan) => {
-      queryClient.setQueryData(usePlan.getKey(), plan)
-      queryClient.removeQueries({ queryKey: usePlanPricing.getKey() })
-      queryClient.removeQueries({ queryKey: usePlanKey.getKey() })
-      forgetPlanMemory()
-      toastSuccess('Removed. This computer is on Free now.')
-      onClose()
-    },
-    onError: (error) =>
-      toastApiError('Couldn’t remove the licence from this computer', error),
-  })
+  const forget = useForgetThisComputer(forgetCallbacks(queryClient, onClose))
   return (
     <MorphingModal
       viewId={open ? 'forget-this-computer' : null}

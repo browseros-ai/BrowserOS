@@ -26,8 +26,9 @@ const PLAN_MEMORY = [
  * Forgets what this browser remembers about the plan, so a computer taken off its plan sees the
  * free trial bar, tags and upgrade notes again, as a new computer would.
  */
-export function forgetPlanMemory(storage: Storage = localStorage): void {
+export function forgetPlanMemory(given?: Storage): void {
   try {
+    const storage = given ?? localStorage
     const keys = Array.from({ length: storage.length }, (_, index) =>
       storage.key(index),
     )
