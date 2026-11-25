@@ -838,6 +838,9 @@ export class OwnedBrowser {
           '--lang=en-US',
           '--window-size=1280,720',
           '--force-device-scale-factor=1',
+          // The profile is throwaway. On macOS the real login Keychain shows the user a password
+          // prompt and stalls HTTP navigation until it is answered; the fake keychain skips it.
+          ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
           'about:blank',
         ],
         { detached: true, stdio: ['ignore', stdout.fd, stderr.fd] },
