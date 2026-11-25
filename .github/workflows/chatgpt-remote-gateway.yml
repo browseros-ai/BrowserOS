@@ -5,9 +5,11 @@ on:
     paths:
       - "infra/cloudflare/chatgpt-remote-gateway/**"
       - ".github/workflows/chatgpt-remote-gateway.yml"
+  workflow_dispatch:
   push:
     branches:
-      - "feat/chatgpt-two-way-integration"
+      - "feat/**"
+      - "fix/**"
     paths:
       - "infra/cloudflare/chatgpt-remote-gateway/**"
       - ".github/workflows/chatgpt-remote-gateway.yml"
