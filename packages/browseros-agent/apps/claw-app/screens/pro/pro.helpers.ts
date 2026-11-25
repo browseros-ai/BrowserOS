@@ -44,6 +44,14 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
   },
 ]
 
+/** What a plan pays for, as approved: one line on the plan picker, before buying. */
+export const BACKING_LINE =
+  'Your plan also helps with long-term development of BrowserOS core features.'
+
+/** The same, as thanks, once someone pays or cancels. */
+export const BACKING_THANKS =
+  'Thanks for helping with long-term development of BrowserOS core features.'
+
 /** Shown when the plan or its prices can't be read right now. */
 export const PLAN_UNCHECKED =
   'Couldn’t check your plan. Connect to the internet and neo checks again.'
