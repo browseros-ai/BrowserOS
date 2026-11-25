@@ -11,6 +11,7 @@ interface Env {
 
 type Pairing = { deviceId: string; label: string; createdAt: number; expiresAt: number; paired: boolean };
 type Client = { clientId: string; redirectUris: string[]; createdAt: number };
+type AuthRequest = { clientId: string; redirectUri: string; state: string; challenge: string; scope: string; expiresAt: number };
 type AuthCode = { clientId: string; redirectUri: string; challenge: string; deviceId: string; scope: string; expiresAt: number };
 type AccessClaims = { iss: string; aud: string; sub: string; device_id: string; scope: string; iat: number; exp: number };
 
@@ -179,25 +180,28 @@ export class GatewayState {
       return json({ error: "invalid_request" }, 400);
     }
     const safeScope = scope.split(/\s+/).filter((s) => ["browser:read", "browser:control"].includes(s));
-    const fields = { clientId, redirectUri, state, challenge, scope: safeScope.join(" ") || "browser:read" };
-    const hidden = Object.entries(fields).map(([k, v]) => '<input type="hidden" name="' + k + '" value="' + html(v) + '">').join("");
+    if (!safeScope.includes("browser:read")) safeScope.push("browser:read");
+    const transaction = randomId(24);
+    await this.ctx.storage.put("authreq:" + await sha256(transaction), {
+      clientId, redirectUri, state, challenge, scope: safeScope.join(" "), expiresAt: Date.now() + 10 * 60 * 1000
+    } satisfies AuthRequest);
+    const hidden = '<input type="hidden" name="transaction" value="' + html(transaction) + '">';
+    const scopeLabel = safeScope.join(", ");
     const page = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pair BrowserOS</title><style>body{font:16px system-ui;max-width:520px;margin:12vh auto;padding:24px;background:#090909;color:#f5f5f5}form{display:grid;gap:14px}input,button{font:inherit;padding:12px;border:1px solid #555;border-radius:0;background:#111;color:#fff}button{background:#fff;color:#000;font-weight:700}small{color:#aaa}</style></head><body><h1>Connect ChatGPT to BrowserOS</h1><p>Enter the one-time pairing code displayed by your local BrowserOS app. The code proves control of that local device.</p><form method="post" action="/authorize">' + hidden + '<label>BrowserOS pairing code<input name="pairing_code" autocomplete="off" required minlength="8" maxlength="24"></label><label><input type="checkbox" name="approve" value="yes" required> I approve this ChatGPT connection.</label><p><small>Browser cookies, passwords and browser login tokens are not requested or transferred by this gateway. MCP page content may still be visible to ChatGPT.</small></p><button type="submit">Approve connection</button></form></body></html>';
     return noStoreHtml(page);
   }
 
   private async authorize(request: Request): Promise<Response> {
     const form = await request.formData();
-    const clientId = String(form.get("clientId") || "");
-    const redirectUri = String(form.get("redirectUri") || "");
-    const state = String(form.get("state") || "");
-    const challenge = String(form.get("challenge") || "");
-    const scope = String(form.get("scope") || "browser:read");
+    const transaction = String(form.get("transaction") || "");
+    const txKey = "authreq:" + await sha256(transaction);
+    const authRequest = await this.ctx.storage.get<AuthRequest>(txKey);
+    if (!authRequest || authRequest.expiresAt < Date.now()) return json({ error: "invalid_request" }, 400);
+    await this.ctx.storage.delete(txKey);
     const codeInput = String(form.get("pairing_code") || "").trim().toUpperCase();
-    if (form.get("approve") !== "yes" || !codeInput || !state || !/^[A-Za-z0-9_-]{43}$/.test(challenge)) return json({ error: "access_denied" }, 400);
-    const requestedScopes = scope.split(/\s+/).filter((s) => ["browser:read", "browser:control"].includes(s));
-    if (!requestedScopes.includes("browser:read")) return json({ error: "invalid_scope" }, 400);
-    const client = await this.ctx.storage.get<Client>("client:" + clientId);
-    if (!client || !client.redirectUris.includes(redirectUri)) return json({ error: "invalid_client" }, 400);
+    if (form.get("approve") !== "yes" || !codeInput) return json({ error: "access_denied" }, 400);
+    const client = await this.ctx.storage.get<Client>("client:" + authRequest.clientId);
+    if (!client || !client.redirectUris.includes(authRequest.redirectUri)) return json({ error: "invalid_client" }, 400);
     const pairKey = "pair:" + await sha256(codeInput);
     const pairing = await this.ctx.storage.get<Pairing>(pairKey);
     if (!pairing || pairing.expiresAt < Date.now() || pairing.paired) return json({ error: "invalid_pairing_code" }, 400);
@@ -206,11 +210,12 @@ export class GatewayState {
     await this.ctx.storage.delete(pairKey);
     const authCode = randomId(32);
     await this.ctx.storage.put("code:" + await sha256(authCode), {
-      clientId, redirectUri, challenge, deviceId: pairing.deviceId, scope: requestedScopes.join(" "), expiresAt: Date.now() + 5 * 60 * 1000
+      clientId: authRequest.clientId, redirectUri: authRequest.redirectUri, challenge: authRequest.challenge,
+      deviceId: pairing.deviceId, scope: authRequest.scope, expiresAt: Date.now() + 5 * 60 * 1000
     } satisfies AuthCode);
-    const target = new URL(redirectUri);
+    const target = new URL(authRequest.redirectUri);
     target.searchParams.set("code", authCode);
-    target.searchParams.set("state", state);
+    target.searchParams.set("state", authRequest.state);
     return Response.redirect(target.toString(), 302);
   }
 
