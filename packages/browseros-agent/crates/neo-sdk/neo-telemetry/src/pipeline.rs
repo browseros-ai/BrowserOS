@@ -37,13 +37,18 @@ use std::time::{Duration, Instant};
 use opentelemetry::InstrumentationScope;
 use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::trace::{Span as _, SpanContext, TracerProvider as _};
+// Only `in_memory` (test-support) names the push reader's type. Ungated, these are unused in an
+// `otel`-only build such as claw-server's lint, which the workspace lint never sees: it unifies
+// `test-support` on through this crate's own dev-dependency.
+#[cfg(feature = "test-support")]
 use opentelemetry_otlp::MetricExporter;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+#[cfg(feature = "test-support")]
+use opentelemetry_sdk::metrics::PeriodicReader;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use opentelemetry_sdk::metrics::reader::MetricReader;
 use opentelemetry_sdk::metrics::{
-    InstrumentKind, ManualReader, PeriodicReader, Pipeline as ReaderPipeline, SdkMeterProvider,
-    Temporality,
+    InstrumentKind, ManualReader, Pipeline as ReaderPipeline, SdkMeterProvider, Temporality,
 };
 use opentelemetry_sdk::trace::{SdkTracerProvider, Span, SpanProcessor};
 use tokio::sync::oneshot;
@@ -577,6 +582,7 @@ mod tests {
     use std::sync::mpsc;
 
     use opentelemetry::{Context, Key, KeyValue};
+    use opentelemetry_sdk::metrics::PeriodicReader;
     use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
     use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
     use opentelemetry_sdk::trace::SpanData;

@@ -113,6 +113,8 @@ impl Drop for LoopbackBrowser {
     }
 }
 
+const APC_BASE64_PAYLOAD: &str = "CgYIARABGgA+L/0=";
+
 async fn serve_browser(stream: TcpStream) {
     let mut socket = tokio_tungstenite::accept_async(stream)
         .await
@@ -136,6 +138,10 @@ async fn serve_browser(stream: TcpStream) {
                 "windows": if window_open { json!([{ "windowId": 7 }]) } else { json!([]) },
                 "mutations": mutations,
             }),
+            Some("Page.getAnnotatedPageContent") => {
+                assert_eq!(request["params"]["includeActionableInformation"], true);
+                json!({ "content": APC_BASE64_PAYLOAD })
+            }
             Some("Fixture.echo") => json!({
                 "params": request["params"],
                 "sessionId": request["sessionId"],
@@ -923,5 +929,26 @@ async fn raw_sends_return_the_browsers_text_and_typed_sends_decode_it() {
             b: vec![1.0, 2.5],
         }
     );
+    client.disconnect().await;
+}
+
+#[tokio::test]
+async fn typed_page_annotated_page_content_decodes_base64_payload_as_string() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+
+    let result: crate::page::GetAnnotatedPageContentResult =
+        crate::page::get_annotated_page_content(
+            &client,
+            crate::page::GetAnnotatedPageContentParams {
+                include_actionable_information: Some(true),
+            },
+            None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("get_annotated_page_content: {err}"));
+
+    let content: String = result.content;
+    assert_eq!(content, APC_BASE64_PAYLOAD);
     client.disconnect().await;
 }

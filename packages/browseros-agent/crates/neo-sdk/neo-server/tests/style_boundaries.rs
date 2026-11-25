@@ -396,6 +396,7 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn 
 const LINT_TWINS: &[&str] = &[
     "crates/neo-sdk/neo-playwright",
     "crates/neo-sdk/neo-snapshot",
+    "crates/neo-sdk/neo-snapshot-apc",
 ];
 
 /// Checks that this crate restates every workspace lint at least as strictly, and that each twin

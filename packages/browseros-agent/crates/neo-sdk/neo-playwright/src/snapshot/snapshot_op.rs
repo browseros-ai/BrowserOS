@@ -61,7 +61,7 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::{self, MAX_VALUE_DEPTH, OpPage};
+use crate::page::{MAX_VALUE_DEPTH, OpPage};
 use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::probe::{
     self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe,
@@ -1142,13 +1142,10 @@ impl Snapshotter<'_> {
         let on_top = mem::take(&mut root.on_top);
         let unmarked = root.unmarked.take();
         let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
-        let encoded = serde_json::to_string(&result).map_err(|_unencodable| {
-            self.scope.fail(
-                ErrorCode::Internal,
-                "could not encode the stitched snapshot",
-            )
-        })?;
-        let nesting = page::json_depth(&encoded);
+        // The levels of JSON the result is sent as, its object above the deepest of `json`.
+        // `partial`, the only other field written here, is an array of flat notes. With the
+        // object that is three levels, far under the bound, so the walk leaves it out.
+        let nesting = 1 + neo_snapshot::json_depth(&result.json);
         if nesting > MAX_VALUE_DEPTH {
             return Err(self.scope.fail(
                 ErrorCode::Unsupported,

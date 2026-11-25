@@ -122,6 +122,7 @@ pub struct PageManager {
     cdp: Arc<dyn CdpConnection>,
     hooks: PageManagerHooks,
     file_transfers: Option<Arc<crate::file_transfers::TransferState>>,
+    accessibility: crate::AccessibilityDomain,
     /// Numbers each listing before its `Browser.getTabs` goes out. A listing's reply is applied
     /// only once the listing gets `state`, after any number of other replies were: one answered
     /// before a concurrent `Browser.createTab` but applied after that creation registered its
@@ -146,6 +147,7 @@ impl PageManager {
             cdp,
             hooks,
             file_transfers: None,
+            accessibility: crate::AccessibilityDomain::Off,
             listings: AtomicU64::new(0),
         }
     }
@@ -155,6 +157,11 @@ impl PageManager {
         transfers: Arc<crate::file_transfers::TransferState>,
     ) -> Self {
         self.file_transfers = Some(transfers);
+        self
+    }
+
+    pub(crate) fn with_accessibility(mut self, accessibility: crate::AccessibilityDomain) -> Self {
+        self.accessibility = accessibility;
         self
     }
 
@@ -817,7 +824,10 @@ impl PageManager {
         // arguments for the inspector, and sites time that to detect DevTools and blank or
         // close themselves. Runtime commands work without it; `PageSignals::harvest_console`
         // turns it on only for the instant it takes to collect the console history.
-        let _: Value = session.send("Accessibility.enable", json!({})).await?;
+        // `Accessibility.enable` is opt-in; `crate::AccessibilityDomain` says what it costs.
+        if self.accessibility == crate::AccessibilityDomain::Enabled {
+            let _: Value = session.send("Accessibility.enable", json!({})).await?;
+        }
         let _ = session
             .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
             .await;

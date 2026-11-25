@@ -2,7 +2,7 @@ use super::TabRegistry;
 use crate::services::sessions::PageOwnership;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, NativeCapabilities,
+    AccessibilityDomain, BrowserSession, BrowserSessionHooks, NativeCapabilities,
     pages::{OnPageDetached, PageManagerHooks},
 };
 use serde::Serialize;
@@ -184,7 +184,7 @@ impl BrowserService {
                 ownership.remove_page(&page_id).await;
             });
         });
-        let session = BrowserSession::new_with_native(
+        let session = BrowserSession::new_with_accessibility(
             Arc::new(client),
             BrowserSessionHooks {
                 page_manager: PageManagerHooks {
@@ -193,6 +193,7 @@ impl BrowserService {
                 },
             },
             self.native,
+            AccessibilityDomain::Enabled,
         );
         if let Err(error) = self
             .tab_registry
