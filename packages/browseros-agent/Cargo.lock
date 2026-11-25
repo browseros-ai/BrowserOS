@@ -2129,6 +2129,7 @@ dependencies = [
  "base64 0.22.1",
  "browseros-cdp",
  "neo-snapshot",
+ "neo-snapshot-apc",
  "prost",
  "serde",
  "serde_json",

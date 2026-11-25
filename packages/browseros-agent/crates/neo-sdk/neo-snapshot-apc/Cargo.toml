@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Pure-Rust decoder and typed protobuf schema for Chromium's AnnotatedPageContent (BrowserOS Neo)"
 
+[features]
+# Hand-built `AnnotatedPageContent` fixtures (`tree::ApcBuilder`) for offline unit and integration
+# tests without compiling test builders into production binaries.
+test-support = []
+
 [dependencies]
 base64.workspace = true
 prost.workspace = true
@@ -18,6 +23,7 @@ thiserror.workspace = true
 browseros-cdp.workspace = true
 # The recorded oracle's states and ARIA trees are neo-snapshot's types (tests/support/oracle.rs).
 neo-snapshot.workspace = true
+neo-snapshot-apc = { path = ".", features = ["test-support"] }
 # `unbounded_depth`: an oracle's ARIA tree nests two JSON levels per element, so deep-nesting's
 # passes serde's default limit of 128; the recorder and tests/oracles.rs lift it per read.
 serde_json = { workspace = true, features = ["unbounded_depth"] }
