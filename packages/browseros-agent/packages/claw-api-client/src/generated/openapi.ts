@@ -1245,7 +1245,11 @@ export interface components {
       label: string
       sessionId: string
       toolName: string
-      /** Format: int64 */
+      /**
+       * Format: int64
+       * @deprecated
+       * @description Use tabId for browser tab identity.
+       */
       pageId?: number
       /** Format: int64 */
       tabId?: number

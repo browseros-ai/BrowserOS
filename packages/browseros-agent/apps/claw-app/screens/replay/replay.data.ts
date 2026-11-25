@@ -337,7 +337,6 @@ export function mapDispatchToFrame(
     node,
     caption,
     url: row.url,
-    pageId: row.pageId,
     tabId:
       row.tabId ?? (row.targetId ? targetTabs.get(row.targetId) : undefined),
     targetId: row.targetId,

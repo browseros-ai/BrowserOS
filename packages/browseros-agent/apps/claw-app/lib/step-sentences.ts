@@ -116,8 +116,8 @@ interface Call {
 
 /**
  * A call as the sentence rules see it. Calls made inside a `run` script are
- * recorded under their wire names with positional args, usually
- * `[pageId, ...]`; each maps onto the tool it mirrors.
+ * recorded under their wire names with positional args. Legacy page-scoped
+ * calls put the host page handle first, followed by the tool's arguments.
  */
 function normalizeCall(
   dispatch: Pick<ToolDispatchRow, 'toolName' | 'argsJson'>,
@@ -141,7 +141,7 @@ function normalizeCall(
     case 'observe.diff':
       return { tool: 'diff', args: {} }
     default:
-      // Tool-shaped calls such as `evaluate` take `[pageId, options]`.
+      // Tool-shaped calls such as `evaluate` record options after the page handle.
       return { tool, args: isArgs(raw[1]) ? raw[1] : {} }
   }
 }
@@ -474,15 +474,8 @@ export interface DescribedSteps {
 /** Correlation retained even when a successful parent is omitted from the rail. */
 interface StepContext {
   runKey: string | number
-  tabKey: string | undefined
+  tabId: ToolDispatchRow['tabId']
   toolName: string
-}
-
-function sdkTabKey(dispatch: ToolDispatchRow): string | undefined {
-  if (dispatch.tabId !== undefined) return `tab:${dispatch.tabId}`
-  if (dispatch.pageId !== undefined) return `page:${dispatch.pageId}`
-  // SDK page openings can lack a tab ID, so a shared sentence cannot identify the tab.
-  return undefined
 }
 
 function sdkRunKey(
@@ -528,8 +521,8 @@ function canFoldStep(
     if (previousContext !== undefined) return false
   } else if (
     previousContext?.runKey !== context.runKey ||
-    context.tabKey === undefined ||
-    previousContext.tabKey !== context.tabKey
+    context.tabId === undefined ||
+    previousContext.tabId !== context.tabId
   ) {
     return false
   }
@@ -599,7 +592,7 @@ export function describeSteps(
     const context: StepContext | undefined =
       runKey === undefined
         ? undefined
-        : { runKey, tabKey: sdkTabKey(dispatch), toolName: dispatch.toolName }
+        : { runKey, tabId: dispatch.tabId, toolName: dispatch.toolName }
     if (afterHandBack) handBackEndedAt = undefined
     const handsBack = handedBack(dispatch)
     if (handsBack) {

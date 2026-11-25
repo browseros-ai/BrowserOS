@@ -29,6 +29,8 @@ Dispatch:
     pageId:
       type: integer
       format: int64
+      deprecated: true
+      description: Use tabId for browser tab identity.
     tabId:
       type: integer
       format: int64
