@@ -76,6 +76,7 @@ pub struct FrameTarget {
 /// `BrowserSession::forget_session`).
 pub struct FrameRegistry {
     cdp: Arc<dyn CdpConnection>,
+    accessibility: crate::AccessibilityDomain,
     initializers: StdMutex<Vec<Weak<dyn FrameInitializer>>>,
     connection_epoch: Mutex<u64>,
     oopif_sessions: Mutex<HashMap<FrameId, SessionId>>,
@@ -98,9 +99,18 @@ pub(crate) struct FrameLink {
 impl FrameRegistry {
     #[must_use]
     pub fn new(cdp: Arc<dyn CdpConnection>) -> Arc<Self> {
+        Self::with_accessibility(cdp, crate::AccessibilityDomain::Off)
+    }
+
+    #[must_use]
+    pub(crate) fn with_accessibility(
+        cdp: Arc<dyn CdpConnection>,
+        accessibility: crate::AccessibilityDomain,
+    ) -> Arc<Self> {
         let connection_epoch = cdp.connection_epoch();
         let registry = Arc::new(Self {
             cdp,
+            accessibility,
             initializers: StdMutex::default(),
             connection_epoch: Mutex::new(connection_epoch),
             oopif_sessions: Mutex::new(HashMap::new()),
@@ -512,9 +522,11 @@ impl FrameRegistry {
                 .await;
         }
         let _ = session.send::<_, Value>("DOM.enable", json!({})).await;
-        let _ = session
-            .send::<_, Value>("Accessibility.enable", json!({}))
-            .await;
+        if self.accessibility == crate::AccessibilityDomain::Enabled {
+            let _ = session
+                .send::<_, Value>("Accessibility.enable", json!({}))
+                .await;
+        }
         // A frame that started paused belongs to a page with configuration, and so do its
         // children; one that did not asks the initializers about the parent it inherits from.
         let pause =

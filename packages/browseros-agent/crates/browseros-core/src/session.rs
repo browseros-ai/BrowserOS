@@ -21,6 +21,23 @@ use std::{
 };
 use tokio::sync::{Mutex, broadcast, mpsc};
 
+/// Whether core sends `Accessibility.enable` on each page and OOPIF session it attaches. With
+/// the domain on, Blink builds a complete accessibility tree for every document the session's
+/// frame loads afterwards and keeps it current until the session ends: about 80 MB of renderer
+/// RSS on a 116k-element page. `Accessibility.getFullAXTree` answers either way, because Blink
+/// builds the tree on demand. Blink also keeps a tree it built for a read until the session
+/// ends, so a host that reads on every snapshot holds one anyway; that host keeps the domain on
+/// and its attach unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AccessibilityDomain {
+    /// Hosted Neo, which never reads the tree.
+    #[default]
+    Off,
+    /// The desktop server, whose observer reads the tree for each snapshot, ref and annotated
+    /// screenshot.
+    Enabled,
+}
+
 #[derive(Clone, Default)]
 pub struct BrowserSessionHooks {
     pub page_manager: PageManagerHooks,
@@ -50,11 +67,26 @@ impl BrowserSession {
         Self::new_with_native(connection, hooks, NativeCapabilities::default())
     }
 
+    /// A session over a browser of known native identity. Attach leaves the accessibility
+    /// domain off; hosts that read the tree on every snapshot use
+    /// [`Self::new_with_accessibility`].
     #[must_use]
     pub fn new_with_native(
         connection: Arc<dyn CdpConnection>,
         hooks: BrowserSessionHooks,
         native: NativeCapabilities,
+    ) -> Arc<Self> {
+        Self::new_with_accessibility(connection, hooks, native, AccessibilityDomain::Off)
+    }
+
+    /// Like [`Self::new_with_native`], with the host choosing whether attach keeps each page's
+    /// and OOPIF's accessibility tree live ([`AccessibilityDomain`]).
+    #[must_use]
+    pub fn new_with_accessibility(
+        connection: Arc<dyn CdpConnection>,
+        hooks: BrowserSessionHooks,
+        native: NativeCapabilities,
+        accessibility: AccessibilityDomain,
     ) -> Arc<Self> {
         let session = Arc::new_cyclic(|session| {
             Self::assemble(
@@ -64,6 +96,7 @@ impl BrowserSession {
                 }),
                 hooks,
                 native,
+                accessibility,
             )
         });
         Self::spawn_detach_listener(session.clone());
@@ -76,9 +109,10 @@ impl BrowserSession {
         connection: Arc<dyn CdpConnection>,
         hooks: BrowserSessionHooks,
         native: NativeCapabilities,
+        accessibility: AccessibilityDomain,
     ) -> Self {
         let file_transfers = crate::file_transfers::TransferState::new(connection.clone());
-        let frames = FrameRegistry::new(connection.clone());
+        let frames = FrameRegistry::with_accessibility(connection.clone(), accessibility);
         let page_signals = PageSignals::new(connection.clone());
         let frame_hook = {
             let frames = frames.clone();
@@ -122,7 +156,8 @@ impl BrowserSession {
         };
         let pages = Arc::new(
             PageManager::new(connection.clone(), page_hooks)
-                .with_file_transfers(file_transfers.clone()),
+                .with_file_transfers(file_transfers.clone())
+                .with_accessibility(accessibility),
         );
         let windows = Arc::new(WindowManager::new(connection.clone()));
         Self {
@@ -545,5 +580,131 @@ impl CdpConnection for EvictingConnection {
 
     fn connection_epoch(&self) -> u64 {
         self.inner.connection_epoch()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccessibilityDomain, BrowserSession, BrowserSessionHooks};
+    use crate::{NativeCapabilities, testing::TestConnection};
+    use serde_json::json;
+    use std::{error::Error, sync::Arc, time::Duration};
+
+    /// Attaches one listed page, then an OOPIF under it, and returns the sessions that got
+    /// `Accessibility.enable` in send order, with the page's session named `page`.
+    async fn accessibility_enabled_sessions(
+        build: impl FnOnce(Arc<TestConnection>) -> Arc<BrowserSession>,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        connection.always(
+            "Browser.getTabs",
+            json!({ "tabs": [{
+                "tabId": 7, "targetId": "target-7", "url": "https://example.com",
+                "title": "Example", "isActive": true, "isLoading": false, "loadProgress": 1.0,
+                "isPinned": false, "isHidden": false, "windowId": 3
+            }] }),
+        )?;
+        for method in [
+            "Page.enable",
+            "DOM.enable",
+            "Accessibility.enable",
+            "Runtime.runIfWaitingForDebugger",
+            "Target.setAutoAttach",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let session = build(connection.clone());
+        let pages = session.pages.list().await?;
+        let page_id = pages.first().ok_or("no listed page")?.page_id.clone();
+        let page_session = session.pages.get_session(page_id).await?.session_id;
+        connection.emit(
+            "Target.attachedToTarget",
+            json!({ "sessionId": "oopif-1", "waitingForDebugger": false, "targetInfo": {
+                "targetId": "frame-1", "type": "iframe", "title": "", "url": "https://ads.test",
+                "attached": true, "canAccessOpener": false
+            }}),
+            Some(page_session.clone()),
+        );
+        // OOPIF setup runs on the registry's event listener and ends by re-arming auto-attach.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let armed = connection.calls().is_ok_and(|calls| {
+                    calls.iter().any(|call| {
+                        call.method == "Target.setAutoAttach"
+                            && call
+                                .session
+                                .as_ref()
+                                .is_some_and(|id| id.as_str() == "oopif-1")
+                    })
+                });
+                if armed {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        Ok(connection
+            .calls()?
+            .into_iter()
+            .filter(|call| call.method == "Accessibility.enable")
+            .map(|call| match call.session {
+                Some(id) if id == page_session => "page".to_owned(),
+                Some(id) => id.as_str().to_owned(),
+                None => "browser".to_owned(),
+            })
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn only_a_host_that_asks_keeps_page_and_oopif_trees_live() -> Result<(), Box<dyn Error>> {
+        type Build = fn(Arc<TestConnection>) -> Arc<BrowserSession>;
+        let cases: [(&str, Build, &[&str]); 4] = [
+            (
+                "new",
+                |connection| BrowserSession::new(connection, BrowserSessionHooks::default()),
+                &[],
+            ),
+            (
+                "new_with_native",
+                |connection| {
+                    BrowserSession::new_with_native(
+                        connection,
+                        BrowserSessionHooks::default(),
+                        NativeCapabilities::default(),
+                    )
+                },
+                &[],
+            ),
+            (
+                "Off",
+                |connection| {
+                    BrowserSession::new_with_accessibility(
+                        connection,
+                        BrowserSessionHooks::default(),
+                        NativeCapabilities::default(),
+                        AccessibilityDomain::Off,
+                    )
+                },
+                &[],
+            ),
+            (
+                "Enabled",
+                |connection| {
+                    BrowserSession::new_with_accessibility(
+                        connection,
+                        BrowserSessionHooks::default(),
+                        NativeCapabilities::default(),
+                        AccessibilityDomain::Enabled,
+                    )
+                },
+                &["page", "oopif-1"],
+            ),
+        ];
+        for (name, build, expected) in cases {
+            let enabled = accessibility_enabled_sessions(build).await?;
+            assert_eq!(enabled, expected, "{name}");
+        }
+        Ok(())
     }
 }
