@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 use crate::proto::ContentAttributes;
 
 use super::hidden::Hidden;
+use super::mask::NodeMask;
 use super::node_key::{DocId, DomNodeId, NodeId, NodeRange};
 use super::role::Role;
 use super::state::State;
@@ -39,6 +40,7 @@ pub struct TreeNode {
     hidden: Hidden,
     role: Option<Role>,
     state: State,
+    mask: NodeMask,
     raw: Option<ContentAttributes>,
 }
 
@@ -58,6 +60,7 @@ impl TreeNode {
             hidden: Hidden::default(),
             role: None,
             state: State::default(),
+            mask: NodeMask::Clear,
             raw: init.raw,
         }
     }
@@ -153,8 +156,18 @@ impl TreeNode {
         self.state
     }
 
+    /// Precomputed privacy mask outcome for this node (Chromium redaction or host-private mark).
+    #[must_use]
+    pub const fn mask(&self) -> NodeMask {
+        self.mask
+    }
+
     pub(crate) const fn raw_attributes(&self) -> Option<&ContentAttributes> {
         self.raw.as_ref()
+    }
+
+    pub(crate) fn raw_attributes_mut(&mut self) -> Option<&mut ContentAttributes> {
+        self.raw.as_mut()
     }
 
     pub(crate) fn set_hidden(&mut self, hidden: Hidden) {
@@ -167,6 +180,10 @@ impl TreeNode {
 
     pub(crate) fn set_state(&mut self, state: State) {
         self.state = state;
+    }
+
+    pub(crate) fn set_mask(&mut self, mask: NodeMask) {
+        self.mask = mask;
     }
 
     pub(crate) fn set_first_child(&mut self, child: NodeId) {
@@ -208,6 +225,7 @@ impl fmt::Debug for TreeNode {
             .field("role", &self.role)
             .field("hidden", &self.hidden)
             .field("state", &self.state)
+            .field("mask", &self.mask)
             .field("has_raw_attributes", &self.raw.is_some())
             .finish()
     }

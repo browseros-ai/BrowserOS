@@ -4,17 +4,14 @@ use std::sync::OnceLock;
 
 use crate::proto::{
     BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
-    RedactionDecision,
 };
 
 use super::hidden;
+use super::mask::{self, MaskSource, NodeMask};
 use super::node_key::{DocId, DomNodeId, NodeId};
 use super::role::{self, Role};
 use super::snapshot_tree::SnapshotTree;
 use super::state::InvalidState;
-
-/// Upper bound on emitted redaction bullets so corrupt payloads cannot trigger OOM.
-const MAX_REDACTED_BULLETS: usize = 65_536;
 
 static EMPTY_NAME: Name = Name {
     text: String::new(),
@@ -494,6 +491,7 @@ struct NodeFacts<'a> {
     doc: DocId,
     dom_id: Option<DomNodeId>,
     role: Option<Role>,
+    mask: NodeMask,
     tag: Option<&'a str>,
     raw: &'a ContentAttributes,
 }
@@ -507,6 +505,7 @@ impl<'a> NodeFacts<'a> {
             doc: node.doc(),
             dom_id: node.dom_node_id(),
             role: node.role(),
+            mask: node.mask(),
             tag: hidden::raw_tag(raw),
             raw,
         })
@@ -756,76 +755,8 @@ fn raw_placeholder(raw: &ContentAttributes) -> &str {
         .unwrap_or("")
 }
 
-fn decode_redaction(code: Option<i32>) -> Option<RedactionDecision> {
-    code.and_then(|raw_code| RedactionDecision::try_from(raw_code).ok())
-}
-
-fn is_redacted_decision(decision: RedactionDecision) -> bool {
-    matches!(
-        decision,
-        RedactionDecision::RedactedHasBeenPassword
-            | RedactionDecision::RedactedIsSensitivePaymentField
-            | RedactionDecision::RedactedCustomPasswordCss
-            | RedactionDecision::RedactedCustomPasswordJs
-            | RedactionDecision::RedactedIsOtp
-    )
-}
-
-fn is_unredacted_empty_decision(decision: RedactionDecision) -> bool {
-    matches!(
-        decision,
-        RedactionDecision::UnredactedEmptyPassword
-            | RedactionDecision::UnredactedEmptyPaymentField
-            | RedactionDecision::UnredactedEmptyCustomPassword
-            | RedactionDecision::UnredactedEmptyOtpField
-    )
-}
-
-fn is_redacted(raw: &ContentAttributes) -> bool {
-    let attr_redacted = decode_redaction(raw.redaction_decision).is_some_and(is_redacted_decision);
-    let control_redacted = form_control_data(raw)
-        .and_then(|control| decode_redaction(control.redaction_decision))
-        .is_some_and(is_redacted_decision);
-    attr_redacted || control_redacted
-}
-
-fn is_unredacted_empty(raw: &ContentAttributes) -> bool {
-    let attr_empty =
-        decode_redaction(raw.redaction_decision).is_some_and(is_unredacted_empty_decision);
-    let control_empty = form_control_data(raw)
-        .and_then(|control| decode_redaction(control.redaction_decision))
-        .is_some_and(is_unredacted_empty_decision);
-    attr_empty || control_empty
-}
-
-fn redacted_bullets(raw: &ContentAttributes) -> String {
-    let len = raw
-        .browseros
-        .as_deref()
-        .and_then(|browseros| browseros.redacted_value_length)
-        .unwrap_or(0);
-    let count = usize::try_from(len)
-        .unwrap_or(MAX_REDACTED_BULLETS)
-        .min(MAX_REDACTED_BULLETS);
-    if count == 0 {
-        String::new()
-    } else {
-        "•".repeat(count)
-    }
-}
-
-fn masked_or_raw_field_value(raw: &ContentAttributes) -> String {
-    // Privacy gate: redacted controls must never read `field_value`, even if a payload populates it.
-    if is_redacted(raw) {
-        return redacted_bullets(raw);
-    }
-    if is_unredacted_empty(raw) {
-        return String::new();
-    }
-    form_control_data(raw)
-        .and_then(|control| control.field_value.as_deref())
-        .unwrap_or("")
-        .to_owned()
+fn masked_or_raw_field_value(raw: &ContentAttributes, node_mask: NodeMask) -> String {
+    mask::effective_field_value(raw, node_mask).unwrap_or_default()
 }
 
 fn contains_in_same_doc(tree: &SnapshotTree, ancestor_id: NodeId, target_id: NodeId) -> bool {
@@ -1545,19 +1476,18 @@ fn eval_step_2c<'a>(
     match control_role {
         Role::Textbox | Role::Searchbox => {
             visited.insert(facts.id);
-            if is_redacted(facts.raw) {
-                return Some(StepOutcome::Done(redacted_bullets(facts.raw)));
-            }
-            if is_unredacted_empty(facts.raw) {
-                return Some(StepOutcome::Done(String::new()));
+            if let Some(masked) = facts.mask.bullets_string() {
+                return Some(StepOutcome::Done(masked));
             }
             if facts.tag.is_some_and(|t| {
                 t.eq_ignore_ascii_case("input") || t.eq_ignore_ascii_case("textarea")
             }) {
-                return Some(StepOutcome::Done(masked_or_raw_field_value(facts.raw)));
+                return Some(StepOutcome::Done(masked_or_raw_field_value(
+                    facts.raw, facts.mask,
+                )));
             }
             let text = collect_dom_text_in_subtree(index.tree, facts.id)
-                .unwrap_or_else(|| masked_or_raw_field_value(facts.raw));
+                .unwrap_or_else(|| masked_or_raw_field_value(facts.raw, facts.mask));
             Some(StepOutcome::Done(text))
         }
         Role::Combobox | Role::Listbox => {
@@ -1571,7 +1501,9 @@ fn eval_step_2c<'a>(
         }
         Role::Progressbar | Role::Scrollbar | Role::Slider | Role::Spinbutton | Role::Meter => {
             visited.insert(facts.id);
-            Some(StepOutcome::Done(masked_or_raw_field_value(facts.raw)))
+            Some(StepOutcome::Done(masked_or_raw_field_value(
+                facts.raw, facts.mask,
+            )))
         }
         Role::Menu => {
             visited.insert(facts.id);
@@ -1610,7 +1542,7 @@ fn eval_step_2c_select_or_listbox<'a>(
         .unwrap_or_default();
 
     if selected.is_empty() && facts.tag.is_some_and(|t| t.eq_ignore_ascii_case("input")) {
-        return StepOutcome::Done(masked_or_raw_field_value(facts.raw));
+        return StepOutcome::Done(masked_or_raw_field_value(facts.raw, facts.mask));
     }
 
     StepOutcome::Push(Frame::JoinAll {
@@ -1733,7 +1665,7 @@ fn eval_step_2e_special_input<'a>(
         | FormControlType::InputSubmit
         | FormControlType::InputReset => {
             visited.insert(facts.id);
-            let value = masked_or_raw_field_value(facts.raw);
+            let value = masked_or_raw_field_value(facts.raw, facts.mask);
             if !role::trim_js_whitespace(&value).is_empty() {
                 return Some(StepOutcome::Done(value));
             }
@@ -1869,9 +1801,9 @@ fn eval_step_2f<'a>(
     }
 
     visited.insert(facts.id);
-    // Privacy guard: never walk child nodes of a redacted control, which could echo sensitive
-    // characters even when referenced through `aria-labelledby`.
-    if is_redacted(facts.raw) {
+    // Privacy guard: never walk child nodes of a Chromium-redacted control, which could echo
+    // sensitive characters even when referenced through `aria-labelledby`.
+    if facts.mask.source() == Some(MaskSource::Chromium) {
         return None;
     }
 

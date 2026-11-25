@@ -12,6 +12,9 @@
 //!                                                 ▼                      ▼
 //!                                           proto::*             tree::SnapshotTree
 //!                                    (Edition 2023 wire schema)  (flat-tree arena + docs)
+//!                                                                        │
+//!                                                                        ▼
+//!                                                                refs::TabRefTable
 //!
 //!  prelude chunk    ─▶ select::ParsedSelector ─▶ select::parse_attribute_selector
 //!                                                   └─▶ select::RoleQuery
@@ -25,6 +28,7 @@
 mod decode;
 mod decode_error;
 pub mod proto;
+pub mod refs;
 pub mod select;
 pub mod tree;
 
