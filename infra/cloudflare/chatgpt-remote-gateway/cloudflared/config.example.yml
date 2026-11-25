@@ -1,0 +1,11 @@
+# Copy this file to your local cloudflared config directory and replace placeholders.
+# Keep the tunnel credentials JSON outside this repository.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /ABSOLUTE/PATH/OUTSIDE/REPOSITORY/TUNNEL_UUID.json
+
+ingress:
+  - hostname: browseros-mcp-origin.example.com
+    service: http://127.0.0.1:9200
+    originRequest:
+      connectTimeout: 10s
+  - service: http_status:404
