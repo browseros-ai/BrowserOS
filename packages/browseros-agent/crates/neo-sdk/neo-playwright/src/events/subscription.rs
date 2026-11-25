@@ -2,6 +2,7 @@
 
 use browseros_core::{TabId, TargetId};
 
+use crate::events::EventScope;
 use crate::events::page_event::PageEvent;
 use crate::listed_enum::listed_enum;
 
@@ -149,6 +150,17 @@ impl Subscription {
             (Self::Context(event), PageEvent::Load { kind, .. }) => kind == event,
             (Self::ContextPage | Self::Context(_), _) => false,
             (Self::Page { target, event, .. }, recorded) => recorded.concerns(*event, target),
+        }
+    }
+
+    /// Whose held events the watcher must have let go before this subscription has heard of
+    /// everything received until now: its page's for a page listener (a download in a popup
+    /// that opened only to download is held for its opener too, `Held`), every tab's for a
+    /// context-level one.
+    pub(crate) fn held_scope(&self) -> EventScope {
+        match self {
+            Self::Page { target, .. } => EventScope::Tabs(vec![target.clone()]),
+            Self::ContextPage | Self::Context(_) => EventScope::Every,
         }
     }
 

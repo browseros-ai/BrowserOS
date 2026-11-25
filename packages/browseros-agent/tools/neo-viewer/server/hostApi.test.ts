@@ -59,6 +59,8 @@ let tokenFile = ''
 const cleanups: Array<() => unknown> = []
 
 beforeEach(async () => {
+  // The client is one per process: a viewer an earlier test file started may have configured it.
+  await configureHostApi(null)
   dir = await mkdtemp(join(tmpdir(), 'neo-viewer-host-api-'))
   tokenFile = join(dir, 'host-token')
   await writeFile(tokenFile, `${TOKEN}\n`, { mode: 0o600 })

@@ -11,6 +11,7 @@ use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_http::Settings;
+use neo_telemetry::{Telemetry, TelemetryError, Vocabulary};
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
     TraceSink, TraceStore, WriterConfig,
@@ -24,10 +25,10 @@ use tokio::{fs, signal, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::browser::{BrowserLink, NeoTab, TabEvent, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, OpenFor, OpenIntent, TabEvent, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
-use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
+use crate::dispatch::{Dispatcher, ErrorCode, Observer, RegistryBuilder};
 use crate::host::{
     AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HolderFeed, HostApi,
     HostHolds, HostInputs, TabHolders, TakeoverLock,
@@ -48,6 +49,7 @@ struct PrivateTypingParts<'a> {
     takeover: &'a Arc<TakeoverLock>,
     playwright: &'a Arc<PlaywrightFacade>,
     filled: Arc<FilledTabs>,
+    telemetry: &'a Telemetry,
 }
 
 async fn private_typing(
@@ -62,6 +64,7 @@ async fn private_typing(
         takeover,
         playwright,
         filled,
+        telemetry,
     } = parts;
     let retention = settings.clone();
     let pictures = settings.clone();
@@ -81,6 +84,7 @@ async fn private_typing(
         pictures_never: Arc::new(move || pictures.fill_pictures_never()),
         shutdown: shutdown.clone(),
         took: Arc::new(move |tab| entry.withholds_picture(tab)),
+        telemetry: telemetry.clone(),
     })
 }
 
@@ -105,7 +109,8 @@ async fn forget_closed_filled_tabs(browser: Arc<BrowserLink>, filled: Arc<Filled
 ///
 /// ```text
 ///  start ─ bind the agent port (taken: exit 2) ─ trace store + writer (with the
-///          screenshot queue) ─ host socket (with a usable token; bind failure: exit 1)
+///          screenshot queue) ─ Telemetry (from the startup environment, before anything that
+///          reports to it) ─ host socket (with a usable token; bind failure: exit 1)
 ///          and the host's settings (saved beside trace.db, or the defaults with no socket)
 ///        ─ TabRegistry + BrowserLink (connects in the background) ─ TabHolders (the task
 ///          book's writer: on the link's first connect it gives every task back the saved tabs
@@ -116,8 +121,8 @@ async fn forget_closed_filled_tabs(browser: Arc<BrowserLink>, filled: Arc<Filled
 ///          (the host's private typing, with its request record beside the trace)
 ///        ─ host API task (starts neo-http once the link connects, then serves the
 ///          socket) ─ housekeeping task (reads the host's settings each pass) ─ agent router
-///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace and tab
-///          holders flushed
+///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace, tab
+///          holders and telemetry flushed, at once, in one budget
 /// ```
 ///
 /// `start` binds the agent port before anything else, so a taken port fails (exit 2) before
@@ -130,6 +135,11 @@ pub struct App {
     trace: TraceSink,
     /// The task book's changes on their way to the tab-holders file, flushed at shutdown.
     holders: Arc<HolderFeed>,
+    /// The process's telemetry, whose pending spans and metrics are flushed at shutdown.
+    telemetry: Telemetry,
+    /// Told when Neo's own shutdown begins and again before the final flush, so a tab that closes
+    /// with no intent then, or one whose close still waits, counts as `shutdown`, not `user`.
+    tabs: Arc<TabRegistry>,
     #[cfg(feature = "test-support")]
     store: TraceStore,
 }
@@ -152,6 +162,9 @@ pub enum StartError {
     /// A usable host token is configured, but its socket could not be bound.
     #[error("host socket: {0}")]
     HostSocket(String),
+    /// Telemetry could not be built from its startup config (`EnvConfig::telemetry`).
+    #[error("telemetry: {0}")]
+    Telemetry(#[from] TelemetryError),
     /// Binding, serving or installing the signal handler failed.
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -237,7 +250,16 @@ impl App {
 
         let store = open_trace(&config.env.trace_dir()).await?;
         let (trace, screenshots) = start_trace(&store);
-        let tabs = Arc::new(TabRegistry::new());
+        // The process's one telemetry handle, built before anything that reports to it: the tab
+        // registry counts tabs from the browser link's first listing, and the host API's
+        // `GET /v1/metrics` renders it. Built from the startup environment, already validated
+        // (`EnvConfig::telemetry`); it opens no connection, so a collector that is down costs
+        // the start nothing.
+        let telemetry = Telemetry::new(&config.env.telemetry)?;
+        let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+        // Before the link's first listing, so tab telemetry counts the blank tab Neo makes its
+        // own at attach born `neo`: `NeoTab::follow` claims it.
+        let attach = tabs.life().expect_open(OpenFor::Neo);
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -249,6 +271,7 @@ impl App {
                 settings_file: config.env.settings_file(),
                 settings_defaults: config.settings_defaults(),
                 tabs: Arc::clone(&tabs),
+                telemetry: telemetry.clone(),
             },
         )
         .await
@@ -298,9 +321,16 @@ impl App {
         };
         builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
+        let registry = methods.build();
+        // The only op and error-code label values, from Neo's own tables, bound before the door
+        // exists, so before any op or run: labels never come from a hand-kept list.
+        telemetry.bind_vocabulary(Vocabulary::new(
+            registry.names(),
+            ErrorCode::all().map(ErrorCode::as_str),
+        ));
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
-            methods.build(),
+            registry,
             builtins::door_rules(&takeover, &claims),
             trace.clone(),
             Arc::clone(&browser),
@@ -308,7 +338,15 @@ impl App {
             Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
-        let blank_tab = keep_blank_tab(&browser, &tabs, &store, &playwright, &holders, &shutdown);
+        let blank_tab = keep_blank_tab(
+            &browser,
+            &tabs,
+            &store,
+            &playwright,
+            &holders,
+            &shutdown,
+            attach,
+        );
         let runs = RunService::new(RunServiceParts {
             dispatcher: Arc::clone(&dispatcher),
             browser: Arc::clone(&browser),
@@ -320,6 +358,7 @@ impl App {
             orphan_grace: Defaults::ORPHAN_GRACE,
             blank_tab: Some(Arc::clone(&blank_tab)),
             holders: Some(Arc::clone(&holders)),
+            telemetry: telemetry.clone(),
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
@@ -333,6 +372,7 @@ impl App {
                 takeover: &takeover,
                 playwright: &playwright,
                 filled,
+                telemetry: &telemetry,
             },
             &shutdown,
         )
@@ -349,7 +389,7 @@ impl App {
             TabJanitor::new(
                 dispatcher,
                 Arc::clone(&browser),
-                tabs,
+                Arc::clone(&tabs),
                 holds,
                 settings.clone(),
             ),
@@ -364,6 +404,8 @@ impl App {
             shutdown,
             trace,
             holders: holder_feed,
+            telemetry,
+            tabs,
             #[cfg(feature = "test-support")]
             store,
         })
@@ -372,8 +414,9 @@ impl App {
     /// Serves the agent listener until SIGTERM (or SIGINT, for a developer's terminal). Then
     /// every run stops as `neo / shutting_down` and records its end, in-flight requests get
     /// `Defaults::SHUTDOWN_DRAIN` to answer, and the trace writer `Defaults::SHUTDOWN_FLUSH` to
-    /// commit. Chromium sends SIGKILL 5 s after SIGTERM, so nothing may depend on this path
-    /// completing; the store marks what it missed `interrupted` at the next start.
+    /// commit, while telemetry flushes beside it in the same budget. Chromium sends SIGKILL 5 s
+    /// after SIGTERM, so nothing may depend on this path completing; the store marks what it
+    /// missed `interrupted` at the next start.
     pub async fn serve(self) -> Result<(), StartError> {
         let Self {
             agent,
@@ -381,17 +424,23 @@ impl App {
             shutdown,
             trace,
             holders,
+            telemetry,
+            tabs,
             ..
         } = self;
         let mut terminate = signal::unix::signal(SignalKind::terminate())?;
         let interrupt = signal::ctrl_c();
         let stop = {
             let shutdown = shutdown.clone();
+            let tabs = Arc::clone(&tabs);
             async move {
                 tokio::select! {
                     _ = terminate.recv() => info!("SIGTERM: stopping"),
                     _ = interrupt => info!("SIGINT: stopping"),
                 }
+                // Before the runs stop: from here a tab that closes with no intent, or one whose
+                // close still waits, closed for Neo's shutdown.
+                tabs.life().shutting_down();
                 shutdown.cancel();
             }
         };
@@ -402,10 +451,14 @@ impl App {
                 warn!("requests still open after the shutdown budget; exiting anyway");
             }
         }
-        // Both in one budget: the tab holders' last changes need no sync, only a write.
-        let (flushed, holders_written) = tokio::join!(
+        // Closes still waiting count as `shutdown` before the flush takes the last metrics.
+        tabs.life().shutting_down();
+        // All three in one budget, at once: the tab holders' last changes need no sync, only a
+        // write, and telemetry gives up on a collector that does not answer.
+        let (flushed, holders_written, ()) = tokio::join!(
             time::timeout(Defaults::SHUTDOWN_FLUSH, trace.flush()),
             time::timeout(Defaults::SHUTDOWN_FLUSH, holders.flush()),
+            flush_telemetry(&telemetry),
         );
         match flushed {
             Ok(Ok(())) => {}
@@ -453,8 +506,10 @@ fn keep_blank_tab(
     playwright: &Arc<PlaywrightFacade>,
     holders: &Arc<TabHolders>,
     shutdown: &CancellationToken,
+    attach: OpenIntent,
 ) -> Arc<NeoTab> {
     let blank_tab = NeoTab::new(Arc::clone(browser), Arc::clone(tabs), store.clone());
+    blank_tab.set_attach_intent(attach);
     playwright.keep(Arc::clone(&blank_tab));
     let follower = Arc::clone(&blank_tab);
     let holders = Arc::clone(holders);
@@ -565,6 +620,23 @@ fn bind_error(address: SocketAddr, error: io::Error) -> StartError {
         StartError::PortInUse(address)
     } else {
         StartError::Io(error)
+    }
+}
+
+/// Telemetry's last flush, once the runs have drained: pending spans and metrics get
+/// `Defaults::SHUTDOWN_FLUSH` to leave, so a collector that is down or hung never holds Neo
+/// past Chromium's SIGKILL. `Telemetry::shutdown` keeps to the budget itself; the timeout holds
+/// the bound should an exporter ever not. What has not left by then is lost, and logged.
+async fn flush_telemetry(telemetry: &Telemetry) {
+    let flushed = time::timeout(
+        Defaults::SHUTDOWN_FLUSH,
+        telemetry.shutdown(Defaults::SHUTDOWN_FLUSH),
+    )
+    .await;
+    match flushed {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(%error, "telemetry did not flush at shutdown"),
+        Err(_elapsed) => warn!("telemetry did not flush within the shutdown budget"),
     }
 }
 
@@ -857,6 +929,113 @@ mod storage_tests {
                 .is_none(),
             "the owner accepted lost request history across a newer-migration rollback"
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use std::error::Error;
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::time::{Duration, Instant};
+
+    use neo_telemetry::label::RunStatus;
+    use neo_telemetry::{RunFacts, RunVerdict, Telemetry, TelemetryConfig};
+
+    use super::{App, flush_telemetry};
+    use crate::config::Defaults;
+    use crate::telemetry_rig::{MockCollector, Wire};
+    use crate::test_rig::TestError;
+
+    /// One finished run: a `neo.run` span and the run metrics, pending until something pushes.
+    fn finish_a_run(telemetry: &Telemetry, run_id: &str) {
+        telemetry
+            .start_run(RunFacts {
+                run_id: &run_id,
+                task_id: None,
+                parent: None,
+            })
+            .finish(RunVerdict {
+                status: RunStatus::Ok,
+                error: None,
+            });
+    }
+
+    /// With the collector up, the exit flush delivers what was still pending, spans and metrics
+    /// both, well inside the budget it shares with the trace writer's commit.
+    #[test]
+    fn the_exit_flush_delivers_what_is_pending_to_a_healthy_collector() -> Result<(), TestError> {
+        let collector = MockCollector::start(Wire::ProtobufTcp)?;
+        // Nothing leaves on a timer before the flush, so the flush carries all of it.
+        let env = collector.env(600_000);
+        let config = TelemetryConfig::from_env(&|name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.clone())
+        })?;
+        App::runtime()?.block_on(async {
+            let telemetry = Telemetry::new(&config)?;
+            finish_a_run(&telemetry, "run-before-sigterm");
+            assert_eq!(collector.spans()?, [], "nothing left before the flush");
+            let flushing = Instant::now();
+            flush_telemetry(&telemetry).await;
+            let elapsed = flushing.elapsed();
+            assert!(
+                elapsed < Defaults::SHUTDOWN_FLUSH,
+                "a healthy collector's flush took {elapsed:?}"
+            );
+            let runs: Vec<_> = collector
+                .spans()?
+                .into_iter()
+                .filter(|span| span.text("neo.run.id") == Some("run-before-sigterm"))
+                .collect();
+            assert_eq!(
+                runs.len(),
+                1,
+                "the pending run span arrived once: {runs:#?}"
+            );
+            assert!(
+                collector
+                    .metric_names()?
+                    .iter()
+                    .any(|name| name == "neo.runs"),
+                "the pending metrics arrived"
+            );
+            Ok::<(), TestError>(())
+        })
+    }
+
+    /// A collector that is down refuses the connection; a hung one accepts it (its backlog
+    /// does) and never answers. Neither may hold the flush past its budget, which Chromium's
+    /// SIGKILL, 5 s after SIGTERM, leaves no room to outgrow.
+    #[test]
+    fn the_exit_flush_ends_within_its_budget_with_the_collector_down_or_hung()
+    -> Result<(), Box<dyn Error>> {
+        let hung = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let down = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?;
+        let runtime = App::runtime()?;
+        for collector in [down, hung.local_addr()?] {
+            let endpoint = format!("http://{collector}");
+            let config = TelemetryConfig::from_env(&|name: &str| match name {
+                "OTEL_EXPORTER_OTLP_ENDPOINT" => Some(endpoint.clone()),
+                // Nothing leaves on a timer before the flush, so the flush carries all of it.
+                "OTEL_BSP_SCHEDULE_DELAY" | "OTEL_METRIC_EXPORT_INTERVAL" => {
+                    Some("600000".to_owned())
+                }
+                _ => None,
+            })?;
+            let elapsed = runtime.block_on(async {
+                let telemetry = Telemetry::new(&config)?;
+                finish_a_run(&telemetry, "run-before-sigterm");
+                let flushing = Instant::now();
+                flush_telemetry(&telemetry).await;
+                Ok::<_, Box<dyn Error>>(flushing.elapsed())
+            })?;
+            assert!(
+                elapsed < Defaults::SHUTDOWN_FLUSH + Duration::from_millis(500),
+                "the collector at {collector} held the exit flush for {elapsed:?}"
+            );
+        }
         Ok(())
     }
 }

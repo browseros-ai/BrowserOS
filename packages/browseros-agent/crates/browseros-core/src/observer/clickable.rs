@@ -109,12 +109,14 @@ impl DomSnapshots {
             captures.entry(key).or_default().clone()
         };
         cell.get_or_init(|| async {
+            // A large page's capture is tens of megabytes of JSON, decoded here from the
+            // browser's text straight into the columns this module reads: as a `Value` it would
+            // be several times that size.
             budget
-                .send::<Capture>(
-                    session,
+                .run(session.send_decoded::<_, Capture>(
                     "DOMSnapshot.captureSnapshot",
                     json!({ "computedStyles": ["cursor"] }),
-                )
+                ))
                 .await
                 .map(Arc::new)
                 .map_err(|error| {

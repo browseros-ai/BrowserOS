@@ -16,19 +16,13 @@
  * the other's check until the two agree.
  */
 
-import { setCoverRenderer, shapeCovered } from '../../src/prelude/cover'
-import { renderFullSnapshot, renderSnapshot } from '../../src/prelude/snapshot'
-import { renderDelta, renderUncompared } from '../../src/prelude/snapshot-delta'
-import {
-  DEFAULT_MAX_TOKENS,
-  renderSnapshotV1,
-  withDefaults,
-} from '../../src/prelude/snapshot-v1'
+import { renderSnapshotV1, withDefaults } from '../../src/prelude/snapshot-v1'
 import {
   type AriaNodeJSON,
   renderAriaSnapshotAsYaml,
 } from '../../src/prelude/vendored'
-import type { SnapshotBaseline, SnapshotResult } from '../../src/prelude/wire'
+import type { SnapshotResult } from '../../src/prelude/wire'
+import { type Answer, todaysAnswer } from './answer'
 import { attributes } from './attributes'
 import { boundaries } from './boundaries'
 import { clip } from './clip'
@@ -132,78 +126,25 @@ function earlier(
   return { text: kept.text, form: kept.form }
 }
 
-/** The message Rust writes for a covered click, around which the block is placed. */
-const COVER_HEAD =
-  'locator.click: the element is covered\n  On top: dialog "Cookies" [ref=e9]'
-const COVER_TAIL = '\n  Its controls: button "Accept" [ref=e10]'
-
 /**
- * The block the prelude puts under a covered click's "On top" line, or null for none: read back
- * from today's own placement (cover.ts `shapeCovered`) on a message of known shape.
+ * Today's answer to one call (answer.ts), with two checks the case files rest on: a cover renders
+ * its tree alone, and Playwright's format on a tree with no facts is the vendored printer's own
+ * text, which playwright.json then records.
  */
-function coverBlock(json: AriaNodeJSON[] | null): string | null {
-  // The prelude's entry (src/prelude/index.ts) gives cover.ts this same renderer.
-  setCoverRenderer(
-    (tree) =>
-      renderSnapshotV1({ json: tree, partial: [] }, withDefaults({})).text,
-  )
-  const error = new Error(COVER_HEAD + COVER_TAIL)
-  Reflect.set(error, 'cover', {
-    ref: 'e9',
-    role: 'dialog',
-    name: 'Cookies',
-    kind: 'dialog',
-    controls: [],
-    snapshot: json,
-  })
-  shapeCovered(error)
-  if (error.message === COVER_HEAD + COVER_TAIL) return null
-  return error.message.slice(COVER_HEAD.length + 1, -COVER_TAIL.length)
-}
-
-/** Today's answer to one call: the text and, for a whole page's default format, what it keeps. */
-function render(
-  call: Call,
-  snapshot: Snapshot | null,
-): { text: string | null; pending?: SnapshotBaseline } {
-  if ('cover' in call) {
-    if (snapshot !== null && !factless(snapshot))
-      throw new Error(
-        'a cover renders its tree alone: give it a snapshot with no facts',
-      )
-    return {
-      text: coverBlock(snapshot === null ? null : result(snapshot).json),
-    }
-  }
-  if (snapshot === null) throw new Error('only a cover may have no snapshot')
-  const tree = result(snapshot)
-  if ('playwright' in call) {
-    const text = renderSnapshot(tree)
-    if (!factless(snapshot)) return { text }
-    // Neo walks the tree with its own stack and asks the vendored printer one node at a time;
-    // on a tree with no facts that must be the vendored printer's own text, byte for byte.
-    const vendored = renderAriaSnapshotAsYaml(tree.json)
-    if (text !== vendored)
-      throw new Error("today's Playwright text is not the vendored printer's")
-    return { text: vendored }
-  }
-  if ('full' in call)
-    return {
-      text: renderFullSnapshot(tree, call.full.maxTokens ?? DEFAULT_MAX_TOKENS),
-    }
-  if ('element' in call)
-    return { text: renderSnapshotV1(tree, withDefaults(call.element)).text }
-  if ('page' in call) {
-    const { text, form } = renderSnapshotV1(tree, withDefaults(call.page))
-    return { text, pending: { text, form } }
-  }
-  const { passed, earlier: found } = call.delta
-  if (found === 'notRead') return { text: renderUncompared(tree, passed) }
-  const answer = renderDelta(found === 'nothing' ? null : found, tree, passed)
-  return {
-    text: answer.returned,
-    pending: { text: answer.baseline.text, form: answer.baseline.form },
-  }
+function render(call: Call, snapshot: Snapshot | null): Answer {
+  if ('cover' in call && snapshot !== null && !factless(snapshot))
+    throw new Error(
+      'a cover renders its tree alone: give it a snapshot with no facts',
+    )
+  const answer = todaysAnswer(call, snapshot === null ? null : result(snapshot))
+  if (!('playwright' in call) || snapshot === null || !factless(snapshot))
+    return answer
+  // Neo walks the tree with its own stack and asks the vendored printer one node at a time;
+  // on a tree with no facts that must be the vendored printer's own text, byte for byte.
+  const vendored = renderAriaSnapshotAsYaml(result(snapshot).json)
+  if (answer.text !== vendored)
+    throw new Error("today's Playwright text is not the vendored printer's")
+  return { text: vendored }
 }
 
 /** A text as the file holds it; only a covered block may hold half a character. */

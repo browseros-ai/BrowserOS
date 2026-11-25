@@ -7,7 +7,7 @@ use std::time::Duration;
 use browseros_core::{TabId, TargetId};
 
 use futures_util::future::BoxFuture;
-use neo_playwright::{EventFence, FileAccess, Playwright};
+use neo_playwright::{EventFence, EventScope, FileAccess, Playwright};
 use tokio::sync::{OnceCell, SetOnce};
 use tokio::time;
 
@@ -220,19 +220,27 @@ impl EventLog for PlaywrightFacade {
             .get()
             .map_or_else(EventFence::default, |pw| pw.event_fence())
     }
-    fn synchronize(&self, fence: EventFence) -> BoxFuture<'_, bool> {
+    fn scope<'a>(&'a self, tabs: &'a [TabId]) -> BoxFuture<'a, EventScope> {
         Box::pin(async move {
             match self.playwright.get() {
-                Some(pw) => pw.synchronize_events(fence).await,
+                Some(pw) => pw.tab_scope(tabs).await,
+                None => EventScope::Every,
+            }
+        })
+    }
+    fn synchronize<'a>(&'a self, fence: EventFence, scope: &'a EventScope) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            match self.playwright.get() {
+                Some(pw) => pw.synchronize_events(fence, scope).await,
                 // No facade yet: no watcher, so no event it could still owe.
                 None => true,
             }
         })
     }
-    fn handled_through(&self, fence: EventFence) -> bool {
+    fn handled_through(&self, fence: EventFence, scope: &EventScope) -> bool {
         self.playwright
             .get()
-            .is_none_or(|pw| pw.events_handled_through(fence))
+            .is_none_or(|pw| pw.events_handled_through(fence, scope))
     }
     fn workers(&self, target: &TargetId) -> Option<Vec<WorkerFact>> {
         self.playwright.get().map(|pw| {

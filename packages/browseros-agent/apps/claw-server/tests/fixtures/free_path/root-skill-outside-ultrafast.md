@@ -27,7 +27,7 @@ Do not fall back to another browser tool because the connection is missing. Say 
 - Call `name_session` early with a 2-3 word task label, the best-fit `category`, and a short PII-free `summary` you can search for later; tabs group as `<client>/<name>` in the cockpit.
 - Open your own tab with `tabs` action `"new"` for work of your own. You may also use the user's tabs and other agents' tabs: ownership is a label telling you whose a tab is, never a barrier.
 - A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory.
-- Preserve useful pages when the task ends, unless a tool reply asks you to close your task's tab group.
+- Preserve useful pages when the task ends, unless a tool reply asks you to close your task's tab group. A task that sits quiet for 5 minutes ends, and your next call picks it up again with the same tabs; a finished task's tabs close 30 minutes after it ends, by default.
 - Give independent subtasks their own tabs, at most 5 at a time unless the user asks for more.
 
 ## Core loop: snapshot -> act -> verify
@@ -74,7 +74,7 @@ A person can also take over a page while you work on it, from the page itself. W
 
 This skill may be installed before your agent is connected. If BrowserOS neo's MCP tools are unavailable, open its MCP connections page and connect your agent, or copy the endpoint from Manual Setup into your agent's MCP settings. Then refresh its MCP connections or start a new session. The skill alone does not provide browser tools.
 
-If a call reports `browser session not connected`, tell the user to start BrowserOS neo and check the cockpit. Do not silently fall back to another browser tool.
+If a call reports `browser session not connected`, tell the user to start BrowserOS neo and check the cockpit. Do not silently fall back to another browser tool. A call that fails with `Session not found` (HTTP 404) means something else: your MCP client's session with BrowserOS neo expired after sitting idle (24 hours by default). Starting a new session is your client's job, not yours, and clients on MCP 2026-07-28 have no such session to lose. Once your client has reconnected, retry the call once, then run `tabs` with action="list" and pass your `groupId` on `tabs` action="new".
 
 A failed `run` comes back with the error and the captured logs. Read those first: they name the cause, and guessing from anything else sends you after the wrong one. Elapsed time adds a single thing the message may not make obvious: a run that died at about thirty seconds hit the wall-clock cap, so split the work rather than raising the timeout, which is clamped.
 

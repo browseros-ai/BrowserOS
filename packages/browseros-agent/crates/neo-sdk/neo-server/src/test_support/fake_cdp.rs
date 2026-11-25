@@ -42,7 +42,7 @@ const EVENT_BACKLOG: usize = 1024;
 pub struct FakeCdp {
     state: Mutex<FakeState>,
     received: watch::Sender<()>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -336,6 +336,11 @@ impl FakeCdp {
         self.lock().failures.insert(method.to_owned(), error);
     }
 
+    /// Calls to `method` succeed again, after [`FakeCdp::fail`].
+    pub fn unfail(&self, method: &str) {
+        self.lock().failures.remove(method);
+    }
+
     /// Calls to `method` get the fake's own answer again, after [`FakeCdp::answer`].
     pub fn unanswer(&self, method: &str) {
         self.lock().answers.remove(method);
@@ -498,7 +503,7 @@ impl FakeCdp {
     fn publish(&self, event: CdpEvent) {
         if let Some(event) = self.targeted.deliver(event) {
             // No receiver is not an error.
-            let _ = self.events.send(event);
+            let _ = self.events.send(Arc::new(event));
         }
     }
 
@@ -808,7 +813,7 @@ impl CdpConnection for FakeCdp {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

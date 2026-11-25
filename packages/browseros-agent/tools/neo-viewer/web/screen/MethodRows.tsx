@@ -222,6 +222,8 @@ function MethodLanes({
 /**
  * The open method's arguments and call log under its row, and its outcome. What it returned is
  * in the right panel, whole and formatted; the Result column says how big it is and points there.
+ * A call whose record holds its outcome alone (`output.outcomeOnly`: one folded from spans, which
+ * its block says once) shows just that.
  */
 export function MethodDetail({
   operation,
@@ -233,6 +235,7 @@ export function MethodDetail({
   const args = argumentLines(operation.name, operation.args)
   // An operation can omit values even when the run ends after recording was turned back on.
   const valuesOff = operation.values === 'off'
+  if (output.outcomeOnly) return <OutcomeOnly operation={operation} />
   return (
     <div className="flex shrink-0 bg-white px-4">
       <Rail />
@@ -294,6 +297,35 @@ export function MethodDetail({
           <p className="text-ink-2">
             {operation.outcome ?? 'running'}
             {operation.delivery ? `, delivery ${operation.delivery}` : ''}
+          </p>
+        </section>
+      </div>
+    </div>
+  )
+}
+
+/** A call known by its outcome alone: its outcome and delivery, or the error recorded for it. */
+function OutcomeOnly({ operation }: { operation: NeoOperation }) {
+  return (
+    <div className="flex shrink-0 bg-white px-4">
+      <Rail />
+      <div className="flex min-w-0 flex-1 border-neo-edge border-b pt-2 pb-2.5 pl-[84px] text-[11px] leading-4">
+        <section className="flex min-w-0 flex-1 flex-col gap-1">
+          <h4 className="font-semibold text-ink leading-[14px]">Outcome</h4>
+          {operation.error && (
+            <p className="font-code text-bad">
+              {operation.error.owner} / {operation.error.code}
+              {operation.error.message && (
+                <span className="ml-2 font-plex text-bad">
+                  {operation.error.message}
+                </span>
+              )}
+            </p>
+          )}
+          <p className="text-ink-2">
+            {operation.outcome ?? 'running'}
+            {operation.delivery ? `, delivery ${operation.delivery}` : ''}
+            {operation.tabId !== null ? `, tab ${operation.tabId}` : ''}
           </p>
         </section>
       </div>

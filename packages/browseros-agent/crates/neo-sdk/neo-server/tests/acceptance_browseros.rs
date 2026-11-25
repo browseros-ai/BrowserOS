@@ -726,10 +726,26 @@ fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
     assert_closed_trace_visibility(&returned["baseline"], &CLOSED_TRACE_SCOPES)
 }
 
+/// Whether a stored snapshot result holds the field `label`: a node of a tree, or a line of a
+/// text (`trace_field_node`, `trace_field_text`).
+fn has_trace_field(result: &Value, label: &str) -> bool {
+    trace_field_node(result, label).is_some()
+        || trace_field_text(result, &format!("textbox \"{label}\"")).is_some()
+}
+
+/// The two runs' stored snapshot rows mask every private value and keep each closed root's
+/// fields, on either path the prelude's `SNAPSHOT_TEXT` names. On the prelude's path each text
+/// call's row holds the tree, the prelude renders it, and a delta reads the stored text through
+/// its own `page.snapshotBaseline` row. On Rust's path (a `format` in the rows' arguments) each
+/// row holds the text the script got, and the delta reads the stored text inside its one row,
+/// whose result is then the changes alone; the text it read is run 1's last, which
+/// `assert_returned_snapshot_values` already holds.
 async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> TestResult {
     let store = TraceStore::open(trace_path).await?;
     let mut snapshot_count = 0;
+    let mut tree_count = 0;
     let mut baseline_count = 0;
+    let mut rust_path = false;
     let mut closed_counts = [0; 3];
     for id in ids {
         let detail = store.run(id).await?.ok_or("the run was persisted")?;
@@ -739,6 +755,8 @@ async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> Te
                 operation.name.as_str(),
                 "page.ariaSnapshot"
                     | "locator.ariaSnapshot"
+                    | "page.ariaSnapshotJSON"
+                    | "locator.ariaSnapshotJSON"
                     | "page.snapshotBaseline"
                     | "page.snapshotPending"
             ) {
@@ -758,6 +776,10 @@ async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> Te
                 .map(Value::to_string)
                 .unwrap_or_default();
             assert_trace_canaries_absent(&args);
+            rust_path |= operation
+                .args
+                .as_ref()
+                .is_some_and(|args| args.get("format").is_some());
             let result = operation
                 .result
                 .ok_or("the snapshot operation has a result")?;
@@ -766,14 +788,19 @@ async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> Te
                 baseline_count += 1;
                 assert_closed_trace_visibility(&result, &CLOSED_TRACE_SCOPES)?;
             }
+            if operation.name.ends_with(".ariaSnapshotJSON") {
+                tree_count += 1;
+            }
             if operation.name.ends_with(".ariaSnapshot") {
                 snapshot_count += 1;
                 assert!(
                     result.to_string().contains('•'),
-                    "the stored tree contains masked values"
+                    "the stored snapshot contains masked values"
                 );
+            }
+            if operation.name.contains(".ariaSnapshot") {
                 for (scope, count) in CLOSED_TRACE_SCOPES.iter().zip(&mut closed_counts) {
-                    if trace_field_node(&result, &format!("{scope} password")).is_some() {
+                    if has_trace_field(&result, &format!("{scope} password")) {
                         assert_closed_trace_visibility(&result, &[*scope])?;
                         *count += 1;
                     }
@@ -781,11 +808,21 @@ async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> Te
             }
         }
     }
-    assert_eq!(snapshot_count, 16);
-    assert_eq!(baseline_count, 1);
+    assert_eq!(
+        (snapshot_count, tree_count),
+        (12, 4),
+        "one row per snapshot call: twelve texts, and the four JSON reads as upstream's command"
+    );
+    assert_eq!(
+        baseline_count,
+        usize::from(!rust_path),
+        "the prelude's path reads the stored text through its own op; Rust's inside the delta"
+    );
     // The top roots occur in eight page reads and the main locator. The child root is absent
     // from page default mode and both unnamed JSON reads, and present in all seven child reads.
-    assert_eq!(closed_counts, [9, 9, 13]);
+    // On Rust's path the delta's row is its changes, which hold no closed root's field.
+    let delta = usize::from(!rust_path);
+    assert_eq!(closed_counts, [8 + delta, 8 + delta, 12 + delta]);
     Ok(())
 }
 

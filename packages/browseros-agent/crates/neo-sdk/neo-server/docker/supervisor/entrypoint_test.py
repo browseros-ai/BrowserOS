@@ -1053,6 +1053,106 @@ class HostSocketTest(unittest.TestCase):
         self.assertEqual(inherited, "")
 
 
+class CheckNeoConfigTest(unittest.TestCase):
+    """check_neo_config with the real spawn_as_neo: a stub setpriv on PATH drops the identity
+    flags and runs the rest, and a stub server answers --check-config as claw-sdk does."""
+
+    def check(
+        self, kind: str, error: str = ""
+    ) -> tuple[subprocess.CompletedProcess, list[str] | None, dict[str, str]]:
+        """The supervisor's result, the server's argv (None when it never ran) and the
+        environment it ran with."""
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        argv, env = directory / "argv", directory / "env"
+        server = directory / "browseros-claw-server"
+        server.write_text(
+            "#!/bin/bash\n"
+            f"printf '%s\\n' \"$@\" > {shlex.quote(str(argv))}\n"
+            f"env > {shlex.quote(str(env))}\n"
+            "echo 'nothing on stdout reaches the message'\n"
+            + (f"echo {shlex.quote(error)} >&2\nexit 1\n" if error else "exit 0\n")
+        )
+        server.chmod(0o755)
+        setpriv = directory / "setpriv"
+        setpriv.write_text('#!/bin/bash\nshift 3\nexec "$@"\n')
+        setpriv.chmod(0o755)
+        result = run_bash(
+            server_is(kind)
+            + f"PATH={shlex.quote(str(directory))}:$PATH\n"
+            + f"neo-server-info() {{ [ \"$1\" = path ] && echo {shlex.quote(str(server))}; }}\n"
+            + "NEO_HOME=/home/neo XDG_DIR=/tmp/neo-xdg CLAW_DATA=/data/browserclaw\n"
+            + "PROFILE=/data/profile DOWNLOADS=/data/downloads OUTPUTS=/data/tool-output\n"
+            + "BROWSERCLAW_HOSTED_MODE=1\n"
+            + "export CLAW_HOST_SOCKET=/run/neo-host/host.sock OTEL_EXPORTER_OTLP_PROTOCOL=grpc\n"
+            + shell_function("spawn_as_neo")
+            + shell_function("check_neo_config")
+            + "check_neo_config\necho started\n",
+            check=False,
+        )
+        ran = argv.read_text().splitlines() if argv.exists() else None
+        seen = dict(
+            line.split("=", 1) for line in (env.read_text().splitlines() if env.exists() else [])
+            if "=" in line
+        )
+        return result, ran, seen
+
+    def test_claw_sdk_checks_the_environment_the_browser_hands_it(self):
+        result, ran, env = self.check("claw-sdk")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("started", result.stdout)
+        self.assertNotIn("nothing on stdout", result.stdout + result.stderr)
+        self.assertEqual(ran, ["--check-config"])
+        # spawn_as_neo's environment, plus what the supervisor exported before it.
+        for name, value in [
+            ("HOME", "/home/neo"),
+            ("BROWSERCLAW_DIR", "/data/browserclaw"),
+            ("BROWSERCLAW_HOSTED_MODE", "1"),
+            ("CLAW_HOST_SOCKET", "/run/neo-host/host.sock"),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+        ]:
+            self.assertEqual(env.get(name), value, name)
+
+    def test_a_value_claw_sdk_refuses_stops_the_container_with_its_error(self):
+        error = (
+            "browseros-claw-sdk: OTEL_EXPORTER_OTLP_PROTOCOL: "
+            "gRPC is not supported: use http/protobuf or http/json"
+        )
+        result, ran, _ = self.check("claw-sdk", error=error)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("started", result.stdout)
+        self.assertEqual(ran, ["--check-config"])
+        self.assertIn(f"Neo cannot start with this environment: {error}", result.stderr)
+        self.assertNotIn("nothing on stdout", result.stderr)
+
+    def test_claw_server_is_not_asked(self):
+        result, ran, _ = self.check("claw-server", error="unused")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("started", result.stdout)
+        self.assertIsNone(ran)
+
+    def test_the_supervisor_checks_after_the_socket_path_and_before_anything_starts(self):
+        steps = SCRIPT.split("\nserver_policy\n", 1)[1].split("\nconfigure_neo &\n", 1)[0]
+
+        self.assertEqual(
+            steps.splitlines(),
+            [
+                "apply_ids",
+                "prepare_data",
+                "prepare_settings",
+                "prepare_host_socket",
+                "check_neo_config",
+                "apply_policies",
+                "apply_minimal_ui",
+                "start_display",
+                "start_slimviewer",
+                'start_neo || { log "Could not start Neo; stopping the container"; shutdown 1; }',
+            ],
+        )
+
+
 @unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")
 class McpListenersTest(unittest.TestCase):
     """The Local State prepare_data leaves for the browser's two MCP proxies."""

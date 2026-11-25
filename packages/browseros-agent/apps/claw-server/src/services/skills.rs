@@ -1,4 +1,5 @@
 use crate::{
+    analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     db::{
         SkillsRepository,
         entities::{skill_flows, skill_runs, skills},
@@ -133,6 +134,7 @@ pub struct SkillService {
     /// Serializes flow.md writes, so an example kept after a handover lands on the newest flow
     /// instead of overwriting a repair saved while that run was going.
     flow_writes: Mutex<()>,
+    analytics: Arc<dyn AnalyticsSink>,
 }
 
 impl SkillService {
@@ -144,7 +146,15 @@ impl SkillService {
             skills_dir,
             mutate: Mutex::new(()),
             flow_writes: Mutex::new(()),
+            analytics: Arc::new(NoopAnalyticsSink),
         }
+    }
+
+    /// Reports every newly saved skill to `analytics`.
+    #[must_use]
+    pub fn with_analytics(mut self, analytics: Arc<dyn AnalyticsSink>) -> Self {
+        self.analytics = analytics;
+        self
     }
 
     pub async fn list(&self) -> AppResult<Vec<SkillView>> {
@@ -432,7 +442,7 @@ impl SkillService {
         } = input;
         let content = render_skill_markdown(&name, &description, &steps, &learned_notes);
         let model = self.new_skill_model(&name, description, site, origin, source_session_id);
-        self.try_install_new(&name, &content, model)
+        self.try_install_new(&name, &content, model, steps.len())
             .await?
             .ok_or_else(|| AppError::conflict("a skill with this name already exists"))
     }
@@ -480,7 +490,10 @@ impl SkillService {
                 source_session_id.clone(),
             );
             model.inputs_json.clone_from(&inputs_json);
-            match self.try_install_new(&name, &content, model).await {
+            match self
+                .try_install_new(&name, &content, model, steps.len())
+                .await
+            {
                 Ok(Some(view)) => return Ok(Saved::Created(view)),
                 Ok(None) => {}
                 // The unique index on the task lost a race with another save of the same draft.
@@ -513,6 +526,15 @@ impl SkillService {
         Ok(self.repo.runs_for(name).await?.len())
     }
 
+    /// How many runs of the skill were recorded at or after `since`, or in all when it is unset.
+    pub async fn runs_since(&self, name: &str, since: Option<i64>) -> AppResult<usize> {
+        let runs = self.repo.runs_for(name).await?;
+        Ok(match since {
+            Some(since) => runs.iter().filter(|run| run.created_at >= since).count(),
+            None => runs.len(),
+        })
+    }
+
     async fn view_of(&self, model: skills::Model) -> AppResult<SkillView> {
         let runs = self.repo.runs_for(&model.name).await?;
         let linked_agents = parse_linked_agents(&model.linked_agents_json);
@@ -533,6 +555,7 @@ impl SkillService {
         name: &str,
         content: &str,
         mut model: skills::Model,
+        steps: usize,
     ) -> AppResult<Option<SkillView>> {
         if !self.repo.try_insert(model.clone()).await? {
             return Ok(None);
@@ -547,6 +570,13 @@ impl SkillService {
         };
         model.linked_agents_json = linked_agents_json(&linked);
         self.repo.update(model.clone()).await?;
+        self.analytics.capture(
+            events::SKILL_SAVED,
+            serde_json::json!({
+                "origin": model.origin,
+                "step_count_bucket": events::step_count_bucket(steps),
+            }),
+        );
         Ok(Some(SkillView {
             model,
             linked_agents: linked.into_iter().collect(),
@@ -722,7 +752,10 @@ impl SkillService {
         );
         // Reserve atomically; if the name is already taken (this run lost the
         // insert or the skill pre-existed), fall through to an in-place update.
-        match self.try_install_new(&name, &content, model).await? {
+        match self
+            .try_install_new(&name, &content, model, steps.len())
+            .await?
+        {
             Some(view) => Ok(view),
             None => {
                 let detail = self
@@ -1255,5 +1288,92 @@ mod tests {
         assert!(normalized_skill_name("").is_err());
         // A bare prefix has no slug after neo-.
         assert!(normalized_skill_name("neo-").is_err());
+    }
+
+    #[derive(Default)]
+    struct RecordingAnalytics {
+        events: std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>,
+    }
+
+    impl crate::analytics::AnalyticsSink for RecordingAnalytics {
+        fn capture(
+            &self,
+            event: crate::analytics::events::EventDefinition,
+            properties: serde_json::Value,
+        ) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((event.name(), properties));
+        }
+    }
+
+    fn create(name: &str, steps: usize, origin: super::SkillOrigin) -> super::CreateSkill {
+        super::CreateSkill {
+            name: name.to_string(),
+            description: "Find phones under a budget".to_string(),
+            site: None,
+            steps: (1..=steps).map(|step| format!("Step {step}.")).collect(),
+            learned_notes: Vec::new(),
+            origin,
+            source_session_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn each_new_skill_is_reported_once_and_updates_are_not() -> anyhow::Result<()> {
+        use crate::db::{DATABASE_FILENAME, Database, SkillsRepository};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir()?;
+        let db = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
+        let harness = Arc::new(crate::services::harness::HarnessService::new(
+            dir.path().join("workspace"),
+            dir.path().join("home"),
+        ));
+        let analytics = Arc::new(RecordingAnalytics::default());
+        let service = super::SkillService::new(
+            SkillsRepository::new(db),
+            harness,
+            dir.path().join("skills"),
+        )
+        .with_analytics(analytics.clone());
+
+        service
+            .create(create("neo-by-hand", 2, super::SkillOrigin::Manual))
+            .await?;
+        service
+            .upsert(create("neo-from-agent", 5, super::SkillOrigin::Agent))
+            .await?;
+        // The agent saving the same name again rewrites it in place: no new skill.
+        service
+            .upsert(create("neo-from-agent", 6, super::SkillOrigin::Agent))
+            .await?;
+        assert!(
+            service
+                .create(create("neo-by-hand", 1, super::SkillOrigin::Manual))
+                .await
+                .is_err()
+        );
+
+        let events = analytics
+            .events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(
+            events,
+            vec![
+                (
+                    crate::analytics::events::SKILL_SAVED.name(),
+                    serde_json::json!({ "origin": "manual", "step_count_bucket": "1_to_3" }),
+                ),
+                (
+                    crate::analytics::events::SKILL_SAVED.name(),
+                    serde_json::json!({ "origin": "agent", "step_count_bucket": "4_to_7" }),
+                ),
+            ]
+        );
+        Ok(())
     }
 }

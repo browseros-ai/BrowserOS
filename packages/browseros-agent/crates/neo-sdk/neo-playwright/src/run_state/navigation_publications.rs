@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use browseros_core::FrameId;
+use browseros_core::{FrameId, TargetId};
 
 use crate::events::{EventHub, PageEvent, PageEventKind};
 use crate::page::LoadState;
@@ -72,7 +72,10 @@ impl NavigationPublications {
 
 impl AwaitedDocument {
     fn ready(&self) -> bool {
-        let read = self.hub.read_after(self.after);
+        // A tab's main frame has the tab's target id, so `frame` names the tab whose ring (plus
+        // the no-tab ring) holds this document's commit and loads.
+        let tab = TargetId(self.frame.as_str().to_owned());
+        let read = self.hub.read_tab_after(&tab, self.after);
         if read.lost > 0 {
             return false;
         }

@@ -10,6 +10,12 @@ const cases = [
     '6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe',
   ],
   [
+    'recaptcha-v2-stale',
+    'recaptcha_v2',
+    'g-recaptcha-response',
+    '6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe',
+  ],
+  [
     'recaptcha-v2-invisible-bind',
     'recaptcha_v2',
     'g-recaptcha-response',
@@ -22,6 +28,12 @@ const cases = [
     '1x0000000000000000000000000000000AA',
   ],
   [
+    'turnstile-stale',
+    'turnstile',
+    'cf-turnstile-response',
+    '1x0000000000000000000000000000000AA',
+  ],
+  [
     'turnstile-block',
     'turnstile',
     'cf-turnstile-response',
@@ -29,6 +41,12 @@ const cases = [
   ],
   [
     'turnstile-interactive',
+    'turnstile',
+    'cf-turnstile-response',
+    '1x0000000000000000000000000000000AA',
+  ],
+  [
+    'turnstile-stale-interactive',
     'turnstile',
     'cf-turnstile-response',
     '1x0000000000000000000000000000000AA',
@@ -114,6 +132,27 @@ test.each(cases)(
     })
   },
 )
+
+test('tests that stale-token fixtures reject their stale token without calling the vendor', async () => {
+  const stalePages = FIXTURE_PAGES.filter((page) => page.staleToken)
+  expect(stalePages.map((page) => page.id)).toEqual([
+    'recaptcha-v2-stale',
+    'turnstile-stale',
+    'turnstile-stale-interactive',
+  ])
+  for (const page of stalePages) {
+    const field =
+      page.family === 'turnstile'
+        ? 'cf-turnstile-response'
+        : 'g-recaptcha-response'
+    const count = requests.length
+    const response = await submit(page.id, field, page.staleToken)
+    const html = await response.text()
+    expect(html).toContain('data-captcha-verdict="rejected"')
+    expect(html).toContain('REJECTED: stale-token')
+    expect(requests).toHaveLength(count)
+  }
+})
 
 test('tests that no-captcha always accepts without calling a verifier', async () => {
   const count = requests.length

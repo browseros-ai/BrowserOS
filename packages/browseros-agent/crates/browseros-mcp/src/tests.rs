@@ -37,7 +37,7 @@ mod tool_guard_tests;
 mod click_feedback_tests;
 
 struct FakeConnection {
-    sender: broadcast::Sender<CdpEvent>,
+    sender: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -80,7 +80,7 @@ impl CdpConnection for FakeConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.sender.subscribe()
     }
 
@@ -217,7 +217,7 @@ struct HarnessCall {
 
 /// Tool fixture whose transport epoch is immutable; guarded dispatch still validates callers.
 struct HarnessConnection {
-    sender: broadcast::Sender<CdpEvent>,
+    sender: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     calls: Mutex<Vec<HarnessCall>>,
     created_tab: Mutex<Option<Value>>,
@@ -331,7 +331,7 @@ impl HarnessConnection {
             session_id: session_id.map(SessionId::from),
         };
         if let Some(event) = self.targeted.deliver(event) {
-            let _ = self.sender.send(event);
+            let _ = self.sender.send(Arc::new(event));
         }
     }
 
@@ -601,7 +601,7 @@ impl CdpConnection for HarnessConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.sender.subscribe()
     }
 
@@ -1003,6 +1003,19 @@ fn catalog_schemas_do_not_use_boolean_schema_nodes() {
         if let Some(output_schema) = tool.output_schema {
             let output_schema = Value::Object(output_schema.as_ref().clone());
             assert_no_boolean_schema_nodes(tool.name, "outputSchema", &output_schema);
+        }
+    }
+}
+
+#[test]
+fn catalog_schemas_use_only_standard_formats() {
+    for tool in catalog() {
+        let input_schema = Value::Object(tool.input_schema.as_ref().clone());
+        assert_only_standard_formats(tool.name, "inputSchema", &input_schema);
+
+        if let Some(output_schema) = tool.output_schema {
+            let output_schema = Value::Object(output_schema.as_ref().clone());
+            assert_only_standard_formats(tool.name, "outputSchema", &output_schema);
         }
     }
 }
@@ -2945,6 +2958,60 @@ fn collect_boolean_paths(value: &Value, path: String, paths: &mut Vec<String>) {
         Value::Object(object) => {
             for (key, value) in object {
                 collect_boolean_paths(value, format!("{path}.{key}"), paths);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The `format` values JSON Schema draft 2020-12 defines; ajv knows no others without plugins.
+const STANDARD_FORMATS: &[&str] = &[
+    "date-time",
+    "date",
+    "time",
+    "duration",
+    "email",
+    "idn-email",
+    "hostname",
+    "idn-hostname",
+    "ipv4",
+    "ipv6",
+    "uri",
+    "uri-reference",
+    "iri",
+    "iri-reference",
+    "uuid",
+    "uri-template",
+    "json-pointer",
+    "relative-json-pointer",
+    "regex",
+];
+
+fn assert_only_standard_formats(tool_name: &str, schema_kind: &str, schema: &Value) {
+    let mut paths = Vec::new();
+    collect_non_standard_format_paths(schema, "$".to_string(), &mut paths);
+    assert!(
+        paths.is_empty(),
+        "{tool_name}.{schema_kind} has non-standard formats at {}",
+        paths.join(", ")
+    );
+}
+
+fn collect_non_standard_format_paths(value: &Value, path: String, paths: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_non_standard_format_paths(item, format!("{path}[{index}]"), paths);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(Value::String(format)) = object.get("format")
+                && !STANDARD_FORMATS.contains(&format.as_str())
+            {
+                paths.push(format!("{path}.format ({format})"));
+            }
+            for (key, value) in object {
+                collect_non_standard_format_paths(value, format!("{path}.{key}"), paths);
             }
         }
         _ => {}

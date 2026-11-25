@@ -148,6 +148,9 @@ pub struct ClawMcpService {
 struct ServiceLifecycle {
     client_info: Option<ClientInfo>,
     session_id: Option<SessionId>,
+    /// The legacy transport session this service serves, kept apart from `session_id`,
+    /// which moves to a successor task when the first one ends.
+    transport: Option<SessionId>,
     started: bool,
     /// Whether this connection has already been told its session went away.
     ///
@@ -1021,7 +1024,7 @@ impl ClawMcpService {
         if let Some(existing) = self.state.sessions.replacement_of(retired).await
             && let Some(session) = self.state.sessions.lookup(&existing).await
         {
-            self.inherit_target(retired, &existing).await?;
+            self.continue_task(retired, &session).await?;
             let agent_label = session.agent().label().to_string();
             return Ok((
                 StartedSession {
@@ -1038,14 +1041,14 @@ impl ClawMcpService {
             .adopt_replacement(retired, mine_handle.clone())
             .await;
         if winner == mine_handle {
-            self.inherit_target(retired, &mine_handle).await?;
+            self.continue_task(retired, &mine.session).await?;
             return Ok((mine, mine_handle));
         }
         // The winner inserted its session before it adopted, and adoption is serialized, so
         // a winner that is still live is visible here. One that is not was torn down in the
         // gap; keep mine rather than chase a chain of tombstones.
         let Some(session) = self.state.sessions.lookup(&winner).await else {
-            self.inherit_target(retired, &mine_handle).await?;
+            self.continue_task(retired, &mine.session).await?;
             return Ok((mine, mine_handle));
         };
         if let Err(error) = self
@@ -1057,7 +1060,7 @@ impl ClawMcpService {
             warn!(error = %error, "discarding a superseded replacement session failed");
         }
         let agent_label = session.agent().label().to_string();
-        self.inherit_target(retired, &winner).await?;
+        self.continue_task(retired, &session).await?;
         Ok((
             StartedSession {
                 session,
@@ -1065,6 +1068,28 @@ impl ClawMcpService {
             },
             winner,
         ))
+    }
+
+    /// The successor carries on the retired task: its browser target, and through
+    /// `Sessions::hand_over` its tab group, open tabs and name.
+    async fn continue_task(
+        &self,
+        retired: &SessionId,
+        successor: &Session,
+    ) -> Result<(), McpError> {
+        // The handle presented can be any earlier one in this task's line: agents resend old
+        // handles. What a successor takes over sits with the latest task of the line, which
+        // the persisted task record names, not with the task the handle was minted for.
+        let latest = self
+            .state
+            .targets
+            .current_session(retired)
+            .await
+            .filter(|latest| latest != successor.id())
+            .unwrap_or_else(|| retired.clone());
+        self.inherit_target(retired, successor.id()).await?;
+        self.state.sessions.hand_over(&latest, successor).await;
+        Ok(())
     }
 
     async fn inherit_target(&self, from: &SessionId, to: &SessionId) -> Result<(), McpError> {
@@ -1141,9 +1166,20 @@ impl ClawMcpService {
         &self,
         context: &RequestContext<RoleServer>,
     ) -> Result<StartedSession, McpError> {
-        let session_id = session_id_from_extensions(&context.extensions)
-            .unwrap_or_else(|| self.fallback_session_id.clone());
+        let transport = session_id_from_extensions(&context.extensions);
+        self.remember_transport(transport.as_ref()).await;
+        let session_id = transport.unwrap_or_else(|| self.fallback_session_id.clone());
         self.ensure_session_started(session_id).await
+    }
+
+    async fn remember_transport(&self, transport: Option<&SessionId>) {
+        if let Some(transport) = transport {
+            self.lifecycle
+                .lock()
+                .await
+                .transport
+                .get_or_insert_with(|| transport.clone());
+        }
     }
 
     async fn learn_session_from_notification(&self, context: &NotificationContext<RoleServer>) {
@@ -1162,6 +1198,7 @@ impl ClawMcpService {
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return;
         };
+        self.remember_transport(Some(&session_id)).await;
         if let Err(error) = self.ensure_session_started(session_id).await {
             warn!(error = %error, "mcp session start failed");
         }
@@ -1179,13 +1216,19 @@ impl Drop for ClawMcpService {
             return;
         };
         handle.spawn(async move {
-            let session_id = {
+            let (transport, session_id) = {
                 let lifecycle = lifecycle.lock().await;
-                lifecycle
-                    .started
-                    .then(|| lifecycle.session_id.clone())
-                    .flatten()
+                (
+                    lifecycle.transport.clone(),
+                    lifecycle
+                        .started
+                        .then(|| lifecycle.session_id.clone())
+                        .flatten(),
+                )
             };
+            if let Some(transport) = transport {
+                state.sessions.transports().ended(transport.as_str()).await;
+            }
             let Some(session_id) = session_id else {
                 return;
             };

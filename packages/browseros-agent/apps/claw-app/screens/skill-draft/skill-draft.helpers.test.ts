@@ -8,8 +8,10 @@ import { describe, expect, test } from 'bun:test'
 import type { SessionSummary, SkillDraft } from '@browseros/claw-api'
 import {
   canDraftSkills,
+  canShowMakeSkill,
   draftProblem,
   editsFrom,
+  isBusy,
   isDraftable,
   makeSkillState,
   newestDraftableId,
@@ -61,10 +63,23 @@ const draft: SkillDraft = {
 }
 
 describe('who sees the button', () => {
-  test('comes with ultrafast', () => {
+  test('drafting comes with ultrafast', () => {
     expect(canDraftSkills(['claw.ultrafast'])).toBe(true)
     expect(canDraftSkills([])).toBe(false)
     expect(canDraftSkills(undefined)).toBe(false)
+  })
+
+  test('the button shows for a draftable task or one with a skill, on any plan', () => {
+    expect(canShowMakeSkill(task())).toBe(true)
+    expect(canShowMakeSkill(task({ skillName: 'neo-x' }))).toBe(true)
+    expect(canShowMakeSkill(task({ status: 'failed' }))).toBe(false)
+  })
+
+  test('a click reopens a draft being written and waits while one is read or saved', () => {
+    expect(isBusy('writing')).toBe(false)
+    expect(isBusy('review')).toBe(true)
+    expect(isBusy('saving')).toBe(true)
+    expect(isBusy('idle')).toBe(false)
   })
 
   test('only finished or cleanly stopped tasks with steps and no skill', () => {

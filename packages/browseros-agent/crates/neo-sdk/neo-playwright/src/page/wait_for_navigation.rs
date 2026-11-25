@@ -85,7 +85,9 @@ pub(crate) async fn wait_for_navigation(
             let changed = hub.changed();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            let read = hub.read_after(after);
+            // The page's own ring plus the no-tab ring: another tab's records never count as a
+            // loss here, so only this tab's history overflowing fails the wait.
+            let read = hub.read_tab_after(page.target_id(), after);
             if read.lost > 0 {
                 return Err(scope.fail(
                     ErrorCode::NavigationFailed,

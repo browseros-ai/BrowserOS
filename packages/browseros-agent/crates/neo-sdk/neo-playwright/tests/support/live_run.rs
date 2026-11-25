@@ -14,10 +14,12 @@ use std::{env, future};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
-    SessionId, TabId,
+    SessionId, TabId, TargetId,
 };
 use futures_util::future::BoxFuture;
-use neo_playwright::{ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState};
+use neo_playwright::{
+    ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState, TabFrameList,
+};
 use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
@@ -170,7 +172,7 @@ impl CdpConnection for Tap {
             .send_raw_json_at_epoch(expected_epoch, method, params_json, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.browser.events()
     }
 
@@ -184,7 +186,7 @@ impl CdpConnection for Tap {
         self.browser.events_broadcast()
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.browser.events_counted()
     }
 
@@ -467,6 +469,12 @@ impl LiveRun {
     /// `frames`: a run re-reads a listed tab's tree once its version moved.
     pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
         self.playwright.frame_versions()
+    }
+
+    /// `target`'s frames as the run's target watcher built them from the tab's events and seeds
+    /// (`Playwright::tab_frames`).
+    pub(crate) fn tab_frames(&self, target: &TargetId) -> Option<TabFrameList> {
+        self.playwright.tab_frames(target)
     }
 
     /// Mirrors the door's cache observation for live tests, including watcher/core lag.

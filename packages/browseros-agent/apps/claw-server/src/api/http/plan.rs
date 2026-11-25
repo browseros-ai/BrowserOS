@@ -11,7 +11,7 @@ use crate::{
     error::{CanonicalError, RequestId},
     services::billing::{
         BillingError, CheckoutPhase, Computer, Key, PlanSnapshot, PortalFlow, Pricing, RefusalCode,
-        Secret, Status,
+        Secret, Status, TrialKind,
     },
 };
 use axum::{
@@ -24,7 +24,7 @@ use claw_api::models::{
     ActivatePlanKeyRequest, CancelPlanRequest, Plan, PlanCheckout, PlanCheckoutPhase,
     PlanCheckoutStatus, PlanComputer, PlanKey, PlanKeyChange, PlanKeyFullError, PlanPortal,
     PlanPortalFlow, PlanPortalRequest, PlanPrice, PlanPricing, PlanRateLimitedError, PlanStatus,
-    PriceInterval, PricedPlan, RenamePlanComputerRequest, StartPlanCheckoutRequest,
+    PlanTrialKind, PriceInterval, PricedPlan, RenamePlanComputerRequest, StartPlanCheckoutRequest,
 };
 
 type PlanResult<T> = Result<Json<T>, PlanFailure>;
@@ -76,10 +76,9 @@ pub(super) async fn start_checkout(
         .start_checkout(&payload.plan, &interval, payload.interval_count)
         .await
         .map_err(|source| fail(&request_id, source))?;
-    Ok((
-        StatusCode::CREATED,
-        Json(PlanCheckout::new(started.checkout_id, started.url)),
-    ))
+    let mut checkout = PlanCheckout::new(started.checkout_id, started.url);
+    checkout.trial_days = started.trial_days.map(|days| days.max(0));
+    Ok((StatusCode::CREATED, Json(checkout)))
 }
 
 /// GET /api/v1/plan/checkout/{checkoutId}
@@ -326,8 +325,15 @@ fn fail(request_id: &RequestId, source: BillingError) -> Response {
     }
 }
 
+/// The trial fields go out as the licence signed them; the app decides how to show each kind.
 fn to_plan(plan: PlanSnapshot) -> Plan {
-    Plan::new(
+    let trial = plan.trial;
+    let trial_kind = plan.trial_kind.map(|kind| match kind {
+        TrialKind::Card => PlanTrialKind::Card,
+        TrialKind::Grant => PlanTrialKind::Grant,
+    });
+    let trial_ends_at = plan.trial_ends_at;
+    let mut dto = Plan::new(
         plan.available,
         plan.plan,
         plan.plan_name,
@@ -345,7 +351,11 @@ fn to_plan(plan: PlanSnapshot) -> Plan {
         plan.on_key,
         plan.checked_at,
         plan.stale,
-    )
+    );
+    dto.trial = trial;
+    dto.trial_kind = trial_kind;
+    dto.trial_ends_at = trial_ends_at;
+    dto
 }
 
 fn to_key(key: Key) -> PlanKey {
@@ -389,12 +399,14 @@ fn to_pricing(pricing: Pricing) -> PlanPricing {
                                 "year" => PriceInterval::Year,
                                 _ => return None,
                             };
-                            Some(PlanPrice::new(
+                            let mut dto = PlanPrice::new(
                                 interval,
                                 price.interval_count,
                                 price.amount,
                                 price.currency,
-                            ))
+                            );
+                            dto.trial_days = price.trial_days.map(|days| days.max(0));
+                            Some(dto)
                         })
                         .collect(),
                 )

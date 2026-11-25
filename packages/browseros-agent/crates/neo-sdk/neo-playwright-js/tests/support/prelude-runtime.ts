@@ -58,6 +58,32 @@ const committedPrelude = (): string =>
     'utf8',
   )
 
+/** The engine switch as the bundler writes it (src/prelude/snapshot-text.ts). */
+const SNAPSHOT_TEXT_LINE = /var SNAPSHOT_TEXT = "(?:prelude|rust)";/g
+
+/**
+ * `prelude` (the committed asset when absent) with its `SNAPSHOT_TEXT` set to `engine`: how a
+ * suite that pins one engine's path builds its own asset, as the late-snapshot suite builds its
+ * own `LATE_SNAPSHOT`, so flipping the committed constant changes none of them.
+ */
+export function withSnapshotText(
+  engine: 'prelude' | 'rust',
+  prelude: string = committedPrelude(),
+): string {
+  const found = prelude.match(SNAPSHOT_TEXT_LINE)?.length ?? 0
+  if (found !== 1)
+    throw new Error(`the prelude sets SNAPSHOT_TEXT ${found} times, not once`)
+  return prelude.replace(SNAPSHOT_TEXT_LINE, `var SNAPSHOT_TEXT = "${engine}";`)
+}
+
+/**
+ * The built prelude on the path whose renderer runs in the realm: the op answers trees, and the
+ * prelude renders them and keeps the delta baseline through its two baseline ops. The suites
+ * that pin rendering through the built prelude, and those that check what that path sends, run
+ * it, whichever engine the committed asset names.
+ */
+export const oldPathPrelude = (): string => withSnapshotText('prelude')
+
 const bootstrap = (): string =>
   readFileSync(
     new URL('crates/neo-sdk/neo-server/src/runtime/js/bootstrap.js', agentRoot),
@@ -139,6 +165,11 @@ export function loadPrelude(
     upstreamSnapshots?: boolean
     /** Also evaluates Neo's task API (neo_prelude.js) after the prelude, as run_script.rs does. */
     withNeo?: boolean
+    /**
+     * Sets the compare switch the harnesses set (`__neo_compare_snapshots`, snapshot-text.ts),
+     * before the prelude starts: the prelude counts each comparison into this object.
+     */
+    compareSnapshots?: { compared: number; noTime: number; differed: number }
   } = {},
 ): Runtime {
   const calls: Call[] = []
@@ -158,6 +189,9 @@ export function loadPrelude(
   // tested through the real QuickJS run_script, rather than proved by these host implementations.
   const realm = createContext({
     ...(options.upstreamSnapshots ? { __neo_upstream_snapshots: true } : {}),
+    ...(options.compareSnapshots
+      ? { __neo_compare_snapshots: options.compareSnapshots }
+      : {}),
     URL,
     URLSearchParams,
     atob,

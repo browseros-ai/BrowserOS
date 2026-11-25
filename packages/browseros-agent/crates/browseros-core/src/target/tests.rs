@@ -48,7 +48,7 @@ struct Fixture {
 struct Native {
     state: Mutex<Fixture>,
     epoch: AtomicU64,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     attach_hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
     attach_started: tokio::sync::Notify,
@@ -130,9 +130,9 @@ impl Native {
     }
     /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
     /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
-    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<Arc<CdpEvent>>> {
         if let Some(event) = self.targeted.deliver(event) {
-            self.events.send(event)?;
+            self.events.send(Arc::new(event))?;
         }
         Ok(())
     }
@@ -663,7 +663,7 @@ impl CdpConnection for Native {
             Ok(serde_json::to_string(&value)?)
         })
     }
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
@@ -2215,7 +2215,7 @@ impl CdpConnection for LegacyTransport {
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         self.0.send_raw_json(method, params, session)
     }
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.0.events()
     }
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {

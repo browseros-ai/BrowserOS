@@ -23,8 +23,10 @@
 //!                                  │    (armed by the app: the host's private typing)
 //!                                  ├▶ GET /v1/display ─ WebSocket, RFB ─▶ Displays ─▶ Xvnc
 //!                                  │    release=<takeover> binds a control display to it
-//!                                  └▶ /v1/settings ─▶ Settings ─ saved beside trace.db; the app's
-//!                                       janitor and retention sweep read it on every pass
+//!                                  ├▶ /v1/settings ─▶ Settings ─ saved beside trace.db; the app's
+//!                                  │    janitor and retention sweep read it on every pass
+//!                                  └▶ GET /v1/metrics ◀── MetricsText ◀── the app's telemetry,
+//!                                       rendered as Prometheus text at each scrape
 //!
 //!  trace writer ─ ShotJobs ─▶ camera (screenshot_taker) ─ agent's BrowserSession ─▶ JPEG file
 //!                              (never of a tab the app's private typing marked: private_tabs)
@@ -69,6 +71,7 @@ mod host_service;
 mod keep_routes;
 mod limits;
 mod live_tabs;
+mod metrics_route;
 mod part_routes;
 mod private_tabs;
 mod query;
@@ -90,6 +93,6 @@ pub use fill_route::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb};
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};
 pub use host_service::{PeerInfo, host_router, host_service};
 pub use private_tabs::TookPrivateText;
-pub use service::{Service, ServiceInputs, TabOpener, TabOwner, TabTask};
+pub use service::{MetricsText, Service, ServiceInputs, TabOpener, TabOwner, TabTask};
 pub use settings::{Settings, SettingsDefaults, TabsScope};
 pub use tab_stamps::TabFence;

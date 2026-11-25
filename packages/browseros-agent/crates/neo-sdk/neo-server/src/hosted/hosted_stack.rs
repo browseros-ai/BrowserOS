@@ -4,6 +4,7 @@ use std::time::Duration;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_http::{Settings, SettingsDefaults};
+use neo_telemetry::Telemetry;
 use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -29,9 +30,16 @@ pub(super) struct HostedStack {
     settings: Settings,
     shutdown: CancellationToken,
     completions: Mutex<Vec<Completion>>,
+    /// Off: the embedding has no host API to scrape and no startup environment to configure
+    /// push, so its runs, ops and tabs record nothing, and it binds no vocabulary.
+    telemetry: Telemetry,
 }
 
 impl HostedStack {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the embedding's composition root: one top-to-bottom startup order, which split helpers would hide"
+    )]
     pub(super) async fn start(
         options: HostedOptions,
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
@@ -60,7 +68,8 @@ impl HostedStack {
             },
             None,
         );
-        let tabs = Arc::new(TabRegistry::new());
+        let telemetry = Telemetry::noop();
+        let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
         let native =
             NativeCapabilities::from_browseros_version(config.launch.browseros_version.as_deref());
         let browser = link(native, Arc::clone(&tabs));
@@ -111,6 +120,7 @@ impl HostedStack {
             blank_tab: None,
             // Its runs start as they always did: no tab-holders file, no wait for one.
             holders: None,
+            telemetry: telemetry.clone(),
         });
         tokio::spawn(App::hosted_housekeeping(
             TabJanitor::new(
@@ -139,6 +149,7 @@ impl HostedStack {
             settings,
             shutdown,
             completions: Mutex::default(),
+            telemetry,
         }))
     }
 
@@ -156,6 +167,7 @@ impl HostedStack {
             let run = HostedRun::start(
                 &self.dispatcher,
                 &self.browser,
+                &self.telemetry,
                 self.shutdown.clone(),
                 timeout,
                 self.settings.tabs_scope(),
@@ -169,6 +181,12 @@ impl HostedStack {
 
     pub(super) fn stop(&self) {
         self.shutdown.cancel();
+    }
+
+    /// The handle every run, op and tab reports to, for tests that check it stays the no-op.
+    #[cfg(test)]
+    pub(super) fn telemetry(&self) -> &Telemetry {
+        &self.telemetry
     }
 
     /// Behavior fixtures finish their runs before waiting for persistence. Their watchdog

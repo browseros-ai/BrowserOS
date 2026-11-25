@@ -7,7 +7,7 @@
  */
 
 import type { Skill, SkillRun, SkillUltrafast } from '@browseros/claw-api'
-import { HARNESSES, type Harness } from '@/components/harness/harness.types'
+import type { Harness } from '@/components/harness/harness.types'
 import { verbForTool } from '@/lib/step-sentences'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
 import { siteHost } from '@/modules/favicon/favicon.helpers'
@@ -123,19 +123,15 @@ export function skillSites(site: string | undefined): string[] {
 }
 
 /**
- * The connected agents any skill is linked into, once, in the usual harness
- * order. A skill records its links when it is saved and keeps them after an
- * agent is disconnected, so the saved links alone can name agents that are gone.
+ * The connected agents a skill can be pasted into: the ones it is linked into. A skill saved with
+ * no links (an empty list) can go to any connected agent, so it shows them all.
  */
-export function worksInAgents(
-  skills: Pick<Skill, 'linkedAgents'>[],
+export function skillAgents(
+  skill: Pick<Skill, 'linkedAgents'>,
   connected: readonly Harness[],
 ): Harness[] {
-  return HARNESSES.filter(
-    (harness) =>
-      connected.includes(harness) &&
-      skills.some((skill) => skill.linkedAgents.includes(harness)),
-  )
+  if (!skill.linkedAgents.length) return [...connected]
+  return connected.filter((harness) => skill.linkedAgents.includes(harness))
 }
 
 const STUCK_WHILE: Record<ReplayVerb, string> = {
@@ -167,12 +163,14 @@ export interface UltrafastMark {
 /**
  * How a skill's ultrafast state reads beside the wordmark, or nothing for a plain skill.
  * `afterFirstRun` marks a skill made from a task that has not run yet: it has no flow, but its
- * first run in an agent makes it ultrafast, so it says so.
+ * first run in an agent makes it ultrafast, so it says so. A plan without ultrafast (`locked`)
+ * shows no mark at all, since every skill then runs the normal way.
  */
 export function ultrafastMark(
   ultrafast: SkillUltrafast | undefined,
   afterFirstRun = false,
 ): UltrafastMark | null {
+  if (ultrafast?.locked === true) return null
   switch (ultrafast?.status) {
     case 'verified':
       return { dim: false, word: null, tone: 'muted' }
@@ -379,6 +377,19 @@ function median(values: number[]): number | null {
   return sorted[Math.floor(sorted.length / 2)] ?? null
 }
 
+/** How long a run done the normal way usually takes, "about 41 sec", from the skill's runs. */
+export function normalRunLabel(
+  runs: Pick<SkillRun, 'mode' | 'durationMs'>[],
+): string | null {
+  return durationLabel(
+    median(
+      runs
+        .filter((run) => run.mode !== 'ultrafast' && run.durationMs)
+        .map((run) => run.durationMs as number),
+    ),
+  )
+}
+
 /**
  * Where a skill stands on running with or without the agent, or null when the skill page has
  * nothing to say (no fast version yet).
@@ -392,13 +403,7 @@ export function runsChoice(
     ultrafast.status === 'verified' || ultrafast.status === 'degraded'
   if (!live) return null
   const fastLabel = durationLabel(ultrafast.p50Ms)
-  const slowLabel = durationLabel(
-    median(
-      runs
-        .filter((run) => run.mode !== 'ultrafast' && run.durationMs)
-        .map((run) => run.durationMs as number),
-    ),
-  )
+  const slowLabel = normalRunLabel(runs)
   const base = { fastLabel, slowLabel, withoutLocked: false, disabled: false }
   if (ultrafast.locked) {
     return {
@@ -485,4 +490,170 @@ export function chosenLine(
     return `You chose this in chat${who} ${day}`
   }
   return `You chose this in BrowserOS ${day}`
+}
+
+/** What a skill card says under its phrase: a choice to make, or its speed and runs. */
+export interface CardStats {
+  /** A write skill that still needs "with or without your agent" says so instead of stats. */
+  choice: 'Choose how it runs' | 'Asks again' | null
+  /** "1.8 s", only when its runs really go the fast way. */
+  speed: string | null
+  /** "32 runs", "1 run", or "Not used yet" for a skill with no ultrafast word to show. */
+  uses: string | null
+}
+
+/** "1.8 s" from a median in milliseconds, the short form for a card. */
+function shortSpeed(p50Ms: number): string {
+  return `${Math.max(0.1, Math.round(p50Ms / 100) / 10)} s`
+}
+
+export function cardStats(skill: Skill): CardStats {
+  const state = runsChoice(skill.ultrafast, [])?.state
+  if (state === 'choose') {
+    return { choice: 'Choose how it runs', speed: null, uses: null }
+  }
+  if (state === 'reask')
+    return { choice: 'Asks again', speed: null, uses: null }
+  const p50Ms = skill.ultrafast?.p50Ms
+  const fast =
+    skill.ultrafast?.status === 'verified' && runsByItself(skill) && p50Ms
+  const marked = ultrafastMark(skill.ultrafast, awaitsFirstRun(skill)) !== null
+  return {
+    choice: null,
+    speed: fast ? shortSpeed(p50Ms) : null,
+    uses:
+      skill.runCount > 0
+        ? skill.runCount === 1
+          ? '1 run'
+          : `${skill.runCount} runs`
+        : marked
+          ? null
+          : 'Not used yet',
+  }
+}
+
+/** Whether a skill matches what someone typed in the search: its title, name or site. */
+export function matchesQuery(
+  skill: Pick<Skill, 'name' | 'description' | 'site'>,
+  query: string,
+): boolean {
+  const words = query.trim().toLowerCase()
+  if (!words) return true
+  return [skill.description, skill.name, skill.site ?? ''].some((field) =>
+    field.toLowerCase().includes(words),
+  )
+}
+
+/** A skill's fast flow as analytics reports it: its status, or `locked` once the plan ended. */
+export function ultrafastStateToken(
+  ultrafast: SkillUltrafast | undefined,
+): string {
+  if (!ultrafast) return 'none'
+  return ultrafast.locked ? 'locked' : ultrafast.status
+}
+
+/** How much a skill is used: the skill page's value row changes shape with it. */
+export type UsageLevel = 'never' | 'rare' | 'sometimes' | 'lot'
+
+export function usageLevel(runCount: number): UsageLevel {
+  if (runCount <= 0) return 'never'
+  if (runCount < 3) return 'rare'
+  if (runCount < 10) return 'sometimes'
+  return 'lot'
+}
+
+/** One figure on the skill page's value row. */
+export interface ValueTile {
+  value: string
+  unit?: string
+  label: string
+  /** Speed tiles read in the ultrafast blue. */
+  fast: boolean
+}
+
+/** What the skill page says above its stats: tiles once it has run, an invite before. */
+export type SkillValue =
+  | { kind: 'invite'; title: string; body: string; fast: boolean }
+  | { kind: 'tiles'; tiles: ValueTile[] }
+
+/**
+ * What a skill has done for this person, by how much it is used. Speed shows only when its runs
+ * really go the fast way (verified, and read-only or chosen to run without the agent), since a
+ * skill that runs with the agent takes the agent's own time.
+ */
+export function skillValue(
+  skill: Skill,
+  runs: Pick<SkillRun, 'mode' | 'durationMs'>[],
+  now: number,
+): SkillValue {
+  const p50Ms = skill.ultrafast?.p50Ms
+  const fast =
+    skill.ultrafast?.status === 'verified' && runsByItself(skill) && p50Ms
+      ? p50Ms
+      : null
+  const normal = normalRunLabel(runs)
+  const level = usageLevel(skill.runCount)
+  if (level === 'never') {
+    if (fast) {
+      return {
+        kind: 'invite',
+        fast: true,
+        title: 'Ready when you are',
+        body: normal
+          ? `It takes ${durationLabel(fast)} a run, down from ${normal} the normal way.`
+          : `It takes ${durationLabel(fast)} a run.`,
+      }
+    }
+    if (awaitsFirstRun(skill)) {
+      return {
+        kind: 'invite',
+        fast: false,
+        title: 'Run it once and neo learns it',
+        body: 'Your agent does it the normal way the first time. Next time it takes seconds.',
+      }
+    }
+    if (skill.ultrafast?.status === 'pending' && !skill.ultrafast.locked) {
+      return {
+        kind: 'invite',
+        fast: false,
+        title: 'Almost ready',
+        body: 'Your agent is turning this skill into a fast version.',
+      }
+    }
+    return {
+      kind: 'invite',
+      fast: false,
+      title: 'Try it the first time',
+      body: 'Copy it, paste it into your agent, and it does the task for you.',
+    }
+  }
+  const lastUsed =
+    skill.lastRunAt === undefined ? null : lastUsedLabel(skill.lastRunAt, now)
+  const tiles: ValueTile[] = []
+  if (fast) {
+    tiles.push({
+      value: `${Math.max(0.1, Math.round(fast / 100) / 10)}`,
+      unit: 's',
+      label: normal ? `a run, down from ${normal}` : 'a run',
+      fast: true,
+    })
+  }
+  const runsUnit = skill.runCount === 1 ? 'run' : 'runs'
+  if (fast && level !== 'rare' && lastUsed) {
+    tiles.push({
+      value: String(skill.runCount),
+      unit: runsUnit,
+      label: 'so far',
+      fast: false,
+    })
+    tiles.push({ value: lastUsed, label: 'last used', fast: false })
+  } else {
+    tiles.push({
+      value: String(skill.runCount),
+      unit: runsUnit,
+      label: lastUsed ? `last used ${lastUsed}` : 'so far',
+      fast: false,
+    })
+  }
+  return { kind: 'tiles', tiles }
 }

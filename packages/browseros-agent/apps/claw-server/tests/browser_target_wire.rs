@@ -28,7 +28,7 @@ fn current_native() -> NativeCapabilities {
 struct NativeProfiles {
     profiles: Mutex<Vec<Value>>,
     windows: Mutex<Vec<Value>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -156,7 +156,7 @@ impl CdpConnection for NativeProfiles {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 
@@ -195,6 +195,7 @@ impl HttpPeer {
             browserclaw_dir: dir.path().join("claw"),
             session_idle: Duration::from_secs(300),
             session_complete_idle: Duration::from_secs(300),
+            mcp_transport_idle: Duration::from_secs(300),
             session_retention: Duration::from_secs(7_200),
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,

@@ -262,6 +262,10 @@ pub(crate) trait TabScript: Send + Sync + 'static {
         false
     }
 
+    /// Sees every command before it is answered, with the session it went out on (`None`: the
+    /// browser's own), for a script that checks where input went.
+    fn seen(&self, _method: &str, _params: &Value, _session: Option<&SessionId>) {}
+
     /// A raw protocol reply outside the DOM probe, such as encoded screenshot bytes.
     /// Returning None retains the scripted browser's ordinary infrastructure responses.
     fn cdp_reply(&self, _method: &str, _params: &Value) -> Option<Value> {
@@ -328,7 +332,7 @@ pub(crate) struct ScriptedTab<S> {
     slowed: AtomicUsize,
     /// Every command sent, by method, in order.
     sent: Mutex<Vec<String>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     /// Count and subscription share this lock, matching the real transport's fence contract.
     broadcast_count: Mutex<u64>,
     targeted: TargetedEvents,
@@ -431,7 +435,7 @@ impl<S: TabScript> ScriptedTab<S> {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             *count += 1;
-            let _ = self.events.send(event);
+            let _ = self.events.send(Arc::new(event));
         }
     }
 
@@ -457,6 +461,11 @@ impl<S: TabScript> ScriptedTab<S> {
     }
 
     /// The session core attaches to `target`: one per target, as Chromium hands them out.
+    /// The session every attach to `target` gets: the one its events arrive on.
+    pub(crate) fn session_for(&self, target: &str) -> SessionId {
+        SessionId::from(self.session_of(target))
+    }
+
     fn session_of(&self, target: &str) -> String {
         format!("{}-{target}", self.session)
     }
@@ -471,6 +480,7 @@ impl<S: TabScript> ScriptedTab<S> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(method.to_owned());
+        self.script.seen(method, params, session);
         if self.script.outlasts_client(method) {
             let _slowed = Slowed::new(&self.slowed);
             time::sleep(client_timeout()).await;
@@ -671,7 +681,7 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
         self.send_raw_json(method, params_json, session)
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 
@@ -682,7 +692,7 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         let count = self
             .broadcast_count
             .lock()

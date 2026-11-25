@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>ad host</title><link rel="icon" href="data:,"></head>
+<body>
+<p>ad host</p>
+<!-- Five cross-site ad frames, out of process: each writes its own frame events. -->
+<iframe src="{{CROSS}}/ad-frame.html?slot=0"></iframe>
+<iframe src="{{CROSS}}/ad-frame.html?slot=1"></iframe>
+<iframe src="{{CROSS}}/ad-frame.html?slot=2"></iframe>
+<iframe src="{{CROSS}}/ad-frame.html?slot=3"></iframe>
+<iframe src="{{CROSS}}/ad-frame.html?slot=4"></iframe>
+<script>
+// Asks every ad frame to add and remove `n` nested children at once, as a busy ad page churns.
+window.burst = (n) => {
+  for (const frame of document.querySelectorAll('iframe')) {
+    frame.contentWindow.postMessage({ burst: n }, '*');
+  }
+  return true;
+};
+</script>
+</body>
+</html>

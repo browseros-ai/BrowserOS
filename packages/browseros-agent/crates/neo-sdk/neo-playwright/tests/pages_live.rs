@@ -804,7 +804,7 @@ const CRASH_COMMAND_REPLY_WAIT: Duration = Duration::from_secs(1);
 async fn crash_renderer(
     run: &LiveRun,
     page: &TestPage,
-    events: &mut Receiver<CdpEvent>,
+    events: &mut Receiver<Arc<CdpEvent>>,
     crashes: &mut Vec<Value>,
 ) -> TestResult<String> {
     let core_page = run.core_page(page).await?;
@@ -816,7 +816,7 @@ async fn crash_renderer(
             if event.method == "Target.targetCrashed" {
                 let ours =
                     event.params.get("targetId").and_then(Value::as_str) == Some(target.as_str());
-                crashes.push(event.params);
+                crashes.push(event.params.clone());
                 if ours {
                     return Ok::<(), Box<dyn Error>>(());
                 }
@@ -891,13 +891,15 @@ async fn check_crash_neighbours(
 )]
 fn check_crash_scope(
     target: &str,
-    events: &mut Receiver<CdpEvent>,
+    events: &mut Receiver<Arc<CdpEvent>>,
     crashes: &mut Vec<Value>,
     stage: &str,
 ) -> TestResult {
     let drained = loop {
         match events.try_recv() {
-            Ok(event) if event.method == "Target.targetCrashed" => crashes.push(event.params),
+            Ok(event) if event.method == "Target.targetCrashed" => {
+                crashes.push(event.params.clone());
+            }
             Ok(_) => {}
             Err(TryRecvError::Empty) => break Ok(()),
             Err(error) => break Err(error),
@@ -1020,15 +1022,16 @@ async fn target_crashed_message_recovery_closes_and_opens_a_working_page() -> Te
 }
 
 /// The longest a run of `ariaSnapshot()` and one click on a healthy tab may take beside tabs whose
-/// renderer is busy, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. The wait it guards is
-/// deterministic: a run that waits for a busy tab's frame tree pays the native read's whole
-/// budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), and with the start hold back a run
-/// cannot go under 2.1 s, so every try fails and the best of three cannot hide it. The run itself
-/// takes about 150 ms on the pool's debug build (main took 5.3 s), plus the start's one grace for
-/// listed tabs (`LISTED_START_GRACE_MS` in context.ts, 300 ms, one window for all of them): three
-/// busy tabs paying it one after another would come to 1,050 ms and fail too. The rest, and the
-/// tries, absorb the seconds-long CPU stalls of a debug test thread on a loaded machine.
-const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(900);
+/// renderer is busy, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. `page.frames` answers from
+/// the target watcher's list and never asks a tab (`frame_tree.rs` `frames`), so the prelude's
+/// reads of the busy tabs answer at once and the run pays nothing for them: about 150 ms on the
+/// pool's debug build (main took 5.3 s before #3723). The bound allows the prelude's one start
+/// retry (`FRAMES_RETRY_MS`, 100 ms) for a tab whose list is not whole yet. With the old renderer
+/// read back, each busy tab's read waits out the start's grace for listed tabs
+/// (`LISTED_START_GRACE_MS` in context.ts, 300 ms), so no try can go under about 450 ms and the
+/// best of three cannot hide it. The rest, and the tries, absorb the CPU stalls of a debug test
+/// thread on a loaded machine.
+const BESIDE_BUSY_TABS_BOUND: Duration = Duration::from_millis(400);
 
 /// Tries per case before [`BESIDE_BUSY_TABS_BOUND`] fails it. The busy tabs stay busy for 20 s,
 /// longer than three tries of a run that waits for them.
@@ -1042,8 +1045,8 @@ const BESIDE_BUSY_TABS_SCRIPT: &str = "const text = await page.ariaSnapshot()\n\
 
 /// A run never waits for the frame tree of a tab it does not use. The run's init lists every tab,
 /// as a host whose runs see the whole browser does, so the prelude reads the busy tabs' trees too;
-/// their renderer answers nothing, and each read waits out its budget. The script never names
-/// them, so it pays nothing for them, whether one, two or three are busy.
+/// their renderer answers nothing, but `page.frames` answers from the watcher's list without
+/// asking it. The script pays nothing for them, whether one, two or three are busy.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 #[expect(
@@ -1116,13 +1119,13 @@ async fn tests_that_a_run_beside_busy_tabs_never_waits_for_their_frames() -> Tes
 static BUSY_TABS: Semaphore = Semaphore::const_new(1);
 
 /// The longest the run may take from the moment another client opened a busy tab to the end of
-/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. A tab the
-/// run first sees mid-run holds the script for its reads until one goes unanswered, so such a tab
-/// may cost the run one wait in all: one native read's whole budget (one second,
-/// `frame_tree.rs` `SNAPSHOT_BUDGET`). The bound is that one wait plus the room
-/// [`BESIDE_BUSY_TABS_BOUND`] gives a run. A tab that held every statement would cost five or
-/// more, so every try would fail.
-const MID_RUN_BUSY_TAB_BOUND: Duration = Duration::from_millis(1_900);
+/// its next five statements, in the best of [`BESIDE_BUSY_TABS_TRIES`] tries. `page.frames`
+/// answers from the target watcher's list and never asks the tab, so the run pays nothing for it,
+/// past the prelude's one start retry for a list that is not whole (100 ms). With the old renderer
+/// read back, the run's first read of the tab it first sees mid-run holds the script for one
+/// native read's whole budget (one second, `frame_tree.rs` `SNAPSHOT_BUDGET`), so no try can go
+/// under it.
+const MID_RUN_BUSY_TAB_BOUND: Duration = BESIDE_BUSY_TABS_BOUND;
 
 /// The script of [`tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_most`]:
 /// it waits for the tab the owner opens from its page, then runs five statements on its own tab,
@@ -1205,12 +1208,11 @@ impl OpHost for FrameReads {
     }
 }
 
-/// A tab another client opens while a run is going, and that never answers, costs the run one
-/// wait at most, never one per statement. Here the owner opens it from the run's page, as a
-/// click on a link that opens a tab would. The run first sees it mid-run, so its first read holds
-/// the script; that read goes unanswered, and from then on the tab is read only in the background.
-/// The row also checks that the run did read the tab while it was busy, so it cannot pass by never
-/// meeting the busy tab.
+/// A tab another client opens while a run is going, and that never answers, costs the run
+/// nothing: `page.frames` answers its frames from the target watcher's list. Here the owner opens
+/// it from the run's page, as a click on a link that opens a tab would. The run first sees it
+/// mid-run and reads its frames at once. The row also checks that the run did read the busy tab,
+/// so it cannot pass by never meeting it.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 #[expect(
@@ -1264,9 +1266,9 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            let unanswered = reads
+            let met = reads
                 .iter()
-                .filter(|(tab, read)| *tab != healthy.tab.0 && *read >= Duration::from_millis(900))
+                .filter(|(tab, _)| *tab != healthy.tab.0)
                 .count();
             eprintln!("MID_RUN_BUSY_TAB took={took:?} reads={reads:?} script={outcome}");
             assert!(
@@ -1274,8 +1276,8 @@ async fn tests_that_a_busy_tab_another_client_opens_mid_run_costs_one_wait_at_mo
                 "the script never met the busy tab's page event: {outcome}"
             );
             assert!(
-                unanswered >= 1,
-                "the run never met the busy tab unanswered, so this try tested nothing: {reads:?}"
+                met >= 1,
+                "the run never read the busy tab, so this try tested nothing: {reads:?}"
             );
             tries.push(took);
             if took < MID_RUN_BUSY_TAB_BOUND {

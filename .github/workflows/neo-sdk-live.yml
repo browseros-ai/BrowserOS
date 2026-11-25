@@ -113,7 +113,21 @@ jobs:
         run: python3 -m unittest discover -s crates/neo-sdk/tests -p test_live.py
 
       - name: Run every live SDK suite
+        env:
+          # The prelude's compare switch (design 2.3, layer 5; neo-playwright-js
+          # prelude/snapshot-text.ts), a test harness's and never a host's. While both snapshot
+          # engines exist, every text the prelude renders on its path is held to Rust's text of
+          # the same read, and a difference fails the call. Each run appends its counts here.
+          NEO_COMPARE_SNAPSHOTS: "1"
+          NEO_COMPARE_SNAPSHOTS_LOG: ${{ runner.temp }}/neo-sdk-live/snapshot-comparisons.log
         run: python3 crates/neo-sdk/live.py --output "$RUNNER_TEMP/neo-sdk-live"
+
+      # A comparison that silently did not run is not a pass: while the built prelude says
+      # SNAPSHOT_TEXT 'prelude', no comparison fails the job, as a difference always does. Once it
+      # says 'rust', the prelude's path no longer runs and the totals are only printed.
+      - name: Count the snapshot comparisons
+        if: always()
+        run: crates/neo-sdk/count-snapshot-comparisons.sh "${{ runner.temp }}/neo-sdk-live/snapshot-comparisons.log"
 
       - name: Upload the live results and browser cleanup receipts
         if: always()

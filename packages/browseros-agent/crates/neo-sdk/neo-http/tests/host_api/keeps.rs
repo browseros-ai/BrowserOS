@@ -314,6 +314,7 @@ async fn a_new_service_does_not_restore_keeps_onto_the_same_browser() -> TestRes
             tab_owner: Arc::new(|_| None),
             tab_task: Arc::new(|_| None),
             tab_opener: Arc::new(|_| None),
+            metrics: Arc::new(String::new),
         },
         Arc::new(ScriptedTransport(Arc::clone(&h.capture))),
     );

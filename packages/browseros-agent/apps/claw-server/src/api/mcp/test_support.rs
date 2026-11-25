@@ -59,6 +59,7 @@ pub async fn tool_call_with_behavior(
         browserclaw_dir: root,
         session_idle: Duration::from_secs(300),
         session_complete_idle: Duration::from_secs(300),
+        mcp_transport_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
@@ -126,7 +127,7 @@ pub async fn tool_call_with_behavior(
 /// Synthetic CDP peer for host integration tests. It models native catalog,
 /// tab/window identity and group movement so routing errors have visible effects.
 pub(crate) struct ProfileConnection {
-    events: tokio::sync::broadcast::Sender<browseros_cdp::CdpEvent>,
+    events: tokio::sync::broadcast::Sender<std::sync::Arc<browseros_cdp::CdpEvent>>,
     targeted: browseros_cdp::TargetedEvents,
     pub profiles: std::sync::Mutex<Vec<Value>>,
     pub windows: std::sync::Mutex<Vec<Value>>,
@@ -535,7 +536,7 @@ impl browseros_core::CdpConnection for ProfileConnection {
                 .to_string())
         })
     }
-    fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
+    fn events(&self) -> tokio::sync::broadcast::Receiver<std::sync::Arc<browseros_cdp::CdpEvent>> {
         self.events.subscribe()
     }
     fn events_targeted(

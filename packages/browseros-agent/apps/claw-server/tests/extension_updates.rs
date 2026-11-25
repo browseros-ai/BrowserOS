@@ -24,7 +24,7 @@ struct Fixture {
     status: Mutex<Value>,
     workers: Mutex<Vec<Value>>,
     calls: Mutex<Vec<String>>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     hang_evaluation: AtomicBool,
     evaluating: Notify,
@@ -142,7 +142,7 @@ impl CdpConnection for Fixture {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 
@@ -301,6 +301,7 @@ async fn running_coordinator_reads_sessions_and_recovers_on_notification_and_tim
         browserclaw_dir: dir.path().join("browserclaw"),
         session_idle: Duration::from_secs(300),
         session_complete_idle: Duration::from_secs(300),
+        mcp_transport_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(300),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,

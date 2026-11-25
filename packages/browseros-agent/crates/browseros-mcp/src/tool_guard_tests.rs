@@ -137,7 +137,7 @@ impl InnerCallHook for GuardHook {
 /// is held, and response gates let the real handler/response futures remain in flight.
 struct GuardConnection {
     state: Arc<GuardState>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
 }
 
@@ -224,7 +224,7 @@ impl CdpConnection for GuardConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

@@ -14,13 +14,13 @@ import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
 import { usePlan, usePlanSavings } from '@/modules/api/plan.hooks'
+import { hasUltrafast } from '@/modules/plan/plan.helpers'
 import { useCockpitData } from './cockpit.data'
 import { homeLede, partOfDay } from './cockpit.helpers'
 import { useCurrentHour, useHelpTakeover } from './cockpit.hooks'
 import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
-const ULTRAFAST_FEATURE = 'claw.ultrafast'
 
 export function Cockpit() {
   const { sessions } = useCockpitData()
@@ -81,7 +81,7 @@ export function Cockpit() {
     refetchInterval: 60_000,
   })
   const plan = usePlan()
-  const ultrafast = plan.data?.features.includes(ULTRAFAST_FEATURE) === true
+  const ultrafast = hasUltrafast(plan.data)
   const savings = usePlanSavings({
     variables: ultrafast && state === 'ready' ? undefined : skipToken,
     refetchInterval: 60_000,

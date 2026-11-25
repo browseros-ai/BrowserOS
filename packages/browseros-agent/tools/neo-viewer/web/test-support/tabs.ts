@@ -7,7 +7,7 @@
  * it all.
  */
 
-import type { ViewerEvent } from '../../shared/api'
+import type { StreamEvent } from '../../shared/api'
 import type {
   ChannelLike,
   LocksLike,
@@ -34,7 +34,7 @@ export class FakeStream implements SourceLike {
     if (!this.closed) this.onopen?.(new Event('open'))
   }
 
-  send(event: ViewerEvent): void {
+  send(event: StreamEvent): void {
     if (!this.closed)
       this.onmessage?.(
         new MessageEvent('message', { data: JSON.stringify(event) }),

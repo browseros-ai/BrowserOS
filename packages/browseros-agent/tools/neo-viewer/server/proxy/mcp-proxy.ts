@@ -9,8 +9,10 @@
  * Every method, path suffix and header goes through, so whatever MCP revision the agent speaks
  * (2026-07-28's `server/discover`, or `initialize`) reaches Neo as sent, and Neo behaves exactly
  * as without the viewer. Headers that belong to one hop (connection, framing) are the only ones
- * dropped. When the agent goes away mid-reply the upstream request is closed too: Neo's stateless
- * MCP stops a run when its client's stream is gone, so the proxy must not keep it alive.
+ * dropped, and one may be added: a `traceparent` for a run call that carried no trace context
+ * (`trace-context.ts`), so the run's OpenTelemetry spans hang under a parent that names it. When
+ * the agent goes away mid-reply the upstream request is closed too: Neo's stateless MCP stops a
+ * run when its client's stream is gone, so the proxy must not keep it alive.
  */
 
 import type { ClientInfo } from '../../shared/api'
@@ -30,6 +32,7 @@ import {
   type RequestMessage,
   readRequestBody,
 } from './request-body'
+import { type TraceDecision, traceContextFor } from './trace-context'
 
 export interface McpProxyDeps {
   /** Neo's MCP endpoint, e.g. `http://127.0.0.1:9010/mcp`. */
@@ -71,6 +74,8 @@ class Exchange {
   private readonly sentAt: number
   private readonly userAgent: string | null
   private readonly body: RequestBody
+  /** The runs' trace context, and the `traceparent` to add when the caller sent none. */
+  private readonly trace: TraceDecision | null
   private readonly calls: Call[]
   private readonly tracker: ReplyTracker
   private readonly abort = new AbortController()
@@ -87,6 +92,7 @@ class Exchange {
     this.userAgent = req.headers.get('user-agent')
     this.body = bytes ? readRequestBody(bytes) : { text: null, messages: [] }
     this.rememberClients()
+    this.trace = traceContextFor(req.headers, this.body.messages)
     this.calls = this.body.messages.flatMap((message) => this.callFor(message))
     this.tracker = new ReplyTracker(this.calls)
     req.signal.addEventListener('abort', this.onAgentGone, { once: true })
@@ -94,11 +100,14 @@ class Exchange {
 
   async forward(): Promise<Response> {
     try {
+      const headers = withoutHopHeaders(this.req.headers)
+      if (this.trace?.inject)
+        headers.set('traceparent', this.trace.inject.traceparent)
       this.upstream = await fetch(
         upstreamUrl(this.req.url, this.deps.upstream),
         {
           method: this.req.method,
-          headers: withoutHopHeaders(this.req.headers),
+          headers,
           body: this.bytes,
           signal: this.abort.signal,
           redirect: 'manual',
@@ -164,6 +173,7 @@ class Exchange {
       timeoutMs: typeof args.timeout === 'number' ? args.timeout : null,
       client: this.clientFor(message),
       agentTaskId: agentTaskId(message),
+      trace: this.trace?.context ?? null,
       sentAt: new Date(this.sentAt).toISOString(),
       proxyMs: this.deps.now() - this.sentAt,
       request: { raw: this.body.text ?? '', jsonRpcId: message.id },

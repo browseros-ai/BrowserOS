@@ -210,8 +210,9 @@ pub(crate) struct ErrBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "unknown")]
     matcher: Option<&'a Value>,
-    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, snapshot }`): the
-    /// bootstrap renders its snapshot into the message and puts the rest on the error as `cover`.
+    /// A `covered` pointer action's cover (`{ ref, role, name, kind, controls, block? }`): the
+    /// bootstrap places its block under the message's "On top" line and puts the rest on the
+    /// error as `cover`.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "unknown")]
     cover: Option<&'a Value>,

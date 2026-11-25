@@ -2,10 +2,12 @@ import { describe, expect, it } from 'bun:test'
 import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
   awaitsFirstRun,
+  cardStats,
   chosenLine,
   durationLabel,
   firstRunLearning,
   healthLine,
+  matchesQuery,
   neoName,
   parseSkillBody,
   runModeCounts,
@@ -13,18 +15,20 @@ import {
   runSpeed,
   runsByItself,
   runsChoice,
+  skillAgents,
   skillCommand,
   skillSites,
+  skillValue,
   stillVerifying,
   stuckWhile,
   turnedUltrafast,
   ultrafastMark,
   upgradeSeconds,
+  usageLevel,
   usedLabel,
   VERIFYING_POLL_MS,
   VERIFYING_WINDOW_MS,
   verifyingPoll,
-  worksInAgents,
 } from './skills.helpers'
 
 describe('skillCommand', () => {
@@ -136,31 +140,28 @@ describe('skillSites', () => {
   })
 })
 
-describe('worksInAgents', () => {
+describe('skillAgents', () => {
   const linked = (...agents: Skill['linkedAgents']) => ({
     linkedAgents: agents,
   })
   const everyone = ['Claude Code', 'Codex', 'Cursor'] as const
 
-  it('lists every connected agent any skill is linked into, once, in the usual order', () => {
-    expect(
-      worksInAgents(
-        [linked('Cursor', 'Claude Code'), linked('Codex', 'Claude Code')],
-        everyone,
-      ),
-    ).toEqual(['Claude Code', 'Codex', 'Cursor'])
+  it('lists the connected agents this skill is linked into, in the usual order', () => {
+    expect(skillAgents(linked('Cursor', 'Claude Code'), everyone)).toEqual([
+      'Claude Code',
+      'Cursor',
+    ])
+    expect(skillAgents(linked('Codex'), everyone)).toEqual(['Codex'])
   })
 
   it('leaves out an agent that was disconnected after the skill was saved', () => {
     expect(
-      worksInAgents([linked('Claude Code', 'Codex')], ['Claude Code']),
+      skillAgents(linked('Claude Code', 'Codex'), ['Claude Code']),
     ).toEqual(['Claude Code'])
-    expect(worksInAgents([linked('Codex')], [])).toEqual([])
   })
 
-  it('is empty when no skill is linked into an agent', () => {
-    expect(worksInAgents([linked(), linked()], everyone)).toEqual([])
-    expect(worksInAgents([], everyone)).toEqual([])
+  it('offers every connected agent for a skill saved with no links', () => {
+    expect(skillAgents(linked(), everyone)).toEqual([...everyone])
   })
 })
 
@@ -551,5 +552,193 @@ describe('runsByItself', () => {
         }),
       ),
     ).toBe(false)
+  })
+})
+
+describe('cardStats', () => {
+  const skill = (patch: Partial<Skill>): Skill => ({
+    name: 'neo-hn',
+    description: 'Hacker News top 10',
+    origin: 'agent',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...patch,
+  })
+
+  it('shows speed and runs for a skill that runs the fast way', () => {
+    expect(
+      cardStats(
+        skill({
+          runCount: 32,
+          ultrafast: ultrafast({ status: 'verified', p50Ms: 1830 }),
+        }),
+      ),
+    ).toEqual({ choice: null, speed: '1.8 s', uses: '32 runs' })
+  })
+
+  it('shows runs only for a skill that runs with the agent or on a plan without ultrafast', () => {
+    const always = ultrafast({
+      status: 'verified',
+      effects: 'write',
+      p50Ms: 900,
+      runs: writeRuns({ alwaysWithAgent: 'order' }),
+    })
+    expect(cardStats(skill({ runCount: 1, ultrafast: always }))).toEqual({
+      choice: null,
+      speed: null,
+      uses: '1 run',
+    })
+    expect(
+      cardStats(
+        skill({
+          runCount: 3,
+          ultrafast: ultrafast({
+            status: 'verified',
+            p50Ms: 900,
+            locked: true,
+          }),
+        }),
+      ),
+    ).toEqual({ choice: null, speed: null, uses: '3 runs' })
+  })
+
+  it('asks for a choice a write skill still needs', () => {
+    const choose = ultrafast({
+      status: 'verified',
+      effects: 'write',
+      runs: writeRuns({}),
+    })
+    expect(cardStats(skill({ ultrafast: choose })).choice).toBe(
+      'Choose how it runs',
+    )
+    const reask = ultrafast({
+      status: 'verified',
+      effects: 'write',
+      runs: writeRuns({ reask: true }),
+    })
+    expect(cardStats(skill({ ultrafast: reask })).choice).toBe('Asks again')
+  })
+
+  it('says not used yet only when no ultrafast word fills the line', () => {
+    expect(cardStats(skill({})).uses).toBe('Not used yet')
+    expect(
+      cardStats(skill({ ultrafast: ultrafast({ status: 'pending' }) })).uses,
+    ).toBeNull()
+  })
+})
+
+describe('matchesQuery', () => {
+  const hn = {
+    name: 'neo-hn-front-page',
+    description: 'Hacker News top 10',
+    site: 'news.ycombinator.com',
+  }
+
+  it('matches the title, the name or the site, in any case', () => {
+    expect(matchesQuery(hn, 'hacker')).toBe(true)
+    expect(matchesQuery(hn, 'FRONT-PAGE')).toBe(true)
+    expect(matchesQuery(hn, 'ycombinator')).toBe(true)
+    expect(matchesQuery(hn, 'flipkart')).toBe(false)
+    expect(matchesQuery(hn, '  ')).toBe(true)
+  })
+})
+
+describe('ultrafastMark on a plan without ultrafast', () => {
+  it('shows no mark once the plan is off', () => {
+    expect(
+      ultrafastMark(ultrafast({ status: 'verified', locked: true })),
+    ).toBeNull()
+  })
+})
+
+describe('skillValue', () => {
+  const now = new Date(2026, 10, 23, 12).getTime()
+  const skill = (patch: Partial<Skill>): Skill => ({
+    name: 'neo-hn',
+    description: 'Hacker News top 10',
+    origin: 'agent',
+    version: 1,
+    linkedAgents: [],
+    runCount: 0,
+    cleanRunCount: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...patch,
+  })
+  const agentRun = { mode: 'agent' as const, durationMs: 41_000 }
+
+  it('sorts usage into never, rarely, sometimes and a lot', () => {
+    expect([0, 1, 2, 3, 9, 10].map(usageLevel)).toEqual([
+      'never',
+      'rare',
+      'rare',
+      'sometimes',
+      'sometimes',
+      'lot',
+    ])
+  })
+
+  it('invites the first run instead of showing empty figures', () => {
+    expect(
+      skillValue(
+        skill({
+          origin: 'history',
+          ultrafast: ultrafast({ status: 'none' }),
+        }),
+        [],
+        now,
+      ),
+    ).toMatchObject({ kind: 'invite', title: 'Run it once and neo learns it' })
+    expect(
+      skillValue(
+        skill({ ultrafast: ultrafast({ status: 'verified', p50Ms: 6000 }) }),
+        [agentRun],
+        now,
+      ),
+    ).toMatchObject({
+      kind: 'invite',
+      title: 'Ready when you are',
+      body: 'It takes about 6 sec a run, down from about 41 sec the normal way.',
+    })
+  })
+
+  it('shows speed beside the runs only when runs go the fast way', () => {
+    const fast = skill({
+      runCount: 2,
+      lastRunAt: now,
+      ultrafast: ultrafast({ status: 'verified', p50Ms: 1800 }),
+    })
+    expect(skillValue(fast, [agentRun], now)).toEqual({
+      kind: 'tiles',
+      tiles: [
+        {
+          value: '1.8',
+          unit: 's',
+          label: 'a run, down from about 41 sec',
+          fast: true,
+        },
+        { value: '2', unit: 'runs', label: 'last used today', fast: false },
+      ],
+    })
+    expect(
+      skillValue(
+        skill({
+          runCount: 5,
+          lastRunAt: now,
+          ultrafast: ultrafast({ status: 'degraded', p50Ms: 1800 }),
+        }),
+        [],
+        now,
+      ),
+    ).toEqual({
+      kind: 'tiles',
+      tiles: [
+        { value: '5', unit: 'runs', label: 'last used today', fast: false },
+      ],
+    })
   })
 })

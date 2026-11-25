@@ -19,10 +19,11 @@ info:
     `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
     the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
     unique among the browser's tabs until the browser restarts. An old number may then name
-    a different tab. A host
-    may send two optional ids of its own with a run
-    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?}`), each at most 128
-    bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
+    a different tab. A host may send optional keys of its own with a run,
+    `_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?, access?, traceparent?,
+    tracestate?}`, and Neo refuses any other key as `host / invalid_meta`. Its two ids,
+    `requestId` and `taskId`, are each at most 128 bytes. `requestId` names one call. Runs can
+    be looked up by it, and a repeat of it never
     runs again (within its task when the run has a `taskId`, else across Neo; under the `task`
     tab scope, a request without a `taskId` repeats only a run without one), as long as Neo's
     trace remembers it: a `requestId` whose run retention has removed (past
@@ -31,6 +32,14 @@ info:
     trace file, or any start on a fresh trace), is unknown, and a repeat of it runs again. A host that journals its request
     ids and retries them across a rollback must not count on the replay. `taskId` groups the
     calls of one task, so its runs, events and trace can be listed together.
+
+    `traceparent` and `tracestate` are W3C trace context, for a host that cannot set the HTTP
+    headers of those names on its MCP request: the run's OpenTelemetry span, `neo.run`, joins
+    that trace. A valid `traceparent` header wins over them, together with its own `tracestate`
+    header. An invalid value is ignored, never refused, and a `tracestate` counts only beside a
+    valid `traceparent`; with neither, the run starts a trace of its own. An older Neo refuses
+    the two keys, as it does any key it does not know, so a host that can set the headers sends
+    those instead.
 
     Task scope (`tabs.scope`, default `task`): a run that carries a `taskId` sees and acts on
     only its task family's tabs. A family starts at the task a host named; every task its runs
@@ -1255,6 +1264,100 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/metrics:
+    get:
+      operationId: getMetrics
+      summary: Neo's metrics now, as Prometheus text, for a scraper.
+      description: |
+        Prometheus text exposition format 0.0.4: `# HELP` and `# TYPE` lines, a counter's name
+        ending in `_total`, and a histogram as `_bucket{le="…"}` (`+Inf` included), `_sum` and
+        `_count`. Neo renders it at each request from the same meter provider it pushes OTLP
+        from when push is on, so a scrape and a push agree on every number. It is served
+        whenever this listener is, with no setting and no parameter, and never on the agent's
+        MCP port. A server older than this route answers 404.
+
+        The families, each named as OpenTelemetry's Prometheus compatibility rules name the
+        instrument an OTLP push sends (its OpenTelemetry name in parentheses), with their
+        labels: `neo_runs_total` (`neo.runs`) by `neo_run_status` and `neo_error_owner`,
+        `neo_run_active` (`neo.run.active`), `neo_run_duration_seconds` (`neo.run.duration`) by
+        `neo_run_status`, `neo_operations_total` (`neo.operations`) by `neo_op_name`,
+        `neo_op_outcome` and `neo_error_owner`, `neo_operation_duration_seconds`
+        (`neo.operation.duration`) by `neo_op_name` and `neo_op_outcome`, `neo_errors_total`
+        (`neo.errors`) by `neo_error_owner` and `error_type`, `neo_tab_count` (`neo.tab.count`)
+        by `neo_tab_origin`, `neo_tab_opened_total` (`neo.tab.opened`) by `neo_tab_origin`,
+        `neo_tab_closed_total` (`neo.tab.closed`) by `neo_tab_origin` and
+        `neo_tab_close_reason`, `neo_tab_duration_seconds` (`neo.tab.duration`) by
+        `neo_tab_origin` and `neo_tab_close_reason`, `neo_renderer_crashes_total`
+        (`neo.renderer.crashes`), `neo_navigations_total` (`neo.navigations`) by
+        `http_response_status_code`, `neo_navigation_errors_total` (`neo.navigation.errors`) by
+        `error_type`, `neo_captcha_solves_total` (`neo.captcha.solves`) by `neo_captcha_family`
+        and `neo_captcha_verdict`, `neo_captcha_reasons_total` (`neo.captcha.reasons`) by
+        `neo_captcha_reason`, and `neo_captcha_spend_total` (`neo.captcha.spend`) by
+        `neo_captcha_provider`. Every one has its `# HELP` and `# TYPE` lines from the first
+        scrape, in this order, even before it has a sample, so the body is never empty:
+        `neo_run_active` and `neo_renderer_crashes_total` start at `0`, `neo_tab_count` has a
+        series for each `neo_tab_origin`, and any other family gains a series the first time Neo
+        records its label set. The operation families count the script's operations and the ones
+        Neo runs for it, such as opening a run's default page. Neo's own housekeeping, sent with
+        no call site (its frame-tree reads, its event pump and listener bookkeeping), grows with
+        open tabs rather than with the script's work, so it is in none of
+        `neo_operations_total`, `neo_operation_duration_seconds` and `neo_errors_total`: its
+        operations appear in the run's trace alone, and a run that fails on one counts that
+        failure once, as the run's. A navigation is a `page.goto` (`frame.goto` included),
+        `page.reload`, `page.goBack` or `page.goForward` the browser was sent and that ended
+        with a value or a browser failure: `neo_navigations_total` counts each once, with
+        `http_response_status_code` only when its document arrived with an HTTP status from 100
+        to 599 (a same-document step, an `about:` or `data:` page or an unreadable status has
+        none), and `neo_navigation_errors_total` counts those the network refused. The
+        operation's own outcome is unchanged: a goto answered 404 is still an `ok` operation. A
+        CAPTCHA solve is every `neo.solveCaptcha` whose solver returned an outcome, one cut
+        short by the run's stop included; each adds 1 to `neo_captcha_solves_total` and to
+        `neo_captcha_reasons_total`, and what providers charged for it, in US dollars (the
+        push's unit is `{USD}`), to `neo_captcha_spend_total`. None of these depends on the
+        `trace` settings. Durations are in seconds.
+
+        Each label is its OpenTelemetry attribute key with every `.` as `_`, and every value
+        comes from a closed set: `neo_run_status` (`neo.run.status`) is how a run ended
+        (`Run.status`: `ok`, `error`, `cancelled` or `timeout`), `neo_op_outcome`
+        (`neo.op.outcome`) how an operation did (`Operation.outcome`), `neo_error_owner`
+        (`neo.error.owner`) an `OperationError.owner` or `none`, `error_type` (`error.type`),
+        the registry's key, an `OperationError.code`, or on `neo_navigation_errors_total`
+        Chromium's net error lowercased without `net::ERR_` (`aborted`, `address_unreachable`,
+        `blocked_by_client`, `blocked_by_response`, `cert_authority_invalid`,
+        `cert_common_name_invalid`, `cert_date_invalid`, `connection_closed`,
+        `connection_refused`, `connection_reset`, `connection_timed_out`, `empty_response`,
+        `failed`, `http2_protocol_error`, `internet_disconnected`, `name_not_resolved`,
+        `ssl_protocol_error`, `timed_out`, `too_many_redirects`, `unsafe_port`) or `_OTHER` for
+        any other, `neo_op_name` (`neo.op.name`) a method Neo serves or `unknown`,
+        `neo_tab_origin` (`neo.tab.origin`) `agent`, `found` or `neo`, `neo_tab_close_reason`
+        (`neo.tab.close_reason`) `script`, `janitor`, `user`, `crash` or `shutdown`,
+        `http_response_status_code` (`http.response.status_code`), the registry's key and an
+        integer in a push, an HTTP status from 100 to 599, `neo_captcha_family`
+        (`neo.captcha.family`) the CAPTCHA a solve found (`recaptcha_v2`, `recaptcha_v3`,
+        `turnstile`, `cloudflare_challenge`, `hcaptcha`, `geetest`, `aws_waf`, `arkose`,
+        `perimeterx`, `unknown`, or `none` when it found none), `neo_captcha_verdict`
+        (`neo.captcha.verdict`) how it ended (`solved`, `token_applied`, `already_clear`,
+        `unsupported`, `failed`, `cancelled`, `needs_human`), `neo_captcha_reason`
+        (`neo.captcha.reason`) the solve's `reason`, and `neo_captcha_provider`
+        (`neo.captcha.provider`) `capsolver`, `2captcha`, or `unknown` for a cost reported
+        without one. The attribute keys are the ones Neo's spans use for the same values where a
+        span carries them. No URL, title, tab, run or task id is ever a label. Neo chooses the
+        bucket boundaries: read them from the data. Parse the text with a parser that also
+        accepts OpenMetrics extras (`# EOF`, `# UNIT`, exemplars).
+
+        An OTLP push carries the same numbers under the OpenTelemetry names and keys in
+        parentheses above. A collector's Prometheus exporter or Prometheus' own OTLP receiver
+        translates them by the same rules, so the names and labels it stores are exactly this
+        route's.
+      responses:
+        '200':
+          description: The metrics as of this request.
+          content:
+            text/plain; version=0.0.4; charset=utf-8:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 components:
   securitySchemes:
     bearer:

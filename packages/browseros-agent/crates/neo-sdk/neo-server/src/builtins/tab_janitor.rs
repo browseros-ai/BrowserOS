@@ -8,11 +8,11 @@ use browseros_cdp::browser;
 use browseros_core::{ProtocolSession, TabId};
 use neo_http::Settings;
 use neo_takeover::TabHold;
-use neo_trace::{RunId, RunStatus};
+use neo_trace::{Delivery, RunId, RunStatus};
 use serde_json::json;
 use tokio::time::{self, Instant};
 
-use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
+use crate::browser::{BrowserLink, IntentReason, PageRef, TabRegistry, TabsScope};
 use crate::dispatch::{Call, Caller, Dispatcher, OpReply, RunCtx, RunEnd, RunStart, StopReason};
 use crate::host::HostHolds;
 
@@ -58,7 +58,10 @@ const SWEEP_BUDGET: Duration = Duration::from_secs(30);
 /// with no `requestId` and no `taskId` (synthesis graft 8), so the trace records what Neo closed.
 /// A held tab is skipped rather than refused, which keeps a long takeover from leaving a refused
 /// close in the trace every minute. A lock taken between the skip and the close is still the
-/// door's to refuse: the close is an op like any other.
+/// door's to refuse: the close is an op like any other. Tab telemetry counts each such close as
+/// the janitor's (`close_reason="janitor"`): the janitor takes its close intent before it
+/// submits the op, so it outranks the op's own `script` one, and its runs are internal, so they
+/// never count as agent runs.
 pub(crate) struct TabJanitor {
     dispatcher: Arc<Dispatcher>,
     link: Arc<BrowserLink>,
@@ -142,6 +145,8 @@ impl TabJanitor {
                 default_page: None,
                 tabs_scope: TabsScope::Browser,
                 access: None,
+                // Neo's own run: not in the run metrics; its closes still count as ops.
+                telemetry: self.tabs.telemetry().internal_run(),
             },
         );
         let Swept { closed, kept } = self.close_each(&run, &idle, idle_time, now, deadline).await;
@@ -208,6 +213,12 @@ impl TabJanitor {
                 site: None,
                 abort: None,
             };
+            // Before the submit: the tab watch may confirm the close before the op answers, and
+            // the earliest intent names a close, so this one outranks the op's own.
+            let intent = self
+                .tabs
+                .life()
+                .intend_close(page.tab, IntentReason::Janitor);
             let reply = self.dispatcher.submit(run, call).wait();
             tokio::pin!(reply);
             // Every op answers on every path, so after the stop its reply still arrives, as
@@ -226,6 +237,13 @@ impl TabJanitor {
                 }
                 Err(failure) => {
                     tracing::info!(run = %run.id(), tab = page.tab.0, error = %failure.error, "kept an idle agent tab");
+                    // Refused, or failed before the browser was asked: the tab stays open, and
+                    // its later close is whoever's makes it. A close that may have landed (sent,
+                    // then timed out) stays the janitor's.
+                    match failure.delivery {
+                        Delivery::NotSent => intent.withdraw(),
+                        Delivery::Done | Delivery::Unknown => {}
+                    }
                     kept.push(page.tab.0);
                 }
             }

@@ -2,6 +2,8 @@
 //! `tests/page_js_guard.rs` ALLOWED list: it creates the `browseros-engine` world and runs the
 //! engine there, apart from the page's main world.
 
+use std::sync::Arc;
+
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{CoreError, FrameId, ProtocolSession, SessionId};
 use serde::Deserialize;
@@ -72,7 +74,7 @@ pub(crate) struct Installed {
 /// subscribed. Taking one by value is what makes [`IsolatedWorld::install`] unable to start late.
 #[derive(Debug)]
 pub(crate) struct ContextWatch {
-    events: broadcast::Receiver<CdpEvent>,
+    events: broadcast::Receiver<Arc<CdpEvent>>,
 }
 
 /// What a session reported about one numeric context id while a watch ran.
@@ -406,7 +408,7 @@ async fn global_of(session: &ProtocolSession, named: &Named) -> Result<String, P
 impl ContextWatch {
     /// A watch over `events`, a subscription to the connection's events taken before the
     /// create.
-    pub(crate) fn new(events: broadcast::Receiver<CdpEvent>) -> Self {
+    pub(crate) fn new(events: broadcast::Receiver<Arc<CdpEvent>>) -> Self {
         Self { events }
     }
 
@@ -588,7 +590,7 @@ mod tests {
             self.replies.send_raw_json(method, params_json, session)
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.replies.events()
         }
 

@@ -403,7 +403,12 @@ function callIn(
       : null
   return {
     operation,
-    output: operationOutput(operation, record.operations, record.traceGaps),
+    output: operationOutput(
+      operation,
+      record.operations,
+      record.traceGaps,
+      record.source,
+    ),
     place: places.get(operation.id) ?? selection.place,
     previous: selectionOf(ordered[at - 1]),
     next: selectionOf(ordered[at + 1]),

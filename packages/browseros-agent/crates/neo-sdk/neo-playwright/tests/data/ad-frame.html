@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><link rel="icon" href="data:,"></head>
+<body style="margin:0">
+<div style="width:300px;height:250px;background:#ddd">ad</div>
+<script>
+// On its host's `burst`, adds and removes nested children: each attach and removal is a frame
+// event on this frame's own session.
+addEventListener('message', (event) => {
+  const count = event.data && event.data.burst;
+  for (let made = 0; made < (count || 0); made += 1) {
+    const child = document.createElement('iframe');
+    document.body.append(child);
+    child.remove();
+  }
+});
+</script>
+</body>
+</html>

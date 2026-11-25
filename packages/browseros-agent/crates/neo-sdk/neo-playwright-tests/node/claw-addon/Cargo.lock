@@ -1579,6 +1579,7 @@ dependencies = [
  "browseros-cdp",
  "browseros-core",
  "futures-util",
+ "neo-snapshot",
  "neo-trace",
  "png",
  "serde",
@@ -1630,6 +1631,7 @@ dependencies = [
  "neo-playwright",
  "neo-sdk-api",
  "neo-takeover",
+ "neo-telemetry",
  "neo-trace",
  "rmcp",
  "rquickjs",
@@ -1649,6 +1651,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-snapshot"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "neo-takeover"
 version = "0.1.0"
 dependencies = [
@@ -1665,6 +1675,18 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "neo-telemetry"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "opentelemetry",
+ "percent-encoding",
+ "thiserror",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1720,6 +1742,20 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "opentelemetry"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c1f1a6ac9c875a4941e4c7c085b61e8f4daa326de03b4701768c3491a6ad9ee"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "ordered-float"

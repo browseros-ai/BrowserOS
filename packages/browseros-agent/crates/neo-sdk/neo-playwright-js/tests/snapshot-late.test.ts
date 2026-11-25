@@ -10,10 +10,14 @@
 // replay did. The attribution audit's cases (repro/timeout-attribution-audit.json) close it.
 
 import { describe, expect, it } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { NO_BASELINE, NO_CHANGE, NO_TIME } from '../src/prelude/snapshot-delta'
 import type { SnapshotForm, SnapshotResult } from '../src/prelude/wire'
-import { type Call, loadPrelude, SEED } from './support/prelude-runtime'
+import {
+  type Call,
+  loadPrelude,
+  oldPathPrelude,
+  SEED,
+} from './support/prelude-runtime'
 
 /** The realm's `Date.now()` when each call starts. */
 const START = 100_000
@@ -23,11 +27,12 @@ const START = 100_000
  */
 const TIMEOUT = 5_000
 
-/** The committed prelude (A), and the same build with `LATE_SNAPSHOT` set to B. */
-const committed = readFileSync(
-  new URL('../../neo-playwright/assets/prelude.js', import.meta.url),
-  'utf8',
-)
+/**
+ * The committed prelude (A) on the path whose renderer runs in the realm, which these rows pin
+ * whichever engine is committed (`SNAPSHOT_TEXT`), and the same build with `LATE_SNAPSHOT` set
+ * to B.
+ */
+const committed = oldPathPrelude()
 const SWITCH = 'var LATE_SNAPSHOT = "return";'
 const PRELUDE_B = committed.replace(SWITCH, 'var LATE_SNAPSHOT = "fail";')
 
@@ -115,7 +120,7 @@ class Host {
     const runtime = loadPrelude({
       seed: SEED,
       now: START,
-      prelude,
+      prelude: prelude ?? committed,
       answer: (call) => {
         const at = (ms: number) => {
           now = ms

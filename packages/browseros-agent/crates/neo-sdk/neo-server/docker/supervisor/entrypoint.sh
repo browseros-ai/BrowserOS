@@ -315,15 +315,17 @@ clear_sessions() {
 #                         with the cache off: a page restored from it fires no load
 #                         or DOMContentLoaded, so goBack() and goForward() waiting
 #                         for either would time out with their outcome unknown.
+#   CONFIG_CHECK          claw-sdk's environment preflight (check_neo_config).
+#                         claw-server has no --check-config.
 server_policy() {
   local kind
   kind=$(neo-server-info kind) || die "Could not identify the installed Neo server"
   case "$kind" in
-    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 HOST_SOCKET=0 BACK_FORWARD_CACHE=1 ;;
-    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 HOST_SOCKET=1 BACK_FORWARD_CACHE=0 ;;
+    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 HOST_SOCKET=0 BACK_FORWARD_CACHE=1 CONFIG_CHECK=0 ;;
+    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 HOST_SOCKET=1 BACK_FORWARD_CACHE=0 CONFIG_CHECK=1 ;;
     *) die "Unknown Neo server '$kind'" ;;
   esac
-  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS HOST_SOCKET BACK_FORWARD_CACHE
+  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS HOST_SOCKET BACK_FORWARD_CACHE CONFIG_CHECK
   log "Server: $kind"
 }
 
@@ -349,6 +351,21 @@ prepare_host_socket() {
   setpriv --regid "$gid" --clear-groups chmod 2750 "$HOST_SOCKET_DIR"
   # spawn_as_neo keeps the environment, and Chromium passes it on to claw-sdk.
   export CLAW_HOST_SOCKET="${CLAW_HOST_SOCKET:-$HOST_SOCKET_DIR/host.sock}"
+}
+
+# claw-sdk reads its environment (CLAW_*, OTEL_*) at every start and exits 1 on a
+# value it cannot use. The browser takes that for a failed launch and starts it
+# again, so the container would loop unready until configure_neo gives up and
+# stops it as "Neo did not become ready". The same check, run first as
+# the neo user with the environment the browser hands claw-sdk (spawn_as_neo,
+# after prepare_host_socket's CLAW_HOST_SOCKET), stops the container on that
+# variable's error before anything else starts.
+check_neo_config() {
+  [ "$CONFIG_CHECK" = 1 ] || return 0
+  local server errors
+  server=$(neo-server-info path) || die "Could not find the installed Neo server"
+  errors=$(spawn_as_neo "$server" --check-config 2>&1 >/dev/null; wait "$!") \
+    || die "Neo cannot start with this environment: ${errors:-no reason given}"
 }
 
 # The arrays built here are never empty, because the host-side tests run this
@@ -683,6 +700,7 @@ apply_ids
 prepare_data
 prepare_settings
 prepare_host_socket
+check_neo_config
 apply_policies
 apply_minimal_ui
 start_display

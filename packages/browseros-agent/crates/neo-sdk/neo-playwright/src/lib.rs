@@ -75,13 +75,14 @@ mod wire;
 mod world;
 
 pub use download_facts::{DownloadFacts, DownloadState};
-pub use events::EventFence;
+pub use events::tab_frames::{ListedFrame, TabFrameList};
+pub use events::{EventFence, EventScope};
 pub use file_access::{FileAccess, FileAccessError, ProtectedPath, ReadPath, WritePath};
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
 pub use playwright::Playwright;
-pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
+pub use playwright_error::{Answer, ErrorCode, NetFailure, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
 pub use private_entry::{
     BoxFact, BoxFacts, BoxLook, BoxSpec, Compared, CoverIn, Drawing, Entry, EntryCode, EntryError,

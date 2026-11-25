@@ -51,6 +51,18 @@ Plan:
       minimum: 0
       nullable: true
       description: When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
+    trial:
+      type: boolean
+      description: Whether the plan is a free trial. Absent when the licence does not say.
+    trialKind:
+      $ref: '#/PlanTrialKind'
+    trialEndsAt:
+      type: integer
+      format: int64
+      minimum: 0
+      description: >-
+        When the free trial ends and the first payment is due, in epoch milliseconds. Present only
+        while trial is true and the licence says when.
     onKey:
       type: boolean
       description: Whether this computer is on a licence key. The key itself is never returned.
@@ -63,6 +75,13 @@ Plan:
     stale:
       type: boolean
       description: True when the last refresh failed and the saved licence is still valid.
+PlanTrialKind:
+  type: string
+  enum: [card, grant]
+  description: >-
+    How a free trial started. card: the person added a card at checkout and is charged when it
+    ends. grant: a free trial link from the BrowserOS team, which the app treats as a paid plan.
+    Present only while trial is true and the licence says.
 PriceInterval:
   type: string
   enum: [day, week, month, year]
@@ -87,6 +106,13 @@ PlanPrice:
       type: string
       minLength: 1
       description: Lower-case ISO 4217 code, such as "usd".
+    trialDays:
+      type: integer
+      format: int32
+      minimum: 0
+      description: >-
+        The free trial days a new checkout on this price is offered, before the gateway checks
+        whether this computer can have one. Absent or 0 when the price has no trial.
 PricedPlan:
   type: object
   additionalProperties: false
@@ -145,6 +171,14 @@ PlanCheckout:
       type: string
       format: uri
       description: The hosted payment page to open in a new tab.
+    trialDays:
+      type: integer
+      format: int32
+      minimum: 0
+      description: >-
+        The free trial days this checkout actually starts with. 0 when the price offered a trial
+        but this computer can't have one now, so the payment is taken today. Absent when the
+        gateway does not say.
 PlanCheckoutPhase:
   type: string
   enum: [open, complete, expired]

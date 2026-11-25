@@ -21,7 +21,7 @@
 
 # How long to keep finished sessions' tabs before automatic cleanup, in positive
 # whole minutes. Starts when the session ends, including after idle expiry; it
-# does not count from when a tab opens. The desktop default is 60 minutes.
+# does not count from when a tab opens. The desktop default is 30 minutes too.
 # Applies with either grouping mode. Automatic groups use the same grace period;
 # individual-tab cleanup skips tabs that are active or still have a live owner.
 # close_after_minutes = 30

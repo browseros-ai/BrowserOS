@@ -21,6 +21,7 @@
 
 use std::collections::HashSet;
 use std::future;
+use std::sync::Arc;
 
 use browseros_cdp::CdpEvent;
 use browseros_core::{FrameId, SessionId, TargetId};
@@ -35,7 +36,7 @@ use crate::{ErrorCode, PlaywrightError};
 
 /// The CDP events of one click's tab, from just before its input.
 pub(crate) struct RequestedNavigations {
-    events: Receiver<CdpEvent>,
+    events: Receiver<Arc<CdpEvent>>,
     /// The sessions whose frames the click can navigate.
     sessions: Vec<SessionId>,
     /// Frames with a navigation requested and not yet committed or cancelled.
@@ -112,7 +113,7 @@ impl Committed {
 
 impl RequestedNavigations {
     /// Starts listening. Take it before the first input event, so no request is missed.
-    pub(crate) fn watch(events: Receiver<CdpEvent>, sessions: Vec<SessionId>) -> Self {
+    pub(crate) fn watch(events: Receiver<Arc<CdpEvent>>, sessions: Vec<SessionId>) -> Self {
         Self {
             events,
             sessions,
@@ -186,7 +187,9 @@ impl RequestedNavigations {
             let changed = hub.changed();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            let read = hub.read_after(after);
+            // The clicked tab's ring plus the no-tab ring: its commits and close are there, and
+            // only their loss, never another tab's, can leave a commit unconfirmed.
+            let read = hub.read_tab_after(target, after);
             for record in read.records {
                 if !pending.is_empty()
                     && matches!(&record.event, PageEvent::Closed(closed) if closed == target)
@@ -288,6 +291,7 @@ impl RequestedNavigations {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use browseros_cdp::CdpEvent;
@@ -306,22 +310,22 @@ mod tests {
 
     const SESSION: &str = "root";
 
-    fn event(method: &str, params: serde_json::Value) -> CdpEvent {
-        CdpEvent {
+    fn event(method: &str, params: serde_json::Value) -> Arc<CdpEvent> {
+        Arc::new(CdpEvent {
             method: method.to_owned(),
             params,
             session_id: Some(SessionId::from(SESSION.to_owned())),
-        }
+        })
     }
 
-    fn requested(frame: &str) -> CdpEvent {
+    fn requested(frame: &str) -> Arc<CdpEvent> {
         event(
             "Page.frameRequestedNavigation",
             json!({ "frameId": frame, "disposition": "currentTab", "reason": "anchorClick", "url": "https://a.test/" }),
         )
     }
 
-    fn watch() -> (broadcast::Sender<CdpEvent>, RequestedNavigations) {
+    fn watch() -> (broadcast::Sender<Arc<CdpEvent>>, RequestedNavigations) {
         let (events, receiver) = broadcast::channel(16);
         let watch =
             RequestedNavigations::watch(receiver, vec![SessionId::from(SESSION.to_owned())]);
@@ -413,9 +417,10 @@ mod tests {
     #[tokio::test]
     async fn tests_that_journal_loss_cannot_silently_discard_an_unpublished_commit()
     -> Result<(), Box<dyn Error>> {
+        // The clicked tab's own ring overflows: another tab's would not count (`event_hub.rs`).
         let (hub, mut writer) = EventHub::new();
         for _ in 0..=LOG_CAPACITY {
-            writer.record(PageEvent::Closed(TargetId("other".to_owned())));
+            writer.record(PageEvent::Crashed(TargetId("main".to_owned())));
         }
         let (_events, mut watch) = watch();
         watch.apply(&requested("main"));

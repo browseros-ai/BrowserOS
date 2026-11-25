@@ -11,6 +11,7 @@ use std::{future, io, mem};
 use browseros_core::TabId;
 use neo_http::Settings;
 use neo_playwright::RunState;
+use neo_telemetry::{RunFacts, RunSpan, Telemetry, TraceContext};
 use neo_trace::{
     EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, RunTabsScope, TaskId, TraceSink,
     TraceStore, Values,
@@ -31,6 +32,7 @@ use crate::config::Defaults;
 use crate::dispatch::FrameVersion;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
+    telemetry_verdict,
 };
 use crate::host::TabHolders;
 use crate::runtime::{Script, ScriptEnd, ScriptOutcome, run_script};
@@ -57,6 +59,9 @@ pub(crate) struct RunService {
     /// Which task held which tab before a restart of Neo's server; a run starts once the book
     /// took them back. `None` in the hosted embedding, which keeps no file and never waits.
     holders: Option<Arc<TabHolders>>,
+    /// The process's telemetry: each admitted run starts its `RunSpan` here, which its
+    /// `RunGuard` then owns; a call refused before it became a run is counted here too.
+    telemetry: Telemetry,
     /// Makes the next run's task panic right after its start record, so tests can watch the
     /// panic boundary hold.
     #[cfg(test)]
@@ -86,6 +91,8 @@ pub(crate) struct RunServiceParts {
     /// The tab-holders file the sidecar restores the task book from; `None` in the hosted
     /// embedding.
     pub(crate) holders: Option<Arc<TabHolders>>,
+    /// The process's one telemetry handle (`Telemetry::noop` in the hosted embedding).
+    pub(crate) telemetry: Telemetry,
 }
 
 impl RunService {
@@ -117,6 +124,7 @@ impl RunService {
             orphan_grace,
             blank_tab,
             holders,
+            telemetry,
         } = parts;
         Arc::new(Self {
             ledger: RequestLedger::new(store.clone(), trace.clone(), LedgerLimits::default()),
@@ -131,6 +139,7 @@ impl RunService {
             snapshot_tips: SnapshotTips::default(),
             blank_tab,
             holders,
+            telemetry,
             #[cfg(test)]
             crash_next_run: AtomicBool::new(false),
         })
@@ -202,7 +211,9 @@ impl RunService {
     /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
     /// trace. Without the request id, though: nothing ran, and a recorded request id would
     /// make the store refuse that request's retry as a duplicate for good. Its code and host
-    /// data are stored all the same.
+    /// data are stored all the same. Every refusal passes here, so it is where telemetry counts
+    /// them, as `/v1/runs` lists them: a failed run with its error, with no span, in-flight or
+    /// duration, so a Neo whose browser is down still shows the calls it turned away.
     fn record_refused(&self, code: String, meta: RunMeta, reply: RunReply) -> Arc<RunReply> {
         // This is a new refused call, never a joined/replayed reply: retain its validated
         // metadata without overlaying a retry's access on the original run's answer.
@@ -219,6 +230,10 @@ impl RunService {
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
+        // A refused reply always carries its error; read it as the record gets it.
+        if let Some(error) = telemetry_verdict(&end).error {
+            self.telemetry.run_refused(error);
+        }
         self.trace.run_ended(RunEnded {
             id,
             status: end.status,
@@ -274,7 +289,9 @@ impl RunService {
             task_id,
             host_data,
             access,
+            trace,
         } = meta;
+        let telemetry = self.start_telemetry(handle.id(), task_id.as_ref(), trace.as_ref());
         let (run, guard) = RunCtx::start(
             &self.dispatcher,
             RunStart {
@@ -288,6 +305,7 @@ impl RunService {
                 default_page: page.clone(),
                 tabs_scope: setting,
                 access,
+                telemetry,
             },
         );
         #[cfg(test)]
@@ -354,6 +372,21 @@ impl RunService {
         let reply = Arc::new(reply);
         guard.finish(reply.trace_end(request_id.as_ref()));
         ticket.finish(reply);
+    }
+
+    /// The run's telemetry: in flight from now until its `RunGuard` ends it with the verdict
+    /// the trace records.
+    fn start_telemetry(
+        &self,
+        id: RunId,
+        task: Option<&TaskId>,
+        trace: Option<&TraceContext>,
+    ) -> RunSpan {
+        self.telemetry.start_run(RunFacts {
+            run_id: &id,
+            task_id: task.map(TaskId::as_str),
+            parent: trace,
+        })
     }
 
     /// Every tab open as the run starts, for its init (decision 25, PB input 4): Playwright's

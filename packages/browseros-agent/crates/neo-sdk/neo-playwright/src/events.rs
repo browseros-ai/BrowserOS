@@ -3,7 +3,7 @@
 //!
 //! ```text
 //!  CDP events ─▶ TargetWatcher (one task per Playwright) ─▶ EventWriter ─▶ EventHub log
-//!                 raw facts: target ids, never PageIds         one writer   ring of 1,024
+//!                 raw facts: target ids, never PageIds         one writer   a ring per tab
 //!                 holds dialogs for listening runs (DialogTable)            + Notify
 //!                 tracks each download to its end (DownloadTable)              │
 //!                                                                              │
@@ -52,6 +52,7 @@ mod recorded_reports;
 mod run_downloads;
 mod run_events;
 mod subscription;
+pub(crate) mod tab_frames;
 mod target_watcher;
 mod watcher_progress;
 pub(crate) mod worker_table;
@@ -60,9 +61,16 @@ pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
 pub(crate) use navigation_event::NavigationEvent;
 pub(crate) use page_event::PageEvent;
+// A queued binding call holds an op's event wait while a pump is in flight: the snapshot rows
+// hold it with one (`snapshot/snapshot_text/tests.rs`).
+#[cfg(test)]
+pub(crate) use page_event::BindingCalled;
 pub(crate) use run_downloads::RunDownloads;
+#[cfg(test)]
+pub(crate) use run_events::QueuedCall;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub use target_watcher::EventFence;
 pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher, WatcherHandle};
-pub(crate) use watcher_progress::{Fence, WatcherProgress};
+pub use watcher_progress::EventScope;
+pub(crate) use watcher_progress::{Fence, Held, WatcherProgress};

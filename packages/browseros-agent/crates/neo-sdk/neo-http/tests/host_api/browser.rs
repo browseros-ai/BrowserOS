@@ -60,7 +60,7 @@ pub(crate) struct ScriptedBrowser {
     hung: Mutex<Vec<usize>>,
     started: watch::Sender<usize>,
     cancelled: watch::Sender<usize>,
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     /// The one window's state; openbox maximizes a normal window.
     window: Mutex<&'static str>,
@@ -329,7 +329,7 @@ impl CdpConnection for ScriptedBrowser {
         Box::pin(async move { Err(CdpError::Transport(format!("{method}: not scripted"))) })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 

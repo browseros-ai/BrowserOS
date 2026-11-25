@@ -11,7 +11,12 @@
  */
 import { Buffer } from 'node:buffer'
 import type { ElementBrand, OpOutputs } from '../src/prelude/wire'
-import { type Call, loadPrelude, SEED } from '../tests/support/prelude-runtime'
+import {
+  type Call,
+  loadPrelude,
+  SEED,
+  withSnapshotText,
+} from '../tests/support/prelude-runtime'
 import { type InputExamples, inputExamples } from './input-examples'
 
 /** The clock the recording runs on, so `since` stamps are the same on every build. */
@@ -73,6 +78,8 @@ const ANSWERS = {
   'locator.elementHandles': [ELEMENT],
   'page.ariaSnapshot': { json: [], partial: [], document: 3, snapshotCall: 1 },
   'locator.ariaSnapshot': { json: [], partial: [] },
+  'page.ariaSnapshotJSON': { snapshot: [] },
+  'locator.ariaSnapshotJSON': { snapshot: [] },
   'page.snapshotBaseline': {
     text: '- button "Go" [ref=e1]',
     form: { text: 'kept', urls: false, maxTokens: 8000 },
@@ -191,7 +198,7 @@ const EVERY_OP = `
   await handle.$('b'); await handle.$$('b')
   await page.ariaSnapshot(sample('page.ariaSnapshot')); await l.ariaSnapshot(sample('locator.ariaSnapshot'))
   await page.ariaSnapshot({ delta: true })
-  await page.ariaSnapshotJSON(sample('page.ariaSnapshot')); await l.ariaSnapshotJSON(sample('locator.ariaSnapshot'))
+  await page.ariaSnapshotJSON(sample('page.ariaSnapshotJSON')); await l.ariaSnapshotJSON(sample('locator.ariaSnapshotJSON'))
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
   // A single generic matcher cannot produce Frame.expect's different optional params.
   const locatorExpect = sample('expect.locator'), pageExpect = sample('expect.page')
@@ -262,14 +269,49 @@ const EVERY_OP = `
   await tab.close({ runBeforeUnload: true }); await tab.close()
 `
 
+/**
+ * Every text a snapshot call can ask for, on a page and a locator: each format, each option the
+ * v1 format reads, a fractional cap and a delta. Recorded on both engines' paths
+ * (`SNAPSHOT_TEXT`), so the file holds every input either sends and does not change when the
+ * committed constant flips.
+ */
+const SNAPSHOT_TEXTS = `
+  const l = page.getByRole('button')
+  for (const at of [page, l]) {
+    await at.ariaSnapshot(); await at.ariaSnapshot({ mode: 'default' })
+    await at.ariaSnapshot({ mode: 'full' }); await at.ariaSnapshot({ mode: 'full', maxTokens: 2.5 })
+    await at.ariaSnapshot({ text: false, urls: true, maxTokens: 30, inert: true })
+    await at.ariaSnapshot({ delta: true, text: true })
+  }
+`
+
+/**
+ * The same under the conformance switch, where every mode is Playwright's text of the mode as
+ * passed; `mode: 'full'` is left out, since the op refuses it there as Playwright's server does.
+ */
+const UPSTREAM_TEXTS = `
+  const l = page.getByRole('button')
+  await page.ariaSnapshot(); await page.ariaSnapshot({ mode: 'ai' }); await l.ariaSnapshot({ mode: 'ai' })
+`
+
+/** Rust's text for a `format` call, and its tree and text for a compared one. */
+function textAnswer(call: Call): unknown {
+  if (!call.name.endsWith('.ariaSnapshot')) return cannedAnswer(call.name)
+  if (call.input.compare === true)
+    return { ...(cannedAnswer(call.name) as object), rust: { snapshot: '' } }
+  return { snapshot: '- button "Go" [ref=e1]' }
+}
+
 /** Runs `EVERY_OP` and returns every op the prelude sent, in order. */
-export async function recordEveryOp(prelude?: string): Promise<Call[]> {
+export async function recordEveryOp(built?: string): Promise<Call[]> {
   const { samples }: InputExamples = await inputExamples()
+  // The main recording runs the prelude's own renderer; the Rust path is recorded apart below.
+  const prelude = withSnapshotText('prelude', built)
   const runtime = loadPrelude({
     seed: SEED,
     answer: everyOpAnswer(),
     now: RECORDED_AT,
-    ...(prelude === undefined ? {} : { prelude }),
+    prelude,
   })
   await runtime.run(`const samples = ${JSON.stringify(samples)};\n${EVERY_OP}`)
   // `page.on` sends its listen op without awaiting it; let those land.
@@ -302,7 +344,7 @@ export async function recordEveryOp(prelude?: string): Promise<Call[]> {
       return cannedAnswer(call.name)
     },
     now: RECORDED_AT,
-    ...(prelude === undefined ? {} : { prelude }),
+    prelude,
   })
   await retired.run('await page.close()')
   await new Promise((resolve) => setTimeout(resolve, 0))
@@ -313,13 +355,47 @@ export async function recordEveryOp(prelude?: string): Promise<Call[]> {
     upstreamSnapshots: true,
     answer: everyOpAnswer(),
     now: RECORDED_AT,
-    ...(prelude === undefined ? {} : { prelude }),
+    prelude,
   })
   await upstream.run(`
     await page.ariaSnapshot()
     await page.locator('body').ariaSnapshotJSON({ mode: 'ai' })
   `)
-  return [...runtime.calls, ...retired.calls, ...upstream.calls]
+  // The text Rust prints: each format the prelude asks for, under the conformance switch too.
+  const texts = []
+  for (const upstreamSnapshots of [false, true]) {
+    const rust = loadPrelude({
+      seed: SEED,
+      upstreamSnapshots,
+      answer: textAnswer,
+      now: RECORDED_AT,
+      prelude: withSnapshotText('rust', built),
+    })
+    await rust.run(upstreamSnapshots ? UPSTREAM_TEXTS : SNAPSHOT_TEXTS)
+    texts.push(...rust.calls)
+  }
+  // The compare switch's inputs: a stub's text differs from the prelude's, so each call's
+  // comparison fails after its input was recorded.
+  const compared = loadPrelude({
+    seed: SEED,
+    answer: textAnswer,
+    now: RECORDED_AT,
+    prelude,
+    compareSnapshots: { compared: 0, noTime: 0, differed: 0 },
+  })
+  await compared.run(
+    SNAPSHOT_TEXTS.replace(
+      /await (at\.ariaSnapshot\([^)]*\))/g,
+      'await $1.catch(() => {})',
+    ),
+  )
+  return [
+    ...runtime.calls,
+    ...retired.calls,
+    ...upstream.calls,
+    ...texts,
+    ...compared.calls,
+  ]
 }
 
 /**

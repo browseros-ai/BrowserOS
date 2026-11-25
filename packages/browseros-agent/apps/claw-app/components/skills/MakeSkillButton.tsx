@@ -13,12 +13,14 @@ import {
   PenLine,
   RotateCcw,
 } from 'lucide-react'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/motion/tooltip'
+import { FreeMakeSkillDialog } from '@/components/skills/FreeMakeSkillDialog'
+import { MakeSkillConfirm } from '@/components/skills/MakeSkillConfirm'
 import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { usePlan } from '@/modules/api/plan.hooks'
@@ -26,9 +28,9 @@ import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { SkillDraftSheet } from '@/screens/skill-draft/SkillDraftSheet'
 import {
   canDraftSkills,
+  canShowMakeSkill,
   draftProblem,
   isBusy,
-  isDraftable,
   type MakeSkillState,
   type SkillCtaSurface,
   siteName,
@@ -56,7 +58,7 @@ const ORDER = Object.keys(LABELS) as MakeSkillState[]
 
 const STATE_CLASS: Record<MakeSkillState, string> = {
   idle: 'bg-accent-tint text-accent-ink',
-  writing: 'cursor-default bg-accent-tint text-accent-ink opacity-85',
+  writing: 'bg-accent-tint text-accent-ink opacity-85',
   review: 'cursor-default bg-accent-tint text-accent-ink opacity-85',
   draft: 'bg-accent-tint text-accent-ink',
   saving: 'cursor-default bg-accent-tint text-accent-ink opacity-85',
@@ -77,9 +79,12 @@ interface MakeSkillButtonProps {
 }
 
 /**
- * "Make it a skill" for one finished task. Home, History and the task page all read one shared
- * draft state, so the label is the same everywhere. While a draft is written or saved the button
- * stays in place, keeps its width (every label shares one grid cell) and ignores clicks.
+ * "Make it a skill" for one finished task, on every plan where ultrafast is on sale. With
+ * ultrafast a click asks first, then neo writes a draft; on a free plan it shows how to have the
+ * agent save it instead, so no paid draft is ever requested there. Home, History and the task page
+ * all read one shared draft state, so the label is the same everywhere. The button keeps its
+ * width (every label shares one grid cell); while a draft is read or saved it ignores clicks, and
+ * while one is written a click reopens the sheet.
  */
 export function MakeSkillButton({
   task,
@@ -91,22 +96,42 @@ export function MakeSkillButton({
   const ctaSurface: SkillCtaSurface = surface === 'page' ? 'task_page' : place
   const plan = usePlan()
   const entitled = canDraftSkills(plan.data?.features)
-  const available = entitled && (Boolean(task.skillName) || isDraftable(task))
+  // Where ultrafast is not on sale, the free path's "Get ultrafast" would lead nowhere.
+  const onSale = entitled || plan.data?.available === true
+  const available = onSale && canShowMakeSkill(task)
+  const planName = entitled ? 'ultrafast' : 'free'
   const flow = useMakeSkill({
     sessionId: task.sessionId,
     skillName: task.skillName,
-    enabled: available,
-    surface: ctaSurface,
+    enabled: entitled && available,
   })
+  const [asking, setAsking] = useState(false)
+  const [freeOpen, setFreeOpen] = useState(false)
   const offered = available && flow.state === 'idle'
   // Counting an impression is a side effect of the button appearing; no handler runs then.
   useEffect(() => {
-    if (offered) countCtaShown(ctaSurface)
-  }, [offered, ctaSurface])
+    if (offered) countCtaShown(ctaSurface, planName)
+  }, [offered, ctaSurface, planName])
   if (!available) return null
 
   const state = flow.state
   const busy = isBusy(state)
+  const click = () => {
+    if (state !== 'idle') {
+      flow.start()
+      return
+    }
+    track(AnalyticsEvent.SkillFromTaskClicked, {
+      surface: ctaSurface,
+      plan: planName,
+    })
+    if (entitled) {
+      setAsking(true)
+    } else {
+      track(AnalyticsEvent.FreeMakeSkillDialogShown, { surface: ctaSurface })
+      setFreeOpen(true)
+    }
+  }
   const button = (
     <button
       type="button"
@@ -116,7 +141,7 @@ export function MakeSkillButton({
         // Rows sit inside a link to the task page; the button must not follow it.
         event.preventDefault()
         event.stopPropagation()
-        flow.start()
+        click()
       }}
       className={cn(
         'relative inline-grid shrink-0 items-center justify-items-center whitespace-nowrap rounded-[9px] border border-transparent font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 active:translate-y-px [&_svg]:size-[15px]',
@@ -160,8 +185,33 @@ export function MakeSkillButton({
       ) : (
         button
       )}
+      {entitled ? (
+        <MakeSkillConfirm
+          task={task}
+          open={asking}
+          onOpenChange={(open) => {
+            if (!open && asking) {
+              track(AnalyticsEvent.SkillMakeDismissed, { surface: ctaSurface })
+            }
+            setAsking(open)
+          }}
+          onConfirm={() => {
+            track(AnalyticsEvent.SkillMakeConfirmed, { surface: ctaSurface })
+            setAsking(false)
+            flow.start()
+          }}
+        />
+      ) : (
+        <FreeMakeSkillDialog
+          task={task}
+          surface={ctaSurface}
+          open={freeOpen}
+          onOpenChange={setFreeOpen}
+        />
+      )}
       <SkillDraftSheet
         open={flow.sheetOpen}
+        startedAt={flow.startedAt}
         status={flow.status}
         source={sourceLine(task)}
         site={task.site}
@@ -177,10 +227,10 @@ export function MakeSkillButton({
 /** Surfaces whose button has been counted as shown in this app load: one impression each. */
 const countedSurfaces = new Set<SkillCtaSurface>()
 
-function countCtaShown(surface: SkillCtaSurface) {
+function countCtaShown(surface: SkillCtaSurface, plan: string) {
   if (countedSurfaces.has(surface)) return
   countedSurfaces.add(surface)
-  track(AnalyticsEvent.SkillFromTaskCtaShown, { surface })
+  track(AnalyticsEvent.SkillFromTaskCtaShown, { surface, plan })
 }
 
 /** "From your Flipkart task, today at 18:39". */

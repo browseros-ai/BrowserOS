@@ -37,6 +37,14 @@ use crate::listed_enum::listed_enum;
 /// exports it to the isolated-world exit, so neither side can silently admit a deeper tree.
 pub(crate) const MAX_DEPTH: usize = 297;
 
+// The snapshot tree's own bound is what this one admits for every tree: after a reply's object
+// and its array, two levels for each node and its `children`, and a `box` under the deepest. The
+// list-building road reads the crate's constant, so the two may never drift apart.
+const _: () = assert!(
+    (MAX_DEPTH - 2) / 2 == neo_snapshot::MAX_TREE_DEPTH,
+    "neo_snapshot::MAX_TREE_DEPTH is the tree levels MAX_DEPTH admits whatever the nodes hold"
+);
+
 /// upstream's message for a result deeper than [`MAX_DEPTH`] (`rewriteError`, PW:36883).
 pub(crate) const TOO_DEEP: &str = "Cannot serialize result: object reference chain is too long.";
 

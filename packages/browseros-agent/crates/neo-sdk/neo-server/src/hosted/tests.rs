@@ -7,6 +7,7 @@ use std::task::Poll;
 use std::time::Duration;
 use std::{fs, future, io};
 
+use neo_telemetry::Telemetry;
 use neo_trace::{RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -241,6 +242,24 @@ async fn dropping_the_run_cancels_its_pending_call() -> Result<(), Box<dyn Error
     let envelope: Value = serde_json::from_str(&call.await)?;
     assert_eq!(envelope["err"]["code"], "cancelled");
     drop(clock);
+    stack.close().await?;
+    Ok(())
+}
+
+/// The embedding has no host API to scrape and no startup environment to configure a push, so
+/// its runs, ops and tabs report to the no-op handle, which records nothing at no cost.
+#[tokio::test]
+async fn the_embedding_reports_to_the_no_op_telemetry() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let stack = connect_stack(&dir, FakeCdp::new()).await?;
+    let run = stack.open_run(Duration::from_secs(10)).await?;
+    let reply: Value = serde_json::from_str(&run.finish().await?)?;
+    assert_eq!(reply["status"], "ok", "its runs run as they always did");
+    assert_eq!(
+        format!("{:?}", stack.telemetry()),
+        format!("{:?}", Telemetry::noop()),
+        "the embedding builds no pipeline: no thread, no exporter, nothing to flush at close"
+    );
     stack.close().await?;
     Ok(())
 }

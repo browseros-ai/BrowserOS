@@ -18,6 +18,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useCancelPlan, usePlan } from '@/modules/api/plan.hooks'
+import { isCardTrial } from '@/modules/plan/trial.helpers'
 import { toastApiError, toastSuccess } from '@/modules/toast/toast'
 import { formatDate } from '@/screens/pro/pro.helpers'
 
@@ -39,17 +40,33 @@ export function CancelProDialog({
   // Uncontrolled: the text is read once on confirm and kept if that fails.
   const feedback = useRef<HTMLTextAreaElement>(null)
   const queryClient = useQueryClient()
+  // A free trial link reads as a paid plan, so only a card trial gets the trial words.
+  const trial = isCardTrial(plan)
+  const keepsUntil = trial
+    ? (plan.trialEndsAt ?? plan.periodEnd)
+    : plan.periodEnd
+  const title = trial ? 'Cancel your free trial?' : 'Cancel ultrafast?'
+  const confirm = trial ? 'Cancel trial' : 'Cancel ultrafast'
   const cancel = useCancelPlan({
     onSuccess: (next, { feedback: said }) => {
       queryClient.setQueryData(usePlan.getKey(), next)
       const until = next.endsAt ?? next.periodEnd
       const date = until === null ? '' : formatDate(until)
       toastSuccess(
-        said
-          ? `Thanks for telling us. ultrafast ends on ${date}`
-          : `ultrafast will end on ${date}`,
+        trial
+          ? said
+            ? `Thanks for telling us. Your free trial ends on ${date}`
+            : `Your free trial ends on ${date}. You won’t be charged.`
+          : said
+            ? `Thanks for telling us. ultrafast ends on ${date}`
+            : `ultrafast will end on ${date}`,
       )
       track(AnalyticsEvent.ProCancelConfirmed, { gave_feedback: Boolean(said) })
+      if (trial) {
+        track(AnalyticsEvent.TrialCancelConfirmed, {
+          gave_feedback: Boolean(said),
+        })
+      }
       onOpenChange(false)
     },
     onError: (error) =>
@@ -59,21 +76,23 @@ export function CancelProDialog({
   return (
     <CenterMorphModal open={open} onOpenChange={onOpenChange}>
       <CenterMorphModalContent
-        ariaLabel="Cancel ultrafast?"
+        ariaLabel={title}
         showCloseButton={false}
         className="max-w-[480px] border-border-2 bg-card"
       >
         <div className="flex flex-col gap-5 p-6">
           <div className="flex flex-col gap-4">
             <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
-              Cancel ultrafast?
+              {title}
             </h2>
             <p className="text-[14.5px] text-ink-2">
               You keep ultrafast until{' '}
               <strong className="text-cyanotype-ink">
-                {plan.periodEnd === null ? '' : formatDate(plan.periodEnd)}
+                {keepsUntil === null ? '' : formatDate(keepsUntil)}
               </strong>
-              . After that, neo goes back to Free and you aren’t charged again.
+              {trial
+                ? ', and you won’t be charged. After that, neo goes back to Free.'
+                : '. After that, neo goes back to Free and you aren’t charged again.'}
             </p>
             <div className="flex flex-col gap-3 rounded-xl border border-border-2 bg-bg-sunken p-4">
               <p className="flex gap-2.5 text-[14px] text-ink-2">
@@ -116,17 +135,27 @@ export function CancelProDialog({
             <StatefulButton
               variant="ghost"
               state={cancel.isPending ? 'loading' : 'idle'}
-              loadingText="Cancel ultrafast"
+              loadingText={confirm}
               disabled={cancel.isPending}
               onClick={() => {
                 const said = feedback.current?.value.trim()
                 cancel.mutate(said ? { feedback: said } : {})
               }}
             >
-              Cancel ultrafast
+              {confirm}
             </StatefulButton>
             <CenterMorphModalClose>
-              <Button disabled={cancel.isPending} className="font-semibold">
+              <Button
+                disabled={cancel.isPending}
+                onClick={() => {
+                  if (trial) {
+                    track(AnalyticsEvent.TrialKept, {
+                      source: 'cancel_dialog',
+                    })
+                  }
+                }}
+                className="font-semibold"
+              >
                 Keep ultrafast
               </Button>
             </CenterMorphModalClose>

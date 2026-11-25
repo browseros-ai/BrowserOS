@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Hang early</title></head>
+<body><p>Hang early</p>
+<!-- Spins from its first script: its renderer never answers, so its frame session's seed read
+     never lands and its tab's frame list is never whole. -->
+<script>for (;;) {}</script></body></html>

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use neo_captcha::config::CaptchaConfig;
 use neo_takeover::Xvnc;
+use neo_telemetry::TelemetryConfig;
 
 use crate::config::{
     AppConfig, Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig, NeoHome,
@@ -12,9 +13,9 @@ use crate::config::{
 
 /// The config Chromium would give a hosted Neo, with its state and its browser profile under
 /// `state_dir` and the agent port left to the OS (port 0; `App::local_addr` reports the one it
-/// got). There is no host listener and no CAPTCHA provider key, whatever the test's environment
-/// holds, and the CDP port goes unused once the app starts on a `FakeCdp`. Neo's screen is
-/// [`CLOSED_XVNC`].
+/// got). There is no host listener, no CAPTCHA provider key and no telemetry push, whatever the
+/// test's environment holds, and the CDP port goes unused once the app starts on a `FakeCdp`.
+/// Neo's screen is [`CLOSED_XVNC`].
 #[must_use]
 pub fn test_config(state_dir: &Path) -> AppConfig {
     let launch = LaunchConfig {
@@ -42,6 +43,7 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
         },
         xvnc: CLOSED_XVNC,
         ignored_trace_value_bytes: false,
+        telemetry: TelemetryConfig::default(),
     };
     AppConfig {
         launch,

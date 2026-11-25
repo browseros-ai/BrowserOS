@@ -10,6 +10,7 @@ import {
   ActionSwapBlurButton,
   type ActionSwapBlurButtonProps,
 } from '@/components/motion/action-swap-blur'
+import { cn } from '@/lib/utils'
 import { toastApiError } from '@/modules/toast/toast'
 
 const COPIED_FOR_MS = 1600
@@ -31,6 +32,7 @@ export function CopyButton({
   copiedLabel = 'Copied',
   what,
   onCopied,
+  className,
   ...props
 }: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
@@ -50,6 +52,7 @@ export function CopyButton({
   return (
     <ActionSwapBlurButton
       {...props}
+      className={cn('cursor-pointer', className)}
       cycle={false}
       value={copied ? 'copied' : 'copy'}
       onClick={copy}

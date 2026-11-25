@@ -60,6 +60,8 @@ pub struct ServiceInputs {
     pub tab_task: TabTask,
     /// The tab that opened each tab, for a released takeover's `openedTabs` `openerTabId`.
     pub tab_opener: TabOpener,
+    /// The metrics text `GET /v1/metrics` serves.
+    pub metrics: MetricsText,
 }
 
 /// Names the tab Neo keeps for itself (`Some("neo")` for its blank tab), or `None`. Asked once per
@@ -73,6 +75,11 @@ pub type TabTask = Arc<dyn Fn(TabId) -> Option<String> + Send + Sync>;
 /// Names the tab that opened a tab, or `None` for one opened by hand. Asked once per tab a
 /// takeover's release lists; it must not wait.
 pub type TabOpener = Arc<dyn Fn(TabId) -> Option<TabId> + Send + Sync>;
+
+/// Renders Neo's metrics as Prometheus text exposition 0.0.4, for `GET /v1/metrics`: the app's
+/// telemetry read now, so this crate needs no OpenTelemetry crate. Asked once per scrape; it
+/// reads in-memory state and never waits on I/O.
+pub type MetricsText = Arc<dyn Fn() -> String + Send + Sync>;
 
 /// The host API, started. Cheap to clone.
 #[derive(Clone)]
@@ -110,6 +117,9 @@ pub(crate) struct ServiceState {
     pub(crate) tab_owner: TabOwner,
     /// The task holding each tab now (`ServiceInputs::tab_task`).
     pub(crate) tab_task: TabTask,
+    /// Neo's metrics as Prometheus text (`ServiceInputs::metrics`), rendered at each scrape of
+    /// `GET /v1/metrics` (`metrics_route`).
+    pub(crate) metrics: MetricsText,
     /// The fill routes' door, armed by the app ([`Service::arm_fill`]).
     pub(crate) fill: FillGate,
     /// The tabs the camera never pictures, armed by the app ([`Service::arm_private_tabs`]).
@@ -156,6 +166,7 @@ impl Service {
             tab_owner,
             tab_task,
             tab_opener,
+            metrics,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -221,6 +232,7 @@ impl Service {
                 settings,
                 tab_owner,
                 tab_task,
+                metrics,
                 fill: FillGate::default(),
                 private,
                 _live_shutdown: shutdown.drop_guard(),

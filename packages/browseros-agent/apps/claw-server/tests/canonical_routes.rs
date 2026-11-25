@@ -45,7 +45,7 @@ struct TestApp {
 }
 
 struct FixtureConnection {
-    events: broadcast::Sender<CdpEvent>,
+    events: broadcast::Sender<Arc<CdpEvent>>,
     targeted: TargetedEvents,
     tabs: tokio::sync::Mutex<Vec<Value>>,
     get_tabs_calls: AtomicUsize,
@@ -226,7 +226,7 @@ impl CdpConnection for FixtureConnection {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.events.subscribe()
     }
 
@@ -289,6 +289,7 @@ async fn test_app() -> anyhow::Result<TestApp> {
         browserclaw_dir: dir.path().join("browserclaw"),
         session_idle: Duration::from_secs(300),
         session_complete_idle: Duration::from_secs(300),
+        mcp_transport_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
@@ -1376,7 +1377,7 @@ async fn canonical_sessions_cancel_and_recordings() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     let detail = json_body(&bytes)?;
-    assert_eq!(detail["session"]["name"], "research-browserclaw");
+    assert_eq!(detail["session"]["name"], "Session on Codex");
     assert_eq!(detail["dispatches"][0]["dispatchId"], 1);
     assert!(detail["dispatches"][0].get("screenshotId").is_none());
     assert!(detail["dispatches"][0].get("agentId").is_none());

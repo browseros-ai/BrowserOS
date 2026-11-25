@@ -6,7 +6,7 @@ mod fake_gateway;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use claw_server::services::billing::{
-    BillingConfig, Status,
+    BillingConfig, Status, TrialKind,
     licence::{LicenceError, MAX_CLOCK_SKEW_MS, SignedLicence, verify},
 };
 use ed25519_dalek::SigningKey;
@@ -81,6 +81,70 @@ fn a_good_licence_reads_its_plan() -> anyhow::Result<()> {
     assert_eq!(licence.features, ["claw.ultrafast"]);
     assert_eq!(licence.issued_at, NOW);
     assert_eq!(licence.expires_at, NOW + 72 * HOUR_MS);
+    Ok(())
+}
+
+#[test]
+fn a_trial_flag_is_read_when_the_gateway_sends_it() -> anyhow::Result<()> {
+    let plain = check(&signed(&payload())).map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(plain.trial, None);
+    let trial =
+        check(&signed(&with("trial", json!(true)))).map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(trial.trial, Some(true));
+    let mut ended = with("trial", json!(true));
+    ended["status"] = json!("none");
+    let none = check(&signed(&ended)).map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(none.trial, None, "no plan means no trial");
+    Ok(())
+}
+
+#[test]
+fn a_trials_kind_and_end_are_read_only_while_it_is_a_trial() -> anyhow::Result<()> {
+    let read = |fields: &[(&str, Value)]| {
+        let mut payload = payload();
+        for (field, value) in fields {
+            payload[*field] = value.clone();
+        }
+        check(&signed(&payload)).map_err(|error| anyhow::anyhow!("{error}"))
+    };
+    let ends = NOW + 7 * 24 * HOUR_MS;
+
+    let card = read(&[
+        ("trial", json!(true)),
+        ("trialKind", json!("card")),
+        ("trialEndsAt", json!(ends)),
+    ])?;
+    assert_eq!(card.trial_kind, Some(TrialKind::Card));
+    assert_eq!(card.trial_ends_at, Some(ends));
+
+    let grant = read(&[
+        ("trial", json!(true)),
+        ("trialKind", json!("grant")),
+        ("trialEndsAt", json!(ends)),
+    ])?;
+    assert_eq!(grant.trial_kind, Some(TrialKind::Grant));
+
+    let unknown = read(&[("trial", json!(true)), ("trialKind", json!("coupon"))])?;
+    assert_eq!(unknown.trial, Some(true));
+    assert_eq!(
+        unknown.trial_kind, None,
+        "a kind this build doesn't know reads as none"
+    );
+
+    let paid = read(&[
+        ("trial", json!(false)),
+        ("trialKind", json!("card")),
+        ("trialEndsAt", json!(ends)),
+    ])?;
+    assert_eq!(paid.trial_kind, None);
+    assert_eq!(paid.trial_ends_at, None, "only a trial has a trial end");
+
+    let older = read(&[])?;
+    assert_eq!(older.trial_kind, None);
+    assert_eq!(
+        older.trial_ends_at, None,
+        "a licence from an older gateway still verifies"
+    );
     Ok(())
 }
 

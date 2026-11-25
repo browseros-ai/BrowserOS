@@ -1,5 +1,5 @@
 use crate::{CoreError, SessionId, TargetError};
-use browseros_cdp::{CdpClient, CdpError, CdpEvent};
+use browseros_cdp::{CdpClient, CdpError, CdpEvent, RawReply};
 use futures_util::future::BoxFuture;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -57,7 +57,44 @@ pub trait CdpConnection: Send + Sync {
         Box::pin(async move { Err(unsupported_epoch_transport(method)) })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent>;
+    /// [`Self::send`], with the result kept as the browser's text for the caller to decode into
+    /// its own type in its own task ([`RawReply::decode`]): a large result is then never built
+    /// as a `Value`, and its decode does not hold up the client's reader loop, which every other
+    /// reply and event waits for. A transport that does not override this answers through
+    /// [`Self::send`] and encodes the `Value` back to text: the same result, without the saving.
+    fn send_raw<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        Box::pin(async move { RawReply::from_value(&self.send(method, params, session).await?) })
+    }
+
+    /// [`Self::send_raw`] under [`Self::send_at_epoch`]'s atomic publication contract. A
+    /// transport that does not override this answers through [`Self::send_at_epoch`].
+    fn send_raw_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        Box::pin(async move {
+            RawReply::from_value(
+                &self
+                    .send_at_epoch(expected_epoch, method, params, session)
+                    .await?,
+            )
+        })
+    }
+
+    /// Every event no targeted subscriber took. A broadcast hands each receiver its own clone
+    /// of what it carries, so the event rides behind an `Arc`: one allocation, whatever the
+    /// receiver count. Check `method` and `session_id` through the `Arc` first, read params by
+    /// reference (`T::deserialize(&event.params)`), and take an owned copy with
+    /// `Arc::unwrap_or_clone` only of an event the reader keeps.
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>>;
 
     /// Every later event of `method` on a dedicated, unbounded channel that bypasses the
     /// broadcast ring. Each subscriber of a method gets every one of its events, and while any
@@ -82,7 +119,7 @@ pub trait CdpConnection: Send + Sync {
     /// A receiver of [`Self::events`] and the [`Self::events_broadcast`] count of the events it
     /// will never receive, taken together so no event is in both or in neither. A transport
     /// that does not count answers 0.
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         (self.events(), 0)
     }
 
@@ -147,7 +184,28 @@ impl CdpConnection for CdpClient {
         })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn send_raw<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        Box::pin(async move { CdpClient::send_raw(self, method, params, session).await })
+    }
+
+    fn send_raw_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        Box::pin(async move {
+            CdpClient::send_raw_at_epoch(self, expected_epoch, method, params, session).await
+        })
+    }
+
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         CdpClient::events(self)
     }
 
@@ -159,7 +217,7 @@ impl CdpConnection for CdpClient {
         CdpClient::events_broadcast(self)
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         CdpClient::events_counted(self)
     }
 
@@ -275,7 +333,7 @@ impl ProtocolSession {
         self.session_id.as_ref()
     }
 
-    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<CdpEvent> {
+    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.connection.events()
     }
 
@@ -361,34 +419,70 @@ impl ProtocolSession {
     }
 
     pub async fn send_value(&self, method: &str, params: Value) -> Result<Value, CoreError> {
+        let session = self.session_id.as_ref();
+        self.dispatch(method, &params, |epoch| match epoch {
+            Some(expected) => {
+                self.connection
+                    .send_at_epoch(expected, method, params.clone(), session)
+            }
+            None => self.connection.send(method, params.clone(), session),
+        })
+        .await
+    }
+
+    /// [`Self::send`] for a large result: it is decoded straight from the browser's text into
+    /// `R`, here in the caller's task, with no `Value` in between ([`CdpConnection::send_raw`]).
+    /// Admission and the epoch are checked exactly as for [`Self::send`].
+    pub async fn send_decoded<P, R>(&self, method: &str, params: P) -> Result<R, CoreError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
+        let params =
+            serde_json::to_value(params).map_err(|err| CoreError::Message(err.to_string()))?;
+        let session = self.session_id.as_ref();
+        let reply = self
+            .dispatch(method, &params, |epoch| match epoch {
+                Some(expected) => {
+                    self.connection
+                        .send_raw_at_epoch(expected, method, params.clone(), session)
+                }
+                None => self.connection.send_raw(method, params.clone(), session),
+            })
+            .await?;
+        reply.decode().map_err(|error| match error {
+            CdpError::Json(message) => CoreError::Message(message),
+            error => error.into(),
+        })
+    }
+
+    /// Brackets one transport call with this handle's checks: admission before the command and
+    /// again after its reply, and, for a handle pinned to a socket incarnation, the epoch at
+    /// dispatch (inside the transport, `call` receives it) and again after the reply.
+    async fn dispatch<'a, T>(
+        &'a self,
+        method: &str,
+        params: &Value,
+        call: impl FnOnce(Option<u64>) -> BoxFuture<'a, Result<T, CdpError>>,
+    ) -> Result<T, CoreError> {
         if let Some(admission) = &self.admission {
-            admission.check(method, &params).await?;
+            admission.check(method, params).await?;
         }
         let response = if let Some(guard) = &self.epoch_guard {
             guard.check(self.connection.as_ref())?;
-            let response = self
-                .connection
-                .send_at_epoch(
-                    guard.expected,
-                    method,
-                    params.clone(),
-                    self.session_id.as_ref(),
-                )
+            let response = call(Some(guard.expected))
                 .await
                 .map_err(|error| guard.transport_error(method, error))?;
             self.mark_answered();
             guard.check(self.connection.as_ref())?;
             response
         } else {
-            let response = self
-                .connection
-                .send(method, params.clone(), self.session_id.as_ref())
-                .await?;
+            let response = call(None).await?;
             self.mark_answered();
             response
         };
         if let Some(admission) = &self.admission {
-            admission.check(method, &params).await?;
+            admission.check(method, params).await?;
         }
         Ok(response)
     }
@@ -435,5 +529,204 @@ impl ProtocolSession {
             admission.check(method, &params).await?;
         }
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CdpConnection, ProtocolSession};
+    use crate::{CoreError, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent, RawReply, TargetedEvents};
+    use futures_util::future::BoxFuture;
+    use serde::Deserialize;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::{broadcast, mpsc};
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Shape {
+        count: u32,
+    }
+
+    /// Answers every command with `answer` and records which of its methods each came through.
+    /// It leaves the raw sends to the trait's defaults, as a test double or a host's own
+    /// transport does.
+    struct Plain {
+        answer: Value,
+        calls: Mutex<Vec<String>>,
+        targeted: TargetedEvents,
+    }
+
+    impl Plain {
+        fn new(answer: Value) -> Self {
+            Self {
+                answer,
+                calls: Mutex::new(Vec::new()),
+                targeted: TargetedEvents::default(),
+            }
+        }
+
+        fn note(&self, call: String) {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push(call);
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .map(|calls| calls.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// [`Plain`], answering the raw sends itself, as `CdpClient` does.
+    struct Raw(Plain);
+
+    impl CdpConnection for Plain {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.note("send".to_owned());
+            Box::pin(async move { Ok(self.answer.clone()) })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.note(format!("send_at_epoch {expected_epoch}"));
+            Box::pin(async move { Ok(self.answer.clone()) })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async move { Err(CdpError::Transport(format!("not sent: {method}"))) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
+            broadcast::channel(1).1
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            7
+        }
+    }
+
+    impl CdpConnection for Raw {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.0.send(method, params, session)
+        }
+
+        fn send_raw<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+            self.0.note("send_raw".to_owned());
+            Box::pin(async move { RawReply::from_value(&self.0.answer) })
+        }
+
+        fn send_raw_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+            self.0.note(format!("send_raw_at_epoch {expected_epoch}"));
+            Box::pin(async move { RawReply::from_value(&self.0.answer) })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            self.0.send_raw_json(method, params_json, session)
+        }
+
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
+            self.0.events()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.0.events_targeted(method)
+        }
+
+        fn is_connected(&self) -> bool {
+            self.0.is_connected()
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            self.0.connection_epoch()
+        }
+    }
+
+    async fn both(root: &ProtocolSession) -> Result<(Shape, Shape), CoreError> {
+        let plain = root.send_decoded("Test.read", json!({})).await?;
+        let pinned = root
+            .at_connection_epoch()
+            .send_decoded("Test.read", json!({}))
+            .await?;
+        Ok((plain, pinned))
+    }
+
+    /// A decoded send reads the transport's raw reply, a pinned handle's at its epoch, and
+    /// decodes it into the caller's type; a reply of another shape fails as `send`'s does.
+    #[tokio::test]
+    async fn a_decoded_send_reads_the_transports_raw_reply_and_a_pinned_one_at_its_epoch() {
+        let transport = Arc::new(Raw(Plain::new(json!({ "count": 3, "other": [1, 2] }))));
+        let decoded = both(&ProtocolSession::root(transport.clone()))
+            .await
+            .unwrap_or_else(|err| panic!("decoded sends: {err}"));
+        assert_eq!(decoded, (Shape { count: 3 }, Shape { count: 3 }));
+        assert_eq!(transport.0.calls(), ["send_raw", "send_raw_at_epoch 7"]);
+
+        let other = Arc::new(Raw(Plain::new(json!({ "count": "three" }))));
+        let refused = ProtocolSession::root(other)
+            .send_decoded::<_, Shape>("Test.read", json!({}))
+            .await;
+        assert!(
+            matches!(&refused, Err(CoreError::Message(message)) if message.contains("invalid type")),
+            "{refused:?}"
+        );
+    }
+
+    /// A transport that only answers `send` still serves a decoded send, through the trait's
+    /// default raw sends.
+    #[tokio::test]
+    async fn a_transport_without_raw_sends_answers_a_decoded_send_through_send() {
+        let transport = Arc::new(Plain::new(json!({ "count": 4 })));
+        let decoded = both(&ProtocolSession::root(transport.clone()))
+            .await
+            .unwrap_or_else(|err| panic!("decoded sends: {err}"));
+        assert_eq!(decoded, (Shape { count: 4 }, Shape { count: 4 }));
+        assert_eq!(transport.calls(), ["send", "send_at_epoch 7"]);
     }
 }

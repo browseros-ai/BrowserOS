@@ -18,10 +18,12 @@ use neo_playwright::{
     ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
 };
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
+use neo_telemetry::{RunFacts, Telemetry, TelemetryConfig};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
-    OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    RunTabsScope, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    OperationStarted, Outcome, RecordPolicy, RedactionLimits, Redactor, RunEnded, RunId,
+    RunStarted, RunStatus, RunTabsScope, TaskId, TraceSink, TraceStore, Values, WriterConfig,
+    spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,16 +37,17 @@ use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, FILE_PAGES, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
-use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry, TabsScope};
+use crate::browser::{Adopt, BrowserLink, NeoTab, OpenFor, PageRef, TabRegistry, TabsScope};
 use crate::config::Defaults;
 use crate::dispatch::{
     Call, CallSite, Dispatcher, ErrorCode, EventLog, FrameVersion, LeafError, Lifetime, Listing,
-    Method, MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageFact,
-    PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError,
-    RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
+    Method, MethodSpec, Observer, OpCtx, OpFailure, OpMetrics, OpReply, OperationError, PageChange,
+    PageFact, PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder,
+    RegistryError, RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
+use crate::telemetry_rig::Scrape;
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
 
@@ -97,8 +100,17 @@ impl Harness {
         solver: Option<Arc<CaptchaSolver>>,
         hosted: bool,
     ) -> Result<Self, Box<dyn Error>> {
+        Self::with_tabs::<SCRIPT_CDP>(solver, hosted, Arc::new(TabRegistry::new())).await
+    }
+
+    /// [`Harness::with_mode`] over `tabs`, a registry the test built: one whose telemetry
+    /// records what its tab ledger reports, say.
+    async fn with_tabs<const SCRIPT_CDP: bool>(
+        solver: Option<Arc<CaptchaSolver>>,
+        hosted: bool,
+        tabs: Arc<TabRegistry>,
+    ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
-        let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
         let link = BrowserLink::start_with(
             NativeCapabilities::default(),
@@ -220,6 +232,35 @@ impl Harness {
             default_page: None,
             tabs_scope: TabsScope::Browser,
             access: None,
+            telemetry: Telemetry::noop().internal_run(),
+        };
+        Ok(RunCtx::start(&self.dispatcher, start))
+    }
+
+    /// A script run like [`Harness::run`], counted by `telemetry`, so its ops' navigation and
+    /// CAPTCHA metrics reach `telemetry`'s scrape.
+    fn run_reporting(
+        &self,
+        telemetry: &Telemetry,
+    ) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+        let view = self.link.view().ok_or("the link is up")?;
+        let id = RunId::new();
+        let start = RunStart {
+            id,
+            code: "await page.goto(url)".to_owned(),
+            request_id: None,
+            task_id: None,
+            host_data: None,
+            view,
+            deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+            default_page: None,
+            tabs_scope: TabsScope::Browser,
+            access: None,
+            telemetry: telemetry.start_run(RunFacts {
+                run_id: &id,
+                task_id: None,
+                parent: None,
+            }),
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -542,6 +583,77 @@ async fn a_load_the_browser_could_not_make_is_the_websites_failure() -> Result<(
     assert_eq!(
         row.error.map(|error| (error.owner, error.code)),
         Some((ErrorOwner::Website, "navigation_failed".to_owned()))
+    );
+    Ok(())
+}
+
+/// Navigation telemetry through the real door: a goto the network refused is a navigation and a
+/// navigation error by Chromium's name, while the op still fails as the website's; a goto the
+/// door refused before sending and an op that navigates nothing count nothing. The same with
+/// `trace.values` on and off: the metrics read the op's result, never its record.
+#[tokio::test]
+async fn a_goto_the_network_refused_counts_by_its_net_error() -> Result<(), Box<dyn Error>> {
+    for values in [Values::On, Values::Off] {
+        net_error_navigation(values).await?;
+    }
+    Ok(())
+}
+
+async fn net_error_navigation(values: Values) -> Result<(), Box<dyn Error>> {
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let harness = Harness::new().await?;
+    harness.sink.record_policy(RecordPolicy {
+        values,
+        ..RecordPolicy::default()
+    });
+    let (run, guard) = harness.run_reporting(&telemetry)?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "page.goto",
+                json!({ "page": handle(&page), "url": "bank.example/login" }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        harness.fake.count("Page.navigate"),
+        0,
+        "refused before the browser was asked: {}",
+        refused.error
+    );
+    value(
+        harness
+            .submit(&run, "page.opener", json!({ "page": handle(&page) }))
+            .await,
+    )?;
+    harness.fake.answer(
+        "Page.navigate",
+        json!({ "frameId": "frame", "errorText": "net::ERR_NAME_NOT_RESOLVED" }),
+    );
+    let input = json!({
+        "page": handle(&page),
+        "url": "https://nowhere.invalid/",
+        "waitUntil": "load",
+    });
+    let failed = failure(within(harness.submit(&run, "page.goto", input)).await?)?;
+    assert_eq!(
+        (failed.error.owner(), failed.error.code()),
+        (ErrorOwner::Website, ErrorCode::NAVIGATION_FAILED),
+        "the op keeps its own outcome: {}",
+        failed.error
+    );
+    Harness::finish(guard);
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&["neo_navigations_total", "neo_navigation_errors_total"]),
+        [
+            r#"neo_navigation_errors_total{error_type="name_not_resolved"} 1"#,
+            "neo_navigations_total 1",
+        ],
+        "{values:?}: one navigation sent, the one the network refused"
     );
     Ok(())
 }
@@ -1339,6 +1451,88 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     assert!(
         !harness.is_open(held.tab).await?,
         "a full idle time after the owner lets go, a sweep closes it"
+    );
+    Ok(())
+}
+
+/// Waits until `done` holds for `neo_tab_count`, as `(agent, found, neo)` in a scrape.
+async fn tabs_until(
+    telemetry: &Telemetry,
+    done: impl Fn((u64, u64, u64)) -> bool,
+) -> Result<(), Box<dyn Error>> {
+    within(async {
+        while !Scrape::of(telemetry).is_ok_and(|scrape| done(scrape.open_tabs())) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+}
+
+/// Tab telemetry through the real ops, the janitor and the tab watch: a script's new tab is born
+/// the agent's (claimed when the engine names it, whatever the watch saw first), a script's close
+/// closes as `script`, the janitor's as `janitor` though it goes through the same `page.close`,
+/// and the owner's own close as `user`, each once.
+#[tokio::test]
+async fn tab_telemetry_names_who_opened_and_who_closed_each_tab() -> Result<(), Box<dyn Error>> {
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let harness = Harness::with_tabs::<false>(None, false, tabs).await?;
+    // The owner's tab, which also keeps the janitor from closing the browser's last tab.
+    let owners = harness.owner_tab("https://example.com/").await?;
+    tabs_until(&telemetry, |(_, found, _)| found == 1).await?;
+
+    let (run, guard) = harness.run()?;
+    let closed_by_script = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let closed_by_janitor = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    tabs_until(&telemetry, |(agent, _, _)| agent == 2).await?;
+    value(
+        harness
+            .submit(
+                &run,
+                "page.close",
+                json!({ "page": handle(&closed_by_script) }),
+            )
+            .await,
+    )?;
+    Harness::finish(guard);
+    let later = Instant::now() + harness.settings.tab_idle_close();
+    within(harness.janitor().sweep(later))
+        .await?
+        .ok_or("the sweep ran")?;
+    assert!(
+        !harness.is_open(closed_by_janitor.tab).await?,
+        "the janitor closed the idle agent tab"
+    );
+    tabs_until(&telemetry, |(agent, _, _)| agent == 0).await?;
+    assert!(harness.fake.close_tab(owners.tab), "the fake had the tab");
+    tabs_until(&telemetry, |(_, found, _)| found == 0).await?;
+
+    let expected = [
+        r#"neo_tab_closed_total{neo_tab_close_reason="janitor",neo_tab_origin="agent"} 1"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="script",neo_tab_origin="agent"} 1"#,
+        r#"neo_tab_closed_total{neo_tab_close_reason="user",neo_tab_origin="found"} 1"#,
+        r#"neo_tab_opened_total{neo_tab_origin="agent"} 2"#,
+        r#"neo_tab_opened_total{neo_tab_origin="found"} 1"#,
+    ];
+    let counts = || {
+        Scrape::of(&telemetry)
+            .map(|scrape| scrape.lines_of(&["neo_tab_opened_total", "neo_tab_closed_total"]))
+    };
+    // The owner's close counts once its two-second wait is over.
+    within(async {
+        while !counts().is_ok_and(|lines| lines == expected) {
+            time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        counts()?,
+        expected,
+        "each tab opened and closed once, with who opened it and why it closed"
     );
     Ok(())
 }
@@ -2482,7 +2676,7 @@ async fn solving_without_a_provider_key_is_the_deployments_to_fix() -> Result<()
 }
 
 #[tokio::test]
-async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> {
+async fn a_solve_answers_what_neo_did_as_a_value() -> Result<(), Box<dyn Error>> {
     let harness = Harness::with_solver(Some(placeholder_solver()?)).await?;
     assert!(
         harness
@@ -2500,16 +2694,32 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
         .await;
     let answer = value(reply)?;
     // The fake browser answers the frame-tree read detection starts with `{}`, which the solver
-    // takes for a browser error: it cannot tell whether a CAPTCHA blocks the page.
+    // takes for a browser error before any solve attempt ran.
     assert_eq!(
-        (answer["verdict"].as_str(), answer["reason"].as_str()),
-        (Some("unknown"), Some("browser_error")),
+        answer.get("verdict"),
+        None,
+        "verdict is not part of the wire contract: {answer}"
+    );
+    assert_eq!(
+        (
+            answer["attempted"].as_bool(),
+            answer.get("type"),
+            answer["method"].as_str(),
+            answer["reason"].as_str(),
+        ),
+        (
+            Some(false),
+            Some(&Value::Null),
+            Some("none"),
+            Some("browser_error"),
+        ),
         "{answer}"
     );
     assert_eq!(
         answer["message"],
-        "Neo could not tell whether the CAPTCHA passed (a browser call failed); look at the page \
-         again before acting.",
+        "A browser call failed before Neo could attempt a solve; Neo cannot tell whether the page \
+         is clear — inspect a fresh snapshot and screenshot before continuing, and hand off to \
+         the user if a check still blocks it.",
         "claw-sdk's own line, not the crate's MCP wording"
     );
     assert_eq!(answer["paidTasks"], 0, "no provider was ever asked");
@@ -2518,7 +2728,61 @@ async fn a_solve_answers_its_verdict_as_a_value() -> Result<(), Box<dyn Error>> 
     assert_eq!(
         (row.outcome, row.delivery),
         (Some(Outcome::Ok), Some(Delivery::Done)),
-        "every verdict is a value, and the solver may have acted, so it was sent"
+        "every completed solve is a value, and the solver may have acted, so it was sent"
+    );
+    Ok(())
+}
+
+/// CAPTCHA telemetry through the real door and solver: a solve that returned an outcome counts
+/// once by family, verdict and reason, with no spend when nothing was paid, and with
+/// `trace.values` off, as a production host records; a call refused before any solve (no
+/// provider key) counts nothing.
+#[tokio::test]
+async fn a_solve_that_returned_an_outcome_is_counted_and_a_refused_one_is_not()
+-> Result<(), Box<dyn Error>> {
+    const SOLVES: [&str; 3] = [
+        "neo_captcha_solves_total",
+        "neo_captcha_reasons_total",
+        "neo_captcha_spend_total",
+    ];
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let keyless = Harness::new().await?;
+    let (run, guard) = keyless.run_reporting(&telemetry)?;
+    let owners = keyless.owner_tab("https://example.com/").await?;
+    let refused = failure(
+        keyless
+            .submit(&run, "neo.solveCaptcha", json!({ "page": handle(&owners) }))
+            .await,
+    )?;
+    assert_eq!(refused.error.code(), ErrorCode::CAPTCHA_UNAVAILABLE);
+    Harness::finish(guard);
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&SOLVES),
+        Vec::<String>::new(),
+        "no solve ran"
+    );
+
+    let harness = Harness::with_solver(Some(placeholder_solver()?)).await?;
+    harness.sink.record_policy(RecordPolicy {
+        values: Values::Off,
+        ..RecordPolicy::default()
+    });
+    let (run, guard) = harness.run_reporting(&telemetry)?;
+    let owners = harness.owner_tab("https://example.com/").await?;
+    let answer = value(
+        harness
+            .submit(&run, "neo.solveCaptcha", json!({ "page": handle(&owners) }))
+            .await,
+    )?;
+    Harness::finish(guard);
+    assert_eq!(answer["reason"], "browser_error", "{answer}");
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&SOLVES),
+        [
+            r#"neo_captcha_reasons_total{neo_captcha_reason="browser_error"} 1"#,
+            r#"neo_captcha_solves_total{neo_captcha_family="none",neo_captcha_verdict="failed"} 1"#,
+        ],
+        "the fake browser's empty frame tree fails detection before any CAPTCHA or provider"
     );
     Ok(())
 }
@@ -2609,6 +2873,48 @@ async fn a_solve_the_run_stops_after_it_was_sent_is_unknown() -> Result<(), Box<
         harness.row(operation).await?.delivery,
         Some(Delivery::Unknown)
     );
+    Ok(())
+}
+
+/// A solve the run stops mid-way still returns an outcome, and it is counted: the solver may
+/// have paid for it, and a race on the stop would drop it before the count.
+#[tokio::test]
+async fn a_solve_the_run_stops_mid_way_is_still_counted() -> Result<(), Box<dyn Error>> {
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let harness = Harness::with_solver(Some(placeholder_solver()?)).await?;
+    let (run, guard) = harness.run_reporting(&telemetry)?;
+    let owners = harness.owner_tab("https://example.com/").await?;
+    harness.fake.hang("Page.getFrameTree");
+    let pending = harness.dispatcher.submit(&run, solve(&owners));
+    within(async {
+        while harness.fake.count("Page.getFrameTree") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+
+    run.stop(StopReason::CallerLeft);
+    let stopped = failure(within(pending.wait()).await?)?;
+    assert_eq!(
+        (stopped.error.code(), stopped.delivery),
+        (ErrorCode::CANCELLED, Delivery::Unknown),
+        "the reply is still the stop's: {}",
+        stopped.error
+    );
+    Harness::finish(guard);
+    let counted = [
+        r#"neo_captcha_reasons_total{neo_captcha_reason="caller_cancelled"} 1"#,
+        r#"neo_captcha_solves_total{neo_captcha_family="none",neo_captcha_verdict="cancelled"} 1"#,
+    ];
+    // The solver answers its stop on its own task, just after the door answered the script.
+    within(async {
+        while !Scrape::of(&telemetry).is_ok_and(|scrape| {
+            scrape.lines_of(&["neo_captcha_solves_total", "neo_captcha_reasons_total"]) == counted
+        }) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
     Ok(())
 }
 
@@ -2788,6 +3094,16 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
                 "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
             ),
             "{}: only the prelude's own work is cut quietly when the run ends",
+            spec.name
+        );
+        assert_eq!(
+            spec.metrics == OpMetrics::Housekeeping,
+            matches!(
+                spec.name,
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered" | "page.frames"
+            ),
+            "{}: only the prelude's own work stays out of the op metrics, as it grows with open \
+             tabs rather than with the script's work",
             spec.name
         );
         let Listing::Grouped(line) = spec.listing else {
@@ -3895,45 +4211,56 @@ impl Method for InFlightClose {
     }
 }
 
-/// Fills the page-event ring while preserving every event on the fake CDP transport.
-async fn fill_event_ring(
+/// Pushes the closes of `targets` out of the event log, the way the log lets one go. Each tab
+/// keeps its own ring, so another tab's records never push a close out; a closed tab's ring goes
+/// only once `CLOSED_RINGS` (1,024) later tabs closed (neo-playwright's `event_hub.rs`). So this
+/// opens, reports and closes owner tabs in batches until no ring holds a close of `targets`.
+///
+/// It counts no records: the watcher's passes attach observers to the churned tabs, and can
+/// attach again a target the test destroyed by event alone (the fake still lists its tab), all
+/// of which write records of their own. Each batch instead waits for its last tab's close: the
+/// watcher applies a tab's URL before its destroy, and its events in order, so by then every
+/// tab of the batch was reported and closed. A close written after its ring went is dropped, so
+/// the answer stays.
+async fn push_closes_out_of_the_log(
     harness: &Harness,
-    noise: &PageRef,
-    close_seq: u64,
+    targets: &[&TargetId],
 ) -> Result<(), Box<dyn Error>> {
+    const BATCH: u64 = 25;
+    /// Well past `CLOSED_RINGS`, so a close that will not leave fails here, not by hanging.
+    const MOST: u64 = 4_000;
     let pw = harness.playwright.get().await;
-    // The generic fake returns an empty Target.getTargetInfo for opener reads. Supply the
-    // attachment event that a real browser uses to bind this console stream to its target.
-    let noise_target = harness
-        .link
-        .page(noise.tab)
-        .await
-        .ok_or("noise cached")?
-        .target_id;
-    assert!(harness.fake.page_event(
-        noise.tab,
-        "Target.attachedToTarget",
-        json!({
-            "sessionId": format!("session-{}", noise_target.as_str()),
-            "targetInfo": {"targetId":noise_target, "type":"page", "url":"https://noise.example/"}
-        })
-    ));
-    for batch in 1..=64 {
-        for call in 0..16 {
-            // Each call its own stamp, as Chromium's are: identical reports are one replayed.
-            assert!(harness.fake.page_event(
-                noise.tab,
-                "Runtime.consoleAPICalled",
-                json!({
-                    "type":"log", "args":[{"type":"string","value":"noise"}],
-                    "executionContextId":1, "timestamp": batch * 16 + call
-                })
-            ));
+    let mut churned = 0;
+    while targets
+        .iter()
+        .any(|target| pw.closed_target(target).is_some())
+    {
+        if churned >= MOST {
+            return Err(format!("a close stayed in the log past {MOST} later closes").into());
         }
-        // Backpressure the fake's transport so this tests event-log eviction, with every
-        // record delivered to the watcher, independently of transport-ring capacity.
+        let mut tabs = Vec::new();
+        for slot in 0..BATCH {
+            let url = format!("https://closed-{}.example/", churned + slot);
+            // Straight on the fake, not through core's listing, which would also let discovery
+            // report again a target the test destroyed by event alone.
+            let tab = harness.fake.open_tab(&url, "Closed");
+            // The fake announces a target with no URL, named `target-<tab>` (`FakeCdp`); this
+            // event makes the watcher report it.
+            let target = TargetId(format!("target-{}", tab.0));
+            assert!(harness.fake.page_event(
+                tab,
+                "Target.targetInfoChanged",
+                json!({ "targetInfo": {"targetId":target,"type":"page","url":url} })
+            ));
+            tabs.push((tab, target));
+        }
+        churned += BATCH;
+        for (tab, _) in &tabs {
+            assert!(harness.fake.close_tab(*tab));
+        }
+        let last = tabs.last().map(|(_, target)| target).ok_or("a batch")?;
         within(async {
-            while pw.event_head() < close_seq + batch * 16 {
+            while pw.closed_target(last).is_none() {
                 time::sleep(Duration::from_millis(1)).await;
             }
         })
@@ -4014,7 +4341,7 @@ async fn evicted_close_case(name: &'static str, rebind: bool) -> Result<(), Box<
     let (run, _guard) = harness.run()?;
     let EventTabs {
         page,
-        noise,
+        noise: _,
         target,
     } = prepare_event_tabs(&harness, &run).await?;
     let pw = harness.playwright.get().await;
@@ -4045,7 +4372,7 @@ async fn evicted_close_case(name: &'static str, rebind: bool) -> Result<(), Box<
     let close_seq = pw
         .closed_target(&target)
         .ok_or("copied close is retained")?;
-    fill_event_ring(&harness, &noise, close_seq).await?;
+    push_closes_out_of_the_log(&harness, &[&target]).await?;
     assert_eq!(
         pw.closed_target(&target),
         None,
@@ -4342,7 +4669,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
     let (run, _guard) = harness.run()?;
     let EventTabs {
         page,
-        noise,
+        noise: _,
         target: old,
     } = prepare_event_tabs(&harness, &run).await?;
     let pw = harness.playwright.get().await;
@@ -4403,8 +4730,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
     })?;
     let pending = door.submit(&run, Call::script("events.next".into(), json!({}), None));
     within(copied.notified()).await?;
-    let head = pw.event_head();
-    fill_event_ring(&harness, &noise, head).await?;
+    push_closes_out_of_the_log(&harness, &[&old, &current]).await?;
     assert!(pw.closed_target(&old).is_none() && pw.closed_target(&current).is_none());
     resume.notify_one();
     let reply = pending.wait().await;
@@ -4546,7 +4872,7 @@ async fn withheld_close_keeps_internal_evidence_without_releasing_lifecycle()
             .is_none_or(|at| at.closes.is_empty())
     );
     assert_eq!(harness.tabs.gone_target(page.tab), Some(target.clone()));
-    fill_event_ring(&harness, &noise, pw.event_head()).await?;
+    push_closes_out_of_the_log(&harness, &[&target]).await?;
     assert!(pw.closed_target(&target).is_none());
     harness.locks.unlock_host(lock.id)?;
     let later = harness
@@ -6025,6 +6351,41 @@ async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<d
     Ok(())
 }
 
+/// The blank tab Neo makes its own at attach is born `neo` in tab
+/// telemetry. The app takes the open intent before the link's first listing, `follow` claims it
+/// with the blank tab it adopts, and a tab held meanwhile is born `found`.
+#[tokio::test]
+async fn the_blank_tab_neo_adopts_at_attach_is_born_neo() -> Result<(), Box<dyn Error>> {
+    let (telemetry, _probe) = Telemetry::in_memory(&TelemetryConfig::default());
+    let tabs = Arc::new(TabRegistry::new_with_telemetry(telemetry.clone()));
+    let attach = tabs.life().expect_open(OpenFor::Neo);
+    let harness = Harness::with_tabs::<false>(None, false, tabs).await?;
+    let launch = harness.fake.open_tab("about:blank", "");
+    harness.owner_tab("https://example.com/").await?;
+    let blank = blank_tab(&harness);
+    blank.set_attach_intent(attach);
+    let shutdown = CancellationToken::new();
+    let following = tokio::spawn(Arc::clone(&blank).follow(shutdown.clone()));
+    tabs_until(&telemetry, |(_, found, neo)| neo == 1 && found == 1).await?;
+    assert_eq!(blank.current(), Some(launch), "the launch tab, adopted");
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        0,
+        "adopted, not opened"
+    );
+    assert_eq!(
+        Scrape::of(&telemetry)?.lines_of(&["neo_tab_opened_total", "neo_tab_closed_total"]),
+        [
+            r#"neo_tab_opened_total{neo_tab_origin="found"} 1"#,
+            r#"neo_tab_opened_total{neo_tab_origin="neo"} 1"#,
+        ],
+        "Neo's tab born neo, the owner's found, each once"
+    );
+    shutdown.cancel();
+    within(following).await??;
+    Ok(())
+}
+
 /// When Neo's tab closes while the server runs, it opens another at once.
 #[tokio::test]
 async fn neo_opens_another_blank_tab_when_its_own_closes() -> Result<(), Box<dyn Error>> {
@@ -6535,6 +6896,7 @@ fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), 
         default_page: None,
         tabs_scope: TabsScope::Browser,
         access: None,
+        telemetry: Telemetry::noop().internal_run(),
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }
@@ -6557,6 +6919,7 @@ fn run_scoped(
         default_page: None,
         tabs_scope: scope,
         access: None,
+        telemetry: Telemetry::noop().internal_run(),
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }

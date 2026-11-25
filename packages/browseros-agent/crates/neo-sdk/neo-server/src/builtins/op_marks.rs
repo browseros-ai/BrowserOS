@@ -5,7 +5,9 @@
 
 use neo_playwright::{Capability, OpLifetime, OpSpec};
 
-use crate::dispatch::{ErrorCode, Lifetime, Listing, MethodSpec, OperationError, PageScript};
+use crate::dispatch::{
+    ErrorCode, Lifetime, Listing, MethodSpec, OpMetrics, OperationError, PageScript,
+};
 
 /// One crate op as the door registers it. A plain data bag, built once per op at startup.
 pub(super) struct OpMarks {
@@ -182,6 +184,12 @@ impl OpMarks {
             lifetime: match spec.lifetime {
                 OpLifetime::Operation => Lifetime::Operation,
                 OpLifetime::Background => Lifetime::Background,
+            },
+            // The prelude's background work (frame-tree reads, the event pump, listener
+            // bookkeeping, the locator-handler poll) is Neo's housekeeping, not the script's.
+            metrics: match spec.lifetime {
+                OpLifetime::Operation => OpMetrics::Counted,
+                OpLifetime::Background => OpMetrics::Housekeeping,
             },
             page_script: if spec.uses(Capability::MainWorld) {
                 PageScript::MainWorld

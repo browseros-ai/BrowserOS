@@ -91,6 +91,12 @@ impl Op {
             .map(Op)
     }
 
+    /// The snapshot op `op`, for a rule a snapshot handler asks about itself (its event wait's
+    /// bound, `ordering_wait_for`).
+    pub(crate) const fn snapshot(op: SnapshotOp) -> Self {
+        Self(OpKind::Snapshot(op))
+    }
+
     /// The op whose wire name is `name` (`locator.click`), if there is one.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
@@ -338,6 +344,8 @@ mod tests {
             ("locator.ref", &[], true),
             ("page.ariaSnapshot", &[], true),
             ("locator.ariaSnapshot", &[], true),
+            ("page.ariaSnapshotJSON", &[], true),
+            ("locator.ariaSnapshotJSON", &[], true),
             ("page.snapshotBaseline", &[], true),
             ("page.snapshotPending", &[], true),
             ("expect.locator", &[], true),

@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { ReactNode } from 'react'
+import { skipToken } from '@tanstack/react-query'
+import { type ReactNode, useEffect } from 'react'
 import { Link, useHref, useLocation } from 'react-router'
 import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
@@ -21,10 +22,17 @@ import {
 } from '@/components/motion/animated-sidebar'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
+import { useCaptureReady } from '@/modules/analytics/capture.hooks'
+import {
+  AnalyticsEvent,
+  track,
+  trackOncePerSession,
+} from '@/modules/analytics/events'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
-import { usePlan } from '@/modules/api/plan.hooks'
+import { usePlan, usePlanPricing } from '@/modules/api/plan.hooks'
 import { useAttentionTitle } from '@/modules/attention/attention.hooks'
+import { trialOfferDays } from '@/modules/plan/trial.helpers'
 import {
   isNavItemActive,
   type NavItem,
@@ -49,7 +57,15 @@ export function SidebarBrand() {
   )
 }
 
-function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
+function NavLinkButton({
+  item,
+  badge,
+  onSelect,
+}: {
+  item: NavItem
+  badge?: ReactNode
+  onSelect?: () => void
+}) {
   const { pathname } = useLocation()
   const href = useHref(item.to)
   const active = isNavItemActive(item.to, pathname)
@@ -59,6 +75,7 @@ function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
       href={href}
       isActive={active}
       badge={badge}
+      onSelect={onSelect}
       icon={<Icon className="size-[18px]" strokeWidth={1.75} />}
       className={cn('text-[15px]', active && 'font-semibold text-primary')}
     >
@@ -72,15 +89,21 @@ function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
 function NavMenu({
   items,
   badges = {},
+  onSelects = {},
 }: {
   items: NavItem[]
   badges?: Record<string, ReactNode>
+  onSelects?: Record<string, () => void>
 }) {
   return (
     <AnimatedSidebarMenu>
       {items.map((item) => (
         <AnimatedSidebarMenuItem key={item.to}>
-          <NavLinkButton item={item} badge={badges[item.to]} />
+          <NavLinkButton
+            item={item}
+            badge={badges[item.to]}
+            onSelect={onSelects[item.to]}
+          />
         </AnimatedSidebarMenuItem>
       ))}
     </AnimatedSidebarMenu>
@@ -94,7 +117,27 @@ function NavMenu({
 export function AppSidebar() {
   // Loading or unreachable reads as no billing, so the ultrafast item stays hidden.
   const plan = usePlan()
-  const tag = planTagFor(plan.data)
+  // Pricing is read only where a free trial could be offered.
+  const pricing = usePlanPricing({
+    variables:
+      plan.data?.available && plan.data.status === 'none' && !plan.data.onKey
+        ? undefined
+        : skipToken,
+  })
+  const trialDays = trialOfferDays(plan.data, pricing.data)
+  const capturing = useCaptureReady()
+  const tag = planTagFor(plan.data, trialDays)
+
+  // Reports what was on screen, which only the rendered sidebar knows; re-runs
+  // when PostHog becomes ready, so an impression before then still goes out.
+  useEffect(() => {
+    if (trialDays > 0 && capturing) {
+      trackOncePerSession(AnalyticsEvent.TrialTagShown, {
+        trial_days: trialDays,
+      })
+    }
+  }, [trialDays, capturing])
+
   return (
     <AnimatedSidebar
       ariaLabel="Sidebar"
@@ -116,6 +159,16 @@ export function AppSidebar() {
         <nav aria-label="Settings">
           <NavMenu
             items={secondaryNavItemsFor(plan.data)}
+            onSelects={
+              trialDays > 0
+                ? {
+                    '/pro': () =>
+                      track(AnalyticsEvent.TrialStartClicked, {
+                        source: 'sidebar_tag',
+                      }),
+                  }
+                : undefined
+            }
             badges={
               tag
                 ? {

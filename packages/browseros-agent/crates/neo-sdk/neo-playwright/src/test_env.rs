@@ -249,7 +249,7 @@ impl CdpConnection for Offline {
         Box::pin(async { Err(CdpError::NotConnected) })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         // The sender drops at once, so every listener sees the stream closed and ends.
         broadcast::channel(1).1
     }
@@ -353,7 +353,7 @@ impl CdpConnection for Recording {
         Box::pin(async { Ok("{}".to_owned()) })
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         broadcast::channel(1).1
     }
 

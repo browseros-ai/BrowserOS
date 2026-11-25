@@ -21,6 +21,10 @@
  *                                    invokes offline (scripts/wire-examples.ts)
  *   ../neo-snapshot/tests/data/cases/  what today's snapshot renderer prints for each case,
  *                                    which the Rust renderer is judged by (scripts/snapshot-cases)
+ *   ../neo-snapshot/tests/data/todays-renderer.js   today's renderer (scripts/snapshot-cases/
+ *   ../neo-snapshot/tests/data/vendored-printer.js  answer.ts) and the vendored printer, each one
+ *                                    script that sets one global, which neo-snapshot's tests run
+ *                                    in QuickJS beside the Rust on generated trees
  *
  * `bun scripts/build.ts` writes them, and `--check` fails when a committed copy is stale. The
  * crate embeds the assets with include_str!, so Cargo needs no build step. Use the Bun version
@@ -181,6 +185,24 @@ async function mainWorldFunction(): Promise<string> {
   return `function () {\n'use strict';\n${body}\nreturn ${exported[1]}.apply(this, arguments);\n}`
 }
 
+/**
+ * `entry` as one script for QuickJS that sets the global `name` to the module's export of that
+ * name. The module is bundled as ESM, its one export dropped, and its code run in a strict
+ * function that assigns the global, so two such scripts in one realm share nothing else.
+ */
+async function quickjsGlobal(entry: string, name: string): Promise<string> {
+  const code = await bundle(entry, 'esm')
+  const exported = new RegExp(`\\nexport \\{\\n {2}${name}\\n\\};\\n$`).exec(
+    code,
+  )
+  if (!exported)
+    throw new Error(
+      `${entry} must bundle to code that ends in its one export, ${name}`,
+    )
+  const body = code.slice(0, exported.index)
+  return `(function () {\n'use strict';\n${body}\nglobalThis.${name} = ${name};\n})();\n`
+}
+
 export async function buildOutputs(): Promise<Output[]> {
   // Check the shared entry point so imported builds and CLI builds use the same emitter.
   // A different Bun can change embedded bytes even when all source files are unchanged.
@@ -189,11 +211,23 @@ export async function buildOutputs(): Promise<Output[]> {
       `This build requires Bun ${engines.bun} (package.json engines.bun), but is running Bun ${Bun.version}. Use ~/.npm/_npx/22f2fe8d8bc13000/node_modules/.bin/bun scripts/build.ts (add --check to check committed outputs), or bunx bun@${engines.bun} scripts/build.ts.`,
     )
   const { tag, commit } = vendoredVersion()
-  const [injected, prelude, mainWorld, bindingsController] = await Promise.all([
+  const [
+    injected,
+    prelude,
+    mainWorld,
+    bindingsController,
+    todaysRenderer,
+    vendoredPrinter,
+  ] = await Promise.all([
     bundle('src/probe/index.ts'),
     bundle('src/prelude/index.ts', 'iife', [vendored, preludeGlobals]),
     mainWorldFunction(),
     bundle('src/main-world/bindings-controller.ts'),
+    quickjsGlobal('scripts/snapshot-cases/answer.ts', 'todaysAnswer'),
+    quickjsGlobal(
+      resolve(vendorRoot, 'packages/isomorphic/ariaSnapshotRenderer.ts'),
+      'renderAriaSnapshotAsYaml',
+    ),
   ])
   const preludeAsset = `/*
  * Playwright ${tag} (${commit}), packages/isomorphic helpers and packages/protocol value
@@ -266,6 +300,32 @@ ${bindingsController}`,
       text: await wireExamplesDocument(preludeAsset),
     },
     ...snapshotCaseOutputs(),
+    {
+      path: 'crates/neo-sdk/neo-snapshot/tests/data/todays-renderer.js',
+      text: `/*
+ * Today's snapshot renderer with the Playwright ${tag} (${commit}) packages/isomorphic
+ * modules it imports, for neo-snapshot's tests: one script for QuickJS that sets the global
+ * todaysAnswer (crates/neo-sdk/neo-playwright-js/scripts/snapshot-cases/answer.ts).
+ * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
+ * Built from crates/neo-sdk/neo-playwright-js/src/prelude and
+ * crates/neo-sdk/neo-playwright/third_party/playwright, by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
+ * Every upstream module is built unmodified. Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
+ */
+${todaysRenderer}`,
+    },
+    {
+      path: 'crates/neo-sdk/neo-snapshot/tests/data/vendored-printer.js',
+      text: `/*
+ * Playwright ${tag} (${commit}), packages/isomorphic ariaSnapshotRenderer with the yaml and
+ * stringUtils it imports, for neo-snapshot's tests: one script for QuickJS that sets the global
+ * renderAriaSnapshotAsYaml.
+ * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
+ * Built unmodified from crates/neo-sdk/neo-playwright/third_party/playwright, by
+ * crates/neo-sdk/neo-playwright-js/scripts/build.ts.
+ * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
+ */
+${vendoredPrinter}`,
+    },
   ]
 }
 

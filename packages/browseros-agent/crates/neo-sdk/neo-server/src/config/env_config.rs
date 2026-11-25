@@ -4,6 +4,7 @@ use std::path::{self, PathBuf};
 use std::str::FromStr;
 
 use neo_takeover::Xvnc;
+use neo_telemetry::{TelemetryConfig, TelemetryError};
 
 use super::{ConfigError, Defaults};
 
@@ -45,6 +46,11 @@ pub(crate) struct EnvConfig {
     /// `trace.valueBytes` through `/v1/settings` instead. Kept to warn a host that still sets it,
     /// since its values would now be cut without a word.
     pub(crate) ignored_trace_value_bytes: bool,
+    /// `CLAW_TELEMETRY_SITE_DETAIL` and the standard `OTEL_*` variables, parsed by
+    /// neo-telemetry, which owns their spelling; `App` builds the process's one telemetry
+    /// handle from it. Startup-only: no `/v1/settings` key changes it. Its `Debug` never prints
+    /// an exporter header's value, which can carry a collector's credential.
+    pub(crate) telemetry: TelemetryConfig,
 }
 
 /// Whether Chromium runs in hosted mode, where popups open as tabs Neo can drive.
@@ -146,7 +152,11 @@ impl EnvConfig {
             home: parse(&read, "NEO_SCREEN", "a screen size like 1600x1000")?
                 .unwrap_or(Defaults::SCREEN),
         };
+        // Through the same `read`, so a test's map reaches the telemetry variables too, and a
+        // blank one is unset like every other here.
+        let telemetry = TelemetryConfig::from_env(&read).map_err(telemetry_error)?;
         Ok(Self {
+            telemetry,
             ignored_trace_value_bytes: read("CLAW_TRACE_VALUE_BYTES").is_some(),
             log_filter: read("CLAW_LOG").unwrap_or_else(|| Defaults::LOG_FILTER.to_owned()),
             hosted_mode,
@@ -203,6 +213,20 @@ where
         .transpose()
 }
 
+/// A telemetry variable Neo cannot use fails the start as any other variable here does: its
+/// name, then why. neo-telemetry's reason never echoes an exporter header's value.
+fn telemetry_error(error: TelemetryError) -> ConfigError {
+    match error {
+        TelemetryError::InvalidEnv { name, reason } => ConfigError::Env { name, why: reason },
+        // Reading the environment builds no pipeline, so this is not expected. It still fails
+        // the start, rather than run with telemetry other than the one configured.
+        error @ TelemetryError::Pipeline { .. } => ConfigError::Env {
+            name: "telemetry",
+            why: error.to_string(),
+        },
+    }
+}
+
 fn non_blank(value: Option<String>) -> Option<String> {
     let trimmed = value?.trim().to_owned();
     (!trimmed.is_empty()).then_some(trimmed)
@@ -216,6 +240,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use neo_takeover::{ScreenSize, Xvnc};
+    use neo_telemetry::{SiteDetail, TelemetryConfig};
 
     use super::{EnvConfig, HostApiConfig, HostedMode, NeoHome};
     use crate::config::{ConfigError, Defaults};
@@ -256,6 +281,7 @@ mod tests {
                     },
                 },
                 ignored_trace_value_bytes: false,
+                telemetry: TelemetryConfig::default(),
             },
             "an image that sets nothing gets the documented defaults"
         );
@@ -465,6 +491,163 @@ mod tests {
             );
         }
     }
+
+    /// Every telemetry variable with a value Neo cannot use fails the start, naming that
+    /// variable, while a collector credential set beside it (or inside the bad value itself)
+    /// stays out of the message and its `Debug`.
+    #[test]
+    fn each_telemetry_variable_neo_cannot_use_fails_the_start_naming_it() {
+        /// The variable, its bad value, and any variable it needs beside it to be read.
+        type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+        const SECRET: &str = "s3cr3tCollectorToken";
+        let credential = format!("authorization=Bearer%20{SECRET}");
+        let bad_headers = format!("authorization Bearer {SECRET}");
+        let cases: [Case<'_>; 18] = [
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "not a url", &[]),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                "ftp://collector/v1/traces",
+                &[],
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                "http://user:pw@collector/v1/metrics",
+                &[],
+            ),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc", &[]),
+            ("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc", &[]),
+            ("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "http/xml", &[]),
+            ("OTEL_EXPORTER_OTLP_HEADERS", bad_headers.as_str(), &[]),
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+                bad_headers.as_str(),
+                &[],
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+                bad_headers.as_str(),
+                &[],
+            ),
+            ("OTEL_EXPORTER_OTLP_TIMEOUT", "soon", &[]),
+            ("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "0", &[]),
+            ("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT", "1.5", &[]),
+            ("OTEL_RESOURCE_ATTRIBUTES", "team", &[]),
+            ("OTEL_TRACES_SAMPLER", "sometimes", &[]),
+            (
+                "OTEL_TRACES_SAMPLER_ARG",
+                "lots",
+                &[("OTEL_TRACES_SAMPLER", "traceidratio")],
+            ),
+            ("OTEL_METRIC_EXPORT_INTERVAL", "0", &[]),
+            ("OTEL_BSP_SCHEDULE_DELAY", "-5", &[]),
+            ("CLAW_TELEMETRY_SITE_DETAIL", "everything", &[]),
+        ];
+        for (variable, value, beside) in cases {
+            let mut vars = vec![
+                ("HOME", "/h"),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318"),
+                ("OTEL_EXPORTER_OTLP_HEADERS", credential.as_str()),
+            ];
+            vars.extend_from_slice(beside);
+            vars.retain(|(name, _)| *name != variable);
+            vars.push((variable, value));
+            let error = env(&vars);
+            let Err(error @ ConfigError::Env { name, .. }) = &error else {
+                panic!("{variable}={value:?} must fail the start; got {error:?}");
+            };
+            assert_eq!(
+                *name, variable,
+                "{variable}={value:?}: the variable is named"
+            );
+            let printed = format!("{error} {error:?}");
+            assert!(
+                !printed.contains(SECRET),
+                "{variable}={value:?}: a header value leaked: {printed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_site_detail_neo_cannot_use_fails_the_start_naming_it() {
+        for value in ["full", "URL", "hosts", "domain", "0"] {
+            let error = env(&[("HOME", "/h"), ("CLAW_TELEMETRY_SITE_DETAIL", value)]);
+            let Err(error @ ConfigError::Env { name, .. }) = &error else {
+                panic!(
+                    "{value:?} must fail the start: a typo would silently widen or narrow what \
+                     spans carry; got {error:?}"
+                );
+            };
+            assert_eq!(*name, "CLAW_TELEMETRY_SITE_DETAIL", "the variable is named");
+            let message = error.to_string();
+            assert!(
+                ["none", "host", "url"]
+                    .iter()
+                    .all(|choice| message.contains(choice)),
+                "the operator reads which values would do: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_site_detail_neo_can_use_is_applied() -> Result<(), Box<dyn Error>> {
+        assert_eq!(
+            env(&[("HOME", "/h")])?.telemetry,
+            TelemetryConfig::default(),
+            "unset: spans carry no address and nothing is pushed"
+        );
+        for (value, detail) in [
+            ("none", SiteDetail::None),
+            ("host", SiteDetail::Host),
+            ("url", SiteDetail::Url),
+            (" url ", SiteDetail::Url),
+            ("  ", SiteDetail::None),
+        ] {
+            assert_eq!(
+                env(&[("HOME", "/h"), ("CLAW_TELEMETRY_SITE_DETAIL", value)])?
+                    .telemetry
+                    .site_detail,
+                detail,
+                "{value:?} is read as every other variable here is: trimmed, blank unset"
+            );
+        }
+        Ok(())
+    }
+
+    /// An exporter header carries a collector's credential, and `EnvConfig` is printed whole
+    /// (`AppConfig` derives `Debug`): neither the config nor an error it fails the start with may
+    /// hold a header's value, whether the headers parse or not.
+    #[test]
+    fn an_exporter_header_value_is_never_printed() {
+        const SECRET: &str = "s3cr3tCollectorToken";
+        let valid = format!("authorization=Bearer%20{SECRET},x-team=neo");
+        let malformed = [
+            format!("authorization Bearer {SECRET}"),
+            format!("={SECRET}"),
+            format!("authorization=Bearer {SECRET}%zz"),
+            format!("authorization=Bearer%20{SECRET},{SECRET}"),
+        ];
+        for headers in [&valid].into_iter().chain(&malformed) {
+            for variable in [
+                "OTEL_EXPORTER_OTLP_HEADERS",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+                "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+            ] {
+                let printed = match env(&[
+                    ("HOME", "/h"),
+                    ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318"),
+                    (variable, headers.as_str()),
+                ]) {
+                    Ok(config) => format!("{config:?}"),
+                    Err(error) => format!("{error} {error:?}"),
+                };
+                assert!(
+                    !printed.contains(SECRET),
+                    "{variable}={headers:?} leaked its value: {printed}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn filesystem_layout_keeps_configured_missing_paths_and_no_home_startup()
     -> Result<(), Box<dyn Error>> {

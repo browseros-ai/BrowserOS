@@ -14,6 +14,7 @@ import { Input } from '@/components/motion/input'
 import { MorphingModal } from '@/components/motion/morphing-modal'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useActivateKey, usePlan, usePlanKey } from '@/modules/api/plan.hooks'
+import { hasUltrafast } from '@/modules/plan/plan.helpers'
 import { toastApiError } from '@/modules/toast/toast'
 import {
   apiErrorCode,
@@ -66,7 +67,12 @@ export function UseKeyDialog({
       queryClient.setQueryData(usePlan.getKey(), change.plan)
       if (change.key) queryClient.setQueryData(usePlanKey.getKey(), change.key)
       track(AnalyticsEvent.ProKeyActivated, {
+        plan: hasUltrafast(change.plan) ? 'ultrafast' : 'free',
         plan_ended: change.plan.status === 'none',
+        status: change.plan.status,
+        ...(change.plan.trial === undefined
+          ? {}
+          : { trial: change.plan.trial }),
       })
     },
     onError: (error) => {

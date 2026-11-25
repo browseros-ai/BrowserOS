@@ -144,8 +144,22 @@ jobs:
         id: spec
         env:
           NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
+          # The prelude's compare switch (design 2.3, layer 5; neo-playwright-js
+          # prelude/snapshot-text.ts), a test harness's and never a host's: under the
+          # conformance switch every Playwright-format text the prelude renders on its path is
+          # held to Rust's text of the same read, and a difference fails the call. The spec
+          # loader (claw-loader.mjs) appends each run's counts here.
+          NEO_COMPARE_SNAPSHOTS: "1"
+          NEO_COMPARE_SNAPSHOTS_LOG: ${{ runner.temp }}/snapshot-comparisons.log
         # Sets the step output `results` to the run's results folder.
         run: bun run test:neo-spec --ci --workers "$NEO_SPEC_WORKERS"
+
+      # A comparison that silently did not run is not a pass: while the built prelude says
+      # SNAPSHOT_TEXT 'prelude', no comparison fails the job, as a difference always does. Once it
+      # says 'rust', the prelude's path no longer runs and the totals are only printed.
+      - name: Count the snapshot comparisons
+        if: always()
+        run: crates/neo-sdk/count-snapshot-comparisons.sh "${{ runner.temp }}/snapshot-comparisons.log"
 
       - name: Leave the copied Playwright tree out of the report
         if: always() && steps.spec.outputs.results != ''

@@ -12,7 +12,7 @@ use crate::{
     },
     windows::WindowManager,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, RawReply};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::{
@@ -285,7 +285,7 @@ impl BrowserSession {
         self.connection.clone()
     }
 
-    pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
+    pub fn cdp_events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.connection.events()
     }
 
@@ -297,7 +297,7 @@ impl BrowserSession {
 
     /// See [`crate::connection::CdpConnection::events_counted`].
     #[must_use]
-    pub fn cdp_events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    pub fn cdp_events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.connection.events_counted()
     }
 
@@ -349,7 +349,7 @@ impl BrowserSession {
                 match events.recv().await {
                     Ok(event) => {
                         if event.method == "Target.detachedFromTarget" {
-                            handle_detached_event(&session, event).await;
+                            handle_detached_event(&session, &event).await;
                         }
                     }
                     // Survive a CDP event-buffer overflow on a frame-heavy page instead of
@@ -362,7 +362,7 @@ impl BrowserSession {
     }
 }
 
-async fn handle_detached_event(session: &BrowserSession, event: CdpEvent) {
+async fn handle_detached_event(session: &BrowserSession, event: &CdpEvent) {
     let session_id = event
         .params
         .get("sessionId")
@@ -483,7 +483,39 @@ impl CdpConnection for EvictingConnection {
         )
     }
 
-    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+    fn send_raw<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        let names_other = names_other_session(&params, session);
+        Box::pin(self.evicting(
+            session,
+            move || names_other,
+            self.inner.send_raw(method, params, session),
+        ))
+    }
+
+    fn send_raw_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<RawReply, CdpError>> {
+        let names_other = names_other_session(&params, session);
+        Box::pin(
+            self.evicting(
+                session,
+                move || names_other,
+                self.inner
+                    .send_raw_at_epoch(expected_epoch, method, params, session),
+            ),
+        )
+    }
+
+    fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
         self.inner.events()
     }
 
@@ -495,7 +527,7 @@ impl CdpConnection for EvictingConnection {
         self.inner.events_broadcast()
     }
 
-    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+    fn events_counted(&self) -> (broadcast::Receiver<Arc<CdpEvent>>, u64) {
         self.inner.events_counted()
     }
 

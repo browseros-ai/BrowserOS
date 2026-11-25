@@ -5,13 +5,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{BrowserSession, TabId, TargetId};
+use neo_trace::Effect;
 use serde_json::Value;
 use tokio::time;
 
 use crate::action::action_op;
+use crate::events::tab_frames::TabFrameList;
 use crate::events::{
-    BINDING_CALLED, EventFence, EventHub, Fence, TargetWatcher, WatcherHandle, WatcherProgress,
-    event_op,
+    BINDING_CALLED, EventFence, EventHub, EventScope, Fence, TargetWatcher, WatcherHandle,
+    WatcherProgress, event_op,
 };
 use crate::expect::expect_op;
 use crate::input::input_op;
@@ -146,10 +148,48 @@ impl Playwright {
     }
 
     /// Brings the independent event watcher up to `fence` (every event received before it was
-    /// taken) and the leases in line with who listens, waiting at most 2 s. Whether the watcher
-    /// answered in time: `false` means it is still behind `fence`.
-    pub async fn synchronize_events(&self, fence: EventFence) -> bool {
-        self.watcher.synchronize(None, fence).await
+    /// taken), with none of `scope`'s events held back, and the leases in line with who listens,
+    /// waiting at most 2 s. Whether the watcher answered in time: `false` means it is still
+    /// behind `fence` for `scope`.
+    pub async fn synchronize_events(&self, fence: EventFence, scope: &EventScope) -> bool {
+        self.watcher.synchronize(None, fence, scope.clone()).await
+    }
+
+    /// The event scope of `tabs`: their current targets, so a wait covers their held events and
+    /// not another tab's ([`EventScope::Tabs`]). A tab core's registry does not list, not yet (a
+    /// popup whose line the watcher holds before core has it) or no longer, has no target to wait
+    /// for and is left out: its held events do not hold this wait, and the next reply that reads
+    /// it catches up with them.
+    pub async fn tab_scope(&self, tabs: &[TabId]) -> EventScope {
+        let mut targets = Vec::with_capacity(tabs.len());
+        for &tab in tabs {
+            if let Some(info) = self.browser.pages.get_info_by_tab(tab).await {
+                targets.push(info.target_id);
+            }
+        }
+        EventScope::Tabs(targets)
+    }
+
+    /// After an op that ended with no answer from its tab's renderer: pings the tab's source
+    /// sessions (`TargetWatcher::order`), then takes the fence and waits for the tab's events
+    /// before it, so every frame event the tab sent before the ping's answer is in its list when
+    /// this returns, held ones included. Only that tab. Whether both the ping and the wait
+    /// answered in time.
+    pub(crate) async fn order_tab(&self, target: TargetId) -> bool {
+        let ordered = self.watcher.order(target.clone()).await;
+        // Taken after the ping's answer: an event the tab sent before that answer is before it.
+        let fence = self.event_fence();
+        let synchronized = self
+            .synchronize_events(fence, &EventScope::Tabs(vec![target]))
+            .await;
+        ordered && synchronized
+    }
+
+    /// Asks the watcher to read again each session of `target`'s tab whose tree has not landed,
+    /// and the tab's own tree whatever landed when `own_tree`, without waiting for it
+    /// (`TargetWatcher::reseed`).
+    pub(crate) fn reseed_frames(&self, target: TargetId, own_tree: bool) {
+        self.watcher.reseed(target, own_tree);
     }
 
     /// The host stopped keeping `target`'s tab for itself (`OpEnv::hides_tab` reads false
@@ -161,11 +201,11 @@ impl Playwright {
         self.watcher.hand_back(target, url).await
     }
 
-    /// Whether every event before `fence` is in the log, without waiting: read by the watcher
-    /// and none of them held back in a tab's line.
+    /// Whether every event before `fence` is in the log for `scope`, without waiting: read by
+    /// the watcher and none of `scope`'s held back in a tab's line.
     #[must_use]
-    pub fn events_handled_through(&self, fence: EventFence) -> bool {
-        self.progress.applied_through() >= fence.0
+    pub fn events_handled_through(&self, fence: EventFence, scope: &EventScope) -> bool {
+        self.progress.applied_through(scope) >= fence.0
     }
 
     /// A handle on the event watcher for what outlives an op (`events::log_lease`).
@@ -177,8 +217,9 @@ impl Playwright {
     /// must reject before the native renderer's eventual protocol shutdown.
     pub(crate) async fn workers_closed(&self, target: TargetId) {
         self.crashes.confirmed_closed(&target);
+        let scope = EventScope::Tabs(vec![target.clone()]);
         self.watcher
-            .synchronize(Some(target), self.watcher.fence())
+            .synchronize(Some(target), self.watcher.fence(), scope)
             .await;
     }
 
@@ -205,6 +246,15 @@ impl Playwright {
     #[must_use]
     pub fn frame_versions(&self) -> Vec<(TabId, u64)> {
         self.events.frame_versions()
+    }
+
+    /// A tab's frames as the target watcher's events and seeds left them, main frame first,
+    /// with the tab's frame version, whether its seed landed and the newest event-log seq the
+    /// list includes; `None` for a target the watcher keeps nothing for. Nothing in the product
+    /// reads it yet: the comparison row checks it against the browser's own tree.
+    #[must_use]
+    pub fn tab_frames(&self, target: &TargetId) -> Option<TabFrameList> {
+        self.events.tab_frames(target)
     }
 
     /// The browser connection, for what an op does after it admitted its page: raw sessions,
@@ -285,6 +335,7 @@ impl Playwright {
         op: Op,
         input: Value,
     ) -> Result<Value, PlaywrightError> {
+        let unordered = ends_unordered(op, &input);
         let OpInput { call, args } = OpInput::decode(op, input)?;
         let scope =
             OpScope::new(env, op, call).tracking(&self.crashes, &self.browser, &self.removals);
@@ -304,7 +355,20 @@ impl Playwright {
                 return scope.settle(event_op::invoke(self, &scope, op, args).await);
             }
         };
+        // The frame events such an op's effect caused may still be on their way: ping the tab's
+        // sources, so the reply's fence covers them and its frame version and the next
+        // `page.frames` see them. Only the tab the op acted on, never another.
+        if unordered
+            && answered.is_ok()
+            && let Some(target) = scope.admitted_target()
+        {
+            let _ordered = self.order_tab(target).await;
+        }
+        // Never both waits and never neither: a handler that took the wait inside itself
+        // (`OpScope::mark_ordered_inside`, a whole page's text in Neo's format, which must read
+        // and record its baseline after the wait) is not held again here.
         if !scope.refused_crash_before_sending()
+            && !scope.ordered_inside()
             && let Some(bound) = ordering_wait(op, &answered)
         {
             self.events_before_reply(&scope, bound).await;
@@ -332,7 +396,12 @@ impl Playwright {
     /// on a threadsafe function of its own, in no fixed order). A run with no listener has
     /// nothing to order and does not wait. An op that timed out does not wait either, except a
     /// `waitForFunction`, whose polls ran page script up to its deadline ([`ordering_wait`]).
-    async fn events_before_reply(&self, scope: &OpScope<'_>, bound: Duration) {
+    ///
+    /// `invoke` runs it after the handler. One handler runs it inside itself instead, at the
+    /// point after its last browser reply: a whole page's text in Neo's format, whose baseline
+    /// is read and recorded after the wait (`snapshot_op.rs`, `order_events_inside`). It is this
+    /// one function in both places, so the two waits cannot drift apart.
+    pub(crate) async fn events_before_reply(&self, scope: &OpScope<'_>, bound: Duration) {
         let run = scope.run_state();
         if !run.events.has_listeners() {
             return;
@@ -341,11 +410,28 @@ impl Playwright {
             events: self.browser.cdp_events_broadcast(),
             calls: self.browser.cdp_events_targeted_delivered(BINDING_CALLED),
         };
+        // Only the listened tabs' held events: the pump reads nothing of another tab's.
+        let listened = run.events.listened_scope();
         let ordered = async {
-            self.progress.reached(fence).await;
+            self.progress.reached(fence, &listened).await;
             run.events.taken_through(self.events.head()).await;
         };
         let _bounded = time::timeout(bound, ordered).await;
+    }
+}
+
+/// Whether `op` can end with no answer from its tab's renderer after its effect, so the frame
+/// events that effect caused may still be on their way when it answers: the raw device calls
+/// (`page.mouse`, `page.keyboard`, `page.touchscreen`), which never read the page, and an action
+/// that is forced or told not to wait after, which arms no interceptor or reads no verdict. Every
+/// other action ends with its verdict, a renderer read in the element's own frame, which already
+/// orders what came before it; a trial presses nothing.
+fn ends_unordered(op: Op, input: &Value) -> bool {
+    let flag = |name: &str| input.get(name).and_then(Value::as_bool) == Some(true);
+    match op.kind() {
+        OpKind::Input(_) => op.spec().effect == Effect::Write,
+        OpKind::Action(_) => (flag("force") || flag("noWaitAfter")) && !flag("trial"),
+        _ => false,
     }
 }
 
@@ -363,8 +449,18 @@ impl Playwright {
 fn ordering_wait(op: Op, answered: &Result<Value, PlaywrightError>) -> Option<Duration> {
     // Crash admission must not wait behind the renderer events that caused refusal. The
     // independent pump still delivers them; successful operations keep their ordering fence.
-    let timed_out = matches!(answered, Err(error) if error.timed_out() == TimedOut::Yes);
-    if !timed_out {
+    let timed_out = match answered {
+        Err(error) => error.timed_out(),
+        Ok(_) => TimedOut::No,
+    };
+    ordering_wait_for(op, timed_out)
+}
+
+/// [`ordering_wait`]'s rule by whether the op timed out: the one source of every event wait's
+/// bound, the generic wait's after the handler and the snapshot handler's own inside it, which
+/// asks with [`TimedOut::No`] since its tree is in hand.
+pub(crate) fn ordering_wait_for(op: Op, timed_out: TimedOut) -> Option<Duration> {
+    if timed_out == TimedOut::No {
         return Some(EVENTS_BEFORE_REPLY);
     }
     matches!(
@@ -384,9 +480,251 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::time;
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    use browseros_core::{TabId, TargetId};
+
     use super::Playwright;
+    use crate::events::EventScope;
     use crate::test_env::{self, TestEnv};
+    use crate::test_support::{
+        ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript, TestResult,
+    };
     use crate::{ErrorCode, Op, PlaywrightError, Refusal};
+
+    /// The ops whose effect may leave frame events on their way when they answer are the ones the
+    /// reply pings their tab for: the raw device calls, and an action forced or told not to wait
+    /// after. An ordinary action ends with its verdict, a trial presses nothing, and a read
+    /// changes nothing.
+    #[test]
+    fn tests_that_only_ops_that_end_without_a_renderer_answer_are_ordered()
+    -> Result<(), Box<dyn Error>> {
+        let ends = |name: &str, input: Value| -> Result<bool, Box<dyn Error>> {
+            let op = Op::from_name(name).ok_or(format!("{name} is an op"))?;
+            Ok(super::ends_unordered(op, &input))
+        };
+        assert!(ends("mouse.click", json!({}))?);
+        assert!(ends("keyboard.press", json!({}))?);
+        assert!(ends("locator.click", json!({ "force": true }))?);
+        assert!(ends("locator.press", json!({ "noWaitAfter": true }))?);
+        assert!(!ends("locator.click", json!({}))?, "its verdict orders it");
+        assert!(!ends(
+            "locator.click",
+            json!({ "force": true, "trial": true })
+        )?);
+        assert!(!ends("page.title", json!({}))?, "a read");
+        Ok(())
+    }
+
+    struct NoProbes;
+    impl TabScript for NoProbes {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+    }
+
+    /// `page.frames` answers from the watcher's list and sends the tab nothing of its own: no
+    /// attach and no tree read, so a tab whose renderer is busy answers as fast as a healthy one.
+    #[tokio::test]
+    async fn tests_that_page_frames_sends_the_tab_nothing() -> TestResult {
+        let tab = ScriptedTab::new(NoProbes);
+        let run = ScriptedRun::over(&tab).await?;
+        let playwright = &run.playwright;
+        assert!(
+            playwright
+                .synchronize_events(playwright.event_fence(), &EventScope::Every)
+                .await
+        );
+        // The watcher's seed of the tab goes out on a task of its own.
+        time::sleep(Duration::from_millis(50)).await;
+        let before = tab.sent_methods().len();
+        let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
+        let answer = playwright
+            .invoke(&run.env, op, json!({ "call": {}, "page": run.page }))
+            .await?;
+        let sent = tab.sent_methods().split_off(before);
+        assert!(
+            !sent
+                .iter()
+                .any(|method| method.starts_with("Page.") || method == "Target.attachToTarget"),
+            "the op asked the tab: {sent:?}"
+        );
+        assert_eq!(
+            answer.pointer("/frames/0/id").and_then(Value::as_str),
+            Some(SCRIPTED_MAIN),
+            "the main frame, from the list: {answer}"
+        );
+        Ok(())
+    }
+
+    /// A tab whose tree reads fail while its renderer is busy.
+    struct Unreadable {
+        failing: AtomicBool,
+    }
+    impl TabScript for Unreadable {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+        fn cdp_error(&self, method: &str, _params: &Value) -> Option<&'static str> {
+            (method == "Page.getFrameTree" && self.failing.load(Ordering::SeqCst)).then_some("busy")
+        }
+    }
+
+    /// `page.frames` on a tab whose list is not whole answers at once, marked incomplete, and
+    /// asks the watcher to read the tab again: once its renderer answers, a later `page.frames` is
+    /// whole. The watcher's own retries are spent before the renderer answers, so only that ask
+    /// reads the tab again.
+    #[tokio::test]
+    async fn tests_that_page_frames_on_a_list_not_whole_has_it_read_again() -> TestResult {
+        let tab = ScriptedTab::new(Unreadable {
+            failing: AtomicBool::new(true),
+        });
+        let run = ScriptedRun::over(&tab).await?;
+        let playwright = &run.playwright;
+        assert!(
+            playwright
+                .synchronize_events(playwright.event_fence(), &EventScope::Every)
+                .await
+        );
+        // Past the watcher's retries of the failed seed (two, a tick apart) and the reseed's
+        // backoff after the last of them.
+        time::sleep(Duration::from_secs(2)).await;
+        let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
+        let frames = || playwright.invoke(&run.env, op, json!({ "call": {}, "page": run.page }));
+        let whole =
+            |answer: &Value| answer.get("incomplete").is_none() && answer.get("frames").is_some();
+        let first = frames().await?;
+        assert!(!whole(&first), "its seed failed: {first}");
+        tab.script().failing.store(false, Ordering::SeqCst);
+        let started = Instant::now();
+        loop {
+            let answer = frames().await?;
+            if whole(&answer) {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(2) {
+                return Err(format!("never whole: {answer}").into());
+            }
+            time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok(())
+    }
+
+    /// A raw mouse click ends with no answer from the tab's renderer, so before it answers it
+    /// pings the tab's source: a `Page.getFrameTree` reaches the tab after the click's last input
+    /// command.
+    #[tokio::test]
+    async fn tests_that_a_raw_click_pings_its_tab_before_it_answers() -> TestResult {
+        let tab = ScriptedTab::new(NoProbes);
+        let run = ScriptedRun::over(&tab).await?;
+        let playwright = &run.playwright;
+        assert!(
+            playwright
+                .synchronize_events(playwright.event_fence(), &EventScope::Every)
+                .await
+        );
+        time::sleep(Duration::from_millis(50)).await;
+        let before = tab.sent_methods().len();
+        let op = Op::from_name("mouse.click").ok_or("mouse.click is an op")?;
+        playwright
+            .invoke(
+                &run.env,
+                op,
+                json!({ "call": { "api": "mouse.click", "timeoutMs": 0 }, "page": run.page,
+                        "x": 1, "y": 1 }),
+            )
+            .await?;
+        let sent = tab.sent_methods().split_off(before);
+        let last_input = sent
+            .iter()
+            .rposition(|method| method.starts_with("Input."))
+            .ok_or(format!("the click sent no input: {sent:?}"))?;
+        assert!(
+            sent.iter()
+                .skip(last_input)
+                .any(|method| method == "Page.getFrameTree"),
+            "no ping after the click's input: {sent:?}"
+        );
+        Ok(())
+    }
+
+    /// A tab whose tree reads fail, then answer only after a while.
+    struct SlowTree {
+        failing: AtomicBool,
+        slow: AtomicBool,
+    }
+    impl TabScript for SlowTree {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+        fn cdp_error(&self, method: &str, _params: &Value) -> Option<&'static str> {
+            (method == "Page.getFrameTree" && self.failing.load(Ordering::SeqCst)).then_some("busy")
+        }
+        fn delay(&self, method: &str, _params: &Value) -> Duration {
+            if method == "Page.getFrameTree" && self.slow.load(Ordering::SeqCst) {
+                Duration::from_millis(300)
+            } else {
+                Duration::ZERO
+            }
+        }
+    }
+
+    /// A frame event the tab sends after the op's last answer, while the ping is out, is in the
+    /// tab's list once the ordering step returns, even while it waits in the tab's line behind a
+    /// tree read: the fence is taken after the ping, so the wait on the tab covers it. The read
+    /// (300 ms) outlasts the ping's budget, so a fence taken before the ping would let the step
+    /// return with the event still held.
+    #[tokio::test]
+    async fn tests_that_a_frame_event_sent_during_the_ping_is_in_the_list_after_it() -> TestResult {
+        let tab = ScriptedTab::new(SlowTree {
+            failing: AtomicBool::new(true),
+            slow: AtomicBool::new(false),
+        });
+        let run = ScriptedRun::over(&tab).await?;
+        let playwright = &run.playwright;
+        assert!(
+            playwright
+                .synchronize_events(playwright.event_fence(), &EventScope::Every)
+                .await
+        );
+        // Past the watcher's retries of the failed seed (two, a tick apart) and the reseed's
+        // backoff after the last of them.
+        time::sleep(Duration::from_secs(2)).await;
+        let target = TargetId(SCRIPTED_MAIN.to_owned());
+        tab.script().failing.store(false, Ordering::SeqCst);
+        tab.script().slow.store(true, Ordering::SeqCst);
+        // A read of the tab goes out and holds its line for 300 ms.
+        playwright.reseed_frames(target.clone(), false);
+        time::sleep(Duration::from_millis(20)).await;
+        let late = json!({ "frameId": "late", "parentFrameId": SCRIPTED_MAIN });
+        let session = tab.session_for(SCRIPTED_MAIN);
+        let emitted = async {
+            time::sleep(Duration::from_millis(10)).await;
+            tab.emit_on("Page.frameAttached", late, Some(session));
+        };
+        let ((), _ordered) = tokio::join!(emitted, playwright.order_tab(target.clone()));
+        let listed = playwright.tab_frames(&target).ok_or("the tab has a list")?;
+        assert!(
+            listed.frames.iter().any(|frame| frame.id.0 == "late"),
+            "the frame the tab announced during the ping: {:?}",
+            listed.frames
+        );
+        Ok(())
+    }
+
+    /// A reply's wait names the tabs it reads by their current targets, so it covers their held
+    /// events and no other tab's; a tab the browser does not list has no target to wait for.
+    #[tokio::test]
+    async fn tests_that_a_tab_scope_names_each_listed_tabs_target() -> TestResult {
+        let tab = ScriptedTab::new(NoProbes);
+        let run = ScriptedRun::over(&tab).await?;
+        assert_eq!(
+            run.playwright.tab_scope(&[TabId(7), TabId(404)]).await,
+            EventScope::Tabs(vec![TargetId(SCRIPTED_MAIN.to_owned())])
+        );
+        Ok(())
+    }
 
     /// An op either answers `not built yet` or decodes its input before it reaches the host, so
     /// an empty call names the missing field and nothing is sent or noted. The ops whose
@@ -457,7 +795,10 @@ mod tests {
 
     #[test]
     fn tests_that_only_an_op_that_timed_out_skips_the_ordering_wait() -> Result<(), String> {
-        use super::{EVENTS_BEFORE_REPLY, POLLED_EVENTS_BEFORE_TIMEOUT, ordering_wait};
+        use super::{
+            EVENTS_BEFORE_REPLY, POLLED_EVENTS_BEFORE_TIMEOUT, ordering_wait, ordering_wait_for,
+        };
+        use crate::TimedOut;
         let op = |name: &str| Op::from_name(name).ok_or(format!("no op {name}"));
         let timed_out = Err(PlaywrightError::new(
             ErrorCode::WaitTimeout,
@@ -480,6 +821,19 @@ mod tests {
             Some(EVENTS_BEFORE_REPLY),
             "a successful op keeps its listeners ahead of the script, even near its deadline"
         );
+        // The rule by itself, as the snapshot handler asks it for the wait inside it: the tree is
+        // in hand, so not timed out. `waitForFunction`'s timed-out wait is unchanged by that.
+        assert_eq!(
+            ordering_wait_for(op("page.ariaSnapshot")?, TimedOut::No),
+            Some(EVENTS_BEFORE_REPLY)
+        );
+        for wait in ["page.waitForFunction", "locator.waitForFunction"] {
+            assert_eq!(
+                ordering_wait_for(op(wait)?, TimedOut::Yes),
+                Some(POLLED_EVENTS_BEFORE_TIMEOUT),
+                "{wait}"
+            );
+        }
         let refused = Err(PlaywrightError::new(
             ErrorCode::ElementDetached,
             "e17 is not on the page any more".to_owned(),

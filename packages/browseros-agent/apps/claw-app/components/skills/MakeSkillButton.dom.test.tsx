@@ -21,7 +21,14 @@ import type {
 } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
-import { act, type ReactNode } from 'react'
+import {
+  act,
+  cloneElement,
+  createContext,
+  type ReactElement,
+  type ReactNode,
+  useContext,
+} from 'react'
 import type { Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router'
 import type { ToastInput } from '@/components/motion/animated-toast-stack'
@@ -47,8 +54,11 @@ mock.module('@/modules/analytics/posthog', () => ({
 }))
 
 let features: string[]
+let available: boolean
 let draftReply: SkillDraftStatus
 let draftCalls: number
+let statusCalls: number
+let clipboard: string[]
 let created: SkillCreate[]
 let deleted: string[]
 
@@ -80,7 +90,7 @@ const ready: SkillDraftStatus = {
 }
 
 const plan = (): Plan => ({
-  available: true,
+  available,
   plan: 'ultrafast',
   planName: 'ultrafast',
   features,
@@ -97,7 +107,10 @@ mock.module('@/modules/api/client', () => ({
   ...api,
   apiClient: async () => ({
     getPlan: async () => plan(),
-    getSkillDraft: async () => ({ status: 'none' }),
+    getSkillDraft: async () => {
+      statusCalls += 1
+      return { status: 'none' }
+    },
     draftSkillFromSession: async () => {
       draftCalls += 1
       await new Promise((resolve) => setTimeout(resolve, 5))
@@ -149,9 +162,66 @@ mock.module('@/components/motion/tooltip', () => ({
   ),
 }))
 mock.module('@/components/copy/CopyButton', () => ({
-  CopyButton: ({ text }: { text: string }) => (
-    <button type="button">Copy {text}</button>
+  CopyButton: ({ text, onCopied }: { text: string; onCopied?: () => void }) => (
+    <button
+      type="button"
+      onClick={() => {
+        clipboard.push(text)
+        onCopied?.()
+      }}
+    >
+      Copy {text}
+    </button>
   ),
+}))
+
+const ModalOpen = createContext<{
+  open: boolean
+  setOpen: (open: boolean) => void
+}>({ open: false, setOpen: () => undefined })
+
+// The beUI center modal animates and measures the DOM too; a plain dialog keeps its open state.
+mock.module('@/components/motion/center-morph-modal', () => ({
+  CenterMorphModal: ({
+    open,
+    onOpenChange,
+    children,
+  }: {
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
+    children: ReactNode
+  }) => (
+    <ModalOpen.Provider
+      value={{ open: Boolean(open), setOpen: (next) => onOpenChange?.(next) }}
+    >
+      {children}
+    </ModalOpen.Provider>
+  ),
+  CenterMorphModalContent: ({
+    ariaLabel,
+    children,
+  }: {
+    ariaLabel: string
+    children: ReactNode
+  }) =>
+    useContext(ModalOpen).open ? (
+      <div role="alertdialog" aria-label={ariaLabel}>
+        {children}
+      </div>
+    ) : null,
+  CenterMorphModalClose: ({
+    children,
+  }: {
+    children: ReactElement<{ onClick?: () => void }>
+  }) => {
+    const modal = useContext(ModalOpen)
+    return cloneElement(children, {
+      onClick: () => {
+        children.props.onClick?.()
+        modal.setOpen(false)
+      },
+    })
+  },
 }))
 
 const { MakeSkillButton } = await import('./MakeSkillButton')
@@ -206,8 +276,11 @@ function task(overrides: Partial<SessionSummary> = {}): SessionSummary {
 
 beforeEach(async () => {
   features = ['claw.ultrafast']
+  available = true
   draftReply = ready
   draftCalls = 0
+  statusCalls = 0
+  clipboard = []
   created = []
   deleted = []
   captured = []
@@ -295,9 +368,27 @@ async function click(target: Element | undefined) {
   })
 }
 
+function dialog(label: string): Element | null {
+  return container.querySelector(`[aria-label="${label}"]`)
+}
+
+/** A plain button by its visible text, such as one inside a dialog. */
+function plainButton(label: string, within: ParentNode = container) {
+  return [...within.querySelectorAll('button')].find(
+    (candidate) => (candidate.textContent ?? '').trim() === label,
+  )
+}
+
+/** "Make it a skill", then "Make the skill" in the dialog that asks first. */
+async function makeIt() {
+  await click(button('Make it a skill'))
+  await click(plainButton('Make the skill'))
+}
+
 describe('making a skill from a task', () => {
-  it('tests that a plan without ultrafast sees no button', async () => {
+  it('tests that a build without ultrafast on sale sees no button', async () => {
     features = []
+    available = false
     await mount(task())
     expect(button('Make it a skill')).toBeUndefined()
   })
@@ -319,11 +410,12 @@ describe('making a skill from a task', () => {
 
   it('tests that a burst of clicks writes one draft, and saving sends the edits', async () => {
     await mount(task())
-    const make = button('Make it a skill')
-    await click(make)
-    await click(make)
-    await click(make)
-    expect(text()).toContain('Writing your skill from this task.')
+    await makeIt()
+    const confirm = plainButton('Make the skill')
+    expect(confirm).toBeUndefined()
+    await click(button('Writing your skill…'))
+    await click(button('Writing your skill…'))
+    expect(text()).toContain('Reading the task')
     await settle()
 
     expect(draftCalls).toBe(1)
@@ -365,6 +457,10 @@ describe('making a skill from a task', () => {
     expect(events).toEqual([
       {
         event: 'skill_from_task_clicked',
+        properties: { surface: 'task_page', plan: 'ultrafast' },
+      },
+      {
+        event: 'skill_make_confirmed',
         properties: { surface: 'task_page' },
       },
       {
@@ -402,7 +498,7 @@ describe('making a skill from a task', () => {
     shown.length = 0
     try {
       await mount(task())
-      await click(button('Make it a skill'))
+      await makeIt()
       await settle()
       const form = container.querySelector('[role="dialog"] form')
       await act(async () => {
@@ -440,7 +536,7 @@ describe('making a skill from a task', () => {
       ),
     ).toHaveLength(1)
 
-    await click(button('Make it a skill'))
+    await makeIt()
     await settle()
     await click(
       container.querySelector('[role="dialog"] button[aria-label="Close"]') ??
@@ -463,7 +559,7 @@ describe('making a skill from a task', () => {
       },
     }
     await mount(task())
-    await click(button('Make it a skill'))
+    await makeIt()
     await settle()
 
     expect(text()).toContain('You’ve made 100 skills today.')
@@ -484,7 +580,7 @@ describe('making a skill from a task', () => {
       failure: { code: 'upstream_error' },
     }
     await mount(task())
-    await click(button('Make it a skill'))
+    await makeIt()
     await settle()
 
     expect(text()).toContain('We couldn’t write this skill right now.')
@@ -498,5 +594,111 @@ describe('making a skill from a task', () => {
     await settle()
     expect(draftCalls).toBe(2)
     expect(text()).toContain('It starts as a regular skill.')
+  })
+})
+
+describe('asking before a skill is written', () => {
+  it('tests that Not now closes the question and writes nothing', async () => {
+    await mount(task())
+    await click(button('Make it a skill'))
+    expect(dialog('Make this task a skill?')).not.toBeNull()
+    expect(text()).toContain('Browsed www.flipkart.com')
+
+    await click(plainButton('Not now'))
+    await settle()
+    expect(dialog('Make this task a skill?')).toBeNull()
+    expect(draftCalls).toBe(0)
+    expect(captured).toContainEqual({
+      event: 'skill_make_dismissed',
+      properties: { surface: 'task_page' },
+    })
+  })
+
+  it('tests that Try again on the button writes again without asking', async () => {
+    draftReply = {
+      status: 'failed',
+      draftId: 'd1',
+      failure: { code: 'upstream_error' },
+    }
+    await mount(task())
+    await makeIt()
+    await settle()
+    await click(
+      container.querySelector('[role="dialog"] button[aria-label="Close"]') ??
+        undefined,
+    )
+    draftReply = ready
+    await click(button('Try again'))
+    await settle()
+
+    expect(dialog('Make this task a skill?')).toBeNull()
+    expect(draftCalls).toBe(2)
+    expect(text()).toContain('It starts as a regular skill.')
+  })
+
+  it('tests that the button reopens the sheet while the draft is written', async () => {
+    await mount(task())
+    await makeIt()
+    await click(
+      container.querySelector('[role="dialog"] button[aria-label="Close"]') ??
+        undefined,
+    )
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+
+    await click(button('Writing your skill…'))
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(text()).toContain('Reading the task')
+    expect(draftCalls).toBe(1)
+  })
+})
+
+describe('making a skill on a free plan', () => {
+  it('tests that the button shows on a free plan and hands the job to the agent', async () => {
+    features = []
+    await mount(task())
+    await click(button('Make it a skill'))
+
+    const free = dialog('Make this a skill')
+    expect(free).not.toBeNull()
+    expect(free?.textContent).toContain(
+      'Ask Claude Code to save it. Paste this into the chat where it did this task:',
+    )
+    expect(free?.textContent).toContain(
+      'With ultrafast, neo does it in one click.',
+    )
+    const upgrade = [...(free?.querySelectorAll('a') ?? [])].find(
+      (link) => (link.textContent ?? '').trim() === 'Get ultrafast',
+    )
+    expect(upgrade?.getAttribute('href')).toBe('/pro')
+    expect(text()).not.toContain('Copied. Now paste it into Claude Code.')
+
+    await click(
+      plainButton('Copy save this as a skill in neo', free ?? undefined),
+    )
+    expect(clipboard).toEqual(['save this as a skill in neo'])
+    expect(text()).toContain('Copied. Now paste it into Claude Code.')
+
+    await click(plainButton('Done', free ?? undefined))
+    await settle()
+    expect(dialog('Make this a skill')).toBeNull()
+    expect(draftCalls).toBe(0)
+    expect(statusCalls).toBe(0)
+    expect(captured).toContainEqual({
+      event: 'skill_from_task_clicked',
+      properties: { surface: 'task_page', plan: 'free' },
+    })
+    expect(captured).toContainEqual({
+      event: 'free_make_skill_phrase_copied',
+      properties: { surface: 'task_page' },
+    })
+  })
+
+  it('tests that a free plan opens a skill the task already has', async () => {
+    features = []
+    await mount(task({ skillName: 'neo-flipkart-phones-under-budget' }))
+    await click(button('Open skill'))
+
+    expect(text()).toContain('Skill page neo-flipkart-phones-under-budget')
+    expect(statusCalls).toBe(0)
   })
 })

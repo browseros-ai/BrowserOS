@@ -1777,6 +1777,14 @@ export interface components {
        * @description When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
        */
       graceUntil: number | null
+      /** @description Whether the plan is a free trial. Absent when the licence does not say. */
+      trial?: boolean
+      trialKind?: components['schemas']['PlanTrialKind']
+      /**
+       * Format: int64
+       * @description When the free trial ends and the first payment is due, in epoch milliseconds. Present only while trial is true and the licence says when.
+       */
+      trialEndsAt?: number
       /** @description Whether this computer is on a licence key. The key itself is never returned. */
       onKey: boolean
       /**
@@ -1787,6 +1795,11 @@ export interface components {
       /** @description True when the last refresh failed and the saved licence is still valid. */
       stale: boolean
     }
+    /**
+     * @description How a free trial started. card: the person added a card at checkout and is charged when it ends. grant: a free trial link from the BrowserOS team, which the app treats as a paid plan. Present only while trial is true and the licence says.
+     * @enum {string}
+     */
+    PlanTrialKind: 'card' | 'grant'
     /** @enum {string} */
     PriceInterval: 'day' | 'week' | 'month' | 'year'
     PlanPrice: {
@@ -1803,6 +1816,11 @@ export interface components {
       amount: number
       /** @description Lower-case ISO 4217 code, such as "usd". */
       currency: string
+      /**
+       * Format: int32
+       * @description The free trial days a new checkout on this price is offered, before the gateway checks whether this computer can have one. Absent or 0 when the price has no trial.
+       */
+      trialDays?: number
     }
     PricedPlan: {
       plan: string
@@ -1831,6 +1849,11 @@ export interface components {
        * @description The hosted payment page to open in a new tab.
        */
       url: string
+      /**
+       * Format: int32
+       * @description The free trial days this checkout actually starts with. 0 when the price offered a trial but this computer can't have one now, so the payment is taken today. Absent when the gateway does not say.
+       */
+      trialDays?: number
     }
     /** @enum {string} */
     PlanCheckoutPhase: 'open' | 'complete' | 'expired'

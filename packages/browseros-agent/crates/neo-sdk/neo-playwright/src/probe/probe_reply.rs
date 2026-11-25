@@ -12,6 +12,7 @@
 
 use std::fmt;
 
+use neo_snapshot::AriaNode;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
@@ -209,8 +210,14 @@ pub(crate) enum ProbeReply {
         #[serde(default)]
         #[ts(optional)]
         inert_marking_ms: Option<f64>,
+        // The frame's tree, read from the reply's text straight into typed nodes, with no
+        // `serde_json::Value` between. The tagged enum still buffers the whole reply once to find
+        // its `kind`; that pass was under 0.1 s of the largest tree's measured read, and the nodes
+        // leave the buffer without a copy per level. A plain comment: ts-rs copies doc comments
+        // into generated.ts.
+        #[serde(deserialize_with = "snapshot_nodes")]
         #[ts(type = "import('../prelude/vendored').AriaSnapshotJSON")]
-        json: Value,
+        json: Vec<AriaNode>,
         iframes: Vec<SnapshotIframe>,
         /// Clickable marking threw on this page and the snapshot was taken again without it;
         /// the op's call log says so.
@@ -451,8 +458,9 @@ pub(crate) struct CoverFacts {
     #[ts(type = "string")]
     pub(crate) markup: PageText,
     /// Its own snapshot (`ariaSnapshotJSON` in `default` mode, which mints no ref and moves
-    /// nothing the agent's own snapshots depend on), which the prelude renders and cuts. `null`
-    /// for a cover that holds the control: its snapshot would be the page's.
+    /// nothing the agent's own snapshots depend on), which Rust prints as the covered block
+    /// where it writes the error's cover (action/cover.rs). `null` for a cover that holds the
+    /// control: its snapshot would be the page's.
     #[ts(type = "unknown")]
     pub(crate) snapshot: Value,
     /// Only when that snapshot holds no words: what the cover draws as text, cut at 300
@@ -621,6 +629,16 @@ impl fmt::Debug for PageText {
 /// A field that is there, `null` included: `Option<PageText>` alone reads `null` as absent.
 fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PageText>, D::Error> {
     PageText::deserialize(deserializer).map(Some)
+}
+
+/// A snapshot's nodes. Any node this build cannot read fails with one fixed message: serde's own
+/// message quotes the value it could not read, and a node's values are the page's text.
+/// `reply_of` adds the rebuild hint and makes it `ProbeFailure::Broken`.
+fn snapshot_nodes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<AriaNode>, D::Error> {
+    use serde::de::Error as _;
+    Vec::<AriaNode>::deserialize(deserializer).map_err(|_unreadable| {
+        D::Error::custom("the probe's snapshot has a node this build cannot read")
+    })
 }
 
 #[cfg(test)]

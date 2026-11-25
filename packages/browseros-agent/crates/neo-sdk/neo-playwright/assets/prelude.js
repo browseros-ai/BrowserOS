@@ -211,6 +211,16 @@
       target: "target",
       lifetime: "operation"
     },
+    "page.ariaSnapshotJSON": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "locator.ariaSnapshotJSON": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
     "page.snapshotBaseline": {
       effect: "read",
       target: "page",
@@ -583,51 +593,17 @@
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/cover.ts
-  var SNAPSHOT_CHARS = 1500;
-  var renderSnapshot;
-  function setCoverRenderer(render) {
-    renderSnapshot = render;
-  }
   var ON_TOP = `
   On top: `;
   function shapeCovered(error) {
     const cover = Reflect.get(error, "cover");
     if (typeof cover !== "object" || cover === null)
       return;
-    const snapshot = Reflect.get(cover, "snapshot");
-    const lines = snapshotLines(snapshot);
-    if (lines !== "")
-      error.message = underOnTop(error.message, lines);
-    const { snapshot: _left, ...kept } = cover;
+    const block = Reflect.get(cover, "block");
+    if (typeof block === "string" && block !== "")
+      error.message = underOnTop(error.message, block);
+    const { block: _left, ...kept } = cover;
     Reflect.set(error, "cover", kept);
-  }
-  function snapshotLines(snapshot) {
-    if (typeof snapshot !== "object" || snapshot === null || !renderSnapshot)
-      return "";
-    let text;
-    try {
-      text = renderSnapshot(snapshot);
-    } catch {
-      return "";
-    }
-    const kept = [];
-    let used = 0;
-    for (const line of text.split(`
-`)) {
-      if (line.trim() === "")
-        continue;
-      if (used + line.length + 1 > SNAPSHOT_CHARS) {
-        const room = SNAPSHOT_CHARS - used - 1;
-        if (room > 0)
-          kept.push(`    ${line.slice(0, room)}…`);
-        kept.push("    … (the rest of its snapshot is cut)");
-        break;
-      }
-      used += line.length + 1;
-      kept.push(`    ${line}`);
-    }
-    return kept.join(`
-`);
   }
   function underOnTop(message, lines) {
     const at = message.indexOf(ON_TOP);
@@ -2147,6 +2123,8 @@ ${lines}${message.slice(end)}`;
   var SNAPSHOT_SEND = {
     "page.ariaSnapshot": (site, call, input, signal) => invoke("page.ariaSnapshot", site, call, input, signal),
     "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal),
+    "page.ariaSnapshotJSON": (site, call, input, signal) => invoke("page.ariaSnapshotJSON", site, call, input, signal),
+    "locator.ariaSnapshotJSON": (site, call, input, signal) => invoke("locator.ariaSnapshotJSON", site, call, input, signal),
     "page.snapshotBaseline": (site, call, input, signal) => invoke("page.snapshotBaseline", site, call, input, signal),
     "page.snapshotPending": (site, call, input, signal) => invoke("page.snapshotPending", site, call, input, signal)
   };
@@ -8310,7 +8288,7 @@ ${value.stack}`;
     }
     return [...lines, ...unplaced];
   }
-  function renderSnapshot2(result) {
+  function renderSnapshot(result) {
     return yamlLines(result, true).map((line) => line.text).join(`
 `);
   }
@@ -8630,6 +8608,53 @@ ${changes}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-text.ts
+  var SNAPSHOT_TEXT = "rust";
+  var comparisons = (() => {
+    const counters = Reflect.get(globalThis, "__neo_compare_snapshots");
+    return typeof counters === "object" && counters !== null ? counters : null;
+  })();
+  var compareEngines = comparisons !== null;
+  function compareSnapshots(api, rust, prelude) {
+    if (comparisons === null)
+      return;
+    if (rust.snapshot.startsWith(NO_TIME) || prelude.text.startsWith(NO_TIME)) {
+      comparisons.noTime += 1;
+      return;
+    }
+    comparisons.compared += 1;
+    const difference = textDifference("text", rust.snapshot, prelude.text) ?? pendingDifference(rust.pending ?? null, prelude.pending);
+    if (difference === null)
+      return;
+    comparisons.differed += 1;
+    throw internalError(api, `the two snapshot engines differ: ${difference}`);
+  }
+  function textDifference(what, rust, prelude) {
+    if (rust === prelude)
+      return null;
+    const rustLines = rust.split(`
+`);
+    const preludeLines = prelude.split(`
+`);
+    let line = 0;
+    while (line < rustLines.length && line < preludeLines.length && rustLines[line] === preludeLines[line])
+      line += 1;
+    return `${what} at line ${line + 1} (Rust's is ${rust.length} UTF-16 units, the prelude's ${prelude.length})`;
+  }
+  function pendingDifference(rust, prelude) {
+    if (rust === null || prelude === null)
+      return rust === prelude ? null : `pending baseline recorded by ${rust === null ? "the prelude" : "Rust"} only`;
+    const text = textDifference("pending text", rust.text, prelude.text);
+    if (text !== null)
+      return text;
+    for (const field of ["text", "urls", "maxTokens"])
+      if (rust.form[field] !== prelude.form[field])
+        return `pending form's ${field}`;
+    if (rust.form.inert === true !== (prelude.form.inert === true))
+      return "pending form's inert";
+    return null;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/timeouts.ts
   var DEFAULT_TIMEOUT = 30000;
   var DEFAULT_EXPECT_TIMEOUT = 5000;
@@ -8726,6 +8751,34 @@ ${changes}`;
       maxTokens: maxTokensOption(api, maxTokens),
       delta: delta ?? false,
       inert
+    };
+  }
+  function locatorAsk(ask) {
+    if (!("format" in ask))
+      return ask;
+    const { format, compare } = ask;
+    if (format === "playwright" || "full" in format)
+      return { format, compare };
+    const { text, urls, maxTokens, inert } = format.neo;
+    return { format: { neo: { text, urls, maxTokens, inert } }, compare };
+  }
+  function textCall(api, selector, options) {
+    const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
+    if (upstreamSnapshots)
+      return { mode, format: "playwright" };
+    if (mode === "default")
+      return { mode, format: "playwright" };
+    if (mode === "full")
+      return {
+        mode: "ai",
+        format: { full: { maxTokens: maxTokensOption(api, options.maxTokens) } }
+      };
+    if (mode !== "ai")
+      throw clientError(api, "mode: expected one of (ai|default|full)");
+    const { delta, ...passed } = snapshotV1Options(api, options);
+    return {
+      mode,
+      format: { neo: selector === null ? { ...passed, delta } : passed }
     };
   }
   function maxTokensOption(api, maxTokens) {
@@ -9231,44 +9284,68 @@ ${changes}`;
       });
       return fromPageValue(api, value);
     }
-    async _snapshot(api, selector, options, mode, clickable = false) {
-      const site = captureSite();
-      const { depth, boxes } = options;
-      const marking = clickable ? { clickable } : {};
-      const wait = this._wait(api, options);
-      if (selector !== null) {
-        const addressed = await this._targetArgs(api, selector, true);
-        return await send["locator.ariaSnapshot"](site, this._call(api, wait), { ...addressed, mode, depth, boxes, ...marking }, wait.signal);
-      }
+    async _snapshotAt(api, selector) {
+      if (selector !== null)
+        return { locator: await this._targetArgs(api, selector, true) };
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
-      return await send["page.ariaSnapshot"](site, this._call(api, wait), {
-        page: await this._page._brand(api),
-        mode,
-        depth,
-        boxes,
-        ...marking
-      }, wait.signal);
+      return { page: await this._page._brand(api) };
+    }
+    async _snapshot(api, selector, options, mode, ask = {}) {
+      const site = captureSite();
+      const { depth, boxes } = options;
+      const wait = this._wait(api, options);
+      const at = await this._snapshotAt(api, selector);
+      if ("locator" in at)
+        return await send["locator.ariaSnapshot"](site, this._call(api, wait), { ...at.locator, mode, depth, boxes, ...locatorAsk(ask) }, wait.signal);
+      return await send["page.ariaSnapshot"](site, this._call(api, wait), { page: at.page, mode, depth, boxes, ...ask }, wait.signal);
+    }
+    _tree(api, answer) {
+      if ("json" in answer)
+        return answer;
+      throw internalError(api, "the snapshot op answered a text for a tree");
     }
     async _ariaSnapshot(api, selector, options = {}) {
       const site = captureSite();
-      const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
-      if (upstreamSnapshots)
-        return renderSnapshot2(await this._snapshot(api, selector, options, mode));
-      if (mode === "default")
-        return renderSnapshot2(await this._snapshot(api, selector, options, mode));
-      if (mode === "full") {
-        const maxTokens = maxTokensOption(api, options.maxTokens) ?? DEFAULT_MAX_TOKENS;
-        return renderFullSnapshot(await this._snapshot(api, selector, options, "ai", true), maxTokens);
+      const { mode, format } = textCall(api, selector, options);
+      if (SNAPSHOT_TEXT === "rust") {
+        const answer = await this._snapshot(api, selector, options, mode, {
+          format
+        });
+        if ("snapshot" in answer)
+          return answer.snapshot;
+        throw internalError(api, "the snapshot op answered a tree for a text");
       }
-      if (mode !== "ai")
-        throw clientError(api, "mode: expected one of (ai|default|full)");
-      const { delta, ...passed } = snapshotV1Options(api, options);
+      const marked = (clickable) => compareEngines ? { format, compare: true } : clickable ? { clickable } : {};
+      const compared = (answer, prelude) => {
+        if ("rust" in answer)
+          compareSnapshots(api, answer.rust, prelude);
+        return prelude.text;
+      };
+      if (format === "playwright") {
+        const answer = await this._snapshot(api, selector, options, mode, marked(false));
+        return compared(answer, {
+          text: renderSnapshot(this._tree(api, answer)),
+          pending: null
+        });
+      }
+      if ("full" in format) {
+        const answer = await this._snapshot(api, selector, options, mode, marked(true));
+        return compared(answer, {
+          text: renderFullSnapshot(this._tree(api, answer), format.full.maxTokens ?? DEFAULT_MAX_TOKENS),
+          pending: null
+        });
+      }
+      const { delta = false, ...passed } = format.neo;
       const wait = this._wait(api, options);
       const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
-      const result = await this._snapshot(api, selector, options, mode, true);
+      const answer = await this._snapshot(api, selector, options, mode, marked(true));
+      const result = this._tree(api, answer);
       if (selector !== null)
-        return renderSnapshotV1(result, withDefaults(passed)).text;
+        return compared(answer, {
+          text: renderSnapshotV1(result, withDefaults(passed)).text,
+          pending: null
+        });
       const { document, snapshotCall } = result;
       const page = await this._page._brand(api);
       let returned;
@@ -9276,7 +9353,10 @@ ${changes}`;
       if (delta) {
         const stored = await baselineOp(LATE_SNAPSHOT, deadline, (timeoutMs) => send["page.snapshotBaseline"](site, this._call(api, timeoutMs), { page, document, snapshotCall }, wait.signal));
         if (stored === null)
-          return renderUncompared(result, passed);
+          return compared(answer, {
+            text: renderUncompared(result, passed),
+            pending: null
+          });
         ({ returned, baseline } = renderDelta(stored.value, result, passed));
       } else {
         baseline = renderSnapshotV1(result, withDefaults(passed));
@@ -9291,10 +9371,19 @@ ${changes}`;
         delta,
         returned: delta ? returned : undefined
       }, wait.signal));
-      return returned;
+      return compared(answer, {
+        text: returned,
+        pending: { text: baseline.text, form: baseline.form }
+      });
     }
     async _ariaSnapshotJSON(api, selector, options = {}) {
-      return (await this._snapshot(api, selector, options, options.mode ?? "default")).json;
+      const site = captureSite();
+      const { depth, boxes } = options;
+      const mode = options.mode ?? "default";
+      const wait = this._wait(api, options);
+      const at = await this._snapshotAt(api, selector);
+      const answer = "locator" in at ? await send["locator.ariaSnapshotJSON"](site, this._call(api, wait), { ...at.locator, mode, depth, boxes }, wait.signal) : await send["page.ariaSnapshotJSON"](site, this._call(api, wait), { page: at.page, mode, depth, boxes }, wait.signal);
+      return answer.snapshot;
     }
     async _screenshot(api, selector, options = {}) {
       const site = captureSite();
@@ -20228,7 +20317,6 @@ Call Log:
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/index.ts
-  setCoverRenderer((json) => renderSnapshotV1({ json, partial: [] }, withDefaults({})).text);
   installUnsupported({
     Selectors,
     Browser,

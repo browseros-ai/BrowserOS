@@ -66,6 +66,14 @@ pub struct Plan {
     /// When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
     #[serde(rename = "graceUntil", deserialize_with = "Option::deserialize")]
     pub grace_until: Option<i64>,
+    /// Whether the plan is a free trial. Absent when the licence does not say.
+    #[serde(rename = "trial", skip_serializing_if = "Option::is_none")]
+    pub trial: Option<bool>,
+    #[serde(rename = "trialKind", skip_serializing_if = "Option::is_none")]
+    pub trial_kind: Option<models::PlanTrialKind>,
+    /// When the free trial ends and the first payment is due, in epoch milliseconds. Present only while trial is true and the licence says when.
+    #[serde(rename = "trialEndsAt", skip_serializing_if = "Option::is_none")]
+    pub trial_ends_at: Option<i64>,
     /// Whether this computer is on a licence key. The key itself is never returned.
     #[serde(rename = "onKey")]
     pub on_key: bool,
@@ -101,6 +109,9 @@ impl Plan {
             period_end,
             ends_at,
             grace_until,
+            trial: None,
+            trial_kind: None,
+            trial_ends_at: None,
             on_key,
             checked_at,
             stale,
@@ -116,11 +127,18 @@ pub struct PlanCheckout {
     /// The hosted payment page to open in a new tab.
     #[serde(rename = "url")]
     pub url: String,
+    /// The free trial days this checkout actually starts with. 0 when the price offered a trial but this computer can't have one now, so the payment is taken today. Absent when the gateway does not say.
+    #[serde(rename = "trialDays", skip_serializing_if = "Option::is_none")]
+    pub trial_days: Option<i32>,
 }
 
 impl PlanCheckout {
     pub fn new(checkout_id: String, url: String) -> PlanCheckout {
-        PlanCheckout { checkout_id, url }
+        PlanCheckout {
+            checkout_id,
+            url,
+            trial_days: None,
+        }
     }
 }
 
@@ -355,6 +373,9 @@ pub struct PlanPrice {
     /// Lower-case ISO 4217 code, such as \"usd\".
     #[serde(rename = "currency")]
     pub currency: String,
+    /// The free trial days a new checkout on this price is offered, before the gateway checks whether this computer can have one. Absent or 0 when the price has no trial.
+    #[serde(rename = "trialDays", skip_serializing_if = "Option::is_none")]
+    pub trial_days: Option<i32>,
 }
 
 impl PlanPrice {
@@ -369,6 +390,7 @@ impl PlanPrice {
             interval_count,
             amount,
             currency,
+            trial_days: None,
         }
     }
 }
@@ -632,6 +654,31 @@ impl std::fmt::Display for PlanStatus {
 impl Default for PlanStatus {
     fn default() -> PlanStatus {
         Self::None
+    }
+}
+
+/// PlanTrialKind : How a free trial started. card: the person added a card at checkout and is charged when it ends. grant: a free trial link from the BrowserOS team, which the app treats as a paid plan. Present only while trial is true and the licence says.
+/// How a free trial started. card: the person added a card at checkout and is charged when it ends. grant: a free trial link from the BrowserOS team, which the app treats as a paid plan. Present only while trial is true and the licence says.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum PlanTrialKind {
+    #[serde(rename = "card")]
+    Card,
+    #[serde(rename = "grant")]
+    Grant,
+}
+
+impl std::fmt::Display for PlanTrialKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Card => write!(f, "card"),
+            Self::Grant => write!(f, "grant"),
+        }
+    }
+}
+
+impl Default for PlanTrialKind {
+    fn default() -> PlanTrialKind {
+        Self::Card
     }
 }
 

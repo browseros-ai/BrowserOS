@@ -297,7 +297,7 @@ mod frame_tests {
         calls: Mutex<Calls>,
         mouse: Mutex<Vec<(Option<SessionId>, Value)>>,
         epoch: AtomicU64,
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         /// Attachments made per target. Each mints a fresh session id; the first keeps the
         /// plain `session-<target>` name the frame tests address.
@@ -338,9 +338,9 @@ mod frame_tests {
 
         /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
         /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
-        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<Arc<CdpEvent>>> {
             if let Some(event) = self.targeted.deliver(event) {
-                self.events.send(event)?;
+                self.events.send(Arc::new(event))?;
             }
             Ok(())
         }
@@ -616,7 +616,7 @@ mod frame_tests {
                 )?)?)
             })
         }
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
         fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {

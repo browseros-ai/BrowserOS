@@ -5,8 +5,19 @@
  */
 
 import type { SkillDraft, SkillDraftStatus } from '@browseros/claw-api'
-import { Bookmark, Info, PenLine, Plus, TriangleAlert, X } from 'lucide-react'
-import { useState } from 'react'
+import {
+  Bookmark,
+  Check,
+  FileSearch,
+  Info,
+  LoaderCircle,
+  PenLine,
+  Plus,
+  ShieldCheck,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router'
 import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { CopyButton } from '@/components/copy/CopyButton'
@@ -18,6 +29,7 @@ import { Phrase } from '@/components/skills/Phrase'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import {
   neoName,
   SAVE_PHRASE,
@@ -32,6 +44,8 @@ import {
 
 interface SkillDraftSheetProps {
   open: boolean
+  /** When this view started the draft being written, or 0 when another view did. */
+  startedAt?: number
   status: SkillDraftStatus | undefined
   /** "From your Flipkart task, today at 18:39". */
   source: string
@@ -48,6 +62,7 @@ interface SkillDraftSheetProps {
  */
 export function SkillDraftSheet({
   open,
+  startedAt = 0,
   status,
   source,
   site,
@@ -81,7 +96,7 @@ export function SkillDraftSheet({
       ) : view === 'problem' ? (
         <DraftProblemView status={status} onClose={onClose} onRetry={onRetry} />
       ) : (
-        <DraftWriting onClose={onClose} />
+        <DraftWriting startedAt={startedAt} onClose={onClose} />
       )}
     </MorphingModal>
   )
@@ -174,32 +189,152 @@ function SheetFooter({
   )
 }
 
-/** About 10 seconds: a skeleton in the review's own shape and one line of copy. */
-function DraftWriting({ onClose }: { onClose: () => void }) {
+/** Where the written draft is, by time since it started: the server only says "writing". */
+const WRITING_STEPS = [
+  { label: 'Reading the task', icon: FileSearch, from: 0 },
+  { label: 'Writing the steps', icon: PenLine, from: 2_000 },
+  { label: 'Checking it', icon: ShieldCheck, from: 8_000 },
+] as const
+
+/** About how long a draft takes; the bar never reaches the end before the draft arrives. */
+const EXPECTED_MS = 12_000
+const SLOW_MS = 10_000
+
+/** When each skeleton in the review's shape fills in, so the sheet visibly moves. */
+const FIELD_AT = {
+  name: 2_500,
+  description: 4_000,
+  steps: [5_000, 6_000, 7_000],
+}
+
+function writingStep(elapsed: number): number {
+  let current = 0
+  WRITING_STEPS.forEach((step, index) => {
+    if (elapsed >= step.from) current = index
+  })
+  return current
+}
+
+/**
+ * About 10 seconds of honest progress: the step neo is on, the seconds so far, a bar, and the
+ * review's own fields filling in as skeletons. Under reduced motion the spin and pulse stop and
+ * the words still change.
+ */
+function DraftWriting({
+  startedAt,
+  onClose,
+}: {
+  /** When the draft started, or 0 when another view started it. */
+  startedAt: number
+  onClose: () => void
+}) {
+  const [openedAt] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now())
+  // A ticking clock is an external timer; it only drives the elapsed seconds and the steps.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const elapsed = Math.max(0, now - (startedAt || openedAt))
+  const current = writingStep(elapsed)
+  const progress = Math.min(95, Math.round((elapsed / EXPECTED_MS) * 100))
+  const filled = (at: number) =>
+    elapsed >= at ? 'motion-reduce:animate-none' : 'animate-none opacity-40'
   return (
     <div className="flex flex-col gap-[18px]" aria-busy="true">
-      <p className="flex items-center gap-2.5 text-[14.5px] text-ink-2">
-        <PenLine aria-hidden className="size-4" />
-        Writing your skill from this task. It takes about 10 seconds.
-      </p>
-      <div
-        aria-hidden
-        className="relative h-[3px] overflow-hidden rounded-full bg-bg-sunken"
-      >
-        <span className="absolute inset-y-0 left-0 w-[38%] rounded-full bg-primary motion-safe:animate-pulse" />
+      <div className="flex flex-col gap-3.5">
+        <p className="flex items-center gap-2.5 font-semibold text-[14.5px] text-cyanotype-ink">
+          <PenLine aria-hidden className="size-4 text-primary" />
+          <span className="flex-1">{WRITING_STEPS[current].label}</span>
+          <span className="font-normal text-[13.5px] text-ink-3 tabular-nums">
+            {Math.floor(elapsed / 1000)} s
+          </span>
+        </p>
+        <ol aria-live="polite" className="grid grid-cols-3 gap-2">
+          {WRITING_STEPS.map((step, index) => {
+            const state =
+              index < current ? 'done' : index === current ? 'now' : 'todo'
+            const Icon = step.icon
+            return (
+              <li
+                key={step.label}
+                className={cn(
+                  'flex items-center gap-2 rounded-[11px] border px-2.5 py-2 text-[13.5px]',
+                  state === 'now'
+                    ? 'border-accent-tint-2 bg-accent-tint font-semibold text-cyanotype-ink'
+                    : 'border-border-2 bg-card-tint',
+                  state === 'done' && 'text-ink',
+                  state === 'todo' && 'text-ink-3',
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'grid size-5 shrink-0 place-items-center rounded-full [&_svg]:size-3',
+                    state === 'done' && 'bg-green-tint text-green-ink',
+                    state === 'now' && 'bg-card text-primary',
+                    state === 'todo' && 'bg-bg-sunken',
+                  )}
+                >
+                  {state === 'done' ? (
+                    <Check strokeWidth={2.4} />
+                  ) : state === 'now' ? (
+                    <LoaderCircle className="motion-safe:animate-spin" />
+                  ) : (
+                    <Icon />
+                  )}
+                </span>
+                <span className="min-w-0 truncate">
+                  <span className="sr-only">
+                    {state === 'done'
+                      ? 'Done: '
+                      : state === 'now'
+                        ? 'In progress: '
+                        : 'Still to come: '}
+                  </span>
+                  {step.label}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+        <div
+          role="progressbar"
+          aria-label="Writing your skill"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+          className="relative h-1.5 overflow-hidden rounded-full bg-bg-sunken"
+        >
+          <span
+            className="absolute inset-y-0 left-0 rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        {elapsed >= SLOW_MS ? (
+          <p className="text-[13.5px] text-ink-2">
+            Still writing, almost there.
+          </p>
+        ) : null}
       </div>
       <Field label="Name">
-        <Skeleton className="h-10" />
+        <Skeleton className={cn('h-10', filled(FIELD_AT.name))} />
       </Field>
       <Field label="What it does">
-        <Skeleton className="h-16" />
+        <Skeleton className={cn('h-16', filled(FIELD_AT.description))} />
       </Field>
       <Field label="Steps">
         <div className="flex flex-col gap-2">
-          <Skeleton className="h-[34px]" />
-          <Skeleton className="h-[34px]" />
-          <Skeleton className="h-[34px]" />
-          <Skeleton className="h-[34px] w-[72%]" />
+          {FIELD_AT.steps.map((at, index) => (
+            <Skeleton
+              key={at}
+              className={cn(
+                'h-[34px]',
+                index === FIELD_AT.steps.length - 1 && 'w-[72%]',
+                filled(at),
+              )}
+            />
+          ))}
         </div>
       </Field>
       <SheetFooter note="Close this and your draft is kept for 24 hours.">

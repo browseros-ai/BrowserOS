@@ -47,6 +47,19 @@ const ORIGIN: &str = "origin";
 const DAYS_SINCE_SAVED: &str = "days_since_saved";
 const RUNS_BEFORE_VERIFY: &str = "runs_before_verify";
 const P50_BUCKET: &str = "p50_bucket";
+const MODE: &str = "mode";
+const RUN_NUMBER_BUCKET: &str = "run_number_bucket";
+const DURATION_BUCKET: &str = "duration_bucket";
+const TOOL_COUNT: &str = "tool_count";
+const CLEAN: &str = "clean";
+const HANDOVER_STEP: &str = "handover_step";
+const HANDOVER_CAUSE: &str = "handover_cause";
+const STEP_COUNT_BUCKET: &str = "step_count_bucket";
+const REASON: &str = "reason";
+const STATUS: &str = "status";
+const RUNS_SINCE_VERIFIED: &str = "runs_since_verified";
+const ON: &str = "on";
+const TRIAL: &str = "trial";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -93,6 +106,59 @@ pub fn p50_bucket(p50_ms: i64) -> &'static str {
     }
 }
 
+/// How a recorded skill run was carried out.
+pub(crate) const RUN_MODE_VALUES: [&str; 3] = ["ultrafast", "handed_back", "agent"];
+
+/// Why an ultrafast run handed the task back to the agent.
+pub(crate) const HANDOVER_CAUSE_VALUES: [&str; 4] =
+    ["site_changed", "input_only", "transient", "unknown"];
+
+/// Why `run_skill` ran nothing, as the tool reports it to the agent.
+pub(crate) const RUN_REFUSAL_VALUES: [&str; 7] = [
+    "no_flow",
+    "flow_broken",
+    "inputs_invalid",
+    "with_agent",
+    "always_with_agent",
+    "needs_consent",
+    "ultrafast_off",
+];
+
+/// Why ultrafast turned on or off on this computer.
+pub(crate) const ULTRAFAST_CHANGE_REASON_VALUES: [&str; 4] =
+    ["plan_added", "plan_ended", "unpaid", "hosted"];
+
+/// Where a skill's fast flow stopped running.
+pub(crate) const PAUSED_FLOW_STATUS_VALUES: [&str; 2] = ["broken", "off"];
+
+/// Which run of a skill this is, in buckets, so reuse shows without exact counts.
+pub(crate) const RUN_NUMBER_BUCKET_VALUES: [&str; 4] = ["1", "2_to_5", "6_to_20", "over_20"];
+
+/// The bucket a skill's run number falls in.
+#[must_use]
+pub fn run_number_bucket(run_number: i64) -> &'static str {
+    match run_number {
+        ..=1 => "1",
+        2..=5 => "2_to_5",
+        6..=20 => "6_to_20",
+        _ => "over_20",
+    }
+}
+
+/// How many steps a saved skill has, in buckets.
+pub(crate) const STEP_COUNT_BUCKET_VALUES: [&str; 4] = ["0", "1_to_3", "4_to_7", "over_7"];
+
+/// The bucket a saved skill's step count falls in.
+#[must_use]
+pub fn step_count_bucket(steps: usize) -> &'static str {
+    match steps {
+        0 => "0",
+        1..=3 => "1_to_3",
+        4..=7 => "4_to_7",
+        _ => "over_7",
+    }
+}
+
 /// Where neo was when the person reached into a held page.
 pub(crate) const HOLD_PHASE_VALUES: [&str; 2] = ["working", "between"];
 
@@ -126,6 +192,14 @@ enum PropertyKind {
     EndKind,
     SkillOrigin,
     P50Bucket,
+    RunMode,
+    HandoverCause,
+    RunNumberBucket,
+    StepCountBucket,
+    Boolean,
+    RunRefusal,
+    PausedFlowStatus,
+    UltrafastChangeReason,
     HoldPhase,
     TakeOverVia,
     ToolName,
@@ -187,13 +261,21 @@ impl PropertyDefinition {
             PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
             PropertyKind::SkillOrigin => normalize_token(value, &SKILL_ORIGIN_VALUES),
             PropertyKind::P50Bucket => normalize_token(value, &P50_BUCKET_VALUES),
+            PropertyKind::RunMode => normalize_token(value, &RUN_MODE_VALUES),
+            PropertyKind::HandoverCause => normalize_token(value, &HANDOVER_CAUSE_VALUES),
+            PropertyKind::RunNumberBucket => normalize_token(value, &RUN_NUMBER_BUCKET_VALUES),
+            PropertyKind::StepCountBucket => normalize_token(value, &STEP_COUNT_BUCKET_VALUES),
+            PropertyKind::Boolean => value.as_bool().map(Value::Bool),
+            PropertyKind::RunRefusal => normalize_token(value, &RUN_REFUSAL_VALUES),
+            PropertyKind::PausedFlowStatus => normalize_token(value, &PAUSED_FLOW_STATUS_VALUES),
+            PropertyKind::UltrafastChangeReason => {
+                normalize_token(value, &ULTRAFAST_CHANGE_REASON_VALUES)
+            }
             PropertyKind::HoldPhase => normalize_token(value, &HOLD_PHASE_VALUES),
             PropertyKind::TakeOverVia => normalize_token(value, &TAKE_OVER_VIA_VALUES),
             PropertyKind::ToolName => {
                 let raw = value.as_str()?;
-                known_tool_names()
-                    .contains(raw)
-                    .then(|| Value::String(raw.to_string()))
+                is_reported_tool(raw).then(|| Value::String(raw.to_string()))
             }
             PropertyKind::UnsignedInteger => value
                 .as_u64()
@@ -208,7 +290,7 @@ impl PropertyDefinition {
                 is_calendar_day(raw).then(|| Value::String(raw.to_string()))
             }
             PropertyKind::ToolCounts => normalize_counts(value, |tool| {
-                if known_tool_names().contains(tool) || SERVER_TOOL_NAMES.contains(&tool) {
+                if is_reported_tool(tool) {
                     tool.to_string()
                 } else {
                     OTHER_TOOL.to_string()
@@ -270,8 +352,8 @@ fn normalize_token(value: &Value, accepted: &[&str]) -> Option<Value> {
         .then(|| Value::String(raw.to_string()))
 }
 
-/// Tools the server registers next to the shared browser catalog. Daily counts keep their names;
-/// anything else is reported as `other`.
+/// Tools the server registers next to the shared browser catalog. Usage reports keep their names;
+/// anything else is dropped or reported as `other`.
 const SERVER_TOOL_NAMES: [&str; 7] = [
     "save_skill",
     "mark_skill_run",
@@ -281,6 +363,10 @@ const SERVER_TOOL_NAMES: [&str; 7] = [
     "solve_captcha",
     "pursue",
 ];
+
+fn is_reported_tool(name: &str) -> bool {
+    known_tool_names().contains(name) || SERVER_TOOL_NAMES.contains(&name)
+}
 
 fn known_tool_names() -> &'static HashSet<&'static str> {
     static KNOWN_TOOL_NAMES: OnceLock<HashSet<&'static str>> = OnceLock::new();
@@ -485,7 +571,69 @@ pub const SKILL_FLOW_VERIFIED: EventDefinition = EventDefinition::new(
     ],
 );
 
-pub const ALL: [EventDefinition; 14] = [
+/// Every recorded run of a saved skill: how it ran, how long it took and why it handed back.
+pub const SKILL_RUN: EventDefinition = EventDefinition::new(
+    "skill_run",
+    &[
+        PropertyDefinition::new(MODE, PropertyKind::RunMode),
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(RUN_NUMBER_BUCKET, PropertyKind::RunNumberBucket),
+        PropertyDefinition::new(DURATION_BUCKET, PropertyKind::P50Bucket),
+        PropertyDefinition::new(TOOL_COUNT, PropertyKind::UnsignedInteger),
+        PropertyDefinition::new(CLEAN, PropertyKind::Boolean),
+        PropertyDefinition::optional(HANDOVER_STEP, PropertyKind::UnsignedInteger),
+        PropertyDefinition::optional(HANDOVER_CAUSE, PropertyKind::HandoverCause),
+    ],
+);
+
+/// A new skill was saved, whichever way it was made.
+pub const SKILL_SAVED: EventDefinition = EventDefinition::new(
+    "skill_saved",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(STEP_COUNT_BUCKET, PropertyKind::StepCountBucket),
+    ],
+);
+
+/// `run_skill` ran nothing, and why.
+pub const RUN_SKILL_REFUSED: EventDefinition = EventDefinition::new(
+    "run_skill_refused",
+    &[
+        PropertyDefinition::new(REASON, PropertyKind::RunRefusal),
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+    ],
+);
+
+/// A skill's broken or degraded fast flow passed verification again.
+pub const SKILL_FLOW_REPAIRED: EventDefinition = EventDefinition::new(
+    "skill_flow_repaired",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(RUNS_SINCE_VERIFIED, PropertyKind::UnsignedInteger),
+    ],
+);
+
+/// A skill's fast flow stopped running: broken by site changes, or off after failed tries.
+pub const SKILL_FLOW_PAUSED: EventDefinition = EventDefinition::new(
+    "skill_flow_paused",
+    &[
+        PropertyDefinition::new(ORIGIN, PropertyKind::SkillOrigin),
+        PropertyDefinition::new(STATUS, PropertyKind::PausedFlowStatus),
+        PropertyDefinition::new(RUNS_SINCE_VERIFIED, PropertyKind::UnsignedInteger),
+    ],
+);
+
+/// Ultrafast turned on or off on this computer as its plan changed.
+pub const ULTRAFAST_STATE_CHANGED: EventDefinition = EventDefinition::new(
+    "ultrafast_state_changed",
+    &[
+        PropertyDefinition::new(ON, PropertyKind::Boolean),
+        PropertyDefinition::new(REASON, PropertyKind::UltrafastChangeReason),
+        PropertyDefinition::optional(TRIAL, PropertyKind::Boolean),
+    ],
+);
+
+pub const ALL: [EventDefinition; 20] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -500,6 +648,12 @@ pub const ALL: [EventDefinition; 14] = [
     TOOL_CALLS_DAILY,
     SKILL_FIRST_RUN,
     SKILL_FLOW_VERIFIED,
+    SKILL_RUN,
+    SKILL_SAVED,
+    RUN_SKILL_REFUSED,
+    SKILL_FLOW_REPAIRED,
+    SKILL_FLOW_PAUSED,
+    ULTRAFAST_STATE_CHANGED,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -561,7 +715,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 14);
+        assert_eq!(ALL.len(), 20);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -579,7 +733,42 @@ mod tests {
                 TOOL_CALLS_DAILY.name(),
                 SKILL_FIRST_RUN.name(),
                 SKILL_FLOW_VERIFIED.name(),
+                SKILL_RUN.name(),
+                SKILL_SAVED.name(),
+                RUN_SKILL_REFUSED.name(),
+                SKILL_FLOW_REPAIRED.name(),
+                SKILL_FLOW_PAUSED.name(),
+                ULTRAFAST_STATE_CHANGED.name(),
             ]
+        );
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.property_names(),
+            vec!["on", "reason", "trial"]
+        );
+        assert_eq!(
+            RUN_SKILL_REFUSED.property_names(),
+            vec!["reason", "client_name"]
+        );
+        assert_eq!(
+            SKILL_FLOW_PAUSED.property_names(),
+            vec!["origin", "status", "runs_since_verified"]
+        );
+        assert_eq!(
+            SKILL_RUN.property_names(),
+            vec![
+                "mode",
+                "origin",
+                "run_number_bucket",
+                "duration_bucket",
+                "tool_count",
+                "clean",
+                "handover_step",
+                "handover_cause",
+            ]
+        );
+        assert_eq!(
+            SKILL_SAVED.property_names(),
+            vec!["origin", "step_count_bucket"]
         );
         assert_eq!(
             SKILL_FIRST_RUN.property_names(),
@@ -669,6 +858,124 @@ mod tests {
         assert_eq!(p50_bucket(900), "under_2s");
         assert_eq!(p50_bucket(2_000), "2s_to_5s");
         assert_eq!(p50_bucket(45_000), "over_30s");
+    }
+
+    #[test]
+    fn skill_run_keeps_tokens_buckets_and_counts_only() {
+        assert_eq!(
+            SKILL_RUN.sanitize(&json!({
+                "mode": "handed_back",
+                "origin": "agent",
+                "run_number_bucket": run_number_bucket(4),
+                "duration_bucket": p50_bucket(12_000),
+                "tool_count": 9,
+                "clean": false,
+                "handover_step": 3,
+                "handover_cause": "site_changed",
+                "skill_name": "neo-private-skill",
+                "duration_ms": 12_000,
+            })),
+            Some(json!({
+                "mode": "handed_back",
+                "origin": "agent",
+                "run_number_bucket": "2_to_5",
+                "duration_bucket": "10s_to_30s",
+                "tool_count": 9,
+                "clean": false,
+                "handover_step": 3,
+                "handover_cause": "site_changed",
+            }))
+        );
+        assert_eq!(
+            SKILL_RUN.sanitize(&json!({
+                "mode": "ultrafast",
+                "origin": "history",
+                "run_number_bucket": "1",
+                "duration_bucket": "under_2s",
+                "tool_count": 0,
+                "clean": true,
+            })),
+            Some(json!({
+                "mode": "ultrafast",
+                "origin": "history",
+                "run_number_bucket": "1",
+                "duration_bucket": "under_2s",
+                "tool_count": 0,
+                "clean": true,
+            }))
+        );
+        assert_eq!(
+            SKILL_RUN.sanitize(&json!({
+                "mode": "turbo",
+                "origin": "history",
+                "run_number_bucket": "1",
+                "duration_bucket": "under_2s",
+                "tool_count": 0,
+                "clean": true,
+            })),
+            None
+        );
+        assert_eq!(run_number_bucket(1), "1");
+        assert_eq!(run_number_bucket(6), "6_to_20");
+        assert_eq!(run_number_bucket(21), "over_20");
+        assert_eq!(step_count_bucket(0), "0");
+        assert_eq!(step_count_bucket(3), "1_to_3");
+        assert_eq!(step_count_bucket(8), "over_7");
+    }
+
+    #[test]
+    fn refusals_and_flow_changes_are_closed_token_sets() {
+        for reason in RUN_REFUSAL_VALUES {
+            assert_eq!(
+                RUN_SKILL_REFUSED.sanitize(&json!({ "reason": reason, "client_name": "Codex" })),
+                Some(json!({ "reason": reason, "client_name": "codex" }))
+            );
+        }
+        assert_eq!(
+            RUN_SKILL_REFUSED.sanitize(&json!({
+                "reason": "the flow file is unreadable: /private/path",
+                "client_name": "Codex",
+            })),
+            None
+        );
+        assert_eq!(
+            SKILL_FLOW_PAUSED.sanitize(&json!({
+                "origin": "agent",
+                "status": "broken",
+                "runs_since_verified": 4,
+                "status_reason": "the site changed 3 times without a passing repair",
+            })),
+            Some(json!({ "origin": "agent", "status": "broken", "runs_since_verified": 4 }))
+        );
+        assert_eq!(
+            SKILL_FLOW_PAUSED.sanitize(&json!({
+                "origin": "agent",
+                "status": "degraded",
+                "runs_since_verified": 4,
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn ultrafast_state_changes_carry_trial_only_when_known() {
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.sanitize(&json!({
+                "on": true,
+                "reason": "plan_added",
+                "trial": true,
+                "licence_key": "private",
+            })),
+            Some(json!({ "on": true, "reason": "plan_added", "trial": true }))
+        );
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.sanitize(&json!({ "on": false, "reason": "unpaid" })),
+            Some(json!({ "on": false, "reason": "unpaid" }))
+        );
+        assert_eq!(
+            ULTRAFAST_STATE_CHANGED.sanitize(&json!({ "on": "yes", "reason": "plan_added" })),
+            None
+        );
     }
 
     #[test]
@@ -932,6 +1239,26 @@ mod tests {
                 "max_duration_ms": 12,
             }))
         );
+
+        for tool_name in SERVER_TOOL_NAMES {
+            assert_eq!(
+                AGENT_SESSION_TOOL_USAGE.sanitize(&json!({
+                    "client_name": "Codex",
+                    "tool_name": tool_name,
+                    "dispatch_count": 2,
+                    "total_duration_ms": 30,
+                    "max_duration_ms": 20,
+                })),
+                Some(json!({
+                    "client_name": "codex",
+                    "tool_name": tool_name,
+                    "dispatch_count": 2,
+                    "total_duration_ms": 30,
+                    "max_duration_ms": 20,
+                })),
+                "{tool_name} usage should be reported"
+            );
+        }
 
         for tool_name in ["unknown", "https://private.example", "user@example.com"] {
             assert_eq!(

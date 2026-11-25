@@ -6,11 +6,13 @@ import {
   reconcileSessionRecording,
   reconcileTelemetryIdentity,
   sanitizeProperties,
+  setPlanContext,
 } from './posthog'
 
 const originalChrome = globalThis.chrome
 
 afterEach(() => {
+  setPlanContext(null)
   Object.defineProperty(globalThis, 'chrome', {
     configurable: true,
     value: originalChrome,
@@ -104,6 +106,24 @@ describe('BrowserClaw PostHog privacy', () => {
       name: 'browserclaw://redacted',
       initiatorType: 'fetch',
     })
+  })
+
+  it('tags every event with the plan, keeps a plan an event names itself, and adds trial only when known', () => {
+    expect(sanitizeProperties({ surface: 'card' })).toEqual({ surface: 'card' })
+
+    setPlanContext({ plan: 'ultrafast', trial: true })
+    expect(sanitizeProperties({ surface: 'card' })).toEqual({
+      surface: 'card',
+      plan: 'ultrafast',
+      trial: true,
+    })
+    expect(sanitizeProperties({ plan: 'free' })).toEqual({
+      plan: 'free',
+      trial: true,
+    })
+
+    setPlanContext({ plan: 'free' })
+    expect(sanitizeProperties({})).toEqual({ plan: 'free' })
   })
 
   it('strips location and referrer properties without changing safe fields', () => {

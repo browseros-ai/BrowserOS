@@ -673,7 +673,7 @@ mod pointer_capture_tests {
 
     struct CaptureConnection {
         calls: Mutex<Vec<(String, Value)>>,
-        events: broadcast::Sender<CdpEvent>,
+        events: broadcast::Sender<Arc<CdpEvent>>,
         targeted: TargetedEvents,
         fail_hide: bool,
         fail_capture: bool,
@@ -796,7 +796,7 @@ mod pointer_capture_tests {
             })
         }
 
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        fn events(&self) -> broadcast::Receiver<Arc<CdpEvent>> {
             self.events.subscribe()
         }
 
