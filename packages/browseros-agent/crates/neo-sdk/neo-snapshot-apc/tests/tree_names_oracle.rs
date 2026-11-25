@@ -2,11 +2,9 @@
 //! descriptions, and error messages against the 16 recorded Playwright oracles
 //! (`tests/fixtures/<name>.{pb,oracle.json}`) and a contract-v4 mirror of `tests/pages/names.html`.
 //!
-//! Frames join by `owner` `<iframe>` `DomNodeId` and elements join by `backendNodeId`. Stock
-//! recordings assert contract section 9 (zero names, descriptions, or error messages derived from
-//! stock `ContentAttributes::label` or `ImageInfo::image_caption`) and pin per-page counts;
-//! recordings at contract v4+ assert full name, description, and error-message parity (allowing
-//! only documented contract gap G6 on `names.html`'s `err-required` input).
+//! Frames join by `owner` `<iframe>` `DomNodeId` and elements join by `backendNodeId`. Every
+//! recording carries contract v4, so the joined elements whose name, description or error message
+//! differ from the oracle's must equal the parity ledger (`support/parity_ledger.rs`).
 
 #[path = "support/fixture_pages.rs"]
 #[expect(
@@ -26,6 +24,12 @@ mod fixture_server;
     reason = "oracle::recorded_url serves tests/oracles.rs; only Oracle types are read here"
 )]
 mod oracle;
+#[path = "support/parity_ledger.rs"]
+#[expect(
+    dead_code,
+    reason = "this test measures name, description and error message; join, role, hidden and state belong to tree_roles_states_oracle.rs"
+)]
+mod parity_ledger;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -34,228 +38,19 @@ use std::path::PathBuf;
 
 use fixture_pages::FIXTURES;
 use neo_snapshot_apc::proto::{
-    AnnotatedPageContent, BrowserOsPageContentData, BrowserOsRef, ContentData, ContentNode,
-    FormControlType, RedactionDecision,
+    AnnotatedPageContent, BrowserOsRef, FormControlType, RedactionDecision,
 };
 use neo_snapshot_apc::tree::{
-    ApcBuilder, BuildError, BuildOptions, DocId, DomNodeId, MIN_CONTRACT_VERSION, NameCache,
-    NameVisibility, NodeBuilder, NodeKey, Role, SnapshotTree, TreeNode,
+    ApcBuilder, BuildOptions, DocId, DomNodeId, NameCache, NameVisibility, NodeBuilder, NodeKey,
+    Role, SnapshotTree, TreeNode,
 };
 use oracle::{Oracle, OracleElement, OracleFrame};
+use parity_ledger::{Field, Measured};
 
+/// The first contract version that carries names, descriptions and error messages (contract C4).
 const CONTRACT_NAMES_VERSION: u32 = 4;
 const CONTRACT_GAP_G6_ERROR_MESSAGE: &str = "error message: shown because validity fails";
 const ERR_REQUIRED_BACKEND_NODE_ID: u64 = 17;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct StockFixtureCounts {
-    fixture: &'static str,
-    joined_elements: usize,
-    stock_label_nodes: usize,
-    stock_image_caption_nodes: usize,
-    name_matches_on_stock: usize,
-    oracle_non_empty_names: usize,
-    description_matches_on_stock: usize,
-    oracle_non_empty_descriptions: usize,
-    error_message_matches_on_stock: usize,
-    oracle_non_empty_errors: usize,
-}
-
-/// Pinned per-page measurements on the 16 stock Chromium 158 `.pb` recordings.
-const EXPECTED_STOCK_COUNTS: &[StockFixtureCounts] = &[
-    StockFixtureCounts {
-        fixture: "nested-cross-site-frames",
-        joined_elements: 28,
-        stock_label_nodes: 15,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 4,
-        oracle_non_empty_names: 24,
-        description_matches_on_stock: 28,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 28,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "shadow-dom",
-        joined_elements: 9,
-        stock_label_nodes: 2,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 3,
-        oracle_non_empty_names: 6,
-        description_matches_on_stock: 9,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 9,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "zero-size-checkbox",
-        joined_elements: 4,
-        stock_label_nodes: 0,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 1,
-        oracle_non_empty_names: 3,
-        description_matches_on_stock: 4,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 4,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "covered-button",
-        joined_elements: 8,
-        stock_label_nodes: 1,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 3,
-        oracle_non_empty_names: 5,
-        description_matches_on_stock: 8,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 8,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "sensitive-form",
-        joined_elements: 6,
-        stock_label_nodes: 0,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 1,
-        oracle_non_empty_names: 5,
-        description_matches_on_stock: 6,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 6,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "hung-subframe",
-        joined_elements: 6,
-        stock_label_nodes: 2,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 2,
-        oracle_non_empty_names: 4,
-        description_matches_on_stock: 6,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 6,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "deep-nesting",
-        joined_elements: 123,
-        stock_label_nodes: 0,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 121,
-        oracle_non_empty_names: 2,
-        description_matches_on_stock: 123,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 123,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "shadow-roots",
-        joined_elements: 22,
-        stock_label_nodes: 1,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 1,
-        oracle_non_empty_names: 21,
-        description_matches_on_stock: 22,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 22,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "zero-size-controls",
-        joined_elements: 13,
-        stock_label_nodes: 0,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 1,
-        oracle_non_empty_names: 12,
-        description_matches_on_stock: 13,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 13,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "nosize",
-        joined_elements: 27,
-        stock_label_nodes: 14,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 4,
-        oracle_non_empty_names: 23,
-        description_matches_on_stock: 27,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 27,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "ua-shadow",
-        joined_elements: 15,
-        stock_label_nodes: 8,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 6,
-        oracle_non_empty_names: 9,
-        description_matches_on_stock: 15,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 15,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "roles",
-        joined_elements: 141,
-        stock_label_nodes: 16,
-        stock_image_caption_nodes: 2,
-        name_matches_on_stock: 56,
-        oracle_non_empty_names: 85,
-        description_matches_on_stock: 140,
-        oracle_non_empty_descriptions: 1,
-        error_message_matches_on_stock: 141,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "names",
-        joined_elements: 69,
-        stock_label_nodes: 27,
-        stock_image_caption_nodes: 4,
-        name_matches_on_stock: 7,
-        oracle_non_empty_names: 62,
-        description_matches_on_stock: 54,
-        oracle_non_empty_descriptions: 15,
-        error_message_matches_on_stock: 67,
-        oracle_non_empty_errors: 2,
-    },
-    StockFixtureCounts {
-        fixture: "states",
-        joined_elements: 140,
-        stock_label_nodes: 24,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 9,
-        oracle_non_empty_names: 131,
-        description_matches_on_stock: 140,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 140,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "private-forms",
-        joined_elements: 21,
-        stock_label_nodes: 1,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 1,
-        oracle_non_empty_names: 20,
-        description_matches_on_stock: 21,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 21,
-        oracle_non_empty_errors: 0,
-    },
-    StockFixtureCounts {
-        fixture: "modal-inert",
-        joined_elements: 12,
-        stock_label_nodes: 1,
-        stock_image_caption_nodes: 0,
-        name_matches_on_stock: 2,
-        oracle_non_empty_names: 10,
-        description_matches_on_stock: 12,
-        oracle_non_empty_descriptions: 0,
-        error_message_matches_on_stock: 12,
-        oracle_non_empty_errors: 0,
-    },
-];
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -284,16 +79,11 @@ fn load_oracle(name: &str) -> Result<Oracle, Box<dyn Error>> {
 
 #[derive(Debug)]
 struct FixtureNameComparison {
-    recorded_version: Option<u32>,
     oracle_frames: usize,
     joined_frames: usize,
     partial_frames: usize,
-    counts: StockFixtureCounts,
-    spurious_stock_names: usize,
-    spurious_stock_descriptions: usize,
-    spurious_stock_errors: usize,
-    empty_oracle_false_positives: Vec<String>,
-    contract_mismatches: Vec<String>,
+    joined_elements: usize,
+    disagreements: Vec<Measured>,
 }
 
 struct MappedOracleFrames {
@@ -353,47 +143,15 @@ fn map_oracle_frames(
     })
 }
 
-fn is_contract_gap_g6(fixture: &str, element: &OracleElement) -> bool {
-    fixture == "names" && element.error_message == CONTRACT_GAP_G6_ERROR_MESSAGE
-}
-
-fn count_stock_label_and_caption_nodes(apc: &AnnotatedPageContent) -> (usize, usize) {
-    let mut stock_label_nodes = 0;
-    let mut stock_image_caption_nodes = 0;
-    let mut stack: Vec<&ContentNode> = apc.root_node.iter().collect();
-
-    while let Some(node) = stack.pop() {
-        if let Some(raw) = node.content_attributes.as_ref() {
-            if raw.label.as_deref().is_some_and(|label| !label.is_empty()) {
-                stock_label_nodes += 1;
-            }
-            if matches!(
-                raw.content_data.as_ref(),
-                Some(ContentData::Image(info))
-                    if info
-                        .image_caption
-                        .as_deref()
-                        .is_some_and(|caption| !caption.is_empty())
-            ) {
-                stock_image_caption_nodes += 1;
-            }
-        }
-        stack.extend(node.children_nodes.iter());
-    }
-
-    (stock_label_nodes, stock_image_caption_nodes)
-}
-
 fn compare_joined_element(
-    fixture: &str,
+    fixture: &'static str,
     frame: &OracleFrame,
     element: &OracleElement,
     node: &TreeNode,
     cache: &NameCache<'_>,
-    recorded_version: Option<u32>,
     stats: &mut FixtureNameComparison,
 ) {
-    stats.counts.joined_elements += 1;
+    stats.joined_elements += 1;
 
     let actual_name = cache.name(node.id(), NameVisibility::VisibleOnly).text();
     let actual_description = cache
@@ -401,94 +159,49 @@ fn compare_joined_element(
         .text();
     let actual_error = cache.error_message(node.id());
 
-    if !element.name.is_empty() {
-        stats.counts.oracle_non_empty_names += 1;
-    }
-    if !element.description.is_empty() {
-        stats.counts.oracle_non_empty_descriptions += 1;
-    }
-    if !element.error_message.is_empty() {
-        stats.counts.oracle_non_empty_errors += 1;
-    }
-
-    if recorded_version.is_none() {
-        if actual_name == element.name {
-            stats.counts.name_matches_on_stock += 1;
-        } else if element.name.is_empty() {
-            stats.empty_oracle_false_positives.push(format!(
-                "{fixture} [{}] node {}: stock name expected empty, got {:?}",
-                frame.url, element.backend_node_id, actual_name
-            ));
-        }
-
-        if actual_description == element.description {
-            stats.counts.description_matches_on_stock += 1;
-        } else if element.description.is_empty() {
-            stats.empty_oracle_false_positives.push(format!(
-                "{fixture} [{}] node {}: stock description expected empty, got {:?}",
-                frame.url, element.backend_node_id, actual_description
-            ));
-        }
-
-        if actual_error == element.error_message {
-            stats.counts.error_message_matches_on_stock += 1;
-        } else if element.error_message.is_empty() {
-            stats.empty_oracle_false_positives.push(format!(
-                "{fixture} [{}] node {}: stock error_message expected empty, got {:?}",
-                frame.url, element.backend_node_id, actual_error
-            ));
-        }
-    }
-
-    if recorded_version.unwrap_or(0) >= CONTRACT_NAMES_VERSION {
-        if actual_name != element.name {
-            stats.contract_mismatches.push(format!(
-                "{fixture} [{}] node {}: name tree={:?} oracle={:?}",
-                frame.url, element.backend_node_id, actual_name, element.name
-            ));
-        }
-        if actual_description != element.description {
-            stats.contract_mismatches.push(format!(
-                "{fixture} [{}] node {}: description tree={:?} oracle={:?}",
-                frame.url, element.backend_node_id, actual_description, element.description
-            ));
-        }
-        if actual_error != element.error_message
-            && !(is_contract_gap_g6(fixture, element) && actual_error.is_empty())
-        {
-            stats.contract_mismatches.push(format!(
-                "{fixture} [{}] node {}: error_message tree={:?} oracle={:?}",
-                frame.url, element.backend_node_id, actual_error, element.error_message
-            ));
+    for (field, actual, expected) in [
+        (Field::Name, actual_name, element.name.as_str()),
+        (
+            Field::Description,
+            actual_description,
+            element.description.as_str(),
+        ),
+        (
+            Field::ErrorMessage,
+            actual_error,
+            element.error_message.as_str(),
+        ),
+    ] {
+        if actual != expected {
+            stats.disagreements.push(Measured {
+                fixture,
+                // The parity ledger keys a child frame by its URL and the main frame, the only
+                // one with no `parent`, by `None`.
+                frame: frame.parent.as_ref().map(|_| frame.url.clone()),
+                backend_node_id: element.backend_node_id,
+                field,
+                detail: format!(
+                    "{fixture} [{}] node {}: {field:?} tree={actual:?} oracle={expected:?}",
+                    frame.url, element.backend_node_id
+                ),
+            });
         }
     }
 }
 
 fn compare_fixture(name: &'static str) -> Result<FixtureNameComparison, Box<dyn Error>> {
-    let mut apc = load_pb(name)?;
+    let apc = load_pb(name)?;
     let oracle = load_oracle(name)?;
     let recorded_version = apc
         .browseros
         .as_ref()
         .and_then(|meta| meta.contract_version);
+    assert!(
+        recorded_version >= Some(CONTRACT_NAMES_VERSION),
+        "{name}: recorded at contract {recorded_version:?}; parity needs v{CONTRACT_NAMES_VERSION}+ \
+         names, descriptions and error messages (tests/fixtures/README.md re-records with --contract)"
+    );
 
-    if recorded_version.is_none() {
-        let refused = SnapshotTree::build(apc.clone(), BuildOptions::default()).err();
-        assert_eq!(
-            refused,
-            Some(BuildError::Unpatched {
-                found: None,
-                required: MIN_CONTRACT_VERSION,
-            }),
-            "{name}: unpatched stock .pb must be refused by SnapshotTree::build"
-        );
-        apc.browseros = Some(BrowserOsPageContentData {
-            contract_version: Some(MIN_CONTRACT_VERSION),
-            subframe_timeout_ms: Some(2_000),
-        });
-    }
-
-    let (stock_label_nodes, stock_image_caption_nodes) = count_stock_label_and_caption_nodes(&apc);
     let tree = SnapshotTree::build(apc, BuildOptions::default())?;
     let cache = tree.name_cache();
     let MappedOracleFrames {
@@ -497,49 +210,14 @@ fn compare_fixture(name: &'static str) -> Result<FixtureNameComparison, Box<dyn 
     } = map_oracle_frames(&tree, &oracle)?;
 
     let mut stats = FixtureNameComparison {
-        recorded_version,
         oracle_frames: oracle.frames.len(),
         joined_frames: frame_to_doc.len(),
         partial_frames,
-        counts: StockFixtureCounts {
-            fixture: name,
-            stock_label_nodes,
-            stock_image_caption_nodes,
-            ..StockFixtureCounts::default()
-        },
-        spurious_stock_names: 0,
-        spurious_stock_descriptions: 0,
-        spurious_stock_errors: 0,
-        empty_oracle_false_positives: Vec::new(),
-        contract_mismatches: Vec::new(),
+        joined_elements: 0,
+        disagreements: Vec::new(),
     };
 
-    if recorded_version.is_none() {
-        for node in tree.nodes() {
-            if !cache
-                .name(node.id(), NameVisibility::VisibleOnly)
-                .is_empty()
-                || !cache
-                    .name(node.id(), NameVisibility::IncludeHidden)
-                    .is_empty()
-            {
-                stats.spurious_stock_names += 1;
-            }
-            if !cache
-                .description(node.id(), NameVisibility::VisibleOnly)
-                .is_empty()
-                || !cache
-                    .description(node.id(), NameVisibility::IncludeHidden)
-                    .is_empty()
-            {
-                stats.spurious_stock_descriptions += 1;
-            }
-            if !cache.error_message(node.id()).is_empty() {
-                stats.spurious_stock_errors += 1;
-            }
-        }
-    }
-
+    // An element with no SnapshotTree node is the roles test's `Field::Join` ledger entry.
     for frame in &oracle.frames {
         let Some(&doc_id) = frame_to_doc.get(&frame.frame) else {
             continue;
@@ -553,15 +231,7 @@ fn compare_fixture(name: &'static str) -> Result<FixtureNameComparison, Box<dyn 
                 DomNodeId::new(i32::try_from(element.backend_node_id)?),
             );
             if let Some(node) = tree.node_by_key(&key) {
-                compare_joined_element(
-                    name,
-                    frame,
-                    element,
-                    node,
-                    &cache,
-                    recorded_version,
-                    &mut stats,
-                );
+                compare_joined_element(name, frame, element, node, &cache, &mut stats);
             }
         }
     }
@@ -573,13 +243,11 @@ fn compare_fixture(name: &'static str) -> Result<FixtureNameComparison, Box<dyn 
 fn recorded_fixtures_agree_with_playwright_oracles_on_all_expressible_name_facts()
 -> Result<(), Box<dyn Error>> {
     let mut total_joined = 0;
-    let mut total_stock_label_nodes = 0;
-    let mut total_stock_image_caption_nodes = 0;
-    let mut measured_stock_counts = Vec::new();
+    let mut disagreements = Vec::new();
 
     for fixture in FIXTURES {
         let stats = compare_fixture(fixture.name)?;
-        total_joined += stats.counts.joined_elements;
+        total_joined += stats.joined_elements;
 
         assert_eq!(
             stats.joined_frames + stats.partial_frames,
@@ -588,92 +256,21 @@ fn recorded_fixtures_agree_with_playwright_oracles_on_all_expressible_name_facts
             fixture.name
         );
         assert!(
-            stats.counts.joined_elements > 0,
+            stats.joined_elements > 0,
             "{}: expected joined elements between .pb and oracle",
             fixture.name
         );
-
-        if stats.recorded_version.is_none() {
-            total_stock_label_nodes += stats.counts.stock_label_nodes;
-            total_stock_image_caption_nodes += stats.counts.stock_image_caption_nodes;
-            assert_eq!(
-                stats.spurious_stock_names, 0,
-                "{}: contract §9 forbids deriving any accessible name from stock Chromium APC fields",
-                fixture.name
-            );
-            assert_eq!(
-                stats.spurious_stock_descriptions, 0,
-                "{}: contract §9 forbids deriving any accessible description from stock Chromium APC fields",
-                fixture.name
-            );
-            assert_eq!(
-                stats.spurious_stock_errors, 0,
-                "{}: contract §9 forbids deriving any error message from stock Chromium APC fields",
-                fixture.name
-            );
-            assert!(
-                stats.empty_oracle_false_positives.is_empty(),
-                "{}: stock recording produced non-empty name/description/error for empty oracle entries: {:?}",
-                fixture.name,
-                stats.empty_oracle_false_positives
-            );
-            assert_eq!(
-                stats.counts.name_matches_on_stock + stats.counts.oracle_non_empty_names,
-                stats.counts.joined_elements,
-                "{}: stock name matches must cover every empty oracle name with zero false positives",
-                fixture.name
-            );
-            assert_eq!(
-                stats.counts.description_matches_on_stock
-                    + stats.counts.oracle_non_empty_descriptions,
-                stats.counts.joined_elements,
-                "{}: stock description matches must cover every empty oracle description with zero false positives",
-                fixture.name
-            );
-            assert_eq!(
-                stats.counts.error_message_matches_on_stock + stats.counts.oracle_non_empty_errors,
-                stats.counts.joined_elements,
-                "{}: stock error_message matches must cover every empty oracle error_message with zero false positives",
-                fixture.name
-            );
-            measured_stock_counts.push(stats.counts);
-        }
-
-        assert!(
-            stats.contract_mismatches.is_empty(),
-            "{}: contract v4+ name/description/error mismatches: {:?}",
-            fixture.name,
-            stats.contract_mismatches
-        );
+        disagreements.extend(stats.disagreements);
     }
 
     assert!(
         total_joined >= 640,
         "expected >= 640 joined oracle elements across all 16 fixtures, saw {total_joined}"
     );
-    if !measured_stock_counts.is_empty() {
-        assert!(
-            total_stock_label_nodes > 0,
-            "stock Chromium .pb recordings must carry non-empty ContentAttributes::label values so the contract §9 refusal check is non-vacuous"
-        );
-        assert!(
-            total_stock_image_caption_nodes > 0,
-            "stock Chromium .pb recordings must carry non-empty ImageInfo::image_caption values so the contract §9 refusal check is non-vacuous"
-        );
-        let expected_for_stock: Vec<StockFixtureCounts> = measured_stock_counts
-            .iter()
-            .filter_map(|measured| {
-                EXPECTED_STOCK_COUNTS
-                    .iter()
-                    .find(|expected| expected.fixture == measured.fixture)
-                    .copied()
-            })
-            .collect();
-        assert_eq!(
-            measured_stock_counts, expected_for_stock,
-            "pinned per-page stock counts across recorded stock fixtures must stay exact and auditable"
-        );
-    }
+    parity_ledger::assert_measured_equals_ledger(
+        &disagreements,
+        &[Field::Name, Field::Description, Field::ErrorMessage],
+    );
 
     Ok(())
 }

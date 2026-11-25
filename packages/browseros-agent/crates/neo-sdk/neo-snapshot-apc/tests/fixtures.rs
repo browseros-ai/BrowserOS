@@ -1,5 +1,6 @@
-//! Offline fixture tests decoding the seven committed Chromium 158 `AnnotatedPageContent` `.pb`
-//! captures plus synthetic forward-compatibility and large-page payloads.
+//! Offline fixture tests decoding seven of the committed `AnnotatedPageContent` `.pb` captures
+//! (BrowserOS Chromium 158, contract v4) plus synthetic forward-compatibility and large-page
+//! payloads.
 
 #[path = "support/tree_counts.rs"]
 mod tree_counts;
@@ -11,14 +12,27 @@ use std::path::PathBuf;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use neo_snapshot_apc::proto::{
-    AnnotatedPageContentMode, AnnotatedPageContentVersion, AxRole, BROWSEROS_EXTENSION_TAG,
-    BoundingRect, CoarseAutofillFieldType, ContentAttributeType, ContentAttributes, ContentData,
-    ContentNode, FormControlType, FrameData, Geometry, IframeData, IframeDataContent,
-    RedactionDecision, TextInfo,
+    AnnotatedPageContentMode, AnnotatedPageContentVersion, AxRole, BoundingRect,
+    BrowserOsRedactedFrame, CoarseAutofillFieldType, ContentAttributeType, ContentAttributes,
+    ContentData, ContentNode, FormControlType, FrameData, Geometry, IframeData, IframeDataContent,
+    RedactedFrameMetadata, RedactedFrameReason, RedactionDecision, TextInfo,
 };
 use neo_snapshot_apc::{AnnotatedPageContent, decode, decode_protobuf, decode_reply_json};
 use prost::Message as _;
 use tree_counts::{TreeCounts, count_frames_and_nodes};
+
+/// The CDP frame id of `hung-subframe`'s `[::1]` frame on its recorded load.
+const HUNG_FRAME_TOKEN: &str = "49D1C59064EA7FCE84F9448D273FFE9A";
+
+/// What the contract writes in place of `FrameData` for `hung-subframe`'s timed-out frame.
+fn hung_frame_timeout_stamp() -> IframeDataContent {
+    IframeDataContent::RedactedFrameMetadata(RedactedFrameMetadata {
+        reason: Some(i32::from(RedactedFrameReason::BrowserOsTimeout)),
+        browseros: Some(BrowserOsRedactedFrame {
+            devtools_frame_token: Some(HUNG_FRAME_TOKEN.to_owned()),
+        }),
+    })
+}
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -112,24 +126,6 @@ fn collect_all_labels(apc: &AnnotatedPageContent) -> Vec<String> {
         .filter(|label| !label.is_empty())
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
-    loop {
-        let low = u8::try_from(value & 0x7f).unwrap_or(0);
-        value >>= 7;
-        if value == 0 {
-            out.push(low);
-            break;
-        }
-        out.push(low | 0x80);
-    }
-}
-
-fn push_length_delimited_field(tag: u32, payload: &[u8], out: &mut Vec<u8>) {
-    encode_varint((u64::from(tag) << 3) | 2, out);
-    encode_varint(u64::try_from(payload.len()).unwrap_or(0), out);
-    out.extend_from_slice(payload);
 }
 
 #[test]
@@ -396,17 +392,22 @@ fn sensitive_form_fixture_redacts_password_and_classifies_card_and_otp()
         count_frames_and_nodes(&apc),
         TreeCounts {
             frames: 1,
-            nodes: 24,
+            nodes: 20,
         },
-        "sensitive-form.pb must decode 1 frame and 24 nodes"
+        "sensitive-form.pb must decode 1 frame and 20 nodes: the contract withholds the card and \
+         OTP values, and with them the two value text nodes each field had on stock"
     );
 
-    assert!(
-        !raw_bytes
-            .windows(b"example-pass-value".len())
-            .any(|window| window == b"example-pass-value"),
-        "password dummy value must be redacted out of wire protobuf bytes"
-    );
+    for (value, field) in [
+        (&b"example-pass-value"[..], "password"),
+        (&b"4111111111111111"[..], "card number"),
+        (&b"123456"[..], "one-time code"),
+    ] {
+        assert!(
+            !raw_bytes.windows(value.len()).any(|window| window == value),
+            "the {field} value set in markup must be redacted out of the wire protobuf bytes"
+        );
+    }
 
     let nodes = walk_nodes(&apc);
     let label_for = |target_dom_id: i32| -> Option<String> {
@@ -458,6 +459,10 @@ fn sensitive_form_fixture_redacts_password_and_classifies_card_and_otp()
                     vec![i32::from(CoarseAutofillFieldType::CreditCard)],
                     "card number field must carry CoarseAutofillFieldType::CreditCard"
                 );
+                assert_eq!(
+                    control.field_value, None,
+                    "the contract withholds an autocomplete=cc-number field's value"
+                );
             }
             Some("One-time code") => {
                 found_otp = true;
@@ -465,6 +470,10 @@ fn sensitive_form_fixture_redacts_password_and_classifies_card_and_otp()
                     control.coarse_autofill_field_type,
                     vec![i32::from(CoarseAutofillFieldType::Otp)],
                     "OTP field must carry CoarseAutofillFieldType::Otp"
+                );
+                assert_eq!(
+                    control.field_value, None,
+                    "the contract withholds an autocomplete=one-time-code field's value"
                 );
             }
             None if text_inside(node) == "Pay now" => {
@@ -486,7 +495,7 @@ fn sensitive_form_fixture_redacts_password_and_classifies_card_and_otp()
 }
 
 #[test]
-fn hung_subframe_fixture_preserves_healthy_sibling_and_empty_hung_iframe()
+fn hung_subframe_fixture_preserves_healthy_sibling_and_stamps_hung_iframe_timeout()
 -> Result<(), Box<dyn Error>> {
     let (_, apc) = decode_fixture_all_paths("hung-subframe")?;
     assert_eq!(
@@ -573,8 +582,10 @@ fn hung_subframe_fixture_preserves_healthy_sibling_and_empty_hung_iframe()
     {
         Some(ContentData::Iframe(iframe)) => {
             assert_eq!(
-                iframe.data, None,
-                "stock Chromium 158 emits empty IframeData.data when a subframe times out"
+                iframe.data,
+                Some(hung_frame_timeout_stamp()),
+                "the contract stamps a timed-out subframe with BrowserOsTimeout and its CDP frame \
+                 id, which hung-subframe.oracle.json records for the [::1] frame"
             );
         }
         other => panic!("expected ContentData::Iframe on hung iframe, got {other:?}"),
@@ -615,35 +626,6 @@ fn deep_nesting_fixture_exceeds_prost_default_limit_and_decodes_cleanly()
             "missing deep-nesting text {expected:?} in {texts:?}"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn browseros_contract_on_real_fixture_decodes_beside_stock_content() -> Result<(), Box<dyn Error>> {
-    let raw_bytes = fs::read(fixture_path("nested-cross-site-frames"))?;
-    let baseline = decode_protobuf(&raw_bytes)?;
-    assert_eq!(
-        baseline.browseros, None,
-        "stock Chromium 158 sends no BrowserOS contract, so contract_version is absent"
-    );
-
-    let mut extended = raw_bytes;
-    // BrowserOSPageContentData { contract_version: 1 }: field 1, varint 1.
-    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, &[0x08, 0x01], &mut extended);
-
-    let mut decoded = decode_protobuf(&extended)?;
-    assert_eq!(
-        decoded
-            .browseros
-            .take()
-            .and_then(|page| page.contract_version),
-        Some(1),
-        "a contract submessage appended to a real Chromium 158 reply must decode"
-    );
-    assert_eq!(
-        decoded, baseline,
-        "the contract submessage must leave every stock field unchanged"
-    );
     Ok(())
 }
 

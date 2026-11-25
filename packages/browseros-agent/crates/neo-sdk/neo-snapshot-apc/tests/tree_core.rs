@@ -1,5 +1,6 @@
 //! Offline tests for [`neo_snapshot_apc::tree`]: document identity, iterative frame stitching,
-//! containment semantics, redacting `Debug`, Chromium 158 fixtures, and stack-safety stress tests.
+//! containment semantics, redacting `Debug`, the contract-v4 Chromium 158 fixtures, and
+//! stack-safety stress tests.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -9,9 +10,8 @@ use std::{fs, thread};
 
 use neo_snapshot_apc::proto::{
     AnnotatedPageContent, AnnotatedRole, AxRole, BrowserOsFrameData, BrowserOsPageContentData,
-    BrowserOsRedactedFrame, BrowserOsRef, BrowserOsTriState, ClickabilityReason, ContentData,
-    ContentNode, FormControlType, IframeDataContent, InteractionDisabledReason,
-    RedactedFrameMetadata, RedactedFrameReason, RedactionDecision, SelectOption,
+    BrowserOsRef, BrowserOsTriState, ClickabilityReason, FormControlType,
+    InteractionDisabledReason, RedactionDecision, SelectOption,
 };
 use neo_snapshot_apc::tree::{
     ApcBuilder, BuildError, BuildOptions, DocId, DocOrigin, DocSeq, DocToken, DomNodeId,
@@ -29,14 +29,16 @@ fn decode_fixture(name: &str) -> Result<AnnotatedPageContent, Box<dyn Error>> {
     Ok(neo_snapshot_apc::decode_protobuf(&bytes)?)
 }
 
-fn load_patched_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
-    let mut apc = decode_fixture(name)?;
-    apc.browseros = Some(BrowserOsPageContentData {
-        contract_version: Some(MIN_CONTRACT_VERSION),
-        subframe_timeout_ms: Some(2_000),
-    });
-    Ok(SnapshotTree::build(apc, BuildOptions::default())?)
+/// Builds a recorded fixture as captured: every `.pb` carries contract v4 (`tests/fixtures/README.md`).
+fn load_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
+    Ok(SnapshotTree::build(
+        decode_fixture(name)?,
+        BuildOptions::default(),
+    )?)
 }
+
+/// The CDP frame id of `hung-subframe`'s `[::1]` frame on its recorded load.
+const HUNG_FRAME_TOKEN: &str = "49D1C59064EA7FCE84F9448D273FFE9A";
 
 fn require_doc_token(raw: &str) -> Result<DocToken, Box<dyn Error>> {
     DocToken::new(raw).ok_or_else(|| format!("expected non-empty DocToken for {raw:?}").into())
@@ -578,21 +580,29 @@ fn empty_root_and_error_cases_return_expected_results() -> Result<(), Box<dyn Er
 }
 
 #[test]
-fn contract_gate_refuses_stock_chromium_fixtures_without_contract_version()
+fn contract_gate_admits_v4_fixtures_and_refuses_them_with_the_contract_stripped()
 -> Result<(), Box<dyn Error>> {
     for name in [
         "nested-cross-site-frames",
         "hung-subframe",
         "sensitive-form",
     ] {
-        let stock_apc = decode_fixture(name)?;
+        let tree = load_fixture_tree(name)?;
+        assert_eq!(
+            tree.contract_version(),
+            4,
+            "{name}.pb was recorded on a contract-v4 build"
+        );
+        let mut stock_apc = decode_fixture(name)?;
+        stock_apc.browseros = None;
         assert_eq!(
             SnapshotTree::build(stock_apc, BuildOptions::default()).err(),
             Some(BuildError::Unpatched {
                 found: None,
                 required: MIN_CONTRACT_VERSION,
             }),
-            "stock fixture {name}.pb has no contract_version and must be refused fail-closed"
+            "{name}.pb without its contract page message reads as a stock reply and must be \
+             refused fail-closed"
         );
     }
     Ok(())
@@ -1130,7 +1140,7 @@ fn assert_colliding_dom_ids(
 #[test]
 fn hung_subframe_fixture_records_partial_frame_and_preserves_healthy_sibling()
 -> Result<(), Box<dyn Error>> {
-    let tree = load_patched_fixture_tree("hung-subframe")?;
+    let tree = load_fixture_tree("hung-subframe")?;
     assert_eq!(tree.documents().len(), 2);
     assert_eq!(tree.nodes().len(), 16);
     assert_eq!(tree.partial_frames().len(), 1);
@@ -1144,7 +1154,19 @@ fn hung_subframe_fixture_records_partial_frame_and_preserves_healthy_sibling()
     let partial = tree
         .partial_frame(0)
         .ok_or("expected one PartialFrame for hung iframe")?;
-    assert_eq!(partial.reason, PartialFrameReason::MissingContent);
+    assert_eq!(
+        partial.reason,
+        PartialFrameReason::Timeout {
+            timeout_ms: Some(2_000),
+        },
+        "the contract stamps the hung iframe BrowserOsTimeout and the page its 2000 ms timeout"
+    );
+    assert_eq!(partial.reason.to_string(), "timeout after 2000 ms");
+    assert_eq!(
+        partial.frame_token.as_ref().map(FrameToken::as_str),
+        Some(HUNG_FRAME_TOKEN),
+        "the hung frame's token is the CDP frame id hung-subframe.oracle.json records for it"
+    );
     assert_eq!(partial.parent_doc, DocId::MAIN);
     let partial_key = partial
         .iframe_key
@@ -1178,45 +1200,6 @@ fn hung_subframe_fixture_records_partial_frame_and_preserves_healthy_sibling()
         assert_ne!(main_node.id(), healthy_node.id());
     }
 
-    // Re-run the same recorded hung-subframe fixture with C2 timeout + frame token stamped on the
-    // empty hung iframe to confirm the patched timeout reason and frame token flow end to end.
-    let mut patched_timeout = decode_fixture("hung-subframe")?;
-    patched_timeout.browseros = Some(BrowserOsPageContentData {
-        contract_version: Some(2),
-        subframe_timeout_ms: Some(2_000),
-    });
-    let mut stack: Vec<&mut ContentNode> = patched_timeout.root_node.iter_mut().collect();
-    while let Some(node) = stack.pop() {
-        if let Some(attrs) = node.content_attributes.as_mut()
-            && let Some(ContentData::Iframe(iframe)) = attrs.content_data.as_mut()
-            && iframe.data.is_none()
-        {
-            iframe.data = Some(IframeDataContent::RedactedFrameMetadata(
-                RedactedFrameMetadata {
-                    reason: Some(i32::from(RedactedFrameReason::BrowserOsTimeout)),
-                    browseros: Some(BrowserOsRedactedFrame {
-                        devtools_frame_token: Some("frame-hung-c2".to_owned()),
-                    }),
-                },
-            ));
-        }
-        stack.extend(node.children_nodes.iter_mut());
-    }
-    let timeout_tree = SnapshotTree::build(patched_timeout, BuildOptions::default())?;
-    let timeout_partial = timeout_tree
-        .partial_frame(0)
-        .ok_or("missing patched timeout partial frame")?;
-    assert_eq!(
-        timeout_partial.reason,
-        PartialFrameReason::Timeout {
-            timeout_ms: Some(2_000),
-        }
-    );
-    assert_eq!(timeout_partial.reason.to_string(), "timeout after 2000 ms");
-    assert_eq!(
-        timeout_partial.frame_token.as_ref().map(FrameToken::as_str),
-        Some("frame-hung-c2")
-    );
     Ok(())
 }
 
@@ -1227,11 +1210,11 @@ fn remaining_chromium_fixtures_build_and_redact_sensitive_debug() -> Result<(), 
         ("shadow-dom", 1, 23),
         ("zero-size-checkbox", 1, 13),
         ("covered-button", 1, 16),
-        ("sensitive-form", 1, 24),
+        ("sensitive-form", 1, 20),
     ];
 
     for (name, expected_docs, expected_nodes) in cases {
-        let tree = load_patched_fixture_tree(name)?;
+        let tree = load_fixture_tree(name)?;
         assert_eq!(
             tree.documents().len(),
             expected_docs,
