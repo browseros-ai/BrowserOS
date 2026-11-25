@@ -154,6 +154,11 @@ export async function start({
       '--no-default-browser-check',
     ]
     if (process.platform === 'linux') flags.push('--no-sandbox')
+    // Both profiles are throwaway. On macOS, Chromium's cookie store waits for the login Keychain
+    // before the first HTTP request goes out, and that lookup can block under a test launch, so
+    // every HTTP navigation times out. The fake keychain skips the lookup, as the SDK's own
+    // launcher (tools/browser-process.mjs) does.
+    if (process.platform === 'darwin') flags.push('--use-mock-keychain')
     const nativeEnv = { ...process.env }
     delete nativeEnv.BROWSERCLAW_HOSTED_MODE
     const native = launch(

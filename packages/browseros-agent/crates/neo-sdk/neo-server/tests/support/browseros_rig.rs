@@ -196,6 +196,11 @@ impl Rig {
                 .arg("--headless=new")
                 .arg(format!("--user-data-dir={}", profile.display()))
                 .arg(format!("--remote-debugging-port={cdp_port}"))
+                // The profile is throwaway. On macOS, Chromium's cookie store waits for the login
+                // Keychain before the first HTTP request goes out, and that lookup can block under
+                // a test launch, so every HTTP `page.goto` times out. The fake keychain skips the
+                // lookup, as the SDK's own launcher (tools/browser-process.mjs) does.
+                .args(cfg!(target_os = "macos").then_some("--use-mock-keychain"))
                 .args([
                     "--disable-browseros-server",
                     "--disable-browseros-server-updater",
