@@ -262,7 +262,6 @@ export class GatewayState {
     const key = "device:" + deviceId;
     const snapshot = await this.ctx.storage.get<any>(key);
     if (!snapshot) return json({ error: "device_not_found" }, 404);
-    if (snapshot.revoked) return json({ revoked: true });
     const message = ["browseros-pair-v1", "revoke", deviceId, nonce, String(timestamp)].join("\n");
     if (!await verifyEd25519(snapshot.publicKey, signature, message)) return json({ error: "invalid_device_proof" }, 401);
 
