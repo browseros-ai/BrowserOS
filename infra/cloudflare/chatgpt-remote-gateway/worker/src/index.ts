@@ -30,6 +30,14 @@ const b64url = (value: ArrayBuffer | ArrayBufferView) => {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 };
 const sha256 = async (value: string) => b64url(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
+const pairingCode = () => {
+  const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => alphabet[byte & 31]).join("");
+};
+const pairingCode = () => {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => alphabet[byte & 31]).join("");
+};
 function fromB64url(value: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
   try {
@@ -211,7 +219,7 @@ export class GatewayState {
     const label = typeof body.label === "string" ? body.label.trim().slice(0, 48) : "BrowserOS device";
     const deviceId = randomId(18);
     const transactionId = randomId(24);
-    const code = randomId(9).replace(/[-_]/g, "A").toUpperCase();
+    const code = pairingCode();
     const challenge = randomId(32);
     const createdAt = Date.now();
     const expiresAt = createdAt + 300000;
@@ -250,20 +258,37 @@ export class GatewayState {
     const nonce = typeof body?.nonce === "string" ? body.nonce : "";
     const signature = typeof body?.signature === "string" ? body.signature : "";
     if (!deviceId || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce) || !Number.isSafeInteger(timestamp) || Math.abs(Date.now() - timestamp * 1000) > 300000) return json({ error: "invalid_request" }, 400);
+
     const key = "device:" + deviceId;
-    const device = await this.ctx.storage.get<any>(key);
-    if (!device) return json({ error: "device_not_found" }, 404);
-    if (device.revoked) return json({ revoked: true });
+    const snapshot = await this.ctx.storage.get<any>(key);
+    if (!snapshot) return json({ error: "device_not_found" }, 404);
+    if (snapshot.revoked) return json({ revoked: true });
     const message = ["browseros-pair-v1", "revoke", deviceId, nonce, String(timestamp)].join("\n");
-    if (!await verifyEd25519(device.publicKey, signature, message)) return json({ error: "invalid_device_proof" }, 401);
+    if (!await verifyEd25519(snapshot.publicKey, signature, message)) return json({ error: "invalid_device_proof" }, 401);
+
+    // Atomically consume the nonce and revoke the device. A concurrent replay cannot pass.
     const nonceKey = "revokenonce:" + deviceId + ":" + nonce;
-    if (await this.ctx.storage.get<boolean>(nonceKey)) return json({ error: "replayed_request" }, 409);
-    await this.ctx.storage.put(nonceKey, true, { expirationTtl: 600 });
-    device.revoked = true;
-    device.revokedAt = Date.now();
-    await this.ctx.storage.put(key, device);
-    const tx = await this.ctx.storage.get<PairTransaction>("pairtx:" + device.transactionId);
-    if (tx) { tx.state = "revoked"; await this.ctx.storage.put("pairtx:" + tx.transactionId, tx); }
+    const result = await this.ctx.storage.transaction(async (txn) => {
+      if (await txn.get<boolean>(nonceKey)) return "replayed";
+      const device = await txn.get<any>(key);
+      if (!device) return "missing";
+      if (device.revoked) return "revoked";
+      if (device.publicKey !== snapshot.publicKey || device.transactionId !== snapshot.transactionId) return "changed";
+      device.revoked = true;
+      device.revokedAt = Date.now();
+      await txn.put(nonceKey, true, { expirationTtl: 600 });
+      await txn.put(key, device);
+      const txKey = "pairtx:" + device.transactionId;
+      const tx = await txn.get<PairTransaction>(txKey);
+      if (tx) {
+        tx.state = "revoked";
+        await txn.put(txKey, tx);
+      }
+      return "revoked";
+    });
+    if (result === "missing") return json({ error: "device_not_found" }, 404);
+    if (result === "changed") return json({ error: "device_changed" }, 409);
+    if (result === "replayed") return json({ error: "replayed_request" }, 409);
     return json({ revoked: true });
   }
 
@@ -296,30 +321,48 @@ export class GatewayState {
     const form = await request.formData();
     const transaction = String(form.get("transaction") || "");
     const txKey = "authreq:" + await sha256(transaction);
-    const authRequest = await this.ctx.storage.get<AuthRequest>(txKey);
-    if (!authRequest || authRequest.expiresAt < Date.now()) return json({ error: "invalid_request" }, 400);
-    await this.ctx.storage.delete(txKey);
     const codeInput = String(form.get("pairing_code") || "").trim().toUpperCase();
     if (form.get("approve") !== "yes" || !codeInput) return json({ error: "access_denied" }, 400);
-    const client = await this.ctx.storage.get<Client>("client:" + authRequest.clientId);
-    if (!client || !client.redirectUris.includes(authRequest.redirectUri)) return json({ error: "invalid_client" }, 400);
+
     const pairKey = "pair:" + await sha256(codeInput);
-    const pairing = await this.ctx.storage.get<Pairing>(pairKey);
-    if (!pairing || pairing.expiresAt < Date.now() || pairing.paired) return json({ error: "invalid_pairing_code" }, 400);
-    pairing.paired = true;
-    const pairedAt = Date.now();
-    await this.ctx.storage.put("device:" + pairing.deviceId, { deviceId: pairing.deviceId, transactionId: pairing.transactionId, publicKey: pairing.publicKey, label: pairing.label, pairedAt, revoked: false });
-    const pairTransaction = await this.ctx.storage.get<PairTransaction>("pairtx:" + pairing.transactionId);
-    if (pairTransaction) { pairTransaction.state = "paired"; await this.ctx.storage.put("pairtx:" + pairing.transactionId, pairTransaction); }
-    await this.ctx.storage.delete(pairKey);
     const authCode = randomId(32);
-    await this.ctx.storage.put("code:" + await sha256(authCode), {
-      clientId: authRequest.clientId, redirectUri: authRequest.redirectUri, challenge: authRequest.challenge,
-      deviceId: pairing.deviceId, scope: authRequest.scope, expiresAt: Date.now() + 5 * 60 * 1000
-    } satisfies AuthCode);
-    const target = new URL(authRequest.redirectUri);
+    const authCodeKey = "code:" + await sha256(authCode);
+    const now = Date.now();
+    const result = await this.ctx.storage.transaction(async (txn) => {
+      const authRequest = await txn.get<AuthRequest>(txKey);
+      if (!authRequest || authRequest.expiresAt < now) return { error: "invalid_request" as const };
+      const client = await txn.get<Client>("client:" + authRequest.clientId);
+      if (!client || !client.redirectUris.includes(authRequest.redirectUri)) return { error: "invalid_client" as const };
+      const pairing = await txn.get<Pairing>(pairKey);
+      if (!pairing || pairing.expiresAt < now || pairing.paired) return { error: "invalid_pairing_code" as const };
+
+      const pairTransactionKey = "pairtx:" + pairing.transactionId;
+      const pairTransaction = await txn.get<PairTransaction>(pairTransactionKey);
+      if (!pairTransaction || pairTransaction.expiresAt < now || pairTransaction.state !== "pending" || pairTransaction.deviceId !== pairing.deviceId) return { error: "invalid_pairing_code" as const };
+
+      pairing.paired = true;
+      const pairedAt = now;
+      await txn.put("device:" + pairing.deviceId, {
+        deviceId: pairing.deviceId, transactionId: pairing.transactionId, publicKey: pairing.publicKey,
+        label: pairing.label, pairedAt, revoked: false
+      });
+      pairTransaction.state = "paired";
+      await txn.put(pairTransactionKey, pairTransaction);
+      await txn.delete(pairKey);
+      await txn.delete(txKey);
+      await txn.put(authCodeKey, {
+        clientId: authRequest.clientId, redirectUri: authRequest.redirectUri, challenge: authRequest.challenge,
+        deviceId: pairing.deviceId, scope: authRequest.scope, expiresAt: now + 5 * 60 * 1000
+      } satisfies AuthCode);
+      return { redirectUri: authRequest.redirectUri, state: authRequest.state };
+    });
+    if ("error" in result) {
+      const status = result.error === "invalid_client" ? 400 : 400;
+      return json({ error: result.error }, status);
+    }
+    const target = new URL(result.redirectUri);
     target.searchParams.set("code", authCode);
-    target.searchParams.set("state", authRequest.state);
+    target.searchParams.set("state", result.state);
     return Response.redirect(target.toString(), 302);
   }
 
@@ -334,19 +377,23 @@ export class GatewayState {
     const code = String(form.get("code") || "");
     const redirectUri = String(form.get("redirect_uri") || "");
     const verifier = String(form.get("code_verifier") || "");
-    if (grantType !== "authorization_code" || verifier.length < 43 || verifier.length > 128) return json({ error: "unsupported_grant_type" }, 400);
+    if (grantType !== "authorization_code" || verifier.length < 43 || verifier.length > 128 || !code) return json({ error: "unsupported_grant_type" }, 400);
+
     const recordKey = "code:" + await sha256(code);
-    const record = await this.ctx.storage.get<AuthCode>(recordKey);
-    if (!record || record.expiresAt < Date.now() || record.clientId !== clientId || record.redirectUri !== redirectUri || !safeEqual(await sha256(verifier), record.challenge)) {
-      return json({ error: "invalid_grant" }, 400);
-    }
-    await this.ctx.storage.delete(recordKey);
-    const device = await this.ctx.storage.get<any>("device:" + record.deviceId);
-    if (!device || device.revoked) return json({ error: "invalid_grant" }, 400);
+    const verifierChallenge = await sha256(verifier);
+    const consumed = await this.ctx.storage.transaction(async (txn) => {
+      const record = await txn.get<AuthCode>(recordKey);
+      if (!record || record.expiresAt < Date.now() || record.clientId !== clientId || record.redirectUri !== redirectUri || !safeEqual(verifierChallenge, record.challenge)) return null;
+      const device = await txn.get<any>("device:" + record.deviceId);
+      if (!device || device.revoked) return null;
+      await txn.delete(recordKey);
+      return record;
+    });
+    if (!consumed) return json({ error: "invalid_grant" }, 400);
     const now = Math.floor(Date.now() / 1000);
-    const claims: AccessClaims = { iss: this.env.GATEWAY_ISSUER, aud: this.env.GATEWAY_ISSUER + "/mcp", sub: clientId, device_id: record.deviceId, scope: record.scope, iat: now, exp: now + 3600 };
+    const claims: AccessClaims = { iss: this.env.GATEWAY_ISSUER, aud: this.env.GATEWAY_ISSUER + "/mcp", sub: clientId, device_id: consumed.deviceId, scope: consumed.scope, iat: now, exp: now + 3600 };
     const accessToken = await signAccessToken(this.env, claims);
-    return json({ access_token: accessToken, token_type: "Bearer", expires_in: 3600, scope: record.scope });
+    return json({ access_token: accessToken, token_type: "Bearer", expires_in: 3600, scope: consumed.scope });
   }
 
   private async mcp(request: Request): Promise<Response> {
