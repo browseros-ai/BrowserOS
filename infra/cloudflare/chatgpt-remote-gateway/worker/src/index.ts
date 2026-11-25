@@ -350,6 +350,8 @@ export class GatewayState {
   }
 
   private async mcp(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "mcp", 120, 60000);
+    if (limited) return limited;
     const auth = request.headers.get("authorization") || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     const claims = token ? await verifyAccessToken(this.env, token) : null;
