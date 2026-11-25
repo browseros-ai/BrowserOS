@@ -106,7 +106,7 @@ const PROFILES: {
 ]
 
 /** A task, then the browser profiles, with your agent picking the one it belongs in. */
-export function ProfilePicture() {
+function ProfilePicture() {
   return (
     <Picture caption="Illustration.">
       <span className="inline-flex items-center gap-2 self-start rounded-full border border-border-2 bg-card px-3 py-1.5 font-semibold text-[13.5px] text-cyanotype-ink shadow-card motion-safe:animate-fade-up">
