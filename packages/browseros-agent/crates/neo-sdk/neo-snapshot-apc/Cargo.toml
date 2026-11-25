@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Pure-Rust decoder and typed protobuf schema for Chromium's AnnotatedPageContent (BrowserOS Neo)"
 
+[features]
+# Hand-built `AnnotatedPageContent` fixtures (`tree::ApcBuilder`) for offline unit and integration
+# tests without compiling test builders into production binaries.
+test-support = []
+
 [dependencies]
 base64.workspace = true
 prost.workspace = true
@@ -16,6 +21,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 browseros-cdp.workspace = true
+neo-snapshot-apc = { path = ".", features = ["test-support"] }
 tokio.workspace = true
 
 # claw-sdk's lint table, restated as neo-server and neo-playwright restate it (check.sh puts a
