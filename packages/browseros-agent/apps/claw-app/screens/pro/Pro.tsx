@@ -28,6 +28,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
+  isCardTrial,
+  monthlyTrialDays,
   TRIAL_ENDING_DAYS,
   trialEndFrom,
   trialOfferDays,
@@ -39,6 +41,7 @@ import {
   apiErrorMessage,
   type BillingPeriod,
   formatDate,
+  formatPrice,
   isPro,
   keyHasEnded,
   PLAN_UNCHECKED,
@@ -49,6 +52,8 @@ import {
 import { SavingsHero } from './SavingsHero'
 
 const DAY_MS = 86_400_000
+/** The days bar's length when the price list can't say. */
+const DEFAULT_TRIAL_DAYS = 7
 
 const TITLE = (
   <>
@@ -121,6 +126,8 @@ export function Pro() {
             plan={current}
             portal={portal}
             onCancel={() => setCancelOpen(true)}
+            monthlyPrice={prices?.month ? formatPrice(prices.month) : undefined}
+            trialLength={monthlyTrialDays(pricing.data) || DEFAULT_TRIAL_DAYS}
           />
           {current.onKey ? <KeySection planKey={planKey} /> : null}
           <FeatureTiles
@@ -195,6 +202,10 @@ export function Pro() {
         on={pro}
         nextPayment={current.status === 'active' ? current.periodEnd : null}
         offeredTrialDays={trial ? trialDays : 0}
+        trialEndsAt={
+          isCardTrial(current) ? (current.trialEndsAt ?? null) : null
+        }
+        trialCancelled={current.status === 'ending'}
       />
 
       <UseKeyDialog
@@ -312,24 +323,34 @@ function ProQuestions({
   on,
   nextPayment,
   offeredTrialDays,
+  trialEndsAt,
+  trialCancelled,
 }: {
   prices: ProPrices | null
   on: boolean
   nextPayment: number | null
   /** The free trial a checkout here would start with, or 0. */
   offeredTrialDays: number
+  /** When this computer's card trial ends, while one is on. */
+  trialEndsAt: number | null
+  trialCancelled: boolean
 }) {
   const yearly = prices?.year ? ', or each year if you pay yearly' : ''
   const offeredEnd =
     offeredTrialDays > 0 ? trialEndFrom(Date.now(), offeredTrialDays) : null
+  const trialEnd = trialEndsAt ?? offeredEnd
   const charged =
-    nextPayment !== null
-      ? `Next on ${formatDate(nextPayment)}. Stripe emails you a receipt each time.`
-      : on
-        ? null
-        : offeredEnd !== null
-          ? `On ${formatDate(offeredEnd)}, after your ${offeredTrialDays} free days, then on the same date each month. Cancel before then and you won’t be charged.`
-          : `Today, then on the same date each month${yearly}.`
+    trialEndsAt !== null
+      ? trialCancelled
+        ? `You won’t be charged. Your trial ends on ${formatDate(trialEndsAt)}.`
+        : `On ${formatDate(trialEndsAt)}, when your free trial ends. Cancel before then and you won’t be charged.`
+      : nextPayment !== null
+        ? `Next on ${formatDate(nextPayment)}. Stripe emails you a receipt each time.`
+        : on
+          ? null
+          : offeredEnd !== null
+            ? `On ${formatDate(offeredEnd)}, after your ${offeredTrialDays} free days, then on the same date each month. Cancel before then and you won’t be charged.`
+            : `Today, then on the same date each month${yearly}.`
   const questions = [
     ...(charged ? [{ q: 'When am I charged?', a: charged }] : []),
     ...(offeredEnd !== null
@@ -343,8 +364,8 @@ function ProQuestions({
     {
       q: 'What if I cancel?',
       a:
-        offeredEnd !== null
-          ? `During the free trial, ultrafast stays on until ${formatDate(offeredEnd)} and you aren’t charged. After that, it stays on until your paid time ends.`
+        trialEnd !== null
+          ? `During the free trial, ultrafast stays on until ${formatDate(trialEnd)} and you aren’t charged. After that, it stays on until your paid time ends.`
           : 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
     },
     {

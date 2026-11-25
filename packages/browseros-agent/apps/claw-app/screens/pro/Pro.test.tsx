@@ -1064,6 +1064,57 @@ describe('the free trial', () => {
   })
 })
 
+describe('a running free trial', () => {
+  const DAY = 86_400_000
+  const cardTrial = (overrides: Partial<Plan> = {}): Plan => ({
+    ...PRO,
+    trial: true,
+    trialKind: 'card',
+    trialEndsAt: Date.now() + 4 * DAY + 60_000,
+    ...overrides,
+  })
+
+  beforeEach(() => {
+    server.pricing = async () => TRIAL_PRICING
+  })
+
+  it('tests that a card trial shows the days left, the first charge, and Cancel trial', async () => {
+    const plan = cardTrial()
+    server.plan = async () => plan
+    server.cancel = async () => ({
+      ...plan,
+      status: 'ending',
+      endsAt: plan.trialEndsAt ?? null,
+    })
+    await mount()
+
+    expect(text()).toContain('Free trial')
+    expect(text()).toMatch(/5 days left\. Then \$20 a month from .+\./)
+    expect(
+      container.querySelector('[role="img"][aria-label="5 of 7 days left"]'),
+    ).not.toBeNull()
+
+    await click('Cancel trial')
+    expect(dialog().getAttribute('aria-label')).toBe('Cancel your free trial?')
+    expect(dialog().textContent).toContain('and you won’t be charged.')
+    await click('Cancel trial', dialog())
+    expect(callsTo('cancelPlan')).toHaveLength(1)
+    expect(text()).toMatch(/Trial ends .+\./)
+    expect(text()).toContain('You won’t be charged.')
+    expect(button('Keep ultrafast')).toBeTruthy()
+  })
+
+  it('tests that a trial from a free trial link reads as a paid plan', async () => {
+    server.plan = async () => cardTrial({ trialKind: 'grant' })
+    await mount()
+
+    expect(text()).toContain('You’re on ultrafast')
+    expect(text()).not.toContain('Free trial')
+    expect(text()).not.toContain('days left')
+    expect(button('Cancel ultrafast')).toBeTruthy()
+  })
+})
+
 describe('Use a licence key', () => {
   async function openDialog() {
     await mount()
