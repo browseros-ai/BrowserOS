@@ -4,7 +4,7 @@ use crate::proto::{
     ClickabilityReason, ContentAttributeType, ContentAttributes, ContentData, FormControlType,
 };
 
-use super::hidden::{Hidden, is_text_node, is_ua_shadow, raw_tag};
+use super::hidden::{self, Hidden};
 use super::node_key::NodeId;
 use super::tree_node::TreeNode;
 
@@ -816,7 +816,7 @@ fn static_implicit_role(tag: &str) -> Option<Role> {
 
 fn is_page_element(node: &TreeNode) -> bool {
     node.raw_attributes()
-        .is_some_and(|raw| !is_text_node(raw) && !is_ua_shadow(raw))
+        .is_some_and(|raw| !hidden::is_text_node(raw) && !hidden::is_ua_shadow(raw))
 }
 
 fn logical_parent_in_doc(nodes: &[TreeNode], id: NodeId) -> Option<NodeId> {
@@ -830,7 +830,7 @@ fn logical_parent_in_doc(nodes: &[TreeNode], id: NodeId) -> Option<NodeId> {
         }
         if ancestor
             .raw_attributes()
-            .is_none_or(|raw| !is_ua_shadow(raw))
+            .is_none_or(|raw| !hidden::is_ua_shadow(raw))
         {
             return Some(ancestor_id);
         }
@@ -839,8 +839,6 @@ fn logical_parent_in_doc(nodes: &[TreeNode], id: NodeId) -> Option<NodeId> {
     None
 }
 
-/// Precomputed O(N) ancestor context for dynamic implicit role lookups (`header`/`footer`
-/// landmark blockers, enclosing `table` for `td`/`th`, and previous element siblings for `th`).
 struct RoleContext {
     ancestor_prevents_landmark: Vec<bool>,
     ancestor_table: Vec<Option<NodeId>>,
@@ -870,9 +868,9 @@ impl RoleContext {
 
             let raw = node
                 .raw_attributes()
-                .filter(|attrs| !is_text_node(attrs) && !is_ua_shadow(attrs));
+                .filter(|attrs| !hidden::is_text_node(attrs) && !hidden::is_ua_shadow(attrs));
             let self_prevents = raw.is_some_and(node_prevents_landmark);
-            let self_tag = raw.and_then(raw_tag);
+            let self_tag = raw.and_then(hidden::raw_tag);
             let is_table = self_tag.is_some_and(|tag| tag.eq_ignore_ascii_case("table"));
             if self_tag.is_some_and(|tag| tag.eq_ignore_ascii_case("th")) {
                 has_th = true;
@@ -1005,9 +1003,9 @@ fn table_has_at_most_one_row(nodes: &[TreeNode], table_id: NodeId) -> bool {
             continue;
         }
         if let Some(raw) = node.raw_attributes()
-            && !is_ua_shadow(raw)
-            && !is_text_node(raw)
-            && let Some(tag) = raw_tag(raw)
+            && !hidden::is_ua_shadow(raw)
+            && !hidden::is_text_node(raw)
+            && let Some(tag) = hidden::raw_tag(raw)
         {
             if tag.eq_ignore_ascii_case("table") {
                 cursor = node.subtree_end().index().max(cursor.saturating_add(1));
@@ -1032,8 +1030,8 @@ fn is_tag(nodes: &[TreeNode], id: NodeId, expected: &str) -> bool {
     nodes
         .get(id.index())
         .and_then(TreeNode::raw_attributes)
-        .filter(|raw| !is_text_node(raw) && !is_ua_shadow(raw))
-        .and_then(raw_tag)
+        .filter(|raw| !hidden::is_text_node(raw) && !hidden::is_ua_shadow(raw))
+        .and_then(hidden::raw_tag)
         .is_some_and(|tag| tag.eq_ignore_ascii_case(expected))
 }
 
@@ -1051,7 +1049,7 @@ fn is_non_empty_data_cell(nodes: &[TreeNode], id: NodeId) -> bool {
         let Some(child) = nodes.get(child_id.index()) else {
             break;
         };
-        if child.doc() == doc && is_page_element(child) {
+        if child.doc() == doc && child.dom_node_id().is_some() && is_page_element(child) {
             return true;
         }
         child_cursor = child.next_sibling();
@@ -1067,9 +1065,12 @@ fn is_non_empty_data_cell(nodes: &[TreeNode], id: NodeId) -> bool {
             cursor = desc.subtree_end().index().max(cursor.saturating_add(1));
             continue;
         }
-        if let Some(raw) = desc.raw_attributes()
-            && !is_ua_shadow(raw)
-            && is_text_node(raw)
+        // Synthetic layout nodes (such as CSS ::before/::after generated text) have no DOM node ID
+        // and are excluded from DOM `textContent`.
+        if desc.dom_node_id().is_some()
+            && let Some(raw) = desc.raw_attributes()
+            && !hidden::is_ua_shadow(raw)
+            && hidden::is_text_node(raw)
         {
             let text = raw
                 .browseros
@@ -1176,7 +1177,7 @@ fn lookup_implicit_role(
     raw: &ContentAttributes,
     context: &RoleContext,
 ) -> Option<Role> {
-    let raw_name = raw_tag(raw)?;
+    let raw_name = hidden::raw_tag(raw)?;
     let mut scratch = [0_u8; 16];
     let tag = canonical_tag(raw_name, &mut scratch)?;
 
@@ -1241,8 +1242,6 @@ fn lookup_implicit_role(
     }
 }
 
-/// Tag name used when checking `kPresentationInheritanceParents`.
-///
 /// BrowserOS APC omits `browseros.tag` on `div` and `span`, so an untagged non-text, non-root,
 /// non-`ua_shadow` element counts as `"div"` so `<dl role="presentation"><div><dt>` inherits
 /// `presentation`.
@@ -1251,10 +1250,10 @@ fn presentation_inheritance_tag<'a>(
     scratch: &'a mut [u8; 16],
 ) -> Option<&'a str> {
     let raw = node.raw_attributes()?;
-    if is_text_node(raw) || is_ua_shadow(raw) {
+    if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) {
         return None;
     }
-    if let Some(tag) = raw_tag(raw) {
+    if let Some(tag) = hidden::raw_tag(raw) {
         return canonical_tag(tag, scratch);
     }
     if raw.attribute_type == Some(i32::from(ContentAttributeType::Root)) {
@@ -1284,7 +1283,6 @@ fn implicit_aria_role(
 ) -> Option<Role> {
     let implicit = lookup_implicit_role(nodes, hidden, id, raw, context)?;
 
-    // Walk required presentation-inheritance ancestors strictly inside this document.
     let mut ancestor_id = id;
     while let Some(ancestor) = nodes.get(ancestor_id.index()) {
         let mut ancestor_scratch = [0_u8; 16];
@@ -1326,7 +1324,6 @@ fn implicit_aria_role(
     Some(implicit)
 }
 
-/// Computes the effective WAI-ARIA [`Role`] for every node in `nodes` iteratively.
 pub(crate) fn compute_roles(nodes: &[TreeNode], hidden: &[Hidden]) -> Vec<Option<Role>> {
     let context = RoleContext::build(nodes);
 
@@ -1334,7 +1331,7 @@ pub(crate) fn compute_roles(nodes: &[TreeNode], hidden: &[Hidden]) -> Vec<Option
     for node in nodes {
         let computed = node
             .raw_attributes()
-            .filter(|raw| !is_text_node(raw) && !is_ua_shadow(raw))
+            .filter(|raw| !hidden::is_text_node(raw) && !hidden::is_ua_shadow(raw))
             .and_then(|raw| {
                 let Some(explicit) = explicit_aria_role(raw) else {
                     return implicit_aria_role(nodes, hidden, node.id(), raw, &context);
@@ -1358,20 +1355,26 @@ mod tests {
 
     #[test]
     fn js_whitespace_matches_ecmascript_bom_and_excludes_nel() {
-        assert!(is_js_whitespace(' '));
-        assert!(is_js_whitespace('\t'));
-        assert!(is_js_whitespace('\u{00A0}'));
-        assert!(is_js_whitespace('\u{FEFF}'));
-        assert!(is_js_whitespace('\u{2028}'));
-        assert!(is_js_whitespace('\u{3000}'));
+        for ch in [' ', '\t', '\u{00A0}', '\u{FEFF}', '\u{2028}', '\u{3000}'] {
+            assert!(
+                is_js_whitespace(ch),
+                "U+{:04X} must be classified as ECMAScript whitespace",
+                u32::from(ch)
+            );
+        }
         assert!(
             !is_js_whitespace('\u{0085}'),
             "U+0085 NEL is Unicode White_Space but not ECMAScript whitespace"
         );
-        assert_eq!(trim_js_whitespace("\u{FEFF} button \u{00A0}"), "button");
+        assert_eq!(
+            trim_js_whitespace("\u{FEFF} button \u{00A0}"),
+            "button",
+            "trim_js_whitespace must strip BOM and NBSP around tokens"
+        );
         assert_eq!(
             trim_js_whitespace("\u{0085}button\u{0085}"),
-            "\u{0085}button\u{0085}"
+            "\u{0085}button\u{0085}",
+            "trim_js_whitespace must preserve U+0085 NEL"
         );
     }
 
@@ -1380,19 +1383,35 @@ mod tests {
         let mut scratch = [0_u8; 16];
         assert_eq!(
             canonical_tag("blockquote", &mut scratch),
-            Some("blockquote")
+            Some("blockquote"),
+            "lowercase HTML tag must borrow directly without scratch buffer copies"
         );
         assert_eq!(
             canonical_tag("BLOCKQUOTE", &mut scratch),
-            Some("blockquote")
+            Some("blockquote"),
+            "uppercase HTML tag within scratch capacity must lowercase to ASCII"
         );
         assert_eq!(
             canonical_tag("custom-very-long-tag", &mut scratch),
-            Some("custom-very-long-tag")
+            Some("custom-very-long-tag"),
+            "already-lowercase custom tags longer than scratch buffer must still borrow"
         );
-        assert_eq!(canonical_tag("CUSTOM-VERY-LONG-TAG", &mut scratch), None);
-        assert!(Role::None.is_presentational());
-        assert!(Role::Presentation.is_presentational());
-        assert!(!Role::Button.is_presentational());
+        assert_eq!(
+            canonical_tag("CUSTOM-VERY-LONG-TAG", &mut scratch),
+            None,
+            "uppercase tag longer than any HTML-AAM tag name must return None"
+        );
+        assert!(
+            Role::None.is_presentational(),
+            "Role::None must be presentational"
+        );
+        assert!(
+            Role::Presentation.is_presentational(),
+            "Role::Presentation must be presentational"
+        );
+        assert!(
+            !Role::Button.is_presentational(),
+            "Role::Button must not be presentational"
+        );
     }
 }

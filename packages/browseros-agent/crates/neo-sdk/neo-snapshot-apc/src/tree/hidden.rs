@@ -46,7 +46,7 @@ impl Hidden {
     }
 
     /// Whether this node starts an `aria-hidden="true"` boundary (raw `browseros.aria_hidden` is
-    /// true here while the immediate same-document parent does not carry raw `aria_hidden`).
+    /// true here while no same-document ancestor carries `aria-hidden`).
     #[must_use]
     pub const fn has_own_aria_hidden(self) -> bool {
         (self.0 & OWN_ARIA_HIDDEN) != 0
@@ -100,7 +100,7 @@ impl Hidden {
         (self.0 & POINTER_EVENTS_NONE) != 0
     }
 
-    /// Whether this node can receive pointer events (`!self.is_pointer_events_none()`).
+    /// Whether this node can receive pointer events.
     #[must_use]
     pub const fn receives_pointer_events(self) -> bool {
         !self.is_pointer_events_none()
@@ -169,12 +169,6 @@ fn has_own_content_hidden_attr(raw: &ContentAttributes) -> bool {
     raw.annotated_roles.contains(&code)
 }
 
-/// Computes [`Hidden`] for every node in `nodes` using two non-recursive passes.
-///
-/// Pass A runs top-down in preorder (`0..nodes.len()`) so inherited `aria-hidden`,
-/// `ContentHidden`, and `<select>` ancestry propagate strictly within each document in O(N) time.
-/// Pass B runs bottom-up in reverse preorder so arbitrarily deep chains of `display: contents`
-/// wrappers resolve from their direct same-document children in O(N) time and O(1) stack depth.
 pub(crate) fn compute_hidden(nodes: &[TreeNode]) -> Vec<Hidden> {
     let mut results = compute_hidden_top_down(nodes);
     resolve_display_contents_bottom_up(nodes, &mut results);
@@ -183,7 +177,6 @@ pub(crate) fn compute_hidden(nodes: &[TreeNode]) -> Vec<Hidden> {
 
 fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
     let mut results = vec![Hidden::default(); nodes.len()];
-    let mut raw_aria_hidden_flags = vec![false; nodes.len()];
     let mut inside_select = vec![false; nodes.len()];
 
     for (index, node) in nodes.iter().enumerate() {
@@ -195,9 +188,6 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
         let parent_hidden = same_doc_parent
             .and_then(|parent_id| results.get(parent_id.index()).copied())
             .unwrap_or_default();
-        let parent_had_raw_aria_hidden = same_doc_parent
-            .and_then(|parent_id| raw_aria_hidden_flags.get(parent_id.index()).copied())
-            .unwrap_or(false);
         let parent_inside_select = same_doc_parent
             .and_then(|parent_id| inside_select.get(parent_id.index()).copied())
             .unwrap_or(false);
@@ -209,10 +199,6 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
         let raw_aria_hidden = browseros.is_some_and(|b| b.aria_hidden == Some(true));
         let own_content_hidden = raw.is_some_and(has_own_content_hidden_attr);
 
-        if let Some(slot) = raw_aria_hidden_flags.get_mut(index) {
-            *slot = raw_aria_hidden;
-        }
-
         let tag = browseros.and_then(|b| b.tag.as_deref());
         let is_select =
             !is_text && !ua_shadow && tag.is_some_and(|name| name.eq_ignore_ascii_case("select"));
@@ -221,7 +207,7 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
         }
 
         let aria_hidden = raw_aria_hidden || parent_hidden.is_aria_hidden();
-        let has_own_aria_hidden = raw_aria_hidden && !parent_had_raw_aria_hidden;
+        let has_own_aria_hidden = !ua_shadow && raw_aria_hidden && !parent_hidden.is_aria_hidden();
         let content_hidden = own_content_hidden || parent_hidden.is_content_hidden();
 
         let visibility_hidden =
@@ -274,7 +260,51 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
     results
 }
 
+#[derive(Clone, Copy, Default)]
+struct LogicalChildVisibility {
+    box_visible: bool,
+    aria_unhidden: bool,
+}
+
+fn aggregate_logical_children(
+    nodes: &[TreeNode],
+    node: &TreeNode,
+    results: &[Hidden],
+    ua_children: &[LogicalChildVisibility],
+) -> LogicalChildVisibility {
+    let mut aggregated = LogicalChildVisibility::default();
+    let mut cursor = node.first_child();
+    while let Some(child_id) = cursor {
+        let Some(child) = nodes.get(child_id.index()) else {
+            break;
+        };
+        if child.doc() == node.doc()
+            && let Some(child_hidden) = results.get(child_id.index()).copied()
+        {
+            if child_hidden.is_ua_shadow() {
+                if let Some(through_ua) = ua_children.get(child_id.index()).copied() {
+                    aggregated.box_visible |= through_ua.box_visible;
+                    aggregated.aria_unhidden |= through_ua.aria_unhidden;
+                }
+            } else {
+                aggregated.box_visible |= child_hidden.is_box_visible();
+                let child_is_text = child.raw_attributes().is_some_and(is_text_node);
+                let counts_for_aria = if child_is_text {
+                    child_hidden.is_box_visible()
+                } else {
+                    !child_hidden.is_hidden_for_aria()
+                };
+                aggregated.aria_unhidden |= counts_for_aria;
+            }
+        }
+        cursor = child.next_sibling();
+    }
+    aggregated
+}
+
 fn resolve_display_contents_bottom_up(nodes: &[TreeNode], results: &mut [Hidden]) {
+    let mut ua_children = vec![LogicalChildVisibility::default(); nodes.len()];
+
     for index in (0..nodes.len()).rev() {
         let Some(node) = nodes.get(index) else {
             continue;
@@ -282,7 +312,15 @@ fn resolve_display_contents_bottom_up(nodes: &[TreeNode], results: &mut [Hidden]
         let Some(current) = results.get(index).copied() else {
             continue;
         };
-        if !current.is_display_contents() || current.is_ua_shadow() {
+        if !current.is_display_contents() && !current.is_ua_shadow() {
+            continue;
+        }
+
+        let children = aggregate_logical_children(nodes, node, results, &ua_children);
+        if current.is_ua_shadow() {
+            if let Some(slot) = ua_children.get_mut(index) {
+                *slot = children;
+            }
             continue;
         }
 
@@ -290,43 +328,10 @@ fn resolve_display_contents_bottom_up(nodes: &[TreeNode], results: &mut [Hidden]
         let is_slot = tag.is_some_and(|name| name.eq_ignore_ascii_case("slot"));
         let is_ignored = tag.is_some_and(is_ignored_for_aria_tag);
 
-        let mut any_child_box_visible = false;
-        let mut any_child_unhidden = false;
-        let mut cursor = node.first_child();
-        while let Some(child_id) = cursor {
-            let Some(child) = nodes.get(child_id.index()) else {
-                break;
-            };
-            if child.doc() == node.doc()
-                && let Some(child_hidden) = results.get(child_id.index()).copied()
-                && !child_hidden.is_ua_shadow()
-            {
-                if child_hidden.is_box_visible() {
-                    any_child_box_visible = true;
-                }
-                let child_is_text = child.raw_attributes().is_some_and(is_text_node);
-                let counts_for_aria = if child_is_text {
-                    child_hidden.is_box_visible() && !child_hidden.is_aria_hidden()
-                } else {
-                    !child_hidden.is_hidden_for_aria()
-                };
-                if counts_for_aria {
-                    any_child_unhidden = true;
-                }
-            }
-            cursor = child.next_sibling();
-        }
-
         let mut updated = current;
-        updated.set(BOX_VISIBLE, any_child_box_visible);
+        updated.set(BOX_VISIBLE, children.box_visible);
         if !is_slot {
-            let hidden_for_aria =
-                if is_ignored || current.is_aria_hidden() || current.is_content_hidden() {
-                    true
-                } else {
-                    !any_child_unhidden
-                };
-            updated.set(HIDDEN_FOR_ARIA, hidden_for_aria);
+            updated.set(HIDDEN_FOR_ARIA, is_ignored || !children.aria_unhidden);
         }
 
         if let Some(slot) = results.get_mut(index) {

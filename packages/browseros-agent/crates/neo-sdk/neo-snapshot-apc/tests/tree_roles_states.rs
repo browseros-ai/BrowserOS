@@ -187,8 +187,7 @@ fn presentation_conflict_focusability_rules() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn presentation_conflict_global_aria_and_own_vs_inherited_aria_hidden() -> Result<(), Box<dyn Error>>
-{
+fn presentation_conflict_global_aria_attributes() -> Result<(), Box<dyn Error>> {
     let root = NodeBuilder::root()
         .child(
             NodeBuilder::element("p")
@@ -213,7 +212,36 @@ fn presentation_conflict_global_aria_and_own_vs_inherited_aria_hidden() -> Resul
                 .dom_id(19)
                 .role("none")
                 .describedby(vec![ref_id(99)]),
-        )
+        );
+
+    let tree = build_tree(root)?;
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 16)?.role(),
+        Some(Role::None),
+        "aria-label is prohibited on paragraph so it must not trigger conflict resolution"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 17)?.role(),
+        Some(Role::Heading),
+        "aria-label is allowed on heading and must resolve none to Heading"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 18)?.role(),
+        Some(Role::Heading),
+        "aria-labelledby must resolve presentation to Heading"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 19)?.role(),
+        Some(Role::Paragraph),
+        "aria-describedby is never label-prohibited so it must override none on paragraph"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn presentation_conflict_own_vs_inherited_aria_hidden() -> Result<(), Box<dyn Error>> {
+    let root = NodeBuilder::root()
         .child(
             NodeBuilder::element("h1")
                 .dom_id(20)
@@ -243,27 +271,22 @@ fn presentation_conflict_global_aria_and_own_vs_inherited_aria_hidden() -> Resul
                 .dom_id(25)
                 .alt("")
                 .aria_hidden(true),
+        )
+        .child(
+            NodeBuilder::element("details")
+                .dom_id(26)
+                .aria_hidden(true)
+                .child(
+                    NodeBuilder::container().ua_shadow(true).dom_id(27).child(
+                        NodeBuilder::element("h1")
+                            .dom_id(28)
+                            .role("presentation")
+                            .aria_hidden(true),
+                    ),
+                ),
         );
 
     let tree = build_tree(root)?;
-    assert_eq!(
-        node_by_dom(&tree, "doc-main", 16)?.role(),
-        Some(Role::None),
-        "aria-label is prohibited on paragraph so it must not trigger conflict resolution"
-    );
-    assert_eq!(
-        node_by_dom(&tree, "doc-main", 17)?.role(),
-        Some(Role::Heading)
-    );
-    assert_eq!(
-        node_by_dom(&tree, "doc-main", 18)?.role(),
-        Some(Role::Heading)
-    );
-    assert_eq!(
-        node_by_dom(&tree, "doc-main", 19)?.role(),
-        Some(Role::Paragraph),
-        "aria-describedby is never label-prohibited so it must override none on paragraph"
-    );
     assert_eq!(
         node_by_dom(&tree, "doc-main", 20)?.role(),
         Some(Role::Heading),
@@ -288,6 +311,16 @@ fn presentation_conflict_global_aria_and_own_vs_inherited_aria_hidden() -> Resul
         node_by_dom(&tree, "doc-main", 25)?.role(),
         Some(Role::Img),
         "own aria-hidden on img[alt=\"\"] counts as global ARIA attr and promotes to img"
+    );
+    let slotted_h1 = node_by_dom(&tree, "doc-main", 28)?;
+    assert!(
+        slotted_h1.hidden().is_aria_hidden() && !slotted_h1.hidden().has_own_aria_hidden(),
+        "aria-hidden inherited across a ua_shadow slot must not count as an element's own boundary"
+    );
+    assert_eq!(
+        slotted_h1.role(),
+        Some(Role::Presentation),
+        "inherited aria-hidden across ua_shadow must keep h1[role=presentation] presentational"
     );
 
     Ok(())
@@ -1046,6 +1079,16 @@ fn dynamic_roles_for_th_sibling_heuristics() -> Result<(), Box<dyn Error>> {
                                 .dom_id(83)
                                 .child(NodeBuilder::text("\u{0085}")),
                         ),
+                )
+                .child(
+                    NodeBuilder::element("tr")
+                        .dom_id(84)
+                        .child(NodeBuilder::element("th").dom_id(85))
+                        .child(
+                            NodeBuilder::element("td")
+                                .dom_id(86)
+                                .child(NodeBuilder::text("generated").without_dom_id()),
+                        ),
                 ),
         );
 
@@ -1074,6 +1117,11 @@ fn dynamic_roles_for_th_sibling_heuristics() -> Result<(), Box<dyn Error>> {
         node_by_dom(&tree, "doc-main", 82)?.role(),
         Some(Role::Rowheader),
         "U+0085 NEL is not JS whitespace so td is non-empty and th becomes Rowheader"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 85)?.role(),
+        Some(Role::Columnheader),
+        "synthetic CSS-generated text (without dom_node_id) must not make an adjacent td non-empty"
     );
 
     Ok(())
@@ -1186,7 +1234,6 @@ fn presentation_inheritance_conflict_quirks_and_negative_contract() -> Result<()
                 .aria_label("x")
                 .child(NodeBuilder::element("li").dom_id(55)),
         )
-        // Negative contract: stock attribute_type, annotated_roles, and aria_role never confer roles
         .child(
             NodeBuilder::heading()
                 .dom_id(60)
@@ -1519,8 +1566,15 @@ fn states_cover_native_disabled() -> Result<(), Box<dyn Error>> {
     let tree = build_tree(root)?;
     for dom_id in 10..=15 {
         let state = node_by_dom(&tree, "doc-main", dom_id)?.state();
-        assert_eq!(state.disabled(), Some(true));
-        assert!(state.is_disabled());
+        assert_eq!(
+            state.disabled(),
+            Some(true),
+            "native form control dom_id={dom_id} with contract disabled must report disabled=Some(true)"
+        );
+        assert!(
+            state.is_disabled(),
+            "native form control dom_id={dom_id} with contract disabled must report is_disabled=true"
+        );
     }
     let fieldset = node_by_dom(&tree, "doc-main", 16)?.state();
     assert_eq!(
@@ -1924,17 +1978,6 @@ fn hidden_rules_cover_display_contents() -> Result<(), Box<dyn Error>> {
                 .display_contents(true)
                 .aria_hidden(true)
                 .child(boxed_element("span").dom_id(54)),
-        )
-        .child(
-            NodeBuilder::element("div")
-                .dom_id(55)
-                .display_contents(true)
-                .child(
-                    NodeBuilder::element("div")
-                        .dom_id(56)
-                        .display_contents(true)
-                        .child(boxed_element("button").dom_id(57)),
-                ),
         );
 
     let tree = build_tree(root)?;
@@ -1967,8 +2010,111 @@ fn hidden_rules_cover_display_contents() -> Result<(), Box<dyn Error>> {
     );
     let dc_aria_self = node_by_dom(&tree, "doc-main", 53)?.hidden();
     assert!(dc_aria_self.is_box_visible() && dc_aria_self.is_hidden_for_aria());
+
+    Ok(())
+}
+
+#[test]
+fn hidden_rules_cover_display_contents_through_ua_shadow_and_direct_text()
+-> Result<(), Box<dyn Error>> {
+    let root = NodeBuilder::root()
+        .dom_id(1)
+        .child(
+            NodeBuilder::element("div")
+                .dom_id(55)
+                .display_contents(true)
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(56)
+                        .display_contents(true)
+                        .child(boxed_element("button").dom_id(57)),
+                ),
+        )
+        .child(
+            NodeBuilder::element("details")
+                .dom_id(80)
+                .display_contents(true)
+                .child(
+                    NodeBuilder::container().ua_shadow(true).dom_id(81).child(
+                        NodeBuilder::container()
+                            .ua_shadow(true)
+                            .dom_id(82)
+                            .child(boxed_element("summary").dom_id(83)),
+                    ),
+                ),
+        )
+        .child(
+            NodeBuilder::element("details")
+                .dom_id(84)
+                .display_contents(true)
+                .child(
+                    NodeBuilder::container()
+                        .ua_shadow(true)
+                        .annotated_role(AnnotatedRole::ContentHidden)
+                        .dom_id(85)
+                        .child(boxed_element("p").dom_id(86)),
+                ),
+        )
+        .child(
+            NodeBuilder::element("div")
+                .dom_id(87)
+                .role("button")
+                .display_contents(true)
+                .aria_hidden(true)
+                .child(
+                    NodeBuilder::text("boxed aria-hidden text")
+                        .bounding_box(0, 0, 50, 12)
+                        .dom_id(88),
+                ),
+        )
+        .child(
+            NodeBuilder::element("div")
+                .dom_id(89)
+                .role("button")
+                .display_contents(true)
+                .annotated_role(AnnotatedRole::ContentHidden)
+                .child(
+                    NodeBuilder::text("content-hidden text")
+                        .bounding_box(0, 0, 50, 12)
+                        .dom_id(90),
+                ),
+        );
+
+    let tree = build_tree(root)?;
+
     let dc_nested_outer = node_by_dom(&tree, "doc-main", 55)?.hidden();
-    assert!(dc_nested_outer.is_box_visible() && !dc_nested_outer.is_hidden_for_aria());
+    assert!(
+        dc_nested_outer.is_box_visible() && !dc_nested_outer.is_hidden_for_aria(),
+        "nested display: contents wrappers must aggregate visibility from their leaf button"
+    );
+
+    let dc_open_details = node_by_dom(&tree, "doc-main", 80)?.hidden();
+    assert!(
+        dc_open_details.is_box_visible() && !dc_open_details.is_hidden_for_aria(),
+        "display: contents details host must aggregate visibility from page children slotted through ua_shadow"
+    );
+
+    let dc_closed_details = node_by_dom(&tree, "doc-main", 84)?.hidden();
+    assert!(
+        !dc_closed_details.is_box_visible() && dc_closed_details.is_hidden_for_aria(),
+        "display: contents details host with only ContentHidden ua_shadow descendants must remain invisible and ARIA-hidden"
+    );
+
+    let dc_aria_text = node_by_dom(&tree, "doc-main", 87)?.hidden();
+    assert!(
+        dc_aria_text.is_aria_hidden()
+            && dc_aria_text.is_box_visible()
+            && !dc_aria_text.is_hidden_for_aria(),
+        "display: contents with boxed direct text must follow Playwright's early text-box rule while retaining is_aria_hidden()"
+    );
+
+    let dc_content_hidden_text = node_by_dom(&tree, "doc-main", 89)?.hidden();
+    assert!(
+        dc_content_hidden_text.is_content_hidden()
+            && !dc_content_hidden_text.is_box_visible()
+            && dc_content_hidden_text.is_hidden_for_aria(),
+        "display: contents under ContentHidden has no boxed text and must be invisible and ARIA-hidden"
+    );
 
     Ok(())
 }
@@ -2024,7 +2170,8 @@ fn hidden_rules_cover_element_exceptions_and_pointer_events() -> Result<(), Box<
         assert!(
             node_by_dom(&tree, "doc-main", dom_id)?
                 .hidden()
-                .is_hidden_for_aria()
+                .is_hidden_for_aria(),
+            "ignored element dom_id={dom_id} (style/script/noscript/template) must be ARIA-hidden"
         );
     }
     let no_ptr = node_by_dom(&tree, "doc-main", 71)?.hidden();
@@ -2102,6 +2249,13 @@ fn build_deep_display_contents_chain(depth: usize) -> AnnotatedPageContent {
     }
 }
 
+struct DeepChainSummary {
+    root_box_visible: bool,
+    root_hidden_for_aria: bool,
+    leaf_role: Option<Role>,
+    leaf_disabled: Option<bool>,
+}
+
 #[test]
 fn deep_100k_display_contents_chain_builds_without_stack_overflow() -> Result<(), Box<dyn Error>> {
     const DEPTH: usize = 100_000;
@@ -2109,42 +2263,44 @@ fn deep_100k_display_contents_chain_builds_without_stack_overflow() -> Result<()
     let handle = thread::Builder::new()
         .name("deep-roles-states".to_owned())
         .stack_size(2 * 1024 * 1024)
-        .spawn(
-            || -> Result<(bool, bool, Option<Role>, Option<bool>), String> {
-                let apc = build_deep_display_contents_chain(DEPTH);
-                let tree = SnapshotTree::build(apc, BuildOptions::default())
-                    .map_err(|err| format!("build failed: {err}"))?;
-                let root = tree
-                    .nodes()
-                    .first()
-                    .ok_or_else(|| "missing root".to_owned())?;
-                let leaf = tree
-                    .nodes()
-                    .last()
-                    .ok_or_else(|| "missing leaf".to_owned())?;
-                Ok((
-                    root.hidden().is_box_visible(),
-                    root.hidden().is_hidden_for_aria(),
-                    leaf.role(),
-                    leaf.state().disabled(),
-                ))
-            },
-        )?;
+        .spawn(|| -> Result<DeepChainSummary, String> {
+            let apc = build_deep_display_contents_chain(DEPTH);
+            let tree = SnapshotTree::build(apc, BuildOptions::default())
+                .map_err(|err| format!("build failed: {err}"))?;
+            let root = tree
+                .nodes()
+                .first()
+                .ok_or_else(|| "missing root".to_owned())?;
+            let leaf = tree
+                .nodes()
+                .last()
+                .ok_or_else(|| "missing leaf".to_owned())?;
+            Ok(DeepChainSummary {
+                root_box_visible: root.hidden().is_box_visible(),
+                root_hidden_for_aria: root.hidden().is_hidden_for_aria(),
+                leaf_role: leaf.role(),
+                leaf_disabled: leaf.state().disabled(),
+            })
+        })?;
 
-    let (root_box_visible, root_hidden_for_aria, leaf_role, leaf_disabled) = handle
+    let summary = handle
         .join()
         .map_err(|payload| format!("deep-roles-states thread panicked: {payload:?}"))??;
     assert!(
-        root_box_visible,
+        summary.root_box_visible,
         "bottom-up display: contents visibility must propagate across 100k levels"
     );
     assert!(
-        !root_hidden_for_aria,
+        !summary.root_hidden_for_aria,
         "bottom-up display: contents ARIA visibility must propagate across 100k levels"
     );
-    assert_eq!(leaf_role, Some(Role::Button));
     assert_eq!(
-        leaf_disabled,
+        summary.leaf_role,
+        Some(Role::Button),
+        "deepest button at 100k depth must retain Role::Button"
+    );
+    assert_eq!(
+        summary.leaf_disabled,
         Some(true),
         "top-down aria-disabled must propagate across 100k levels"
     );

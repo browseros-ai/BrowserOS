@@ -1,12 +1,10 @@
-//! Offline parity comparison of [`neo_snapshot_apc::tree`] roles, hidden flags, and states against
-//! the 16 recorded Playwright oracles (`tests/fixtures/<name>.{pb,oracle.json}`).
+//! Offline parity checks comparing [`neo_snapshot_apc::tree`] roles, hidden flags, and states
+//! against the 16 recorded Playwright oracles (`tests/fixtures/<name>.{pb,oracle.json}`).
 //!
-//! Each fixture is joined by document (`owner` `<iframe>` `DomNodeId` for child frames) and by
-//! element (`backendNodeId` -> `common_ancestor_dom_node_id`). On unpatched stock Chromium 158
-//! recordings this suite proves contract section 9 (no role is ever inferred from stock fields)
-//! and verifies every stock-expressible fact (`active` focus state, `ContentHidden`, and layout box
-//! visibility). Once recordings carry BrowserOS contract versions 3+ (roles/hidden) and 4+
-//! (states), the exact same join asserts full node-for-node role, hidden, and state equality.
+//! Frames join by `owner` `<iframe>` `DomNodeId` and elements join by `backendNodeId`. Stock
+//! recordings assert contract section 9 (zero inferred roles) plus stock-expressible focus,
+//! `ContentHidden`, and layout box facts; recordings at contract v3+ and v4+ assert full role,
+//! hidden, and state equality.
 
 #[path = "support/fixture_pages.rs"]
 #[expect(
@@ -86,12 +84,17 @@ struct FixtureComparison {
     contract_mismatches: Vec<String>,
 }
 
+struct MappedOracleFrames {
+    frame_to_doc: HashMap<String, DocId>,
+    partial_frames: usize,
+}
+
 fn map_oracle_frames(
     tree: &SnapshotTree,
     oracle: &Oracle,
-) -> Result<(HashMap<String, DocId>, usize), Box<dyn Error>> {
+) -> Result<MappedOracleFrames, Box<dyn Error>> {
     let mut frame_to_doc: HashMap<String, DocId> = HashMap::new();
-    let mut skipped_partial = 0;
+    let mut partial_frames = 0;
 
     let Some(main_frame) = oracle.frames.first() else {
         return Err(format!("{}: oracle has no main frame", oracle.fixture).into());
@@ -110,7 +113,7 @@ fn map_oracle_frames(
             );
         };
         let Some(&parent_doc_id) = frame_to_doc.get(parent_frame) else {
-            skipped_partial += 1;
+            partial_frames += 1;
             continue;
         };
         let parent_doc = tree
@@ -128,11 +131,14 @@ fn map_oracle_frames(
         if let Some(child_doc) = iframe_node.child_doc() {
             frame_to_doc.insert(frame.frame.clone(), child_doc);
         } else {
-            skipped_partial += 1;
+            partial_frames += 1;
         }
     }
 
-    Ok((frame_to_doc, skipped_partial))
+    Ok(MappedOracleFrames {
+        frame_to_doc,
+        partial_frames,
+    })
 }
 
 fn to_oracle_tristate(value: TriState) -> Tristate {
@@ -281,7 +287,10 @@ fn compare_fixture(name: &str) -> Result<FixtureComparison, Box<dyn Error>> {
     }
 
     let tree = SnapshotTree::build(apc, BuildOptions::default())?;
-    let (frame_to_doc, partial_frames) = map_oracle_frames(&tree, &oracle)?;
+    let MappedOracleFrames {
+        frame_to_doc,
+        partial_frames,
+    } = map_oracle_frames(&tree, &oracle)?;
 
     let mut stats = FixtureComparison {
         oracle_frames: oracle.frames.len(),
@@ -388,7 +397,7 @@ fn recorded_fixtures_agree_with_playwright_oracles_on_all_expressible_facts()
         );
         // Blink repairs a zero-size ancestor's outer_bounding_box from its descendants
         // (design §5.2): the two zero-size <input type="file"> controls on `zero-size-controls`
-        // inherit their UA shadow button's box in APC, while every other fixture matches 100%.
+        // inherit their UA shadow button's box in APC.
         if fixture.name == "zero-size-controls" {
             assert_eq!(
                 stats.box_visible_mismatches.len(),

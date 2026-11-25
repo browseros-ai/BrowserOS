@@ -2,8 +2,8 @@ use crate::proto::{
     BrowserOsContentAttributes, BrowserOsTriState, ContentAttributes, ContentData, FormControlType,
 };
 
-use super::hidden::{is_text_node, is_ua_shadow, raw_tag};
-use super::role::{Role, is_natively_disabled, trim_js_whitespace};
+use super::hidden;
+use super::role::{self, Role};
 use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
 
@@ -39,7 +39,7 @@ impl InvalidState {
         let Some(value) = raw else {
             return Self::False;
         };
-        if trim_js_whitespace(value).is_empty() || value.eq_ignore_ascii_case("false") {
+        if role::trim_js_whitespace(value).is_empty() || value.eq_ignore_ascii_case("false") {
             return Self::False;
         }
         match value {
@@ -154,8 +154,7 @@ fn compute_checked(
     if let Some(code) = browseros.and_then(|b| b.checked) {
         return Some(decode_tri_state(Some(code)));
     }
-    // Fallback to stock FormControlData::is_checked only for native checkbox/radio inputs.
-    if raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
+    if hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("input"))
         && let Some(ContentData::FormControl(control)) = raw.content_data.as_ref()
         && let Some(control_type) = control
             .form_control_type
@@ -230,7 +229,7 @@ fn compute_level(
     if !role.is_some_and(Role::supports_level) {
         return None;
     }
-    if let Some(native) = native_heading_level(raw_tag(raw)) {
+    if let Some(native) = native_heading_level(hidden::raw_tag(raw)) {
         return Some(native);
     }
     let aria_level = browseros
@@ -252,7 +251,6 @@ fn compute_invalid(
     ))
 }
 
-/// Computes [`State`] for every node in `nodes` in one iterative preorder pass.
 pub(crate) fn compute_states(
     nodes: &[TreeNode],
     docs: &[TreeDoc],
@@ -284,7 +282,7 @@ pub(crate) fn compute_states(
             states.push(State::default());
             continue;
         };
-        if is_text_node(raw_attrs) || is_ua_shadow(raw_attrs) {
+        if hidden::is_text_node(raw_attrs) || hidden::is_ua_shadow(raw_attrs) {
             states.push(State::default());
             continue;
         }
@@ -292,7 +290,7 @@ pub(crate) fn compute_states(
         let role = roles.get(index).copied().flatten();
         let supports_disabled = role.is_some_and(Role::supports_disabled);
         let is_disabled =
-            is_natively_disabled(raw_attrs) || (supports_disabled && node_aria_disabled);
+            role::is_natively_disabled(raw_attrs) || (supports_disabled && node_aria_disabled);
         let disabled = supports_disabled.then_some(is_disabled);
 
         let doc_focused = docs
@@ -324,43 +322,46 @@ mod tests {
 
     #[test]
     fn invalid_state_from_aria_attr_matches_playwright() {
-        assert_eq!(InvalidState::from_aria_attr(None), InvalidState::False);
-        assert_eq!(InvalidState::from_aria_attr(Some("")), InvalidState::False);
-        assert_eq!(
-            InvalidState::from_aria_attr(Some(" \t\u{FEFF}\u{00A0} ")),
-            InvalidState::False
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("false")),
-            InvalidState::False
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("FALSE")),
-            InvalidState::False
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("true")),
-            InvalidState::True
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("grammar")),
-            InvalidState::Grammar
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("spelling")),
-            InvalidState::Spelling
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some(" false ")),
-            InvalidState::True
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("GRAMMAR")),
-            InvalidState::True
-        );
-        assert_eq!(
-            InvalidState::from_aria_attr(Some("\u{0085}")),
-            InvalidState::True
-        );
+        let cases: &[(Option<&str>, InvalidState, &str)] = &[
+            (None, InvalidState::False, "absent attribute"),
+            (Some(""), InvalidState::False, "empty string"),
+            (
+                Some(" \t\u{FEFF}\u{00A0} "),
+                InvalidState::False,
+                "JS whitespace only",
+            ),
+            (Some("false"), InvalidState::False, "lowercase false"),
+            (Some("FALSE"), InvalidState::False, "uppercase FALSE"),
+            (Some("true"), InvalidState::True, "lowercase true"),
+            (Some("grammar"), InvalidState::Grammar, "lowercase grammar"),
+            (
+                Some("spelling"),
+                InvalidState::Spelling,
+                "lowercase spelling",
+            ),
+            (
+                Some(" false "),
+                InvalidState::True,
+                "whitespace around false prevents lowercase equality",
+            ),
+            (
+                Some("GRAMMAR"),
+                InvalidState::True,
+                "case-sensitive GRAMMAR falls back to True",
+            ),
+            (
+                Some("\u{0085}"),
+                InvalidState::True,
+                "U+0085 NEL is not JS whitespace and falls back to True",
+            ),
+        ];
+
+        for &(raw, expected, reason) in cases {
+            assert_eq!(
+                InvalidState::from_aria_attr(raw),
+                expected,
+                "aria-invalid={raw:?} ({reason}) must map to {expected:?}"
+            );
+        }
     }
 }
