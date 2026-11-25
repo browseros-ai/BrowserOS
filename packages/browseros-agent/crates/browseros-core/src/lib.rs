@@ -29,7 +29,7 @@ pub mod viewport;
 pub mod windows;
 
 pub use browser::Browser;
-pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
+pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature, WithheldFeatures};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
 pub use page_js::PageJs;

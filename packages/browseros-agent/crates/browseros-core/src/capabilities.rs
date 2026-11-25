@@ -16,6 +16,11 @@
 //! malformed is unknown, and unknown supports no feature in the table; ordinary
 //! browsing never consults this gate.
 //!
+//! A host can also withhold a feature the browser implements, for example because the
+//! user's plan does not include it ([`WithheldFeatures`]). Withholding goes through the same
+//! gate, so discovery, typed calls and raw CDP all refuse it alike; only the error differs,
+//! telling the agent it is a plan matter rather than a browser upgrade.
+//!
 //! Adding a native feature: land the Chromium patch, add a [`NativeFeature`] variant and
 //! one `FEATURES` row whose minimum is the first `BROWSEROS_VERSION` that ships it, list
 //! any raw CDP methods or (method, parameter) pairs it introduced, then tag the tools that
@@ -59,6 +64,26 @@ impl NativeFeature {
         }
     }
 
+    const fn bit(self) -> u8 {
+        match self {
+            Self::ProfileTargeting => 1,
+            Self::Credentials => 1 << 1,
+            Self::PaymentCards => 1 << 2,
+        }
+    }
+
+    /// Why a host withheld this feature, in words an agent can act on.
+    #[must_use]
+    pub const fn withheld_reason(self) -> &'static str {
+        match self {
+            Self::ProfileTargeting => {
+                "choosing a browser profile is part of ultrafast, which is off on this computer"
+            }
+            Self::Credentials => "saved passwords are not part of this computer's plan",
+            Self::PaymentCards => "saved payment cards are not part of this computer's plan",
+        }
+    }
+
     /// The first native BrowserOS release that ships this feature.
     #[must_use]
     pub fn min_browseros(self) -> BrowserOsVersion {
@@ -70,6 +95,33 @@ impl NativeFeature {
             .iter()
             .find(|spec| spec.feature == self)
             .unwrap_or_else(|| unreachable!("every NativeFeature has a FEATURES row"))
+    }
+}
+
+/// Native features a host withholds even though the browser implements them. Set per admitted
+/// call (see `BrowserView::capture_withholding`), so a plan change applies from the next call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct WithheldFeatures(u8);
+
+impl WithheldFeatures {
+    #[must_use]
+    pub const fn none() -> Self {
+        Self(0)
+    }
+
+    #[must_use]
+    pub const fn with(self, feature: NativeFeature) -> Self {
+        Self(self.0 | feature.bit())
+    }
+
+    #[must_use]
+    pub const fn contains(self, feature: NativeFeature) -> bool {
+        self.0 & feature.bit() != 0
+    }
+
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
     }
 }
 
@@ -186,6 +238,7 @@ const FEATURES: &[FeatureSpec] = &[
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeCapabilities {
     browseros: Option<BrowserOsVersion>,
+    withheld: WithheldFeatures,
 }
 
 impl NativeCapabilities {
@@ -195,7 +248,29 @@ impl NativeCapabilities {
     pub fn from_browseros_version(raw: Option<&str>) -> Self {
         Self {
             browseros: raw.and_then(BrowserOsVersion::parse),
+            withheld: WithheldFeatures::none(),
         }
+    }
+
+    /// The same browser with `withheld` refused on top of what it lacks. The reported identity
+    /// and native support stay as they are; see [`Self::implements`].
+    #[must_use]
+    pub const fn withholding(mut self, withheld: WithheldFeatures) -> Self {
+        self.withheld = withheld;
+        self
+    }
+
+    #[must_use]
+    pub const fn withheld(&self) -> WithheldFeatures {
+        self.withheld
+    }
+
+    /// Whether the browser itself implements `feature`, whatever the host withholds. Routing
+    /// that only the browser decides (the Default profile on a capable native) reads this.
+    #[must_use]
+    pub fn implements(&self, feature: NativeFeature) -> bool {
+        self.browseros
+            .is_some_and(|version| version >= feature.spec().min_browseros)
     }
 
     #[must_use]
@@ -205,20 +280,23 @@ impl NativeCapabilities {
 
     #[must_use]
     pub fn supports(&self, feature: NativeFeature) -> bool {
-        self.browseros
-            .is_some_and(|version| version >= feature.spec().min_browseros)
+        self.implements(feature) && !self.withheld.contains(feature)
     }
 
-    /// Fails before an operation that needs `feature` is sent to the browser.
+    /// Fails before an operation that needs `feature` is sent to the browser. A browser that
+    /// lacks it reports the upgrade it needs first; withholding only narrows a capable one.
     pub fn require(&self, feature: NativeFeature) -> Result<(), CoreError> {
-        if self.supports(feature) {
-            return Ok(());
+        if !self.implements(feature) {
+            return Err(CoreError::NativeFeatureUnavailable {
+                feature,
+                required: feature.spec().min_browseros,
+                reported: self.browseros,
+            });
         }
-        Err(CoreError::NativeFeatureUnavailable {
-            feature,
-            required: feature.spec().min_browseros,
-            reported: self.browseros,
-        })
+        if self.withheld.contains(feature) {
+            return Err(CoreError::FeatureWithheld { feature });
+        }
+        Ok(())
     }
 
     /// Refuses only raw CDP that a table row lists for an unsupported feature. Everything
@@ -280,6 +358,44 @@ mod tests {
         assert!(!native("0.51.1.2").supports(NativeFeature::ProfileTargeting));
         assert!(native("0.51.1.3").supports(NativeFeature::ProfileTargeting));
         assert!(native("0.52.0.0").supports(NativeFeature::ProfileTargeting));
+    }
+
+    #[test]
+    fn a_withheld_feature_is_refused_as_a_plan_matter_on_a_capable_native() {
+        let withheld = WithheldFeatures::none().with(NativeFeature::ProfileTargeting);
+        let caps = native("0.53.0.1").withholding(withheld);
+        assert!(caps.implements(NativeFeature::ProfileTargeting));
+        assert!(!caps.supports(NativeFeature::ProfileTargeting));
+        assert!(caps.supports(NativeFeature::Credentials));
+        assert!(matches!(
+            caps.require(NativeFeature::ProfileTargeting),
+            Err(CoreError::FeatureWithheld {
+                feature: NativeFeature::ProfileTargeting
+            })
+        ));
+        let refused = caps
+            .check_raw("Browser.getProfiles", &json!({}))
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(
+            refused.starts_with(
+                "plan_feature_unavailable: choosing a browser profile is part of ultrafast"
+            ),
+            "{refused}"
+        );
+        assert!(
+            caps.check_raw("History.getRecent", &json!({"browserContextId": "c"}))
+                .is_err()
+        );
+        assert!(caps.check_raw("Browser.getTabs", &json!({})).is_ok());
+        // An older native still reports the upgrade it needs, not the plan.
+        assert!(matches!(
+            native("0.51.1.2")
+                .withholding(withheld)
+                .require(NativeFeature::ProfileTargeting),
+            Err(CoreError::NativeFeatureUnavailable { .. })
+        ));
     }
 
     #[test]
