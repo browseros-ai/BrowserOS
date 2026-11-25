@@ -15,6 +15,7 @@ const REQUIRED_PROVIDER_IDS = [
   'openai',
   'google',
   'openrouter',
+  'llmtr',
   'azure',
   'bedrock',
   'lmstudio',

@@ -161,6 +161,7 @@ export const PROVIDER_MAP: Record<string, string> = {
   openai: 'openai',
   google: 'google',
   openrouter: 'openrouter',
+  llmtr: 'llmtr',
   azure: 'azure',
   'amazon-bedrock': 'bedrock',
   lmstudio: 'lmstudio',

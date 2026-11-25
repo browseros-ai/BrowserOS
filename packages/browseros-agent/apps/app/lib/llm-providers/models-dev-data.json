@@ -8112,6 +8112,503 @@
       }
     ]
   },
+  "llmtr": {
+    "name": "LLMTR",
+    "api": "https://llmtr.com/v1",
+    "doc": "https://llmtr.com/docs",
+    "models": [
+      {
+        "id": "magibu-11b-v8",
+        "name": "Magibu 11B v8",
+        "contextWindow": 8192,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": false,
+        "supportsToolCall": false,
+        "supportsTemperature": true,
+        "inputCost": 0.1,
+        "outputCost": 0.5
+      },
+      {
+        "id": "muse-glimmer-30b-tr",
+        "name": "Muse Glimmer 30B (TR)",
+        "contextWindow": 131072,
+        "maxOutput": 131072,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "inputCost": 2,
+        "outputCost": 5
+      },
+      {
+        "id": "upstage/solar-pro4",
+        "name": "Solar Pro 4",
+        "contextWindow": 524288,
+        "maxOutput": 131072,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 0.15,
+        "outputCost": 0.6
+      },
+      {
+        "id": "meta/muse-spark-1.2-contributor",
+        "name": "Muse Spark 1.2 Contributor",
+        "contextWindow": 1048576,
+        "maxOutput": 131072,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 0.1,
+        "outputCost": 0.2
+      },
+      {
+        "id": "thinkingmachines/inkling-small",
+        "name": "Inkling Small",
+        "contextWindow": 262144,
+        "maxOutput": 262144,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 0.58,
+        "outputCost": 1.44
+      },
+      {
+        "id": "thinkingmachines/inkling",
+        "name": "Inkling",
+        "contextWindow": 262144,
+        "maxOutput": 262144,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 1.87,
+        "outputCost": 4.68
+      },
+      {
+        "id": "poolside/laguna-xs-2.1",
+        "name": "Laguna XS 2.1",
+        "contextWindow": 262144,
+        "maxOutput": 32768,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          }
+        ],
+        "inputCost": 0,
+        "outputCost": 0
+      },
+      {
+        "id": "sakana/fugu-ultra",
+        "name": "Fugu Ultra",
+        "contextWindow": 1000000,
+        "maxOutput": 1000000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 5,
+        "outputCost": 30
+      },
+      {
+        "id": "qwen/qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxOutput": 131072,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.4,
+        "outputCost": 1.6
+      },
+      {
+        "id": "qwen/qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.25,
+        "outputCost": 1.5
+      },
+      {
+        "id": "qwen3-6-35b",
+        "name": "Qwen3.6 35B-A3B",
+        "contextWindow": 16384,
+        "maxOutput": 16384,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": false,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          }
+        ],
+        "inputCost": 5,
+        "outputCost": 10
+      },
+      {
+        "id": "gemma-4",
+        "name": "Gemma 4",
+        "contextWindow": 131072,
+        "maxOutput": 131072,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          }
+        ],
+        "inputCost": 2,
+        "outputCost": 5
+      },
+      {
+        "id": "qwen/qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.5,
+        "outputCost": 3
+      },
+      {
+        "id": "upstage/solar-pro3",
+        "name": "Solar Pro 3",
+        "contextWindow": 131072,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "inputCost": 0.15,
+        "outputCost": 0.6
+      },
+      {
+        "id": "trendyol-asure-12b",
+        "name": "Trendyol Asure 12B",
+        "contextWindow": 40960,
+        "maxOutput": 40960,
+        "supportsImages": true,
+        "supportsReasoning": false,
+        "supportsToolCall": false,
+        "supportsTemperature": true,
+        "inputCost": 0.1,
+        "outputCost": 0.5
+      },
+      {
+        "id": "qwen/qwen3.5-plus",
+        "name": "Qwen3.5 Plus",
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.4,
+        "outputCost": 2.4
+      },
+      {
+        "id": "qwen/qwen3.5-397b-a17b",
+        "name": "Qwen3.5 397B-A17B",
+        "contextWindow": 256000,
+        "maxOutput": 65536,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.6,
+        "outputCost": 3.6
+      },
+      {
+        "id": "qwen/qwen3-vl-plus",
+        "name": "Qwen3-VL Plus",
+        "contextWindow": 256000,
+        "maxOutput": 32768,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.2,
+        "outputCost": 1.6
+      },
+      {
+        "id": "qwen/qwen-plus",
+        "name": "Qwen Plus",
+        "contextWindow": 1000000,
+        "maxOutput": 32768,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.4,
+        "outputCost": 1.2
+      },
+      {
+        "id": "publicai/apertus-70b-instruct",
+        "name": "Apertus 70B Instruct",
+        "contextWindow": 65536,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": false,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "inputCost": 0.82,
+        "outputCost": 2.92
+      },
+      {
+        "id": "publicai/apertus-8b-instruct",
+        "name": "Apertus 8B Instruct",
+        "contextWindow": 65536,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": false,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "inputCost": 0.1,
+        "outputCost": 0.2
+      },
+      {
+        "id": "perplexity/sonar-deep-research",
+        "name": "Sonar Deep Research",
+        "contextWindow": 128000,
+        "maxOutput": 32768,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": false,
+        "supportsTemperature": false,
+        "inputCost": 2,
+        "outputCost": 8
+      },
+      {
+        "id": "qwen/qwen-flash",
+        "name": "Qwen Flash",
+        "contextWindow": 1000000,
+        "maxOutput": 32768,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "toggle",
+            "values": []
+          },
+          {
+            "type": "budget_tokens",
+            "values": []
+          }
+        ],
+        "inputCost": 0.05,
+        "outputCost": 0.4
+      },
+      {
+        "id": "qwen/qwen3-coder-flash",
+        "name": "Qwen3 Coder Flash",
+        "contextWindow": 1000000,
+        "maxOutput": 65536,
+        "supportsImages": false,
+        "supportsReasoning": false,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "inputCost": 0.3,
+        "outputCost": 1.5
+      },
+      {
+        "id": "mistral/voxtral-small-latest",
+        "name": "Voxtral Small (latest)",
+        "contextWindow": 32000,
+        "maxOutput": 32000,
+        "supportsImages": true,
+        "supportsReasoning": false,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "inputCost": 0.1,
+        "outputCost": 0.3
+      },
+      {
+        "id": "upstage/solar-pro2",
+        "name": "Solar Pro 2",
+        "contextWindow": 65536,
+        "maxOutput": 8192,
+        "supportsImages": false,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "high"
+            ]
+          }
+        ],
+        "inputCost": 0.15,
+        "outputCost": 0.6
+      }
+    ]
+  },
   "azure": {
     "name": "Azure",
     "doc": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",

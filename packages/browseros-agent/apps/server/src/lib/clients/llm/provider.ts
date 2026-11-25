@@ -145,6 +145,17 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createLlmtrModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.baseUrl) throw new Error('LLMTR provider requires baseUrl')
+  if (!config.apiKey) throw new Error('LLMTR provider requires apiKey')
+  return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
+    name: 'llmtr',
+    baseURL: config.baseUrl,
+    apiKey: config.apiKey,
+  })(config.model)
+}
+
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   // Managed OAuth provider: user custom headers are deliberately not forwarded.
@@ -190,6 +201,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,
+  [LLM_PROVIDERS.LLMTR]: createLlmtrModel,
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {
