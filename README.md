@@ -69,7 +69,7 @@ Claude Code, Codex and Cursor work in it <strong>signed in as you, in their own 
 About **63% faster** and **40% fewer tokens** than the browsers built into Claude and ChatGPT, and it finishes about **96%** of tasks. These are approximate figures from our own runs.
 
 | Tool | Time per task | Tokens per task | Tasks finished |
-| --- | --: | --: | --: |
+| :-- | --: | --: | --: |
 | **BrowserOS neo** | **~102 s** | **~21.6k** | **~96%** |
 | Claude’s built-in browser | ~264 s | ~35.4k | n/a |
 | ChatGPT’s built-in browser | ~276 s | ~35.8k | n/a |
@@ -79,7 +79,7 @@ About **63% faster** and **40% fewer tokens** than the browsers built into Claud
 ## Why not something else?
 
 | Instead of | The catch | With neo |
-| --- | --- | --- |
+| :-- | :-- | :-- |
 | **Headless drivers**<br>Playwright MCP, agent-browser | A fresh Chrome with no logins. Fine for CI, not for your inbox. | Your logins, imported from Chrome in one click. |
 | **Cloud browsers**<br>Browserbase, browser-use | Datacenter IPs get blocked, and signing in is a chore. | Runs on your machine, at `127.0.0.1`. |
 | **AI browsers**<br>Atlas, Comet, Dia | Each works only with its own AI. | Works with the agent you already pay for. |
