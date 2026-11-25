@@ -15,8 +15,11 @@
 //! ```sh
 //! NEO_E2E_BROWSER="/Users/shadowfax/code/chromium-1/src/out/Default_browseros_arm64/BrowserOS Dev.app/Contents/MacOS/BrowserOS Dev" \
 //!   NEO_APC_EXPECT_CONTRACT_VERSION=1 \
-//!   bun run test:browser -- cargo test -p neo-snapshot-apc --test contract_live -- --ignored
+//!   bun run test:browser -- cargo test -p neo-snapshot-apc --test contract_live -- --ignored --nocapture
 //! ```
+//!
+//! `--nocapture` shows each test's report: why it skipped, and its page's node count and reply
+//! bytes, which a Chromium PR compares before and after its change.
 //!
 //! Do not run it under `nice`: a debug component build's cold start nearly fills `test:browser`'s
 //! 30 s CDP deadline. The P5 test also needs BrowserOS's takeover bar, which only a browser
@@ -26,7 +29,7 @@
 #[path = "support/fixture_server.rs"]
 mod fixture_server;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fmt::Write as _;
@@ -455,6 +458,13 @@ async fn check_patch(
         let tab = Tab::open(&client, server.url("127.0.0.1", path)).await?;
         let checked = async {
             let capture = tab.capture().await?;
+            // Printed at every version, so a run before and after a patch compares page size
+            // (O1 asks PR 3 for exactly that).
+            report(&format!(
+                "{patch:?} page: {} nodes, {} reply bytes",
+                capture.nodes().len(),
+                capture.raw.len()
+            ));
             if !patch_is_live(patch, &capture)? {
                 return Ok(());
             }
@@ -774,80 +784,124 @@ async fn p1_declared_private_text_controls_are_withheld_in_the_renderer() -> Tes
 
 const FRAMES_TOP: &str = r"<!doctype html><html><head><title>Contract frames</title></head>
 <body><h1>Frames top</h1><script>
-// Three sites on one port: 127.0.0.1, localhost and [::1]. With `?hang` a third child, on its
-// own site and so in its own process, joins and spins once told to.
-const wanted = location.search.includes('hang') ? 3 : 2;
+// Two sites, 127.0.0.1 and localhost, nest three levels deep on one port, crossing processes at
+// every level. With `?hang` a child on a third site, [::1], joins: alone on its site it has a
+// process of its own, so its spin stalls no other frame.
+const hang = location.search.includes('hang');
+const wanted = hang ? 6 : 5;
 let ready = 0;
 addEventListener('message', (event) => {
   if (event.data === 'ready') ready += 1;
   window.__fixtureReady = ready >= wanted;
 });
-const children = [['same', '127.0.0.1', '/frames/child.html'], ['cross', 'localhost', '/frames/child.html']];
-if (wanted === 3) children.push(['hung', '[::1]', '/frames/hung.html']);
-for (const [id, host, path] of children) {
+const child = (id, host, path) => {
   const frame = document.createElement('iframe');
   frame.id = id;
   frame.src = `http://${host}:${location.port}${path}`;
   document.body.append(frame);
-}
+};
+child('a1', '127.0.0.1', `/frames/child.html?name=a1&nest=${encodeURIComponent('localhost|a2,127.0.0.1|a3')}`);
+child('b1', 'localhost', `/frames/child.html?name=b1&nest=${encodeURIComponent('127.0.0.1|b2')}`);
+if (hang) child('hung', '[::1]', '/frames/hung.html');
 </script></body></html>";
 
+/// A frame named by `name`, which embeds the next `host|name` pair of `nest` and passes the rest
+/// down.
 const FRAMES_CHILD: &str = r#"<!doctype html><html><body><p id="text"></p><script>
-document.getElementById('text').textContent = `${location.hostname} frame text`;
-addEventListener('load', () => parent.postMessage('ready', '*'));
+const params = new URLSearchParams(location.search);
+document.getElementById('text').textContent = `${params.get('name')} frame text`;
+const [next, ...rest] = (params.get('nest') || '').split(',').filter(Boolean);
+if (next) {
+  const [host, name] = next.split('|');
+  const frame = document.createElement('iframe');
+  frame.src = `http://${host}:${location.port}/frames/child.html?name=${name}&nest=${encodeURIComponent(rest.join(','))}`;
+  document.body.append(frame);
+}
+addEventListener('load', () => top.postMessage('ready', '*'));
 </script></body></html>"#;
 
 const FRAMES_HUNG: &str = r"<!doctype html><html><body><p>Hung frame text</p><script>
 addEventListener('message', (event) => {
   if (event.data === 'spin' && event.source === parent) for (;;) {}
 });
-addEventListener('load', () => parent.postMessage('ready', '*'));
+addEventListener('load', () => top.postMessage('ready', '*'));
 </script></body></html>";
+
+/// The frames below the top page that stay healthy, by the name each prints.
+const HEALTHY_FRAMES: &[&str] = &["a1", "a2", "a3", "b1", "b2"];
 
 /// A capture that waits out a hung frame must still return inside this (design section 7, F6).
 const HUNG_CAPTURE_BUDGET: Duration = Duration::from_millis(2_500);
 
-/// Every CDP frame id the browser knows, with its URL: the tab's own frame tree, plus out-of-
-/// process frames, whose target id is their frame id.
-async fn cdp_frames(tab: &Tab<'_>) -> Result<(String, Vec<(String, String)>), Box<dyn Error>> {
-    let tree = tab.send("Page.getFrameTree", json!({})).await?;
-    let main = tree
-        .pointer("/frameTree/frame/id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("Page.getFrameTree gave no main frame: {tree}"))?
-        .to_owned();
-    let mut frames = Vec::new();
-    let mut stack: Vec<&Value> = tree.get("frameTree").into_iter().collect();
-    while let Some(entry) = stack.pop() {
-        if let (Some(id), Some(url)) = (
-            entry.pointer("/frame/id").and_then(Value::as_str),
-            entry.pointer("/frame/url").and_then(Value::as_str),
-        ) {
-            frames.push((id.to_owned(), url.to_owned()));
+/// One frame as CDP names it.
+#[derive(Debug)]
+struct CdpFrame {
+    id: String,
+    url: String,
+}
+
+/// The frames CDP knows for one tab: its own frame tree, plus out-of-process frames, whose
+/// target id is their frame id.
+#[derive(Debug)]
+struct CdpFrames {
+    main_id: String,
+    frames: Vec<CdpFrame>,
+}
+
+impl CdpFrames {
+    async fn read(tab: &Tab<'_>) -> Result<Self, Box<dyn Error>> {
+        let tree = tab.send("Page.getFrameTree", json!({})).await?;
+        let main_id = tree
+            .pointer("/frameTree/frame/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("Page.getFrameTree gave no main frame: {tree}"))?
+            .to_owned();
+        let mut entries: Vec<&Value> = Vec::new();
+        let mut stack: Vec<&Value> = tree.get("frameTree").into_iter().collect();
+        while let Some(entry) = stack.pop() {
+            if let Some(frame) = entry.get("frame") {
+                entries.push(frame);
+            }
+            if let Some(children) = entry.get("childFrames").and_then(Value::as_array) {
+                stack.extend(children);
+            }
         }
-        if let Some(children) = entry.get("childFrames").and_then(Value::as_array) {
-            stack.extend(children);
-        }
+        let targets = tab
+            .client
+            .send("Target.getTargets", json!({}), None)
+            .await?;
+        let iframe_targets = targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|info| info.get("type").and_then(Value::as_str) == Some("iframe"));
+        let frames = entries
+            .into_iter()
+            .filter_map(|frame| Some((frame.get("id")?, frame.get("url")?)))
+            .chain(
+                iframe_targets.filter_map(|info| Some((info.get("targetId")?, info.get("url")?))),
+            )
+            .filter_map(|(id, url)| {
+                Some(CdpFrame {
+                    id: id.as_str()?.to_owned(),
+                    url: url.as_str()?.to_owned(),
+                })
+            })
+            .collect();
+        Ok(Self { main_id, frames })
     }
-    let targets = tab
-        .client
-        .send("Target.getTargets", json!({}), None)
-        .await?;
-    for info in targets
-        .get("targetInfos")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|info| info.get("type").and_then(Value::as_str) == Some("iframe"))
-    {
-        if let (Some(id), Some(url)) = (
-            info.get("targetId").and_then(Value::as_str),
-            info.get("url").and_then(Value::as_str),
-        ) {
-            frames.push((id.to_owned(), url.to_owned()));
-        }
+
+    fn knows(&self, id: &str) -> bool {
+        self.frames.iter().any(|frame| frame.id == id)
     }
-    Ok((main, frames))
+
+    fn id_of(&self, url_part: &str) -> Option<&str> {
+        self.frames
+            .iter()
+            .find(|frame| frame.url.contains(url_part))
+            .map(|frame| frame.id.as_str())
+    }
 }
 
 fn frame_token(content: &IframeDataContent) -> Option<&str> {
@@ -874,6 +928,40 @@ fn timed_out_frames(capture: &Capture) -> Vec<&RedactedFrameMetadata> {
         .collect()
 }
 
+/// Every healthy frame, at every depth, is whole and names a distinct CDP frame.
+fn assert_healthy_frames(capture: &Capture, cdp: &CdpFrames, when: &str) -> TestResult {
+    assert_eq!(
+        capture
+            .apc
+            .main_frame_data
+            .as_ref()
+            .and_then(|frame| frame.browseros.as_ref())
+            .and_then(|facts| facts.devtools_frame_token.as_deref()),
+        Some(cdp.main_id.as_str()),
+        "{when}: the main frame's token is its CDP frame id"
+    );
+    let tokens: HashSet<&str> = capture
+        .iframes()
+        .into_iter()
+        .filter_map(frame_token)
+        .collect();
+    assert_eq!(
+        tokens.len(),
+        HEALTHY_FRAMES.len(),
+        "{when}: every healthy frame carries its own token: {tokens:?}"
+    );
+    for token in &tokens {
+        assert!(
+            cdp.knows(token),
+            "{when}: token {token} is a CDP frame id, known {cdp:?}"
+        );
+    }
+    for name in HEALTHY_FRAMES {
+        capture.text_node(&format!("{name} frame text"))?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
 async fn p6_frames_carry_devtools_tokens_and_a_hung_frame_times_out() -> TestResult {
@@ -893,27 +981,7 @@ async fn p6_frames_carry_devtools_tokens_and_a_hung_frame_times_out() -> TestRes
             deadline_ms <= 2_000,
             "the compiled subframe deadline is at most 2 s, got {deadline_ms} ms"
         );
-
-        let (main_id, frames) = cdp_frames(tab).await?;
-        assert_eq!(
-            capture
-                .apc
-                .main_frame_data
-                .as_ref()
-                .and_then(|frame| frame.browseros.as_ref())
-                .and_then(|facts| facts.devtools_frame_token.as_deref()),
-            Some(main_id.as_str()),
-            "the main frame's token is its CDP frame id"
-        );
-        let tokens: Vec<&str> = capture.iframes().into_iter().filter_map(frame_token).collect();
-        assert_eq!(tokens.len(), 2, "both child frames carry a token: {tokens:?}");
-        assert_ne!(tokens.first(), tokens.get(1), "frame tokens are distinct");
-        for token in &tokens {
-            assert!(
-                frames.iter().any(|(id, _)| id == token),
-                "token {token} is a CDP frame id, known frames {frames:?}"
-            );
-        }
+        assert_healthy_frames(capture, &CdpFrames::read(tab).await?, "healthy page")?;
         assert!(timed_out_frames(capture).is_empty(), "no frame timed out on the healthy page");
 
         let href = tab.eval("location.href").await?;
@@ -930,12 +998,11 @@ async fn p6_frames_carry_devtools_tokens_and_a_hung_frame_times_out() -> TestRes
             "a capture with a hung frame returns inside {HUNG_CAPTURE_BUDGET:?}, took {elapsed:?}"
         );
 
-        let (_, frames) = cdp_frames(tab).await?;
-        let hung_id = frames
-            .iter()
-            .find(|(_, url)| url.contains("/frames/hung.html"))
-            .map(|(id, _)| id.as_str())
-            .ok_or_else(|| format!("no CDP frame for the hung page in {frames:?}"))?;
+        let cdp = CdpFrames::read(tab).await?;
+        assert_healthy_frames(&hung, &cdp, "hung page")?;
+        let hung_id = cdp
+            .id_of("/frames/hung.html")
+            .ok_or_else(|| format!("no CDP frame for the hung page in {cdp:?}"))?;
         let timed_out = timed_out_frames(&hung);
         assert_eq!(timed_out.len(), 1, "exactly the hung frame times out");
         assert_eq!(
@@ -946,9 +1013,6 @@ async fn p6_frames_carry_devtools_tokens_and_a_hung_frame_times_out() -> TestRes
             Some(hung_id),
             "the timeout names the hung frame by its CDP frame id"
         );
-        for text in ["127.0.0.1 frame text", "localhost frame text"] {
-            hung.text_node(text)?;
-        }
         Ok(())
     })
     .await
@@ -1007,7 +1071,8 @@ async fn p3_retention_keeps_role_bearing_nodes_and_seeds_each_closed_root() -> T
                 roots.push(
                     tab.call_on_node(
                         seed,
-                        "function() { return window.__roots.indexOf(this.getRootNode()); }",
+                        "function() { return this.nodeType === Node.ELEMENT_NODE \
+                         ? window.__roots.indexOf(this.getRootNode()) : 'not an element'; }",
                     )
                     .await?,
                 );
@@ -1016,13 +1081,8 @@ async fn p3_retention_keeps_role_bearing_nodes_and_seeds_each_closed_root() -> T
             assert_eq!(
                 roots,
                 vec![json!(0), json!(1)],
-                "one seed in each closed root, resolving into it, and none in the open root"
+                "one seed in each closed root, an element resolving into it, none in the open root"
             );
-            report(&format!(
-                "P3 retention page (O1): {} nodes, {} reply bytes",
-                capture.nodes().len(),
-                capture.raw.len()
-            ));
             Ok(())
         },
     )
@@ -1126,16 +1186,26 @@ const TAKEOVER_MOUNT_TIMEOUT: Duration = Duration::from_secs(10);
 async fn p5_browseros_takeover_bar_stays_out_of_the_tree() -> TestResult {
     let pages = HashMap::from([("/takeover.html".to_owned(), Page::html(TAKEOVER_PAGE))]);
     check_patch(Patch::BrowserOsUi, pages, "/takeover.html", async |tab, _| {
+        // `test:browser` disables BrowserOS's extensions, which mount the bar; only the takeover
+        // wrapper keeps them. Without it the bar cannot appear, so the test skips. With it a
+        // missing bar is a failed prerequisite, not a pass.
+        let wrapped = env::var("NEO_E2E_BROWSER")
+            .is_ok_and(|browser| browser.ends_with("neo-with-takeover.sh"));
+        if !wrapped {
+            report(
+                "skipped BrowserOsUi: it needs the takeover bar; set NEO_E2E_BROWSER to \
+                 crates/neo-sdk/neo-playwright/tests/support/neo-with-takeover.sh",
+            );
+            return Ok(());
+        }
         let mounted = "!!document.querySelector('browseros-neo-takeover')?.shadowRoot?.querySelector('body')";
         let deadline = Instant::now() + TAKEOVER_MOUNT_TIMEOUT;
         while tab.eval(mounted).await? != Value::Bool(true) {
-            if Instant::now() >= deadline {
-                report(
-                    "skipped BrowserOsUi: no takeover bar mounted; launch the browser through \
-                     crates/neo-sdk/neo-playwright/tests/support/neo-with-takeover.sh",
-                );
-                return Ok(());
-            }
+            assert!(
+                Instant::now() < deadline,
+                "the takeover wrapper's browser mounted no takeover bar within \
+                 {TAKEOVER_MOUNT_TIMEOUT:?}"
+            );
             time::sleep(Duration::from_millis(100)).await;
         }
         // An active takeover shows a button; give the bar one so there is something to leak.
@@ -1350,42 +1420,53 @@ async fn p11_display_contents_elements_get_a_node_without_geometry() -> TestResu
         pages,
         "/contents.html",
         async |tab, capture| {
-            let list = tab
-                .element_node(capture, "#list")
-                .await?
-                .ok_or("the display: contents list has no node")?;
-            let list_facts = facts(list).cloned().unwrap_or_default();
-            assert_eq!(
-                (list_facts.display_contents, list_facts.role.as_deref()),
-                (Some(true), Some("list"))
-            );
-            assert_eq!(
-                list.content_attributes
-                    .as_ref()
-                    .and_then(|attrs| attrs.geometry.as_ref()),
-                None,
-                "a display: contents node has no geometry"
-            );
-            let under: Vec<Option<i32>> = descendants(list).into_iter().map(dom_node_id).collect();
-            for item in ["one", "two"] {
+            // The plain list, then the same shape under aria-hidden, which must also reach both
+            // the wrapper and its items.
+            for (wrapper, items, hidden) in [
+                ("#list", ["#one", "#two"], None),
+                ("#hidden-list", ["#three", "#four"], Some(true)),
+            ] {
                 let id = tab
-                    .backend_node_id(&format!("document.getElementById({item:?})"))
+                    .backend_node_id(&format!("document.querySelector({wrapper:?})"))
                     .await?;
-                assert!(
-                    under.contains(&Some(id)),
-                    "item {item} hangs under the list's node"
-                );
-            }
-            for item in ["#three", "#four"] {
-                let node = tab
-                    .element_node(capture, item)
-                    .await?
-                    .ok_or_else(|| format!("{item} has no node"))?;
+                let nodes: Vec<&ContentNode> = capture
+                    .nodes()
+                    .into_iter()
+                    .filter(|node| dom_node_id(node) == Some(id))
+                    .collect();
+                assert_eq!(nodes.len(), 1, "{wrapper}: exactly one node");
+                let list = nodes.first().ok_or("checked above")?;
+                let list_facts = facts_of(list);
                 assert_eq!(
-                    facts(node).and_then(|facts| facts.aria_hidden),
-                    Some(true),
-                    "{item}: aria-hidden on a display: contents parent reaches its items"
+                    (
+                        list_facts.display_contents,
+                        list_facts.role.as_deref(),
+                        list_facts.aria_hidden
+                    ),
+                    (Some(true), Some("list"), hidden),
+                    "{wrapper}: its facts"
                 );
+                assert_eq!(
+                    list.content_attributes
+                        .as_ref()
+                        .and_then(|attrs| attrs.geometry.as_ref()),
+                    None,
+                    "{wrapper}: a display: contents node has no geometry"
+                );
+                let under: Vec<Option<i32>> =
+                    descendants(list).into_iter().map(dom_node_id).collect();
+                for item in items {
+                    let item_node = tab.require_node(capture, item).await?;
+                    assert!(
+                        under.contains(&dom_node_id(item_node)),
+                        "{item} hangs under {wrapper}"
+                    );
+                    assert_eq!(
+                        facts_of(item_node).aria_hidden,
+                        hidden,
+                        "{item}: aria_hidden"
+                    );
+                }
             }
             assert!(
                 tab.element_node(capture, "#empty-list").await?.is_none(),
