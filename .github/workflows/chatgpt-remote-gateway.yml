@@ -5,6 +5,9 @@ on:
     paths:
       - "infra/cloudflare/chatgpt-remote-gateway/**"
       - ".github/workflows/chatgpt-remote-gateway.yml"
+      - "packages/browseros-agent/apps/claw-app/**"
+      - "packages/browseros-agent/apps/claw-server/**"
+      - "packages/browseros-agent/Cargo.toml"
   workflow_dispatch:
   push:
     branches:
@@ -13,6 +16,9 @@ on:
     paths:
       - "infra/cloudflare/chatgpt-remote-gateway/**"
       - ".github/workflows/chatgpt-remote-gateway.yml"
+      - "packages/browseros-agent/apps/claw-app/**"
+      - "packages/browseros-agent/apps/claw-server/**"
+      - "packages/browseros-agent/Cargo.toml"
 
 permissions:
   contents: read
@@ -30,6 +36,13 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: infra/cloudflare/chatgpt-remote-gateway/worker/package.json
-      - run: npm install --no-audit --no-fund
-      - run: npm run typecheck
-      - run: npx wrangler deploy --dry-run --outdir=dist
+      - name: Show toolchain
+        run: |
+          node --version
+          npm --version
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --verbose
+      - name: TypeScript typecheck
+        run: npm run typecheck -- --pretty false
+      - name: Wrangler dry-run
+        run: npx wrangler deploy --dry-run --outdir=dist --log-level debug
