@@ -1,7 +1,9 @@
-//! Pure-Rust decoder, typed protobuf schema, and normalized [`tree::SnapshotTree`] layer for
-//! Chromium's `AnnotatedPageContent` (APC) returned by CDP's `Page.getAnnotatedPageContent`.
+//! Pure-Rust decoder, typed protobuf schema, normalized [`tree::SnapshotTree`] layer, and
+//! selector parsing for Chromium's `AnnotatedPageContent` (APC) returned by CDP's
+//! `Page.getAnnotatedPageContent`.
 //!
-//! Its place in the snapshot pipeline is untrusted wire bytes in, immutable multi-frame tree out:
+//! Its place in the snapshot and locator pipeline is untrusted wire bytes and selector chunks in,
+//! immutable multi-frame trees and validated selector queries out:
 //!
 //! ```text
 //!  CDP JSON reply   ─▶ decode_reply_json ─┐
@@ -10,15 +12,20 @@
 //!                                                 ▼                      ▼
 //!                                           proto::*             tree::SnapshotTree
 //!                                    (Edition 2023 wire schema)  (flat-tree arena + docs)
+//!
+//!  prelude chunk    ─▶ select::ParsedSelector ─▶ select::parse_attribute_selector
+//!                                                   └─▶ select::RoleQuery
 //! ```
 //!
-//! Normal dependencies are strictly pure (`base64`, `prost`, `serde`, `serde_json`, `thiserror`):
-//! no async runtime, no CDP transport, and no browser handles. Both live browser sessions and
-//! recorded fixtures feed the same entry points and build into the same [`tree::SnapshotTree`].
+//! Normal dependencies are strictly pure (`base64`, `neo-snapshot`, `prost`, `serde`,
+//! `serde_json`, `thiserror`): no async runtime, no CDP transport, and no browser handles. Both
+//! live browser sessions and recorded fixtures feed the same entry points and build into the same
+//! [`tree::SnapshotTree`].
 
 mod decode;
 mod decode_error;
 pub mod proto;
+pub mod select;
 pub mod tree;
 
 pub use decode::{MAX_CONTENT_NODE_DEPTH, decode, decode_protobuf, decode_reply_json};
