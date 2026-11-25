@@ -105,12 +105,19 @@ async function signAccessToken(env: Env, claims: AccessClaims): Promise<string> 
 async function verifyAccessToken(env: Env, token: string): Promise<AccessClaims | null> {
   const parts = token.split(".");
   if (parts.length !== 3 || !env.TOKEN_SIGNING_KEY) return null;
-  const expected = await hmac(env.TOKEN_SIGNING_KEY, parts[0] + "." + parts[1]);
-  if (!safeEqual(expected, parts[2])) return null;
+  if (!env.TOKEN_SIGNING_KEY) return null;
   try {
-    const claims = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as AccessClaims;
-    if (claims.iss !== env.GATEWAY_ISSUER || claims.aud !== env.GATEWAY_ISSUER + "/mcp" || claims.exp <= Math.floor(Date.now() / 1000)) return null;
-    if (!claims.device_id || !claims.scope) return null;
+    const headerBytes = fromB64url(parts[0]);
+    const payloadBytes = fromB64url(parts[1]);
+    if (!headerBytes || !payloadBytes) return null;
+    const header = JSON.parse(new TextDecoder().decode(headerBytes));
+    if (header?.alg !== "HS256" || header?.typ !== "JWT") return null;
+    const expected = await hmac(env.TOKEN_SIGNING_KEY, parts[0] + "." + parts[1]);
+    if (!safeEqual(expected, parts[2])) return null;
+    const claims = JSON.parse(new TextDecoder().decode(payloadBytes)) as AccessClaims;
+    const now = Math.floor(Date.now() / 1000);
+    if (claims.iss !== env.GATEWAY_ISSUER || claims.aud !== env.GATEWAY_ISSUER + "/mcp" || !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) || claims.iat > now + 60 || claims.exp <= now || claims.exp - claims.iat > 3600) return null;
+    if (!claims.device_id || !claims.scope || !claims.sub) return null;
     return claims;
   } catch { return null; }
 }
@@ -148,7 +155,11 @@ export class GatewayState {
     if (request.method === "POST" && url.pathname === "/pair/start") return this.startPairing(request);
     if (request.method === "POST" && url.pathname === "/pair/status") return this.pairingStatus(request);
     if (request.method === "POST" && url.pathname === "/pair/revoke") return this.revokePairing(request);
-    if (request.method === "GET" && url.pathname === "/authorize") return this.authorizePage(url);
+    if (request.method === "GET" && url.pathname === "/authorize") {
+      const limited = await this.rateLimit(request, "authorize-page", 30, 3600000);
+      if (limited) return limited;
+      return this.authorizePage(url);
+    }
     if (request.method === "POST" && url.pathname === "/authorize") return this.authorize(request);
     if (request.method === "POST" && url.pathname === "/token") return this.token(request);
     if (request.method === "POST" && url.pathname === "/mcp") return this.mcp(request);
