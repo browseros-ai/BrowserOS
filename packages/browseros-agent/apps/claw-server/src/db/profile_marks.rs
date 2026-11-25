@@ -25,8 +25,7 @@ impl ProfileMark {
         }
     }
 
-    fn of(row: &ToolDispatchRow) -> Option<Self> {
-        let meta = serde_json::from_str::<Value>(row.result_meta.as_deref()?).ok()?;
+    fn of(meta: &Value) -> Option<Self> {
         match meta.get(KEY)?.as_str()? {
             "profileStop" => Some(Self::Stopped),
             "profileLocked" => Some(Self::Refused),
@@ -35,28 +34,40 @@ impl ProfileMark {
     }
 }
 
-/// The strongest mark in a task: a stop outranks a refused choice, since the task page shows one
-/// note and a stopped task needs the user's attention first.
+/// What the task page says now. The newest word wins: a stop stands only until a later call
+/// succeeds (ultrafast came back and the task carried on), while a refused choice stays true of
+/// the task. A stop still standing outranks a refused choice, since the page shows one note.
 pub(crate) fn task_mark(dispatches: &[ToolDispatchRow]) -> Option<ProfileMark> {
-    let marks = dispatches.iter().filter_map(ProfileMark::of);
-    let mut found = None;
-    for mark in marks {
-        if mark == ProfileMark::Stopped {
-            return Some(mark);
+    let mut rows = dispatches.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|row| (row.created_at, row.id));
+    let mut stopped = false;
+    let mut refused = false;
+    for meta in rows
+        .iter()
+        .filter_map(|row| serde_json::from_str::<Value>(row.result_meta.as_deref()?).ok())
+    {
+        match ProfileMark::of(&meta) {
+            Some(ProfileMark::Stopped) => stopped = true,
+            Some(ProfileMark::Refused) => refused = true,
+            None if meta.get("isError").and_then(Value::as_bool) == Some(false) => stopped = false,
+            None => {}
         }
-        found = Some(mark);
     }
-    found
+    if stopped {
+        Some(ProfileMark::Stopped)
+    } else {
+        refused.then_some(ProfileMark::Refused)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn row(meta: &str) -> ToolDispatchRow {
+    fn row(at: i64, meta: &str) -> ToolDispatchRow {
         ToolDispatchRow {
-            id: 1,
-            created_at: 0,
+            id: at,
+            created_at: at,
             agent_id: String::new(),
             slug: String::new(),
             agent_label: String::new(),
@@ -79,18 +90,36 @@ mod tests {
         }
     }
 
+    const OK: &str = r#"{"isError":false}"#;
+    const FAILED: &str = r#"{"isError":true}"#;
+    const REFUSED: &str = r#"{"isError":true,"planWithheld":"profileLocked"}"#;
+    const STOPPED: &str = r#"{"isError":true,"planWithheld":"profileStop"}"#;
+
     #[test]
-    fn a_stop_outranks_a_refused_choice_and_plain_failures_carry_none() {
-        let plain = row(r#"{"isError":true}"#);
-        let refused = row(r#"{"isError":true,"planWithheld":"profileLocked"}"#);
-        let stopped = row(r#"{"isError":true,"planWithheld":"profileStop"}"#);
-        assert_eq!(task_mark(std::slice::from_ref(&plain)), None);
+    fn plain_failures_carry_no_mark_and_a_refused_choice_stays() {
+        assert_eq!(task_mark(&[row(1, FAILED)]), None);
         assert_eq!(
-            task_mark(&[plain.clone(), refused.clone()]),
+            task_mark(&[row(1, REFUSED), row(2, OK)]),
             Some(ProfileMark::Refused)
         );
+    }
+
+    /// A task that stopped and then carried on (ultrafast came back) is no longer stopped; one
+    /// that ran and then stopped is.
+    #[test]
+    fn the_newest_call_decides_whether_a_task_is_stopped() {
+        assert_eq!(task_mark(&[row(1, STOPPED), row(2, OK)]), None);
         assert_eq!(
-            task_mark(&[refused, stopped, plain]),
+            task_mark(&[row(1, OK), row(2, STOPPED)]),
+            Some(ProfileMark::Stopped)
+        );
+        // Order is by time, not by the order rows arrive in.
+        assert_eq!(
+            task_mark(&[row(2, STOPPED), row(1, OK)]),
+            Some(ProfileMark::Stopped)
+        );
+        assert_eq!(
+            task_mark(&[row(1, REFUSED), row(2, STOPPED), row(3, FAILED)]),
             Some(ProfileMark::Stopped)
         );
     }
