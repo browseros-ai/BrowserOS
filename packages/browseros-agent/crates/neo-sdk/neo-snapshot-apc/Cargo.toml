@@ -14,19 +14,20 @@ test-support = []
 
 [dependencies]
 base64.workspace = true
+neo-snapshot.workspace = true
 prost.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 thiserror.workspace = true
 
 [dev-dependencies]
 browseros-cdp.workspace = true
-# The recorded oracle's states and ARIA trees are neo-snapshot's types (tests/support/oracle.rs).
-neo-snapshot.workspace = true
 neo-snapshot-apc = { path = ".", features = ["test-support"] }
+rquickjs.workspace = true
 # `unbounded_depth`: an oracle's ARIA tree nests two JSON levels per element, so deep-nesting's
 # passes serde's default limit of 128; the recorder and tests/oracles.rs lift it per read.
 serde_json = { workspace = true, features = ["unbounded_depth"] }
+sha2.workspace = true
 tokio.workspace = true
 
 # claw-sdk's lint table, restated as neo-server and neo-playwright restate it (check.sh puts a

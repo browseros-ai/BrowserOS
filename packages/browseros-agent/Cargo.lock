@@ -2131,8 +2131,10 @@ dependencies = [
  "neo-snapshot",
  "neo-snapshot-apc",
  "prost",
+ "rquickjs",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
 ]
