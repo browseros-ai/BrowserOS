@@ -64,6 +64,26 @@ describe('the ultrafast item', () => {
       planTagFor(planOf({ available: false, status: 'active' })),
     ).toBeNull()
   })
+
+  it('tests that Free offered a trial sees how many days are free, until a plan exists', () => {
+    expect(planTagFor(planOf(), 7)).toEqual({
+      label: '7 days free',
+      status: 'success',
+    })
+    expect(planTagFor(planOf({ status: 'active' }), 7)?.label).toBe('On')
+  })
+
+  it('tests that only a card trial reads Trial; a free trial link reads On', () => {
+    const tag = (trialKind: Plan['trialKind']) =>
+      planTagFor(planOf({ status: 'active', trial: true, trialKind }))?.label
+    expect(tag('card')).toBe('Trial')
+    expect(tag('grant')).toBe('On')
+    expect(tag(undefined)).toBe('On')
+    expect(
+      planTagFor(planOf({ status: 'ending', trial: true, trialKind: 'card' }))
+        ?.label,
+    ).toBe('Ending')
+  })
 })
 
 describe('isNavItemActive', () => {

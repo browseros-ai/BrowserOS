@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import type { AnimatedBadgeStatus } from '@/components/motion/animated-badge'
+import { isCardTrial } from '@/modules/plan/trial.helpers'
 
 export interface NavItem {
   name: string
@@ -46,12 +47,25 @@ export interface PlanTag {
   status: AnimatedBadgeStatus
 }
 
-/** The small tag beside ultrafast in the sidebar; Free has none. */
-export function planTagFor(plan: Plan | undefined): PlanTag | null {
+/**
+ * The small tag beside ultrafast in the sidebar. Free has none, unless this
+ * computer is offered a free trial (`trialDays`, from `trialOfferDays`); the
+ * tag can't be hidden and gives way to the plan's own once there is one.
+ */
+export function planTagFor(
+  plan: Plan | undefined,
+  trialDays = 0,
+): PlanTag | null {
   if (!plan?.available) return null
   switch (plan.status) {
+    case 'none':
+      return trialDays > 0
+        ? { label: `${trialDays} days free`, status: 'success' }
+        : null
     case 'active':
-      return { label: 'On', status: 'success' }
+      return isCardTrial(plan)
+        ? { label: 'Trial', status: 'info' }
+        : { label: 'On', status: 'success' }
     case 'ending':
       return { label: 'Ending', status: 'warning' }
     case 'paymentFailed':

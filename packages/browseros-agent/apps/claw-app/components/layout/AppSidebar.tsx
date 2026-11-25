@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { skipToken } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Link, useHref, useLocation } from 'react-router'
 import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
@@ -23,8 +24,9 @@ import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
-import { usePlan } from '@/modules/api/plan.hooks'
+import { usePlan, usePlanPricing } from '@/modules/api/plan.hooks'
 import { useAttentionTitle } from '@/modules/attention/attention.hooks'
+import { trialOfferDays } from '@/modules/plan/trial.helpers'
 import {
   isNavItemActive,
   type NavItem,
@@ -94,7 +96,14 @@ function NavMenu({
 export function AppSidebar() {
   // Loading or unreachable reads as no billing, so the ultrafast item stays hidden.
   const plan = usePlan()
-  const tag = planTagFor(plan.data)
+  // Pricing is read only where a free trial could be offered.
+  const pricing = usePlanPricing({
+    variables:
+      plan.data?.available && plan.data.status === 'none' && !plan.data.onKey
+        ? undefined
+        : skipToken,
+  })
+  const tag = planTagFor(plan.data, trialOfferDays(plan.data, pricing.data))
   return (
     <AnimatedSidebar
       ariaLabel="Sidebar"
