@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::snapshot_rules;
-use crate::page::{self, MAX_VALUE_DEPTH};
+use crate::page::MAX_VALUE_DEPTH;
 use crate::probe;
 
 /// One frame's own snapshot, as its probe returned it, and what became of each iframe it
@@ -225,8 +225,7 @@ fn attach(
         {
             // The child's top array becomes this iframe's children array. Test before
             // attachment: the parent stays readable even when this one branch cannot fit.
-            let encoded = serde_json::to_string(&child.nodes);
-            let deepest = encoded.as_deref().map_or(MAX_VALUE_DEPTH, page::json_depth);
+            let deepest = neo_snapshot::json_depth(&child.nodes);
             if depth + deepest > MAX_VALUE_DEPTH {
                 partial.retain(|frame| !child.unread_refs.contains(&frame.r#ref));
                 partial.push(PartialFrame {
@@ -254,13 +253,15 @@ fn attach(
 #[cfg(test)]
 pub(crate) mod tests {
     use std::error::Error;
-    use std::fs;
     use std::path::Path;
+    use std::{fs, slice};
 
     use serde::Deserialize;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{AriaChild, AriaNode, ChildFrame, FrameSnapshot, PartialFrame, merge, stitch};
+    use crate::page::{self, MAX_VALUE_DEPTH};
+    use crate::probe;
 
     /// Recorded from playwright-core 1.64.1 by scripts/capture-snapshot-fixture.mjs.
     const RECORDED: &str = include_str!("../../tests/data/snapshot-frames.json");
@@ -463,6 +464,77 @@ pub(crate) mod tests {
         assert_eq!(result.partial[0].r#ref, "e2");
         assert!(result.partial[0].reason.contains("149 levels deep"));
         assert!(result.partial[0].reason.contains("{ depth: n }"));
+        Ok(())
+    }
+
+    /// `levels` of group nodes around `deepest`, the deepest node a level of its own.
+    fn chain(levels: usize, deepest: Value) -> Result<AriaNode, serde_json::Error> {
+        let mut node: AriaNode = serde_json::from_value(deepest)?;
+        for _ in 1..levels {
+            let mut group: AriaNode = serde_json::from_value(json!({"role":"group"}))?;
+            group.children.push(AriaChild::Node(Box::new(node)));
+            node = group;
+        }
+        Ok(node)
+    }
+
+    /// A top frame of one iframe `e2`, whose read frame holds `child`.
+    fn under_iframe(child: AriaNode) -> Result<FrameSnapshot, serde_json::Error> {
+        Ok(FrameSnapshot {
+            json: serde_json::from_value(json!([{"role":"iframe", "ref":"e2"}]))?,
+            children: vec![ChildFrame::Read {
+                iframe_ref: "e2".to_owned(),
+                src: "https://frame.example".to_owned(),
+                snapshot: FrameSnapshot {
+                    json: vec![child],
+                    children: Vec::new(),
+                },
+            }],
+        })
+    }
+
+    /// The result's object, its `json` array and the iframe's node come before the child's
+    /// array, so 147 bare levels below the iframe end exactly at the 297-level bound, and a text
+    /// child on the deepest is one level over. Each measure is checked against the encoded text's
+    /// own count, the measure the walk replaced.
+    #[test]
+    fn stitching_admits_a_child_at_the_bound_and_refuses_one_level_over()
+    -> Result<(), Box<dyn Error>> {
+        let at_bound = chain(147, json!({"role":"button", "name":"End"}))?;
+        let over = chain(147, json!({"role":"button", "children":["End"]}))?;
+        for (child, levels) in [
+            (&at_bound, MAX_VALUE_DEPTH - 3),
+            (&over, MAX_VALUE_DEPTH - 2),
+        ] {
+            let nodes = slice::from_ref(child);
+            let encoded = page::json_depth(&serde_json::to_string(nodes)?);
+            assert_eq!((neo_snapshot::json_depth(nodes), encoded), (levels, levels));
+        }
+
+        let admitted = stitch(under_iframe(at_bound)?);
+        assert!(
+            admitted.partial.is_empty(),
+            "nothing is dropped at the bound"
+        );
+        assert_eq!(
+            admitted.json[0].children.len(),
+            1,
+            "the child is stitched in"
+        );
+        let encoded = page::json_depth(&serde_json::to_string(&admitted)?);
+        assert_eq!(
+            (1 + neo_snapshot::json_depth(&admitted.json), encoded),
+            (MAX_VALUE_DEPTH, MAX_VALUE_DEPTH),
+            "the op's measure of the stitched result is its encoded text's"
+        );
+
+        let refused = stitch(under_iframe(over)?);
+        assert!(
+            refused.json[0].children.is_empty(),
+            "the iframe stays a leaf"
+        );
+        assert_eq!(refused.partial.len(), 1);
+        assert_eq!(refused.partial[0].reason, probe::depth_error(148));
         Ok(())
     }
 }

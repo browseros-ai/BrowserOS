@@ -79,7 +79,7 @@ mod snapshot;
 mod split_mix64;
 
 pub use answer::{Answer, Pending};
-pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate};
+pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate, json_depth};
 pub use call::Call;
 pub use cap::{DEFAULT_MAX_TOKENS, MaxTokens};
 pub use cover_block::cover_block;

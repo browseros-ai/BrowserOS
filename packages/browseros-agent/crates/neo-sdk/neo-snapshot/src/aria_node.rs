@@ -122,8 +122,35 @@ pub struct AriaNode {
 /// at compile time that its bound admits exactly this many.
 ///
 /// A producer that builds the tree without a reply in between, and must refuse the pages the
-/// reader refuses, measures the levels of JSON its tree would have, as the reader does.
+/// reader refuses, measures the levels of JSON its tree would have with [`json_depth`], as the
+/// reader does.
 pub const MAX_TREE_DEPTH: usize = 147;
+
+/// The levels of JSON `nodes` encode to: what counting the brackets of
+/// `serde_json::to_string(nodes)` gives, without writing the text. neo-playwright holds a stitched
+/// tree to its 297-level bound with it, rather than encoding a large page's megabytes to read one
+/// number.
+///
+/// The array is level 1 and each node's object sits a level below the array holding it. A `box`
+/// or a non-empty `children` array is one level below its node; text adds none, and an empty
+/// `children` is not written. The walk keeps its own stack, so a tree deeper than
+/// [`MAX_TREE_DEPTH`], which the derived encode would recurse through past the thread's stack, is
+/// measured like any other.
+#[must_use]
+pub fn json_depth(nodes: &[AriaNode]) -> usize {
+    let mut pending: Vec<(&AriaNode, usize)> = nodes.iter().map(|node| (node, 2)).collect();
+    let mut deepest = 1;
+    while let Some((node, level)) = pending.pop() {
+        let below = node.r#box.is_some() || !node.children.is_empty();
+        deepest = deepest.max(if below { level + 1 } else { level });
+        for child in &node.children {
+            if let AriaChild::Node(child) = child {
+                pending.push((child, level + 2));
+            }
+        }
+    }
+    deepest
+}
 
 /// One entry of a node's `children`: a run of text or a node, in document order.
 ///
@@ -328,7 +355,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::{Number, Value, json};
 
-    use super::{AriaChild, AriaNode, Invalid, Tristate};
+    use super::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, Tristate, json_depth};
 
     /// Four frames of one page and the tree upstream's server stitched from them, recorded from
     /// playwright-core 1.64.1 by neo-playwright's capture script.
@@ -562,6 +589,82 @@ mod tests {
             tree = parent;
         }
         drop(tree);
+        Ok(())
+    }
+
+    /// JSON's levels by their definition, an oracle that shares nothing with the walk: an array or
+    /// an object is one level above the deepest value it holds.
+    fn levels(value: &Value) -> usize {
+        match value {
+            Value::Array(items) => 1 + items.iter().map(levels).max().unwrap_or(0),
+            Value::Object(fields) => 1 + fields.values().map(levels).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// A chain of `length` nodes around `deepest`, the deepest node a level of its own.
+    fn chain(length: usize, deepest: &Value) -> Result<AriaNode, serde_json::Error> {
+        let mut node: AriaNode = serde_json::from_value(deepest.clone())?;
+        for _ in 1..length {
+            let mut parent: AriaNode = serde_json::from_value(json!({ "role": "generic" }))?;
+            parent.children.push(AriaChild::Node(Box::new(node)));
+            node = parent;
+        }
+        Ok(node)
+    }
+
+    #[test]
+    fn tests_that_json_depth_counts_the_levels_the_encoder_writes() -> Result<(), Box<dyn Error>> {
+        let recorded: Recorded = serde_json::from_str(RECORDED)?;
+        let mut trees: Vec<Vec<AriaNode>> = recorded.frames.into_iter().map(|f| f.json).collect();
+        trees.push(recorded.stitched);
+        for shape in [
+            json!([]),
+            json!([{ "role": "button" }]),
+            json!([{ "role": "button", "children": [] }]),
+            json!([{ "role": "button", "box": { "x": 0, "y": 0, "width": 1, "height": 1 } }]),
+            json!([{ "role": "text", "children": ["[{ not a level }]"] }]),
+            json!([{ "role": "list", "children": ["a", { "role": "listitem" }, "b"] }]),
+            json!([
+                { "role": "generic", "children": [{ "role": "generic", "children": ["deep"] }] },
+                { "role": "button", "box": { "x": 1, "y": 2, "width": 3, "height": 4 } },
+            ]),
+            json!([{ "role": "group", "children": [
+                { "role": "button", "box": { "x": 1, "y": 2, "width": 3, "height": 4 } },
+                { "role": "link" },
+            ] }]),
+        ] {
+            trees.push(serde_json::from_value(shape)?);
+        }
+        let boxed = json!({ "role": "button", "box": { "x": 1, "y": 2, "width": 3, "height": 4 } });
+        let bare = json!({ "role": "button" });
+        for (length, deepest) in [(MAX_TREE_DEPTH, &boxed), (MAX_TREE_DEPTH + 1, &bare)] {
+            trees.push(vec![chain(length, deepest)?]);
+        }
+        for nodes in &trees {
+            assert_eq!(
+                json_depth(nodes),
+                levels(&serde_json::to_value(nodes)?),
+                "the walk measures what the encoder writes: {}",
+                serde_json::to_string(nodes)?
+            );
+        }
+        Ok(())
+    }
+
+    /// A reader's bound is about 300 levels, so this deep a tree only ever reaches the walk to be
+    /// refused: the walk must measure it without the derived encode's recursion.
+    #[test]
+    fn tests_that_json_depth_measures_a_tree_deeper_than_any_stack() -> Result<(), Box<dyn Error>> {
+        let tree = vec![chain(
+            100_000,
+            &json!({ "role": "button", "name": "Deep" }),
+        )?];
+        assert_eq!(
+            json_depth(&tree),
+            200_000,
+            "a node and its children array a level each"
+        );
         Ok(())
     }
 
