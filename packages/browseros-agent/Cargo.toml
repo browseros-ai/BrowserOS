@@ -96,6 +96,9 @@ imagesize = "0.15"
 png = "0.18.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 regex = "1"
+# `utf16`: unflagged JS `new RegExp(pattern)` matches UCS-2 / UTF-16 code units (`^.$` rejects
+# supplementary characters such as emoji, `^..$` matches them).
+regress = { version = "0.12", features = ["utf16"] }
 rand = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 serde_path_to_error = "0.1"

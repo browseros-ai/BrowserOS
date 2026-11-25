@@ -52,13 +52,14 @@
 //! | `render.rs`, `call.rs`, `answer.rs` | `Frame._ariaSnapshot` in neo-playwright-js `prelude/frame.ts`: which text a call gets, and what it keeps |
 //! | `cover_block.rs` | neo-playwright-js `scripts/snapshot-cases/snapshot-lines.ts` (`snapshotLines`, the prelude's `cover.ts` until Rust rendered the block) |
 //! | `delta/*.rs` | neo-playwright-js `prelude/snapshot-delta.ts`, and `onTopDelta` in `neo/on_top.rs` |
+//! | `template/*.rs` | vendored `isomorphic/ariaSnapshot.ts` (template shape) and `injected/src/ariaSnapshot.ts:308-462` (template matching) |
 //! | `js/*.rs` | ECMAScript itself; QuickJS is the test oracle |
 //!
 //! [`PORTED_FROM`] holds the vendored files' hashes at the port, which neo-playwright's tests
 //! compare with the vendored tree at every engine upgrade.
 //!
-//! Pure: no clock, no store, no browser and no async. The dependencies are serde and `serde_json`,
-//! so the build refuses printing that waits or sends.
+//! Pure: no clock, no store, no browser and no async. The dependencies are `serde`, `serde_json`
+//! and `regress`, so the build refuses printing or matching that waits or sends.
 
 mod answer;
 mod aria_node;
@@ -77,6 +78,7 @@ mod render;
 mod snapshot;
 #[cfg(test)]
 mod split_mix64;
+pub mod template;
 
 pub use answer::{Answer, Pending};
 pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate, json_depth};
