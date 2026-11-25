@@ -256,7 +256,7 @@ impl StitchState {
                     redacted.reason,
                     self.subframe_timeout_ms,
                 );
-                let frame_token = extract_redacted_frame_token(redacted);
+                let frame_token = extract_redacted_frame_token(&redacted);
                 Ok(self.partial_resolution(
                     iframe_node,
                     iframe_key,
@@ -386,14 +386,16 @@ fn extract_doc_token(frame: &FrameData) -> Option<DocToken> {
     DocToken::new(raw)
 }
 
-/// Extracts the BrowserOS `DevTools` frame token from `FrameData` when extension metadata is
-/// decoded.
-fn extract_frame_token(_frame: &FrameData) -> Option<FrameToken> {
-    None
+fn extract_frame_token(frame: &FrameData) -> Option<FrameToken> {
+    let raw = frame.browseros.as_ref()?.devtools_frame_token.as_deref()?;
+    FrameToken::new(raw)
 }
 
-/// Extracts the BrowserOS `DevTools` frame token from `RedactedFrameMetadata` when extension
-/// metadata is decoded.
-fn extract_redacted_frame_token(_redacted: RedactedFrameMetadata) -> Option<FrameToken> {
-    None
+fn extract_redacted_frame_token(redacted: &RedactedFrameMetadata) -> Option<FrameToken> {
+    let raw = redacted
+        .browseros
+        .as_ref()?
+        .devtools_frame_token
+        .as_deref()?;
+    FrameToken::new(raw)
 }

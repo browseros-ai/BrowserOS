@@ -1,7 +1,7 @@
 //! Offline tests for [`neo_snapshot_apc::tree`]: document identity, iterative frame stitching,
 //! containment semantics, redacting `Debug`, Chromium 158 fixtures, and stack-safety stress tests.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
@@ -9,22 +9,33 @@ use std::{fs, thread};
 
 use neo_snapshot_apc::decode_protobuf;
 use neo_snapshot_apc::proto::{
-    AnnotatedRole, AxRole, ClickabilityReason, FormControlType, InteractionDisabledReason,
-    RedactionDecision, SelectOption,
+    AnnotatedPageContent, AnnotatedRole, AxRole, BrowserOsFrameData, BrowserOsPageContentData,
+    BrowserOsRedactedFrame, BrowserOsRef, BrowserOsTriState, ClickabilityReason, ContentData,
+    ContentNode, FormControlType, IframeDataContent, InteractionDisabledReason,
+    RedactedFrameMetadata, RedactedFrameReason, RedactionDecision, SelectOption,
 };
 use neo_snapshot_apc::tree::{
     ApcBuilder, BuildError, BuildOptions, DocId, DocOrigin, DocSeq, DocToken, DomNodeId,
     FrameBuilder, FrameToken, MIN_CONTRACT_VERSION, NodeBuilder, NodeId, NodeKey, NodeRange,
     PartialFrameReason, PartialIframeSpec, SnapshotTree, TreeDoc, TreeNode, Viewport,
 };
+use prost::Message as _;
 
-fn load_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
+fn decode_fixture(name: &str) -> Result<AnnotatedPageContent, Box<dyn Error>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
         .join(format!("{name}.pb"));
     let bytes = fs::read(path)?;
-    let apc = decode_protobuf(&bytes)?;
+    Ok(decode_protobuf(&bytes)?)
+}
+
+fn load_patched_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
+    let mut apc = decode_fixture(name)?;
+    apc.browseros = Some(BrowserOsPageContentData {
+        contract_version: Some(MIN_CONTRACT_VERSION),
+        subframe_timeout_ms: Some(2_000),
+    });
     Ok(SnapshotTree::build(apc, BuildOptions::default())?)
 }
 
@@ -108,7 +119,7 @@ fn assert_main_doc_metadata(tree: &SnapshotTree) -> Result<(), Box<dyn Error>> {
     assert_eq!(tree.documents().len(), 1);
     assert!(tree.partial_frames().is_empty());
     assert_eq!(tree.contract_version(), MIN_CONTRACT_VERSION);
-    assert_eq!(tree.subframe_timeout_ms(), None);
+    assert_eq!(tree.subframe_timeout_ms(), Some(2_000));
     assert_eq!(
         tree.viewport(),
         Some(Viewport {
@@ -475,6 +486,215 @@ fn empty_root_and_error_cases_return_expected_results() -> Result<(), Box<dyn Er
             required: 2,
         })
     );
+
+    let unpatched = ApcBuilder::unpatched("doc-stock").build();
+    assert_eq!(
+        SnapshotTree::build(unpatched, BuildOptions::default()).err(),
+        Some(BuildError::Unpatched {
+            found: None,
+            required: MIN_CONTRACT_VERSION,
+        }),
+        "captures without BrowserOS page metadata must be refused"
+    );
+
+    let missing_version = ApcBuilder::new("doc-no-ver")
+        .without_contract_version()
+        .build();
+    assert_eq!(
+        SnapshotTree::build(missing_version, BuildOptions::default()).err(),
+        Some(BuildError::Unpatched {
+            found: None,
+            required: MIN_CONTRACT_VERSION,
+        }),
+        "captures with empty contract_version must be refused"
+    );
+
+    let zero_version = ApcBuilder::new("doc-zero").contract_version(0).build();
+    assert_eq!(
+        SnapshotTree::build(zero_version, BuildOptions::default()).err(),
+        Some(BuildError::Unpatched {
+            found: Some(0),
+            required: MIN_CONTRACT_VERSION,
+        }),
+        "contract_version = 0 must be refused below MIN_CONTRACT_VERSION"
+    );
+
+    let patched_v2 = ApcBuilder::new("doc-v2")
+        .contract_version(2)
+        .subframe_timeout_ms(1_500)
+        .build();
+    let v2_tree = SnapshotTree::build(
+        patched_v2,
+        BuildOptions::default().with_min_contract_version(2),
+    )?;
+    assert_eq!(v2_tree.contract_version(), 2);
+    assert_eq!(v2_tree.subframe_timeout_ms(), Some(1_500));
+    Ok(())
+}
+
+#[test]
+fn contract_gate_refuses_stock_chromium_fixtures_without_contract_version()
+-> Result<(), Box<dyn Error>> {
+    for name in [
+        "nested-cross-site-frames",
+        "hung-subframe",
+        "sensitive-form",
+    ] {
+        let stock_apc = decode_fixture(name)?;
+        assert_eq!(
+            SnapshotTree::build(stock_apc, BuildOptions::default()).err(),
+            Some(BuildError::Unpatched {
+                found: None,
+                required: MIN_CONTRACT_VERSION,
+            }),
+            "stock fixture {name}.pb has no contract_version and must be refused fail-closed"
+        );
+    }
+    Ok(())
+}
+
+fn build_rich_browseros_node() -> NodeBuilder {
+    NodeBuilder::element("button")
+        .role("button")
+        .aria_label("Pay")
+        .href("")
+        .alt("")
+        .scope("col")
+        .list_box(false)
+        .has_datalist(false)
+        .aria_hidden(false)
+        .break_before(true)
+        .dom_text("Pay")
+        .labelledby(vec![BrowserOsRef {
+            dom_node_id: Some(1),
+            unrendered_text: None,
+        }])
+        .describedby(vec![BrowserOsRef {
+            dom_node_id: None,
+            unrendered_text: Some("Total due".to_owned()),
+        }])
+        .errormessage(Vec::new())
+        .title("Submit payment")
+        .aria_description("Charges card")
+        .checked_state(BrowserOsTriState::Mixed)
+        .pressed_state(BrowserOsTriState::True)
+        .expanded_state(BrowserOsTriState::False)
+        .selected(true)
+        .level(2)
+        .contract_disabled(false)
+        .aria_disabled(false)
+        .aria_invalid("false")
+        .redacted_value_length(0)
+        .visibility_hidden(false)
+        .pointer_events_none(false)
+        .inert(false)
+        .closed_root_seed(false)
+        .ua_shadow(false)
+        .display_contents(false)
+}
+
+#[test]
+fn frame_tokens_and_browseros_fields_round_trip_through_wire_decode() -> Result<(), Box<dyn Error>>
+{
+    let apc = ApcBuilder::new("doc-top")
+        .contract_version(4)
+        .subframe_timeout_ms(2_000)
+        .main_frame_token("frame-top")
+        .root(
+            NodeBuilder::root()
+                .child(build_rich_browseros_node())
+                .child(NodeBuilder::iframe(
+                    FrameBuilder::new("doc-child")
+                        .frame_token("frame-child")
+                        .root(NodeBuilder::root().child(NodeBuilder::text("Inside"))),
+                ))
+                .child(NodeBuilder::iframe(
+                    FrameBuilder::new("doc-empty-ft").frame_token(""),
+                ))
+                .child(
+                    NodeBuilder::partial_iframe(PartialIframeSpec::Timeout)
+                        .redacted_frame_token("frame-hung")
+                        .dom_id(90),
+                )
+                .child(
+                    NodeBuilder::partial_iframe(PartialIframeSpec::CrossSite)
+                        .redacted_frame_token("")
+                        .dom_id(91),
+                ),
+        )
+        .build();
+
+    let encoded = apc.encode_to_vec();
+    let decoded = decode_protobuf(&encoded)?;
+
+    let observed_seq_inputs: RefCell<Vec<(String, Option<String>)>> = RefCell::new(Vec::new());
+    let seq_assigner = |doc: &DocToken, frame: Option<&FrameToken>| {
+        let mut log = observed_seq_inputs.borrow_mut();
+        let seq = u32::try_from(log.len()).unwrap_or(u32::MAX);
+        log.push((
+            doc.as_str().to_owned(),
+            frame.map(|token| token.as_str().to_owned()),
+        ));
+        DocSeq::new(seq)
+    };
+    let tree = SnapshotTree::build(
+        decoded,
+        BuildOptions::default()
+            .with_min_contract_version(4)
+            .with_seq_of(&seq_assigner),
+    )?;
+
+    assert_eq!(tree.contract_version(), 4);
+    assert_eq!(tree.subframe_timeout_ms(), Some(2_000));
+    assert_eq!(
+        *observed_seq_inputs.borrow(),
+        vec![
+            ("doc-top".to_owned(), Some("frame-top".to_owned())),
+            ("doc-child".to_owned(), Some("frame-child".to_owned())),
+            ("doc-empty-ft".to_owned(), None),
+        ],
+        "seq_of must receive validated non-empty FrameTokens and None for empty tokens"
+    );
+
+    assert_eq!(
+        tree.document(DocId::MAIN)
+            .and_then(TreeDoc::frame_token)
+            .map(FrameToken::as_str),
+        Some("frame-top")
+    );
+    assert_eq!(
+        tree.document(DocId::new(1))
+            .and_then(TreeDoc::frame_token)
+            .map(FrameToken::as_str),
+        Some("frame-child")
+    );
+    assert_eq!(
+        tree.document(DocId::new(2)).and_then(TreeDoc::frame_token),
+        None,
+        "empty devtools_frame_token must normalize to None"
+    );
+
+    let hung = tree.partial_frame(0).ok_or("missing hung partial frame")?;
+    assert_eq!(
+        hung.frame_token.as_ref().map(FrameToken::as_str),
+        Some("frame-hung")
+    );
+    assert_eq!(
+        hung.reason,
+        PartialFrameReason::Timeout {
+            timeout_ms: Some(2_000),
+        }
+    );
+    assert_eq!(hung.reason.to_string(), "timeout after 2000 ms");
+
+    let cross_site = tree
+        .partial_frame(1)
+        .ok_or("missing cross-site partial frame")?;
+    assert_eq!(
+        cross_site.frame_token, None,
+        "empty redacted devtools_frame_token must normalize to None"
+    );
+    assert_eq!(cross_site.reason, PartialFrameReason::CrossSite);
     Ok(())
 }
 
@@ -482,6 +702,7 @@ fn empty_root_and_error_cases_return_expected_results() -> Result<(), Box<dyn Er
 fn partial_and_redacted_iframes_record_reasons_without_descending_children()
 -> Result<(), Box<dyn Error>> {
     let apc = ApcBuilder::new("doc-main")
+        .without_subframe_timeout()
         .root(
             NodeBuilder::root()
                 .child(
@@ -591,12 +812,18 @@ fn partial_and_redacted_iframes_record_reasons_without_descending_children()
 fn nested_partial_iframe_records_child_doc_as_parent_and_uses_child_doc_token()
 -> Result<(), Box<dyn Error>> {
     let apc = ApcBuilder::new("doc-top")
+        .subframe_timeout_ms(2_000)
         .root(
             NodeBuilder::root().child(NodeBuilder::iframe(
-                FrameBuilder::new("doc-child").root(
-                    NodeBuilder::root()
-                        .child(NodeBuilder::partial_iframe(PartialIframeSpec::Timeout).dom_id(77)),
-                ),
+                FrameBuilder::new("doc-child")
+                    .frame_token("frame-child")
+                    .root(
+                        NodeBuilder::root().child(
+                            NodeBuilder::partial_iframe(PartialIframeSpec::Timeout)
+                                .redacted_frame_token("frame-nested-hung")
+                                .dom_id(77),
+                        ),
+                    ),
             )),
         )
         .build();
@@ -606,10 +833,18 @@ fn nested_partial_iframe_records_child_doc_as_parent_and_uses_child_doc_token()
     assert_eq!(tree.partial_frames().len(), 1);
 
     let child_doc = tree.document(DocId::new(1)).ok_or("missing child doc")?;
+    assert_eq!(
+        child_doc.frame_token().map(FrameToken::as_str),
+        Some("frame-child")
+    );
     let partial = tree
         .partial_frame(0)
         .ok_or("missing nested partial frame")?;
     assert_eq!(partial.parent_doc, child_doc.id());
+    assert_eq!(
+        partial.frame_token.as_ref().map(FrameToken::as_str),
+        Some("frame-nested-hung")
+    );
     assert_eq!(
         partial.iframe_key,
         Some(NodeKey::new(child_doc.token().clone(), DomNodeId::new(77))),
@@ -617,7 +852,9 @@ fn nested_partial_iframe_records_child_doc_as_parent_and_uses_child_doc_token()
     );
     assert_eq!(
         partial.reason,
-        PartialFrameReason::Timeout { timeout_ms: None }
+        PartialFrameReason::Timeout {
+            timeout_ms: Some(2_000),
+        }
     );
     Ok(())
 }
@@ -627,7 +864,13 @@ fn debug_formatting_redacts_sensitive_page_content_and_metadata() -> Result<(), 
     const CANARIES: &[&str] = &[
         "CANARY_SECRET_FIELD_VALUE",
         "CANARY_DOM_TEXT_SECRET",
+        "CANARY_BROWSEROS_DOM_TEXT",
         "CANARY_ARIA_LABEL_SECRET",
+        "CANARY_BROWSEROS_ARIA_LABEL",
+        "CANARY_BROWSEROS_TITLE",
+        "CANARY_BROWSEROS_DESC",
+        "CANARY_BROWSEROS_HREF",
+        "CANARY_BROWSEROS_ALT",
         "CANARY_PLACEHOLDER_SECRET",
         "CANARY_DOC_TITLE_SECRET",
         "https://canary-url-secret.example/private?token=abc",
@@ -642,11 +885,19 @@ fn debug_formatting_redacts_sensitive_page_content_and_metadata() -> Result<(), 
         .main_origin("https://canary-origin-secret.example", false)
         .root(
             NodeBuilder::root()
-                .child(NodeBuilder::text("CANARY_DOM_TEXT_SECRET"))
+                .child(
+                    NodeBuilder::text("CANARY_DOM_TEXT_SECRET")
+                        .dom_text("CANARY_BROWSEROS_DOM_TEXT"),
+                )
                 .child(
                     NodeBuilder::form_control(FormControlType::InputText)
                         .aria_role(AxRole::TextField)
                         .label("CANARY_ARIA_LABEL_SECRET")
+                        .aria_label("CANARY_BROWSEROS_ARIA_LABEL")
+                        .title("CANARY_BROWSEROS_TITLE")
+                        .aria_description("CANARY_BROWSEROS_DESC")
+                        .href("CANARY_BROWSEROS_HREF")
+                        .alt("CANARY_BROWSEROS_ALT")
                         .field_name("secret_input")
                         .field_value("CANARY_SECRET_FIELD_VALUE")
                         .placeholder("CANARY_PLACEHOLDER_SECRET")
@@ -699,10 +950,26 @@ fn debug_formatting_redacts_sensitive_page_content_and_metadata() -> Result<(), 
 #[test]
 fn nested_cross_site_frames_fixture_stitches_eight_docs_and_disambiguates_dom_ids()
 -> Result<(), Box<dyn Error>> {
-    let tree = load_fixture_tree("nested-cross-site-frames")?;
+    let mut apc = decode_fixture("nested-cross-site-frames")?;
+    apc.browseros = Some(BrowserOsPageContentData {
+        contract_version: Some(2),
+        subframe_timeout_ms: Some(2_000),
+    });
+    if let Some(main) = apc.main_frame_data.as_mut() {
+        main.browseros = Some(BrowserOsFrameData {
+            devtools_frame_token: Some("frame-top".to_owned()),
+        });
+    }
+    let tree = SnapshotTree::build(apc, BuildOptions::default())?;
     assert_eq!(tree.documents().len(), 8);
     assert_eq!(tree.nodes().len(), 71);
     assert!(tree.partial_frames().is_empty());
+    assert_eq!(
+        tree.main_document()
+            .and_then(TreeDoc::frame_token)
+            .map(FrameToken::as_str),
+        Some("frame-top")
+    );
 
     let titles: Vec<Option<&str>> = tree.documents().iter().map(TreeDoc::title).collect();
     assert_eq!(
@@ -818,7 +1085,7 @@ fn assert_colliding_dom_ids(
 #[test]
 fn hung_subframe_fixture_records_partial_frame_and_preserves_healthy_sibling()
 -> Result<(), Box<dyn Error>> {
-    let tree = load_fixture_tree("hung-subframe")?;
+    let tree = load_patched_fixture_tree("hung-subframe")?;
     assert_eq!(tree.documents().len(), 2);
     assert_eq!(tree.nodes().len(), 16);
     assert_eq!(tree.partial_frames().len(), 1);
@@ -852,7 +1119,6 @@ fn hung_subframe_fixture_records_partial_frame_and_preserves_healthy_sibling()
         "populated docs must account for all 16 arena nodes"
     );
 
-    // Cross-doc DomNodeId collisions (4 and 7) must remain distinct keys between main and healthy.
     for raw_id in [4_i32, 7_i32] {
         let main_key = NodeKey::new(main_doc.token().clone(), DomNodeId::new(raw_id));
         let healthy_key = NodeKey::new(healthy_doc.token().clone(), DomNodeId::new(raw_id));
@@ -866,6 +1132,46 @@ fn hung_subframe_fixture_records_partial_frame_and_preserves_healthy_sibling()
         assert_eq!(healthy_node.doc(), healthy_doc.id());
         assert_ne!(main_node.id(), healthy_node.id());
     }
+
+    // Re-run the same recorded hung-subframe fixture with C2 timeout + frame token stamped on the
+    // empty hung iframe to confirm the patched timeout reason and frame token flow end to end.
+    let mut patched_timeout = decode_fixture("hung-subframe")?;
+    patched_timeout.browseros = Some(BrowserOsPageContentData {
+        contract_version: Some(2),
+        subframe_timeout_ms: Some(2_000),
+    });
+    let mut stack: Vec<&mut ContentNode> = patched_timeout.root_node.iter_mut().collect();
+    while let Some(node) = stack.pop() {
+        if let Some(attrs) = node.content_attributes.as_mut()
+            && let Some(ContentData::Iframe(iframe)) = attrs.content_data.as_mut()
+            && iframe.data.is_none()
+        {
+            iframe.data = Some(IframeDataContent::RedactedFrameMetadata(
+                RedactedFrameMetadata {
+                    reason: Some(i32::from(RedactedFrameReason::BrowserOsTimeout)),
+                    browseros: Some(BrowserOsRedactedFrame {
+                        devtools_frame_token: Some("frame-hung-c2".to_owned()),
+                    }),
+                },
+            ));
+        }
+        stack.extend(node.children_nodes.iter_mut());
+    }
+    let timeout_tree = SnapshotTree::build(patched_timeout, BuildOptions::default())?;
+    let timeout_partial = timeout_tree
+        .partial_frame(0)
+        .ok_or("missing patched timeout partial frame")?;
+    assert_eq!(
+        timeout_partial.reason,
+        PartialFrameReason::Timeout {
+            timeout_ms: Some(2_000),
+        }
+    );
+    assert_eq!(timeout_partial.reason.to_string(), "timeout after 2000 ms");
+    assert_eq!(
+        timeout_partial.frame_token.as_ref().map(FrameToken::as_str),
+        Some("frame-hung-c2")
+    );
     Ok(())
 }
 
@@ -880,7 +1186,7 @@ fn remaining_chromium_fixtures_build_and_redact_sensitive_debug() -> Result<(), 
     ];
 
     for (name, expected_docs, expected_nodes) in cases {
-        let tree = load_fixture_tree(name)?;
+        let tree = load_patched_fixture_tree(name)?;
         assert_eq!(
             tree.documents().len(),
             expected_docs,

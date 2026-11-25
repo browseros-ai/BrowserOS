@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::proto::{FrameData, REASON_BROWSEROS_TIMEOUT, RedactedFrameReason, SecurityOrigin};
+use crate::proto::{FrameData, RedactedFrameReason, SecurityOrigin};
 
 use super::node_key::{DocId, DocSeq, DocToken, DomNodeId, FrameToken, NodeId, NodeKey, NodeRange};
 
@@ -54,12 +54,10 @@ impl PartialFrameReason {
         reason: Option<i32>,
         subframe_timeout_ms: Option<u32>,
     ) -> Self {
-        if reason == Some(REASON_BROWSEROS_TIMEOUT) {
-            return Self::Timeout {
-                timeout_ms: subframe_timeout_ms,
-            };
-        }
         match reason.and_then(|code| RedactedFrameReason::try_from(code).ok()) {
+            Some(RedactedFrameReason::BrowserOsTimeout) => Self::Timeout {
+                timeout_ms: subframe_timeout_ms,
+            },
             Some(RedactedFrameReason::CrossSite) => Self::CrossSite,
             Some(RedactedFrameReason::CrossOrigin) => Self::CrossOrigin,
             Some(RedactedFrameReason::Unspecified) | None => Self::Redacted(reason.unwrap_or(0)),

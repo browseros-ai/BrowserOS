@@ -2,12 +2,16 @@ use std::mem;
 
 use crate::proto::{
     AnchorData, AnnotatedPageContent, AnnotatedPageContentMode, AnnotatedPageContentVersion,
-    AnnotatedRole, AxRole, BoundingRect, ClickabilityReason, ContentAttributeType,
-    ContentAttributes, ContentData, ContentNode, DocumentIdentifier, FormControlData,
-    FormControlType, FrameData, FrameInteractionInfo, Geometry, IframeData, IframeDataContent,
-    InteractionDisabledReason, InteractionInfo, REASON_BROWSEROS_TIMEOUT, RedactedFrameMetadata,
-    RedactedFrameReason, RedactionDecision, SecurityOrigin, SelectOption, TextInfo,
+    AnnotatedRole, AxRole, BoundingRect, BrowserOsContentAttributes, BrowserOsFrameData,
+    BrowserOsPageContentData, BrowserOsRedactedFrame, BrowserOsRef, BrowserOsTriState,
+    ClickabilityReason, ContentAttributeType, ContentAttributes, ContentData, ContentNode,
+    DocumentIdentifier, FormControlData, FormControlType, FrameData, FrameInteractionInfo,
+    Geometry, IframeData, IframeDataContent, InteractionDisabledReason, InteractionInfo,
+    RedactedFrameMetadata, RedactedFrameReason, RedactionDecision, SecurityOrigin, SelectOption,
+    TextInfo,
 };
+
+use super::snapshot_tree::MIN_CONTRACT_VERSION;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DomIdSpec {
@@ -19,7 +23,10 @@ enum DomIdSpec {
 #[derive(Debug)]
 enum IframeKind {
     Populated(Box<FrameBuilder>),
-    Partial(PartialIframeSpec),
+    Partial {
+        spec: PartialIframeSpec,
+        frame_token: Option<String>,
+    },
 }
 
 /// Specification for an embedded iframe whose child document was omitted or redacted.
@@ -33,7 +40,7 @@ pub enum PartialIframeSpec {
     CrossSite,
     /// Emits `RedactedFrameReason::CrossOrigin`.
     CrossOrigin,
-    /// Emits BrowserOS `REASON_BROWSEROS_TIMEOUT` (`1000`).
+    /// Emits `RedactedFrameReason::BrowserOsTimeout` (`1000`).
     Timeout,
     /// Emits `RedactedFrameMetadata { reason: Some(code) }`.
     Redacted(i32),
@@ -43,9 +50,9 @@ pub enum PartialIframeSpec {
 
 /// Ergonomic builder for constructing hand-built [`AnnotatedPageContent`] trees in offline tests.
 ///
-/// Assigns per-document `DomNodeId` values starting from `1` unless overridden, supports nested
-/// iframes, partial iframes, form controls, geometry, and interaction signals, and builds deep
-/// chains iteratively so tests stay concise and stack-safe.
+/// Defaults to a patched BrowserOS payload (`contract_version = MIN_CONTRACT_VERSION`,
+/// `subframe_timeout_ms = 2000`) with per-document `DomNodeId` values starting from `1`. Use
+/// [`Self::unpatched`] or [`Self::without_contract`] to model stock Chromium captures.
 #[must_use]
 #[derive(Debug)]
 pub struct ApcBuilder {
@@ -54,10 +61,12 @@ pub struct ApcBuilder {
     root: Option<NodeBuilder>,
     version: AnnotatedPageContentVersion,
     mode: AnnotatedPageContentMode,
+    browseros: Option<BrowserOsPageContentData>,
 }
 
 impl ApcBuilder {
-    /// Starts a builder with a populated main frame carrying `main_doc_token`.
+    /// Starts a builder with a populated main frame carrying `main_doc_token` and default BrowserOS
+    /// contract metadata (`contract_version = MIN_CONTRACT_VERSION`, `subframe_timeout_ms = 2000`).
     pub fn new(main_doc_token: &str) -> Self {
         Self {
             main_frame: Some(FrameBuilder::new(main_doc_token)),
@@ -65,7 +74,16 @@ impl ApcBuilder {
             root: None,
             version: AnnotatedPageContentVersion::Version10,
             mode: AnnotatedPageContentMode::ActionableElements,
+            browseros: Some(BrowserOsPageContentData {
+                contract_version: Some(MIN_CONTRACT_VERSION),
+                subframe_timeout_ms: Some(2_000),
+            }),
         }
+    }
+
+    /// Starts a builder modeling stock Chromium with `browseros: None`.
+    pub fn unpatched(main_doc_token: &str) -> Self {
+        Self::new(main_doc_token).without_contract()
     }
 
     /// Starts a builder with `main_frame_data: None` for testing `MissingMainFrame`.
@@ -76,6 +94,10 @@ impl ApcBuilder {
             root: None,
             version: AnnotatedPageContentVersion::Version10,
             mode: AnnotatedPageContentMode::ActionableElements,
+            browseros: Some(BrowserOsPageContentData {
+                contract_version: Some(MIN_CONTRACT_VERSION),
+                subframe_timeout_ms: Some(2_000),
+            }),
         }
     }
 
@@ -88,7 +110,50 @@ impl ApcBuilder {
             root,
             version: AnnotatedPageContentVersion::Version10,
             mode: AnnotatedPageContentMode::ActionableElements,
+            browseros: Some(BrowserOsPageContentData {
+                contract_version: Some(MIN_CONTRACT_VERSION),
+                subframe_timeout_ms: Some(2_000),
+            }),
         }
+    }
+
+    /// Sets `AnnotatedPageContent.browseros.contract_version`.
+    pub fn contract_version(mut self, version: u32) -> Self {
+        self.browseros_mut().contract_version = Some(version);
+        self
+    }
+
+    /// Clears `AnnotatedPageContent.browseros.contract_version` while keeping the `browseros`
+    /// submessage present.
+    pub fn without_contract_version(mut self) -> Self {
+        self.browseros_mut().contract_version = None;
+        self
+    }
+
+    /// Removes `AnnotatedPageContent.browseros` completely (stock Chromium payload).
+    pub fn without_contract(mut self) -> Self {
+        self.browseros = None;
+        self
+    }
+
+    /// Sets `AnnotatedPageContent.browseros.subframe_timeout_ms`.
+    pub fn subframe_timeout_ms(mut self, timeout_ms: u32) -> Self {
+        self.browseros_mut().subframe_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Clears `AnnotatedPageContent.browseros.subframe_timeout_ms`.
+    pub fn without_subframe_timeout(mut self) -> Self {
+        self.browseros_mut().subframe_timeout_ms = None;
+        self
+    }
+
+    /// Sets the main frame's BrowserOS `DevTools` frame token.
+    pub fn main_frame_token(mut self, frame_token: &str) -> Self {
+        if let Some(frame) = self.main_frame.take() {
+            self.main_frame = Some(frame.frame_token(frame_token));
+        }
+        self
     }
 
     /// Sets the main document's URL.
@@ -174,12 +239,13 @@ impl ApcBuilder {
             root_node,
             main_frame_data,
             viewport_geometry: self.viewport,
+            browseros: self.browseros,
             ..AnnotatedPageContent::default()
         }
     }
 
-    /// Iteratively constructs a single-document chain of `depth` nested nodes (`dom_id` `1..=depth`)
-    /// with O(1) call-stack usage for stack-safety stress tests.
+    /// Iteratively constructs a patched single-document chain of `depth` nested nodes (`dom_id`
+    /// `1..=depth`) with O(1) call-stack usage for stack-safety stress tests.
     #[must_use]
     pub fn deep_chain(depth: usize) -> AnnotatedPageContent {
         let mut current: Option<ContentNode> = None;
@@ -214,8 +280,17 @@ impl ApcBuilder {
                 title: Some("Deep Chain".to_owned()),
                 ..FrameData::default()
             }),
+            browseros: Some(BrowserOsPageContentData {
+                contract_version: Some(MIN_CONTRACT_VERSION),
+                subframe_timeout_ms: Some(2_000),
+            }),
             ..AnnotatedPageContent::default()
         }
+    }
+
+    fn browseros_mut(&mut self) -> &mut BrowserOsPageContentData {
+        self.browseros
+            .get_or_insert_with(BrowserOsPageContentData::default)
     }
 }
 
@@ -224,6 +299,7 @@ impl ApcBuilder {
 #[derive(Debug)]
 pub struct FrameBuilder {
     doc_token: Option<String>,
+    frame_token: Option<String>,
     url: Option<String>,
     title: Option<String>,
     origin: Option<SecurityOrigin>,
@@ -236,6 +312,7 @@ impl FrameBuilder {
     pub fn new(doc_token: &str) -> Self {
         Self {
             doc_token: Some(doc_token.to_owned()),
+            frame_token: None,
             url: None,
             title: None,
             origin: None,
@@ -248,6 +325,7 @@ impl FrameBuilder {
     pub fn without_doc_token() -> Self {
         Self {
             doc_token: None,
+            frame_token: None,
             url: None,
             title: None,
             origin: None,
@@ -265,6 +343,12 @@ impl FrameBuilder {
     /// Clears `document_identifier` completely.
     pub fn without_token(mut self) -> Self {
         self.doc_token = None;
+        self
+    }
+
+    /// Sets `FrameData.browseros.devtools_frame_token`.
+    pub fn frame_token(mut self, frame_token: &str) -> Self {
+        self.frame_token = Some(frame_token.to_owned());
         self
     }
 
@@ -323,12 +407,16 @@ impl FrameBuilder {
             focused_node_id: Some(id),
             ..FrameInteractionInfo::default()
         });
+        let browseros = self.frame_token.map(|token| BrowserOsFrameData {
+            devtools_frame_token: Some(token),
+        });
         FrameData {
             security_origin: self.origin,
             frame_interaction_info,
             document_identifier,
             url: self.url,
             title: self.title,
+            browseros,
             ..FrameData::default()
         }
     }
@@ -381,6 +469,11 @@ impl NodeBuilder {
     /// Creates a generic container node (`ContentAttributeType::Container`).
     pub fn container() -> Self {
         Self::new(ContentAttributeType::Container)
+    }
+
+    /// Creates a container node carrying a BrowserOS lowercase HTML `tag` fact.
+    pub fn element(tag: &str) -> Self {
+        Self::container().tag(tag)
     }
 
     /// Creates a heading node (`ContentAttributeType::Heading`).
@@ -438,8 +531,20 @@ impl NodeBuilder {
     /// Creates an omitted or redacted iframe node according to `spec`.
     pub fn partial_iframe(spec: PartialIframeSpec) -> Self {
         let mut node = Self::new(ContentAttributeType::Iframe);
-        node.iframe = Some(IframeKind::Partial(spec));
+        node.iframe = Some(IframeKind::Partial {
+            spec,
+            frame_token: None,
+        });
         node
+    }
+
+    /// Attaches a BrowserOS `DevTools` frame token to a redacted partial iframe created with
+    /// [`Self::partial_iframe`].
+    pub fn redacted_frame_token(mut self, token: &str) -> Self {
+        if let Some(IframeKind::Partial { frame_token, .. }) = self.iframe.as_mut() {
+            *frame_token = Some(token.to_owned());
+        }
+        self
     }
 
     /// Overrides the node's `common_ancestor_dom_node_id` with an explicit value.
@@ -530,7 +635,7 @@ impl NodeBuilder {
         self
     }
 
-    /// Sets `interaction_info.is_disabled`.
+    /// Sets `interaction_info.is_disabled` (legacy stock field; prefer [`Self::contract_disabled`]).
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.interaction_mut().is_disabled = Some(disabled);
         self
@@ -606,6 +711,198 @@ impl NodeBuilder {
         self
     }
 
+    /// Replaces `ContentAttributes.browseros` with `attrs`.
+    pub fn browseros(mut self, attrs: BrowserOsContentAttributes) -> Self {
+        self.attrs.browseros = Some(Box::new(attrs));
+        self
+    }
+
+    /// Sets `browseros.tag` (contract field 1).
+    pub fn tag(mut self, tag: &str) -> Self {
+        self.browseros_mut().tag = Some(tag.to_owned());
+        self
+    }
+
+    /// Sets raw `browseros.role` (contract field 2).
+    pub fn role(mut self, role: &str) -> Self {
+        self.browseros_mut().role = Some(role.to_owned());
+        self
+    }
+
+    /// Sets raw `browseros.href` (contract field 3).
+    pub fn href(mut self, href: &str) -> Self {
+        self.browseros_mut().href = Some(href.to_owned());
+        self
+    }
+
+    /// Sets raw `browseros.alt` (contract field 4).
+    pub fn alt(mut self, alt: &str) -> Self {
+        self.browseros_mut().alt = Some(alt.to_owned());
+        self
+    }
+
+    /// Sets raw `browseros.scope` (contract field 5).
+    pub fn scope(mut self, scope: &str) -> Self {
+        self.browseros_mut().scope = Some(scope.to_owned());
+        self
+    }
+
+    /// Sets `browseros.list_box` (contract field 6).
+    pub fn list_box(mut self, list_box: bool) -> Self {
+        self.browseros_mut().list_box = Some(list_box);
+        self
+    }
+
+    /// Sets `browseros.has_datalist` (contract field 7).
+    pub fn has_datalist(mut self, has_datalist: bool) -> Self {
+        self.browseros_mut().has_datalist = Some(has_datalist);
+        self
+    }
+
+    /// Sets `browseros.aria_hidden` (contract field 8).
+    pub fn aria_hidden(mut self, aria_hidden: bool) -> Self {
+        self.browseros_mut().aria_hidden = Some(aria_hidden);
+        self
+    }
+
+    /// Sets `browseros.break_before` (contract field 9).
+    pub fn break_before(mut self, break_before: bool) -> Self {
+        self.browseros_mut().break_before = Some(break_before);
+        self
+    }
+
+    /// Sets `browseros.dom_text` (contract field 10).
+    pub fn dom_text(mut self, dom_text: &str) -> Self {
+        self.browseros_mut().dom_text = Some(dom_text.to_owned());
+        self
+    }
+
+    /// Sets `browseros.aria_label` (contract field 11).
+    pub fn aria_label(mut self, aria_label: &str) -> Self {
+        self.browseros_mut().aria_label = Some(aria_label.to_owned());
+        self
+    }
+
+    /// Sets `browseros.labelledby` (contract field 12).
+    pub fn labelledby(mut self, refs: Vec<BrowserOsRef>) -> Self {
+        self.browseros_mut().labelledby = refs;
+        self
+    }
+
+    /// Sets `browseros.describedby` (contract field 13).
+    pub fn describedby(mut self, refs: Vec<BrowserOsRef>) -> Self {
+        self.browseros_mut().describedby = refs;
+        self
+    }
+
+    /// Sets `browseros.errormessage` (contract field 14).
+    pub fn errormessage(mut self, refs: Vec<BrowserOsRef>) -> Self {
+        self.browseros_mut().errormessage = refs;
+        self
+    }
+
+    /// Sets `browseros.title` (contract field 15).
+    pub fn title(mut self, title: &str) -> Self {
+        self.browseros_mut().title = Some(title.to_owned());
+        self
+    }
+
+    /// Sets `browseros.aria_description` (contract field 16).
+    pub fn aria_description(mut self, description: &str) -> Self {
+        self.browseros_mut().aria_description = Some(description.to_owned());
+        self
+    }
+
+    /// Sets `browseros.checked` tri-state (contract field 17).
+    pub fn checked_state(mut self, state: BrowserOsTriState) -> Self {
+        self.browseros_mut().checked = Some(i32::from(state));
+        self
+    }
+
+    /// Sets `browseros.pressed` tri-state (contract field 18).
+    pub fn pressed_state(mut self, state: BrowserOsTriState) -> Self {
+        self.browseros_mut().pressed = Some(i32::from(state));
+        self
+    }
+
+    /// Sets `browseros.expanded` tri-state (contract field 19).
+    pub fn expanded_state(mut self, state: BrowserOsTriState) -> Self {
+        self.browseros_mut().expanded = Some(i32::from(state));
+        self
+    }
+
+    /// Sets `browseros.selected` (contract field 20).
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.browseros_mut().selected = Some(selected);
+        self
+    }
+
+    /// Sets `browseros.level` (contract field 21).
+    pub fn level(mut self, level: u32) -> Self {
+        self.browseros_mut().level = Some(level);
+        self
+    }
+
+    /// Sets `browseros.disabled` (contract field 22).
+    pub fn contract_disabled(mut self, disabled: bool) -> Self {
+        self.browseros_mut().disabled = Some(disabled);
+        self
+    }
+
+    /// Sets `browseros.aria_disabled` (contract field 23).
+    pub fn aria_disabled(mut self, aria_disabled: bool) -> Self {
+        self.browseros_mut().aria_disabled = Some(aria_disabled);
+        self
+    }
+
+    /// Sets `browseros.aria_invalid` (contract field 24).
+    pub fn aria_invalid(mut self, aria_invalid: &str) -> Self {
+        self.browseros_mut().aria_invalid = Some(aria_invalid.to_owned());
+        self
+    }
+
+    /// Sets `browseros.redacted_value_length` (contract field 27).
+    pub fn redacted_value_length(mut self, len: u32) -> Self {
+        self.browseros_mut().redacted_value_length = Some(len);
+        self
+    }
+
+    /// Sets `browseros.visibility_hidden` (contract field 28).
+    pub fn visibility_hidden(mut self, hidden: bool) -> Self {
+        self.browseros_mut().visibility_hidden = Some(hidden);
+        self
+    }
+
+    /// Sets `browseros.pointer_events_none` (contract field 29).
+    pub fn pointer_events_none(mut self, none: bool) -> Self {
+        self.browseros_mut().pointer_events_none = Some(none);
+        self
+    }
+
+    /// Sets `browseros.inert` (contract field 30).
+    pub fn inert(mut self, inert: bool) -> Self {
+        self.browseros_mut().inert = Some(inert);
+        self
+    }
+
+    /// Sets `browseros.closed_root_seed` (contract field 31).
+    pub fn closed_root_seed(mut self, seed: bool) -> Self {
+        self.browseros_mut().closed_root_seed = Some(seed);
+        self
+    }
+
+    /// Sets `browseros.ua_shadow` (contract field 32).
+    pub fn ua_shadow(mut self, ua_shadow: bool) -> Self {
+        self.browseros_mut().ua_shadow = Some(ua_shadow);
+        self
+    }
+
+    /// Sets `browseros.display_contents` (contract field 33).
+    pub fn display_contents(mut self, display_contents: bool) -> Self {
+        self.browseros_mut().display_contents = Some(display_contents);
+        self
+    }
+
     /// Appends a child node.
     pub fn child(mut self, child: Self) -> Self {
         self.children.push(child);
@@ -616,6 +913,10 @@ impl NodeBuilder {
     pub fn children(mut self, mut children: Vec<Self>) -> Self {
         self.children.append(&mut children);
         self
+    }
+
+    fn browseros_mut(&mut self) -> &mut BrowserOsContentAttributes {
+        self.attrs.browseros.get_or_insert_with(Box::default)
     }
 
     fn interaction_mut(&mut self) -> &mut InteractionInfo {
@@ -715,8 +1016,8 @@ fn start_frame(mut builder: NodeBuilder, doc_counters: &mut Vec<i32>) -> BuildFr
                 doc_counters.push(1);
                 pops_doc_counter = true;
             }
-            IframeKind::Partial(spec) => {
-                builder.attrs.content_data = partial_iframe_content_data(spec);
+            IframeKind::Partial { spec, frame_token } => {
+                builder.attrs.content_data = partial_iframe_content_data(spec, frame_token);
             }
         }
     }
@@ -729,7 +1030,6 @@ fn start_frame(mut builder: NodeBuilder, doc_counters: &mut Vec<i32>) -> BuildFr
         Some(attrs)
     };
 
-    // Reverse so `.pop()` processes children in forward declaration order.
     pending_children.reverse();
 
     BuildFrame {
@@ -740,30 +1040,45 @@ fn start_frame(mut builder: NodeBuilder, doc_counters: &mut Vec<i32>) -> BuildFr
     }
 }
 
-fn partial_iframe_content_data(spec: PartialIframeSpec) -> Option<ContentData> {
+fn partial_iframe_content_data(
+    spec: PartialIframeSpec,
+    frame_token: Option<String>,
+) -> Option<ContentData> {
+    let browseros = frame_token.map(|token| BrowserOsRedactedFrame {
+        devtools_frame_token: Some(token),
+    });
     let data = match spec {
         PartialIframeSpec::MissingPayload => return None,
         PartialIframeSpec::MissingContent => None,
         PartialIframeSpec::CrossSite => Some(IframeDataContent::RedactedFrameMetadata(
             RedactedFrameMetadata {
                 reason: Some(i32::from(RedactedFrameReason::CrossSite)),
+                browseros,
             },
         )),
         PartialIframeSpec::CrossOrigin => Some(IframeDataContent::RedactedFrameMetadata(
             RedactedFrameMetadata {
                 reason: Some(i32::from(RedactedFrameReason::CrossOrigin)),
+                browseros,
             },
         )),
         PartialIframeSpec::Timeout => Some(IframeDataContent::RedactedFrameMetadata(
             RedactedFrameMetadata {
-                reason: Some(REASON_BROWSEROS_TIMEOUT),
+                reason: Some(i32::from(RedactedFrameReason::BrowserOsTimeout)),
+                browseros,
             },
         )),
         PartialIframeSpec::Redacted(code) => Some(IframeDataContent::RedactedFrameMetadata(
-            RedactedFrameMetadata { reason: Some(code) },
+            RedactedFrameMetadata {
+                reason: Some(code),
+                browseros,
+            },
         )),
         PartialIframeSpec::RedactedUnspecified => Some(IframeDataContent::RedactedFrameMetadata(
-            RedactedFrameMetadata { reason: None },
+            RedactedFrameMetadata {
+                reason: None,
+                browseros,
+            },
         )),
     };
     Some(ContentData::Iframe(Box::new(IframeData { data })))

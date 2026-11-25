@@ -391,15 +391,13 @@ impl fmt::Debug for DocNodes<'_> {
     }
 }
 
-/// Reads `(contract_version, subframe_timeout_ms)` from the top-level APC message.
-///
-/// Isolated at this seam so wiring BrowserOS extension tag 1000 (`apc.browseros`) updates only
-/// this function.
-fn read_contract_meta(_apc: &AnnotatedPageContent) -> (Option<u32>, Option<u32>) {
-    (Some(MIN_CONTRACT_VERSION), None)
+fn read_contract_meta(apc: &AnnotatedPageContent) -> (Option<u32>, Option<u32>) {
+    match apc.browseros {
+        Some(data) => (data.contract_version, data.subframe_timeout_ms),
+        None => (None, None),
+    }
 }
 
-/// Validates that the browser's reported contract version satisfies `required`.
 pub(crate) fn check_contract_version(found: Option<u32>, required: u32) -> Result<u32, BuildError> {
     match found {
         Some(version) if version >= required => Ok(version),
