@@ -3485,3 +3485,88 @@ async fn claude_desktop_extension_reports_what_claude_has_installed() -> anyhow:
 #[cfg(unix)]
 #[path = "playwright/routes.rs"]
 mod playwright;
+
+/// Records one failed dispatch whose audit meta carries `mark`, the way the audit observer marks
+/// a call the plan turned away.
+async fn record_marked_dispatch(
+    app: &TestApp,
+    session: &Session,
+    tool: &str,
+    mark: &str,
+) -> anyhow::Result<()> {
+    record_session_with_dispatch(app, session).await?;
+    let mut meta: Value = serde_json::from_str(&result_meta(true, false, &json!({}), 1))?;
+    meta["planWithheld"] = json!(mark);
+    app.state
+        .audit_log
+        .record_tool_dispatch(RecordToolDispatchInput {
+            agent_id: session.convo_id().as_str().to_string(),
+            slug: session.agent().slug().to_string(),
+            agent_label: session.agent().label().to_string(),
+            session_id: session.id().as_str().to_string(),
+            tool_name: tool.to_string(),
+            page_id: None,
+            tab_id: None,
+            target_id: None,
+            url: None,
+            title: None,
+            args_json: bounded_args_json(&json!({})),
+            result_meta: meta.to_string(),
+            duration_ms: 1,
+            dispatch_id: DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
+            tool_input_token_estimate: 1,
+            tool_output_token_estimate: 0,
+            token_estimator_version: 1,
+        })
+        .await?;
+    Ok(())
+}
+
+/// Task detail names the profile a task was set to, says when it stopped because ultrafast is
+/// off, and says when a Free agent's profile choice was refused.
+#[tokio::test]
+async fn session_detail_explains_profile_choice_and_plan_stops() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let stopped = test_session(SessionId::new("session-profile-stop"), "codex-a", "codex");
+    record_marked_dispatch(&app, &stopped, "navigate", "profileStop").await?;
+    app.state
+        .targets
+        .set(
+            stopped.id(),
+            browseros_core::target::TargetIntent {
+                browser_profile_id: browseros_core::BrowserProfileId("native-work".into()),
+                directory: "Profile 1".into(),
+                name: "Work".into(),
+                window: None,
+            },
+        )
+        .await?;
+    let (status, detail) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions/session-profile-stop",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["session"]["browserProfile"]["name"], "Work");
+    assert_eq!(detail["session"]["stopReason"], "profileNeedsUltrafast");
+    assert!(detail["session"]["profileLocked"].is_null(), "{detail}");
+
+    let refused = test_session(SessionId::new("session-profile-locked"), "codex-b", "codex");
+    record_marked_dispatch(&app, &refused, "browser_target", "profileLocked").await?;
+    let (status, detail) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions/session-profile-locked",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["session"]["profileLocked"], true);
+    assert!(detail["session"]["stopReason"].is_null(), "{detail}");
+    assert!(detail["session"]["browserProfile"].is_null(), "{detail}");
+    Ok(())
+}
