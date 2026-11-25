@@ -33,71 +33,77 @@ type ProbeBundle = {
   RefMap: new () => WorldMod.World['refs']
 }
 
-async function loadProbeBundle(options: {
-  withAriaStubs: boolean
-}): Promise<ProbeBundle> {
+const BUNDLE_ENTRY_PATH = resolve(
+  PACKAGE_ROOT,
+  'src/probe/__cover-aria-entry.ts',
+)
+const BUNDLE_ENTRY_SOURCE = [
+  "export * as cover from './cover'",
+  "export * as coverAria from './cover-aria'",
+  "export * as coverSurvey from './cover-survey'",
+  "export * as failureOutput from './failure-output'",
+  "export * as privateLook from './private-look'",
+  "export * as snapshotAria from './snapshot-aria'",
+  "export * as snapshotInert from './snapshot-inert'",
+  "export { createEngine, Pins } from './world'",
+  "export { RefMap } from './aria-ref'",
+].join('\n')
+
+function probeBundleStubs(withAriaStubs: boolean): Record<string, string> {
   const stubs: Record<string, string> = {
     './highlight': resolve(PACKAGE_ROOT, 'src/stubs/highlight.ts'),
     './consoleApi': resolve(PACKAGE_ROOT, 'src/stubs/consoleApi.ts'),
-    ...(options.withAriaStubs
-      ? {
-          './roleUtils': resolve(PACKAGE_ROOT, 'src/stubs/roleUtils.ts'),
-          './ariaSnapshot': resolve(PACKAGE_ROOT, 'src/stubs/ariaSnapshot.ts'),
-          './roleSelectorEngine': resolve(
-            PACKAGE_ROOT,
-            'src/stubs/roleSelectorEngine.ts',
-          ),
-        }
-      : {}),
   }
-  const entryPath = resolve(PACKAGE_ROOT, 'src/probe/__cover-aria-entry.ts')
-  const entrySource = `
-    export * as cover from './cover'
-    export * as coverAria from './cover-aria'
-    export * as coverSurvey from './cover-survey'
-    export * as failureOutput from './failure-output'
-    export * as privateLook from './private-look'
-    export * as snapshotAria from './snapshot-aria'
-    export * as snapshotInert from './snapshot-inert'
-    export { createEngine, Pins } from './world'
-    export { RefMap } from './aria-ref'
-  `
+  if (!withAriaStubs) return stubs
+  return {
+    ...stubs,
+    './roleUtils': resolve(PACKAGE_ROOT, 'src/stubs/roleUtils.ts'),
+    './ariaSnapshot': resolve(PACKAGE_ROOT, 'src/stubs/ariaSnapshot.ts'),
+    './roleSelectorEngine': resolve(
+      PACKAGE_ROOT,
+      'src/stubs/roleSelectorEngine.ts',
+    ),
+  }
+}
+
+function probeBundlePlugin(stubs: Record<string, string>): Bun.BunPlugin {
+  return {
+    name: 'cover-aria-test-bundle',
+    setup(build) {
+      build.onResolve({ filter: /__cover-aria-entry\.ts$/ }, () => ({
+        path: BUNDLE_ENTRY_PATH,
+      }))
+      build.onLoad({ filter: /__cover-aria-entry\.ts$/ }, () => ({
+        contents: BUNDLE_ENTRY_SOURCE,
+        loader: 'ts',
+      }))
+      build.onResolve(
+        {
+          filter:
+            /^\.\/(highlight|consoleApi|roleUtils|ariaSnapshot|roleSelectorEngine)$/,
+        },
+        (args) => (stubs[args.path] ? { path: stubs[args.path] } : undefined),
+      )
+      build.onResolve({ filter: /^@isomorphic\// }, (args) => ({
+        path: resolve(
+          VENDOR_ROOT,
+          'packages/isomorphic',
+          `${args.path.slice('@isomorphic/'.length)}.ts`,
+        ),
+      }))
+    },
+  }
+}
+
+async function loadProbeBundle(options: {
+  withAriaStubs: boolean
+}): Promise<ProbeBundle> {
   const result = await Bun.build({
-    entrypoints: [entryPath],
+    entrypoints: [BUNDLE_ENTRY_PATH],
     target: 'browser',
     format: 'esm',
     minify: false,
-    plugins: [
-      {
-        name: 'cover-aria-test-bundle',
-        setup(build) {
-          build.onResolve({ filter: /__cover-aria-entry\.ts$/ }, () => ({
-            path: entryPath,
-          }))
-          build.onLoad({ filter: /__cover-aria-entry\.ts$/ }, () => ({
-            contents: entrySource,
-            loader: 'ts',
-          }))
-          build.onResolve(
-            {
-              filter:
-                /^\.\/(highlight|consoleApi|roleUtils|ariaSnapshot|roleSelectorEngine)$/,
-            },
-            (args) => {
-              const target = stubs[args.path]
-              return target ? { path: target } : undefined
-            },
-          )
-          build.onResolve({ filter: /^@isomorphic\// }, (args) => ({
-            path: resolve(
-              VENDOR_ROOT,
-              'packages/isomorphic',
-              `${args.path.slice('@isomorphic/'.length)}.ts`,
-            ),
-          }))
-        },
-      },
-    ],
+    plugins: [probeBundlePlugin(probeBundleStubs(options.withAriaStubs))],
   })
   if (!result.success || !result.outputs[0])
     throw new AggregateError(
@@ -183,14 +189,32 @@ type FixtureContext = {
   setHits: (fn: (x: number, y: number) => Element[]) => void
 }
 
-function withFixtureDom<T>(html: string, fn: (ctx: FixtureContext) => T): T {
-  const { window, document } = parseHTML(html)
+type PatchFn = (
+  target: object,
+  key: PropertyKey,
+  descriptor: PropertyDescriptor,
+) => void
+
+type FixtureWindow = ReturnType<typeof parseHTML>['window']
+
+const DEFAULT_STYLE: Readonly<Record<string, string>> = {
+  display: 'block',
+  visibility: 'visible',
+  opacity: '1',
+  position: 'static',
+  pointerEvents: 'auto',
+  overflowX: 'visible',
+  overflowY: 'visible',
+  borderLeftWidth: '0px',
+  borderTopWidth: '0px',
+  cursor: 'auto',
+  content: 'none',
+  transform: 'none',
+}
+
+function createPatcher(): { patch: PatchFn; restore: () => void } {
   const saved: SavedDescriptor[] = []
-  const patch = (
-    target: object,
-    key: PropertyKey,
-    descriptor: PropertyDescriptor,
-  ) => {
+  const patch: PatchFn = (target, key, descriptor) => {
     saved.push({
       target,
       key,
@@ -198,122 +222,125 @@ function withFixtureDom<T>(html: string, fn: (ctx: FixtureContext) => T): T {
     })
     Object.defineProperty(target, key, { configurable: true, ...descriptor })
   }
+  const restore = () => {
+    for (let index = saved.length - 1; index >= 0; index--) {
+      const entry = saved[index]
+      if (!entry) continue
+      if (entry.descriptor)
+        Object.defineProperty(entry.target, entry.key, entry.descriptor)
+      else Reflect.deleteProperty(entry.target, entry.key)
+    }
+  }
+  return { patch, restore }
+}
 
-  const rects = new WeakMap<Element, RectLike>()
-  const styles = new WeakMap<Element, Record<string, string>>()
-  const defaultRect = makeRect(0, 0, 100, 40)
+function patchValue(
+  patch: PatchFn,
+  target: object,
+  key: PropertyKey,
+  value: unknown,
+): void {
+  patch(target, key, { writable: true, enumerable: true, value })
+}
 
-  const styleFor = (element: Element) => {
+function createStyleReader(styles: WeakMap<Element, Record<string, string>>) {
+  return (element: Element) => {
     const custom = styles.get(element) ?? {}
     return {
-      display: 'block',
-      visibility: 'visible',
-      opacity: '1',
-      position: 'static',
-      pointerEvents: 'auto',
-      overflowX: 'visible',
-      overflowY: 'visible',
-      borderLeftWidth: '0px',
-      borderTopWidth: '0px',
-      cursor: 'auto',
-      content: 'none',
-      transform: 'none',
+      ...DEFAULT_STYLE,
       ...custom,
       getPropertyValue: (name: string) => custom[name] ?? '',
     }
   }
+}
 
-  let hitResolver: (x: number, y: number) => Element[] = () => []
-  const elementsFromPoint = (x: number, y: number) => hitResolver(x, y)
-  const elementFromPoint = (x: number, y: number) =>
-    hitResolver(x, y)[0] ?? null
-
-  patch(window, 'getComputedStyle', {
-    writable: true,
-    enumerable: true,
-    value: styleFor,
+function installLayoutShims(
+  patch: PatchFn,
+  window: FixtureWindow,
+  document: Document,
+  rects: WeakMap<Element, RectLike>,
+  styles: WeakMap<Element, Record<string, string>>,
+  getHits: () => (x: number, y: number) => Element[],
+): void {
+  const defaultRect = makeRect(0, 0, 100, 40)
+  patchValue(patch, window, 'getComputedStyle', createStyleReader(styles))
+  patchValue(patch, window, 'location', {
+    href: 'https://fixture.test/page',
+    origin: 'https://fixture.test',
   })
-  patch(window, 'location', {
-    writable: true,
-    enumerable: true,
-    value: {
-      href: 'https://fixture.test/page',
-      origin: 'https://fixture.test',
+  patchValue(patch, window, 'origin', 'https://fixture.test')
+  patchValue(patch, document, 'elementsFromPoint', (x: number, y: number) =>
+    getHits()(x, y),
+  )
+  patchValue(
+    patch,
+    document,
+    'elementFromPoint',
+    (x: number, y: number) => getHits()(x, y)[0] ?? null,
+  )
+  patchValue(patch, window.Element.prototype, 'scrollIntoView', () => {})
+  patchValue(patch, window.Element.prototype, 'checkVisibility', () => true)
+  patchValue(
+    patch,
+    window.Element.prototype,
+    'getBoundingClientRect',
+    function (this: Element) {
+      return rects.get(this) ?? defaultRect
     },
-  })
-  patch(window, 'origin', {
-    writable: true,
-    enumerable: true,
-    value: 'https://fixture.test',
-  })
-  patch(document, 'elementsFromPoint', {
-    writable: true,
-    enumerable: true,
-    value: elementsFromPoint,
-  })
-  patch(document, 'elementFromPoint', {
-    writable: true,
-    enumerable: true,
-    value: elementFromPoint,
-  })
-  patch(window.Element.prototype, 'scrollIntoView', {
-    writable: true,
-    enumerable: true,
-    value() {},
-  })
+  )
+  patchValue(
+    patch,
+    window.Element.prototype,
+    'getClientRects',
+    function (this: Element) {
+      const rect = rects.get(this) ?? defaultRect
+      return rect.width > 0 && rect.height > 0 ? [rect] : []
+    },
+  )
+}
+
+function installSelectorShims(
+  patch: PatchFn,
+  window: FixtureWindow,
+  document: Document,
+): void {
   const origMatches = window.Element.prototype.matches
-  patch(window.Element.prototype, 'matches', {
-    writable: true,
-    enumerable: true,
-    value(this: Element, selector: string) {
+  patchValue(
+    patch,
+    window.Element.prototype,
+    'matches',
+    function (this: Element, selector: string) {
       if (selector === ':modal' || selector === 'dialog:modal')
         return this.localName === 'dialog' && this.hasAttribute('data-modal')
       if (selector === ':popover-open')
         return this.hasAttribute('data-popover-open')
       return Reflect.apply(origMatches, this, [selector])
     },
-  })
+  )
   const origDocQsa = document.querySelectorAll
-  patch(document, 'querySelectorAll', {
-    writable: true,
-    enumerable: true,
-    value(this: Document, selector: string) {
+  patchValue(
+    patch,
+    document,
+    'querySelectorAll',
+    function (this: Document, selector: string) {
       if (selector === 'dialog:modal')
         return Array.from(
           Reflect.apply(origDocQsa, this, ['dialog[data-modal]']),
         )
       return Reflect.apply(origDocQsa, this, [selector])
     },
-  })
-  patch(window.Element.prototype, 'checkVisibility', {
-    writable: true,
-    enumerable: true,
-    value() {
-      return true
-    },
-  })
-  patch(window.Element.prototype, 'getBoundingClientRect', {
-    writable: true,
-    enumerable: true,
-    value(this: Element) {
-      return rects.get(this) ?? defaultRect
-    },
-  })
-  patch(window.Element.prototype, 'getClientRects', {
-    writable: true,
-    enumerable: true,
-    value(this: Element) {
-      const rect = rects.get(this) ?? defaultRect
-      return rect.width > 0 && rect.height > 0 ? [rect] : []
-    },
-  })
+  )
+}
+
+function installFormShims(patch: PatchFn, window: FixtureWindow): void {
+  const inputProto = window.HTMLInputElement.prototype
   patch(window.HTMLElement.prototype, 'innerText', {
     enumerable: true,
     get(this: HTMLElement) {
       return this.textContent ?? ''
     },
   })
-  patch(window.HTMLInputElement.prototype, 'defaultValue', {
+  patch(inputProto, 'defaultValue', {
     enumerable: true,
     get(this: HTMLInputElement) {
       return this.getAttribute('value') ?? ''
@@ -331,62 +358,60 @@ function withFixtureDom<T>(html: string, fn: (ctx: FixtureContext) => T): T {
       this.textContent = value
     },
   })
-  patch(window.HTMLInputElement.prototype, 'type', {
+  patch(inputProto, 'type', {
     enumerable: true,
     get(this: HTMLInputElement) {
       return (this.getAttribute('type') ?? 'text').toLowerCase()
     },
   })
-  patch(window.HTMLInputElement.prototype, 'checked', {
+  patch(inputProto, 'checked', {
     enumerable: true,
     get(this: HTMLInputElement) {
       return this.hasAttribute('checked')
     },
   })
-  patch(window.HTMLInputElement.prototype, 'maxLength', {
+  patch(inputProto, 'maxLength', {
     enumerable: true,
     get(this: HTMLInputElement) {
-      const raw = this.getAttribute('maxlength')
-      if (raw === null) return -1
-      const parsed = Number.parseInt(raw, 10)
+      const parsed = Number.parseInt(this.getAttribute('maxlength') ?? '', 10)
       return Number.isFinite(parsed) && parsed >= 0 ? parsed : -1
     },
   })
-  patch(window.HTMLInputElement.prototype, 'disabled', {
+  patch(inputProto, 'disabled', {
     enumerable: true,
     get(this: HTMLInputElement) {
       return this.hasAttribute('disabled')
     },
   })
-  patch(window.HTMLInputElement.prototype, 'readOnly', {
+  patch(inputProto, 'readOnly', {
     enumerable: true,
     get(this: HTMLInputElement) {
       return this.hasAttribute('readonly')
     },
   })
+}
 
-  for (const name of DOM_GLOBALS) {
-    patch(globalThis, name, {
-      writable: true,
-      enumerable: true,
-      value: Reflect.get(window, name),
-    })
-  }
-  patch(globalThis, 'innerWidth', {
-    writable: true,
-    enumerable: true,
-    value: 1280,
+function installDomGlobals(patch: PatchFn, window: FixtureWindow): void {
+  for (const name of DOM_GLOBALS)
+    patchValue(patch, globalThis, name, Reflect.get(window, name))
+  patchValue(patch, globalThis, 'innerWidth', 1280)
+  patchValue(patch, globalThis, 'innerHeight', 800)
+  patchValue(patch, globalThis, 'CSS', {
+    escape: (value: string) => value.replace(/([^\w-])/g, '\\$1'),
   })
-  patch(globalThis, 'innerHeight', {
-    writable: true,
-    enumerable: true,
-    value: 800,
-  })
-  patch(globalThis, 'CSS', {
-    writable: true,
-    enumerable: true,
-    value: { escape: (value: string) => value.replace(/([^\w-])/g, '\\$1') },
-  })
+}
+
+function withFixtureDom<T>(html: string, fn: (ctx: FixtureContext) => T): T {
+  const { window, document } = parseHTML(html)
+  const { patch, restore } = createPatcher()
+  const rects = new WeakMap<Element, RectLike>()
+  const styles = new WeakMap<Element, Record<string, string>>()
+  let hitResolver: (x: number, y: number) => Element[] = () => []
+
+  installLayoutShims(patch, window, document, rects, styles, () => hitResolver)
+  installSelectorShims(patch, window, document)
+  installFormShims(patch, window)
+  installDomGlobals(patch, window)
 
   const byId = (id: string): Element => {
     const found = document.getElementById(id)
@@ -406,13 +431,7 @@ function withFixtureDom<T>(html: string, fn: (ctx: FixtureContext) => T): T {
       },
     })
   } finally {
-    for (let index = saved.length - 1; index >= 0; index--) {
-      const entry = saved[index]
-      if (!entry) continue
-      if (entry.descriptor)
-        Object.defineProperty(entry.target, entry.key, entry.descriptor)
-      else Reflect.deleteProperty(entry.target, entry.key)
-    }
+    restore()
   }
 }
 
