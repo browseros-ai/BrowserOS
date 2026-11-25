@@ -15,15 +15,16 @@
 mod fixture_pages;
 #[path = "../tests/support/fixture_server.rs"]
 mod fixture_server;
+#[path = "../tests/support/tree_counts.rs"]
+mod tree_counts;
 
 use std::error::Error;
 use std::path::PathBuf;
 use std::{env, fs};
 
-use fixture_pages::{
-    ALL_FIXTURES, all_fixture_pages, capture_fixture_typed, connect_cdp, count_frames_and_nodes,
-};
+use fixture_pages::{ALL_FIXTURES, all_fixture_pages, capture_fixture_typed, connect_cdp};
 use fixture_server::FixtureServer;
+use tree_counts::count_frames_and_nodes;
 
 #[expect(
     clippy::print_stdout,
@@ -49,12 +50,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let result = async {
         for name in names {
             let (raw_bytes, apc) = capture_fixture_typed(&client, &server, name).await?;
-            let (frames, nodes) = count_frames_and_nodes(&apc);
+            let counts = count_frames_and_nodes(&apc);
             let out_path = fixtures_dir.join(format!("{name}.pb"));
             fs::write(&out_path, &raw_bytes)?;
             println!(
-                "{name}: {} bytes, {frames} frames, {nodes} nodes -> {}",
+                "{name}: {} bytes, {} frames, {} nodes -> {}",
                 raw_bytes.len(),
+                counts.frames,
+                counts.nodes,
                 out_path.display()
             );
         }

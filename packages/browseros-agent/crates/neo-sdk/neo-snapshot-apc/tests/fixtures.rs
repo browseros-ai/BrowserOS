@@ -1,5 +1,8 @@
-//! Offline fixture tests decoding the six committed Chromium 158 `AnnotatedPageContent` `.pb`
+//! Offline fixture tests decoding the seven committed Chromium 158 `AnnotatedPageContent` `.pb`
 //! captures plus synthetic forward-compatibility and large-page payloads.
+
+#[path = "support/tree_counts.rs"]
+mod tree_counts;
 
 use std::error::Error;
 use std::fs;
@@ -15,6 +18,7 @@ use neo_snapshot_apc::proto::{
 };
 use neo_snapshot_apc::{AnnotatedPageContent, decode, decode_protobuf, decode_reply_json};
 use prost::Message as _;
+use tree_counts::{TreeCounts, count_frames_and_nodes};
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -46,60 +50,44 @@ fn decode_fixture_all_paths(name: &str) -> Result<(Vec<u8>, AnnotatedPageContent
     Ok((raw_bytes, from_proto))
 }
 
-fn count_frames_and_nodes(apc: &AnnotatedPageContent) -> (usize, usize) {
-    fn walk(node: &ContentNode, frames: &mut usize, nodes: &mut usize) {
-        *nodes += 1;
-        if let Some(attrs) = node.content_attributes.as_ref()
-            && matches!(attrs.content_data, Some(ContentData::Iframe(_)))
-        {
-            *frames += 1;
-        }
-        for child in &node.children_nodes {
-            walk(child, frames, nodes);
-        }
-    }
-
-    let mut frames = usize::from(apc.main_frame_data.is_some());
-    let mut nodes = 0;
-    if let Some(root) = apc.root_node.as_ref() {
-        walk(root, &mut frames, &mut nodes);
-    }
-    (frames, nodes)
-}
-
 fn walk_nodes(apc: &AnnotatedPageContent) -> Vec<&ContentNode> {
-    fn collect<'a>(node: &'a ContentNode, out: &mut Vec<&'a ContentNode>) {
-        out.push(node);
-        for child in &node.children_nodes {
-            collect(child, out);
-        }
-    }
-
     let mut out = Vec::new();
-    if let Some(root) = apc.root_node.as_ref() {
-        collect(root, &mut out);
+    let mut stack: Vec<&ContentNode> = apc.root_node.iter().collect();
+    while let Some(node) = stack.pop() {
+        out.push(node);
+        stack.extend(node.children_nodes.iter().rev());
     }
     out
 }
 
+fn max_tree_depth(apc: &AnnotatedPageContent) -> usize {
+    let mut deepest = 0;
+    let mut stack: Vec<(&ContentNode, usize)> =
+        apc.root_node.iter().map(|node| (node, 1)).collect();
+    while let Some((node, depth)) = stack.pop() {
+        deepest = deepest.max(depth);
+        for child in node.children_nodes.iter().rev() {
+            stack.push((child, depth + 1));
+        }
+    }
+    deepest
+}
+
 fn text_inside(node: &ContentNode) -> String {
-    fn collect(node: &ContentNode, out: &mut Vec<String>) {
-        if let Some(attrs) = node.content_attributes.as_ref()
+    let mut parts = Vec::new();
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        if let Some(attrs) = current.content_attributes.as_ref()
             && let Some(ContentData::Text(text)) = attrs.content_data.as_ref()
             && let Some(content) = text.text_content.as_ref()
         {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
-                out.push(trimmed.to_owned());
+                parts.push(trimmed.to_owned());
             }
         }
-        for child in &node.children_nodes {
-            collect(child, out);
-        }
+        stack.extend(current.children_nodes.iter().rev());
     }
-
-    let mut parts = Vec::new();
-    collect(node, &mut parts);
     parts.join(" ")
 }
 
@@ -159,7 +147,10 @@ fn nested_cross_site_frames_fixture_decodes_all_eight_frames() -> Result<(), Box
     );
     assert_eq!(
         count_frames_and_nodes(&apc),
-        (8, 71),
+        TreeCounts {
+            frames: 8,
+            nodes: 71,
+        },
         "nested-cross-site-frames.pb must decode 8 frames and 71 nodes"
     );
 
@@ -206,7 +197,10 @@ fn shadow_dom_fixture_decodes_light_open_closed_and_slotted_nodes() -> Result<()
     let (_, apc) = decode_fixture_all_paths("shadow-dom")?;
     assert_eq!(
         count_frames_and_nodes(&apc),
-        (1, 23),
+        TreeCounts {
+            frames: 1,
+            nodes: 23,
+        },
         "shadow-dom.pb must decode 1 frame and 23 nodes"
     );
 
@@ -240,7 +234,10 @@ fn zero_size_checkbox_fixture_preserves_zero_boxes_and_label_for_links()
     let (_, apc) = decode_fixture_all_paths("zero-size-checkbox")?;
     assert_eq!(
         count_frames_and_nodes(&apc),
-        (1, 13),
+        TreeCounts {
+            frames: 1,
+            nodes: 13,
+        },
         "zero-size-checkbox.pb must decode 1 frame and 13 nodes"
     );
 
@@ -325,7 +322,10 @@ fn covered_button_fixture_decodes_dialog_and_higher_overlay_z_order() -> Result<
     let (_, apc) = decode_fixture_all_paths("covered-button")?;
     assert_eq!(
         count_frames_and_nodes(&apc),
-        (1, 16),
+        TreeCounts {
+            frames: 1,
+            nodes: 16,
+        },
         "covered-button.pb must decode 1 frame and 16 nodes"
     );
 
@@ -394,7 +394,10 @@ fn sensitive_form_fixture_redacts_password_and_classifies_card_and_otp()
     let (raw_bytes, apc) = decode_fixture_all_paths("sensitive-form")?;
     assert_eq!(
         count_frames_and_nodes(&apc),
-        (1, 24),
+        TreeCounts {
+            frames: 1,
+            nodes: 24,
+        },
         "sensitive-form.pb must decode 1 frame and 24 nodes"
     );
 
@@ -488,7 +491,10 @@ fn hung_subframe_fixture_preserves_healthy_sibling_and_empty_hung_iframe()
     let (_, apc) = decode_fixture_all_paths("hung-subframe")?;
     assert_eq!(
         count_frames_and_nodes(&apc),
-        (3, 16),
+        TreeCounts {
+            frames: 3,
+            nodes: 16,
+        },
         "hung-subframe.pb must decode 3 frames (top + healthy + hung) and 16 nodes"
     );
 
@@ -577,6 +583,38 @@ fn hung_subframe_fixture_preserves_healthy_sibling_and_empty_hung_iframe()
         hung.children_nodes.is_empty(),
         "timed-out hung iframe must have zero child content nodes"
     );
+    Ok(())
+}
+
+#[test]
+fn deep_nesting_fixture_exceeds_prost_default_limit_and_decodes_cleanly()
+-> Result<(), Box<dyn Error>> {
+    let (raw_bytes, apc) = decode_fixture_all_paths("deep-nesting")?;
+    assert!(
+        AnnotatedPageContent::decode(raw_bytes.as_slice()).is_err(),
+        "real Chromium 158 deep-nesting.pb exceeds prost's default 100-level recursion limit"
+    );
+    assert_eq!(
+        count_frames_and_nodes(&apc),
+        TreeCounts {
+            frames: 1,
+            nodes: 127,
+        },
+        "deep-nesting.pb must decode 1 frame and 127 nodes"
+    );
+    let depth = max_tree_depth(&apc);
+    assert!(
+        depth > 100,
+        "deep-nesting.pb tree depth ({depth}) must exceed prost's 100-level limit"
+    );
+
+    let texts = collect_all_texts(&apc);
+    for expected in ["Deep Nesting Fixture", "Deep nested button"] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "missing deep-nesting text {expected:?} in {texts:?}"
+        );
+    }
     Ok(())
 }
 
@@ -712,7 +750,10 @@ fn generated_large_page_fixture_decodes_cleanly() -> Result<(), Box<dyn Error>> 
     let decoded = decode_reply_json(&reply_json)?;
     assert_eq!(
         count_frames_and_nodes(&decoded),
-        (expected_frames, expected_nodes),
+        TreeCounts {
+            frames: expected_frames,
+            nodes: expected_nodes,
+        },
         "generated ~10k-node multi-frame payload must decode with exact frame and node counts"
     );
     Ok(())

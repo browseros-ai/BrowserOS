@@ -17,6 +17,7 @@ Real `Page.getAnnotatedPageContent` (`includeActionableInformation: true`) proto
 | `covered-button.pb` | Visible `<button>` occluded by a fixed full-viewport backdrop and `<div role="dialog">` with higher `document_scoped_z_order` | 1 | 16 | 1,418 |
 | `sensitive-form.pb` | Password (`RedactedHasBeenPassword`, omitted `field_value`), credit-card (`CoarseAutofillFieldType::CreditCard`), and OTP (`CoarseAutofillFieldType::Otp`) form controls with dummy test values | 1 | 24 | 1,989 |
 | `hung-subframe.pb` | Healthy cross-site OOPIF (`localhost`) preserved alongside a spinning cross-site OOPIF (`[::1]`) that hits Chromium's 10 s subframe timeout and emits empty `IframeData.data` | 3 | 16 | 1,494 |
+| `deep-nesting.pb` | 120 nested semantic `<div role="group">` containers wrapping a button; exceeds `prost`'s default 100-level recursion limit and proves iterative decoding on real Chromium 158 output | 1 | 127 | 8,269 |
 
 ## Re-recording
 

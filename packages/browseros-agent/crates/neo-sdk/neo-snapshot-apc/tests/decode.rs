@@ -18,7 +18,8 @@ use neo_snapshot_apc::proto::{
     SvgRootData, TableData, TableRowData, TableRowType, TextInfo, TextSize, TextStyle, VideoData,
 };
 use neo_snapshot_apc::{
-    AnnotatedPageContent, DecodeError, decode, decode_protobuf, decode_reply_json,
+    AnnotatedPageContent, DecodeError, MAX_CONTENT_NODE_DEPTH, decode, decode_protobuf,
+    decode_reply_json,
 };
 use prost::Message as _;
 
@@ -730,9 +731,190 @@ fn invalid_inputs_return_distinct_error_variants() {
         ),
         "corrupt protobuf wire bytes must report DecodeError::Protobuf"
     );
+    // Tag 2 (root_node, length-delimited) declaring 50 bytes when only 2 bytes follow.
+    let truncated_root = [0x12_u8, 50, 0x0a, 0x00];
+    assert!(
+        matches!(
+            decode_protobuf(&truncated_root),
+            Err(DecodeError::Protobuf(_))
+        ),
+        "truncated length-delimited root_node must report DecodeError::Protobuf"
+    );
     let corrupt_b64 = STANDARD.encode(corrupt_proto);
     assert!(
         matches!(decode(&corrupt_b64), Err(DecodeError::Protobuf(_))),
         "corrupt protobuf inside valid base64 must report DecodeError::Protobuf"
     );
+}
+
+/// Encodes a linear `ContentNode` chain of `depth` nodes (depth 1 is a single leaf node) without
+/// recursion so tests can construct trees deeper than `prost`'s 100-level recursion limit.
+fn encode_nested_content_node_chain(depth: usize, leaf_text: &str) -> Vec<u8> {
+    let leaf_attrs = ContentAttributes {
+        common_ancestor_dom_node_id: Some(999),
+        attribute_type: Some(i32::from(ContentAttributeType::Text)),
+        content_data: Some(ContentData::Text(TextInfo {
+            text_content: Some(leaf_text.to_owned()),
+            text_style: None,
+        })),
+        ..ContentAttributes::default()
+    };
+    let mut current = Vec::new();
+    push_length_delimited_field(2, &leaf_attrs.encode_to_vec(), &mut current);
+
+    let wrapper_attrs = ContentAttributes {
+        attribute_type: Some(i32::from(ContentAttributeType::Container)),
+        aria_role: Some(i32::from(AxRole::Group)),
+        ..ContentAttributes::default()
+    }
+    .encode_to_vec();
+
+    for _ in 1..depth {
+        let mut parent = Vec::with_capacity(current.len() + wrapper_attrs.len() + 16);
+        push_length_delimited_field(2, &wrapper_attrs, &mut parent);
+        push_length_delimited_field(1, &current, &mut parent);
+        current = parent;
+    }
+    current
+}
+
+#[test]
+fn deep_content_node_trees_beyond_prost_recursion_limit_decode_in_root_and_popup()
+-> Result<(), Box<dyn Error>> {
+    const DEPTH: usize = 250;
+    let chain = encode_nested_content_node_chain(DEPTH, "Deep leaf text");
+
+    let mut popup_wire = Vec::new();
+    push_length_delimited_field(1, &chain, &mut popup_wire);
+    push_varint_field(4, 77, &mut popup_wire);
+
+    let mut apc_wire = Vec::new();
+    push_varint_field(1, 1, &mut apc_wire);
+    push_length_delimited_field(2, &chain, &mut apc_wire);
+    push_length_delimited_field(8, &popup_wire, &mut apc_wire);
+
+    assert!(
+        AnnotatedPageContent::decode(apc_wire.as_slice()).is_err(),
+        "default prost::Message::decode rejects 250-level trees at its 100-level recursion limit"
+    );
+
+    let decoded = decode_protobuf(&apc_wire)?;
+    let mut walk_depth = 0_usize;
+    let mut cursor = decoded.root_node.as_ref();
+    let mut leaf_found = None;
+    while let Some(node) = cursor {
+        walk_depth += 1;
+        if let Some(ContentData::Text(text)) = node
+            .content_attributes
+            .as_ref()
+            .and_then(|attrs| attrs.content_data.as_ref())
+        {
+            leaf_found = text.text_content.clone();
+        }
+        cursor = node.children_nodes.first();
+    }
+    assert_eq!(
+        walk_depth, DEPTH,
+        "root_node must decode all {DEPTH} levels"
+    );
+    assert_eq!(
+        leaf_found.as_deref(),
+        Some("Deep leaf text"),
+        "deepest leaf text must survive iterative decode"
+    );
+
+    let popup = decoded
+        .popup_window
+        .as_ref()
+        .ok_or("popup_window missing")?;
+    assert_eq!(popup.opener_common_ancestor_dom_node_id, Some(77));
+    let mut popup_depth = 0_usize;
+    let mut popup_cursor = popup.root_node.as_ref();
+    while let Some(node) = popup_cursor {
+        popup_depth += 1;
+        popup_cursor = node.children_nodes.first();
+    }
+    assert_eq!(
+        popup_depth, DEPTH,
+        "popup_window.root_node must decode all {DEPTH} levels"
+    );
+    Ok(())
+}
+
+#[test]
+fn duplicate_root_node_fields_merge_in_wire_order() -> Result<(), Box<dyn Error>> {
+    let first_root = ContentNode {
+        children_nodes: vec![node_with_data(
+            10,
+            ContentAttributeType::Text,
+            ContentData::Text(TextInfo {
+                text_content: Some("first".to_owned()),
+                text_style: None,
+            }),
+            Vec::new(),
+        )],
+        content_attributes: Some(ContentAttributes {
+            common_ancestor_dom_node_id: Some(1),
+            attribute_type: Some(i32::from(ContentAttributeType::Root)),
+            ..ContentAttributes::default()
+        }),
+    };
+    let second_root = ContentNode {
+        children_nodes: vec![node_with_data(
+            11,
+            ContentAttributeType::Text,
+            ContentData::Text(TextInfo {
+                text_content: Some("second".to_owned()),
+                text_style: None,
+            }),
+            Vec::new(),
+        )],
+        content_attributes: Some(ContentAttributes {
+            label: Some("merged-label".to_owned()),
+            ..ContentAttributes::default()
+        }),
+    };
+
+    let mut wire = Vec::new();
+    push_length_delimited_field(2, &first_root.encode_to_vec(), &mut wire);
+    push_length_delimited_field(2, &second_root.encode_to_vec(), &mut wire);
+
+    let decoded = decode_protobuf(&wire)?;
+    let root = decoded.root_node.as_ref().ok_or("root_node missing")?;
+    assert_eq!(
+        root.children_nodes.len(),
+        2,
+        "merged root_node must keep children from both wire occurrences in order"
+    );
+    let attrs = root
+        .content_attributes
+        .as_ref()
+        .ok_or("root_node.content_attributes missing")?;
+    assert_eq!(attrs.common_ancestor_dom_node_id, Some(1));
+    assert_eq!(attrs.label.as_deref(), Some("merged-label"));
+    Ok(())
+}
+
+#[test]
+fn content_node_nesting_limit_allows_max_and_rejects_excess() -> Result<(), Box<dyn Error>> {
+    let at_limit = encode_nested_content_node_chain(MAX_CONTENT_NODE_DEPTH, "at limit");
+    let mut wire_ok = Vec::new();
+    push_length_delimited_field(2, &at_limit, &mut wire_ok);
+    let decoded = decode_protobuf(&wire_ok)?;
+    assert!(
+        decoded.root_node.is_some(),
+        "tree at exact MAX_CONTENT_NODE_DEPTH must decode"
+    );
+
+    let over_limit = encode_nested_content_node_chain(MAX_CONTENT_NODE_DEPTH + 1, "over limit");
+    let mut wire_err = Vec::new();
+    push_length_delimited_field(2, &over_limit, &mut wire_err);
+    assert!(
+        matches!(
+            decode_protobuf(&wire_err),
+            Err(DecodeError::NestingLimitExceeded { limit }) if limit == MAX_CONTENT_NODE_DEPTH
+        ),
+        "tree deeper than MAX_CONTENT_NODE_DEPTH must return DecodeError::NestingLimitExceeded"
+    );
+    Ok(())
 }

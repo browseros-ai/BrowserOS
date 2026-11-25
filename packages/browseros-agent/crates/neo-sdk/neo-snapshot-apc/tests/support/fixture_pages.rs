@@ -16,14 +16,13 @@ use browseros_cdp::page::{self, EnableParams, GetAnnotatedPageContentParams, Nav
 use browseros_cdp::runtime::{self, EvaluateParams};
 use browseros_cdp::target::{self, AttachToTargetParams};
 use browseros_cdp::{CdpClient, ConnectOptions, SessionId};
-use neo_snapshot_apc::proto::{ContentData, ContentNode};
 use neo_snapshot_apc::{AnnotatedPageContent, decode, decode_reply_json};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
 use crate::fixture_server::{FixtureServer, Page};
 
-/// All six named APC edge fixtures recorded against Chromium 158.
+/// All seven named APC edge fixtures recorded against Chromium 158.
 pub(crate) const ALL_FIXTURES: &[&str] = &[
     "nested-cross-site-frames",
     "shadow-dom",
@@ -31,6 +30,7 @@ pub(crate) const ALL_FIXTURES: &[&str] = &[
     "covered-button",
     "sensitive-form",
     "hung-subframe",
+    "deep-nesting",
 ];
 
 /// Default CDP port when `BROWSEROS_CDP_PORT` is unset.
@@ -76,6 +76,7 @@ pub(crate) fn all_fixture_pages() -> HashMap<String, Page> {
         sensitive_form_page(),
     );
     insert_hung_subframe_pages(&mut pages);
+    pages.insert("/deep-nesting/index.html".to_owned(), deep_nesting_page());
     pages
 }
 
@@ -88,6 +89,7 @@ pub(crate) fn fixture_entry_path(name: &str) -> Result<&'static str, Box<dyn Err
         "covered-button" => Ok("/covered-button/index.html"),
         "sensitive-form" => Ok("/sensitive-form/index.html"),
         "hung-subframe" => Ok("/hung-subframe/top.html"),
+        "deep-nesting" => Ok("/deep-nesting/index.html"),
         other => Err(format!("unknown fixture name: {other}").into()),
     }
 }
@@ -140,29 +142,6 @@ pub(crate) async fn capture_fixture_raw_json(
     .await;
     close_target_best_effort(client, &target_id).await;
     captured
-}
-
-/// Counts total [`ContentNode`] entries and embedded frames (`1` main frame plus every
-/// [`ContentData::Iframe`] node) in `apc`.
-pub(crate) fn count_frames_and_nodes(apc: &AnnotatedPageContent) -> (usize, usize) {
-    fn walk(node: &ContentNode, frames: &mut usize, nodes: &mut usize) {
-        *nodes += 1;
-        if let Some(attrs) = node.content_attributes.as_ref()
-            && matches!(attrs.content_data, Some(ContentData::Iframe(_)))
-        {
-            *frames += 1;
-        }
-        for child in &node.children_nodes {
-            walk(child, frames, nodes);
-        }
-    }
-
-    let mut frames = usize::from(apc.main_frame_data.is_some());
-    let mut nodes = 0;
-    if let Some(root) = apc.root_node.as_ref() {
-        walk(root, &mut frames, &mut nodes);
-    }
-    (frames, nodes)
 }
 
 /// Opens a fresh target tab, attaches a flattened session, navigates to `name`, waits for fixture
@@ -680,4 +659,26 @@ fn insert_hung_subframe_pages(pages: &mut HashMap<String, Page>) {
 "#,
         ),
     );
+}
+
+/// Builds the `deep-nesting` fixture: 120 nested semantic `<div role="group">` containers around a
+/// button, exceeding `prost`'s default 100-level recursion limit while remaining valid in Blink.
+fn deep_nesting_page() -> Page {
+    const NESTED_GROUPS: usize = 120;
+    let mut html = String::from(
+        "<!doctype html>\n\
+         <html lang=\"en\">\n\
+         <head><meta charset=\"utf-8\"><title>Deep Nesting Fixture</title></head>\n\
+         <body style=\"margin:16px;font-family:sans-serif;\">\n\
+         <h1>Deep Nesting Fixture</h1>\n",
+    );
+    for _ in 0..NESTED_GROUPS {
+        html.push_str("<div role=\"group\">");
+    }
+    html.push_str("<button type=\"button\">Deep nested button</button>");
+    for _ in 0..NESTED_GROUPS {
+        html.push_str("</div>");
+    }
+    html.push_str("\n<script>window.__fixtureReady = true;</script>\n</body>\n</html>\n");
+    Page::html(&html)
 }

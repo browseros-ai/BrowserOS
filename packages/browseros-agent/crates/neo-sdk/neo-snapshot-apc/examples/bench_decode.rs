@@ -8,6 +8,9 @@
 //! cargo run --release -p neo-snapshot-apc --example bench_decode
 //! ```
 
+#[path = "../tests/support/tree_counts.rs"]
+mod tree_counts;
+
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -24,6 +27,7 @@ use neo_snapshot_apc::proto::{
 };
 use neo_snapshot_apc::{AnnotatedPageContent, decode, decode_protobuf, decode_reply_json};
 use prost::Message as _;
+use tree_counts::{TreeCounts, count_frames_and_nodes};
 
 /// Number of unmeasured warmup runs before timing starts.
 const WARMUP_RUNS: usize = 3;
@@ -42,12 +46,15 @@ struct LatencyMs {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("fixtures")
-        .join("nested-cross-site-frames.pb");
-    let fixture_bytes = fs::read(&fixture_path)?;
-    bench_payload("recorded: nested-cross-site-frames.pb", &fixture_bytes)?;
+        .join("fixtures");
+
+    let deep_bytes = fs::read(fixtures_dir.join("deep-nesting.pb"))?;
+    bench_payload("recorded (largest): deep-nesting.pb", &deep_bytes)?;
+
+    let nested_bytes = fs::read(fixtures_dir.join("nested-cross-site-frames.pb"))?;
+    bench_payload("recorded: nested-cross-site-frames.pb", &nested_bytes)?;
 
     let large_apc = generate_large_page_apc(LARGE_PAGE_TARGET_PROTO_BYTES);
     let large_bytes = large_apc.encode_to_vec();
@@ -62,16 +69,16 @@ fn bench_payload(label: &str, proto_bytes: &[u8]) -> Result<(), Box<dyn Error>> 
     let reply_json = format!(r#"{{"content":"{b64}"}}"#);
 
     let baseline = decode_protobuf(proto_bytes)?;
-    let (expected_frames, expected_nodes) = count_frames_and_nodes(&baseline);
+    let expected = count_frames_and_nodes(&baseline);
 
     let reply_stats = measure(
         || Ok(decode_reply_json(hint::black_box(reply_json.as_str()))?),
-        |apc| verify_counts(apc, expected_frames, expected_nodes),
+        |apc| verify_counts(apc, expected),
     )?;
 
     let decode_b64_stats = measure(
         || Ok(decode(hint::black_box(b64.as_str()))?),
-        |apc| verify_counts(apc, expected_frames, expected_nodes),
+        |apc| verify_counts(apc, expected),
     )?;
 
     let b64_stats = measure(
@@ -91,7 +98,7 @@ fn bench_payload(label: &str, proto_bytes: &[u8]) -> Result<(), Box<dyn Error>> 
 
     let proto_stats = measure(
         || Ok(decode_protobuf(hint::black_box(proto_bytes))?),
-        |apc| verify_counts(apc, expected_frames, expected_nodes),
+        |apc| verify_counts(apc, expected),
     )?;
 
     println!("=== {label} ===");
@@ -99,8 +106,8 @@ fn bench_payload(label: &str, proto_bytes: &[u8]) -> Result<(), Box<dyn Error>> 
         "  proto_bytes={}  base64_bytes={}  frames={}  nodes={}",
         proto_bytes.len(),
         b64.len(),
-        expected_frames,
-        expected_nodes
+        expected.frames,
+        expected.nodes
     );
     print_stats("decode_reply_json (end-to-end)", &reply_stats);
     print_stats("decode (base64 + prost)       ", &decode_b64_stats);
@@ -156,40 +163,16 @@ fn duration_to_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 
-fn verify_counts(
-    apc: &AnnotatedPageContent,
-    expected_frames: usize,
-    expected_nodes: usize,
-) -> Result<(), Box<dyn Error>> {
-    let (frames, nodes) = count_frames_and_nodes(apc);
-    if frames != expected_frames || nodes != expected_nodes {
+fn verify_counts(apc: &AnnotatedPageContent, expected: TreeCounts) -> Result<(), Box<dyn Error>> {
+    let actual = count_frames_and_nodes(apc);
+    if actual != expected {
         return Err(format!(
-            "decoded count mismatch: got ({frames} frames, {nodes} nodes), expected ({expected_frames}, {expected_nodes})"
+            "decoded count mismatch: got ({} frames, {} nodes), expected ({}, {})",
+            actual.frames, actual.nodes, expected.frames, expected.nodes
         )
         .into());
     }
     Ok(())
-}
-
-fn count_frames_and_nodes(apc: &AnnotatedPageContent) -> (usize, usize) {
-    fn walk(node: &ContentNode, frames: &mut usize, nodes: &mut usize) {
-        *nodes += 1;
-        if let Some(attrs) = node.content_attributes.as_ref()
-            && matches!(attrs.content_data, Some(ContentData::Iframe(_)))
-        {
-            *frames += 1;
-        }
-        for child in &node.children_nodes {
-            walk(child, frames, nodes);
-        }
-    }
-
-    let mut frames = usize::from(apc.main_frame_data.is_some());
-    let mut nodes = 0;
-    if let Some(root) = apc.root_node.as_ref() {
-        walk(root, &mut frames, &mut nodes);
-    }
-    (frames, nodes)
 }
 
 /// Deterministically builds a large multi-frame [`AnnotatedPageContent`] tree whose encoded

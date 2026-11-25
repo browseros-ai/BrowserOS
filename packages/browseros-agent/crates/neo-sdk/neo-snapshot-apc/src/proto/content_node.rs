@@ -1,3 +1,5 @@
+use std::mem;
+
 use prost::{Enumeration, Message, Oneof};
 
 use super::ax_role::AxRole;
@@ -23,6 +25,17 @@ pub struct ContentNode {
     /// node.
     #[prost(message, optional, tag = "2")]
     pub content_attributes: Option<ContentAttributes>,
+}
+
+impl Drop for ContentNode {
+    /// Tears down arbitrarily deep `ContentNode` subtrees iteratively so dropping a deeply nested
+    /// page cannot overflow the call stack.
+    fn drop(&mut self) {
+        let mut stack = mem::take(&mut self.children_nodes);
+        while let Some(mut node) = stack.pop() {
+            stack.extend(mem::take(&mut node.children_nodes));
+        }
+    }
 }
 
 /// Attributes and type-specific payload attached to a [`ContentNode`].

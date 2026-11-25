@@ -20,6 +20,6 @@ mod decode;
 mod decode_error;
 pub mod proto;
 
-pub use decode::{decode, decode_protobuf, decode_reply_json};
+pub use decode::{MAX_CONTENT_NODE_DEPTH, decode, decode_protobuf, decode_reply_json};
 pub use decode_error::DecodeError;
 pub use proto::AnnotatedPageContent;

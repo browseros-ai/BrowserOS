@@ -12,6 +12,12 @@ pub enum DecodeError {
     /// The decoded bytes did not conform to the `AnnotatedPageContent` protobuf wire format.
     #[error("invalid protobuf in AnnotatedPageContent payload: {0}")]
     Protobuf(#[from] prost::DecodeError),
+    /// The `ContentNode` tree exceeded [`MAX_CONTENT_NODE_DEPTH`](crate::MAX_CONTENT_NODE_DEPTH).
+    #[error("AnnotatedPageContent tree exceeded maximum nesting depth of {limit}")]
+    NestingLimitExceeded {
+        /// Maximum permitted `ContentNode` nesting depth.
+        limit: usize,
+    },
     /// The CDP JSON reply did not match the expected `{"content": "<base64>"}` envelope.
     #[error("invalid Page.getAnnotatedPageContent reply JSON: {0}")]
     ReplyJson(#[from] serde_json::Error),

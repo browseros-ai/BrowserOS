@@ -17,16 +17,18 @@
 mod fixture_pages;
 #[path = "support/fixture_server.rs"]
 mod fixture_server;
+#[path = "support/tree_counts.rs"]
+mod tree_counts;
 
 use std::error::Error;
 
 use fixture_pages::{
     all_fixture_pages, capture_fixture_raw_json, capture_fixture_typed, connect_cdp,
-    count_frames_and_nodes,
 };
 use fixture_server::FixtureServer;
 use neo_snapshot_apc::AnnotatedPageContent;
 use neo_snapshot_apc::proto::{ContentData, ContentNode};
+use tree_counts::count_frames_and_nodes;
 
 fn collect_text_and_labels(apc: &AnnotatedPageContent) -> Vec<String> {
     fn walk(node: &ContentNode, out: &mut Vec<String>) {
@@ -53,14 +55,15 @@ fn collect_text_and_labels(apc: &AnnotatedPageContent) -> Vec<String> {
 }
 
 fn assert_nested_frames_tree(apc: &AnnotatedPageContent, path_name: &str) {
-    let (frames, nodes) = count_frames_and_nodes(apc);
+    let counts = count_frames_and_nodes(apc);
     assert_eq!(
-        frames, 8,
+        counts.frames, 8,
         "{path_name}: expected 8 frames (Top + 7 nested cross-site iframes)"
     );
     assert!(
-        nodes >= 40,
-        "{path_name}: expected at least 40 content nodes across 8 frames, got {nodes}"
+        counts.nodes >= 40,
+        "{path_name}: expected at least 40 content nodes across 8 frames, got {}",
+        counts.nodes
     );
 
     let texts = collect_text_and_labels(apc);
@@ -106,11 +109,10 @@ async fn live_chromium_158_captures_nested_cross_site_frames_typed_and_raw_json(
         );
         assert_nested_frames_tree(&raw_json_apc, "CdpClient::send_raw -> decode_reply_json");
 
-        let (typed_frames, typed_nodes) = count_frames_and_nodes(&typed_apc);
-        let (raw_frames, raw_nodes) = count_frames_and_nodes(&raw_json_apc);
+        let typed_counts = count_frames_and_nodes(&typed_apc);
+        let raw_counts = count_frames_and_nodes(&raw_json_apc);
         assert_eq!(
-            (typed_frames, typed_nodes),
-            (raw_frames, raw_nodes),
+            typed_counts, raw_counts,
             "typed and raw JSON capture paths should decode identical frame/node counts"
         );
         Ok::<(), Box<dyn Error>>(())
