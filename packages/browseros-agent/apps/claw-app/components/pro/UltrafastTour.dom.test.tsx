@@ -221,8 +221,8 @@ describe('UltrafastTour', () => {
     )
 
     await click('Step 3 of 3')
-    expect(headline()).toBe('Robot checks, solved for you')
-    expect(dialog().textContent).toContain('Solved')
+    expect(headline()).toBe('Works in the right profile')
+    expect(dialog().textContent).toContain('Using this')
     expect(() => button('Next')).toThrow()
 
     await click('Back')
@@ -237,7 +237,7 @@ describe('UltrafastTour', () => {
     await press('ArrowRight')
     await press('ArrowRight')
     await press('ArrowRight')
-    expect(headline()).toBe('Robot checks, solved for you')
+    expect(headline()).toBe('Works in the right profile')
   })
 
   it('tests that Skip closes from any picture', async () => {

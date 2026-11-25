@@ -7,10 +7,7 @@
 import {
   Bot,
   Check,
-  Compass,
-  Eye,
   type LucideIcon,
-  ShieldCheck,
   ShoppingCart,
   UserRoundCheck,
   WandSparkles,
@@ -31,7 +28,7 @@ const delay = (seconds: number): CSSProperties => ({
 export function UltrafastPicture({ step }: { step: number }) {
   if (step === 0) return <StepRacePicture />
   if (step === 1) return <SkillPicture />
-  return <RobotCheckPicture />
+  return <ProfilePicture />
 }
 
 /** Your agent alone takes many paid steps; with ultrafast, neo takes a few. */
@@ -96,44 +93,60 @@ export function SkillPicture() {
   )
 }
 
-const CHECK_STEPS: { icon: LucideIcon; text: string; check?: boolean }[] = [
-  { icon: Compass, text: 'Opened the product page' },
-  { icon: ShieldCheck, text: 'Are you a robot?', check: true },
-  { icon: Eye, text: 'Read today’s price' },
-  { icon: Check, text: 'Noted the price' },
+// Made-up profiles: the picture shows the idea, not the person's own browser.
+const PROFILES: {
+  initial: string
+  name: string
+  account: string
+  picked?: boolean
+}[] = [
+  { initial: 'P', name: 'Personal', account: 'home account' },
+  { initial: 'W', name: 'Work', account: 'company account', picked: true },
+  { initial: 'D', name: 'Default', account: '' },
 ]
 
-/** A task's steps, with the robot check turning to Solved. */
-export function RobotCheckPicture() {
+/** A task, then the browser profiles, with your agent picking the one it belongs in. */
+export function ProfilePicture() {
   return (
     <Picture caption="Illustration.">
+      <span className="inline-flex items-center gap-2 self-start rounded-full border border-border-2 bg-card px-3 py-1.5 font-semibold text-[13.5px] text-cyanotype-ink shadow-card motion-safe:animate-fade-up">
+        <Bot className="size-3.5 text-accent-ink" />
+        Order the team’s printer paper
+      </span>
       <ol className="flex flex-col gap-0.5 rounded-xl border border-border-2 bg-card p-2 shadow-card">
-        {CHECK_STEPS.map((step, index) => (
+        {PROFILES.map((profile, index) => (
           <li
-            key={step.text}
+            key={profile.name}
             className={cn(
               'grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2.5 rounded-md px-2 py-1.5 text-[14px] motion-safe:animate-fade-up',
-              step.check
+              profile.picked
                 ? 'bg-green-tint font-semibold text-cyanotype-ink motion-safe:[animation:fade-up_0.35s_cubic-bezier(0.16,1,0.3,1)_both,uf-flash_1.2s_ease_both]'
                 : 'text-ink-2',
             )}
             style={
-              step.check
-                ? { animationDelay: `${0.2 + index * 0.55}s, 1.25s` }
-                : delay(0.2 + index * 0.55)
+              profile.picked
+                ? { animationDelay: `${0.2 + index * 0.45}s, 1.2s` }
+                : delay(0.2 + index * 0.45)
             }
           >
-            <span className="grid size-7 place-items-center rounded-full bg-accent-tint text-accent-ink">
-              <step.icon className="size-3.5" />
+            <span className="grid size-7 place-items-center rounded-full bg-accent-tint font-semibold text-[12.5px] text-accent-ink">
+              {profile.initial}
             </span>
-            <span className="truncate">{step.text}</span>
-            {step.check ? (
+            <span className="truncate">
+              {profile.name}
+              {profile.account ? (
+                <span className="ml-1.5 font-normal text-[12.5px] text-ink-3">
+                  {profile.account}
+                </span>
+              ) : null}
+            </span>
+            {profile.picked ? (
               <span
                 className="inline-flex items-center gap-1 rounded-full bg-card px-2 py-0.5 font-semibold text-[12px] text-green-ink motion-safe:animate-uf-pop"
-                style={delay(1.35)}
+                style={delay(1.3)}
               >
                 <Check className="size-3" />
-                Solved
+                Using this
               </span>
             ) : null}
           </li>

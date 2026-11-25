@@ -12,7 +12,7 @@ import type {
   PlanPricing,
 } from '@browseros/claw-api'
 import { ApiResponseError } from '@browseros/claw-api-client'
-import { Gauge, type LucideIcon, ShieldCheck, Zap } from 'lucide-react'
+import { Gauge, type LucideIcon, UserRoundCheck, Zap } from 'lucide-react'
 
 export interface UltrafastStep {
   icon: LucideIcon
@@ -37,10 +37,10 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
     line: 'neo writes them from tasks you repeat.',
   },
   {
-    icon: ShieldCheck,
-    name: 'Robot checks',
-    title: 'Robot checks, solved for you',
-    line: 'Sign-ins and codes still come to you.',
+    icon: UserRoundCheck,
+    name: 'Right profile',
+    title: 'Works in the right profile',
+    line: 'Your agent uses the profile you’re signed in to, like Work or Personal.',
   },
 ]
 

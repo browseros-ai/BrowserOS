@@ -604,7 +604,7 @@ describe('the ultrafast page', () => {
       'Illustration. Each dot is a step your agent pays for.',
     )
     expect(text()).toContain('Skills run in seconds')
-    expect(text()).toContain('Robot checks, solved for you')
+    expect(text()).toContain('Works in the right profile')
     expect(text()).not.toContain('Fewer steps. Smaller AI bills.')
     expect(text()).not.toContain('Show me')
     expect(text()).toContain('$20a month')
@@ -699,8 +699,8 @@ describe('the ultrafast page', () => {
     await click('Skip', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
 
-    await click('Show me Robot checks')
-    expect(dialog().textContent).toContain('Robot checks, solved for you')
+    await click('Show me Right profile')
+    expect(dialog().textContent).toContain('Works in the right profile')
     expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })
 
@@ -888,7 +888,7 @@ describe('buying ultrafast', () => {
     await click('Next', dialog())
     expect(dialog().textContent).toContain('Skills run in seconds')
     await click('Next', dialog())
-    expect(dialog().textContent).toContain('Robot checks, solved for you')
+    expect(dialog().textContent).toContain('Works in the right profile')
 
     await click('Start using ultrafast', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
