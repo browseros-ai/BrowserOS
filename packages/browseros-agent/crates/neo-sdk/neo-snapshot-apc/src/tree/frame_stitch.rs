@@ -119,6 +119,11 @@ pub(crate) fn frame_stitch(
     })
 }
 
+struct NodeSlot {
+    id: NodeId,
+    initial_end: NodeId,
+}
+
 impl StitchState {
     fn enter_node(
         &mut self,
@@ -127,7 +132,7 @@ impl StitchState {
         parent: Option<NodeId>,
         options: BuildOptions<'_>,
     ) -> Result<WalkFrame, BuildError> {
-        let (node_id, initial_end) = allocate_node_slot(self.nodes.len())?;
+        let slot = allocate_node_slot(self.nodes.len())?;
 
         let mut children = mem::take(&mut content.children_nodes);
         let mut attrs = content.content_attributes.take();
@@ -144,8 +149,8 @@ impl StitchState {
         let resolution = self.resolve_iframe(
             &mut attrs,
             doc,
-            node_id,
-            initial_end,
+            slot.id,
+            slot.initial_end,
             node_key.as_ref(),
             options,
         )?;
@@ -156,11 +161,11 @@ impl StitchState {
         };
 
         if let Some(parent_id) = parent {
-            link_child(&mut self.nodes, parent_id, node_id);
+            link_child(&mut self.nodes, parent_id, slot.id);
         }
 
         self.nodes.push(TreeNode::new(TreeNodeInit {
-            id: node_id,
+            id: slot.id,
             doc,
             dom_node_id,
             parent,
@@ -170,11 +175,11 @@ impl StitchState {
         }));
 
         if let Some(doc_entry) = self.docs.get_mut(doc.index()) {
-            doc_entry.record_node(node_id);
+            doc_entry.record_node(slot.id);
         }
         if let Some(key) = node_key {
             // First node in flat-tree preorder owns the key if a document duplicates a DOM ID.
-            self.by_key.entry(key).or_insert(node_id);
+            self.by_key.entry(key).or_insert(slot.id);
         }
 
         let remaining_children = if descend_doc.is_some() {
@@ -185,7 +190,7 @@ impl StitchState {
         };
 
         Ok(WalkFrame {
-            node_id,
+            node_id: slot.id,
             child_doc,
             descend_doc,
             remaining_children,
@@ -341,12 +346,15 @@ impl StitchState {
     }
 }
 
-fn allocate_node_slot(current_len: usize) -> Result<(NodeId, NodeId), BuildError> {
+fn allocate_node_slot(current_len: usize) -> Result<NodeSlot, BuildError> {
     let next_end = current_len
         .checked_add(1)
         .and_then(|len| u32::try_from(len).ok())
         .ok_or(BuildError::TreeTooLarge { count: current_len })?;
-    Ok((NodeId::new(next_end - 1), NodeId::new(next_end)))
+    Ok(NodeSlot {
+        id: NodeId::new(next_end - 1),
+        initial_end: NodeId::new(next_end),
+    })
 }
 
 fn link_child(nodes: &mut [TreeNode], parent_id: NodeId, child_id: NodeId) {

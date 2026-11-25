@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::mem;
 
 use crate::proto::{
@@ -102,8 +103,11 @@ impl ApcBuilder {
     }
 
     /// Starts a builder from a pre-configured main [`FrameBuilder`].
+    ///
+    /// If `frame` contains multiple top-level children, they are wrapped under a synthetic
+    /// [`NodeBuilder::root`] so no siblings are dropped.
     pub fn with_main_frame(mut frame: FrameBuilder) -> Self {
-        let root = frame.take_primary_root();
+        let root = frame.take_main_root();
         Self {
             main_frame: Some(frame),
             viewport: None,
@@ -391,11 +395,12 @@ impl FrameBuilder {
         self
     }
 
-    fn take_primary_root(&mut self) -> Option<NodeBuilder> {
-        if self.children.is_empty() {
-            None
-        } else {
-            Some(self.children.remove(0))
+    fn take_main_root(&mut self) -> Option<NodeBuilder> {
+        let mut children = mem::take(&mut self.children);
+        match children.len() {
+            0 => None,
+            1 => children.pop(),
+            _ => Some(NodeBuilder::root().children(children)),
         }
     }
 
@@ -421,15 +426,20 @@ impl FrameBuilder {
         }
     }
 
-    fn into_parts(self) -> (FrameData, Vec<NodeBuilder>) {
+    fn into_parts(self) -> FrameParts {
         let children = self.children;
         let data = FrameBuilder {
             children: Vec::new(),
             ..self
         }
         .into_frame_data();
-        (data, children)
+        FrameParts { data, children }
     }
+}
+
+struct FrameParts {
+    data: FrameData,
+    children: Vec<NodeBuilder>,
 }
 
 /// Builder for a single [`ContentNode`] and its [`ContentAttributes`] payload.
@@ -946,24 +956,65 @@ impl Drop for NodeBuilder {
     }
 }
 
+struct DocIdAllocator {
+    next: i32,
+    reserved: HashSet<i32>,
+}
+
+impl DocIdAllocator {
+    fn for_root(root: &NodeBuilder) -> Self {
+        let mut reserved = HashSet::new();
+        collect_explicit_ids(&[root], &mut reserved);
+        Self { next: 1, reserved }
+    }
+
+    fn for_children(children: &[NodeBuilder]) -> Self {
+        let mut reserved = HashSet::new();
+        let roots: Vec<&NodeBuilder> = children.iter().collect();
+        collect_explicit_ids(&roots, &mut reserved);
+        Self { next: 1, reserved }
+    }
+
+    fn allocate_auto(&mut self) -> i32 {
+        while self.reserved.contains(&self.next) && self.next < i32::MAX {
+            self.next += 1;
+        }
+        let id = self.next;
+        self.next = self.next.saturating_add(1);
+        id
+    }
+}
+
+fn collect_explicit_ids(roots: &[&NodeBuilder], reserved: &mut HashSet<i32>) {
+    let mut stack: Vec<&NodeBuilder> = roots.to_vec();
+    while let Some(node) = stack.pop() {
+        if let DomIdSpec::Explicit(id) = node.dom_id {
+            reserved.insert(id);
+        }
+        if !matches!(node.iframe, Some(IframeKind::Populated(_))) {
+            stack.extend(node.children.iter());
+        }
+    }
+}
+
 struct BuildFrame {
     content_attributes: Option<ContentAttributes>,
     built_children: Vec<ContentNode>,
     pending_children: Vec<NodeBuilder>,
-    pops_doc_counter: bool,
+    pops_doc_allocator: bool,
 }
 
 fn build_node_iter(root: NodeBuilder) -> ContentNode {
-    let mut doc_counters: Vec<i32> = vec![1];
-    let mut stack = vec![start_frame(root, &mut doc_counters)];
+    let mut doc_allocators = vec![DocIdAllocator::for_root(&root)];
+    let mut stack = vec![start_frame(root, &mut doc_allocators)];
 
     while let Some(top) = stack.last_mut() {
         if let Some(next_child) = top.pending_children.pop() {
-            let child_frame = start_frame(next_child, &mut doc_counters);
+            let child_frame = start_frame(next_child, &mut doc_allocators);
             stack.push(child_frame);
         } else if let Some(finished) = stack.pop() {
-            if finished.pops_doc_counter {
-                doc_counters.pop();
+            if finished.pops_doc_allocator {
+                doc_allocators.pop();
             }
             let built = ContentNode {
                 children_nodes: finished.built_children,
@@ -980,22 +1031,15 @@ fn build_node_iter(root: NodeBuilder) -> ContentNode {
     ContentNode::default()
 }
 
-fn start_frame(mut builder: NodeBuilder, doc_counters: &mut Vec<i32>) -> BuildFrame {
+fn start_frame(mut builder: NodeBuilder, doc_allocators: &mut Vec<DocIdAllocator>) -> BuildFrame {
     let dom_id = match builder.dom_id {
-        DomIdSpec::Auto => {
-            let counter = doc_counters.last_mut();
-            counter.map(|next| {
-                let id = *next;
-                *next = next.saturating_add(1);
-                id
-            })
-        }
+        DomIdSpec::Auto => doc_allocators.last_mut().map(DocIdAllocator::allocate_auto),
         DomIdSpec::Explicit(id) => Some(id),
         DomIdSpec::Omitted => None,
     };
 
     let mut pending_children = mem::take(&mut builder.children);
-    let mut pops_doc_counter = false;
+    let mut pops_doc_allocator = false;
 
     if let Some(control) = builder.form_control.take() {
         builder.attrs.content_data = Some(ContentData::FormControl(control));
@@ -1004,17 +1048,20 @@ fn start_frame(mut builder: NodeBuilder, doc_counters: &mut Vec<i32>) -> BuildFr
     if let Some(iframe_kind) = builder.iframe.take() {
         match iframe_kind {
             IframeKind::Populated(frame) => {
-                let (frame_data, mut frame_children) = frame.into_parts();
+                let FrameParts {
+                    data: frame_data,
+                    children: mut frame_children,
+                } = frame.into_parts();
                 builder.attrs.content_data = Some(ContentData::Iframe(Box::new(IframeData {
                     data: Some(IframeDataContent::FrameData(Box::new(frame_data))),
                 })));
                 // Frame children come first, followed by any directly attached test children.
                 frame_children.append(&mut pending_children);
                 pending_children = frame_children;
-                // Push a fresh counter for the child document so every descendant inside the
-                // iframe gets independent per-document auto IDs starting at 1.
-                doc_counters.push(1);
-                pops_doc_counter = true;
+                // Push a fresh allocator for the child document, pre-reserving its explicit IDs so
+                // auto IDs start at 1 and never collide with explicit IDs inside the iframe.
+                doc_allocators.push(DocIdAllocator::for_children(&pending_children));
+                pops_doc_allocator = true;
             }
             IframeKind::Partial { spec, frame_token } => {
                 builder.attrs.content_data = partial_iframe_content_data(spec, frame_token);
@@ -1036,7 +1083,7 @@ fn start_frame(mut builder: NodeBuilder, doc_counters: &mut Vec<i32>) -> BuildFr
         content_attributes,
         built_children: Vec::with_capacity(pending_children.len()),
         pending_children,
-        pops_doc_counter,
+        pops_doc_allocator,
     }
 }
 

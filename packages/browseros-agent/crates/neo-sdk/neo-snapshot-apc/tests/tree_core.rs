@@ -7,7 +7,6 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::{fs, thread};
 
-use neo_snapshot_apc::decode_protobuf;
 use neo_snapshot_apc::proto::{
     AnnotatedPageContent, AnnotatedRole, AxRole, BrowserOsFrameData, BrowserOsPageContentData,
     BrowserOsRedactedFrame, BrowserOsRef, BrowserOsTriState, ClickabilityReason, ContentData,
@@ -27,7 +26,7 @@ fn decode_fixture(name: &str) -> Result<AnnotatedPageContent, Box<dyn Error>> {
         .join("fixtures")
         .join(format!("{name}.pb"));
     let bytes = fs::read(path)?;
-    Ok(decode_protobuf(&bytes)?)
+    Ok(neo_snapshot_apc::decode_protobuf(&bytes)?)
 }
 
 fn load_patched_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
@@ -447,6 +446,52 @@ fn missing_dom_ids_and_duplicate_dom_ids_follow_preorder_rules() -> Result<(), B
 }
 
 #[test]
+fn apc_builder_reserves_explicit_dom_ids_and_preserves_multi_child_main_frames()
+-> Result<(), Box<dyn Error>> {
+    let apc = ApcBuilder::new("doc-explicit")
+        .root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(NodeBuilder::button("First"))
+                .child(NodeBuilder::button("Reserved").dom_id(2)),
+        )
+        .build();
+    let tree = SnapshotTree::build(apc, BuildOptions::default())?;
+    let dom_ids: Vec<Option<i32>> = tree
+        .nodes()
+        .iter()
+        .map(|node| node.dom_node_id().map(DomNodeId::raw))
+        .collect();
+    assert_eq!(
+        dom_ids,
+        vec![Some(1), Some(3), Some(4), Some(2), Some(5)],
+        "auto DOM IDs must skip explicit IDs declared earlier or later in the same document"
+    );
+    let token = require_doc_token("doc-explicit")?;
+    let root_key = NodeKey::new(token.clone(), DomNodeId::new(1));
+    let first_btn_key = NodeKey::new(token, DomNodeId::new(3));
+    assert!(
+        tree.is_strict_descendant(&root_key, &first_btn_key),
+        "auto-numbered child under explicit dom_id(1) root must have a distinct key"
+    );
+
+    let multi_root_apc = ApcBuilder::with_main_frame(
+        FrameBuilder::new("doc-multi")
+            .child(NodeBuilder::text("One"))
+            .child(NodeBuilder::text("Two")),
+    )
+    .build();
+    let multi_tree = SnapshotTree::build(multi_root_apc, BuildOptions::default())?;
+    assert_eq!(
+        multi_tree.nodes().len(),
+        3,
+        "with_main_frame must preserve all top-level children beneath a synthetic root"
+    );
+    assert_eq!(multi_tree.children(NodeId::new(0)).count(), 2);
+    Ok(())
+}
+
+#[test]
 fn empty_root_and_error_cases_return_expected_results() -> Result<(), Box<dyn Error>> {
     let empty_root = ApcBuilder::new("doc-empty-root").without_root().build();
     let tree = SnapshotTree::build(empty_root, BuildOptions::default())?;
@@ -625,7 +670,7 @@ fn frame_tokens_and_browseros_fields_round_trip_through_wire_decode() -> Result<
         .build();
 
     let encoded = apc.encode_to_vec();
-    let decoded = decode_protobuf(&encoded)?;
+    let decoded = neo_snapshot_apc::decode_protobuf(&encoded)?;
 
     let observed_seq_inputs: RefCell<Vec<(String, Option<String>)>> = RefCell::new(Vec::new());
     let seq_assigner = |doc: &DocToken, frame: Option<&FrameToken>| {

@@ -5,7 +5,7 @@ use std::iter::FusedIterator;
 use crate::proto::AnnotatedPageContent;
 
 use super::build_error::BuildError;
-use super::frame_stitch::{StitchedTree, frame_stitch};
+use super::frame_stitch::{self, StitchedTree};
 use super::node_key::{DocId, DocSeq, DocToken, FrameToken, NodeId, NodeKey, NodeRange};
 use super::tree_doc::{PartialFrame, TreeDoc};
 use super::tree_node::TreeNode;
@@ -111,8 +111,8 @@ pub struct SnapshotTree {
 impl SnapshotTree {
     /// Validates contract metadata and stitches `apc` into an immutable [`SnapshotTree`].
     pub fn build(apc: AnnotatedPageContent, options: BuildOptions<'_>) -> Result<Self, BuildError> {
-        let (found_version, subframe_timeout_ms) = read_contract_meta(&apc);
-        let contract_version = check_contract_version(found_version, options.min_contract_version)?;
+        let meta = read_contract_meta(&apc);
+        let contract_version = check_contract_version(meta.version, options.min_contract_version)?;
 
         let StitchedTree {
             nodes,
@@ -121,7 +121,7 @@ impl SnapshotTree {
             by_key,
             doc_by_token,
             viewport,
-        } = frame_stitch(apc, options, subframe_timeout_ms)?;
+        } = frame_stitch::frame_stitch(apc, options, meta.subframe_timeout_ms)?;
 
         Ok(Self {
             nodes,
@@ -131,7 +131,7 @@ impl SnapshotTree {
             doc_by_token,
             viewport,
             contract_version,
-            subframe_timeout_ms,
+            subframe_timeout_ms: meta.subframe_timeout_ms,
         })
     }
 
@@ -391,10 +391,21 @@ impl fmt::Debug for DocNodes<'_> {
     }
 }
 
-fn read_contract_meta(apc: &AnnotatedPageContent) -> (Option<u32>, Option<u32>) {
+struct ContractMeta {
+    version: Option<u32>,
+    subframe_timeout_ms: Option<u32>,
+}
+
+fn read_contract_meta(apc: &AnnotatedPageContent) -> ContractMeta {
     match apc.browseros {
-        Some(data) => (data.contract_version, data.subframe_timeout_ms),
-        None => (None, None),
+        Some(data) => ContractMeta {
+            version: data.contract_version,
+            subframe_timeout_ms: data.subframe_timeout_ms,
+        },
+        None => ContractMeta {
+            version: None,
+            subframe_timeout_ms: None,
+        },
     }
 }
 
@@ -411,14 +422,14 @@ mod tests {
 
     use crate::proto::{REASON_BROWSEROS_TIMEOUT, RedactedFrameReason};
 
-    use super::{BuildOptions, MIN_CONTRACT_VERSION, check_contract_version};
+    use super::{BuildOptions, MIN_CONTRACT_VERSION};
     use crate::tree::{BuildError, PartialFrameReason};
 
     #[test]
     fn contract_version_gate_refuses_missing_zero_and_lower_versions() -> Result<(), Box<dyn Error>>
     {
         assert_eq!(
-            check_contract_version(None, MIN_CONTRACT_VERSION),
+            super::check_contract_version(None, MIN_CONTRACT_VERSION),
             Err(BuildError::Unpatched {
                 found: None,
                 required: MIN_CONTRACT_VERSION,
@@ -426,7 +437,7 @@ mod tests {
             "stock Chromium payloads with no contract version must be refused"
         );
         assert_eq!(
-            check_contract_version(Some(0), MIN_CONTRACT_VERSION),
+            super::check_contract_version(Some(0), MIN_CONTRACT_VERSION),
             Err(BuildError::Unpatched {
                 found: Some(0),
                 required: MIN_CONTRACT_VERSION,
@@ -434,7 +445,7 @@ mod tests {
             "contract version 0 must be refused below MIN_CONTRACT_VERSION"
         );
         assert_eq!(
-            check_contract_version(Some(1), 2),
+            super::check_contract_version(Some(1), 2),
             Err(BuildError::Unpatched {
                 found: Some(1),
                 required: 2,
@@ -442,12 +453,12 @@ mod tests {
             "versions below a raised floor must be refused"
         );
         assert_eq!(
-            check_contract_version(Some(1), 1)?,
+            super::check_contract_version(Some(1), 1)?,
             1,
             "exact floor match must be accepted"
         );
         assert_eq!(
-            check_contract_version(Some(3), 2)?,
+            super::check_contract_version(Some(3), 2)?,
             3,
             "versions above the floor must be accepted"
         );
