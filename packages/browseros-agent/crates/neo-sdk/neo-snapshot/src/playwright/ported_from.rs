@@ -28,16 +28,16 @@ pub const PORTED_FROM: &[PortedFile] = &[
         sha256: "805b5de857749599fcf979b1e00b35ad89beb807c189e163fd264a891110dd29",
         mirror: "src/playwright/yaml_escape.rs",
     },
-    // The tree's shape and the page's writer of it: a change to either changes what `AriaNode`
-    // has to read.
+    // The tree's shape, the parsed template shape, the page's writer and the template matcher: a
+    // change to either file changes what `AriaNode` or `template` has to mirror.
     PortedFile {
         path: "packages/isomorphic/ariaSnapshot.ts",
         sha256: "8a6d5d90933b786bcbf6407359702257ca8d499eec568215830afc9fd25e1fec",
-        mirror: "src/aria_node.rs",
+        mirror: "src/aria_node.rs, src/template/aria_template_node.rs",
     },
     PortedFile {
         path: "packages/injected/src/ariaSnapshot.ts",
         sha256: "7caadae854a544c5f0da7bdb7392b0b8962bb67c40bf906c755cc52b3ec262d7",
-        mirror: "src/aria_node.rs",
+        mirror: "src/aria_node.rs, src/template/match_template.rs",
     },
 ];
