@@ -22,9 +22,15 @@ const session: SessionSummary = {
 
 const plan = (status: Plan['status']): Plan => ({
   available: true,
-  status,
+  plan: 'ultrafast',
+  planName: 'ultrafast',
   features: [],
+  status,
+  periodEnd: null,
+  endsAt: null,
+  graceUntil: null,
   onKey: true,
+  checkedAt: null,
   stale: false,
 })
 
