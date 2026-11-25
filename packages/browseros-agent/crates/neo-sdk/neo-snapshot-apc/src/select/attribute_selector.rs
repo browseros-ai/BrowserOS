@@ -126,6 +126,11 @@ pub fn parse_attribute_selector(
     Parser::new(selector).parse(unquoted)
 }
 
+struct ParsedAttributeValue {
+    value: AttributeValue,
+    case_sensitive: bool,
+}
+
 struct Parser<'a> {
     selector: &'a str,
     chars: Peekable<Chars<'a>>,
@@ -330,7 +335,10 @@ impl<'a> Parser<'a> {
         }
 
         let operator = self.read_operator()?;
-        let (value, case_sensitive) = self.read_attribute_value(operator, unquoted)?;
+        let ParsedAttributeValue {
+            value,
+            case_sensitive,
+        } = self.read_attribute_value(operator, unquoted)?;
 
         self.skip_spaces();
         if self.next_char() != Some(']') {
@@ -362,7 +370,7 @@ impl<'a> Parser<'a> {
         &mut self,
         operator: AttributeSelectorOperator,
         unquoted: UnquotedStrings,
-    ) -> Result<(AttributeValue, bool), AttributeSelectorError> {
+    ) -> Result<ParsedAttributeValue, AttributeSelectorError> {
         let mut case_sensitive = true;
         self.skip_spaces();
         let value = match self.next_char() {
@@ -421,7 +429,10 @@ impl<'a> Parser<'a> {
                 }
             }
         };
-        Ok((value, case_sensitive))
+        Ok(ParsedAttributeValue {
+            value,
+            case_sensitive,
+        })
     }
 
     fn parse(

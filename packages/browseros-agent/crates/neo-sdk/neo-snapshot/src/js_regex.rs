@@ -22,7 +22,9 @@ impl Error for RegexError {}
 ///
 /// Unflagged patterns compile and match over UTF-16 code units (UCS-2), where supplementary
 /// characters such as emoji occupy two surrogate code units. Patterns with `u` or `v` compile and
-/// match over Unicode scalar values (code points).
+/// match over Unicode scalar values (code points). Note: `regress 0.12.0` applies case folding
+/// after class-set negation/subtraction under `/iv`, so patterns like `/\P{Lowercase_Letter}/iv`
+/// or `/[[A-Z]--[a]]/iv` diverge from V8's ES2024 operand-level folding.
 #[derive(Clone, Debug)]
 pub struct JsRegex {
     pattern: String,

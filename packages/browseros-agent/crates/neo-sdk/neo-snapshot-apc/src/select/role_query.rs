@@ -2,8 +2,8 @@ use neo_snapshot::Tristate;
 use thiserror::Error;
 
 use super::attribute_selector::{
-    AttributeSelector, AttributeSelectorError, AttributeSelectorOperator, AttributeSelectorPart,
-    AttributeValue, UnquotedStrings, js_string_to_number, parse_attribute_selector,
+    self, AttributeSelector, AttributeSelectorError, AttributeSelectorOperator,
+    AttributeSelectorPart, AttributeValue, UnquotedStrings,
 };
 use super::js_regex::JsRegex;
 
@@ -173,7 +173,7 @@ impl RoleQuery {
     /// Parses a `role` or `internal:role` selector body and validates every attribute in upstream
     /// Playwright 1.64.1 order.
     pub fn parse(body: &str) -> Result<Self, RoleQueryError> {
-        let parsed = parse_attribute_selector(body, UnquotedStrings::Allow)?;
+        let parsed = attribute_selector::parse_attribute_selector(body, UnquotedStrings::Allow)?;
         Self::from_attribute_selector(&parsed)
     }
 
@@ -393,7 +393,7 @@ fn validate_truthy_or_eq(
 
 fn validate_level(attr: &AttributeSelectorPart) -> Result<f64, RoleQueryError> {
     let number = match &attr.value {
-        AttributeValue::String(text) => js_string_to_number(text),
+        AttributeValue::String(text) => attribute_selector::js_string_to_number(text),
         AttributeValue::Number(number) => *number,
         AttributeValue::Null | AttributeValue::Bool(_) | AttributeValue::RegExp(_) => {
             return Err(RoleQueryError::InvalidLevel);

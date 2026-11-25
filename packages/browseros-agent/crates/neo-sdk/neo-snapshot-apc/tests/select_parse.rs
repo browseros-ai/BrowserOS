@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 
 use neo_snapshot::Tristate;
 use neo_snapshot_apc::select::{
-    AttributeSelector, AttributeSelectorError, AttributeSelectorOperator, AttributeSelectorPart,
-    AttributeValue, JsRegex, LAYOUT_SELECTOR_NAMES, NESTED_SELECTOR_NAMES, NestedSelectorBody,
-    ParsedSelector, RoleQuery, RoleQueryError, SelectorBody, StringMatchOperator, TextFilter,
-    UnquotedStrings, parse_attribute_selector,
+    self, AttributeSelector, AttributeSelectorError, AttributeSelectorOperator,
+    AttributeSelectorPart, AttributeValue, JsRegex, LAYOUT_SELECTOR_NAMES, NESTED_SELECTOR_NAMES,
+    NestedSelectorBody, ParsedSelector, RoleQuery, RoleQueryError, SelectorBody,
+    StringMatchOperator, TextFilter, UnquotedStrings,
 };
 use rquickjs::{CatchResultExt, Context, Runtime};
 use serde::Deserialize;
@@ -630,7 +630,7 @@ fn attribute_selector_matches_quickjs_oracle() -> Result<(), Box<dyn Error>> {
         assert_attribute_outcome_eq(
             selector,
             *allow,
-            parse_attribute_selector(selector, mode),
+            select::parse_attribute_selector(selector, mode),
             js_outcome,
         )?;
     }
@@ -955,7 +955,8 @@ fn role_query_validation_matches_quickjs_oracle() -> Result<(), Box<dyn Error>> 
         "expanded error must preserve upstream's duplicate rowheader entry verbatim"
     );
 
-    let numeric_parsed = parse_attribute_selector("heading[level=3]", UnquotedStrings::Forbid)?;
+    let numeric_parsed =
+        select::parse_attribute_selector("heading[level=3]", UnquotedStrings::Forbid)?;
     let query = RoleQuery::from_attribute_selector(&numeric_parsed)?;
     assert_eq!(
         query.level(),
@@ -963,7 +964,7 @@ fn role_query_validation_matches_quickjs_oracle() -> Result<(), Box<dyn Error>> 
         "from_attribute_selector must accept AttributeValue::Number for level"
     );
 
-    let numeric_name = parse_attribute_selector("button[name=3]", UnquotedStrings::Forbid)?;
+    let numeric_name = select::parse_attribute_selector("button[name=3]", UnquotedStrings::Forbid)?;
     assert_eq!(
         RoleQuery::from_attribute_selector(&numeric_name),
         Err(RoleQueryError::InvalidTextValue { attribute: "name" }),
@@ -1311,7 +1312,7 @@ fn js_regex_matches_quickjs_on_corpus_and_edge_cases() -> Result<(), Box<dyn Err
     }
     for entry in &escaped_regexes {
         let body = format!("button[name={}]", entry.escaped);
-        let parsed = parse_attribute_selector(&body, UnquotedStrings::Allow)?;
+        let parsed = select::parse_attribute_selector(&body, UnquotedStrings::Allow)?;
         let Some(AttributeValue::RegExp(re)) = parsed.attributes.first().map(|a| &a.value) else {
             return Err(format!("expected regex attribute for {body:?}").into());
         };
@@ -1432,7 +1433,7 @@ fn js_regex_matches_es2024_v_flag_unicode_mode_semantics() -> Result<(), Box<dyn
         "/v must reject non-syntax identity escape \\a (matches V8)"
     );
     assert!(
-        parse_attribute_selector(r"foo[a=/[a\]/b]/v]", UnquotedStrings::Allow).is_err(),
+        select::parse_attribute_selector(r"foo[a=/[a\]/b]/v]", UnquotedStrings::Allow).is_err(),
         "/v must reject unescaped '/' inside a character class (matches V8)"
     );
     Ok(())
