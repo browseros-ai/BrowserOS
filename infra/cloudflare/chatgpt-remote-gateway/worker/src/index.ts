@@ -6,10 +6,10 @@ interface Env {
   TOKEN_SIGNING_KEY: string;
   CF_ACCESS_CLIENT_ID: string;
   CF_ACCESS_CLIENT_SECRET: string;
-  PAIRING_BOOTSTRAP_SECRET: string;
 }
 
-type Pairing = { deviceId: string; label: string; createdAt: number; expiresAt: number; paired: boolean };
+type Pairing = { deviceId: string; transactionId: string; publicKey: string; challenge: string; label: string; createdAt: number; expiresAt: number; paired: boolean };
+type PairTransaction = { transactionId: string; deviceId: string; publicKey: string; challenge: string; state: "pending" | "paired" | "revoked"; createdAt: number; expiresAt: number };
 type Client = { clientId: string; redirectUris: string[]; createdAt: number };
 type AuthRequest = { clientId: string; redirectUri: string; state: string; challenge: string; scope: string; expiresAt: number };
 type AuthCode = { clientId: string; redirectUri: string; challenge: string; deviceId: string; scope: string; expiresAt: number };
@@ -30,6 +30,23 @@ const b64url = (value: ArrayBuffer | ArrayBufferView) => {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 };
 const sha256 = async (value: string) => b64url(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
+function fromB64url(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(normalized + "=".repeat((4 - normalized.length % 4) % 4));
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  } catch { return null; }
+}
+async function verifyEd25519(publicKey: string, signature: string, message: string): Promise<boolean> {
+  const keyBytes = fromB64url(publicKey);
+  const signatureBytes = fromB64url(signature);
+  if (!keyBytes || keyBytes.length !== 32 || !signatureBytes || signatureBytes.length !== 64) return false;
+  try {
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify({ name: "Ed25519" }, key, signatureBytes, encoder.encode(message));
+  } catch { return false; }
+}
 const hmac = async (secret: string, value: string) => {
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return b64url(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
@@ -88,12 +105,19 @@ async function signAccessToken(env: Env, claims: AccessClaims): Promise<string> 
 async function verifyAccessToken(env: Env, token: string): Promise<AccessClaims | null> {
   const parts = token.split(".");
   if (parts.length !== 3 || !env.TOKEN_SIGNING_KEY) return null;
-  const expected = await hmac(env.TOKEN_SIGNING_KEY, parts[0] + "." + parts[1]);
-  if (!safeEqual(expected, parts[2])) return null;
+  if (!env.TOKEN_SIGNING_KEY) return null;
   try {
-    const claims = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as AccessClaims;
-    if (claims.iss !== env.GATEWAY_ISSUER || claims.aud !== env.GATEWAY_ISSUER + "/mcp" || claims.exp <= Math.floor(Date.now() / 1000)) return null;
-    if (!claims.device_id || !claims.scope) return null;
+    const headerBytes = fromB64url(parts[0]);
+    const payloadBytes = fromB64url(parts[1]);
+    if (!headerBytes || !payloadBytes) return null;
+    const header = JSON.parse(new TextDecoder().decode(headerBytes));
+    if (header?.alg !== "HS256" || header?.typ !== "JWT") return null;
+    const expected = await hmac(env.TOKEN_SIGNING_KEY, parts[0] + "." + parts[1]);
+    if (!safeEqual(expected, parts[2])) return null;
+    const claims = JSON.parse(new TextDecoder().decode(payloadBytes)) as AccessClaims;
+    const now = Math.floor(Date.now() / 1000);
+    if (claims.iss !== env.GATEWAY_ISSUER || claims.aud !== env.GATEWAY_ISSUER + "/mcp" || !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) || claims.iat > now + 60 || claims.exp <= now || claims.exp - claims.iat > 3600) return null;
+    if (!claims.device_id || !claims.scope || !claims.sub) return null;
     return claims;
   } catch { return null; }
 }
@@ -129,8 +153,13 @@ export class GatewayState {
     }
     if (request.method === "POST" && url.pathname === "/register") return this.registerClient(request);
     if (request.method === "POST" && url.pathname === "/pair/start") return this.startPairing(request);
+    if (request.method === "POST" && url.pathname === "/pair/status") return this.pairingStatus(request);
     if (request.method === "POST" && url.pathname === "/pair/revoke") return this.revokePairing(request);
-    if (request.method === "GET" && url.pathname === "/authorize") return this.authorizePage(url);
+    if (request.method === "GET" && url.pathname === "/authorize") {
+      const limited = await this.rateLimit(request, "authorize-page", 30, 3600000);
+      if (limited) return limited;
+      return this.authorizePage(url);
+    }
     if (request.method === "POST" && url.pathname === "/authorize") return this.authorize(request);
     if (request.method === "POST" && url.pathname === "/token") return this.token(request);
     if (request.method === "POST" && url.pathname === "/mcp") return this.mcp(request);
@@ -138,6 +167,8 @@ export class GatewayState {
   }
 
   private async registerClient(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "register", 30, 3600000);
+    if (limited) return limited;
     const body = await request.json().catch(() => null) as any;
     const uris = body?.redirect_uris;
     if (!Array.isArray(uris) || uris.length < 1 || uris.length > 10 || !uris.every((u: unknown) => typeof u === "string" && this.validRedirect(u))) {
@@ -155,31 +186,84 @@ export class GatewayState {
     } catch { return false; }
   }
 
-  private async startPairing(request: Request): Promise<Response> {
-    const suppliedSecret = request.headers.get("x-browseros-pairing-secret") || "";
-    if (!this.env.PAIRING_BOOTSTRAP_SECRET || !safeEqual(suppliedSecret, this.env.PAIRING_BOOTSTRAP_SECRET)) return json({ error: "unauthorized" }, 401);
-    const body = await request.json().catch(() => ({})) as any;
-    const label = typeof body.label === "string" ? body.label.trim().slice(0, 48) : "BrowserOS device";
-    const deviceId = randomId(18);
-    const code = randomId(9).toUpperCase();
-    const expiresAt = Date.now() + 10 * 60 * 1000;
-    await this.ctx.storage.put("pair:" + await sha256(code), { deviceId, label, createdAt: Date.now(), expiresAt, paired: false } satisfies Pairing);
-    return json({ device_id: deviceId, pairing_code: code, expires_in: 600, instruction: "Enter this one-time code on the OAuth approval page. It expires in 10 minutes." }, 201);
+  private async rateLimit(request: Request, action: string, limit: number, windowMs: number): Promise<Response | null> {
+    const ip = request.headers.get("cf-connecting-ip") || "unknown";
+    const now = Date.now();
+    const key = "rate:" + action + ":" + await sha256(ip);
+    const retryAfter = await this.ctx.storage.transaction(async (txn) => {
+      const previous = await txn.get<{ count: number; resetAt: number }>(key);
+      const current = !previous || previous.resetAt <= now ? { count: 0, resetAt: now + windowMs } : previous;
+      if (current.count >= limit) return Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      await txn.put(key, { count: current.count + 1, resetAt: current.resetAt });
+      return 0;
+    });
+    if (retryAfter > 0) return new Response(JSON.stringify({ error: "rate_limited", retry_after: retryAfter }), { status: 429, headers: { "content-type": "application/json", "cache-control": "no-store", "retry-after": String(retryAfter) } });
+    return null;
   }
 
+  private async startPairing(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "pair-start", 8, 3600000);
+    if (limited) return limited;
+    const body = await request.json().catch(() => null) as any;
+    const publicKey = typeof body?.public_key === "string" ? body.public_key : "";
+    const keyBytes = fromB64url(publicKey);
+    if (!keyBytes || keyBytes.length !== 32) return json({ error: "invalid_public_key" }, 400);
+    const label = typeof body.label === "string" ? body.label.trim().slice(0, 48) : "BrowserOS device";
+    const deviceId = randomId(18);
+    const transactionId = randomId(24);
+    const code = randomId(9).replace(/[-_]/g, "A").toUpperCase();
+    const challenge = randomId(32);
+    const createdAt = Date.now();
+    const expiresAt = createdAt + 300000;
+    const pairing: Pairing = { deviceId, transactionId, publicKey, challenge, label, createdAt, expiresAt, paired: false };
+    const transaction: PairTransaction = { transactionId, deviceId, publicKey, challenge, state: "pending", createdAt, expiresAt };
+    await this.ctx.storage.put("pair:" + await sha256(code), pairing);
+    await this.ctx.storage.put("pairtx:" + transactionId, transaction);
+    return json({ device_id: deviceId, transaction_id: transactionId, pairing_code: code, challenge, expires_in: 300, signature_format: "browseros-pair-v1\\nstatus\\n{transaction_id}\\n{challenge}\\n{unix_timestamp}" }, 201);
+  }
+
+  private async pairingStatus(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "pair-status", 60, 60000);
+    if (limited) return limited;
+    const body = await request.json().catch(() => null) as any;
+    const transactionId = typeof body?.transaction_id === "string" ? body.transaction_id : "";
+    const timestamp = Number(body?.timestamp);
+    const signature = typeof body?.signature === "string" ? body.signature : "";
+    if (!transactionId || !Number.isSafeInteger(timestamp) || Math.abs(Date.now() - timestamp * 1000) > 300000) return json({ error: "invalid_request" }, 400);
+    const transaction = await this.ctx.storage.get<PairTransaction>("pairtx:" + transactionId);
+    if (!transaction || transaction.expiresAt < Date.now()) return json({ error: "pairing_expired" }, 410);
+    const message = ["browseros-pair-v1", "status", transactionId, transaction.challenge, String(timestamp)].join("\n");
+    if (!await verifyEd25519(transaction.publicKey, signature, message)) return json({ error: "invalid_device_proof" }, 401);
+    if (transaction.state === "pending") return json({ state: "pending", expires_at: transaction.expiresAt });
+    if (transaction.state === "revoked") return json({ state: "revoked" }, 403);
+    const device = await this.ctx.storage.get<any>("device:" + transaction.deviceId);
+    if (!device || device.revoked) return json({ state: "revoked" }, 403);
+    return json({ state: "paired", device_id: transaction.deviceId, paired_at: device.pairedAt });
+  }
 
   private async revokePairing(request: Request): Promise<Response> {
-    const suppliedSecret = request.headers.get("x-browseros-pairing-secret") || "";
-    if (!this.env.PAIRING_BOOTSTRAP_SECRET || !safeEqual(suppliedSecret, this.env.PAIRING_BOOTSTRAP_SECRET)) return json({ error: "unauthorized" }, 401);
+    const limited = await this.rateLimit(request, "pair-revoke", 12, 3600000);
+    if (limited) return limited;
     const body = await request.json().catch(() => null) as any;
     const deviceId = typeof body?.device_id === "string" ? body.device_id : "";
-    if (!deviceId) return json({ error: "invalid_request" }, 400);
+    const timestamp = Number(body?.timestamp);
+    const nonce = typeof body?.nonce === "string" ? body.nonce : "";
+    const signature = typeof body?.signature === "string" ? body.signature : "";
+    if (!deviceId || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce) || !Number.isSafeInteger(timestamp) || Math.abs(Date.now() - timestamp * 1000) > 300000) return json({ error: "invalid_request" }, 400);
     const key = "device:" + deviceId;
     const device = await this.ctx.storage.get<any>(key);
     if (!device) return json({ error: "device_not_found" }, 404);
+    if (device.revoked) return json({ revoked: true });
+    const message = ["browseros-pair-v1", "revoke", deviceId, nonce, String(timestamp)].join("\n");
+    if (!await verifyEd25519(device.publicKey, signature, message)) return json({ error: "invalid_device_proof" }, 401);
+    const nonceKey = "revokenonce:" + deviceId + ":" + nonce;
+    if (await this.ctx.storage.get<boolean>(nonceKey)) return json({ error: "replayed_request" }, 409);
+    await this.ctx.storage.put(nonceKey, true, { expirationTtl: 600 });
     device.revoked = true;
     device.revokedAt = Date.now();
     await this.ctx.storage.put(key, device);
+    const tx = await this.ctx.storage.get<PairTransaction>("pairtx:" + device.transactionId);
+    if (tx) { tx.state = "revoked"; await this.ctx.storage.put("pairtx:" + tx.transactionId, tx); }
     return json({ revoked: true });
   }
 
@@ -207,6 +291,8 @@ export class GatewayState {
   }
 
   private async authorize(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "authorize", 20, 3600000);
+    if (limited) return limited;
     const form = await request.formData();
     const transaction = String(form.get("transaction") || "");
     const txKey = "authreq:" + await sha256(transaction);
@@ -221,7 +307,10 @@ export class GatewayState {
     const pairing = await this.ctx.storage.get<Pairing>(pairKey);
     if (!pairing || pairing.expiresAt < Date.now() || pairing.paired) return json({ error: "invalid_pairing_code" }, 400);
     pairing.paired = true;
-    await this.ctx.storage.put("device:" + pairing.deviceId, { deviceId: pairing.deviceId, label: pairing.label, pairedAt: Date.now(), revoked: false });
+    const pairedAt = Date.now();
+    await this.ctx.storage.put("device:" + pairing.deviceId, { deviceId: pairing.deviceId, transactionId: pairing.transactionId, publicKey: pairing.publicKey, label: pairing.label, pairedAt, revoked: false });
+    const pairTransaction = await this.ctx.storage.get<PairTransaction>("pairtx:" + pairing.transactionId);
+    if (pairTransaction) { pairTransaction.state = "paired"; await this.ctx.storage.put("pairtx:" + pairing.transactionId, pairTransaction); }
     await this.ctx.storage.delete(pairKey);
     const authCode = randomId(32);
     await this.ctx.storage.put("code:" + await sha256(authCode), {
@@ -235,6 +324,8 @@ export class GatewayState {
   }
 
   private async token(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "token", 60, 3600000);
+    if (limited) return limited;
     if (!this.env.TOKEN_SIGNING_KEY || this.env.TOKEN_SIGNING_KEY.length < 43) return json({ error: "gateway_not_configured" }, 503);
     const form = await request.formData().catch(() => null);
     if (!form) return json({ error: "invalid_request" }, 400);
@@ -259,6 +350,8 @@ export class GatewayState {
   }
 
   private async mcp(request: Request): Promise<Response> {
+    const limited = await this.rateLimit(request, "mcp", 120, 60000);
+    if (limited) return limited;
     const auth = request.headers.get("authorization") || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     const claims = token ? await verifyAccessToken(this.env, token) : null;

@@ -16,7 +16,7 @@ This package is an opt-in remote MCP gateway. It is intentionally separate from 
 
 ## Components
 
-1. `worker/`: OAuth 2.1 + PKCE authorization server, pairing state, MCP reverse proxy and strict request filtering.
+1. `worker/`: OAuth 2.1 + PKCE authorization server, Ed25519 device proof, one-time pairing state, IP-scoped rate limits, MCP reverse proxy and strict request filtering.
 2. Cloudflare Tunnel: publishes the local MCP origin through an Access-protected hostname. Do not use a quick tunnel or an unauthenticated public hostname.
 3. BrowserOS desktop integration: must request a one-time pairing code and display it locally. The local MCP listener must remain on loopback.
 
@@ -34,7 +34,6 @@ Limits and pricing can change; check the current Cloudflare plan before deployme
 Worker secrets (set through Cloudflare's secret manager, never in Git):
 
 - `TOKEN_SIGNING_KEY`: at least 32 random bytes, base64url encoded.
-- `PAIRING_BOOTSTRAP_SECRET`: a separate high-entropy secret used only by the local BrowserOS pairing client for `/pair/start` and `/pair/revoke`.
 - `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`: a Cloudflare Access service token for the tunnel hostname.
 
 Worker variables:
@@ -62,5 +61,7 @@ A Cloudflare Tunnel does not install or run itself on the user's computer. The d
 7. Start with an empty tool allowlist; inspect the upstream `tools/list` response and add only reviewed tools. Keep credential, cookie, arbitrary-script, and secret-bearing tools excluded.
 
 ## Current implementation boundary
+
+The Worker pairing API now accepts a 32-byte Ed25519 public key at `/pair/start`, returns a five-minute one-time code and transaction challenge, and requires signed device proof for `/pair/status` and `/pair/revoke`. Signatures use the UTF-8 canonical messages `browseros-pair-v1\\nstatus\\n{transaction_id}\\n{challenge}\\n{unix_timestamp}` and `browseros-pair-v1\\nrevoke\\n{device_id}\\n{nonce}\\n{unix_timestamp}`. The device private key must remain in native OS secure storage; this Worker change does not implement that desktop storage or UI. Rate limits are stored transactionally in the Durable Object and keyed by the Cloudflare client IP.
 
 The Worker package is an isolated Preview candidate. It does not create Cloudflare resources, DNS records, Access policies, or a tunnel automatically. It does not modify BrowserOS Production or install software on the user's computer. Those steps require selecting the intended Cloudflare account/domain and a desktop-side BrowserOS pairing client.

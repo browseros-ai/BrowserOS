@@ -16,9 +16,9 @@ This is an opt-in remote bridge for users who understand that MCP page content i
 
 ## Pairing
 
-The desktop-side BrowserOS integration requests a one-time pairing code from `POST /pair/start` using the locally stored gateway pairing bootstrap secret. The user enters that code on the OAuth approval page. The code expires after ten minutes and is stored hashed at rest. A paired device can be revoked using `POST /pair/revoke`.
+The Worker pairing API accepts a 32-byte Ed25519 public key at `POST /pair/start` and returns a one-time code, transaction ID, and challenge. The code expires after five minutes and is stored hashed at rest. The desktop must retain the private key locally and sign canonical challenge messages to poll `POST /pair/status`. Revocation at `POST /pair/revoke` also requires a timestamped Ed25519 signature and a unique nonce; device revocation is checked on every MCP request.
 
-The pairing bootstrap secret is not a browser password or cookie. It authorizes only pairing/revocation API calls and must be stored in the desktop OS credential store and the Worker secret store. Never commit it.
+The static `PAIRING_BOOTSTRAP_SECRET` mechanism has been removed from this Worker branch. The desktop-side Ed25519 key generation, native OS secure storage, local pairing UI, and signed API client are not yet implemented.
 
 ## OAuth
 
@@ -40,4 +40,4 @@ Cloudflare Tunnel is available on all plans. Workers Free currently includes 100
 
 ## Known integration gap
 
-The gateway Worker is a deployable infrastructure candidate, but the BrowserOS desktop UI/agent still needs to call `/pair/start`, store the pairing bootstrap secret in the OS credential store, display the one-time code, and manage tunnel lifecycle. Until that desktop component is implemented and tested, pairing is not end-to-end and the remote gateway must not be considered ready for use.
+The Worker branch contains the Ed25519 pairing API and per-IP rate limiting, but it has not passed typecheck/Wrangler dry-run yet. The BrowserOS desktop UI/agent still needs native key generation, OS secure storage, local code display, signed status/revoke calls, and cloudflared lifecycle management. Pairing is not end-to-end and the remote gateway must not be considered ready for use.
