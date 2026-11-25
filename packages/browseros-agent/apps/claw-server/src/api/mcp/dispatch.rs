@@ -89,6 +89,9 @@ pub struct ToolCall {
     /// hooks, including calls that fail or are cancelled before they can return
     /// runtime audit hints.
     pub sensitive_input: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when a primitive inside this script was refused because the plan withholds choosing
+    /// a browser profile, so the task page explains the task stayed in Default.
+    pub profile_refused: Arc<std::sync::atomic::AtomicBool>,
     /// Original snapshots and deep dispatch guards, captured before detached grouping.
     /// A reusable PageId must never let a later callback adopt its replacement tab.
     pub(crate) created_page_snapshots:
@@ -142,6 +145,7 @@ impl ToolCall {
         Self {
             // Conservatively classify secret-bearing source before target admission
             // or execution. The bridge also marks dynamic calls.
+            profile_refused: Arc::default(),
             sensitive_input: Arc::new(std::sync::atomic::AtomicBool::new(
                 browseros_mcp::tools::sensitive::is_sensitive_tool(tool_name)
                     || tool_name == "run"

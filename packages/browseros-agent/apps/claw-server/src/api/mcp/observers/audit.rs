@@ -253,6 +253,14 @@ pub(crate) async fn persist_screenshot(
 /// profile tool refused because the plan withholds profile choice. Read from the admitted view,
 /// which is what made the call fail.
 fn profile_mark(call: &ToolCall, result: &ToolResult) -> Option<ProfileMark> {
+    // A script whose own call was refused: whether or not the script caught it, the task
+    // stayed in Default, and the page should say so.
+    if call
+        .profile_refused
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return Some(ProfileMark::Refused);
+    }
     if !result.is_error {
         return None;
     }
@@ -273,7 +281,7 @@ fn profile_mark(call: &ToolCall, result: &ToolResult) -> Option<ProfileMark> {
     .then_some(ProfileMark::Refused)
 }
 
-fn with_profile_mark(meta: String, mark: Option<ProfileMark>) -> String {
+pub(crate) fn with_profile_mark(meta: String, mark: Option<ProfileMark>) -> String {
     let Some(mark) = mark else {
         return meta;
     };
