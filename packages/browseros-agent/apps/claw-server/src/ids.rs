@@ -11,6 +11,7 @@
 //! - `DispatchId` — one tool call.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{fmt, str::FromStr};
 use ulid::Ulid;
 
@@ -66,6 +67,26 @@ macro_rules! string_id {
 }
 
 string_id!(SessionId);
+
+/// A short stand-in for a session id or state handle in logs. The MCP security guidance treats
+/// both as hijackable, so a log line carries 8 hex digits of their SHA-256, enough to follow one
+/// id through the log, and never the id itself.
+#[must_use]
+pub fn log_fingerprint(id: &str) -> String {
+    let digest = Sha256::digest(id.as_bytes());
+    digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+impl SessionId {
+    /// See [`log_fingerprint`].
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        log_fingerprint(&self.0)
+    }
+}
 string_id!(ProfileId);
 string_id!(ConvoId);
 
@@ -111,5 +132,19 @@ impl From<String> for DispatchId {
 impl From<&str> for DispatchId {
     fn from(value: &str) -> Self {
         Self(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_log_fingerprint_is_eight_hex_of_the_sha256() {
+        assert_eq!(log_fingerprint("abc"), "ba7816bf");
+        let id = SessionId::new("0b2f0c8e-5d0a-4c55-9b1e-6f2d6f1e7a10");
+        let fingerprint = id.fingerprint();
+        assert_eq!(fingerprint.len(), 8);
+        assert!(!id.as_str().contains(&fingerprint));
     }
 }

@@ -1,4 +1,4 @@
-use super::{PageOwnership, Session, TargetBindings};
+use super::{PageOwnership, Session, TargetBindings, TransportLog};
 use crate::{
     analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     db::{AuditLog, SessionTabLedger},
@@ -23,7 +23,7 @@ use tokio::{
     time::{Instant, MissedTickBehavior, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use ulid::Ulid;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -37,6 +37,10 @@ pub type RetainedGroupHook = Arc<
         + Send
         + Sync,
 >;
+
+/// How long a continuing task waits for its predecessor's teardown before it gives up on
+/// taking over the predecessor's tab group.
+const HAND_OVER_WAIT: Duration = Duration::from_secs(5);
 
 /// Receives a session only after its end audit row is durable.
 pub type SessionCompletionHook = Arc<dyn Fn(String) + Send + Sync>;
@@ -71,6 +75,15 @@ struct Retired {
     /// call and agents have been observed resending the dead one regardless, so a stubborn
     /// agent must land in one session rather than minting one per call.
     replacement: Option<SessionId>,
+    /// What a successor takes over; absent for a handle this server never minted.
+    origin: Option<RetiredOrigin>,
+}
+
+#[derive(Clone)]
+struct RetiredOrigin {
+    convo: ConvoId,
+    /// The agent's own name for the task, if it gave one; a generated label is not carried.
+    declared_name: Option<String>,
 }
 
 /**
@@ -131,12 +144,16 @@ pub struct Sessions {
     retained: RwLock<HashMap<ConvoId, RetainedSession>>,
     // One retained-group close per key may be in flight; failed attempts remain retryable.
     reaping_keys: Mutex<HashSet<ConvoId>>,
+    /// Conversations whose task was removed but whose teardown has not yet left its tab group
+    /// retained, so a successor arriving in that window can wait for it.
+    ending: Mutex<HashMap<ConvoId, Arc<Notify>>>,
     /// Serializes retries per session through terminal persistence without coupling unrelated Stops.
     cancellation_transitions: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
     audit_flush_hook: OnceLock<SessionAuditFlushHook>,
     completion_hook: OnceLock<SessionCompletionHook>,
     target_bindings: OnceLock<Arc<TargetBindings>>,
+    transports: TransportLog,
     idle_after: Duration,
     complete_after: Duration,
     retention: Duration,
@@ -185,11 +202,13 @@ impl Sessions {
             reserved_keys: Mutex::new(HashSet::new()),
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
+            ending: Mutex::new(HashMap::new()),
             cancellation_transitions: Mutex::new(HashMap::new()),
             retained_group_hook: OnceLock::new(),
             audit_flush_hook: OnceLock::new(),
             completion_hook: OnceLock::new(),
             target_bindings: OnceLock::new(),
+            transports: TransportLog::default(),
             idle_after,
             complete_after,
             retention,
@@ -200,6 +219,12 @@ impl Sessions {
     #[must_use]
     pub fn ownership(&self) -> Arc<PageOwnership> {
         self.ownership.clone()
+    }
+
+    /// Legacy MCP transports, for telling an expired id from one never seen.
+    #[must_use]
+    pub fn transports(&self) -> &TransportLog {
+        &self.transports
     }
 
     /// Installs browser-backed retained-group collapse and close operations.
@@ -358,18 +383,88 @@ impl Sessions {
             at: Instant::now(),
             cause: RetirementCause::Closed,
             replacement: None,
+            origin: None,
         });
         entry.replacement.get_or_insert(candidate).clone()
     }
 
-    async fn retire(&self, id: &SessionId, cause: RetirementCause) {
+    async fn retire(&self, session: &Session, cause: RetirementCause) {
+        let label = session.label().await;
+        let origin = RetiredOrigin {
+            convo: session.convo_id().clone(),
+            declared_name: (label != session.generated_label()).then_some(label),
+        };
         self.retired.write().await.insert(
-            id.clone(),
+            session.id().clone(),
             Retired {
                 at: Instant::now(),
                 cause,
                 replacement: None,
+                origin: Some(origin),
             },
+        );
+    }
+
+    /// Lets the task that continues a finished one, on the same legacy transport session or
+    /// the same stateless handle, keep its predecessor's tab group, still-open tabs and the
+    /// name its agent gave it. Without this, every pause past `complete_after` left one
+    /// conversation with one more tab group. A call without either never comes here.
+    pub async fn hand_over(&self, retired: &SessionId, successor: &Session) {
+        let origin = self
+            .retired
+            .read()
+            .await
+            .get(retired)
+            .and_then(|entry| entry.origin.clone());
+        let Some(origin) = origin else {
+            return;
+        };
+        if &origin.convo == successor.convo_id() {
+            return;
+        }
+        // A call can land between the predecessor's removal and the end of its teardown; its
+        // group is only retained, and so only handed over, once that teardown has finished.
+        if !self.retained.read().await.contains_key(&origin.convo)
+            && !self.wait_until_ended(&origin.convo).await
+        {
+            warn!(
+                from = %retired.fingerprint(),
+                to = %successor.id().fingerprint(),
+                "the task being continued was still ending; its tab group stays with it"
+            );
+            return;
+        }
+        {
+            // Both held through the move: a retained-group close already under way keeps the
+            // group, and one that starts afterwards finds nothing left under the old key.
+            let reaping = self.reaping_keys.lock().await;
+            if reaping.contains(&origin.convo) {
+                return;
+            }
+            let group_lock = self.ownership.group_operation_lock(&origin.convo).await;
+            let _group = group_lock.lock().await;
+            if self.retained.write().await.remove(&origin.convo).is_none() {
+                return;
+            }
+            self.ownership
+                .transfer(&origin.convo, successor.convo_id())
+                .await;
+        }
+        self.reserved_keys.lock().await.remove(&origin.convo);
+        self.session_tabs.enqueue_hand_over_tabs(
+            retired.as_str().to_string(),
+            successor.id().as_str().to_string(),
+            successor.convo_id().as_str().to_string(),
+        );
+        if let Some(name) = origin.declared_name
+            && successor.label().await == successor.generated_label()
+        {
+            successor.rename(name).await;
+        }
+        info!(
+            from = %retired.fingerprint(),
+            to = %successor.id().fingerprint(),
+            "a continuing task took over its predecessor's tab group"
         );
     }
 
@@ -440,8 +535,8 @@ impl Sessions {
             let removed = sessions
                 .remove(session_id)
                 .map(|session| (session, self.teardowns.begin()));
-            if removed.is_some() {
-                self.retire(session_id, RetirementCause::Cancelled).await;
+            if let Some((session, _)) = &removed {
+                self.retire(session, RetirementCause::Cancelled).await;
             }
             removed
         };
@@ -505,13 +600,21 @@ impl Sessions {
             let removed = sessions
                 .remove(id)
                 .map(|session| (session, self.teardowns.begin()));
-            if removed.is_some() {
-                self.retire(id, RetirementCause::Closed).await;
+            if let Some((session, _)) = &removed {
+                self.retire(session, RetirementCause::Closed).await;
+                self.ending
+                    .lock()
+                    .await
+                    .insert(session.convo_id().clone(), Arc::new(Notify::new()));
             }
             removed
         };
         if let Some((session, _teardown)) = session {
-            return match self.teardown(session.clone(), kind, reason).await {
+            let result = self.teardown(session.clone(), kind, reason).await;
+            if let Some(ending) = self.ending.lock().await.remove(session.convo_id()) {
+                ending.notify_waiters();
+            }
+            return match result {
                 Ok(_) => Ok(true),
                 Err(error) => {
                     self.restore_pending_operator_stop(id, session).await;
@@ -520,6 +623,22 @@ impl Sessions {
             };
         }
         Ok(false)
+    }
+
+    /// Waits, at most [`HAND_OVER_WAIT`], for a removed task whose teardown is still running,
+    /// which is what leaves its tab group retained and ready to hand over. False if it is
+    /// still ending after the wait.
+    async fn wait_until_ended(&self, convo: &ConvoId) -> bool {
+        let Some(ending) = self.ending.lock().await.get(convo).cloned() else {
+            return true;
+        };
+        let ended = ending.notified();
+        tokio::pin!(ended);
+        ended.as_mut().enable();
+        if !self.ending.lock().await.contains_key(convo) {
+            return true;
+        }
+        tokio::time::timeout(HAND_OVER_WAIT, ended).await.is_ok()
     }
 
     async fn restore_pending_operator_stop(&self, id: &SessionId, session: Arc<Session>) {
@@ -631,6 +750,12 @@ impl Sessions {
         }
         self.session_tabs
             .enqueue_release_claims_for_session(session.id().as_str().to_string());
+        info!(
+            session = %session.id().fingerprint(),
+            kind,
+            reason = reason.unwrap_or_default(),
+            "claw session ended"
+        );
         let audit_result = self
             .audit_log
             .record_session_end(session.id().as_str(), kind, reason)
@@ -722,6 +847,12 @@ impl Sessions {
 
         let mut reaped = 0;
         for key in expired {
+            let had_groups = self
+                .ownership
+                .groups(&key)
+                .await
+                .iter()
+                .any(|group| group.group_ref.is_some() && !group.borrowed);
             let closed = match self.retained_group_hook.get() {
                 Some(hook) => {
                     hook(
@@ -734,6 +865,9 @@ impl Sessions {
                 None => self.ownership.tab_group_ref(&key).await.is_none(),
             };
             if closed && self.retained.write().await.remove(&key).is_some() {
+                if had_groups {
+                    info!(convo = %key, "closed a finished task's tab group");
+                }
                 self.ownership.forget(&key).await;
                 self.reserved_keys.lock().await.remove(&key);
                 reaped += 1;
@@ -1251,9 +1385,7 @@ mod tests {
             Instant::now(),
         );
         session.request_operator_stop();
-        registry
-            .retire(session.id(), RetirementCause::Cancelled)
-            .await;
+        registry.retire(&session, RetirementCause::Cancelled).await;
 
         registry
             .restore_pending_operator_stop(session.id(), session.clone())
@@ -1990,6 +2122,204 @@ mod tests {
                 RetainedGroupAction::Close
             ]
         );
+        Ok(())
+    }
+
+    fn codex_session(id: &str, label: &str) -> Arc<Session> {
+        Session::new(
+            SessionId::new(id),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ConversationIdentity::new("codex", label.to_string()),
+            "Codex".to_string(),
+            Instant::now(),
+        )
+    }
+
+    async fn registry_recording_closes(
+        dir: &tempfile::TempDir,
+    ) -> anyhow::Result<(
+        Arc<Sessions>,
+        Arc<StdMutex<Vec<(ConvoId, RetainedGroupAction)>>>,
+    )> {
+        let (audit_log, session_tabs) = repositories(dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        );
+        let actions = Arc::new(StdMutex::new(Vec::new()));
+        let hook_actions = actions.clone();
+        registry.set_retained_group_hook(Arc::new(move |ownership, key, action| {
+            let hook_actions = hook_actions.clone();
+            Box::pin(async move {
+                if action == RetainedGroupAction::Close {
+                    ownership.forget(&key).await;
+                }
+                hook_actions
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((key, action));
+                true
+            })
+        }));
+        Ok((registry, actions))
+    }
+
+    #[tokio::test]
+    async fn a_handed_over_group_is_never_closed_by_its_predecessors_retention()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (registry, actions) = registry_recording_closes(&dir).await?;
+        let first = codex_session("s1", "agile-alpaca");
+        let first_key = first.convo_id().clone();
+        registry.insert_for_testing(first.clone()).await;
+        first.rename("bbc-headlines".to_string()).await;
+        registry
+            .ownership()
+            .claim_page(first_key.clone(), browseros_core::PageId(4))
+            .await;
+        registry
+            .ownership()
+            .set_tab_group_ref(first_key.clone(), Some("group-4".to_string()))
+            .await;
+        assert!(
+            registry
+                .remove(first.id(), "closed", Some("completed"))
+                .await?
+        );
+
+        let successor = codex_session("s2", "witty-dolphin");
+        registry.insert_for_testing(successor.clone()).await;
+        registry.hand_over(first.id(), &successor).await;
+
+        let ownership = registry.ownership();
+        assert_eq!(
+            ownership
+                .tab_group_ref(successor.convo_id())
+                .await
+                .as_deref(),
+            Some("group-4")
+        );
+        assert_eq!(
+            ownership.owner_of_page(&browseros_core::PageId(4)).await,
+            Some(successor.convo_id().clone())
+        );
+        assert_eq!(successor.label().await, "bbc-headlines");
+
+        // Well past the predecessor's retention: nothing of its is left to close.
+        registry
+            .reap_retained(Instant::now() + Duration::from_secs(60))
+            .await;
+        let closes: Vec<_> = actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|(_, action)| *action == RetainedGroupAction::Close)
+            .cloned()
+            .collect();
+        assert!(closes.is_empty(), "closed {closes:?}");
+        assert_eq!(
+            ownership
+                .tab_group_ref(successor.convo_id())
+                .await
+                .as_deref(),
+            Some("group-4")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_hand_over_during_the_predecessors_teardown_waits_for_it() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (registry, _actions) = registry_recording_closes(&dir).await?;
+        // Holds the predecessor's teardown open, as a slow audit flush would.
+        let release = Arc::new(tokio::sync::Notify::new());
+        let hook_release = release.clone();
+        registry.set_audit_flush_hook(Arc::new(move |_| {
+            let hook_release = hook_release.clone();
+            Box::pin(async move {
+                hook_release.notified().await;
+                Ok(())
+            })
+        }));
+        let first = codex_session("s1", "agile-alpaca");
+        registry.insert_for_testing(first.clone()).await;
+        registry
+            .ownership()
+            .set_tab_group_ref(first.convo_id().clone(), Some("group-4".to_string()))
+            .await;
+        let removing = tokio::spawn({
+            let registry = registry.clone();
+            let id = first.id().clone();
+            async move { registry.remove(&id, "closed", Some("completed")).await }
+        });
+        while registry.contains(first.id()).await {
+            tokio::task::yield_now().await;
+        }
+
+        let successor = codex_session("s2", "witty-dolphin");
+        registry.insert_for_testing(successor.clone()).await;
+        let handing = tokio::spawn({
+            let registry = registry.clone();
+            let retired = first.id().clone();
+            let successor = successor.clone();
+            async move { registry.hand_over(&retired, &successor).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release.notify_one();
+        handing.await?;
+        assert!(removing.await??);
+        assert_eq!(
+            registry
+                .ownership()
+                .tab_group_ref(successor.convo_id())
+                .await
+                .as_deref(),
+            Some("group-4")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_hand_over_after_the_group_closed_takes_nothing() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (registry, _actions) = registry_recording_closes(&dir).await?;
+        let first = codex_session("s1", "agile-alpaca");
+        let first_key = first.convo_id().clone();
+        registry.insert_for_testing(first.clone()).await;
+        registry
+            .ownership()
+            .set_tab_group_ref(first_key.clone(), Some("group-4".to_string()))
+            .await;
+        assert!(
+            registry
+                .remove(first.id(), "closed", Some("completed"))
+                .await?
+        );
+        assert_eq!(
+            registry
+                .reap_retained(Instant::now() + Duration::from_secs(60))
+                .await,
+            1
+        );
+
+        let successor = codex_session("s2", "witty-dolphin");
+        registry.insert_for_testing(successor.clone()).await;
+        registry.hand_over(first.id(), &successor).await;
+        assert_eq!(
+            registry
+                .ownership()
+                .tab_group_ref(successor.convo_id())
+                .await,
+            None
+        );
+        assert_eq!(successor.label().await, "witty-dolphin");
         Ok(())
     }
 

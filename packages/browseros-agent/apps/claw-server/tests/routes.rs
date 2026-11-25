@@ -106,6 +106,7 @@ async fn test_app_with_behavior(
         browserclaw_dir: root,
         session_idle: Duration::from_secs(300),
         session_complete_idle: Duration::from_secs(300),
+        mcp_transport_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
@@ -1700,6 +1701,300 @@ async fn same_name_mcp_sessions_have_distinct_groups_and_label_cross_page_access
     )
     .await?;
     assert_eq!(body["result"]["isError"], true);
+    drop(mock);
+    Ok(())
+}
+
+/// What the idle sweep does to a task that has been quiet for `session_complete_idle`.
+async fn complete_task(app: &TestApp, session: &Session) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        app.state
+            .sessions
+            .remove(session.id(), "closed", Some("completed"))
+            .await?,
+        "the task was not live"
+    );
+    Ok(())
+}
+
+async fn wait_for_group(ownership: &Arc<PageOwnership>, key: &ConvoId) -> anyhow::Result<String> {
+    for _ in 0..100 {
+        if let Some(group) = ownership.tab_group_ref(key).await {
+            return Ok(group);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    anyhow::bail!("no tab group was recorded for {key}")
+}
+
+async fn live_session(app: &TestApp, id: &SessionId) -> anyhow::Result<Arc<Session>> {
+    app.state
+        .sessions
+        .lookup(id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("session {id} is not live"))
+}
+
+/// The live case: a conversation paused past task completion, came back on the same
+/// transport and opened a second group while its own tab moved to "Other agents' tabs".
+#[tokio::test]
+async fn a_task_continued_on_the_same_transport_keeps_the_conversations_group() -> anyhow::Result<()>
+{
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let transport = initialize_mcp(&app).await?;
+    let headers = [("mcp-session-id", transport.as_str())];
+    for request in [
+        name_session_request(9, "bbc headlines"),
+        tabs_new_request(10),
+    ] {
+        let (status, _headers, body) =
+            request_json_with_headers(&app.router, "POST", "/mcp", Some(request), &headers).await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "{body:?}");
+    }
+    let first = live_session(&app, &SessionId::new(transport.clone())).await?;
+    let name = first.label().await;
+    let ownership = app.state.sessions.ownership();
+    let group = wait_for_group(&ownership, first.convo_id()).await?;
+
+    complete_task(&app, &first).await?;
+    let tabs_list = json!({
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": { "name": "tabs", "arguments": { "action": "list" } }
+    });
+    let (status, _headers, body) =
+        request_json_with_headers(&app.router, "POST", "/mcp", Some(tabs_list), &headers).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["result"]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("Your tabs:\n[1] https://example.com")),
+        "the continuing task does not own its tab: {body:?}"
+    );
+
+    let successor_id = app
+        .state
+        .sessions
+        .replacement_of(first.id())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no successor was minted"))?;
+    let successor = live_session(&app, &successor_id).await?;
+    assert_ne!(successor.convo_id(), first.convo_id());
+    assert_eq!(
+        ownership.tab_group_ref(successor.convo_id()).await,
+        Some(group.clone())
+    );
+    assert_eq!(ownership.group(first.convo_id()).await, None);
+    assert_eq!(successor.label().await, name);
+
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(tabs_new_request(12)),
+        &headers,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], false, "{body:?}");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        ownership.tab_group_ref(successor.convo_id()).await,
+        Some(group),
+        "the new tab opened another group"
+    );
+    drop(mock);
+    Ok(())
+}
+
+/// Agents resend old handles. After two pauses, the first handle must still find the
+/// group, which by then belongs to the second task of the line.
+#[tokio::test]
+async fn an_older_handle_after_two_pauses_still_continues_with_the_group() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let tabs = |action: &str, session: Option<&str>| {
+        let mut arguments = json!({ "action": action });
+        if action == "new" {
+            arguments["url"] = json!("https://example.com");
+        }
+        if let Some(session) = session {
+            arguments["session"] = json!(session);
+        }
+        json!({ "name": "tabs", "arguments": arguments })
+    };
+    let handle_of = |reply: &Value| -> anyhow::Result<String> {
+        Ok(reply["result"]["_meta"]["com.browseros.neo/session"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("no handle: {reply}"))?
+            .to_string())
+    };
+    let opened = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs("new", None),
+        Some("claude-code"),
+    )
+    .await?;
+    let first = handle_of(&opened)?;
+    let first_task = live_session(&app, &SessionId::new(first.clone())).await?;
+    let ownership = app.state.sessions.ownership();
+    let group = wait_for_group(&ownership, first_task.convo_id()).await?;
+
+    complete_task(&app, &first_task).await?;
+    let resumed = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs("list", Some(&first)),
+        Some("claude-code"),
+    )
+    .await?;
+    let second_task = live_session(&app, &SessionId::new(handle_of(&resumed)?)).await?;
+    assert_eq!(
+        ownership.tab_group_ref(second_task.convo_id()).await,
+        Some(group.clone())
+    );
+
+    complete_task(&app, &second_task).await?;
+    let again = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs("list", Some(&first)),
+        Some("claude-code"),
+    )
+    .await?;
+    let third_task = live_session(&app, &SessionId::new(handle_of(&again)?)).await?;
+    assert_ne!(third_task.id(), second_task.id());
+    assert_eq!(
+        ownership.tab_group_ref(third_task.convo_id()).await,
+        Some(group),
+        "the oldest handle lost the group after the second pause"
+    );
+    drop(mock);
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_collapses_the_tasks_group_at_once() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let transport = initialize_mcp(&app).await?;
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(tabs_new_request(10)),
+        &[("mcp-session-id", &transport)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], false, "{body:?}");
+    let session = live_session(&app, &SessionId::new(transport.clone())).await?;
+    let ownership = app.state.sessions.ownership();
+    wait_for_group(&ownership, session.convo_id()).await?;
+
+    let (status, _headers, _body) = request_json_with_headers(
+        &app.router,
+        "DELETE",
+        "/mcp",
+        None,
+        &[("mcp-session-id", &transport)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    for _ in 0..100 {
+        if ownership.tab_group_collapsed(session.convo_id()).await {
+            drop(mock);
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    anyhow::bail!("the task's group was not collapsed after DELETE")
+}
+
+/// The stateless path continues only through the handle the agent passes back. A call
+/// without one is a new task and inherits nothing, whatever connection it arrives on.
+#[tokio::test]
+async fn only_the_returned_handle_continues_a_stateless_task() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let tabs_new = |session: Option<&str>| {
+        let mut arguments = json!({ "action": "new", "url": "https://example.com" });
+        if let Some(session) = session {
+            arguments["session"] = json!(session);
+        }
+        json!({ "name": "tabs", "arguments": arguments })
+    };
+    let opened = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs_new(None),
+        Some("claude-code"),
+    )
+    .await?;
+    let handle = opened["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no handle: {opened}"))?
+        .to_string();
+    let first = live_session(&app, &SessionId::new(handle.clone())).await?;
+    let ownership = app.state.sessions.ownership();
+    let group = wait_for_group(&ownership, first.convo_id()).await?;
+    complete_task(&app, &first).await?;
+
+    let unrelated = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs_new(None),
+        Some("claude-code"),
+    )
+    .await?;
+    let unrelated_handle = unrelated["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no handle: {unrelated}"))?
+        .to_string();
+    let unrelated = live_session(&app, &SessionId::new(unrelated_handle)).await?;
+    let unrelated_group = wait_for_group(&ownership, unrelated.convo_id()).await?;
+    assert_ne!(
+        unrelated_group, group,
+        "a call without a handle took over a finished task's group"
+    );
+    assert_eq!(
+        app.state.sessions.replacement_of(first.id()).await,
+        None,
+        "a call without a handle continued a finished task"
+    );
+
+    let continued = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        tabs_new(Some(&handle)),
+        Some("claude-code"),
+    )
+    .await?;
+    assert_eq!(continued["result"]["isError"], false, "{continued}");
+    let successor_id = app
+        .state
+        .sessions
+        .replacement_of(first.id())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the returned handle minted no successor"))?;
+    let successor = live_session(&app, &successor_id).await?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        ownership.tab_group_ref(successor.convo_id()).await,
+        Some(group)
+    );
     drop(mock);
     Ok(())
 }

@@ -141,7 +141,15 @@ task shows up on the user's /skills and re-runs as /neo-<name>.
 
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
-don't silently fall back to another browser tool."#;
+don't silently fall back to another browser tool.
+
+A task that sits quiet for 5 minutes ends, and your next call picks it up again
+with the same tabs; a finished task's tabs close 30 minutes after it ends, by
+default. A call that fails with "Session not found" (HTTP 404) means your MCP
+client's session with BrowserOS neo expired after sitting idle (24 hours by
+default). Starting a new session is your client's job, not yours. Once it has
+reconnected, retry the call once, then run tabs action="list" and pass your
+groupId on tabs action="new"."#;
 
 const HUMAN_HELP_GUIDANCE: &str = r#"Ask a human when you are blocked by something only a person can do: a sign-in, a
 one-time code, a captcha, an account choice, or an approval you should not make.

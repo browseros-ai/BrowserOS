@@ -17,7 +17,11 @@ use std::{
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
-const DEFAULT_SESSION_COMPLETE_IDLE_MS: u64 = 5 * 60 * 1000;
+/// How long a task's own dispatches may sit quiet before the sweep completes it.
+pub const SESSION_COMPLETE_IDLE: Duration = Duration::from_secs(5 * 60);
+/// How long rmcp keeps a legacy MCP transport session after its last request. It only bounds
+/// server memory, so it sits far above the session idle; `Config` never lets it fall below it.
+pub const MCP_TRANSPORT_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
@@ -85,6 +89,10 @@ pub struct Config {
     /// each other. Sits beneath `session_idle` (the 30-min abandonment ceiling). Set equal to
     /// `session_idle` to disable early completion.
     pub session_complete_idle: Duration,
+    /// How long rmcp keeps a legacy MCP transport session after its last request. Tasks and
+    /// tab groups have their own clocks, so this only bounds server memory; it never sits below
+    /// `session_idle`, because an expired transport costs the client a 404 and a re-initialize.
+    pub mcp_transport_idle: Duration,
     /// The resolved `behavior.tab_close_after`, shared by retained-session/group cleanup
     /// and durable individual-tab cleanup so neither can close tabs before the chosen grace.
     pub session_retention: Duration,
@@ -269,22 +277,22 @@ impl Config {
             ignored: behavior_ignored,
         } = resolve_behavior(env, mode)?;
 
+        let session_idle = Duration::from_millis(read_positive_ms(
+            env,
+            "CLAW_SESSION_IDLE_MS",
+            DEFAULT_SESSION_IDLE_MS,
+        ));
+        let mcp_transport_idle = MCP_TRANSPORT_IDLE.max(session_idle);
+
         Ok(Self {
             server_port,
             cdp_port,
             proxy_port,
             resources_dir,
             browserclaw_dir,
-            session_idle: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_SESSION_IDLE_MS",
-                DEFAULT_SESSION_IDLE_MS,
-            )),
-            session_complete_idle: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_SESSION_COMPLETE_IDLE_MS",
-                DEFAULT_SESSION_COMPLETE_IDLE_MS,
-            )),
+            session_idle,
+            session_complete_idle: SESSION_COMPLETE_IDLE,
+            mcp_transport_idle,
             session_retention: behavior.tab_close_after,
             session_sweep_interval: Duration::from_millis(read_positive_ms(
                 env,
@@ -628,14 +636,14 @@ mod tests {
                 "garbage",
                 "-500",
                 Duration::from_secs(30 * 60),
-                Duration::from_millis(3_600_000),
+                Duration::from_millis(1_800_000),
                 Duration::from_millis(60_000),
             ),
             (
                 "0",
                 "0x10",
                 Duration::from_secs(30 * 60),
-                Duration::from_millis(3_600_000),
+                Duration::from_millis(1_800_000),
                 Duration::from_millis(60_000),
             ),
             // Number.parseInt parity: integer prefix wins, trailing garbage
@@ -677,8 +685,44 @@ mod tests {
             &ConfigEnv::with_vars(BTreeMap::new(), home.clone()),
         )?;
         assert_eq!(cfg.session_idle, Duration::from_secs(30 * 60));
-        assert_eq!(cfg.session_retention, Duration::from_millis(3_600_000));
+        assert_eq!(cfg.session_retention, Duration::from_millis(1_800_000));
         assert_eq!(cfg.session_sweep_interval, Duration::from_millis(60_000));
+        Ok(())
+    }
+
+    #[test]
+    fn task_and_transport_idles_are_constants_and_the_transport_never_undercuts_session_idle()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let config_path = dir.path().join("sidecar.json");
+        fs::write(&config_path, r#"{"ports":{},"directories":{}}"#)?;
+        let home = dir.path().join("home");
+        let load = |vars: &[(&str, &str)]| {
+            let vars = vars
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect();
+            Config::load_with_env(&config_path, &ConfigEnv::with_vars(vars, home.clone()))
+        };
+
+        let defaults = load(&[])?;
+        assert_eq!(
+            defaults.mcp_transport_idle,
+            Duration::from_secs(24 * 60 * 60)
+        );
+        assert_eq!(defaults.session_complete_idle, Duration::from_secs(5 * 60));
+        // Neither is read from the environment any more.
+        let ignored = load(&[
+            ("CLAW_MCP_TRANSPORT_IDLE_MS", "1000"),
+            ("CLAW_SESSION_COMPLETE_IDLE_MS", "1000"),
+        ])?;
+        assert_eq!(ignored.mcp_transport_idle, super::MCP_TRANSPORT_IDLE);
+        assert_eq!(ignored.session_complete_idle, super::SESSION_COMPLETE_IDLE);
+        let floored = load(&[("CLAW_SESSION_IDLE_MS", "90000000")])?;
+        assert_eq!(
+            floored.mcp_transport_idle,
+            Duration::from_millis(90_000_000)
+        );
         Ok(())
     }
 
@@ -903,9 +947,8 @@ mod tests {
     }
 
     #[test]
-    fn tab_close_grace_defaults_to_30_minutes_when_hosted_and_one_hour_on_desktop()
-    -> anyhow::Result<()> {
-        for (mode, expected_seconds) in [("1", 1_800), ("0", 3_600)] {
+    fn tab_close_grace_defaults_to_30_minutes_in_both_modes() -> anyhow::Result<()> {
+        for (mode, expected_seconds) in [("1", 1_800), ("0", 1_800)] {
             let config = load_native("{}", &[(HOSTED_MODE_ENV, mode)])?;
             assert_eq!(
                 config.session_retention,

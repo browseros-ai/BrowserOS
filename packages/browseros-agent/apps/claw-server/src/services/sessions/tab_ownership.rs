@@ -553,6 +553,32 @@ impl PageOwnership {
         .await;
     }
 
+    /// Moves a finished conversation's pages and tab groups to the conversation that continues
+    /// it, so the successor works in the same group and sees those tabs as its own. Anything the
+    /// successor already recorded wins.
+    pub async fn transfer(&self, from: &ConvoId, to: &ConvoId) {
+        let mut inner = self.inner.write().await;
+        let Some(moved) = inner.convos.remove(from) else {
+            return;
+        };
+        for page_id in &moved.pages {
+            if inner.page_owners.get(page_id) == Some(from) {
+                inner.page_owners.insert(page_id.clone(), to.clone());
+            }
+        }
+        let successor = inner.convos.entry(to.clone()).or_default();
+        successor.pages.extend(moved.pages);
+        if successor.group.is_none() {
+            successor.group = moved.group;
+        }
+        for (scope, group_ref) in moved.scoped_groups {
+            successor.scoped_groups.entry(scope).or_insert(group_ref);
+        }
+        for (group_ref, group) in moved.retained_groups {
+            successor.retained_groups.entry(group_ref).or_insert(group);
+        }
+    }
+
     /// Removes all durable ownership and tab-group state for a conversation.
     pub async fn forget(&self, convo_id: &ConvoId) {
         let mut inner = self.inner.write().await;
