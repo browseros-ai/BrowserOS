@@ -30,6 +30,7 @@ import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   isCardTrial,
   monthlyTrialDays,
+  promisedTrialDays,
   TRIAL_ENDING_DAYS,
   trialDaysLeft,
   trialEndFrom,
@@ -103,12 +104,7 @@ export function Pro() {
   const period = prices ? pickPeriod(prices, wantedPeriod) : wantedPeriod
   const idle = checkout.phase !== 'waiting' && checkout.phase !== 'confirming'
   const offeredDays = trialOfferDays(current, pricing.data)
-  // Once a monthly checkout has started, what the gateway granted it outranks
-  // the price list: a refused trial must not be promised anywhere on the page.
-  const trialDays =
-    checkout.trialDays !== undefined && checkout.interval === 'month'
-      ? checkout.trialDays
-      : offeredDays
+  const trialDays = promisedTrialDays(offeredDays, checkout)
   const trial = trialDays > 0 && period === 'month'
 
   const buy = () => {

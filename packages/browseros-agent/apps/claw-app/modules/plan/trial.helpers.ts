@@ -44,6 +44,20 @@ export function trialOfferDays(
   return monthlyTrialDays(pricing)
 }
 
+/**
+ * The free trial days the page should promise. Once a monthly checkout has
+ * started, what the gateway granted it outranks the price list, so a refused
+ * trial is never promised; before that, the offer stands.
+ */
+export function promisedTrialDays(
+  offered: number,
+  checkout: { trialDays?: number; interval?: string },
+): number {
+  return checkout.trialDays !== undefined && checkout.interval === 'month'
+    ? checkout.trialDays
+    : offered
+}
+
 /** Whole days left in a card trial, rounded up so the last day reads "1 day left". */
 export function trialDaysLeft(
   plan: Pick<Plan, 'trial' | 'trialKind' | 'trialEndsAt'> | undefined,
