@@ -112,6 +112,18 @@ export interface Plan {
      */
     trial?: boolean;
     /**
+     *
+     * @type {PlanTrialKind}
+     * @memberof Plan
+     */
+    trialKind?: PlanTrialKind;
+    /**
+     * When the free trial ends and the first payment is due, in epoch milliseconds. Present only while trial is true and the licence says when.
+     * @type {number}
+     * @memberof Plan
+     */
+    trialEndsAt?: number;
+    /**
      * Whether this computer is on a licence key. The key itself is never returned.
      * @type {boolean}
      * @memberof Plan
@@ -149,6 +161,12 @@ export interface PlanCheckout {
      * @memberof PlanCheckout
      */
     url: string;
+    /**
+     * The free trial days this checkout actually starts with. 0 when the price offered a trial but this computer can't have one now, so the payment is taken today. Absent when the gateway does not say.
+     * @type {number}
+     * @memberof PlanCheckout
+     */
+    trialDays?: number;
 }
 
 /**
@@ -372,6 +390,12 @@ export interface PlanPrice {
      * @memberof PlanPrice
      */
     currency: string;
+    /**
+     * The free trial days a new checkout on this price is offered, before the gateway checks whether this computer can have one. Absent or 0 when the price has no trial.
+     * @type {number}
+     * @memberof PlanPrice
+     */
+    trialDays?: number;
 }
 
 /**
@@ -634,6 +658,16 @@ export const PlanStatus = {
     Unpaid: 'unpaid'
 } as const;
 export type PlanStatus = typeof PlanStatus[keyof typeof PlanStatus];
+
+/**
+ * How a free trial started. card: the person added a card at checkout and is charged when it ends. grant: a free trial link from the BrowserOS team, which the app treats as a paid plan. Present only while trial is true and the licence says.
+ * @export
+ */
+export const PlanTrialKind = {
+    Card: 'card',
+    Grant: 'grant'
+} as const;
+export type PlanTrialKind = typeof PlanTrialKind[keyof typeof PlanTrialKind];
 
 /**
  *
