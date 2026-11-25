@@ -34,6 +34,7 @@ Limits and pricing can change; check the current Cloudflare plan before deployme
 Worker secrets (set through Cloudflare's secret manager, never in Git):
 
 - `TOKEN_SIGNING_KEY`: at least 32 random bytes, base64url encoded.
+- `PAIRING_BOOTSTRAP_SECRET`: a separate high-entropy secret used only by the local BrowserOS pairing client for `/pair/start` and `/pair/revoke`.
 - `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`: a Cloudflare Access service token for the tunnel hostname.
 
 Worker variables:
