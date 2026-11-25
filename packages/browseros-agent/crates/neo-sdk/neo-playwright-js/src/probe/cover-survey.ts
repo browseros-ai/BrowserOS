@@ -3,7 +3,7 @@
  * The click module owns hits, faces, control eligibility and names. This module owns grouping,
  * reach and weak per-document memory; child frames and pressing are outside its scope.
  */
-import type { AriaSnapshotJSON } from '../prelude/vendored'
+import type { AriaNodeJSON, AriaSnapshotJSON } from '../prelude/vendored'
 import {
   controlRole,
   controlsOf,
@@ -28,7 +28,8 @@ import {
 import type { FailureOutput } from './failure-output'
 import { renderedText } from './private-look'
 import type { Point } from './protocol'
-import { lastSnapshotNodes, lastSnapshotRefs, type World } from './world'
+import { type SnapshotAria, snapshotAriaFor } from './snapshot-aria'
+import type { World } from './world'
 
 const MAX_CONTROLS = 300
 const BUDGET_MS = 20
@@ -97,6 +98,7 @@ export function surveyCovers(
   world: World,
   output: FailureOutput,
   json: AriaSnapshotJSON,
+  aria: SnapshotAria = snapshotAriaFor(world),
 ): {
   layers: SurveyLayer[]
   tested: number
@@ -106,7 +108,7 @@ export function surveyCovers(
 } {
   const { injected } = world
   const document = injected.document
-  const refs = lastSnapshotRefs(injected)
+  const elements = aria.surveyElements()
   const phases: Phases = {
     hits: 0,
     count: 0,
@@ -124,10 +126,11 @@ export function surveyCovers(
   }))
   const { hits, tested, main } = findFaces(
     world,
-    refs,
+    elements,
     samples,
     started,
     phases,
+    aria,
   )
   phases.hits = performance.now() - started
   // The engine's scope walk crosses hosts but not slots. Layer membership follows the
@@ -141,9 +144,9 @@ export function surveyCovers(
       if (at === root) return true
     return false
   }
-  const page = pageGuard(world, refs, phases, main)
+  const page = pageGuard(elements, phases, main, aria)
   const resolving = performance.now()
-  const found = facesFromHits(world, hits, page)
+  const found = facesFromHits(world, hits, page, aria)
   // This is the first use of the guard, so its entire count time belongs to this resolution.
   // Charge that work to counting rather than to naming.
   if (hits.length)
@@ -170,7 +173,7 @@ export function surveyCovers(
   phases.count = 0
   const centre = { x: innerWidth / 2, y: innerHeight / 2 }
   for (const face of found.values())
-    face.named = shownAs(world, output, face.named, centre)
+    face.named = shownAs(world, output, face.named, centre, undefined, aria)
   const groups = joinFaces(found, inside).map((faces) => ({
     faces,
     ...holdersOf(faces, inside, page),
@@ -188,6 +191,7 @@ export function surveyCovers(
         tested,
         samples,
         inside,
+        aria,
       ),
     )
     .filter((layer) => layer !== undefined)
@@ -200,7 +204,7 @@ export function surveyCovers(
   memory.set(document, next)
   phases.naming += Math.max(0, performance.now() - naming - phases.count)
   phases.count += countedBeforeNaming
-  const marksSkipped = markBlocks(world, json, layers, inside, phases)
+  const marksSkipped = markBlocks(json, layers, inside, phases, aria)
   return {
     layers: layers.map(({ note }) => note),
     tested: tested.length,
@@ -213,10 +217,11 @@ export function surveyCovers(
 /** Samples seed candidates; only a foreign hit on an outside control makes one a layer. */
 function findFaces(
   world: World,
-  refs: ReturnType<typeof lastSnapshotRefs>,
+  elements: Iterable<Element>,
   samples: Sample[],
   started: number,
   phases: Phases,
+  aria: SnapshotAria,
 ) {
   const main = world.injected.document.querySelector('main, [role="main"]')
   const hits: Hit[] = []
@@ -229,9 +234,9 @@ function findFaces(
     const top = chain.at(-1)
     if (top) sample.deepest = rememberHit(hits, chain, top, point, false, main)
   }
-  // The engine's ref map has tree order. Filtering and testing in one pass means a budget
-  // stop leaves a tested prefix, never a selected list whose tail was silently untested.
-  for (const { element } of refs.values()) {
+  // The provider yields candidates in tree order. Filtering and testing in one pass means a
+  // budget stop leaves a tested prefix, never a selected list whose tail was silently untested.
+  for (const element of elements) {
     if (
       tested.length >= MAX_CONTROLS ||
       performance.now() - started >= BUDGET_MS
@@ -250,7 +255,7 @@ function findFaces(
     const subject = world.injected.retarget(element, 'button-link') ?? element
     const chain = hitChain(subject, point)
     const kind = chain
-      ? kindOf(world, subject, chain, point, false).is
+      ? kindOf(world, subject, chain, point, false, aria).is
       : 'nothing'
     const covered = kind === 'page' || kind === 'frame'
     tested.push({ element, clear: !covered })
@@ -291,6 +296,7 @@ function facesFromHits(
   world: World,
   hits: Hit[],
   page: (element: Element) => boolean,
+  aria: Pick<SnapshotAria, 'roleOf'>,
 ): Map<Element, Face> {
   const found = new Map<Element, Face>()
   for (const hit of hits) {
@@ -317,7 +323,7 @@ function facesFromHits(
       if (!page(root)) known.roots.add(root)
       continue
     }
-    const named = whichDialog(world, hit.chain, root, hit.point)
+    const named = whichDialog(world, hit.chain, root, hit.point, aria)
     found.set(element, {
       element,
       named: page(named) ? element : named,
@@ -330,10 +336,10 @@ function facesFromHits(
 
 /** The expensive majority clause is lazy: ordinary pages never count the whole document. */
 function pageGuard(
-  world: World,
-  refs: ReturnType<typeof lastSnapshotRefs>,
+  elements: Iterable<Element>,
   phases: Phases,
   main: Element | null,
+  aria: Pick<SnapshotAria, 'roleOf'>,
 ): (element: Element) => boolean {
   let controls: Element[] | undefined
   const cached = new Map<Element, boolean>()
@@ -343,7 +349,7 @@ function pageGuard(
   const meaning = (element: Element) => {
     let known = meanings.get(element)
     if (!known) {
-      const role = world.injected.utils.getAriaRole(element) ?? ''
+      const role = aria.roleOf(element) ?? ''
       const top = inTopLayer(element)
       known = {
         dialog: role === 'dialog' || role === 'alertdialog' || top,
@@ -384,8 +390,8 @@ function pageGuard(
         page = true
         return true
       }
-      controls ??= Array.from(refs.values(), ({ element }) => element).filter(
-        (element) => coverControl(element),
+      controls ??= Array.from(elements).filter((element) =>
+        coverControl(element),
       )
       // A dialog's controls cannot turn its carrier into the page. The denominator remains
       // the whole document, so a fixed app shell is still judged by its own controls.
@@ -508,10 +514,11 @@ function describeLayer(
   tested: Tested[],
   samples: Sample[],
   inside: Inside,
+  aria: SnapshotAria,
 ): Layer | undefined {
   const { faces, held, controlsFrom } = group
   const face =
-    faces.find((face) => isBlank(world, output, face.element)) ?? faces[0]
+    faces.find((face) => isBlank(world, output, face.element, aria)) ?? faces[0]
   if (!face) return undefined
   const old = remembered.find((entry) =>
     faces.some((face) => entry.face.deref() === face.element),
@@ -532,7 +539,7 @@ function describeLayer(
   const controls = Array.from(
     new Map(
       controlsFrom
-        .flatMap((root) => controlsOf(world, output, root))
+        .flatMap((root) => controlsOf(world, output, root, undefined, aria))
         .map((control) => [control.ref, control]),
     ).values(),
   )
@@ -543,7 +550,7 @@ function describeLayer(
     !inClosedPart(named) &&
     controls.length === 0 &&
     !words &&
-    isBlank(world, output, named)
+    isBlank(world, output, named, aria)
   for (const member of faces)
     next.push({
       face: new WeakRef(member.element),
@@ -555,9 +562,9 @@ function describeLayer(
     order,
     held,
     note: {
-      role: controlRole(world, named),
-      name: nameOf(world, output, named),
-      ref: world.refs.forElement(named, world.seq),
+      role: controlRole(world, named, aria),
+      name: nameOf(world, output, named, aria),
+      ref: aria.refOf(named),
       blank,
       loading: controlsFrom.some(saysLoading),
       wholeView,
@@ -569,17 +576,17 @@ function describeLayer(
 
 /** Link and mark only an actual whole-view layer, after its reach is known. */
 function markBlocks(
-  world: World,
   json: AriaSnapshotJSON,
   layers: Layer[],
   inside: Inside,
   phases: Phases,
+  aria: Pick<SnapshotAria, 'snapshotNodes'>,
 ): boolean {
   if (!layers.some(({ note }) => note.wholeView && !note.blank)) return false
   const started = performance.now()
-  let linked: ReturnType<typeof lastSnapshotNodes>
+  let nodes: ReadonlyMap<AriaNodeJSON, Element>
   try {
-    linked = lastSnapshotNodes(world.injected, json)
+    nodes = aria.snapshotNodes(json)
   } catch {
     phases.linking = performance.now() - started
     return true
@@ -590,7 +597,7 @@ function markBlocks(
   while (pending.length) {
     const node = pending.pop()
     if (!node) continue
-    const element = linked.nodes.get(node)
+    const element = nodes.get(node)
     const layer =
       element &&
       layers.find(
