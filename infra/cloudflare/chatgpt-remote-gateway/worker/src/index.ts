@@ -6,6 +6,7 @@ interface Env {
   TOKEN_SIGNING_KEY: string;
   CF_ACCESS_CLIENT_ID: string;
   CF_ACCESS_CLIENT_SECRET: string;
+  PAIRING_BOOTSTRAP_SECRET: string;
 }
 
 type Pairing = { deviceId: string; label: string; createdAt: number; expiresAt: number; paired: boolean };
@@ -98,7 +99,7 @@ export class GatewayState {
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ service: "browseros-chatgpt-remote-gateway", status: "ok", pairing: "required", toolCalls: "allowlist-only" });
     }
-    if (request.method === "GET" && (url.pathname === "/.well-known/oauth-authorization-server" || url.pathname === "/.well-known/oauth-protected-resource")) {
+    if (request.method === "GET" && (url.pathname === "/.well-known/oauth-authorization-server" || url.pathname === "/.well-known/oauth-protected-resource" || url.pathname === "/mcp/.well-known/oauth-protected-resource")) {
       const issuer = this.env.GATEWAY_ISSUER;
       if (url.pathname.endsWith("oauth-authorization-server")) {
         return json({
@@ -112,6 +113,7 @@ export class GatewayState {
     }
     if (request.method === "POST" && url.pathname === "/register") return this.registerClient(request);
     if (request.method === "POST" && url.pathname === "/pair/start") return this.startPairing(request);
+    if (request.method === "POST" && url.pathname === "/pair/revoke") return this.revokePairing(request);
     if (request.method === "GET" && url.pathname === "/authorize") return this.authorizePage(url);
     if (request.method === "POST" && url.pathname === "/authorize") return this.authorize(request);
     if (request.method === "POST" && url.pathname === "/token") return this.token(request);
@@ -138,6 +140,8 @@ export class GatewayState {
   }
 
   private async startPairing(request: Request): Promise<Response> {
+    const suppliedSecret = request.headers.get("x-browseros-pairing-secret") || "";
+    if (!this.env.PAIRING_BOOTSTRAP_SECRET || !safeEqual(suppliedSecret, this.env.PAIRING_BOOTSTRAP_SECRET)) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({})) as any;
     const label = typeof body.label === "string" ? body.label.trim().slice(0, 48) : "BrowserOS device";
     const deviceId = randomId(18);
@@ -145,6 +149,22 @@ export class GatewayState {
     const expiresAt = Date.now() + 10 * 60 * 1000;
     await this.ctx.storage.put("pair:" + await sha256(code), { deviceId, label, createdAt: Date.now(), expiresAt, paired: false } satisfies Pairing);
     return json({ device_id: deviceId, pairing_code: code, expires_in: 600, instruction: "Enter this one-time code on the OAuth approval page. It expires in 10 minutes." }, 201);
+  }
+
+
+  private async revokePairing(request: Request): Promise<Response> {
+    const suppliedSecret = request.headers.get("x-browseros-pairing-secret") || "";
+    if (!this.env.PAIRING_BOOTSTRAP_SECRET || !safeEqual(suppliedSecret, this.env.PAIRING_BOOTSTRAP_SECRET)) return json({ error: "unauthorized" }, 401);
+    const body = await request.json().catch(() => null) as any;
+    const deviceId = typeof body?.device_id === "string" ? body.device_id : "";
+    if (!deviceId) return json({ error: "invalid_request" }, 400);
+    const key = "device:" + deviceId;
+    const device = await this.ctx.storage.get<any>(key);
+    if (!device) return json({ error: "device_not_found" }, 404);
+    device.revoked = true;
+    device.revokedAt = Date.now();
+    await this.ctx.storage.put(key, device);
+    return json({ revoked: true });
   }
 
   private async authorizePage(url: URL): Promise<Response> {
@@ -173,7 +193,9 @@ export class GatewayState {
     const challenge = String(form.get("challenge") || "");
     const scope = String(form.get("scope") || "browser:read");
     const codeInput = String(form.get("pairing_code") || "").trim().toUpperCase();
-    if (form.get("approve") !== "yes" || !codeInput || !state) return json({ error: "access_denied" }, 400);
+    if (form.get("approve") !== "yes" || !codeInput || !state || !/^[A-Za-z0-9_-]{43}$/.test(challenge)) return json({ error: "access_denied" }, 400);
+    const requestedScopes = scope.split(/\\s+/).filter((s) => ["browser:read", "browser:control"].includes(s));
+    if (!requestedScopes.includes("browser:read")) return json({ error: "invalid_scope" }, 400);
     const client = await this.ctx.storage.get<Client>("client:" + clientId);
     if (!client || !client.redirectUris.includes(redirectUri)) return json({ error: "invalid_client" }, 400);
     const pairKey = "pair:" + await sha256(codeInput);
@@ -184,7 +206,7 @@ export class GatewayState {
     await this.ctx.storage.delete(pairKey);
     const authCode = randomId(32);
     await this.ctx.storage.put("code:" + await sha256(authCode), {
-      clientId, redirectUri, challenge, deviceId: pairing.deviceId, scope, expiresAt: Date.now() + 5 * 60 * 1000
+      clientId, redirectUri, challenge, deviceId: pairing.deviceId, scope: requestedScopes.join(" "), expiresAt: Date.now() + 5 * 60 * 1000
     } satisfies AuthCode);
     const target = new URL(redirectUri);
     target.searchParams.set("code", authCode);
@@ -193,6 +215,7 @@ export class GatewayState {
   }
 
   private async token(request: Request): Promise<Response> {
+    if (!this.env.TOKEN_SIGNING_KEY || this.env.TOKEN_SIGNING_KEY.length < 43) return json({ error: "gateway_not_configured" }, 503);
     const form = await request.formData().catch(() => null);
     if (!form) return json({ error: "invalid_request" }, 400);
     const grantType = String(form.get("grant_type") || "");
