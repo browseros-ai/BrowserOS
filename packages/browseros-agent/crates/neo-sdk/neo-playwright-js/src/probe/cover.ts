@@ -20,6 +20,7 @@
  * survey of the covers over a page's controls: one rule for "what covers it" and "what is its
  * own", and no second hit test anywhere. They are never part of the probe's protocol.
  */
+import { type CoverAria, coverAriaFor } from './cover-aria'
 import type { FailureOutput } from './failure-output'
 import { SECTION_ROLES } from './pointer-targets'
 import { CONTROLS, drawingOf, renderedText } from './private-look'
@@ -207,6 +208,7 @@ export function cover(
   root: Node | undefined,
   _nodes: readonly unknown[],
   output: FailureOutput,
+  aria: CoverAria = coverAriaFor(world),
 ): ReplyTo<'cover'> {
   const found = resolveTarget(world, request.target, 'firstMatch', root)
   if (found.kind !== 'one') return found
@@ -223,7 +225,7 @@ export function cover(
   if (coverNumber(top) !== request.cover) return { kind: 'cover', facts: null }
   return {
     kind: 'cover',
-    facts: factsOf(world, output, subject, chain, top, request),
+    facts: factsOf(world, output, subject, chain, top, request, aria),
   }
 }
 
@@ -234,15 +236,17 @@ function factsOf(
   chain: readonly Element[],
   top: Element,
   request: CoverRequest,
+  aria: CoverAria,
 ): CoverFacts {
-  const kind = kindOf(world, subject, chain, request.point, request.above)
-  const layer = whichDialog(world, chain, top, request.point)
+  const kind = kindOf(world, subject, chain, request.point, request.above, aria)
+  const layer = whichDialog(world, chain, top, request.point, aria)
   const { shown, behind, closed } = shownLayer(
     world,
     output,
     layer,
     request.point,
     subject,
+    aria,
   )
   // A cover that holds the control (its wrapper, its label, the page's root) is the control's
   // own surroundings: its snapshot would be the page, so it is left out.
@@ -250,22 +254,23 @@ function factsOf(
   let snapshot: unknown = null
   let words = true
   if (!surrounds) {
-    snapshot = output.tree(shown, () => quietSnapshot(world, shown))
-    words = holdsWords(snapshot)
+    const coverTree = output.tree(shown, () => aria.coverSnapshot(shown))
+    snapshot = coverTree.json
+    words = coverTree.hasWords
   }
   // Every control the cover takes the pointer with, read in full: the list the answer prints is
   // cut to eight, and what the cover is (frames only or not) is decided before that cut.
   const taking = surrounds ? [] : takingControls(world, shown)
-  const controls = controlsOf(world, output, shown, taking)
+  const controls = controlsOf(world, output, shown, taking, aria)
   // The engine drops a textbox's own text, so a wordless snapshot is not a wordless cover.
   const drawn = words
     ? undefined
     : output.tree(shown, () => Array.from(renderedText(shown).trim()))
   return {
     layer: coverNumber(layer),
-    ref: world.refs.forElement(shown, world.seq),
-    role: controlRole(world, shown),
-    name: nameOf(world, output, shown),
+    ref: aria.refOf(shown),
+    role: controlRole(world, shown, aria),
+    name: nameOf(world, output, shown, aria),
     // A blank layer prints as itself, the dialog open over it after; a dialog shown for its
     // nameless layer prints as the dialog.
     markup: output.previewNode(behind ? layer : shown),
@@ -282,7 +287,7 @@ function factsOf(
       !drawn?.length,
     behind,
     closed,
-    notice: !surrounds && inLiveRegion(world, shown),
+    notice: !surrounds && inLiveRegion(shown, aria),
     kind: frameKind(shown, kind, taking),
   }
 }
@@ -294,8 +299,9 @@ export function shownAs(
   layer: Element,
   point: Point,
   subject?: Element,
+  aria: CoverAria = coverAriaFor(world),
 ): Element {
-  return shownLayer(world, output, layer, point, subject).shown
+  return shownLayer(world, output, layer, point, subject, aria).shown
 }
 
 /** Keep the blank reading beside the chosen element: the click needs both, without a
@@ -305,7 +311,8 @@ function shownLayer(
   output: FailureOutput,
   layer: Element,
   point: Point,
-  subject?: Element,
+  subject: Element | undefined,
+  aria: CoverAria,
 ): { shown: Element; behind: boolean; closed: boolean } {
   const holds = subject
     ? layer.contains(subject) || layer === world.injected.document.body
@@ -314,10 +321,11 @@ function shownLayer(
     ? !layer.contains(subject) && inClosedPart(layer)
     : !holds && inClosedPart(layer)
   if (holds || closed) return { shown: layer, behind: false, closed }
-  const blank = isBlank(world, output, layer)
+  const blank = isBlank(world, output, layer, aria)
   const shown =
-    (blank ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ??
-    layer
+    (blank
+      ? dialogBehind(world, layer, point, aria)
+      : soleDialog(world, layer, aria)) ?? layer
   // Only a blank face names a sibling behind it; a sole child dialog is the layer's content.
   return { shown, behind: blank && shown !== layer, closed }
 }
@@ -354,23 +362,6 @@ function frameKind(
 }
 
 /**
- * The cover's own snapshot, moving nothing the agent's own reads depend on: `default` mode mints
- * no engine ref (the engine's ref counter and `_ariaRef` stay as they were, so the agent's next
- * snapshot numbers its refs as it would have without this answer), and the engine's last
- * snapshot, which its aria-ref engine reads, is put back. Not a marked snapshot: it opens no
- * closed root. The refs an answer prints come from the ref map (`forElement`), never from here.
- */
-function quietSnapshot(world: World, element: Element): unknown {
-  const { injected } = world
-  const last: unknown = Reflect.get(injected, '_lastAriaSnapshotForQuery')
-  try {
-    return injected.ariaSnapshotJSON(element, { mode: 'default' }).json
-  } finally {
-    Reflect.set(injected, '_lastAriaSnapshotForQuery', last)
-  }
-}
-
-/**
  * "Which dialog": walking up from what is on top to the cover's root, (1) the first element with a
  * dialog-like role or a notice's role; else (2) the face, the outermost one that is fixed or in the
  * top layer and takes the pointer itself (a fixed full-view carrier with `pointer-events: none` is
@@ -387,19 +378,19 @@ export function whichDialog(
   chain: readonly Element[],
   top: Element,
   point: Point,
+  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
 ): Element {
   const path = coverPath(chain, top, point)
   const main = top.ownerDocument.querySelector('main, [role="main"]')
   const named = path.filter((at) => !pageElement(at, main))
-  const roleOf = (element: Element) => world.injected.utils.getAriaRole(element)
   const face = coverFace(named)
   return (
     named.find((at) => {
-      const role = roleOf(at) ?? ''
+      const role = aria.roleOf(at) ?? ''
       return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)
     }) ??
     face ??
-    named.find((at) => SECTION_ROLES.has(roleOf(at) ?? '')) ??
+    named.find((at) => SECTION_ROLES.has(aria.roleOf(at) ?? '')) ??
     (pageElement(top, main) ? (path[0] ?? top) : top)
   )
 }
@@ -464,11 +455,12 @@ export function isBlank(
   world: World,
   output: FailureOutput,
   element: Element,
+  aria: Pick<CoverAria, 'coverSnapshot'> = coverAriaFor(world),
 ): boolean {
   return (
     !isFrame(element) &&
     takingControls(world, element).length === 0 &&
-    !holdsWords(output.tree(element, () => quietSnapshot(world, element)))
+    !output.tree(element, () => aria.coverSnapshot(element).hasWords)
   )
 }
 
@@ -484,6 +476,7 @@ export function dialogBehind(
   world: World,
   backdrop: Element,
   point: Point,
+  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
 ): Element | undefined {
   const { injected } = world
   // The document's own query, with no count: a portal renders its dialog at the end of `<body>`,
@@ -498,7 +491,7 @@ export function dialogBehind(
   for (const candidate of candidates) {
     if (backdrop.contains(candidate) || candidate.contains(backdrop)) continue
     if (!injected.utils.isElementVisible(candidate)) continue
-    const role = injected.utils.getAriaRole(candidate) ?? ''
+    const role = aria.roleOf(candidate) ?? ''
     if (!DIALOG_ROLES.has(role) && !inTopLayer(candidate)) continue
     if (!standsOn(candidate, backdrop)) continue
     if (takingControls(world, candidate).length === 0) continue
@@ -521,14 +514,16 @@ export function takesPointer(element: Element): boolean {
  * A notice that may go by itself: a live region on the cover or around it, by a notice's role or
  * by `aria-live`. Its answer says so, beside its controls.
  */
-function inLiveRegion(world: World, cover: Element): boolean {
+function inLiveRegion(
+  cover: Element,
+  aria: Pick<CoverAria, 'roleOf'>,
+): boolean {
   for (
     let at: Element | undefined = cover;
     at;
     at = at.assignedSlot ?? parentOrHost(at)
   ) {
-    if (NOTICE_ROLES.has(world.injected.utils.getAriaRole(at) ?? ''))
-      return true
+    if (NOTICE_ROLES.has(aria.roleOf(at) ?? '')) return true
     const live = at.getAttribute('aria-live')
     if (live !== null && live !== 'off') return true
   }
@@ -657,25 +652,14 @@ export function inTopLayer(element: Element): boolean {
   }
 }
 
-/** Whether a snapshot tree has a name or a text anywhere in it. */
-function holdsWords(node: unknown): boolean {
-  if (typeof node === 'string') return node.trim() !== ''
-  if (Array.isArray(node)) return node.some(holdsWords)
-  if (typeof node !== 'object' || node === null) return false
-  for (const key of ['name', 'text', 'children'] as const)
-    if (holdsWords(Reflect.get(node, key))) return true
-  return false
-}
-
 /** The accessible name, read under the mask. */
 export function nameOf(
   world: World,
   output: FailureOutput,
   element: Element,
+  aria: Pick<CoverAria, 'nameOf'> = coverAriaFor(world),
 ): string {
-  return output.tree(element, () =>
-    world.injected.utils.getElementAccessibleNameText(element, false),
-  )
+  return output.tree(element, () => aria.nameOf(element))
 }
 
 /** The roles that make an element a control, written in its `role` attribute. */
@@ -710,14 +694,17 @@ function explicitControl(element: Element): boolean {
  * not seen. Giving up at the bound would take the name from every cover that holds one large
  * dialog, which is commoner, and counting past it costs a second walk.
  */
-function soleDialog(world: World, cover: Element): Element | undefined {
+function soleDialog(
+  world: World,
+  cover: Element,
+  aria: Pick<CoverAria, 'roleOf' | 'nameOf'>,
+): Element | undefined {
   const { utils } = world.injected
-  const role = utils.getAriaRole(cover) ?? ''
+  const role = aria.roleOf(cover) ?? ''
   if (DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)) return undefined
-  if (utils.getElementAccessibleNameText(cover, false).trim() !== '')
-    return undefined
+  if (aria.nameOf(cover).trim() !== '') return undefined
   const dialogs = composedDescendants(cover).filter((element) => {
-    const its = utils.getAriaRole(element)
+    const its = aria.roleOf(element)
     return (
       (its === 'dialog' || its === 'alertdialog') &&
       utils.isElementVisible(element)
@@ -741,9 +728,13 @@ export function coverControl(element: Element): boolean {
 }
 
 /** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
-export function controlRole(world: World, control: Element): string {
+export function controlRole(
+  world: World,
+  control: Element,
+  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
+): string {
   if (isFrame(control)) return 'iframe'
-  const role = world.injected.utils.getAriaRole(control)
+  const role = aria.roleOf(control)
   return !role || role === 'presentation' || role === 'none' ? 'generic' : role
 }
 
@@ -779,8 +770,9 @@ export function controlsOf(
   output: FailureOutput,
   shown: Element,
   taking: readonly Element[] = takingControls(world, shown),
+  aria: Pick<CoverAria, 'roleOf' | 'nameOf' | 'refOf'> = coverAriaFor(world),
 ): CoverControl[] {
-  const roleOf = (control: Element) => controlRole(world, control)
+  const roleOf = (control: Element) => controlRole(world, control, aria)
   const kept = new Set<Element>(
     taking
       .filter((control) => roleOf(control) === 'button')
@@ -794,8 +786,8 @@ export function controlsOf(
     .filter((control) => kept.has(control))
     .map((control) => ({
       role: roleOf(control),
-      name: nameOf(world, output, control),
-      ref: world.refs.forElement(control, world.seq),
+      name: nameOf(world, output, control, aria),
+      ref: aria.refOf(control),
     }))
 }
 
@@ -809,6 +801,7 @@ export function kindOf(
   chain: readonly Element[],
   point: Point,
   above: boolean,
+  aria: Pick<CoverAria, 'refOf' | 'nameOf'> = coverAriaFor(world),
 ): CoverKind {
   const onTop = chain[0]
   if (!onTop) return { is: 'nothing' }
@@ -819,13 +812,12 @@ export function kindOf(
   const label = ownLabel(subject, onTop)
   if (label) return labelKind(label)
   const labelled = labelledControl(subject, onTop)
-  if (labelled)
-    return { is: 'labels', ref: world.refs.forElement(labelled, world.seq) }
+  if (labelled) return { is: 'labels', ref: aria.refOf(labelled) }
   const parent = parentOrHost(subject)
   if (
     onTop === parent ||
     (parent && onTop === parentOrHost(parent)) ||
-    drawingOf(world, subject, onTop, false) !== null
+    drawingOf(world, subject, onTop, false, aria) !== null
   )
     return { is: 'wrapper' }
   if (onTop.contains(subject) || onTop === document.documentElement)
@@ -908,11 +900,12 @@ export function ownPress(
   target: Element,
   point: Point,
   allowed: OwnAllowed,
+  aria: Pick<CoverAria, 'roleOf' | 'refOf' | 'nameOf'> = coverAriaFor(world),
 ): OwnChoice | undefined {
   const chain = hitChain(target, point)
   const onTop = chain?.[0]
   if (!chain || !onTop) return undefined
-  const kind = kindOf(world, target, chain, point, false)
+  const kind = kindOf(world, target, chain, point, false, aria)
   if (kind.is === 'label') {
     const label = ownLabel(target, onTop)
     if (!label) return undefined
@@ -938,7 +931,7 @@ export function ownPress(
       at = at.parentElement
     )
       if (!plainElement(at)) return undefined
-    const checked = checkedState(world, target)
+    const checked = checkedState(world, target, aria)
     if (checked === undefined) return undefined
     return {
       element: onTop,
@@ -947,7 +940,7 @@ export function ownPress(
     }
   }
   if (kind.is === 'partial') {
-    const role = world.injected.utils.getAriaRole(target) ?? ''
+    const role = aria.roleOf(target) ?? ''
     if (!POINT_ROLES.has(role) && target.localName !== 'summary')
       return undefined
     return {
@@ -1039,8 +1032,12 @@ export function labelPlainPoint(label: Element): Point | undefined {
 }
 
 /** A checkbox's, radio's or switch's state; `undefined` for any other control. */
-function checkedState(world: World, control: Element): boolean | undefined {
-  const role = world.injected.utils.getAriaRole(control) ?? ''
+function checkedState(
+  world: World,
+  control: Element,
+  aria: Pick<CoverAria, 'roleOf'>,
+): boolean | undefined {
+  const role = aria.roleOf(control) ?? ''
   if (role !== 'checkbox' && role !== 'radio' && role !== 'switch')
     return undefined
   try {

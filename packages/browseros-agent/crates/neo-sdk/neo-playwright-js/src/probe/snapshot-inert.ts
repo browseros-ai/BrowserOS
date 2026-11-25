@@ -1,7 +1,11 @@
 /** Annotates only browser-declared inert subtrees, in the snapshot's own isolated-world read. */
 import type { AriaNodeJSON, AriaSnapshotJSON } from '../prelude/vendored'
+import {
+  type SnapshotAria,
+  type SnapshotRefs,
+  snapshotAriaFor,
+} from './snapshot-aria'
 import type { World } from './world'
-import { lastSnapshotRefs } from './world'
 
 /** Cross shadow hosts as native inertness does; never inspect another document. */
 function parent(element: Element): Element | null {
@@ -13,22 +17,30 @@ function parent(element: Element): Element | null {
   return root instanceof ShadowRoot ? root.host : null
 }
 
-export function markInert(world: World, json: AriaSnapshotJSON): void {
+export function markInert(
+  world: World,
+  json: AriaSnapshotJSON,
+  aria: Pick<SnapshotAria, 'snapshotRefs'> = snapshotAriaFor(world),
+): void {
   // Selector support or an unfamiliar DOM shape must never turn a read into a refusal or
   // partially hide a live subtree. Commit the marks only after the complete read succeeds.
   try {
-    for (const node of inertNodes(world, json)) node.inert = true
+    for (const node of inertNodes(world, json, aria)) node.inert = true
   } catch {
     // Listing too much is the conservative answer when native inertness is uncertain.
   }
 }
 
-function inertNodes(world: World, json: AriaSnapshotJSON) {
+function inertNodes(
+  world: World,
+  json: AriaSnapshotJSON,
+  aria: Pick<SnapshotAria, 'snapshotRefs'>,
+) {
   const document = world.injected.document
   // Only document-level modals make the page inert in this version. Shadow modals are
   // discovered below for protection, so their live content can never be hidden with a host.
   const modals = [...document.querySelectorAll('dialog:modal')]
-  const refs = lastSnapshotRefs(world.injected)
+  const refs = aria.snapshotRefs()
   if (modals.length === 0 && !hasInertAttribute(document, refs)) return []
   const modalAncestors = new Set<Element>()
   for (const modal of reachableModals(document, modals))
@@ -73,7 +85,7 @@ function inertNodes(world: World, json: AriaSnapshotJSON) {
   while (pending.length) {
     const node = pending.pop()
     if (!node) continue
-    const element = node.ref ? refs.get(node.ref)?.element : undefined
+    const element = node.ref ? refs.elementFor(node.ref) : undefined
     // A modal escapes its ancestors' inertness. Coalescing that ancestor would hide live
     // descendants; leave the wrapper and mark only its independently inert children.
     if (
@@ -115,14 +127,11 @@ function reachableModals(
   return reachable
 }
 
-/** Find attribute triggers in roots the engine already read, without another document walk. */
-function hasInertAttribute(
-  document: Document,
-  refs: ReturnType<typeof lastSnapshotRefs>,
-): boolean {
+/** Find attribute triggers in roots the provider already read, without another document walk. */
+function hasInertAttribute(document: Document, refs: SnapshotRefs): boolean {
   if (document.querySelector('[inert]')) return true
   const seen = new Set<ShadowRoot>()
-  for (const { element } of refs.values()) {
+  for (const element of refs.elements()) {
     let root = element.getRootNode()
     while (root instanceof ShadowRoot && !seen.has(root)) {
       seen.add(root)
@@ -133,10 +142,10 @@ function hasInertAttribute(
   return false
 }
 
-/** Preserve live descendants the engine already exposed, including shadow-contained modals. */
+/** Preserve live descendants the snapshot exposed, including shadow-contained modals. */
 function liveAncestors(
   json: AriaSnapshotJSON,
-  refs: ReturnType<typeof lastSnapshotRefs>,
+  refs: SnapshotRefs,
   isInert: (element: Element) => boolean,
 ): Set<AriaNodeJSON> {
   const protectedNodes = new Set<AriaNodeJSON>()
@@ -150,7 +159,7 @@ function liveAncestors(
       if (typeof child !== 'string') scan.push(child)
   }
   for (const node of visited.reverse()) {
-    const element = node.ref ? refs.get(node.ref)?.element : undefined
+    const element = node.ref ? refs.elementFor(node.ref) : undefined
     if (
       // A ref-less image or icon proves nothing about its inert ancestors. Only known-live
       // elements protect this tree path; reachable modal ancestors are protected separately.

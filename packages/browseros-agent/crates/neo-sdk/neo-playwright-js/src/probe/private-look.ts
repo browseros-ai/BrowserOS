@@ -22,6 +22,7 @@
  * Neo does not wait here: a box that is hidden, covered or read-only now is refused now. The
  * host approved a box in one state, so a different state is a refusal, never a wait.
  */
+import { type CoverAria, coverAriaFor } from './cover-aria'
 import type {
   BoxAsk,
   BoxExpect,
@@ -69,7 +70,12 @@ export function look(world: World, request: LookRequest): ReplyTo<'look'> {
  * text input, and the first check it fails: a covered box answers both. Without `expect` (a
  * check call before the host approved anything) no origin and no fact is checked.
  */
-export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
+export function lookAt(
+  world: World,
+  element: Element,
+  ask: BoxAsk,
+  aria: Pick<CoverAria, 'nameOf'> = coverAriaFor(world),
+): Looked {
   // Every look starts without the wrapper an earlier one kept: a box with no size is reached by
   // focus and never hit-tested, so a wrapper from a look when it had a size must not carry over.
   coverWrappers.delete(element)
@@ -84,7 +90,7 @@ export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
       behavior: 'instant',
     })
   const facts = factsOf(element)
-  const refusal = firstRefusal(world, element, facts, ask)
+  const refusal = firstRefusal(world, element, facts, ask, aria)
   // Ruling R64: the limit moved and still fits, so the look went on; the answer says so.
   const moved =
     ask.expect !== undefined && limitMove(facts, ask.expect, ask) === 'fits'
@@ -100,6 +106,7 @@ function firstRefusal(
   element: HTMLInputElement,
   facts: BoxFacts,
   ask: BoxAsk,
+  aria: Pick<CoverAria, 'nameOf'>,
 ): LookRefused | undefined {
   const { expect } = ask
   if (expect && facts.origin !== expect.origin) return { code: 'wrongOrigin' }
@@ -118,7 +125,8 @@ function firstRefusal(
     !world.injected.elementState(element, 'visible', ask.frameVisible).matches
   )
     return { code: 'boxHidden' }
-  else if (blocked(world, element, ask.keys)) return { code: 'boxCovered' }
+  else if (blocked(world, element, ask.keys, aria))
+    return { code: 'boxCovered' }
   if (
     ask.length !== undefined &&
     !ask.cut &&
@@ -287,11 +295,16 @@ export function coverWrapper(box: Element): Element | undefined {
  * not cover it ([`drawingOf`], rulings R55 and R56). tests/private_look_live.rs holds the look
  * against main's own script on every page, and lists the pages where the two differ.
  */
-function blocked(world: World, box: Element, keys: boolean): boolean {
+function blocked(
+  world: World,
+  box: Element,
+  keys: boolean,
+  aria: Pick<CoverAria, 'nameOf'>,
+): boolean {
   const blocker = blockerOf(box)
   if (blocker === null) return false
   if (blocker === 'unread') return true
-  const wrapper = drawingOf(world, box, blocker, keys)
+  const wrapper = drawingOf(world, box, blocker, keys, aria)
   if (!wrapper) return true
   coverWrappers.set(box, wrapper)
   return false
@@ -323,6 +336,7 @@ export function drawingOf(
   box: Element,
   blocker: Element,
   keys: boolean,
+  aria: Pick<CoverAria, 'nameOf'> = coverAriaFor(world),
 ): Element | null {
   if (blocker.ownerDocument !== box.ownerDocument) return null
   const parent = box.parentElement
@@ -360,7 +374,7 @@ export function drawingOf(
     return null
   const text = renderedText(cover)
   if (fold(text) === '') return keys ? wrapper : null
-  const name = world.injected.utils.getElementAccessibleNameText(box, false)
+  const name = aria.nameOf(box)
   return sameName(text, name) ? wrapper : null
 }
 
