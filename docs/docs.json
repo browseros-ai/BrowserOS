@@ -27,7 +27,8 @@
             "pages": [
               "neo/mcp/index",
               "neo/mcp/claude-desktop",
-              "neo/mcp/manual"
+              "neo/mcp/manual",
+              "neo/mcp/chatgpt"
             ]
           },
           {
