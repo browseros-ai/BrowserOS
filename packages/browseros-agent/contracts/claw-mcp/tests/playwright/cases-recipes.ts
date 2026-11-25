@@ -97,8 +97,12 @@ async function withRecipeSession(
 
   // The generic sidecar has no native identity. Enable profile routing here,
   // then probe the actual browser: older fixtures may lack the native methods.
+  // Choosing a profile comes with ultrafast, so this server has it.
   const server = await startRustServer(ctx.browser.cdpPort, {
-    env: { CLAW_NATIVE_BROWSEROS_VERSION: '0.51.1.3' },
+    env: {
+      CLAW_NATIVE_BROWSEROS_VERSION: '0.51.1.3',
+      CLAW_SERVER_ULTRAFAST: '1',
+    },
   })
   try {
     const mcp = await McpSession.connect(server.baseUrl, 'recipe-profiles')
