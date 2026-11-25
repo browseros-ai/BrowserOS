@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: states</title>
+<style>
+  body { margin: 8px; font: 11px/1.25 sans-serif; }
+  /* Dense wrapping keeps the whole first block inside the initial viewport. */
+  .block { display: flex; flex-wrap: wrap; gap: 1px 8px; align-items: baseline; }
+  .block * { margin: 0; }
+  h1, h2, h3, h4, h5, h6 { font-size: 11px; }
+  ul { padding-left: 14px; }
+  fieldset { padding: 0 4px; }
+  input[type=text] { width: 60px; }
+  #fold-spacer { height: 3000px; }
+</style>
+</head>
+<body>
+<div id="fold-spacer"></div>
+<script>
+  // One block, rendered twice: on screen, and below the fold with every name suffixed " (below)".
+  // `s` keeps ids and radio groups apart; `n` keeps names apart.
+  const block = (s, n) => `
+<section class="block" id="states${s}" aria-label="region: states block${n}">
+  <label><input type="checkbox">checkbox: unchecked${n}</label>
+  <label><input type="checkbox" checked>checkbox: checked${n}</label>
+  <label><input type="checkbox" data-indeterminate>checkbox: indeterminate, set from script${n}</label>
+  <div role="checkbox" tabindex="0" aria-checked="true">checkbox: role=checkbox aria-checked=true${n}</div>
+  <div role="checkbox" tabindex="0" aria-checked="false">checkbox: role=checkbox aria-checked=false${n}</div>
+  <div role="checkbox" tabindex="0" aria-checked="mixed">checkbox: role=checkbox aria-checked=mixed${n}</div>
+  <label><input type="radio" name="radio${s}" checked>radio: checked${n}</label>
+  <label><input type="radio" name="radio${s}">radio: unchecked${n}</label>
+  <div role="switch" tabindex="0" aria-checked="true">switch: aria-checked=true${n}</div>
+  <div role="switch" tabindex="0" aria-checked="false">switch: aria-checked=false${n}</div>
+  <label><input type="checkbox" role="switch" checked>switch: input checkbox role=switch, checked${n}</label>
+  <div role="menu" aria-label="menu: checkable items${n}">
+    <div role="menuitemcheckbox" tabindex="-1" aria-checked="true">menuitemcheckbox: checked${n}</div>
+    <div role="menuitemcheckbox" tabindex="-1" aria-checked="false">menuitemcheckbox: unchecked${n}</div>
+    <div role="menuitemradio" tabindex="-1" aria-checked="true">menuitemradio: checked${n}</div>
+  </div>
+  <div role="listbox" aria-label="listbox: aria options${n}">
+    <div role="option" aria-selected="true">option: aria-selected=true${n}</div>
+    <div role="option" aria-selected="false">option: aria-selected=false${n}</div>
+    <div role="option">option: aria-selected unset${n}</div>
+  </div>
+  <select size="3" aria-label="listbox: select size=3${n}">
+    <option selected>option: selected${n}</option>
+    <option>option: not selected${n}</option>
+    <option disabled>option: disabled${n}</option>
+  </select>
+  <select disabled aria-label="combobox: disabled select${n}"><option>option: in a disabled select${n}</option></select>
+  <button type="button" aria-pressed="true">button: aria-pressed=true${n}</button>
+  <button type="button" aria-pressed="false">button: aria-pressed=false${n}</button>
+  <button type="button" aria-pressed="mixed">button: aria-pressed=mixed${n}</button>
+  <button type="button">button: aria-pressed unset${n}</button>
+  <button type="button" aria-expanded="true">button: aria-expanded=true${n}</button>
+  <button type="button" aria-expanded="false">button: aria-expanded=false${n}</button>
+  <button type="button">button: aria-expanded unset${n}</button>
+  <input type="text" role="combobox" aria-expanded="false" aria-label="combobox: input aria-expanded=false${n}">
+  <input type="text" role="combobox" aria-expanded="true" aria-controls="combo-popup${s}" aria-label="combobox: input aria-expanded=true${n}">
+  <div role="listbox" id="combo-popup${s}" aria-label="listbox: combobox popup${n}">
+    <div role="option" aria-selected="false">option: combobox popup entry${n}</div>
+  </div>
+  <div role="tablist" aria-label="tablist: tabs${n}">
+    <div role="tab" tabindex="0" aria-selected="true">tab: aria-selected=true${n}</div>
+    <div role="tab" tabindex="-1" aria-selected="false">tab: aria-selected=false${n}</div>
+  </div>
+  <ul role="tree" aria-label="tree: treeitems${n}">
+    <li role="treeitem" aria-level="1" aria-expanded="true" aria-selected="true">treeitem: level 1, expanded, selected${n}
+      <ul role="group"><li role="treeitem" aria-level="2" aria-selected="false">treeitem: level 2, not selected${n}</li></ul>
+    </li>
+    <li role="treeitem" aria-level="1" aria-expanded="false">treeitem: level 1, collapsed${n}</li>
+  </ul>
+  <h1>heading: h1${n}</h1>
+  <h2>heading: h2${n}</h2>
+  <h3>heading: h3${n}</h3>
+  <h4>heading: h4${n}</h4>
+  <h5>heading: h5${n}</h5>
+  <h6>heading: h6${n}</h6>
+  <h2 aria-level="5">heading: h2 with aria-level=5, tag wins${n}</h2>
+  <div role="heading" aria-level="3">heading: role=heading aria-level=3${n}</div>
+  <div role="heading">heading: role=heading without aria-level${n}</div>
+  <ul><li aria-level="2">listitem: aria-level=2${n}</li><li>listitem: aria-level unset${n}</li></ul>
+  <button type="button" disabled>button: disabled${n}</button>
+  <label>textbox: disabled input${n} <input type="text" disabled></label>
+  <fieldset disabled>
+    <legend>group: disabled fieldset${n} <input type="text" aria-label="textbox: in the first legend of a disabled fieldset, enabled${n}"></legend>
+    <input type="text" aria-label="textbox: in a disabled fieldset${n}">
+    <button type="button">button: in a disabled fieldset${n}</button>
+  </fieldset>
+  <button type="button" aria-disabled="true">button: aria-disabled=true${n}</button>
+  <div role="group" aria-disabled="true" aria-label="group: aria-disabled=true${n}">
+    <button type="button">button: inherits aria-disabled from its group${n}</button>
+    <button type="button" aria-disabled="false">button: own aria-disabled=false inside an aria-disabled group${n}</button>
+    <div aria-disabled="false"><button type="button">button: under an aria-disabled=false wrapper inside an aria-disabled group${n}</button></div>
+  </div>
+  <label>textbox: aria-invalid=true${n} <input type="text" aria-invalid="true"></label>
+  <label>textbox: aria-invalid=grammar${n} <input type="text" aria-invalid="grammar"></label>
+  <label>textbox: aria-invalid=spelling${n} <input type="text" aria-invalid="spelling"></label>
+  <label>textbox: aria-invalid=false${n} <input type="text" aria-invalid="false"></label>
+  <label>textbox: focused at load in the top block only${n} <input type="text" data-focus></label>
+</section>`;
+
+  const spacer = document.getElementById('fold-spacer');
+  spacer.insertAdjacentHTML('beforebegin', block('-top', ''));
+  spacer.insertAdjacentHTML('afterend', block('-below', ' (below)'));
+  for (const box of document.querySelectorAll('[data-indeterminate]')) box.indeterminate = true;
+  // preventScroll keeps the page at the top, so the second block stays below the fold.
+  document.querySelector('#states-top [data-focus]').focus({ preventScroll: true });
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>

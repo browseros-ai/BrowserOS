@@ -23,6 +23,8 @@
       "!crates/neo-sdk/neo-playwright/assets",
       "!crates/neo-sdk/neo-playwright/tests/data",
       "!crates/neo-sdk/neo-snapshot/tests/data",
+      // The APC edge pack: each page breaks accessibility rules on purpose, to pin an engine rule.
+      "!crates/neo-sdk/neo-snapshot-apc/tests/pages",
       "!crates/neo-sdk/neo-server/tests/behavior/pages",
       // run() bodies: a function body with top-level await and return, which Biome cannot parse as a module
       "!crates/neo-sdk/neo-server/docker/devkit/examples/*.js",

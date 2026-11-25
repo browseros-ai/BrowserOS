@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: roles</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  .g { margin: 4px 0; }
+  h1, h2, h3, h4, h5, h6 { font-size: 14px; margin: 2px 0; }
+  /* An open non-modal dialog is absolutely positioned by default and would overlap the cases after it. */
+  dialog { position: static; }
+</style>
+</head>
+<body>
+
+<div class="g">
+  <a href="#a-href">link: a with href</a>
+  <a>generic: a without href</a>
+  <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" usemap="#roles-map" alt="img: image with usemap" width="48" height="16">
+  <map name="roles-map">
+    <area shape="rect" coords="0,0,24,16" href="#area-href" alt="link: area with href">
+    <area shape="rect" coords="24,0,48,16" alt="generic: area without href">
+  </map>
+</div>
+
+<header>banner: header at top level</header>
+<footer>contentinfo: footer at top level</footer>
+<article><p>paragraph: inside article</p><header>generic: header inside article</header><footer>generic: footer inside article</footer></article>
+<aside><p>paragraph: inside aside</p><header>generic: header inside aside</header><footer>generic: footer inside aside</footer></aside>
+<main><p>paragraph: inside main</p><header>generic: header inside main</header><footer>generic: footer inside main</footer></main>
+<nav><p>paragraph: inside nav</p><header>generic: header inside nav</header><footer>generic: footer inside nav</footer></nav>
+<section><p>paragraph: inside section without name (no role)</p><header>generic: header inside section</header><footer>generic: footer inside section</footer></section>
+<div role="main"><p>paragraph: inside div role=main</p><header>generic: header inside role=main</header><footer>generic: footer inside role=main</footer></div>
+
+<form><p>paragraph: inside form without name (no role)</p></form>
+<form aria-label="form: aria-label"><p>paragraph: inside form with aria-label</p></form>
+<span id="form-name">form: aria-labelledby</span>
+<form aria-labelledby="form-name"><p>paragraph: inside form with aria-labelledby</p></form>
+<section aria-label="region: section with aria-label"><p>paragraph: inside section with aria-label</p></section>
+<span id="section-name">region: section with aria-labelledby</span>
+<section aria-labelledby="section-name"><p>paragraph: inside section with aria-labelledby</p></section>
+<!-- Presence of aria-label decides the region role, not its value. -->
+<section aria-label=""><p>paragraph: inside section with empty aria-label</p></section>
+
+<ul>
+  <li>presentation: img alt="" without title <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="" width="24" height="16"></li>
+  <li><img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="" title="img: alt empty with title" width="24" height="16"></li>
+  <li>img: alt empty with tabindex=0 <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="" tabindex="0" width="24" height="16"></li>
+  <li><img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="" aria-label="img: alt empty with aria-label" width="24" height="16"></li>
+  <li><img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="img: alt text" width="24" height="16"></li>
+  <li>img: no alt attribute <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" width="24" height="16"></li>
+</ul>
+
+<div class="g">
+  <div><label for="in-text">textbox: input type=text</label> <input id="in-text" type="text"></div>
+  <div><label for="in-search">searchbox: input type=search</label> <input id="in-search" type="search"></div>
+  <div><label for="in-email">textbox: input type=email</label> <input id="in-email" type="email"></div>
+  <div><label for="in-tel">textbox: input type=tel</label> <input id="in-tel" type="tel"></div>
+  <div><label for="in-url">textbox: input type=url</label> <input id="in-url" type="url"></div>
+  <div><label for="in-number">spinbutton: input type=number</label> <input id="in-number" type="number"></div>
+  <div><label for="in-range">slider: input type=range</label> <input id="in-range" type="range"></div>
+  <div><label for="in-checkbox">checkbox: input type=checkbox</label> <input id="in-checkbox" type="checkbox"></div>
+  <div><label for="in-radio">radio: input type=radio</label> <input id="in-radio" type="radio"></div>
+  <div><input type="button" value="button: input type=button"></div>
+  <div><input type="submit" value="button: input type=submit"></div>
+  <div><input type="reset" value="button: input type=reset"></div>
+  <div><input type="image" src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="button: input type=image" width="24" height="16"></div>
+  <div><label for="in-file">button: input type=file</label> <input id="in-file" type="file"></div>
+  <div><label for="in-password">textbox: input type=password</label> <input id="in-password" type="password"></div>
+  <div><label for="in-date">textbox: input type=date</label> <input id="in-date" type="date"></div>
+  <div><label for="in-color">textbox: input type=color</label> <input id="in-color" type="color"></div>
+  <div><input type="hidden" value="none: input type=hidden"></div>
+  <div><label for="in-list">combobox: input with list pointing at a datalist</label> <input id="in-list" type="text" list="roles-datalist">
+    <datalist id="roles-datalist"><option value="option: datalist entry one"></option><option value="option: datalist entry two"></option></datalist></div>
+  <div><label for="in-list-other">textbox: input with list pointing at a non-datalist</label> <input id="in-list-other" type="text" list="roles-not-datalist">
+    <span id="roles-not-datalist">generic: list target that is not a datalist</span></div>
+</div>
+
+<div class="g">
+  <div><label for="sel-single">combobox: select single</label>
+    <select id="sel-single"><option>option: single, first</option><option>option: single, second</option></select></div>
+  <div><label for="sel-multiple">listbox: select multiple</label>
+    <select id="sel-multiple" multiple><option>option: multiple, first</option><option>option: multiple, second</option></select></div>
+  <div><label for="sel-sized">listbox: select size=3</label>
+    <select id="sel-sized" size="3"><optgroup label="optgroup: label attribute"><option>option: sized, first</option><option>option: sized, second</option></optgroup><option>option: sized, third</option></select></div>
+</div>
+
+<table>
+  <caption>caption: plain table</caption>
+  <thead><tr><th>columnheader: th no scope, header row first</th><th>columnheader: th no scope, between header cells</th><th scope="col">columnheader: th scope=col</th></tr></thead>
+  <tbody>
+    <tr><th>rowheader: th no scope, body row first column</th><td>cell: row 1, second</td><td>cell: row 1, third</td></tr>
+    <tr><th scope="row">rowheader: th scope=row</th><td>cell: row 2, second</td><td>cell: row 2, third</td></tr>
+  </tbody>
+  <tfoot><tr><td>cell: tfoot, first</td><td>cell: tfoot, second</td><td>cell: tfoot, third</td></tr></tfoot>
+</table>
+<table><tr><th>generic: lone th in a one-row table</th></tr></table>
+<table role="grid" aria-label="grid: table role=grid">
+  <tr><th>columnheader: in grid, first</th><th>columnheader: in grid, second</th></tr>
+  <tr><td>gridcell: td in grid, first</td><td>gridcell: td in grid, second</td></tr>
+</table>
+<table role="treegrid" aria-label="treegrid: table role=treegrid">
+  <tr><td>gridcell: td in treegrid, first</td><td>gridcell: td in treegrid, second</td></tr>
+</table>
+
+<h1>heading: h1</h1>
+<h2>heading: h2</h2>
+<h3>heading: h3</h3>
+<h4>heading: h4</h4>
+<h5>heading: h5</h5>
+<h6>heading: h6</h6>
+
+<details><summary>generic: summary in details</summary><p>paragraph: inside closed details</p></details>
+<div>generic: plain div</div>
+<span>generic: plain span</span>
+<dialog open aria-label="dialog: non-modal open dialog"><p>paragraph: inside non-modal dialog</p></dialog>
+<fieldset><legend>group: fieldset legend</legend><p>paragraph: inside fieldset</p></fieldset>
+<figure><figcaption>figure: figcaption</figcaption><p>paragraph: inside figure</p></figure>
+<hr aria-label="separator: hr">
+<ul><li>listitem: li in ul</li></ul>
+<ol><li>listitem: li in ol</li></ol>
+<menu><li>listitem: li in menu</li></menu>
+<div class="g">
+  <div><label for="el-meter">meter: meter</label> <meter id="el-meter" value="0.5"></meter></div>
+  <div><label for="el-progress">progressbar: progress</label> <progress id="el-progress" value="30" max="100"></progress></div>
+  <div><label for="el-output">status: output</label> <output id="el-output">output value</output></div>
+  <div><label for="el-textarea">textbox: textarea</label> <textarea id="el-textarea"></textarea></div>
+  <div><button type="button">button: button element</button></div>
+</div>
+<dl><dt>term: dt</dt><dd>definition: dd</dd></dl>
+<blockquote>blockquote: blockquote</blockquote>
+<p>paragraph: p</p>
+<div class="g">
+  <code>code: code</code> <em>emphasis: em</em> <strong>strong: strong</strong> <del>deletion: del</del> <ins>insertion: ins</ins>
+  <sub>subscript: sub</sub> <sup>superscript: sup</sup> <time datetime="2020-01-02">time: time</time> <mark>mark: mark</mark> <dfn>term: dfn</dfn>
+</div>
+<address>generic: address</address>
+<search>search: search element</search>
+<svg width="48" height="16"><title>img: inline svg with title</title><rect width="48" height="16" fill="#999"></rect></svg>
+<math><mtext>math: math element</mtext></math>
+
+<div class="g">
+  <div role="button">button: div role=button</div>
+  <div role="foo button">button: role="foo button", first valid token wins</div>
+  <div role="BUTTON">generic: role="BUTTON", role tokens are case-sensitive</div>
+  <h4 role="none" tabindex="0">heading: h4 role=none with tabindex=0, focusable keeps implicit role</h4>
+  <button type="button" role="presentation">button: button role=presentation, natively focusable keeps implicit role</button>
+  <h5 role="presentation" aria-label="heading: h5 role=presentation with aria-label, global attribute keeps implicit role">text: h5 role=presentation with aria-label</h5>
+  <!-- aria-label is prohibited on the paragraph role, so it is no global attribute here and presentation stands. -->
+  <p role="presentation" aria-label="leak: aria-label on p role=presentation">text: p role=presentation with aria-label stays presentation</p>
+  <h6 role="none">text: h6 role=none, not focusable, drops to text</h6>
+</div>
+
+<ul role="presentation"><li>text: li in ul role=presentation inherits presentation</li></ul>
+<table role="presentation"><tr><td>text: td in table role=presentation inherits presentation</td></tr></table>
+<ul role="presentation" tabindex="0"><li>listitem: li in focusable ul role=presentation, conflict keeps list</li></ul>
+
+<div class="g">
+  <button type="button" style="display:contents">button: button display:contents</button>
+  <ul style="display:contents"><li>listitem: li in ul display:contents</li></ul>
+  <div role="list" style="display:contents"><div role="listitem">listitem: role=listitem in role=list display:contents</div></div>
+  <a href="#contents-link" style="display:contents">link: a href display:contents</a>
+  <div role="button" style="display:contents">button: div role=button display:contents</div>
+  <div role="group" aria-label="group: display:contents whose only child is hidden" style="display:contents"><button type="button" hidden>button: hidden child of display:contents</button></div>
+</div>
+
+<script>
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: modal and inert</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  #covered { width: 200px; height: 48px; }
+  .inert-box { margin: 8px 0; padding: 4px; border: 1px dashed #888; }
+</style>
+</head>
+<body>
+<h1>heading: page behind the modal</h1>
+<button type="button" id="covered">button: behind modal</button>
+<p>paragraph: page text behind the modal</p>
+<div class="inert-box" inert>
+  <button type="button">button: in an inert div outside the dialog</button>
+</div>
+
+<dialog id="modal" aria-labelledby="modal-title">
+  <h2 id="modal-title">heading: modal title, also the dialog name</h2>
+  <p>paragraph: modal text</p>
+  <button type="button" autofocus>button: modal confirm</button>
+  <button type="button">button: modal cancel</button>
+  <div class="inert-box" inert>
+    <a href="#inert-link">link: inert inside the modal</a>
+    <button type="button">button: inert inside the modal</button>
+    <label for="inert-input">textbox: inert inside the modal</label>
+    <input id="inert-input" type="text">
+  </div>
+</dialog>
+
+<script>
+  document.getElementById('modal').showModal();
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>
