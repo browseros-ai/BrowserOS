@@ -1,5 +1,7 @@
 use prost::{Enumeration, Message, Oneof};
 
+use super::browseros::{BrowserOsFrameData, BrowserOsRedactedFrame};
+
 /// Frame-level metadata shared by the main frame ([`AnnotatedPageContent::main_frame_data`]) and
 /// embedded iframes ([`IframeDataContent::FrameData`]).
 ///
@@ -36,8 +38,9 @@ pub struct FrameData {
     /// Positive used line height in CSS pixels for scaling-proof geometry heuristics.
     #[prost(uint32, optional, tag = "12")]
     pub default_line_height_px: Option<u32>,
-    // Field 1000 (`BROWSEROS_EXTENSION_TAG`): reserved for BrowserOS per-frame extension
-    // submessage per `apc-contract-design`.
+    /// BrowserOS per-frame metadata.
+    #[prost(message, optional, tag = "1000")]
+    pub browseros: Option<BrowserOsFrameData>,
 }
 
 /// Payload for an embedded iframe node ([`ContentData::Iframe`](super::ContentData::Iframe)).
@@ -60,12 +63,14 @@ pub enum IframeDataContent {
 }
 
 /// Explanation for why an embedded iframe's content was redacted from the snapshot.
-#[derive(Clone, Copy, PartialEq, Eq, Message)]
+#[derive(Clone, PartialEq, Eq, Message)]
 pub struct RedactedFrameMetadata {
-    /// Reason the iframe was redacted (open [`RedactedFrameReason`] enum; preserves future values
-    /// such as [`REASON_BROWSEROS_TIMEOUT`](super::REASON_BROWSEROS_TIMEOUT)).
+    /// Reason the iframe was redacted (open [`RedactedFrameReason`] enum; preserves future values).
     #[prost(enumeration = "RedactedFrameReason", optional, tag = "1")]
     pub reason: Option<i32>,
+    /// BrowserOS metadata naming the left-out frame.
+    #[prost(message, optional, tag = "1000")]
+    pub browseros: Option<BrowserOsRedactedFrame>,
 }
 
 /// Reason an embedded iframe was redacted in [`RedactedFrameMetadata::reason`].
@@ -78,9 +83,9 @@ pub enum RedactedFrameReason {
     CrossSite = 1,
     /// Redacted because the iframe is not on the same origin as the top-level frame.
     CrossOrigin = 2,
-    // Value 1000 (`REASON_BROWSEROS_TIMEOUT`): reserved for BrowserOS frame-capture timeout per
-    // `apc-contract-design`. Open enum `Option<i32>` storage preserves `1000` without failing
-    // decode.
+    /// BrowserOS: the iframe missed the subframe capture deadline. Only a timeout sets it, never
+    /// an empty or torn-down frame, so a `# partial:` line can say "timeout" truthfully.
+    BrowserOsTimeout = 1000,
 }
 
 /// Selection and focus state scoped to a single frame.

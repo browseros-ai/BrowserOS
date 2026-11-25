@@ -619,19 +619,30 @@ fn deep_nesting_fixture_exceeds_prost_default_limit_and_decodes_cleanly()
 }
 
 #[test]
-fn unknown_field_1000_on_real_fixture_decodes_cleanly() -> Result<(), Box<dyn Error>> {
+fn browseros_contract_on_real_fixture_decodes_beside_stock_content() -> Result<(), Box<dyn Error>> {
     let raw_bytes = fs::read(fixture_path("nested-cross-site-frames"))?;
     let baseline = decode_protobuf(&raw_bytes)?;
+    assert_eq!(
+        baseline.browseros, None,
+        "stock Chromium 158 sends no BrowserOS contract, so contract_version is absent"
+    );
 
     let mut extended = raw_bytes;
-    let mut ext_payload = Vec::new();
-    push_length_delimited_field(1, b"browseros-page-extension-v1", &mut ext_payload);
-    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, &ext_payload, &mut extended);
+    // BrowserOSPageContentData { contract_version: 1 }: field 1, varint 1.
+    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, &[0x08, 0x01], &mut extended);
 
-    let decoded = decode_protobuf(&extended)?;
+    let mut decoded = decode_protobuf(&extended)?;
+    assert_eq!(
+        decoded
+            .browseros
+            .take()
+            .and_then(|page| page.contract_version),
+        Some(1),
+        "a contract submessage appended to a real Chromium 158 reply must decode"
+    );
     assert_eq!(
         decoded, baseline,
-        "appending synthetic field 1000 extension submessage to real Chromium 158 fixture must decode identically"
+        "the contract submessage must leave every stock field unchanged"
     );
     Ok(())
 }
