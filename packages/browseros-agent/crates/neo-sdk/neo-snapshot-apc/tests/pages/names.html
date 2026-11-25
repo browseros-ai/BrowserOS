@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: names</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  .c { margin: 4px 0; }
+  .pseudo::before { content: "[before] "; }
+  .pseudo::after { content: " [after " attr(data-tail) "]"; }
+  .pseudo-block::after { content: "block-after"; display: block; }
+  .sized { display: inline-block; width: 160px; height: 20px; border: 1px solid #888; }
+</style>
+</head>
+<body>
+
+<!-- A "leak:" or "unused:" string must never become an accessible name. -->
+<p aria-label="leak: p aria-label">paragraph: p with aria-label, name prohibited</p>
+<div class="c"><span aria-label="leak: span aria-label">generic: span with aria-label, name prohibited</span></div>
+<div class="c"><code aria-label="leak: code aria-label">code: code with aria-label, name prohibited</code></div>
+<div class="c"><strong aria-label="leak: strong aria-label">strong: strong with aria-label, name prohibited</strong></div>
+<div class="c"><em aria-label="leak: em aria-label">emphasis: em with aria-label, name prohibited</em></div>
+<div class="c" aria-label="leak: div aria-label">generic: div with aria-label, name prohibited</div>
+
+<div class="c">
+  <span id="lb-a">labelledby: first id</span> <span id="lb-b">second id</span>
+  <button type="button" aria-labelledby="lb-a lb-b">content loses to labelledby with several ids</button>
+</div>
+<div class="c">
+  <button type="button" id="lb-self" aria-labelledby="lb-self lb-self-tail">labelledby: self reference</button>
+  <span id="lb-self-tail">plus a second id</span>
+</div>
+<div class="c">
+  <span id="lb-hidden" style="display:none">labelledby: display-none referent still counts</span>
+  <button type="button" aria-labelledby="lb-hidden">content loses to a hidden referent</button>
+</div>
+<div class="c">
+  <span id="lb-labelled" aria-label="labelledby: referent's own aria-label wins">referent content loses</span>
+  <button type="button" aria-labelledby="lb-labelled">content loses to a referent with aria-label</button>
+</div>
+<div class="c">
+  <span id="lb-chain" aria-labelledby="lb-chain-next">labelledby: referent content, its own labelledby not followed</span>
+  <span id="lb-chain-next">leak: second hop of a labelledby chain</span>
+  <button type="button" aria-labelledby="lb-chain">content loses to a referent with labelledby</button>
+</div>
+<div class="c">
+  <button type="button" aria-labelledby="no-such-id">labelledby: every id missing, falls to content</button>
+</div>
+<div class="c">
+  <span id="pw-label">labelledby: private box</span>
+  <label for="pw-box">textbox: password box inside a labelledby chain</label>
+  <input id="pw-box" type="password" data-typed>
+  <button type="button" aria-labelledby="pw-label pw-box">content loses to labelledby with a private box</button>
+</div>
+
+<div class="c">
+  <input type="checkbox" id="emb-check">
+  <label for="emb-check">embedded: send <input type="text" value="three" aria-label="textbox: embedded in a label, value three"> copies in
+    <select aria-label="combobox: embedded in a label"><option>red</option><option selected>blue</option></select> ink</label>
+</div>
+
+<div class="c">
+  <button type="button" aria-label="   ">aria-label blank: falls to content</button>
+  <label for="blank-in">aria-label blank: falls to label</label> <input id="blank-in" type="text" aria-label="   ">
+</div>
+
+<div class="c"><label for="n-for">native: label by for</label> <input id="n-for" type="text"></div>
+<div class="c"><label>native: wrapping label <input type="text"></label></div>
+<div class="c"><label for="n-two">native: first of two labels</label> <input id="n-two" type="text"> <label for="n-two">second of two labels</label></div>
+<div class="c">
+  <input type="button" value="native: input type=button by value">
+  <input type="button" title="native: input type=button without value falls to title">
+  <input type="submit" value="native: input type=submit by value">
+  <input type="submit">
+  <input type="reset" value="native: input type=reset by value">
+  <input type="reset">
+</div>
+<div class="c">
+  <label for="n-file">native: file input by label</label> <input id="n-file" type="file">
+  <input type="file">
+</div>
+<div class="c">
+  <label for="n-image">native: image input by label</label>
+  <input id="n-image" type="image" src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="unused: alt loses to label" width="24" height="16">
+  <input type="image" src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="native: image input by alt" title="image input title becomes the description, alt wins the name" width="24" height="16">
+  <input type="image" src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" title="native: image input by title" width="24" height="16">
+  <input type="image" src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" width="24" height="16">
+</div>
+<div class="c">
+  <input type="text" title="native: text input by title" placeholder="placeholder: loses the name to title">
+  <input type="text" placeholder="native: text input by placeholder">
+  <textarea placeholder="native: textarea by placeholder"></textarea>
+  <select title="native: select by title"><option>option: in a select named by title</option></select>
+  <input type="checkbox" title="native: checkbox by title">
+</div>
+<div class="c">
+  <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="native: img by alt" title="img title becomes the description, alt wins the name" width="24" height="16">
+  <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" title="native: img by title" width="24" height="16">
+  <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" usemap="#names-map" alt="native: img carrying an image map" width="48" height="16">
+  <map name="names-map">
+    <area shape="rect" coords="0,0,24,16" href="#area-alt" alt="native: area by alt" title="area title becomes the description, alt wins the name">
+    <area shape="rect" coords="24,0,48,16" href="#area-title" title="native: area by title">
+  </map>
+</div>
+<fieldset><legend>native: fieldset legend</legend><p>paragraph: inside a fieldset named by legend</p></fieldset>
+<figure><figcaption>native: figure figcaption</figcaption><p>paragraph: inside a figure named by figcaption</p></figure>
+<table><caption>native: table caption</caption><tr><td>cell: in a table named by caption</td></tr></table>
+
+<div class="c">
+  <button type="button">content: block<div>div</div>boundary</button>
+  <button type="button">content: inline<span>span</span>join</button>
+  <button type="button" class="pseudo" data-tail="attr">content: css pseudo</button>
+  <button type="button" class="pseudo-block">content: block pseudo</button>
+  <button type="button">content: icon <img src="data:image/gif;base64,R0lGODlhAQABAIAAAJmZmQAAACwAAAAAAQABAAACAkQBADs=" alt="nested img alt" width="12" height="12"></button>
+  <button type="button">content: visible<span style="display:none"> display-none</span><span aria-hidden="true"> aria-hidden</span><span style="visibility:hidden"> visibility-hidden</span> end</button>
+  <button type="button" style="text-transform:uppercase">content: text-transform uppercase source</button>
+  <button type="button">content: whitespace&nbsp;nbsp zero&#8203;width soft&shy;hyphen
+    newline&#9;tab</button>
+</div>
+<a href="#heading-link"><h3>content: heading inside link</h3></a>
+<div class="c" role="group">unused: group does not take its name from content</div>
+
+<div class="c">
+  <button type="button" title="title: empty button with only a title"></button>
+  <div role="button" class="sized" title="title: div role=button with only a title"></div>
+</div>
+
+<div class="c">
+  <button type="button" aria-describedby="d-one d-two">description: describedby two ids</button>
+  <span id="d-one">first description part</span> <span id="d-two">second description part</span>
+</div>
+<div class="c">
+  <button type="button" aria-describedby="d-hidden">description: describedby a hidden referent</button>
+  <span id="d-hidden" hidden>hidden description text still counts</span>
+</div>
+<div class="c">
+  <button type="button" aria-description="aria-description text">description: aria-description</button>
+  <button type="button" aria-describedby="d-one" aria-description="unused: aria-description loses to describedby">description: describedby beats aria-description</button>
+  <button type="button" title="title text becomes the description">description: title on a button named by content</button>
+</div>
+
+<div class="c">
+  <label for="err-on">error: aria-invalid=true with errormessage</label>
+  <input id="err-on" type="text" aria-invalid="true" aria-errormessage="err-on-msg">
+  <span id="err-on-msg">error message: shown because aria-invalid</span>
+</div>
+<div class="c">
+  <label for="err-off">error: errormessage without aria-invalid</label>
+  <input id="err-off" type="text" aria-errormessage="err-off-msg">
+  <span id="err-off-msg">error message: unused, field is valid</span>
+</div>
+<!-- Playwright also reads validity: an empty required field is invalid without aria-invalid. -->
+<div class="c">
+  <label for="err-required">error: empty required field with errormessage, no aria-invalid</label>
+  <input id="err-required" type="text" required aria-errormessage="err-required-msg">
+  <span id="err-required-msg">error message: shown because validity fails</span>
+</div>
+
+<script>
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>

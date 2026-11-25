@@ -1,0 +1,2178 @@
+{
+  "fixture": "names",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "95F17B11F6343D03CF9E80B913E920D7",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/names.html",
+      "elements": [
+        {
+          "backendNodeId": 22,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 24,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 265,
+          "role": "code",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 267,
+          "role": "strong",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 269,
+          "role": "emphasis",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 76,
+          "role": "button",
+          "name": "labelledby: first id second id",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 78,
+          "role": "button",
+          "name": "labelledby: self reference plus a second id",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 82,
+          "role": "button",
+          "name": "labelledby: display-none referent still counts",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 86,
+          "role": "button",
+          "name": "labelledby: referent's own aria-label wins",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 92,
+          "role": "button",
+          "name": "labelledby: referent content, its own labelledby not followed",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 94,
+          "role": "button",
+          "name": "labelledby: every id missing, falls to content",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "textbox: password box inside a labelledby chain",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 101,
+          "role": "button",
+          "name": "labelledby: private box •••••••••••••••••••••••••",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "checkbox",
+          "name": "embedded: send three copies in blue ink",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "textbox",
+          "name": "textbox: embedded in a label, value three",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "combobox",
+          "name": "combobox: embedded in a label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 307,
+          "role": "option",
+          "name": "red",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 309,
+          "role": "option",
+          "name": "blue",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 111,
+          "role": "button",
+          "name": "aria-label blank: falls to content",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "aria-label blank: falls to label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "textbox",
+          "name": "native: label by for",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "textbox",
+          "name": "native: wrapping label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "textbox",
+          "name": "native: first of two labels second of two labels",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 126,
+          "role": "button",
+          "name": "native: input type=button by value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 129,
+          "role": "button",
+          "name": "native: input type=button without value falls to title",
+          "description": "native: input type=button without value falls to title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 131,
+          "role": "button",
+          "name": "native: input type=submit by value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 133,
+          "role": "button",
+          "name": "Submit",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 136,
+          "role": "button",
+          "name": "native: input type=reset by value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 139,
+          "role": "button",
+          "name": "Reset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "button",
+          "name": "native: file input by label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 146,
+          "role": "button",
+          "name": "Choose File",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 20,
+          "role": "button",
+          "name": "native: image input by label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 153,
+          "role": "button",
+          "name": "native: image input by alt",
+          "description": "image input title becomes the description, alt wins the name",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 155,
+          "role": "button",
+          "name": "native: image input by title",
+          "description": "native: image input by title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 157,
+          "role": "button",
+          "name": "Submit",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 11,
+          "role": "textbox",
+          "name": "native: text input by title",
+          "description": "native: text input by title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "textbox",
+          "name": "native: text input by placeholder",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "textbox",
+          "name": "native: textarea by placeholder",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "combobox",
+          "name": "native: select by title",
+          "description": "native: select by title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 340,
+          "role": "option",
+          "name": "option: in a select named by title",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 172,
+          "role": "checkbox",
+          "name": "native: checkbox by title",
+          "description": "native: checkbox by title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 173,
+          "role": "img",
+          "name": "native: img by alt",
+          "description": "img title becomes the description, alt wins the name",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 175,
+          "role": "img",
+          "name": "native: img by title",
+          "description": "native: img by title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 177,
+          "role": "img",
+          "name": "native: img carrying an image map",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 348,
+          "role": "link",
+          "name": "",
+          "description": "area title becomes the description, alt wins the name",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 350,
+          "role": "link",
+          "name": "",
+          "description": "native: area by title",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 47,
+          "role": "group",
+          "name": "native: fieldset legend",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 49,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 50,
+          "role": "figure",
+          "name": "native: figure figcaption",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 52,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 53,
+          "role": "table",
+          "name": "native: table caption",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 54,
+          "role": "caption",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 356,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 357,
+          "role": "row",
+          "name": "cell: in a table named by caption",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 55,
+          "role": "cell",
+          "name": "cell: in a table named by caption",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 184,
+          "role": "button",
+          "name": "content: block div boundary",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 190,
+          "role": "button",
+          "name": "content: inlinespanjoin",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 194,
+          "role": "button",
+          "name": "[before] content: css pseudo [after attr]",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 197,
+          "role": "button",
+          "name": "content: block pseudo block-after",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 200,
+          "role": "button",
+          "name": "content: icon nested img alt",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 202,
+          "role": "img",
+          "name": "nested img alt",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 204,
+          "role": "button",
+          "name": "content: visible end",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 208,
+          "role": "button",
+          "name": "content: text-transform uppercase source",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 210,
+          "role": "button",
+          "name": "content: whitespace nbsp zerowidth softhyphen newline tab",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 374,
+          "role": "link",
+          "name": "content: heading inside link",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 57,
+          "role": "heading",
+          "name": "content: heading inside link",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 58,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 214,
+          "role": "button",
+          "name": "title: empty button with only a title",
+          "description": "title: empty button with only a title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 216,
+          "role": "button",
+          "name": "title: div role=button with only a title",
+          "description": "title: div role=button with only a title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 217,
+          "role": "button",
+          "name": "description: describedby two ids",
+          "description": "first description part second description part",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 223,
+          "role": "button",
+          "name": "description: describedby a hidden referent",
+          "description": "hidden description text still counts",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 225,
+          "role": "button",
+          "name": "description: aria-description",
+          "description": "aria-description text",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 228,
+          "role": "button",
+          "name": "description: describedby beats aria-description",
+          "description": "first description part",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 230,
+          "role": "button",
+          "name": "description: title on a button named by content",
+          "description": "title text becomes the description",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "textbox",
+          "name": "error: aria-invalid=true with errormessage",
+          "description": "",
+          "errorMessage": "error message: shown because aria-invalid",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "textbox",
+          "name": "error: errormessage without aria-invalid",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "textbox",
+          "name": "error: empty required field with errormessage, no aria-invalid",
+          "description": "",
+          "errorMessage": "error message: shown because validity fails",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 23,
+        "e10": 29,
+        "e100": 228,
+        "e101": 230,
+        "e102": 63,
+        "e103": 15,
+        "e104": 64,
+        "e105": 16,
+        "e106": 65,
+        "e107": 17,
+        "e11": 30,
+        "e12": 76,
+        "e13": 31,
+        "e14": 78,
+        "e15": 32,
+        "e16": 82,
+        "e17": 33,
+        "e18": 86,
+        "e19": 34,
+        "e2": 24,
+        "e20": 92,
+        "e21": 35,
+        "e22": 94,
+        "e23": 36,
+        "e24": 4,
+        "e25": 101,
+        "e26": 37,
+        "e27": 18,
+        "e28": 306,
+        "e29": 5,
+        "e3": 25,
+        "e30": 6,
+        "e31": 38,
+        "e32": 111,
+        "e33": 7,
+        "e34": 39,
+        "e35": 8,
+        "e36": 40,
+        "e37": 320,
+        "e38": 9,
+        "e39": 41,
+        "e4": 26,
+        "e40": 10,
+        "e41": 42,
+        "e42": 126,
+        "e43": 129,
+        "e44": 131,
+        "e45": 133,
+        "e46": 136,
+        "e47": 139,
+        "e48": 43,
+        "e49": 19,
+        "e5": 265,
+        "e50": 146,
+        "e51": 44,
+        "e52": 20,
+        "e53": 153,
+        "e54": 155,
+        "e55": 157,
+        "e56": 45,
+        "e57": 11,
+        "e58": 12,
+        "e59": 13,
+        "e6": 27,
+        "e60": 14,
+        "e61": 172,
+        "e62": 46,
+        "e63": 173,
+        "e64": 175,
+        "e65": 177,
+        "e66": 47,
+        "e67": 48,
+        "e68": 49,
+        "e69": 50,
+        "e7": 267,
+        "e70": 51,
+        "e71": 52,
+        "e72": 53,
+        "e73": 54,
+        "e74": 356,
+        "e75": 357,
+        "e76": 55,
+        "e77": 56,
+        "e78": 184,
+        "e79": 185,
+        "e8": 28,
+        "e80": 190,
+        "e81": 194,
+        "e82": 197,
+        "e83": 200,
+        "e84": 202,
+        "e85": 204,
+        "e86": 208,
+        "e87": 210,
+        "e88": 374,
+        "e89": 57,
+        "e9": 269,
+        "e90": 58,
+        "e91": 59,
+        "e92": 214,
+        "e93": 216,
+        "e94": 60,
+        "e95": 217,
+        "e96": 61,
+        "e97": 223,
+        "e98": 62,
+        "e99": 225
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "ref": "e2",
+                "role": "paragraph",
+                "text": "paragraph: p with aria-label, name prohibited"
+              },
+              {
+                "ref": "e3",
+                "role": "generic",
+                "text": "generic: span with aria-label, name prohibited"
+              },
+              {
+                "ref": "e5",
+                "role": "code",
+                "text": "code: code with aria-label, name prohibited"
+              },
+              {
+                "ref": "e7",
+                "role": "strong",
+                "text": "strong: strong with aria-label, name prohibited"
+              },
+              {
+                "ref": "e9",
+                "role": "emphasis",
+                "text": "emphasis: em with aria-label, name prohibited"
+              },
+              {
+                "name": "leak: div aria-label",
+                "ref": "e10",
+                "role": "generic",
+                "text": "generic: div with aria-label, name prohibited"
+              },
+              {
+                "children": [
+                  "labelledby: first id second id",
+                  {
+                    "name": "labelledby: first id second id",
+                    "ref": "e12",
+                    "role": "button",
+                    "text": "content loses to labelledby with several ids"
+                  }
+                ],
+                "ref": "e11",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "labelledby: self reference plus a second id",
+                    "ref": "e14",
+                    "role": "button",
+                    "text": "labelledby: self reference"
+                  },
+                  "plus a second id"
+                ],
+                "ref": "e13",
+                "role": "generic"
+              },
+              {
+                "name": "labelledby: display-none referent still counts",
+                "ref": "e16",
+                "role": "button",
+                "text": "content loses to a hidden referent"
+              },
+              {
+                "children": [
+                  "referent content loses",
+                  {
+                    "name": "labelledby: referent's own aria-label wins",
+                    "ref": "e18",
+                    "role": "button",
+                    "text": "content loses to a referent with aria-label"
+                  }
+                ],
+                "ref": "e17",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "labelledby: referent content, its own labelledby not followed leak: second hop of a labelledby chain",
+                  {
+                    "name": "labelledby: referent content, its own labelledby not followed",
+                    "ref": "e20",
+                    "role": "button",
+                    "text": "content loses to a referent with labelledby"
+                  }
+                ],
+                "ref": "e19",
+                "role": "generic"
+              },
+              {
+                "name": "labelledby: every id missing, falls to content",
+                "ref": "e22",
+                "role": "button"
+              },
+              {
+                "children": [
+                  "labelledby: private box textbox: password box inside a labelledby chain",
+                  {
+                    "name": "textbox: password box inside a labelledby chain",
+                    "ref": "e24",
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••"
+                  },
+                  {
+                    "name": "labelledby: private box •••••••••••••••••••••••••",
+                    "ref": "e25",
+                    "role": "button",
+                    "text": "content loses to labelledby with a private box"
+                  }
+                ],
+                "ref": "e23",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "embedded: send three copies in blue ink",
+                    "ref": "e27",
+                    "role": "checkbox"
+                  },
+                  {
+                    "children": [
+                      "embedded: send",
+                      {
+                        "name": "textbox: embedded in a label, value three",
+                        "ref": "e29",
+                        "role": "textbox",
+                        "text": "three"
+                      },
+                      "copies in",
+                      {
+                        "children": [
+                          {
+                            "name": "red",
+                            "role": "option"
+                          },
+                          {
+                            "name": "blue",
+                            "role": "option",
+                            "selected": true
+                          }
+                        ],
+                        "name": "combobox: embedded in a label",
+                        "ref": "e30",
+                        "role": "combobox"
+                      },
+                      "ink"
+                    ],
+                    "ref": "e28",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e26",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "aria-label blank: falls to content",
+                    "ref": "e32",
+                    "role": "button"
+                  },
+                  "aria-label blank: falls to label",
+                  {
+                    "name": "aria-label blank: falls to label",
+                    "ref": "e33",
+                    "role": "textbox"
+                  }
+                ],
+                "ref": "e31",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "native: label by for",
+                  {
+                    "name": "native: label by for",
+                    "ref": "e35",
+                    "role": "textbox"
+                  }
+                ],
+                "ref": "e34",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "native: wrapping label",
+                  {
+                    "name": "native: wrapping label",
+                    "ref": "e38",
+                    "role": "textbox"
+                  }
+                ],
+                "ref": "e37",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "native: first of two labels",
+                  {
+                    "name": "native: first of two labels second of two labels",
+                    "ref": "e40",
+                    "role": "textbox"
+                  },
+                  "second of two labels"
+                ],
+                "ref": "e39",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "native: input type=button by value",
+                    "ref": "e42",
+                    "role": "button"
+                  },
+                  {
+                    "name": "native: input type=button without value falls to title",
+                    "ref": "e43",
+                    "role": "button"
+                  },
+                  {
+                    "name": "native: input type=submit by value",
+                    "ref": "e44",
+                    "role": "button"
+                  },
+                  {
+                    "name": "Submit",
+                    "ref": "e45",
+                    "role": "button"
+                  },
+                  {
+                    "name": "native: input type=reset by value",
+                    "ref": "e46",
+                    "role": "button"
+                  },
+                  {
+                    "name": "Reset",
+                    "ref": "e47",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e41",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "native: file input by label",
+                  {
+                    "name": "native: file input by label",
+                    "ref": "e49",
+                    "role": "button"
+                  },
+                  {
+                    "name": "Choose File",
+                    "ref": "e50",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e48",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "native: image input by label",
+                  {
+                    "cursor": "pointer",
+                    "name": "native: image input by label",
+                    "ref": "e52",
+                    "role": "button"
+                  },
+                  {
+                    "cursor": "pointer",
+                    "name": "native: image input by alt",
+                    "ref": "e53",
+                    "role": "button"
+                  },
+                  {
+                    "cursor": "pointer",
+                    "name": "native: image input by title",
+                    "ref": "e54",
+                    "role": "button"
+                  },
+                  {
+                    "cursor": "pointer",
+                    "name": "Submit",
+                    "ref": "e55",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e51",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "native: text input by title",
+                    "placeholder": "placeholder: loses the name to title",
+                    "ref": "e57",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "native: text input by placeholder",
+                    "ref": "e58",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "native: textarea by placeholder",
+                    "ref": "e59",
+                    "role": "textbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "option: in a select named by title",
+                        "role": "option",
+                        "selected": true
+                      }
+                    ],
+                    "name": "native: select by title",
+                    "ref": "e60",
+                    "role": "combobox"
+                  },
+                  {
+                    "name": "native: checkbox by title",
+                    "ref": "e61",
+                    "role": "checkbox"
+                  }
+                ],
+                "ref": "e56",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "native: img by alt",
+                    "ref": "e63",
+                    "role": "img"
+                  },
+                  {
+                    "name": "native: img by title",
+                    "ref": "e64",
+                    "role": "img"
+                  },
+                  {
+                    "name": "native: img carrying an image map",
+                    "ref": "e65",
+                    "role": "img"
+                  }
+                ],
+                "ref": "e62",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e68",
+                    "role": "paragraph",
+                    "text": "paragraph: inside a fieldset named by legend"
+                  }
+                ],
+                "name": "native: fieldset legend",
+                "ref": "e66",
+                "role": "group"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e71",
+                    "role": "paragraph",
+                    "text": "paragraph: inside a figure named by figcaption"
+                  }
+                ],
+                "name": "native: figure figcaption",
+                "ref": "e69",
+                "role": "figure"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e73",
+                    "role": "caption",
+                    "text": "native: table caption"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "name": "cell: in a table named by caption",
+                            "ref": "e76",
+                            "role": "cell"
+                          }
+                        ],
+                        "ref": "e75",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e74",
+                    "role": "rowgroup"
+                  }
+                ],
+                "ref": "e72",
+                "role": "table"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "content: block",
+                      {
+                        "ref": "e79",
+                        "role": "generic",
+                        "text": "div"
+                      },
+                      "boundary"
+                    ],
+                    "name": "content: block div boundary",
+                    "ref": "e78",
+                    "role": "button"
+                  },
+                  {
+                    "name": "content: inlinespanjoin",
+                    "ref": "e80",
+                    "role": "button"
+                  },
+                  {
+                    "name": "[before] content: css pseudo [after attr]",
+                    "ref": "e81",
+                    "role": "button"
+                  },
+                  {
+                    "name": "content: block pseudo block-after",
+                    "ref": "e82",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      "content: icon",
+                      {
+                        "name": "nested img alt",
+                        "ref": "e84",
+                        "role": "img"
+                      }
+                    ],
+                    "ref": "e83",
+                    "role": "button"
+                  },
+                  {
+                    "name": "content: visible end",
+                    "ref": "e85",
+                    "role": "button",
+                    "text": "content: visible aria-hidden end"
+                  },
+                  {
+                    "name": "content: text-transform uppercase source",
+                    "ref": "e86",
+                    "role": "button"
+                  },
+                  {
+                    "name": "content: whitespace nbsp zerowidth softhyphen newline tab",
+                    "ref": "e87",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e77",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "level": 3,
+                    "name": "content: heading inside link",
+                    "ref": "e89",
+                    "role": "heading"
+                  }
+                ],
+                "cursor": "pointer",
+                "ref": "e88",
+                "role": "link",
+                "url": "#heading-link"
+              },
+              {
+                "ref": "e90",
+                "role": "group",
+                "text": "unused: group does not take its name from content"
+              },
+              {
+                "children": [
+                  {
+                    "name": "title: empty button with only a title",
+                    "ref": "e92",
+                    "role": "button"
+                  },
+                  {
+                    "name": "title: div role=button with only a title",
+                    "ref": "e93",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e91",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "description: describedby two ids",
+                    "ref": "e95",
+                    "role": "button"
+                  },
+                  "first description part second description part"
+                ],
+                "ref": "e94",
+                "role": "generic"
+              },
+              {
+                "name": "description: describedby a hidden referent",
+                "ref": "e97",
+                "role": "button"
+              },
+              {
+                "children": [
+                  {
+                    "name": "description: aria-description",
+                    "ref": "e99",
+                    "role": "button"
+                  },
+                  {
+                    "name": "description: describedby beats aria-description",
+                    "ref": "e100",
+                    "role": "button"
+                  },
+                  {
+                    "name": "description: title on a button named by content",
+                    "ref": "e101",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e98",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "error: aria-invalid=true with errormessage",
+                  {
+                    "invalid": true,
+                    "name": "error: aria-invalid=true with errormessage",
+                    "ref": "e103",
+                    "role": "textbox"
+                  },
+                  "error message: shown because aria-invalid"
+                ],
+                "ref": "e102",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "error: errormessage without aria-invalid",
+                  {
+                    "name": "error: errormessage without aria-invalid",
+                    "ref": "e105",
+                    "role": "textbox"
+                  },
+                  "error message: unused, field is valid"
+                ],
+                "ref": "e104",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "error: empty required field with errormessage, no aria-invalid",
+                  {
+                    "name": "error: empty required field with errormessage, no aria-invalid",
+                    "ref": "e107",
+                    "role": "textbox"
+                  },
+                  "error message: shown because validity fails"
+                ],
+                "ref": "e106",
+                "role": "generic"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "role": "paragraph",
+            "text": "paragraph: p with aria-label, name prohibited"
+          },
+          {
+            "role": "text",
+            "text": "generic: span with aria-label, name prohibited"
+          },
+          {
+            "role": "code",
+            "text": "code: code with aria-label, name prohibited"
+          },
+          {
+            "role": "strong",
+            "text": "strong: strong with aria-label, name prohibited"
+          },
+          {
+            "role": "emphasis",
+            "text": "emphasis: em with aria-label, name prohibited"
+          },
+          {
+            "role": "text",
+            "text": "generic: div with aria-label, name prohibited labelledby: first id second id"
+          },
+          {
+            "name": "labelledby: first id second id",
+            "role": "button",
+            "text": "content loses to labelledby with several ids"
+          },
+          {
+            "name": "labelledby: self reference plus a second id",
+            "role": "button",
+            "text": "labelledby: self reference"
+          },
+          {
+            "role": "text",
+            "text": "plus a second id"
+          },
+          {
+            "name": "labelledby: display-none referent still counts",
+            "role": "button",
+            "text": "content loses to a hidden referent"
+          },
+          {
+            "role": "text",
+            "text": "referent content loses"
+          },
+          {
+            "name": "labelledby: referent's own aria-label wins",
+            "role": "button",
+            "text": "content loses to a referent with aria-label"
+          },
+          {
+            "role": "text",
+            "text": "labelledby: referent content, its own labelledby not followed leak: second hop of a labelledby chain"
+          },
+          {
+            "name": "labelledby: referent content, its own labelledby not followed",
+            "role": "button",
+            "text": "content loses to a referent with labelledby"
+          },
+          {
+            "name": "labelledby: every id missing, falls to content",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "labelledby: private box textbox: password box inside a labelledby chain"
+          },
+          {
+            "name": "textbox: password box inside a labelledby chain",
+            "role": "textbox",
+            "text": "•••••••••••••••••••••••••"
+          },
+          {
+            "name": "labelledby: private box •••••••••••••••••••••••••",
+            "role": "button",
+            "text": "content loses to labelledby with a private box"
+          },
+          {
+            "name": "embedded: send three copies in blue ink",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "embedded: send"
+          },
+          {
+            "name": "textbox: embedded in a label, value three",
+            "role": "textbox",
+            "text": "three"
+          },
+          {
+            "role": "text",
+            "text": "copies in"
+          },
+          {
+            "children": [
+              {
+                "name": "red",
+                "role": "option"
+              },
+              {
+                "name": "blue",
+                "role": "option",
+                "selected": true
+              }
+            ],
+            "name": "combobox: embedded in a label",
+            "role": "combobox"
+          },
+          {
+            "role": "text",
+            "text": "ink"
+          },
+          {
+            "name": "aria-label blank: falls to content",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "aria-label blank: falls to label"
+          },
+          {
+            "name": "aria-label blank: falls to label",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "native: label by for"
+          },
+          {
+            "name": "native: label by for",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "native: wrapping label"
+          },
+          {
+            "name": "native: wrapping label",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "native: first of two labels"
+          },
+          {
+            "name": "native: first of two labels second of two labels",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "second of two labels"
+          },
+          {
+            "name": "native: input type=button by value",
+            "role": "button"
+          },
+          {
+            "name": "native: input type=button without value falls to title",
+            "role": "button"
+          },
+          {
+            "name": "native: input type=submit by value",
+            "role": "button"
+          },
+          {
+            "name": "Submit",
+            "role": "button"
+          },
+          {
+            "name": "native: input type=reset by value",
+            "role": "button"
+          },
+          {
+            "name": "Reset",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "native: file input by label"
+          },
+          {
+            "name": "native: file input by label",
+            "role": "button"
+          },
+          {
+            "name": "Choose File",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "native: image input by label"
+          },
+          {
+            "name": "native: image input by label",
+            "role": "button"
+          },
+          {
+            "name": "native: image input by alt",
+            "role": "button"
+          },
+          {
+            "name": "native: image input by title",
+            "role": "button"
+          },
+          {
+            "name": "Submit",
+            "role": "button"
+          },
+          {
+            "name": "native: text input by title",
+            "placeholder": "placeholder: loses the name to title",
+            "role": "textbox"
+          },
+          {
+            "name": "native: text input by placeholder",
+            "role": "textbox"
+          },
+          {
+            "name": "native: textarea by placeholder",
+            "role": "textbox"
+          },
+          {
+            "children": [
+              {
+                "name": "option: in a select named by title",
+                "role": "option",
+                "selected": true
+              }
+            ],
+            "name": "native: select by title",
+            "role": "combobox"
+          },
+          {
+            "name": "native: checkbox by title",
+            "role": "checkbox"
+          },
+          {
+            "name": "native: img by alt",
+            "role": "img"
+          },
+          {
+            "name": "native: img by title",
+            "role": "img"
+          },
+          {
+            "name": "native: img carrying an image map",
+            "role": "img"
+          },
+          {
+            "children": [
+              "native: fieldset legend",
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside a fieldset named by legend"
+              }
+            ],
+            "name": "native: fieldset legend",
+            "role": "group"
+          },
+          {
+            "children": [
+              "native: figure figcaption",
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside a figure named by figcaption"
+              }
+            ],
+            "name": "native: figure figcaption",
+            "role": "figure"
+          },
+          {
+            "children": [
+              {
+                "role": "caption",
+                "text": "native: table caption"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "cell: in a table named by caption",
+                        "role": "cell"
+                      }
+                    ],
+                    "name": "cell: in a table named by caption",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              }
+            ],
+            "name": "native: table caption",
+            "role": "table"
+          },
+          {
+            "name": "content: block div boundary",
+            "role": "button"
+          },
+          {
+            "name": "content: inlinespanjoin",
+            "role": "button"
+          },
+          {
+            "name": "[before] content: css pseudo [after attr]",
+            "role": "button"
+          },
+          {
+            "name": "content: block pseudo block-after",
+            "role": "button"
+          },
+          {
+            "children": [
+              "content: icon",
+              {
+                "name": "nested img alt",
+                "role": "img"
+              }
+            ],
+            "name": "content: icon nested img alt",
+            "role": "button"
+          },
+          {
+            "name": "content: visible end",
+            "role": "button"
+          },
+          {
+            "name": "content: text-transform uppercase source",
+            "role": "button"
+          },
+          {
+            "name": "content: whitespace nbsp zerowidth softhyphen newline tab",
+            "role": "button"
+          },
+          {
+            "children": [
+              {
+                "level": 3,
+                "name": "content: heading inside link",
+                "role": "heading"
+              }
+            ],
+            "name": "content: heading inside link",
+            "role": "link",
+            "url": "#heading-link"
+          },
+          {
+            "role": "group",
+            "text": "unused: group does not take its name from content"
+          },
+          {
+            "name": "title: empty button with only a title",
+            "role": "button"
+          },
+          {
+            "name": "title: div role=button with only a title",
+            "role": "button"
+          },
+          {
+            "name": "description: describedby two ids",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "first description part second description part"
+          },
+          {
+            "name": "description: describedby a hidden referent",
+            "role": "button"
+          },
+          {
+            "name": "description: aria-description",
+            "role": "button"
+          },
+          {
+            "name": "description: describedby beats aria-description",
+            "role": "button"
+          },
+          {
+            "name": "description: title on a button named by content",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "error: aria-invalid=true with errormessage"
+          },
+          {
+            "invalid": true,
+            "name": "error: aria-invalid=true with errormessage",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "error message: shown because aria-invalid error: errormessage without aria-invalid"
+          },
+          {
+            "name": "error: errormessage without aria-invalid",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "error message: unused, field is valid error: empty required field with errormessage, no aria-invalid"
+          },
+          {
+            "name": "error: empty required field with errormessage, no aria-invalid",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "error message: shown because validity fails"
+          }
+        ]
+      }
+    }
+  ]
+}

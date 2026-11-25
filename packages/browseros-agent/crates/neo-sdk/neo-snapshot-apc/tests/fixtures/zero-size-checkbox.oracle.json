@@ -1,0 +1,141 @@
+{
+  "fixture": "zero-size-checkbox",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "B45229C9288A21D4E27477F80B6B4AEC",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/zero-size-checkbox/index.html",
+      "elements": [
+        {
+          "backendNodeId": 5,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "heading",
+          "name": "Zero-Size Checkbox Fixture",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 28,
+          "role": "checkbox",
+          "name": "Accept terms",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 36,
+          "role": "checkbox",
+          "name": "Subscribe newsletter",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 6,
+        "e2": 7,
+        "e3": 8,
+        "e4": 9,
+        "e5": 34
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "Zero-Size Checkbox Fixture",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "name": "Accept terms",
+                    "role": "checkbox"
+                  },
+                  "Accept terms"
+                ],
+                "ref": "e3",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "checked": true,
+                    "name": "Subscribe newsletter",
+                    "role": "checkbox"
+                  },
+                  "Subscribe newsletter"
+                ],
+                "ref": "e5",
+                "role": "generic"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "Zero-Size Checkbox Fixture",
+            "role": "heading"
+          },
+          {
+            "name": "Accept terms",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Accept terms"
+          },
+          {
+            "checked": true,
+            "name": "Subscribe newsletter",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Subscribe newsletter"
+          }
+        ]
+      }
+    }
+  ]
+}

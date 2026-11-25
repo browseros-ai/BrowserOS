@@ -1,0 +1,4582 @@
+{
+  "fixture": "roles",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "2F0B6558418A944048C78EB503347246",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/roles.html",
+      "elements": [
+        {
+          "backendNodeId": 29,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 446,
+          "role": "link",
+          "name": "link: a with href",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 181,
+          "role": "img",
+          "name": "img: image with usemap",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 451,
+          "role": "link",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 32,
+          "role": "banner",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 33,
+          "role": "contentinfo",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 34,
+          "role": "article",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 35,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 38,
+          "role": "complementary",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 39,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 42,
+          "role": "main",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 43,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 46,
+          "role": "navigation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 47,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 51,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 54,
+          "role": "main",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 55,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 58,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "form",
+          "name": "form: aria-label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 59,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "form",
+          "name": "form: aria-labelledby",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 60,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 61,
+          "role": "region",
+          "name": "region: section with aria-label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 62,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 63,
+          "role": "region",
+          "name": "region: section with aria-labelledby",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 64,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 65,
+          "role": "region",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 66,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 67,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 68,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 212,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 69,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 214,
+          "role": "img",
+          "name": "img: alt empty with title",
+          "description": "img: alt empty with title",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 70,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 217,
+          "role": "img",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 71,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 219,
+          "role": "img",
+          "name": "img: alt empty with aria-label",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 72,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 221,
+          "role": "img",
+          "name": "img: alt text",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 73,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 224,
+          "role": "img",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "textbox: input type=text",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "searchbox",
+          "name": "searchbox: input type=search",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "textbox",
+          "name": "textbox: input type=email",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "textbox",
+          "name": "textbox: input type=tel",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 11,
+          "role": "textbox",
+          "name": "textbox: input type=url",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "spinbutton",
+          "name": "spinbutton: input type=number",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 20,
+          "role": "slider",
+          "name": "slider: input type=range",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 21,
+          "role": "checkbox",
+          "name": "checkbox: input type=checkbox",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "radio",
+          "name": "radio: input type=radio",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 256,
+          "role": "button",
+          "name": "button: input type=button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 258,
+          "role": "button",
+          "name": "button: input type=submit",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 260,
+          "role": "button",
+          "name": "button: input type=reset",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 262,
+          "role": "button",
+          "name": "button: input type=image",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 23,
+          "role": "button",
+          "name": "button: input type=file",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "textbox",
+          "name": "textbox: input type=password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "textbox",
+          "name": "textbox: input type=date",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 24,
+          "role": "textbox",
+          "name": "textbox: input type=color",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "combobox",
+          "name": "combobox: input with list pointing at a datalist",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 521,
+          "role": "listbox",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 522,
+          "role": "option",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 523,
+          "role": "option",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "textbox",
+          "name": "textbox: input with list pointing at a non-datalist",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "combobox",
+          "name": "combobox: select single",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 531,
+          "role": "option",
+          "name": "option: single, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 533,
+          "role": "option",
+          "name": "option: single, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 25,
+          "role": "listbox",
+          "name": "listbox: select multiple",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 305,
+          "role": "option",
+          "name": "option: multiple, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 306,
+          "role": "option",
+          "name": "option: multiple, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "listbox",
+          "name": "listbox: select size=3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 311,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 313,
+          "role": "option",
+          "name": "option: sized, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 314,
+          "role": "option",
+          "name": "option: sized, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 543,
+          "role": "option",
+          "name": "option: sized, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 98,
+          "role": "table",
+          "name": "caption: plain table",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 99,
+          "role": "caption",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 549,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 550,
+          "role": "row",
+          "name": "columnheader: th no scope, header row first columnheader: th no scope, between header cells columnheader: th scope=col",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 100,
+          "role": "columnheader",
+          "name": "columnheader: th no scope, header row first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 101,
+          "role": "columnheader",
+          "name": "columnheader: th no scope, between header cells",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 102,
+          "role": "columnheader",
+          "name": "columnheader: th scope=col",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 552,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 554,
+          "role": "row",
+          "name": "rowheader: th no scope, body row first column cell: row 1, second cell: row 1, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 103,
+          "role": "rowheader",
+          "name": "rowheader: th no scope, body row first column",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 104,
+          "role": "cell",
+          "name": "cell: row 1, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 105,
+          "role": "cell",
+          "name": "cell: row 1, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 556,
+          "role": "row",
+          "name": "rowheader: th scope=row cell: row 2, second cell: row 2, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 106,
+          "role": "rowheader",
+          "name": "rowheader: th scope=row",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 107,
+          "role": "cell",
+          "name": "cell: row 2, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 108,
+          "role": "cell",
+          "name": "cell: row 2, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 559,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 560,
+          "role": "row",
+          "name": "cell: tfoot, first cell: tfoot, second cell: tfoot, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 109,
+          "role": "cell",
+          "name": "cell: tfoot, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 110,
+          "role": "cell",
+          "name": "cell: tfoot, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 111,
+          "role": "cell",
+          "name": "cell: tfoot, third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 112,
+          "role": "table",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 563,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 564,
+          "role": "row",
+          "name": "generic: lone th in a one-row table",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 114,
+          "role": "grid",
+          "name": "grid: table role=grid",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 567,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 568,
+          "role": "row",
+          "name": "columnheader: in grid, first columnheader: in grid, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 115,
+          "role": "columnheader",
+          "name": "columnheader: in grid, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 116,
+          "role": "columnheader",
+          "name": "columnheader: in grid, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 570,
+          "role": "row",
+          "name": "gridcell: td in grid, first gridcell: td in grid, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 117,
+          "role": "gridcell",
+          "name": "gridcell: td in grid, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 118,
+          "role": "gridcell",
+          "name": "gridcell: td in grid, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 119,
+          "role": "treegrid",
+          "name": "treegrid: table role=treegrid",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 574,
+          "role": "rowgroup",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 575,
+          "role": "row",
+          "name": "gridcell: td in treegrid, first gridcell: td in treegrid, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "level": 0,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 120,
+          "role": "gridcell",
+          "name": "gridcell: td in treegrid, first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 121,
+          "role": "gridcell",
+          "name": "gridcell: td in treegrid, second",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 122,
+          "role": "heading",
+          "name": "heading: h1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 123,
+          "role": "heading",
+          "name": "heading: h2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 124,
+          "role": "heading",
+          "name": "heading: h3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 125,
+          "role": "heading",
+          "name": "heading: h4",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 4,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 126,
+          "role": "heading",
+          "name": "heading: h5",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 5,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 127,
+          "role": "heading",
+          "name": "heading: h6",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 6,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 128,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 584,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 131,
+          "role": "dialog",
+          "name": "dialog: non-modal open dialog",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 132,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 133,
+          "role": "group",
+          "name": "group: fieldset legend",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 135,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 136,
+          "role": "figure",
+          "name": "figure: figcaption",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 138,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 139,
+          "role": "separator",
+          "name": "separator: hr",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 140,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 141,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 142,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 143,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 144,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 145,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 361,
+          "role": "meter",
+          "name": "meter: meter",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 364,
+          "role": "progressbar",
+          "name": "progressbar: progress",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 26,
+          "role": "status",
+          "name": "status: output",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "textbox",
+          "name": "textbox: textarea",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 371,
+          "role": "button",
+          "name": "button: button element",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 153,
+          "role": "term",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 154,
+          "role": "definition",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 155,
+          "role": "blockquote",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 156,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 612,
+          "role": "code",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 613,
+          "role": "emphasis",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 614,
+          "role": "strong",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 615,
+          "role": "deletion",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 616,
+          "role": "insertion",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 617,
+          "role": "subscript",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 619,
+          "role": "superscript",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 620,
+          "role": "time",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 392,
+          "role": "mark",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 621,
+          "role": "term",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 159,
+          "role": "search",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 398,
+          "role": "img",
+          "name": "img: inline svg with title",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 401,
+          "role": "math",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 161,
+          "role": "button",
+          "name": "button: div role=button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 162,
+          "role": "button",
+          "name": "button: role=\"foo button\", first valid token wins",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 164,
+          "role": "heading",
+          "name": "heading: h4 role=none with tabindex=0, focusable keeps implicit role",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 4,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 408,
+          "role": "button",
+          "name": "button: button role=presentation, natively focusable keeps implicit role",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 165,
+          "role": "heading",
+          "name": "heading: h5 role=presentation with aria-label, global attribute keeps implicit role",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 5,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 166,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 167,
+          "role": "none",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 168,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 169,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 170,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 642,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 643,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 171,
+          "role": "presentation",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 172,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 173,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 647,
+          "role": "button",
+          "name": "button: button display:contents",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 649,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 175,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 651,
+          "role": "list",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 176,
+          "role": "listitem",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 0,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 653,
+          "role": "link",
+          "name": "link: a href display:contents",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 654,
+          "role": "button",
+          "name": "button: div role=button display:contents",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 656,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 657,
+          "role": "button",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 30,
+        "e10": 37,
+        "e100": 306,
+        "e101": 97,
+        "e102": 18,
+        "e103": 311,
+        "e104": 313,
+        "e105": 314,
+        "e106": 543,
+        "e107": 98,
+        "e108": 99,
+        "e109": 549,
+        "e11": 38,
+        "e110": 550,
+        "e111": 100,
+        "e112": 101,
+        "e113": 102,
+        "e114": 552,
+        "e115": 554,
+        "e116": 103,
+        "e117": 104,
+        "e118": 105,
+        "e119": 556,
+        "e12": 39,
+        "e120": 106,
+        "e121": 107,
+        "e122": 108,
+        "e123": 559,
+        "e124": 560,
+        "e125": 109,
+        "e126": 110,
+        "e127": 111,
+        "e128": 112,
+        "e129": 563,
+        "e13": 40,
+        "e130": 564,
+        "e131": 113,
+        "e132": 114,
+        "e133": 567,
+        "e134": 568,
+        "e135": 115,
+        "e136": 116,
+        "e137": 570,
+        "e138": 117,
+        "e139": 118,
+        "e14": 41,
+        "e140": 119,
+        "e141": 574,
+        "e142": 575,
+        "e143": 120,
+        "e144": 121,
+        "e145": 122,
+        "e146": 123,
+        "e147": 124,
+        "e148": 125,
+        "e149": 126,
+        "e15": 42,
+        "e150": 127,
+        "e151": 128,
+        "e152": 129,
+        "e153": 130,
+        "e154": 131,
+        "e155": 132,
+        "e156": 133,
+        "e157": 134,
+        "e158": 135,
+        "e159": 136,
+        "e16": 43,
+        "e160": 137,
+        "e161": 138,
+        "e162": 139,
+        "e163": 140,
+        "e164": 141,
+        "e165": 142,
+        "e166": 143,
+        "e167": 144,
+        "e168": 145,
+        "e169": 146,
+        "e17": 44,
+        "e170": 147,
+        "e171": 361,
+        "e172": 148,
+        "e173": 364,
+        "e174": 149,
+        "e175": 26,
+        "e176": 150,
+        "e177": 19,
+        "e178": 151,
+        "e179": 371,
+        "e18": 45,
+        "e180": 152,
+        "e181": 153,
+        "e182": 154,
+        "e183": 155,
+        "e184": 156,
+        "e185": 157,
+        "e186": 612,
+        "e187": 613,
+        "e188": 614,
+        "e189": 615,
+        "e19": 46,
+        "e190": 616,
+        "e191": 617,
+        "e192": 619,
+        "e193": 620,
+        "e194": 392,
+        "e195": 621,
+        "e196": 158,
+        "e197": 159,
+        "e198": 398,
+        "e199": 399,
+        "e2": 31,
+        "e20": 47,
+        "e200": 401,
+        "e201": 402,
+        "e202": 160,
+        "e203": 161,
+        "e204": 162,
+        "e205": 163,
+        "e206": 164,
+        "e207": 408,
+        "e208": 165,
+        "e209": 172,
+        "e21": 48,
+        "e210": 173,
+        "e211": 174,
+        "e212": 647,
+        "e213": 649,
+        "e214": 175,
+        "e215": 651,
+        "e216": 176,
+        "e217": 653,
+        "e218": 654,
+        "e22": 49,
+        "e23": 50,
+        "e24": 51,
+        "e25": 52,
+        "e26": 53,
+        "e27": 54,
+        "e28": 55,
+        "e29": 56,
+        "e3": 446,
+        "e30": 57,
+        "e31": 4,
+        "e32": 58,
+        "e33": 5,
+        "e34": 59,
+        "e35": 6,
+        "e36": 60,
+        "e37": 61,
+        "e38": 62,
+        "e39": 63,
+        "e4": 181,
+        "e40": 64,
+        "e41": 65,
+        "e42": 66,
+        "e43": 67,
+        "e44": 68,
+        "e45": 69,
+        "e46": 214,
+        "e47": 70,
+        "e48": 217,
+        "e49": 71,
+        "e5": 32,
+        "e50": 219,
+        "e51": 72,
+        "e52": 221,
+        "e53": 73,
+        "e54": 224,
+        "e55": 74,
+        "e56": 75,
+        "e57": 7,
+        "e58": 76,
+        "e59": 8,
+        "e6": 33,
+        "e60": 77,
+        "e61": 9,
+        "e62": 78,
+        "e63": 10,
+        "e64": 79,
+        "e65": 11,
+        "e66": 80,
+        "e67": 12,
+        "e68": 81,
+        "e69": 20,
+        "e7": 34,
+        "e70": 82,
+        "e71": 21,
+        "e72": 83,
+        "e73": 22,
+        "e74": 84,
+        "e75": 256,
+        "e76": 85,
+        "e77": 258,
+        "e78": 86,
+        "e79": 260,
+        "e8": 35,
+        "e80": 87,
+        "e81": 262,
+        "e82": 88,
+        "e83": 23,
+        "e84": 89,
+        "e85": 13,
+        "e86": 90,
+        "e87": 14,
+        "e88": 91,
+        "e89": 24,
+        "e9": 36,
+        "e90": 92,
+        "e91": 15,
+        "e92": 93,
+        "e93": 16,
+        "e94": 94,
+        "e95": 95,
+        "e96": 17,
+        "e97": 96,
+        "e98": 25,
+        "e99": 305
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "children": [
+                  {
+                    "cursor": "pointer",
+                    "name": "link: a with href",
+                    "ref": "e3",
+                    "role": "link",
+                    "url": "#a-href"
+                  },
+                  "generic: a without href",
+                  {
+                    "name": "img: image with usemap",
+                    "ref": "e4",
+                    "role": "img"
+                  }
+                ],
+                "ref": "e2",
+                "role": "generic"
+              },
+              {
+                "ref": "e5",
+                "role": "banner",
+                "text": "banner: header at top level"
+              },
+              {
+                "ref": "e6",
+                "role": "contentinfo",
+                "text": "contentinfo: footer at top level"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e8",
+                    "role": "paragraph",
+                    "text": "paragraph: inside article"
+                  },
+                  {
+                    "ref": "e9",
+                    "role": "generic",
+                    "text": "generic: header inside article"
+                  },
+                  {
+                    "ref": "e10",
+                    "role": "generic",
+                    "text": "generic: footer inside article"
+                  }
+                ],
+                "ref": "e7",
+                "role": "article"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e12",
+                    "role": "paragraph",
+                    "text": "paragraph: inside aside"
+                  },
+                  {
+                    "ref": "e13",
+                    "role": "generic",
+                    "text": "generic: header inside aside"
+                  },
+                  {
+                    "ref": "e14",
+                    "role": "generic",
+                    "text": "generic: footer inside aside"
+                  }
+                ],
+                "ref": "e11",
+                "role": "complementary"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e16",
+                    "role": "paragraph",
+                    "text": "paragraph: inside main"
+                  },
+                  {
+                    "ref": "e17",
+                    "role": "generic",
+                    "text": "generic: header inside main"
+                  },
+                  {
+                    "ref": "e18",
+                    "role": "generic",
+                    "text": "generic: footer inside main"
+                  }
+                ],
+                "ref": "e15",
+                "role": "main"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e20",
+                    "role": "paragraph",
+                    "text": "paragraph: inside nav"
+                  },
+                  {
+                    "ref": "e21",
+                    "role": "generic",
+                    "text": "generic: header inside nav"
+                  },
+                  {
+                    "ref": "e22",
+                    "role": "generic",
+                    "text": "generic: footer inside nav"
+                  }
+                ],
+                "ref": "e19",
+                "role": "navigation"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e24",
+                    "role": "paragraph",
+                    "text": "paragraph: inside section without name (no role)"
+                  },
+                  {
+                    "ref": "e25",
+                    "role": "generic",
+                    "text": "generic: header inside section"
+                  },
+                  {
+                    "ref": "e26",
+                    "role": "generic",
+                    "text": "generic: footer inside section"
+                  }
+                ],
+                "ref": "e23",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e28",
+                    "role": "paragraph",
+                    "text": "paragraph: inside div role=main"
+                  },
+                  {
+                    "ref": "e29",
+                    "role": "generic",
+                    "text": "generic: header inside role=main"
+                  },
+                  {
+                    "ref": "e30",
+                    "role": "generic",
+                    "text": "generic: footer inside role=main"
+                  }
+                ],
+                "ref": "e27",
+                "role": "main"
+              },
+              {
+                "ref": "e32",
+                "role": "paragraph",
+                "text": "paragraph: inside form without name (no role)"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e34",
+                    "role": "paragraph",
+                    "text": "paragraph: inside form with aria-label"
+                  }
+                ],
+                "name": "form: aria-label",
+                "ref": "e33",
+                "role": "form"
+              },
+              "form: aria-labelledby",
+              {
+                "children": [
+                  {
+                    "ref": "e36",
+                    "role": "paragraph",
+                    "text": "paragraph: inside form with aria-labelledby"
+                  }
+                ],
+                "name": "form: aria-labelledby",
+                "ref": "e35",
+                "role": "form"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e38",
+                    "role": "paragraph",
+                    "text": "paragraph: inside section with aria-label"
+                  }
+                ],
+                "name": "region: section with aria-label",
+                "ref": "e37",
+                "role": "region"
+              },
+              "region: section with aria-labelledby",
+              {
+                "children": [
+                  {
+                    "ref": "e40",
+                    "role": "paragraph",
+                    "text": "paragraph: inside section with aria-labelledby"
+                  }
+                ],
+                "name": "region: section with aria-labelledby",
+                "ref": "e39",
+                "role": "region"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e42",
+                    "role": "paragraph",
+                    "text": "paragraph: inside section with empty aria-label"
+                  }
+                ],
+                "ref": "e41",
+                "role": "region"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e44",
+                    "role": "listitem",
+                    "text": "presentation: img alt=\"\" without title"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "img: alt empty with title",
+                        "ref": "e46",
+                        "role": "img"
+                      }
+                    ],
+                    "ref": "e45",
+                    "role": "listitem"
+                  },
+                  {
+                    "ref": "e47",
+                    "role": "listitem",
+                    "text": "img: alt empty with tabindex=0"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "img: alt empty with aria-label",
+                        "ref": "e50",
+                        "role": "img"
+                      }
+                    ],
+                    "ref": "e49",
+                    "role": "listitem"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "img: alt text",
+                        "ref": "e52",
+                        "role": "img"
+                      }
+                    ],
+                    "ref": "e51",
+                    "role": "listitem"
+                  },
+                  {
+                    "ref": "e53",
+                    "role": "listitem",
+                    "text": "img: no alt attribute"
+                  }
+                ],
+                "ref": "e43",
+                "role": "list"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "textbox: input type=text",
+                      {
+                        "name": "textbox: input type=text",
+                        "ref": "e57",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e56",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "searchbox: input type=search",
+                      {
+                        "name": "searchbox: input type=search",
+                        "ref": "e59",
+                        "role": "searchbox"
+                      }
+                    ],
+                    "ref": "e58",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input type=email",
+                      {
+                        "name": "textbox: input type=email",
+                        "ref": "e61",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e60",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input type=tel",
+                      {
+                        "name": "textbox: input type=tel",
+                        "ref": "e63",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e62",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input type=url",
+                      {
+                        "name": "textbox: input type=url",
+                        "ref": "e65",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e64",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "spinbutton: input type=number",
+                      {
+                        "name": "spinbutton: input type=number",
+                        "ref": "e67",
+                        "role": "spinbutton"
+                      }
+                    ],
+                    "ref": "e66",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "slider: input type=range",
+                      {
+                        "name": "slider: input type=range",
+                        "ref": "e69",
+                        "role": "slider",
+                        "text": "50"
+                      }
+                    ],
+                    "ref": "e68",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "checkbox: input type=checkbox",
+                      {
+                        "name": "checkbox: input type=checkbox",
+                        "ref": "e71",
+                        "role": "checkbox"
+                      }
+                    ],
+                    "ref": "e70",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "radio: input type=radio",
+                      {
+                        "name": "radio: input type=radio",
+                        "ref": "e73",
+                        "role": "radio"
+                      }
+                    ],
+                    "ref": "e72",
+                    "role": "generic"
+                  },
+                  {
+                    "name": "button: input type=button",
+                    "ref": "e75",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: input type=submit",
+                    "ref": "e77",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: input type=reset",
+                    "ref": "e79",
+                    "role": "button"
+                  },
+                  {
+                    "cursor": "pointer",
+                    "name": "button: input type=image",
+                    "ref": "e81",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      "button: input type=file",
+                      {
+                        "name": "button: input type=file",
+                        "ref": "e83",
+                        "role": "button"
+                      }
+                    ],
+                    "ref": "e82",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input type=password",
+                      {
+                        "name": "textbox: input type=password",
+                        "ref": "e85",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e84",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input type=date",
+                      {
+                        "name": "textbox: input type=date",
+                        "ref": "e87",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e86",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input type=color",
+                      {
+                        "name": "textbox: input type=color",
+                        "ref": "e89",
+                        "role": "textbox",
+                        "text": "#000000"
+                      }
+                    ],
+                    "ref": "e88",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "combobox: input with list pointing at a datalist",
+                      {
+                        "name": "combobox: input with list pointing at a datalist",
+                        "ref": "e91",
+                        "role": "combobox"
+                      }
+                    ],
+                    "ref": "e90",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: input with list pointing at a non-datalist",
+                      {
+                        "name": "textbox: input with list pointing at a non-datalist",
+                        "ref": "e93",
+                        "role": "textbox"
+                      },
+                      "generic: list target that is not a datalist"
+                    ],
+                    "ref": "e92",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e55",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "combobox: select single",
+                      {
+                        "children": [
+                          {
+                            "name": "option: single, first",
+                            "role": "option",
+                            "selected": true
+                          },
+                          {
+                            "name": "option: single, second",
+                            "role": "option"
+                          }
+                        ],
+                        "name": "combobox: select single",
+                        "ref": "e96",
+                        "role": "combobox"
+                      }
+                    ],
+                    "ref": "e95",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "listbox: select multiple",
+                      {
+                        "children": [
+                          {
+                            "name": "option: multiple, first",
+                            "ref": "e99",
+                            "role": "option"
+                          },
+                          {
+                            "name": "option: multiple, second",
+                            "ref": "e100",
+                            "role": "option"
+                          }
+                        ],
+                        "name": "listbox: select multiple",
+                        "ref": "e98",
+                        "role": "listbox"
+                      }
+                    ],
+                    "ref": "e97",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "listbox: select size=3",
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "name": "option: sized, first",
+                                "ref": "e104",
+                                "role": "option"
+                              },
+                              {
+                                "name": "option: sized, second",
+                                "ref": "e105",
+                                "role": "option"
+                              }
+                            ],
+                            "ref": "e103",
+                            "role": "group"
+                          },
+                          {
+                            "name": "option: sized, third",
+                            "ref": "e106",
+                            "role": "option"
+                          }
+                        ],
+                        "name": "listbox: select size=3",
+                        "ref": "e102",
+                        "role": "listbox"
+                      }
+                    ],
+                    "ref": "e101",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e94",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e108",
+                    "role": "caption",
+                    "text": "caption: plain table"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "name": "columnheader: th no scope, header row first",
+                            "ref": "e111",
+                            "role": "columnheader"
+                          },
+                          {
+                            "name": "columnheader: th no scope, between header cells",
+                            "ref": "e112",
+                            "role": "columnheader"
+                          },
+                          {
+                            "name": "columnheader: th scope=col",
+                            "ref": "e113",
+                            "role": "columnheader"
+                          }
+                        ],
+                        "ref": "e110",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e109",
+                    "role": "rowgroup"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "name": "rowheader: th no scope, body row first column",
+                            "ref": "e116",
+                            "role": "rowheader"
+                          },
+                          {
+                            "name": "cell: row 1, second",
+                            "ref": "e117",
+                            "role": "cell"
+                          },
+                          {
+                            "name": "cell: row 1, third",
+                            "ref": "e118",
+                            "role": "cell"
+                          }
+                        ],
+                        "ref": "e115",
+                        "role": "row"
+                      },
+                      {
+                        "children": [
+                          {
+                            "name": "rowheader: th scope=row",
+                            "ref": "e120",
+                            "role": "rowheader"
+                          },
+                          {
+                            "name": "cell: row 2, second",
+                            "ref": "e121",
+                            "role": "cell"
+                          },
+                          {
+                            "name": "cell: row 2, third",
+                            "ref": "e122",
+                            "role": "cell"
+                          }
+                        ],
+                        "ref": "e119",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e114",
+                    "role": "rowgroup"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "name": "cell: tfoot, first",
+                            "ref": "e125",
+                            "role": "cell"
+                          },
+                          {
+                            "name": "cell: tfoot, second",
+                            "ref": "e126",
+                            "role": "cell"
+                          },
+                          {
+                            "name": "cell: tfoot, third",
+                            "ref": "e127",
+                            "role": "cell"
+                          }
+                        ],
+                        "ref": "e124",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e123",
+                    "role": "rowgroup"
+                  }
+                ],
+                "ref": "e107",
+                "role": "table"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "generic: lone th in a one-row table",
+                        "ref": "e130",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e129",
+                    "role": "rowgroup"
+                  }
+                ],
+                "ref": "e128",
+                "role": "table"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "name": "columnheader: in grid, first",
+                            "ref": "e135",
+                            "role": "columnheader"
+                          },
+                          {
+                            "name": "columnheader: in grid, second",
+                            "ref": "e136",
+                            "role": "columnheader"
+                          }
+                        ],
+                        "ref": "e134",
+                        "role": "row"
+                      },
+                      {
+                        "children": [
+                          {
+                            "name": "gridcell: td in grid, first",
+                            "ref": "e138",
+                            "role": "gridcell"
+                          },
+                          {
+                            "name": "gridcell: td in grid, second",
+                            "ref": "e139",
+                            "role": "gridcell"
+                          }
+                        ],
+                        "ref": "e137",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e133",
+                    "role": "rowgroup"
+                  }
+                ],
+                "name": "grid: table role=grid",
+                "ref": "e132",
+                "role": "grid"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "name": "gridcell: td in treegrid, first",
+                            "ref": "e143",
+                            "role": "gridcell"
+                          },
+                          {
+                            "name": "gridcell: td in treegrid, second",
+                            "ref": "e144",
+                            "role": "gridcell"
+                          }
+                        ],
+                        "ref": "e142",
+                        "role": "row"
+                      }
+                    ],
+                    "ref": "e141",
+                    "role": "rowgroup"
+                  }
+                ],
+                "name": "treegrid: table role=treegrid",
+                "ref": "e140",
+                "role": "treegrid"
+              },
+              {
+                "level": 1,
+                "name": "heading: h1",
+                "ref": "e145",
+                "role": "heading"
+              },
+              {
+                "level": 2,
+                "name": "heading: h2",
+                "ref": "e146",
+                "role": "heading"
+              },
+              {
+                "level": 3,
+                "name": "heading: h3",
+                "ref": "e147",
+                "role": "heading"
+              },
+              {
+                "level": 4,
+                "name": "heading: h4",
+                "ref": "e148",
+                "role": "heading"
+              },
+              {
+                "level": 5,
+                "name": "heading: h5",
+                "ref": "e149",
+                "role": "heading"
+              },
+              {
+                "level": 6,
+                "name": "heading: h6",
+                "ref": "e150",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "name": "generic: summary in details",
+                    "ref": "e152",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e151",
+                "role": "group"
+              },
+              {
+                "ref": "e153",
+                "role": "generic",
+                "text": "generic: plain div"
+              },
+              "generic: plain span",
+              {
+                "children": [
+                  {
+                    "ref": "e155",
+                    "role": "paragraph",
+                    "text": "paragraph: inside non-modal dialog"
+                  }
+                ],
+                "name": "dialog: non-modal open dialog",
+                "ref": "e154",
+                "role": "dialog"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e158",
+                    "role": "paragraph",
+                    "text": "paragraph: inside fieldset"
+                  }
+                ],
+                "name": "group: fieldset legend",
+                "ref": "e156",
+                "role": "group"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e161",
+                    "role": "paragraph",
+                    "text": "paragraph: inside figure"
+                  }
+                ],
+                "name": "figure: figcaption",
+                "ref": "e159",
+                "role": "figure"
+              },
+              {
+                "name": "separator: hr",
+                "ref": "e162",
+                "role": "separator"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e164",
+                    "role": "listitem",
+                    "text": "listitem: li in ul"
+                  }
+                ],
+                "ref": "e163",
+                "role": "list"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e166",
+                    "role": "listitem",
+                    "text": "listitem: li in ol"
+                  }
+                ],
+                "ref": "e165",
+                "role": "list"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e168",
+                    "role": "listitem",
+                    "text": "listitem: li in menu"
+                  }
+                ],
+                "ref": "e167",
+                "role": "list"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "meter: meter",
+                      {
+                        "name": "meter: meter",
+                        "ref": "e171",
+                        "role": "meter"
+                      }
+                    ],
+                    "ref": "e170",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "progressbar: progress",
+                      {
+                        "name": "progressbar: progress",
+                        "ref": "e173",
+                        "role": "progressbar"
+                      }
+                    ],
+                    "ref": "e172",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "status: output",
+                      {
+                        "name": "status: output",
+                        "ref": "e175",
+                        "role": "status",
+                        "text": "output value"
+                      }
+                    ],
+                    "ref": "e174",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "textbox: textarea",
+                      {
+                        "name": "textbox: textarea",
+                        "ref": "e177",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e176",
+                    "role": "generic"
+                  },
+                  {
+                    "name": "button: button element",
+                    "ref": "e179",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e169",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e181",
+                    "role": "term",
+                    "text": "term: dt"
+                  },
+                  {
+                    "ref": "e182",
+                    "role": "definition",
+                    "text": "definition: dd"
+                  }
+                ],
+                "ref": "e180",
+                "role": "generic"
+              },
+              {
+                "ref": "e183",
+                "role": "blockquote",
+                "text": "blockquote: blockquote"
+              },
+              {
+                "ref": "e184",
+                "role": "paragraph",
+                "text": "paragraph: p"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e186",
+                    "role": "code",
+                    "text": "code: code"
+                  },
+                  {
+                    "ref": "e187",
+                    "role": "emphasis",
+                    "text": "emphasis: em"
+                  },
+                  {
+                    "ref": "e188",
+                    "role": "strong",
+                    "text": "strong: strong"
+                  },
+                  {
+                    "ref": "e189",
+                    "role": "deletion",
+                    "text": "deletion: del"
+                  },
+                  {
+                    "ref": "e190",
+                    "role": "insertion",
+                    "text": "insertion: ins"
+                  },
+                  {
+                    "ref": "e191",
+                    "role": "subscript",
+                    "text": "subscript: sub"
+                  },
+                  {
+                    "ref": "e192",
+                    "role": "superscript",
+                    "text": "superscript: sup"
+                  },
+                  {
+                    "ref": "e193",
+                    "role": "time",
+                    "text": "time: time"
+                  },
+                  {
+                    "ref": "e194",
+                    "role": "mark",
+                    "text": "mark: mark"
+                  },
+                  {
+                    "ref": "e195",
+                    "role": "term",
+                    "text": "term: dfn"
+                  }
+                ],
+                "ref": "e185",
+                "role": "generic"
+              },
+              {
+                "ref": "e196",
+                "role": "generic",
+                "text": "generic: address"
+              },
+              {
+                "ref": "e197",
+                "role": "search",
+                "text": "search: search element"
+              },
+              {
+                "name": "img: inline svg with title",
+                "ref": "e198",
+                "role": "img"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e201",
+                    "role": "generic",
+                    "text": "math: math element"
+                  }
+                ],
+                "ref": "e200",
+                "role": "math"
+              },
+              {
+                "children": [
+                  {
+                    "name": "button: div role=button",
+                    "ref": "e203",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: role=\"foo button\", first valid token wins",
+                    "ref": "e204",
+                    "role": "button"
+                  },
+                  {
+                    "ref": "e205",
+                    "role": "generic",
+                    "text": "generic: role=\"BUTTON\", role tokens are case-sensitive"
+                  },
+                  {
+                    "level": 4,
+                    "name": "heading: h4 role=none with tabindex=0, focusable keeps implicit role",
+                    "ref": "e206",
+                    "role": "heading"
+                  },
+                  {
+                    "name": "button: button role=presentation, natively focusable keeps implicit role",
+                    "ref": "e207",
+                    "role": "button"
+                  },
+                  {
+                    "level": 5,
+                    "name": "heading: h5 role=presentation with aria-label, global attribute keeps implicit role",
+                    "ref": "e208",
+                    "role": "heading",
+                    "text": "text: h5 role=presentation with aria-label"
+                  },
+                  "text: p role=presentation with aria-label stays presentation text: h6 role=none, not focusable, drops to text"
+                ],
+                "ref": "e202",
+                "role": "generic"
+              },
+              "text: li in ul role=presentation inherits presentation text: td in table role=presentation inherits presentation",
+              {
+                "children": [
+                  {
+                    "ref": "e210",
+                    "role": "listitem",
+                    "text": "listitem: li in focusable ul role=presentation, conflict keeps list"
+                  }
+                ],
+                "ref": "e209",
+                "role": "list"
+              },
+              {
+                "children": [
+                  {
+                    "name": "button: button display:contents",
+                    "ref": "e212",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      {
+                        "ref": "e214",
+                        "role": "listitem",
+                        "text": "listitem: li in ul display:contents"
+                      }
+                    ],
+                    "ref": "e213",
+                    "role": "list"
+                  },
+                  {
+                    "children": [
+                      {
+                        "ref": "e216",
+                        "role": "listitem",
+                        "text": "listitem: role=listitem in role=list display:contents"
+                      }
+                    ],
+                    "ref": "e215",
+                    "role": "list"
+                  },
+                  {
+                    "cursor": "pointer",
+                    "name": "link: a href display:contents",
+                    "ref": "e217",
+                    "role": "link",
+                    "url": "#contents-link"
+                  },
+                  {
+                    "name": "button: div role=button display:contents",
+                    "ref": "e218",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e211",
+                "role": "generic"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "name": "link: a with href",
+            "role": "link",
+            "url": "#a-href"
+          },
+          {
+            "role": "text",
+            "text": "generic: a without href"
+          },
+          {
+            "name": "img: image with usemap",
+            "role": "img"
+          },
+          {
+            "role": "banner",
+            "text": "banner: header at top level"
+          },
+          {
+            "role": "contentinfo",
+            "text": "contentinfo: footer at top level"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside article"
+              },
+              "generic: header inside article generic: footer inside article"
+            ],
+            "role": "article"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside aside"
+              },
+              "generic: header inside aside generic: footer inside aside"
+            ],
+            "role": "complementary"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside main"
+              },
+              "generic: header inside main generic: footer inside main"
+            ],
+            "role": "main"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside nav"
+              },
+              "generic: header inside nav generic: footer inside nav"
+            ],
+            "role": "navigation"
+          },
+          {
+            "role": "paragraph",
+            "text": "paragraph: inside section without name (no role)"
+          },
+          {
+            "role": "text",
+            "text": "generic: header inside section generic: footer inside section"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside div role=main"
+              },
+              "generic: header inside role=main generic: footer inside role=main"
+            ],
+            "role": "main"
+          },
+          {
+            "role": "paragraph",
+            "text": "paragraph: inside form without name (no role)"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside form with aria-label"
+              }
+            ],
+            "name": "form: aria-label",
+            "role": "form"
+          },
+          {
+            "role": "text",
+            "text": "form: aria-labelledby"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside form with aria-labelledby"
+              }
+            ],
+            "name": "form: aria-labelledby",
+            "role": "form"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside section with aria-label"
+              }
+            ],
+            "name": "region: section with aria-label",
+            "role": "region"
+          },
+          {
+            "role": "text",
+            "text": "region: section with aria-labelledby"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside section with aria-labelledby"
+              }
+            ],
+            "name": "region: section with aria-labelledby",
+            "role": "region"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside section with empty aria-label"
+              }
+            ],
+            "role": "region"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "presentation: img alt=\"\" without title"
+              },
+              {
+                "children": [
+                  {
+                    "name": "img: alt empty with title",
+                    "role": "img"
+                  }
+                ],
+                "role": "listitem"
+              },
+              {
+                "children": [
+                  "img: alt empty with tabindex=0",
+                  {
+                    "role": "img"
+                  }
+                ],
+                "role": "listitem"
+              },
+              {
+                "children": [
+                  {
+                    "name": "img: alt empty with aria-label",
+                    "role": "img"
+                  }
+                ],
+                "role": "listitem"
+              },
+              {
+                "children": [
+                  {
+                    "name": "img: alt text",
+                    "role": "img"
+                  }
+                ],
+                "role": "listitem"
+              },
+              {
+                "children": [
+                  "img: no alt attribute",
+                  {
+                    "role": "img"
+                  }
+                ],
+                "role": "listitem"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=text"
+          },
+          {
+            "name": "textbox: input type=text",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "searchbox: input type=search"
+          },
+          {
+            "name": "searchbox: input type=search",
+            "role": "searchbox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=email"
+          },
+          {
+            "name": "textbox: input type=email",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=tel"
+          },
+          {
+            "name": "textbox: input type=tel",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=url"
+          },
+          {
+            "name": "textbox: input type=url",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "spinbutton: input type=number"
+          },
+          {
+            "name": "spinbutton: input type=number",
+            "role": "spinbutton"
+          },
+          {
+            "role": "text",
+            "text": "slider: input type=range"
+          },
+          {
+            "name": "slider: input type=range",
+            "role": "slider",
+            "text": "50"
+          },
+          {
+            "role": "text",
+            "text": "checkbox: input type=checkbox"
+          },
+          {
+            "name": "checkbox: input type=checkbox",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "radio: input type=radio"
+          },
+          {
+            "name": "radio: input type=radio",
+            "role": "radio"
+          },
+          {
+            "name": "button: input type=button",
+            "role": "button"
+          },
+          {
+            "name": "button: input type=submit",
+            "role": "button"
+          },
+          {
+            "name": "button: input type=reset",
+            "role": "button"
+          },
+          {
+            "name": "button: input type=image",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "button: input type=file"
+          },
+          {
+            "name": "button: input type=file",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=password"
+          },
+          {
+            "name": "textbox: input type=password",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=date"
+          },
+          {
+            "name": "textbox: input type=date",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input type=color"
+          },
+          {
+            "name": "textbox: input type=color",
+            "role": "textbox",
+            "text": "#000000"
+          },
+          {
+            "role": "text",
+            "text": "combobox: input with list pointing at a datalist"
+          },
+          {
+            "name": "combobox: input with list pointing at a datalist",
+            "role": "combobox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: input with list pointing at a non-datalist"
+          },
+          {
+            "name": "textbox: input with list pointing at a non-datalist",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "generic: list target that is not a datalist combobox: select single"
+          },
+          {
+            "children": [
+              {
+                "name": "option: single, first",
+                "role": "option",
+                "selected": true
+              },
+              {
+                "name": "option: single, second",
+                "role": "option"
+              }
+            ],
+            "name": "combobox: select single",
+            "role": "combobox"
+          },
+          {
+            "role": "text",
+            "text": "listbox: select multiple"
+          },
+          {
+            "children": [
+              {
+                "name": "option: multiple, first",
+                "role": "option"
+              },
+              {
+                "name": "option: multiple, second",
+                "role": "option"
+              }
+            ],
+            "name": "listbox: select multiple",
+            "role": "listbox"
+          },
+          {
+            "role": "text",
+            "text": "listbox: select size=3"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "name": "option: sized, first",
+                    "role": "option"
+                  },
+                  {
+                    "name": "option: sized, second",
+                    "role": "option"
+                  }
+                ],
+                "role": "group"
+              },
+              {
+                "name": "option: sized, third",
+                "role": "option"
+              }
+            ],
+            "name": "listbox: select size=3",
+            "role": "listbox"
+          },
+          {
+            "children": [
+              {
+                "role": "caption",
+                "text": "caption: plain table"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "columnheader: th no scope, header row first",
+                        "role": "columnheader"
+                      },
+                      {
+                        "name": "columnheader: th no scope, between header cells",
+                        "role": "columnheader"
+                      },
+                      {
+                        "name": "columnheader: th scope=col",
+                        "role": "columnheader"
+                      }
+                    ],
+                    "name": "columnheader: th no scope, header row first columnheader: th no scope, between header cells columnheader: th scope=col",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "rowheader: th no scope, body row first column",
+                        "role": "rowheader"
+                      },
+                      {
+                        "name": "cell: row 1, second",
+                        "role": "cell"
+                      },
+                      {
+                        "name": "cell: row 1, third",
+                        "role": "cell"
+                      }
+                    ],
+                    "name": "rowheader: th no scope, body row first column cell: row 1, second cell: row 1, third",
+                    "role": "row"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "rowheader: th scope=row",
+                        "role": "rowheader"
+                      },
+                      {
+                        "name": "cell: row 2, second",
+                        "role": "cell"
+                      },
+                      {
+                        "name": "cell: row 2, third",
+                        "role": "cell"
+                      }
+                    ],
+                    "name": "rowheader: th scope=row cell: row 2, second cell: row 2, third",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "cell: tfoot, first",
+                        "role": "cell"
+                      },
+                      {
+                        "name": "cell: tfoot, second",
+                        "role": "cell"
+                      },
+                      {
+                        "name": "cell: tfoot, third",
+                        "role": "cell"
+                      }
+                    ],
+                    "name": "cell: tfoot, first cell: tfoot, second cell: tfoot, third",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              }
+            ],
+            "name": "caption: plain table",
+            "role": "table"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "name": "generic: lone th in a one-row table",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              }
+            ],
+            "role": "table"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "columnheader: in grid, first",
+                        "role": "columnheader"
+                      },
+                      {
+                        "name": "columnheader: in grid, second",
+                        "role": "columnheader"
+                      }
+                    ],
+                    "name": "columnheader: in grid, first columnheader: in grid, second",
+                    "role": "row"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "gridcell: td in grid, first",
+                        "role": "gridcell"
+                      },
+                      {
+                        "name": "gridcell: td in grid, second",
+                        "role": "gridcell"
+                      }
+                    ],
+                    "name": "gridcell: td in grid, first gridcell: td in grid, second",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              }
+            ],
+            "name": "grid: table role=grid",
+            "role": "grid"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "gridcell: td in treegrid, first",
+                        "role": "gridcell"
+                      },
+                      {
+                        "name": "gridcell: td in treegrid, second",
+                        "role": "gridcell"
+                      }
+                    ],
+                    "name": "gridcell: td in treegrid, first gridcell: td in treegrid, second",
+                    "role": "row"
+                  }
+                ],
+                "role": "rowgroup"
+              }
+            ],
+            "name": "treegrid: table role=treegrid",
+            "role": "treegrid"
+          },
+          {
+            "level": 1,
+            "name": "heading: h1",
+            "role": "heading"
+          },
+          {
+            "level": 2,
+            "name": "heading: h2",
+            "role": "heading"
+          },
+          {
+            "level": 3,
+            "name": "heading: h3",
+            "role": "heading"
+          },
+          {
+            "level": 4,
+            "name": "heading: h4",
+            "role": "heading"
+          },
+          {
+            "level": 5,
+            "name": "heading: h5",
+            "role": "heading"
+          },
+          {
+            "level": 6,
+            "name": "heading: h6",
+            "role": "heading"
+          },
+          {
+            "role": "group",
+            "text": "generic: summary in details"
+          },
+          {
+            "role": "text",
+            "text": "generic: plain div generic: plain span"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside non-modal dialog"
+              }
+            ],
+            "name": "dialog: non-modal open dialog",
+            "role": "dialog"
+          },
+          {
+            "children": [
+              "group: fieldset legend",
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside fieldset"
+              }
+            ],
+            "name": "group: fieldset legend",
+            "role": "group"
+          },
+          {
+            "children": [
+              "figure: figcaption",
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside figure"
+              }
+            ],
+            "name": "figure: figcaption",
+            "role": "figure"
+          },
+          {
+            "name": "separator: hr",
+            "role": "separator"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "listitem: li in ul"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "listitem: li in ol"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "listitem: li in menu"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "role": "text",
+            "text": "meter: meter"
+          },
+          {
+            "name": "meter: meter",
+            "role": "meter"
+          },
+          {
+            "role": "text",
+            "text": "progressbar: progress"
+          },
+          {
+            "name": "progressbar: progress",
+            "role": "progressbar"
+          },
+          {
+            "role": "text",
+            "text": "status: output"
+          },
+          {
+            "name": "status: output",
+            "role": "status",
+            "text": "output value"
+          },
+          {
+            "role": "text",
+            "text": "textbox: textarea"
+          },
+          {
+            "name": "textbox: textarea",
+            "role": "textbox"
+          },
+          {
+            "name": "button: button element",
+            "role": "button"
+          },
+          {
+            "role": "term",
+            "text": "term: dt"
+          },
+          {
+            "role": "definition",
+            "text": "definition: dd"
+          },
+          {
+            "role": "blockquote",
+            "text": "blockquote: blockquote"
+          },
+          {
+            "role": "paragraph",
+            "text": "paragraph: p"
+          },
+          {
+            "role": "code",
+            "text": "code: code"
+          },
+          {
+            "role": "emphasis",
+            "text": "emphasis: em"
+          },
+          {
+            "role": "strong",
+            "text": "strong: strong"
+          },
+          {
+            "role": "deletion",
+            "text": "deletion: del"
+          },
+          {
+            "role": "insertion",
+            "text": "insertion: ins"
+          },
+          {
+            "role": "subscript",
+            "text": "subscript: sub"
+          },
+          {
+            "role": "superscript",
+            "text": "superscript: sup"
+          },
+          {
+            "role": "time",
+            "text": "time: time"
+          },
+          {
+            "role": "mark",
+            "text": "mark: mark"
+          },
+          {
+            "role": "term",
+            "text": "term: dfn"
+          },
+          {
+            "role": "text",
+            "text": "generic: address"
+          },
+          {
+            "role": "search",
+            "text": "search: search element"
+          },
+          {
+            "name": "img: inline svg with title",
+            "role": "img"
+          },
+          {
+            "role": "math",
+            "text": "math: math element"
+          },
+          {
+            "name": "button: div role=button",
+            "role": "button"
+          },
+          {
+            "name": "button: role=\"foo button\", first valid token wins",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "generic: role=\"BUTTON\", role tokens are case-sensitive"
+          },
+          {
+            "level": 4,
+            "name": "heading: h4 role=none with tabindex=0, focusable keeps implicit role",
+            "role": "heading"
+          },
+          {
+            "name": "button: button role=presentation, natively focusable keeps implicit role",
+            "role": "button"
+          },
+          {
+            "level": 5,
+            "name": "heading: h5 role=presentation with aria-label, global attribute keeps implicit role",
+            "role": "heading",
+            "text": "text: h5 role=presentation with aria-label"
+          },
+          {
+            "role": "text",
+            "text": "text: p role=presentation with aria-label stays presentation text: h6 role=none, not focusable, drops to text text: li in ul role=presentation inherits presentation text: td in table role=presentation inherits presentation"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "listitem: li in focusable ul role=presentation, conflict keeps list"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "name": "button: button display:contents",
+            "role": "button"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "listitem: li in ul display:contents"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "children": [
+              {
+                "role": "listitem",
+                "text": "listitem: role=listitem in role=list display:contents"
+              }
+            ],
+            "role": "list"
+          },
+          {
+            "name": "link: a href display:contents",
+            "role": "link",
+            "url": "#contents-link"
+          },
+          {
+            "name": "button: div role=button display:contents",
+            "role": "button"
+          }
+        ]
+      }
+    }
+  ]
+}

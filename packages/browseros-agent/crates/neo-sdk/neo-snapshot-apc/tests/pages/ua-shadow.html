@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: browser-made shadow content</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  .row { margin: 6px 0; }
+</style>
+</head>
+<body>
+<h1>heading: browser-made shadow content</h1>
+
+<div class="row"><label for="ua-text">textbox: text input with value</label> <input id="ua-text" type="text" value="value: public text"></div>
+<div class="row"><label for="ua-date">textbox: date input with value</label> <input id="ua-date" type="date" value="2020-02-03"></div>
+<div class="row"><label for="ua-file">button: file input</label> <input id="ua-file" type="file"></div>
+<div class="row"><label for="ua-select">combobox: collapsed select</label>
+  <select id="ua-select">
+    <option>option: first</option>
+    <option selected>option: second, selected</option>
+    <option>option: third</option>
+  </select>
+</div>
+<div class="row"><label for="ua-textarea">textbox: textarea with value</label> <textarea id="ua-textarea">value: public textarea text</textarea></div>
+<div class="row"><input type="text" placeholder="textbox: input with only a placeholder"></div>
+
+<figure>
+  <video controls width="320" height="180"></video>
+  <figcaption>figure: video with controls, no src</figcaption>
+</figure>
+
+<details>
+  <summary>summary: closed details</summary>
+  <p>paragraph: inside closed details</p>
+  <button type="button">button: inside closed details</button>
+</details>
+
+<details open>
+  <summary>summary: open details</summary>
+  <p>paragraph: inside open details</p>
+  <button type="button">button: inside open details</button>
+</details>
+
+<script>
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>

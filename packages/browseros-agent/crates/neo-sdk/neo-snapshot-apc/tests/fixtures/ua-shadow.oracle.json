@@ -1,0 +1,512 @@
+{
+  "fixture": "ua-shadow",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "0CDC5D174E6F881CB16D3C43ADD3D57F",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/ua-shadow.html",
+      "elements": [
+        {
+          "backendNodeId": 13,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "heading",
+          "name": "heading: browser-made shadow content",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "textbox",
+          "name": "textbox: text input with value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "textbox: date input with value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 11,
+          "role": "button",
+          "name": "button: file input",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "combobox",
+          "name": "combobox: collapsed select",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 132,
+          "role": "option",
+          "name": "option: first",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 135,
+          "role": "option",
+          "name": "option: second, selected",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 138,
+          "role": "option",
+          "name": "option: third",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "textbox",
+          "name": "textbox: textarea with value",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "textbox",
+          "name": "textbox: input with only a placeholder",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "figure",
+          "name": "figure: video with controls, no src",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 24,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 153,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 156,
+          "role": "button",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 26,
+          "role": "group",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 29,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 71,
+          "role": "button",
+          "name": "button: inside open details",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 14,
+        "e10": 8,
+        "e11": 20,
+        "e12": 9,
+        "e13": 21,
+        "e14": 10,
+        "e15": 22,
+        "e16": 73,
+        "e17": 23,
+        "e18": 24,
+        "e19": 25,
+        "e2": 15,
+        "e20": 26,
+        "e21": 27,
+        "e22": 29,
+        "e23": 71,
+        "e3": 16,
+        "e4": 6,
+        "e5": 17,
+        "e6": 7,
+        "e7": 18,
+        "e8": 11,
+        "e9": 19
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "heading: browser-made shadow content",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  "textbox: text input with value",
+                  {
+                    "name": "textbox: text input with value",
+                    "ref": "e4",
+                    "role": "textbox",
+                    "text": "value: public text"
+                  }
+                ],
+                "ref": "e3",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "textbox: date input with value",
+                  {
+                    "name": "textbox: date input with value",
+                    "ref": "e6",
+                    "role": "textbox",
+                    "text": "2020-02-03"
+                  }
+                ],
+                "ref": "e5",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "button: file input",
+                  {
+                    "name": "button: file input",
+                    "ref": "e8",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e7",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "combobox: collapsed select",
+                  {
+                    "children": [
+                      {
+                        "name": "option: first",
+                        "role": "option"
+                      },
+                      {
+                        "name": "option: second, selected",
+                        "role": "option",
+                        "selected": true
+                      },
+                      {
+                        "name": "option: third",
+                        "role": "option"
+                      }
+                    ],
+                    "name": "combobox: collapsed select",
+                    "ref": "e10",
+                    "role": "combobox"
+                  }
+                ],
+                "ref": "e9",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "textbox: textarea with value",
+                  {
+                    "name": "textbox: textarea with value",
+                    "ref": "e12",
+                    "role": "textbox",
+                    "text": "value: public textarea text"
+                  }
+                ],
+                "ref": "e11",
+                "role": "generic"
+              },
+              {
+                "name": "textbox: input with only a placeholder",
+                "ref": "e14",
+                "role": "textbox"
+              },
+              {
+                "name": "figure: video with controls, no src",
+                "ref": "e15",
+                "role": "figure"
+              },
+              {
+                "children": [
+                  {
+                    "name": "summary: closed details",
+                    "ref": "e19",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e18",
+                "role": "group"
+              },
+              {
+                "children": [
+                  {
+                    "name": "summary: open details",
+                    "ref": "e21",
+                    "role": "generic"
+                  },
+                  {
+                    "ref": "e22",
+                    "role": "paragraph",
+                    "text": "paragraph: inside open details"
+                  },
+                  {
+                    "name": "button: inside open details",
+                    "ref": "e23",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e20",
+                "role": "group"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "heading: browser-made shadow content",
+            "role": "heading"
+          },
+          {
+            "role": "text",
+            "text": "textbox: text input with value"
+          },
+          {
+            "name": "textbox: text input with value",
+            "role": "textbox",
+            "text": "value: public text"
+          },
+          {
+            "role": "text",
+            "text": "textbox: date input with value"
+          },
+          {
+            "name": "textbox: date input with value",
+            "role": "textbox",
+            "text": "2020-02-03"
+          },
+          {
+            "role": "text",
+            "text": "button: file input"
+          },
+          {
+            "name": "button: file input",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "combobox: collapsed select"
+          },
+          {
+            "children": [
+              {
+                "name": "option: first",
+                "role": "option"
+              },
+              {
+                "name": "option: second, selected",
+                "role": "option",
+                "selected": true
+              },
+              {
+                "name": "option: third",
+                "role": "option"
+              }
+            ],
+            "name": "combobox: collapsed select",
+            "role": "combobox"
+          },
+          {
+            "role": "text",
+            "text": "textbox: textarea with value"
+          },
+          {
+            "name": "textbox: textarea with value",
+            "role": "textbox",
+            "text": "value: public textarea text"
+          },
+          {
+            "name": "textbox: input with only a placeholder",
+            "role": "textbox"
+          },
+          {
+            "name": "figure: video with controls, no src",
+            "role": "figure"
+          },
+          {
+            "role": "group",
+            "text": "summary: closed details"
+          },
+          {
+            "children": [
+              "summary: open details",
+              {
+                "role": "paragraph",
+                "text": "paragraph: inside open details"
+              },
+              {
+                "name": "button: inside open details",
+                "role": "button"
+              }
+            ],
+            "role": "group"
+          }
+        ]
+      }
+    }
+  ]
+}
