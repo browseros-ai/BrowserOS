@@ -89,6 +89,38 @@ fn generated_surface_includes_runtime_members_and_tombstones() -> Result<(), Box
     Ok(())
 }
 
+#[test]
+fn generated_page_apc_binding_serializes_params_and_decodes_binary_as_string()
+-> Result<(), Box<dyn Error>> {
+    let params = page::GetAnnotatedPageContentParams {
+        include_actionable_information: Some(true),
+    };
+    let encoded_params = serde_json::to_value(&params)?;
+    assert_eq!(
+        encoded_params,
+        serde_json::json!({ "includeActionableInformation": true })
+    );
+    let roundtrip_params: page::GetAnnotatedPageContentParams =
+        serde_json::from_value(encoded_params)?;
+    assert_eq!(roundtrip_params, params);
+    assert_eq!(
+        serde_json::to_value(page::GetAnnotatedPageContentParams::default())?,
+        serde_json::json!({})
+    );
+
+    let result = page::GetAnnotatedPageContentResult {
+        content: "CgYIARABGgA+L/0=".to_string(),
+    };
+    let encoded_result = serde_json::to_string(&result)?;
+    assert_eq!(encoded_result, r#"{"content":"CgYIARABGgA+L/0="}"#);
+    let decoded_result: page::GetAnnotatedPageContentResult =
+        serde_json::from_str(&encoded_result)?;
+    let decoded_content: String = decoded_result.content.clone();
+    assert_eq!(decoded_content, "CgYIARABGgA+L/0=");
+    assert_eq!(decoded_result, result);
+    Ok(())
+}
+
 fn has_member(domain: &Value, collection: &str, name: &str) -> bool {
     domain[collection]
         .as_array()

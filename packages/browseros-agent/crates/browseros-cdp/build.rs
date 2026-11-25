@@ -572,6 +572,10 @@ fn rust_ref_type(
 fn rust_primitive(kind: &str) -> &'static str {
     match kind {
         "string" => "String",
+        // CDP carries binary fields as base64-encoded JSON strings on the wire.
+        // Decoding directly into String avoids building a serde_json::Value for
+        // large binary replies like Page.getAnnotatedPageContent.
+        "binary" => "String",
         "integer" => "i64",
         "number" => "f64",
         "boolean" => "bool",
