@@ -47,7 +47,7 @@ export function Analytics() {
     // A card trial's outcome is reported from the first plan read after it
     // ends, and only once capture is on, so a plan that arrives first doesn't
     // spend the marker on an event that can't be sent.
-    if (plan.data?.available) syncTrialOutcome(plan.data)
+    if (plan.data?.available) void syncTrialOutcome(plan.data)
     if (!appOpened.current) {
       appOpened.current = true
       track(AnalyticsEvent.AppOpened)

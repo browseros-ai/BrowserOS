@@ -16,6 +16,9 @@ import { AnalyticsEvent, type AnalyticsEventName, track } from './events'
 import { isCapturing } from './posthog'
 
 const MARK_KEY = 'ultrafastTrialWatch:v1'
+// Every new tab page reads the same marker, so reading and clearing it is one
+// exclusive step across tabs; without it two tabs could both report the outcome.
+const LOCK_NAME = 'ultrafast-trial-outcome'
 
 type TrialOutcome = {
   event: AnalyticsEventName
@@ -80,12 +83,25 @@ function writeMark(on: boolean): void {
  * The marker is cleared only once the outcome can be sent, so a read before
  * PostHog is ready leaves it for the next one.
  */
-export function syncTrialOutcome(
+export async function syncTrialOutcome(
   plan: Pick<Plan, 'status' | 'trial' | 'trialKind'>,
-): void {
-  const watching = readMark()
-  const { outcome, mark } = trialOutcome(watching, plan)
-  if (outcome && !isCapturing()) return
-  if (outcome) track(outcome.event, outcome.properties)
-  if (mark !== watching) writeMark(mark)
+): Promise<void> {
+  const settle = () => {
+    const watching = readMark()
+    const { outcome, mark } = trialOutcome(watching, plan)
+    if (outcome && !isCapturing()) return
+    if (outcome) track(outcome.event, outcome.properties)
+    if (mark !== watching) writeMark(mark)
+  }
+  const locks = globalThis.navigator?.locks
+  if (!locks) {
+    settle()
+    return
+  }
+  try {
+    await locks.request(LOCK_NAME, { mode: 'exclusive' }, settle)
+  } catch {
+    // A browser that refuses the lock still gets this tab's answer.
+    settle()
+  }
 }
