@@ -72,5 +72,9 @@ describe('the Home promotion', () => {
       trial({ trialKind: 'grant' }),
       'a free trial link is a paid plan',
     ).toBe('<output>nothing</output>')
+    expect(
+      trial({ trialEndsAt: Date.now() - 60_000 }),
+      'a trial whose end has passed has no charge date ahead',
+    ).toBe('<output>nothing</output>')
   })
 })

@@ -40,10 +40,12 @@ function readDismissed(): boolean {
 /**
  * Whether Home owes this plan the reminder: a card trial that will turn into
  * a paid plan within the last few days. A cancelled trial won't be charged, so
- * it gets none.
+ * it gets none, and neither does one whose end has passed while the licence
+ * still says trial: its charge date is no longer ahead.
  */
 export function isTrialEndingDue(plan: Plan | undefined, now: number): boolean {
   if (!isCardTrial(plan) || plan?.status !== 'active') return false
+  if (plan.trialEndsAt === undefined || plan.trialEndsAt <= now) return false
   const left = trialDaysLeft(plan, now)
   return left !== null && left <= TRIAL_ENDING_DAYS && !readDismissed()
 }
