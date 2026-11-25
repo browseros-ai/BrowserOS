@@ -19,7 +19,7 @@ pub use client::{
     BillingError, CheckoutStarted, Computer, Key, Price, PricedPlan, Pricing, Refusal, RefusalCode,
 };
 pub use config::BillingConfig;
-pub use licence::Status;
+pub use licence::{Status, TrialKind};
 pub use secret::Secret;
 
 /// The plan feature that turns ultrafast on.
@@ -67,6 +67,10 @@ pub struct PlanSnapshot {
     pub grace_until: Option<i64>,
     /// Whether the plan is a free trial; `None` when the licence does not say.
     pub trial: Option<bool>,
+    /// How the trial started, while `trial` is true.
+    pub trial_kind: Option<TrialKind>,
+    /// When the trial ends, in epoch milliseconds, while `trial` is true.
+    pub trial_ends_at: Option<i64>,
     pub on_key: bool,
     pub checked_at: Option<i64>,
     pub stale: bool,
@@ -739,6 +743,8 @@ impl State {
             ends_at: licence.ends_at,
             grace_until: licence.grace_until,
             trial: licence.trial,
+            trial_kind: licence.trial_kind,
+            trial_ends_at: licence.trial_ends_at,
             on_key: self.on_key,
             checked_at: self.checked_at,
             stale: self.stale,
@@ -770,6 +776,8 @@ impl PlanSnapshot {
             ends_at: None,
             grace_until: None,
             trial: None,
+            trial_kind: None,
+            trial_ends_at: None,
             on_key: false,
             checked_at: None,
             stale: false,
@@ -809,6 +817,8 @@ mod tests {
                 ends_at,
                 grace_until,
                 trial: None,
+                trial_kind: None,
+                trial_ends_at: None,
                 issued_at: NOW - HOUR,
                 expires_at: NOW + 71 * HOUR,
             }),

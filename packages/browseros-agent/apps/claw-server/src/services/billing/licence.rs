@@ -44,6 +44,15 @@ impl SignedLicence {
     }
 }
 
+/// How a free trial started, as the gateway signs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrialKind {
+    /// A card was added at checkout; the first payment is taken when the trial ends.
+    Card,
+    /// A free trial link from the BrowserOS team; the app treats it as a paid plan.
+    Grant,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     None,
@@ -65,6 +74,11 @@ pub struct Licence {
     pub grace_until: Option<i64>,
     /// Whether the plan is a free trial; `None` when the gateway does not say.
     pub trial: Option<bool>,
+    /// How the trial started. Set only while `trial` is true and the gateway names a kind this
+    /// build knows, so an older or newer gateway can only make a trial read as paid.
+    pub trial_kind: Option<TrialKind>,
+    /// When the trial ends, in epoch milliseconds. Set only while `trial` is true.
+    pub trial_ends_at: Option<i64>,
     pub issued_at: i64,
     pub expires_at: i64,
 }
@@ -119,6 +133,10 @@ struct Payload {
     grace_until: Option<i64>,
     #[serde(default)]
     trial: Option<bool>,
+    #[serde(default)]
+    trial_kind: Option<String>,
+    #[serde(default)]
+    trial_ends_at: Option<i64>,
     issued_at: i64,
     expires_at: i64,
 }
@@ -172,6 +190,8 @@ pub fn verify(
         Status::Active | Status::Ending | Status::PaymentFailed => payload.features,
         Status::None | Status::Unpaid => Vec::new(),
     };
+    let trial = payload.trial.filter(|_| status != Status::None);
+    let on_trial = trial == Some(true);
     Ok(Licence {
         plan: payload.plan.filter(|_| status != Status::None),
         features,
@@ -179,7 +199,13 @@ pub fn verify(
         period_end: payload.period_end,
         ends_at: payload.ends_at,
         grace_until: payload.grace_until,
-        trial: payload.trial.filter(|_| status != Status::None),
+        trial,
+        trial_kind: payload
+            .trial_kind
+            .as_deref()
+            .and_then(parse_trial_kind)
+            .filter(|_| on_trial),
+        trial_ends_at: payload.trial_ends_at.filter(|_| on_trial),
         issued_at: payload.issued_at,
         expires_at: payload.expires_at,
     })
@@ -193,6 +219,15 @@ fn parse_status(raw: &str) -> Status {
         "paymentFailed" => Status::PaymentFailed,
         "unpaid" => Status::Unpaid,
         _ => Status::None,
+    }
+}
+
+/// A trial kind this build does not know reads as none, which the app shows as a paid plan.
+fn parse_trial_kind(raw: &str) -> Option<TrialKind> {
+    match raw {
+        "card" => Some(TrialKind::Card),
+        "grant" => Some(TrialKind::Grant),
+        _ => None,
     }
 }
 
