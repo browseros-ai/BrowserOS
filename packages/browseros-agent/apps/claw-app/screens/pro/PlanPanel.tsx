@@ -11,6 +11,7 @@ import { type ReactNode, useEffect } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { cn } from '@/lib/utils'
+import { useCaptureReady } from '@/modules/analytics/capture.hooks'
 import {
   AnalyticsEvent,
   track,
@@ -95,14 +96,16 @@ export function PlanPanel({
   const daysLeftShown =
     trialEnd !== undefined && daysLeft !== null && plan.status === 'active'
 
-  // Reports what was on screen, which only the rendered row knows.
+  // Reports what was on screen, which only the rendered row knows; re-runs when
+  // PostHog becomes ready, so a view before then still goes out.
+  const capturing = useCaptureReady()
   useEffect(() => {
-    if (daysLeftShown && daysLeft !== null) {
+    if (daysLeftShown && daysLeft !== null && capturing) {
       trackOncePerSession(AnalyticsEvent.TrialDaysLeftViewed, {
         days_left: daysLeft,
       })
     }
-  }, [daysLeftShown, daysLeft])
+  }, [daysLeftShown, daysLeft, capturing])
 
   if (trialEnd !== undefined && plan.status === 'ending') {
     return (

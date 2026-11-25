@@ -22,6 +22,7 @@ import {
 } from '@/components/motion/animated-sidebar'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
+import { useCaptureReady } from '@/modules/analytics/capture.hooks'
 import {
   AnalyticsEvent,
   track,
@@ -124,16 +125,18 @@ export function AppSidebar() {
         : skipToken,
   })
   const trialDays = trialOfferDays(plan.data, pricing.data)
+  const capturing = useCaptureReady()
   const tag = planTagFor(plan.data, trialDays)
 
-  // Reports what was on screen, which only the rendered sidebar knows.
+  // Reports what was on screen, which only the rendered sidebar knows; re-runs
+  // when PostHog becomes ready, so an impression before then still goes out.
   useEffect(() => {
-    if (trialDays > 0) {
+    if (trialDays > 0 && capturing) {
       trackOncePerSession(AnalyticsEvent.TrialTagShown, {
         trial_days: trialDays,
       })
     }
-  }, [trialDays])
+  }, [trialDays, capturing])
 
   return (
     <AnimatedSidebar

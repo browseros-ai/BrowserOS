@@ -13,6 +13,7 @@
 import type { Plan } from '@browseros/claw-api'
 import { isCardTrial } from '@/modules/plan/trial.helpers'
 import { AnalyticsEvent, type AnalyticsEventName, track } from './events'
+import { isCapturing } from './posthog'
 
 const MARK_KEY = 'ultrafastTrialWatch:v1'
 
@@ -74,12 +75,17 @@ function writeMark(on: boolean): void {
   }
 }
 
-/** Reports a card trial's outcome once, on the first plan read after it ends. */
+/**
+ * Reports a card trial's outcome once, on the first plan read after it ends.
+ * The marker is cleared only once the outcome can be sent, so a read before
+ * PostHog is ready leaves it for the next one.
+ */
 export function syncTrialOutcome(
   plan: Pick<Plan, 'status' | 'trial' | 'trialKind'>,
 ): void {
   const watching = readMark()
   const { outcome, mark } = trialOutcome(watching, plan)
-  if (mark !== watching) writeMark(mark)
+  if (outcome && !isCapturing()) return
   if (outcome) track(outcome.event, outcome.properties)
+  if (mark !== watching) writeMark(mark)
 }

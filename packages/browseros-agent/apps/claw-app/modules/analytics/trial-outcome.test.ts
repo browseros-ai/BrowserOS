@@ -9,10 +9,12 @@ import type { Plan } from '@browseros/claw-api'
 import * as posthog from './posthog'
 
 const captured: { event: string; properties?: Record<string, unknown> }[] = []
+let ready = true
 mock.module('./posthog', () => ({
   ...posthog,
+  isCapturing: () => ready,
   capture: (event: string, properties?: Record<string, unknown>) => {
-    captured.push({ event, properties })
+    if (ready) captured.push({ event, properties })
   },
 }))
 
@@ -44,6 +46,7 @@ const cardTrial: PlanState = {
 const paid: PlanState = { status: 'active', trial: false }
 
 beforeEach(() => {
+  ready = true
   captured.length = 0
   for (const key of Object.keys(storage)) delete storage[key]
 })
@@ -86,6 +89,20 @@ describe('how a card trial ended', () => {
     expect(names()).toEqual([])
   })
 
+  it('tests that a plan read before PostHog is ready keeps the outcome for later', () => {
+    syncTrialOutcome(cardTrial)
+    ready = false
+    syncTrialOutcome(paid)
+    expect(names()).toEqual([])
+    expect(storage['ultrafastTrialWatch:v1']).toBe('true')
+
+    ready = true
+    syncTrialOutcome(paid)
+    syncTrialOutcome(paid)
+    expect(names()).toEqual(['ultrafast_trial_converted'])
+    expect(storage['ultrafastTrialWatch:v1']).toBeUndefined()
+  })
+
   it('tests that a plan that was never a card trial reports nothing', () => {
     syncTrialOutcome(paid)
     syncTrialOutcome({ status: 'unpaid' })
@@ -98,5 +115,16 @@ describe('events seen once per page load', () => {
     trackOncePerSession(AnalyticsEvent.TrialTagShown, { trial_days: 7 })
     trackOncePerSession(AnalyticsEvent.TrialTagShown, { trial_days: 7 })
     expect(names()).toEqual(['ultrafast_trial_tag_shown'])
+  })
+
+  it('tests that one seen before PostHog is ready is sent once it is', () => {
+    ready = false
+    trackOncePerSession(AnalyticsEvent.TrialBarShown, { trial_days: 7 })
+    expect(names()).toEqual([])
+
+    ready = true
+    trackOncePerSession(AnalyticsEvent.TrialBarShown, { trial_days: 7 })
+    trackOncePerSession(AnalyticsEvent.TrialBarShown, { trial_days: 7 })
+    expect(names()).toEqual(['ultrafast_trial_bar_shown'])
   })
 })

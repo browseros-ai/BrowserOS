@@ -13,6 +13,7 @@ import { ArrowRight, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useHref } from 'react-router'
 import { ButtonLink } from '@/components/motion/button/base'
+import { useCaptureReady } from '@/modules/analytics/capture.hooks'
 import {
   AnalyticsEvent,
   track,
@@ -44,6 +45,7 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
   const plan = usePlan()
   const pricing = usePlanPricing()
   const proHref = useHref('/pro')
+  const capturing = useCaptureReady()
   const trialDays = trialOfferDays(plan.data, pricing.data)
   const key = trialDays > 0 ? TRIAL_DISMISS_KEY : DISMISS_KEY
   const [hidden, setHidden] = useState<readonly string[]>(() =>
@@ -64,14 +66,15 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
     return () => window.removeEventListener('storage', onStorage)
   }, [key, onClosed])
 
-  // Reports what was on screen, which only a rendered bar knows.
+  // Reports what was on screen, which only a rendered bar knows; re-runs when
+  // PostHog becomes ready, so an impression before then still goes out.
   useEffect(() => {
-    if (trialShown) {
+    if (trialShown && capturing) {
       trackOncePerSession(AnalyticsEvent.TrialBarShown, {
         trial_days: trialDays,
       })
     }
-  }, [trialShown, trialDays])
+  }, [trialShown, trialDays, capturing])
 
   const dismiss = () => {
     if (trialDays > 0) track(AnalyticsEvent.TrialBarDismissed)

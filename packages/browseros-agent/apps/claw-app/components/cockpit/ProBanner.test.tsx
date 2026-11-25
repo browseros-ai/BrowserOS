@@ -82,6 +82,10 @@ mock.module('@/modules/analytics/events', () => ({
   },
 }))
 
+mock.module('@/modules/analytics/capture.hooks', () => ({
+  useCaptureReady: () => true,
+}))
+
 const storage: Record<string, string> = {}
 let storageUnavailable = false
 Object.defineProperty(globalThis, 'localStorage', {

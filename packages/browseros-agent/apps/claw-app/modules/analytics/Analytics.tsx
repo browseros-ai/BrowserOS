@@ -35,10 +35,8 @@ export function Analytics() {
   //     burned while capture was a no-op).
   // Runs on telemetry state changes and on navigation.
   // Tag events with the plan before any of them fires; posthog reads it at capture time.
-  // A card trial's outcome is reported from the first plan read after it ends.
   useEffect(() => {
     setPlanContext(planContextFor(plan.data))
-    if (plan.data?.available) syncTrialOutcome(plan.data)
   }, [plan.data])
 
   useEffect(() => {
@@ -46,6 +44,10 @@ export function Analytics() {
     applyTelemetry({ distinctId: data.distinctId, enabled: data.enabled })
     // The first events wait for the plan, so they carry it; a failed plan read still lets them go.
     if (!isCapturing() || plan.isPending) return
+    // A card trial's outcome is reported from the first plan read after it
+    // ends, and only once capture is on, so a plan that arrives first doesn't
+    // spend the marker on an event that can't be sent.
+    if (plan.data?.available) syncTrialOutcome(plan.data)
     if (!appOpened.current) {
       appOpened.current = true
       track(AnalyticsEvent.AppOpened)
@@ -55,7 +57,7 @@ export function Analytics() {
       const event = screenEventForPath(location.pathname)
       if (event) track(event)
     }
-  }, [data, location.pathname, plan.isPending])
+  }, [data, location.pathname, plan.isPending, plan.data])
 
   return null
 }

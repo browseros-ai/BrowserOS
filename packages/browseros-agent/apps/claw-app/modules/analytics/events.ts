@@ -10,7 +10,7 @@
  * cancellation feedback.
  */
 
-import { capture } from './posthog'
+import { capture, isCapturing } from './posthog'
 
 export const AnalyticsEvent = {
   AppOpened: 'app_opened',
@@ -99,13 +99,15 @@ const trackedThisSession = new Set<AnalyticsEventName>()
 
 /**
  * For "shown" events on surfaces that re-render or remount: the first call in
- * this page load sends the event, later ones do nothing.
+ * this page load that can actually be sent sends the event, later ones do
+ * nothing. Before PostHog is ready the call is not counted, so the caller's
+ * retry once it is ready still goes out.
  */
 export function trackOncePerSession(
   event: AnalyticsEventName,
   properties?: Record<string, boolean | number | string>,
 ): void {
-  if (trackedThisSession.has(event)) return
+  if (trackedThisSession.has(event) || !isCapturing()) return
   trackedThisSession.add(event)
   capture(event, properties)
 }

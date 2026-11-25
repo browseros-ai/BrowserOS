@@ -12,6 +12,7 @@ import { ArrowRight, CalendarClock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useHref } from 'react-router'
 import { ButtonLink } from '@/components/motion/button/base'
+import { useCaptureReady } from '@/modules/analytics/capture.hooks'
 import {
   AnalyticsEvent,
   track,
@@ -60,17 +61,19 @@ export function TrialEndingBar({
   const pricing = usePlanPricing()
   const plansHref = useHref('/pro')
   const [dismissed, setDismissed] = useState(readDismissed)
+  const capturing = useCaptureReady()
   const left = trialDaysLeft(plan, Date.now())
   const shown = !dismissed && left !== null && plan.trialEndsAt !== undefined
 
-  // Reports what was on screen, which only a rendered bar knows.
+  // Reports what was on screen, which only a rendered bar knows; re-runs when
+  // PostHog becomes ready, so an impression before then still goes out.
   useEffect(() => {
-    if (shown && left !== null) {
+    if (shown && left !== null && capturing) {
       trackOncePerSession(AnalyticsEvent.TrialEndingBarShown, {
         days_left: left,
       })
     }
-  }, [shown, left])
+  }, [shown, left, capturing])
 
   if (!shown || left === null || plan.trialEndsAt === undefined) return null
 
