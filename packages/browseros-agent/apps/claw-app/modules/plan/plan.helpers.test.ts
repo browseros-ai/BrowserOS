@@ -36,7 +36,19 @@ describe('the plan analytics events carry', () => {
       plan: 'ultrafast',
     })
     expect(
-      planContextFor({ features: ['claw.ultrafast'], trial: true }),
+      planContextFor({
+        features: ['claw.ultrafast'],
+        trial: true,
+        trialKind: 'card',
+      }),
     ).toEqual({ plan: 'ultrafast', trial: true })
+    expect(
+      planContextFor({
+        features: ['claw.ultrafast'],
+        trial: true,
+        trialKind: 'grant',
+      }),
+      'a free trial link counts as paid',
+    ).toEqual({ plan: 'ultrafast', trial: false })
   })
 })

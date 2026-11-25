@@ -16,6 +16,7 @@ import { planContextFor } from '@/modules/plan/plan.helpers'
 import { AnalyticsEvent, screenEventForPath, track } from './events'
 import { applyTelemetry, isCapturing, setPlanContext } from './posthog'
 import { useTelemetryState } from './telemetry.hooks'
+import { syncTrialOutcome } from './trial-outcome'
 
 export function Analytics() {
   const { data } = useTelemetryState()
@@ -43,6 +44,10 @@ export function Analytics() {
     applyTelemetry({ distinctId: data.distinctId, enabled: data.enabled })
     // The first events wait for the plan, so they carry it; a failed plan read still lets them go.
     if (!isCapturing() || plan.isPending) return
+    // A card trial's outcome is reported from the first plan read after it
+    // ends, and only once capture is on, so a plan that arrives first doesn't
+    // spend the marker on an event that can't be sent.
+    if (plan.data?.available) void syncTrialOutcome(plan.data)
     if (!appOpened.current) {
       appOpened.current = true
       track(AnalyticsEvent.AppOpened)
@@ -52,7 +57,7 @@ export function Analytics() {
       const event = screenEventForPath(location.pathname)
       if (event) track(event)
     }
-  }, [data, location.pathname, plan.isPending])
+  }, [data, location.pathname, plan.isPending, plan.data])
 
   return null
 }

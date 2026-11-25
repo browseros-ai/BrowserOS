@@ -263,6 +263,65 @@ async fn pricing_is_cached_and_drops_periods_it_cannot_show() -> anyhow::Result<
 }
 
 #[tokio::test]
+async fn trial_days_pass_through_from_pricing_and_the_checkout() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    gateway.script(
+        "GET /v1/pricing",
+        200,
+        json!({"app": "claw", "plans": [{
+            "plan": "ultrafast",
+            "name": "ultrafast",
+            "description": null,
+            "features": ["claw.ultrafast"],
+            "trialDays": 7,
+            "prices": [
+                {"interval": "month", "intervalCount": 1, "amount": 2000, "currency": "usd", "trialDays": 7},
+                {"interval": "year", "intervalCount": 1, "amount": 20000, "currency": "usd", "trialDays": 0}
+            ]
+        }]}),
+        None,
+    );
+    let a = computer(Some(&gateway)).await?;
+    let pricing = a.call("GET", "/api/v1/plan/pricing", None).await?;
+    assert_eq!(pricing.status, StatusCode::OK, "{}", pricing.raw);
+    assert_eq!(pricing.body["plans"][0]["prices"][0]["trialDays"], 7);
+    assert_eq!(pricing.body["plans"][0]["prices"][1]["trialDays"], 0);
+
+    gateway.script(
+        "POST /v1/checkouts",
+        201,
+        json!({"checkoutId": "0b6f1c2e-4a5d-4e7f-9a1b-2c3d4e5f6a7b", "url": "https://checkout.example.com/c/pay/cs_test_trial", "trialDays": 0}),
+        None,
+    );
+    let refused = a
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
+        )
+        .await?;
+    assert_eq!(refused.status, StatusCode::CREATED, "{}", refused.raw);
+    assert_eq!(
+        refused.body["trialDays"], 0,
+        "a trial the gateway refused reads as 0, not absent"
+    );
+
+    let plain = a
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
+        )
+        .await?;
+    assert_eq!(plain.status, StatusCode::CREATED, "{}", plain.raw);
+    assert!(
+        plain.body.get("trialDays").is_none(),
+        "an older gateway that says nothing leaves it out"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_gateway_that_is_down_or_unreachable_answers_503() -> anyhow::Result<()> {
     let gateway = FakeGateway::start().await?;
     gateway.set_down(true);

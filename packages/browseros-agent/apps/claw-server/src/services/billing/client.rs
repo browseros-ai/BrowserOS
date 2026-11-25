@@ -126,6 +126,9 @@ pub struct Price {
     pub interval_count: i32,
     pub amount: i64,
     pub currency: String,
+    /// The free trial days a new checkout on this price is offered; absent from older gateways.
+    #[serde(default)]
+    pub trial_days: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -133,6 +136,10 @@ pub struct Price {
 pub struct CheckoutStarted {
     pub checkout_id: String,
     pub url: String,
+    /// The free trial days this checkout starts with: 0 when the price offered one but this
+    /// computer can't have it now. Absent from older gateways.
+    #[serde(default)]
+    pub trial_days: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

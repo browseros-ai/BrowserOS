@@ -27,6 +27,15 @@ import { UseKeyDialog } from '@/components/pro/UseKeyDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import {
+  isCardTrial,
+  monthlyTrialDays,
+  promisedTrialDays,
+  TRIAL_ENDING_DAYS,
+  trialDaysLeft,
+  trialEndFrom,
+  trialOfferDays,
+} from '@/modules/plan/trial.helpers'
 import { PlanPanel } from './PlanPanel'
 import { BuyButton, PricePanel } from './PricePanel'
 import { useProData } from './pro.data'
@@ -34,6 +43,7 @@ import {
   apiErrorMessage,
   type BillingPeriod,
   formatDate,
+  formatPrice,
   isPro,
   keyHasEnded,
   PLAN_UNCHECKED,
@@ -42,6 +52,10 @@ import {
   ULTRAFAST_STEPS,
 } from './pro.helpers'
 import { SavingsHero } from './SavingsHero'
+
+const DAY_MS = 86_400_000
+/** The days bar's length when the price list can't say. */
+const DEFAULT_TRIAL_DAYS = 7
 
 const TITLE = (
   <>
@@ -89,11 +103,35 @@ export function Pro() {
   const ended = keyHasEnded(current)
   const period = prices ? pickPeriod(prices, wantedPeriod) : wantedPeriod
   const idle = checkout.phase !== 'waiting' && checkout.phase !== 'confirming'
+  const offeredDays = trialOfferDays(current, pricing.data)
+  const trialDays = promisedTrialDays(offeredDays, checkout)
+  const trial = trialDays > 0 && period === 'month'
 
   const buy = () => {
     const price = prices?.[period]
     if (!prices || !price) return
-    checkout.start({ plan: prices.plan, interval: price.interval })
+    if (trial) {
+      track(AnalyticsEvent.TrialStartClicked, { source: 'plan_picker' })
+    }
+    checkout.start({
+      plan: prices.plan,
+      interval: price.interval,
+      offeredTrialDays: period === 'month' ? offeredDays : 0,
+    })
+  }
+  const pickPeriodAndTrack = (next: BillingPeriod) => {
+    setWantedPeriod(next)
+    track(AnalyticsEvent.ProPeriodSelected, {
+      interval: next,
+      trial_offered: next === 'month' && trialDays > 0,
+    })
+  }
+  const openCancel = () => {
+    setCancelOpen(true)
+    const daysLeft = trialDaysLeft(current, Date.now())
+    if (daysLeft !== null) {
+      track(AnalyticsEvent.TrialCancelOpened, { days_left: daysLeft })
+    }
   }
 
   return (
@@ -111,7 +149,9 @@ export function Pro() {
           <PlanPanel
             plan={current}
             portal={portal}
-            onCancel={() => setCancelOpen(true)}
+            onCancel={openCancel}
+            monthlyPrice={prices?.month ? formatPrice(prices.month) : undefined}
+            trialLength={monthlyTrialDays(pricing.data) || DEFAULT_TRIAL_DAYS}
           />
           {current.onKey ? <KeySection planKey={planKey} /> : null}
           <FeatureTiles
@@ -141,8 +181,10 @@ export function Pro() {
                   plan={current}
                   pricing={pricing}
                   prices={prices}
+                  trialDays={trialDays}
+                  offeredTrialDays={offeredDays}
                   period={period}
-                  onPeriodChange={setWantedPeriod}
+                  onPeriodChange={pickPeriodAndTrack}
                   checkout={checkout}
                   onBuy={buy}
                   onUseKey={() => {
@@ -166,11 +208,14 @@ export function Pro() {
               <h2 className="font-extrabold text-[22px] text-cyanotype-ink tracking-[-0.025em] md:text-[26px]">
                 {ended
                   ? 'Turn ultrafast back on'
-                  : 'Make your agents ultrafast'}
+                  : trial
+                    ? `Try ultrafast free for ${trialDays} days`
+                    : 'Make your agents ultrafast'}
               </h2>
               <BuyButton
                 isStarting={checkout.isStarting}
                 ended={ended}
+                trial={trial}
                 onBuy={buy}
               />
             </section>
@@ -181,6 +226,11 @@ export function Pro() {
         prices={prices}
         on={pro}
         nextPayment={current.status === 'active' ? current.periodEnd : null}
+        offeredTrialDays={trial ? trialDays : 0}
+        trialEndsAt={
+          isCardTrial(current) ? (current.trialEndsAt ?? null) : null
+        }
+        trialCancelled={current.status === 'ending'}
       />
 
       <UseKeyDialog
@@ -297,23 +347,51 @@ function ProQuestions({
   prices,
   on,
   nextPayment,
+  offeredTrialDays,
+  trialEndsAt,
+  trialCancelled,
 }: {
   prices: ProPrices | null
   on: boolean
   nextPayment: number | null
+  /** The free trial a checkout here would start with, or 0. */
+  offeredTrialDays: number
+  /** When this computer's card trial ends, while one is on. */
+  trialEndsAt: number | null
+  trialCancelled: boolean
 }) {
   const yearly = prices?.year ? ', or each year if you pay yearly' : ''
+  const offeredEnd =
+    offeredTrialDays > 0 ? trialEndFrom(Date.now(), offeredTrialDays) : null
+  const trialEnd = trialEndsAt ?? offeredEnd
   const charged =
-    nextPayment !== null
-      ? `Next on ${formatDate(nextPayment)}. Stripe emails you a receipt each time.`
-      : on
-        ? null
-        : `Today, then on the same date each month${yearly}.`
+    trialEndsAt !== null
+      ? trialCancelled
+        ? `You won’t be charged. Your trial ends on ${formatDate(trialEndsAt)}.`
+        : `On ${formatDate(trialEndsAt)}, when your free trial ends. Cancel before then and you won’t be charged.`
+      : nextPayment !== null
+        ? `Next on ${formatDate(nextPayment)}. Stripe emails you a receipt each time.`
+        : on
+          ? null
+          : offeredEnd !== null
+            ? `On ${formatDate(offeredEnd)}, after your ${offeredTrialDays} free days, then on the same date each month. Cancel before then and you won’t be charged.`
+            : `Today, then on the same date each month${yearly}.`
   const questions = [
     ...(charged ? [{ q: 'When am I charged?', a: charged }] : []),
+    ...(offeredEnd !== null
+      ? [
+          {
+            q: 'Why do you need my card for a free trial?',
+            a: `So ultrafast keeps going after the trial without a gap. Stripe holds the card, and we email you on ${formatDate(offeredEnd - TRIAL_ENDING_DAYS * DAY_MS)}, ${TRIAL_ENDING_DAYS} days before the first charge.`,
+          },
+        ]
+      : []),
     {
       q: 'What if I cancel?',
-      a: 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
+      a:
+        trialEnd !== null
+          ? `During the free trial, ultrafast stays on until ${formatDate(trialEnd)} and you aren’t charged. After that, it stays on until your paid time ends.`
+          : 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
     },
     {
       q: 'Does neo change sites without asking?',

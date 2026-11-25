@@ -974,6 +974,225 @@ describe('buying ultrafast', () => {
   })
 })
 
+const TRIAL_PRICING: PlanPricing = {
+  plans: PRICING.plans.map((plan) => ({
+    ...plan,
+    prices: plan.prices.map((price) => ({
+      ...price,
+      trialDays: price.interval === 'month' ? 7 : 0,
+    })),
+  })),
+}
+
+function tab(name: string): HTMLElement {
+  const found = [...container.querySelectorAll('[role="tab"]')].find(
+    (candidate) => nameOf(candidate) === name,
+  )
+  if (!found) throw new Error(`no "${name}" tab`)
+  return found as unknown as HTMLElement
+}
+
+describe('the free trial', () => {
+  beforeEach(() => {
+    server.pricing = async () => TRIAL_PRICING
+  })
+
+  it('tests that Monthly offers 7 free days with the price and the date after them', async () => {
+    await mount()
+
+    expect(tab('Monthly7 days free')).toBeTruthy()
+    expect(button('Start free trial')).toBeTruthy()
+    expect(text()).toMatch(
+      /Free until .+, then \$20 a month\. Cancel before then and you won’t be charged\./,
+    )
+    expect(text()).toContain('Try ultrafast free for 7 days')
+    expect(text()).not.toContain('Make your agents ultrafast')
+    await click('Why do you need my card for a free trial?')
+    expect(text()).toContain('3 days before the first charge.')
+  })
+
+  it('tests that Yearly is paid now and says the trial comes with Monthly', async () => {
+    await mount()
+    await act(async () => {
+      tab('Yearly2 months free').dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      )
+    })
+    await settle()
+
+    expect(button('Get ultrafast')).toBeTruthy()
+    expect(text()).toContain('The free trial comes with Monthly.')
+    expect(text()).not.toContain('Free until')
+    expect(events('pro_period_selected')[0]?.properties).toEqual({
+      interval: 'year',
+      trial_offered: false,
+    })
+  })
+
+  it('tests that a trial checkout asks for a card and says nothing is charged today', async () => {
+    server.startCheckout = async () => ({
+      checkoutId: 'checkout-1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_1',
+      trialDays: 7,
+    })
+    await mount()
+    await click('Start free trial')
+
+    expect(text()).toContain('Add your card with Stripe')
+    expect(text()).toContain('Your free trial starts here')
+    expect(text()).toContain('You won’t be charged today.')
+    expect(text()).not.toContain('Pay $20 with Stripe')
+    expect(events('ultrafast_trial_start_clicked')[0]?.properties).toEqual({
+      source: 'plan_picker',
+    })
+    expect(events('pro_checkout_started')[0]?.properties).toEqual({
+      interval: 'month',
+      trial_days: 7,
+    })
+    expect(events('ultrafast_trial_unavailable_shown')).toHaveLength(0)
+  })
+
+  it('tests that a finished card trial checkout reports the trial started, and a free trial link doesn’t', async () => {
+    const trialPlan: Plan = {
+      ...PRO,
+      trial: true,
+      trialKind: 'card',
+      trialEndsAt: Date.now() + 7 * 86_400_000,
+    }
+    server.startCheckout = async () => ({
+      checkoutId: 'checkout-1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_1',
+      trialDays: 7,
+    })
+    server.checkout = async () => ({ status: 'complete', plan: trialPlan })
+    await mount()
+    await click('Start free trial')
+
+    expect(events('pro_checkout_completed')[0]?.properties).toEqual({
+      trial: true,
+    })
+    expect(events('ultrafast_trial_started')[0]?.properties).toEqual({
+      days_left: 7,
+    })
+  })
+
+  it('tests that a finished checkout on a free trial link reports no trial', async () => {
+    server.checkout = async () => ({
+      status: 'complete',
+      plan: { ...PRO, trial: true, trialKind: 'grant' },
+    })
+    await mount()
+    await click('Start free trial')
+
+    expect(events('pro_checkout_completed')[0]?.properties).toEqual({
+      trial: false,
+    })
+    expect(events('ultrafast_trial_started')).toHaveLength(0)
+  })
+
+  it('tests that a trial the gateway refuses at checkout says so and asks to pay', async () => {
+    server.startCheckout = async () => ({
+      checkoutId: 'checkout-1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_1',
+      trialDays: 0,
+    })
+    await mount()
+    await click('Start free trial')
+
+    expect(text()).toContain('Trial temporarily unavailable')
+    expect(text()).toContain('Pay $20 with Stripe')
+    expect(text()).toContain('Nothing is charged until you subscribe.')
+    await click('When am I charged?')
+    expect(text()).toContain('Today, then on the same date each month')
+    expect(text()).not.toContain('after your 7 free days')
+
+    await click('Cancel')
+    expect(text()).toContain('Make your agents ultrafast')
+    expect(text()).not.toContain('Try ultrafast free for 7 days')
+    expect(button('Get ultrafast')).toBeTruthy()
+    expect(events('ultrafast_trial_unavailable_shown')[0]?.properties).toEqual({
+      interval: 'month',
+    })
+  })
+
+  it('tests that a key whose ultrafast ended is offered Renew, not a trial', async () => {
+    server.plan = async () => planOf({ onKey: true })
+    await mount()
+
+    expect(button('Renew ultrafast')).toBeTruthy()
+    expect(text()).not.toContain('days free')
+    expect(text()).not.toContain('Free until')
+  })
+})
+
+describe('a running free trial', () => {
+  const DAY = 86_400_000
+  const cardTrial = (overrides: Partial<Plan> = {}): Plan => ({
+    ...PRO,
+    trial: true,
+    trialKind: 'card',
+    trialEndsAt: Date.now() + 4 * DAY + 60_000,
+    ...overrides,
+  })
+
+  beforeEach(() => {
+    server.pricing = async () => TRIAL_PRICING
+  })
+
+  it('tests that a card trial shows the days left, the first charge, and Cancel trial', async () => {
+    const plan = cardTrial()
+    server.plan = async () => plan
+    server.cancel = async () => ({
+      ...plan,
+      status: 'ending',
+      endsAt: plan.trialEndsAt ?? null,
+    })
+    await mount()
+
+    expect(text()).toContain('Free trial')
+    expect(text()).toMatch(/5 days left\. Then \$20 a month from .+\./)
+    expect(
+      container.querySelector('[role="img"][aria-label="5 of 7 days left"]'),
+    ).not.toBeNull()
+
+    await click('Cancel trial')
+    expect(dialog().getAttribute('aria-label')).toBe('Cancel your free trial?')
+    expect(dialog().textContent).toContain('and you won’t be charged.')
+    expect(events('ultrafast_trial_cancel_opened')[0]?.properties).toEqual({
+      days_left: 5,
+    })
+    await click('Keep ultrafast', dialog())
+    expect(events('ultrafast_trial_kept')[0]?.properties).toEqual({
+      source: 'cancel_dialog',
+    })
+    expect(callsTo('cancelPlan')).toHaveLength(0)
+
+    await click('Cancel trial')
+    await click('Cancel trial', dialog())
+    expect(callsTo('cancelPlan')).toHaveLength(1)
+    expect(events('ultrafast_trial_cancel_confirmed')[0]?.properties).toEqual({
+      gave_feedback: false,
+    })
+    expect(text()).toMatch(/Trial ends .+\./)
+    expect(text()).toContain('You won’t be charged.')
+    expect(button('Keep ultrafast')).toBeTruthy()
+  })
+
+  it('tests that a trial from a free trial link reads as a paid plan', async () => {
+    server.plan = async () => cardTrial({ trialKind: 'grant' })
+    await mount()
+
+    expect(text()).toContain('You’re on ultrafast')
+    expect(text()).not.toContain('Free trial')
+    expect(text()).not.toContain('days left')
+    await click('Cancel ultrafast')
+    expect(dialog().getAttribute('aria-label')).toBe('Cancel ultrafast?')
+    expect(
+      captured.filter((entry) => entry.event.startsWith('ultrafast_trial_')),
+    ).toEqual([])
+  })
+})
+
 describe('Use a licence key', () => {
   async function openDialog() {
     await mount()

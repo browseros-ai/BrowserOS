@@ -12,10 +12,12 @@ import { StatefulButton } from '@/components/motion/button/stateful'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { trialEndFrom } from '@/modules/plan/trial.helpers'
 import {
   apiErrorMessage,
   type BillingPeriod,
   billingPeriods,
+  formatDate,
   formatPrice,
   isBillingPeriod,
   keyHasEnded,
@@ -32,6 +34,10 @@ interface PricePanelProps {
   plan: Plan
   pricing: { isPending: boolean; isError: boolean; error: unknown }
   prices: ProPrices | null
+  /** The free trial the copy promises for Monthly: the checkout's grant once one started, or 0. */
+  trialDays: number
+  /** The free trial the price list offers for Monthly, or 0. */
+  offeredTrialDays: number
   period: BillingPeriod
   onPeriodChange: (period: BillingPeriod) => void
   checkout: ProCheckout
@@ -44,6 +50,8 @@ export function PricePanel({
   plan,
   pricing,
   prices,
+  trialDays,
+  offeredTrialDays,
   period,
   onPeriodChange,
   checkout,
@@ -79,11 +87,19 @@ export function PricePanel({
   }
 
   const amount = formatPrice(price)
+  const trial = trialDays > 0 && price.interval === 'month'
 
   if (checkout.phase === 'waiting' || checkout.phase === 'confirming') {
     return (
       <WaitingPanel
         amount={amount}
+        trial={(checkout.trialDays ?? 0) > 0}
+        // Offered, but the gateway said no at checkout: not eligible, or trials are paused.
+        trialRefused={
+          offeredTrialDays > 0 &&
+          price.interval === 'month' &&
+          checkout.trialDays === 0
+        }
         paid={checkout.phase === 'confirming'}
         onReopen={checkout.reopen}
         onCancel={checkout.cancel}
@@ -105,22 +121,43 @@ export function PricePanel({
         <PeriodSwitch
           period={period}
           saving={monthsFree(prices)}
+          trialDays={trialDays}
           onPeriodChange={onPeriodChange}
         />
       ) : null}
 
       <PriceLine price={price} amount={amount} />
 
-      <BuyButton isStarting={checkout.isStarting} ended={ended} onBuy={onBuy} />
-      <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13.5px] text-ink-3">
-        <span>
-          {price.interval === 'year'
-            ? `Works out to ${monthlyEquivalent(price)} a month. `
-            : null}
-          Cancel any time.
-        </span>
-        {useKey}
-      </p>
+      <BuyButton
+        isStarting={checkout.isStarting}
+        ended={ended}
+        trial={trial}
+        onBuy={onBuy}
+      />
+      {trial ? (
+        <>
+          <p className="max-w-[46ch] text-[14px] text-ink-2">
+            Free until{' '}
+            <strong className="text-cyanotype-ink">
+              {formatDate(trialEndFrom(Date.now(), trialDays))}
+            </strong>
+            , then {amount} a month. Cancel before then and you won’t be
+            charged.
+          </p>
+          {useKey ? <p className="text-[13.5px]">{useKey}</p> : null}
+        </>
+      ) : (
+        <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13.5px] text-ink-3">
+          <span>
+            {price.interval === 'year'
+              ? `Works out to ${monthlyEquivalent(price)} a month. `
+              : null}
+            Cancel any time.
+            {trialDays > 0 ? ' The free trial comes with Monthly.' : null}
+          </span>
+          {useKey}
+        </p>
+      )}
     </>
   )
 }
@@ -137,17 +174,23 @@ function UseKeyLink({ onUseKey }: { onUseKey: () => void }) {
   )
 }
 
-/** Get ultrafast, or Renew ultrafast once a key's plan has ended. */
+/** Get ultrafast, Start free trial while one is offered, or Renew ultrafast once a key's plan has ended. */
 export function BuyButton({
   isStarting,
   ended,
+  trial = false,
   onBuy,
 }: {
   isStarting: boolean
   ended: boolean
+  trial?: boolean
   onBuy: () => void
 }) {
-  const label = ended ? 'Renew ultrafast' : 'Get ultrafast'
+  const label = ended
+    ? 'Renew ultrafast'
+    : trial
+      ? 'Start free trial'
+      : 'Get ultrafast'
   return (
     <StatefulButton
       state={isStarting ? 'loading' : 'idle'}
@@ -166,10 +209,12 @@ export function BuyButton({
 function PeriodSwitch({
   period,
   saving,
+  trialDays,
   onPeriodChange,
 }: {
   period: BillingPeriod
   saving: number | null
+  trialDays: number
   onPeriodChange: (period: BillingPeriod) => void
 }) {
   return (
@@ -184,6 +229,11 @@ function PeriodSwitch({
       <TabsList aria-label="Billing period" className="border border-border-2">
         <TabsTrigger value="month" className="font-semibold text-[13.5px]">
           Monthly
+          {trialDays > 0 ? (
+            <span className="ml-1.5 rounded-full bg-green-tint px-1.5 font-bold text-[11px] text-green-ink leading-[18px]">
+              {trialDays} days free
+            </span>
+          ) : null}
         </TabsTrigger>
         <TabsTrigger value="year" className="font-semibold text-[13.5px]">
           Yearly
@@ -245,25 +295,43 @@ type StepState = 'done' | 'now' | 'next'
 
 function WaitingPanel({
   amount,
+  trial,
+  trialRefused,
   paid,
   onReopen,
   onCancel,
 }: {
   amount: string
+  /** The checkout starts a free trial: a card now, the first charge later. */
+  trial: boolean
+  trialRefused: boolean
   paid: boolean
   onReopen: () => void
   onCancel: () => void
 }) {
   const steps: { label: string; state: StepState }[] = [
     { label: 'Payment page opened', state: 'done' },
-    { label: `Pay ${amount} with Stripe`, state: paid ? 'done' : 'now' },
-    { label: 'ultrafast turns on here', state: paid ? 'now' : 'next' },
+    {
+      label: trial ? 'Add your card with Stripe' : `Pay ${amount} with Stripe`,
+      state: paid ? 'done' : 'now',
+    },
+    {
+      label: trial ? 'Your free trial starts here' : 'ultrafast turns on here',
+      state: paid ? 'now' : 'next',
+    },
   ]
   return (
     <div role="status" className="flex w-full flex-col items-start gap-4">
       <h2 className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
-        {paid ? 'Payment received' : 'Finish in the payment tab'}
+        {paid
+          ? trial
+            ? 'Card added'
+            : 'Payment received'
+          : 'Finish in the payment tab'}
       </h2>
+      {trialRefused ? (
+        <Note icon={<Info />}>Trial temporarily unavailable</Note>
+      ) : null}
       <ol className="flex w-full max-w-[380px] flex-col gap-3.5">
         {steps.map((step) => (
           <li
@@ -315,7 +383,9 @@ function WaitingPanel({
             </Button>
           </div>
           <p className="text-[13.5px] text-ink-3">
-            Nothing is charged until you subscribe.
+            {trial
+              ? 'You won’t be charged today.'
+              : 'Nothing is charged until you subscribe.'}
           </p>
         </>
       )}

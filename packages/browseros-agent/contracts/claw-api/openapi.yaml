@@ -334,6 +334,8 @@ components:
       $ref: ./schemas/plan.yaml#/PlanStatus
     Plan:
       $ref: ./schemas/plan.yaml#/Plan
+    PlanTrialKind:
+      $ref: ./schemas/plan.yaml#/PlanTrialKind
     PriceInterval:
       $ref: ./schemas/plan.yaml#/PriceInterval
     PlanPrice:

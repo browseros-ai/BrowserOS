@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import type { PlanPricing } from '@browseros/claw-api'
+import type { Plan, PlanPricing } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
@@ -22,13 +22,43 @@ const PRICING: PlanPricing = {
   ],
 }
 
-const server: { pricing: () => Promise<PlanPricing> } = {
+const FREE: Plan = {
+  available: true,
+  plan: null,
+  planName: null,
+  features: [],
+  status: 'none',
+  periodEnd: null,
+  endsAt: null,
+  graceUntil: null,
+  onKey: false,
+  checkedAt: null,
+  stale: false,
+}
+
+const withTrial = (days: number): PlanPricing => ({
+  plans: PRICING.plans.map((plan) => ({
+    ...plan,
+    prices: plan.prices.map((price) =>
+      price.interval === 'month' ? { ...price, trialDays: days } : price,
+    ),
+  })),
+})
+
+const server: {
+  pricing: () => Promise<PlanPricing>
+  plan: () => Promise<Plan>
+} = {
   pricing: async () => PRICING,
+  plan: async () => FREE,
 }
 
 mock.module('@/modules/api/client', () => ({
   ...api,
-  apiClient: async () => ({ getPlanPricing: () => server.pricing() }),
+  apiClient: async () => ({
+    getPlanPricing: () => server.pricing(),
+    getPlan: () => server.plan(),
+  }),
 }))
 
 mock.module('@/modules/analytics/telemetry.hooks', () => ({
@@ -36,9 +66,24 @@ mock.module('@/modules/analytics/telemetry.hooks', () => ({
 }))
 
 const tracked: string[] = []
+const shownOnce = new Set<string>()
 mock.module('@/modules/analytics/events', () => ({
-  AnalyticsEvent: { UltrafastBannerClicked: 'ultrafast_banner_clicked' },
+  AnalyticsEvent: {
+    UltrafastBannerClicked: 'ultrafast_banner_clicked',
+    TrialBarShown: 'ultrafast_trial_bar_shown',
+    TrialBarDismissed: 'ultrafast_trial_bar_dismissed',
+    TrialStartClicked: 'ultrafast_trial_start_clicked',
+  },
   track: (event: string) => tracked.push(event),
+  trackOncePerSession: (event: string) => {
+    if (shownOnce.has(event)) return
+    shownOnce.add(event)
+    tracked.push(event)
+  },
+}))
+
+mock.module('@/modules/analytics/capture.hooks', () => ({
+  useCaptureReady: () => true,
 }))
 
 const storage: Record<string, string> = {}
@@ -74,8 +119,10 @@ let client: QueryClient
 
 beforeEach(async () => {
   tracked.length = 0
+  shownOnce.clear()
   storageUnavailable = false
   server.pricing = async () => PRICING
+  server.plan = async () => FREE
   for (const key of Object.keys(storage)) delete storage[key]
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -142,11 +189,72 @@ describe('ProBanner', () => {
 
     expect(container.textContent).toContain('ultrafast')
     expect(container.textContent).toContain(
-      'Faster skills, robot checks solved, and more, for $20 a month.',
+      'Faster skills and more, for $20 a month.',
     )
     const link = container.querySelector('a')
     expect(link?.textContent).toContain('See ultrafast')
     expect(link?.getAttribute('href')).toBe('/pro')
+  })
+
+  it('tests that a computer offered a free trial sees it, with the price after', async () => {
+    server.pricing = async () => withTrial(7)
+    await render()
+
+    expect(container.textContent).toContain(
+      'Try it free for 7 days, then $20 a month.',
+    )
+    const link = container.querySelector('a')
+    expect(link?.textContent).toContain('Start free trial')
+    expect(link?.getAttribute('href')).toBe('/pro')
+  })
+
+  it('tests that the trial bar reports being seen once, a start and a hide', async () => {
+    server.pricing = async () => withTrial(7)
+    await render()
+    await render('new-tab')
+    expect(tracked).toEqual(['ultrafast_trial_bar_shown'])
+
+    await act(async () => {
+      container
+        .querySelector('a')
+        ?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(tracked).toContain('ultrafast_trial_start_clicked')
+
+    await act(async () => {
+      closeButton()?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(tracked).toContain('ultrafast_trial_bar_dismissed')
+  })
+
+  it('tests that the plain bar reports no trial events', async () => {
+    await render()
+    await act(async () => {
+      closeButton()?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(tracked).toEqual([])
+  })
+
+  it('tests that a lapsed key gets the plain bar, not the trial', async () => {
+    server.pricing = async () => withTrial(7)
+    server.plan = async () => ({ ...FREE, onKey: true })
+    await render()
+    expect(container.textContent).toContain('See ultrafast')
+    expect(container.textContent).not.toContain('free for 7 days')
+  })
+
+  it('tests that people who hid the old bar still see the free trial once', async () => {
+    storage['proBannerDismissed:v1'] = 'true'
+    server.pricing = async () => withTrial(7)
+    await render()
+    expect(container.textContent).toContain('Start free trial')
+
+    await act(async () => {
+      closeButton()?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(storage['ultrafastTrialBarDismissed:v1']).toBe('true')
+    await render('new-tab')
+    expect(container.innerHTML).toBe('')
   })
 
   it('tests that it stays away while the prices can’t be read', async () => {

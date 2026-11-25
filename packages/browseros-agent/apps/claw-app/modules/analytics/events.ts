@@ -10,7 +10,7 @@
  * cancellation feedback.
  */
 
-import { capture } from './posthog'
+import { capture, isCapturing } from './posthog'
 
 export const AnalyticsEvent = {
   AppOpened: 'app_opened',
@@ -66,6 +66,23 @@ export const AnalyticsEvent = {
   SkillCopied: 'skill_copied',
   SkillPageViewed: 'skill_page_viewed',
   UltrafastDetailsOpened: 'ultrafast_details_opened',
+  ProPeriodSelected: 'pro_period_selected',
+  TrialBarShown: 'ultrafast_trial_bar_shown',
+  TrialBarDismissed: 'ultrafast_trial_bar_dismissed',
+  TrialTagShown: 'ultrafast_trial_tag_shown',
+  TrialStartClicked: 'ultrafast_trial_start_clicked',
+  TrialUnavailableShown: 'ultrafast_trial_unavailable_shown',
+  TrialStarted: 'ultrafast_trial_started',
+  TrialDaysLeftViewed: 'ultrafast_trial_days_left_viewed',
+  TrialEndingBarShown: 'ultrafast_trial_ending_bar_shown',
+  TrialEndingBarClicked: 'ultrafast_trial_ending_bar_clicked',
+  TrialEndingBarDismissed: 'ultrafast_trial_ending_bar_dismissed',
+  TrialCancelOpened: 'ultrafast_trial_cancel_opened',
+  TrialCancelConfirmed: 'ultrafast_trial_cancel_confirmed',
+  TrialKept: 'ultrafast_trial_kept',
+  TrialConverted: 'ultrafast_trial_converted',
+  TrialPaymentFailed: 'ultrafast_trial_payment_failed',
+  TrialEnded: 'ultrafast_trial_ended',
 } as const
 
 export type AnalyticsEventName =
@@ -75,6 +92,23 @@ export function track(
   event: AnalyticsEventName,
   properties?: Record<string, boolean | number | string>,
 ): void {
+  capture(event, properties)
+}
+
+const trackedThisSession = new Set<AnalyticsEventName>()
+
+/**
+ * For "shown" events on surfaces that re-render or remount: the first call in
+ * this page load that can actually be sent sends the event, later ones do
+ * nothing. Before PostHog is ready the call is not counted, so the caller's
+ * retry once it is ready still goes out.
+ */
+export function trackOncePerSession(
+  event: AnalyticsEventName,
+  properties?: Record<string, boolean | number | string>,
+): void {
+  if (trackedThisSession.has(event) || !isCapturing()) return
+  trackedThisSession.add(event)
   capture(event, properties)
 }
 
