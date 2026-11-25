@@ -89,6 +89,7 @@
       "commands": [
         "captureScreenshot",
         "enable",
+        "getAnnotatedPageContent",
         "getFrameTree",
         "getLayoutMetrics",
         "handleJavaScriptDialog",
