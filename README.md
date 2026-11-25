@@ -1,8 +1,9 @@
+<!-- Two images, not <picture>: GitHub's own CSS hides the one that does not match its theme (the #gh-…-mode-only suffix).
+     A <picture> follows the computer's theme whenever GitHub's script has not rewritten it, and showed the dark banner on a light page.
+     Keep both images out of a link, or the suffix no longer ends the link GitHub wraps around each one. -->
 <p align="center">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/banner-dark.svg">
-  <img src="docs/images/readme/banner-light.svg" width="830" alt="BrowserOS neo: a browser for your agents to do your chores.">
-</picture>
+<img src="docs/images/readme/banner-light.svg#gh-light-mode-only" width="830" alt="BrowserOS neo: a browser for your agents to do your chores.">
+<img src="docs/images/readme/banner-dark.svg#gh-dark-mode-only" width="830" alt="BrowserOS neo: a browser for your agents to do your chores.">
 </p>
 
 <p align="center">
