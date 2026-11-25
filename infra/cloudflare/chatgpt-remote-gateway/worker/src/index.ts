@@ -34,10 +34,6 @@ const pairingCode = () => {
   const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
   return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => alphabet[byte & 31]).join("");
 };
-const pairingCode = () => {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => alphabet[byte & 31]).join("");
-};
 function fromB64url(value: string): Uint8Array | null {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
   try {
