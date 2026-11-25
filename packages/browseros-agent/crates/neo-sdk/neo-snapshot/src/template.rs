@@ -23,14 +23,13 @@
 //! absent when printing YAML.
 
 mod aria_template_node;
-mod js_regex;
 mod match_template;
 #[cfg(test)]
 mod tests;
 
+pub use crate::js_regex::RegexError;
 pub use aria_template_node::{
     AriaRegex, AriaTemplateNode, AriaTemplateRoleNode, AriaTemplateTextNode, AriaTextValue,
     ContainerMode, TemplateName,
 };
-pub use js_regex::RegexError;
 pub use match_template::{TemplateError, TemplateMatch, match_template, matches_template};

@@ -6,11 +6,11 @@ use std::num::FpCategory;
 use serde_json::Number;
 
 use crate::aria_node::{AriaChild, AriaNode, Invalid, Tristate};
+use crate::js_regex::{JsRegex, RegexError};
 
 use super::aria_template_node::{
     AriaTemplateNode, AriaTemplateRoleNode, AriaTextValue, ContainerMode, TemplateName,
 };
-use super::js_regex::{JsRegex, RegexError};
 
 /// One subtree of a snapshot matched by [`match_template`].
 #[derive(Clone, Copy, Debug, PartialEq)]
