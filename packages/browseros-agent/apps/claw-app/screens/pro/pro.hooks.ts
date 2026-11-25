@@ -40,6 +40,12 @@ export interface ProCheckout {
   phase: Exclude<CheckoutPhase, 'complete'>
   start: (checkout: StartProCheckout) => void
   isStarting: boolean
+  /**
+   * The free trial days the started checkout actually has: 0 when a trial was
+   * offered but the gateway refused it this time. Undefined before a checkout
+   * starts, or when the gateway doesn't say.
+   */
+  trialDays: number | undefined
   /** Opens the payment page again, for a tab that was closed. */
   reopen: () => void
   /** The person says they won't pay this time. */
@@ -135,6 +141,7 @@ export function useProCheckout(): ProCheckout {
       start.mutate({ plan: checkout.plan, interval: checkout.interval })
     },
     isStarting: start.isPending,
+    trialDays: start.data?.trialDays,
     reopen: () => {
       if (start.data) openInNewTab(start.data.url)
     },

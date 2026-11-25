@@ -27,6 +27,11 @@ import { UseKeyDialog } from '@/components/pro/UseKeyDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import {
+  TRIAL_ENDING_DAYS,
+  trialEndFrom,
+  trialOfferDays,
+} from '@/modules/plan/trial.helpers'
 import { PlanPanel } from './PlanPanel'
 import { BuyButton, PricePanel } from './PricePanel'
 import { useProData } from './pro.data'
@@ -42,6 +47,8 @@ import {
   ULTRAFAST_STEPS,
 } from './pro.helpers'
 import { SavingsHero } from './SavingsHero'
+
+const DAY_MS = 86_400_000
 
 const TITLE = (
   <>
@@ -89,6 +96,8 @@ export function Pro() {
   const ended = keyHasEnded(current)
   const period = prices ? pickPeriod(prices, wantedPeriod) : wantedPeriod
   const idle = checkout.phase !== 'waiting' && checkout.phase !== 'confirming'
+  const trialDays = trialOfferDays(current, pricing.data)
+  const trial = trialDays > 0 && period === 'month'
 
   const buy = () => {
     const price = prices?.[period]
@@ -141,6 +150,7 @@ export function Pro() {
                   plan={current}
                   pricing={pricing}
                   prices={prices}
+                  trialDays={trialDays}
                   period={period}
                   onPeriodChange={setWantedPeriod}
                   checkout={checkout}
@@ -166,11 +176,14 @@ export function Pro() {
               <h2 className="font-extrabold text-[22px] text-cyanotype-ink tracking-[-0.025em] md:text-[26px]">
                 {ended
                   ? 'Turn ultrafast back on'
-                  : 'Make your agents ultrafast'}
+                  : trial
+                    ? `Try ultrafast free for ${trialDays} days`
+                    : 'Make your agents ultrafast'}
               </h2>
               <BuyButton
                 isStarting={checkout.isStarting}
                 ended={ended}
+                trial={trial}
                 onBuy={buy}
               />
             </section>
@@ -181,6 +194,7 @@ export function Pro() {
         prices={prices}
         on={pro}
         nextPayment={current.status === 'active' ? current.periodEnd : null}
+        offeredTrialDays={trial ? trialDays : 0}
       />
 
       <UseKeyDialog
@@ -297,23 +311,41 @@ function ProQuestions({
   prices,
   on,
   nextPayment,
+  offeredTrialDays,
 }: {
   prices: ProPrices | null
   on: boolean
   nextPayment: number | null
+  /** The free trial a checkout here would start with, or 0. */
+  offeredTrialDays: number
 }) {
   const yearly = prices?.year ? ', or each year if you pay yearly' : ''
+  const offeredEnd =
+    offeredTrialDays > 0 ? trialEndFrom(Date.now(), offeredTrialDays) : null
   const charged =
     nextPayment !== null
       ? `Next on ${formatDate(nextPayment)}. Stripe emails you a receipt each time.`
       : on
         ? null
-        : `Today, then on the same date each month${yearly}.`
+        : offeredEnd !== null
+          ? `On ${formatDate(offeredEnd)}, after your ${offeredTrialDays} free days, then on the same date each month. Cancel before then and you won’t be charged.`
+          : `Today, then on the same date each month${yearly}.`
   const questions = [
     ...(charged ? [{ q: 'When am I charged?', a: charged }] : []),
+    ...(offeredEnd !== null
+      ? [
+          {
+            q: 'Why do you need my card for a free trial?',
+            a: `So ultrafast keeps going after the trial without a gap. Stripe holds the card, and we email you on ${formatDate(offeredEnd - TRIAL_ENDING_DAYS * DAY_MS)}, ${TRIAL_ENDING_DAYS} days before the first charge.`,
+          },
+        ]
+      : []),
     {
       q: 'What if I cancel?',
-      a: 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
+      a:
+        offeredEnd !== null
+          ? `During the free trial, ultrafast stays on until ${formatDate(offeredEnd)} and you aren’t charged. After that, it stays on until your paid time ends.`
+          : 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
     },
     {
       q: 'Does neo change sites without asking?',

@@ -974,6 +974,96 @@ describe('buying ultrafast', () => {
   })
 })
 
+const TRIAL_PRICING: PlanPricing = {
+  plans: PRICING.plans.map((plan) => ({
+    ...plan,
+    prices: plan.prices.map((price) => ({
+      ...price,
+      trialDays: price.interval === 'month' ? 7 : 0,
+    })),
+  })),
+}
+
+function tab(name: string): HTMLElement {
+  const found = [...container.querySelectorAll('[role="tab"]')].find(
+    (candidate) => nameOf(candidate) === name,
+  )
+  if (!found) throw new Error(`no "${name}" tab`)
+  return found as unknown as HTMLElement
+}
+
+describe('the free trial', () => {
+  beforeEach(() => {
+    server.pricing = async () => TRIAL_PRICING
+  })
+
+  it('tests that Monthly offers 7 free days with the price and the date after them', async () => {
+    await mount()
+
+    expect(tab('Monthly7 days free')).toBeTruthy()
+    expect(button('Start free trial')).toBeTruthy()
+    expect(text()).toMatch(
+      /Free until .+, then \$20 a month\. Cancel before then and you won’t be charged\./,
+    )
+    expect(text()).toContain('Try ultrafast free for 7 days')
+    expect(text()).not.toContain('Make your agents ultrafast')
+    await click('Why do you need my card for a free trial?')
+    expect(text()).toContain('3 days before the first charge.')
+  })
+
+  it('tests that Yearly is paid now and says the trial comes with Monthly', async () => {
+    await mount()
+    await act(async () => {
+      tab('Yearly2 months free').dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      )
+    })
+    await settle()
+
+    expect(button('Get ultrafast')).toBeTruthy()
+    expect(text()).toContain('The free trial comes with Monthly.')
+    expect(text()).not.toContain('Free until')
+  })
+
+  it('tests that a trial checkout asks for a card and says nothing is charged today', async () => {
+    server.startCheckout = async () => ({
+      checkoutId: 'checkout-1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_1',
+      trialDays: 7,
+    })
+    await mount()
+    await click('Start free trial')
+
+    expect(text()).toContain('Add your card with Stripe')
+    expect(text()).toContain('Your free trial starts here')
+    expect(text()).toContain('You won’t be charged today.')
+    expect(text()).not.toContain('Pay $20 with Stripe')
+  })
+
+  it('tests that a trial the gateway refuses at checkout says so and asks to pay', async () => {
+    server.startCheckout = async () => ({
+      checkoutId: 'checkout-1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_1',
+      trialDays: 0,
+    })
+    await mount()
+    await click('Start free trial')
+
+    expect(text()).toContain('Trial temporarily unavailable')
+    expect(text()).toContain('Pay $20 with Stripe')
+    expect(text()).toContain('Nothing is charged until you subscribe.')
+  })
+
+  it('tests that a key whose ultrafast ended is offered Renew, not a trial', async () => {
+    server.plan = async () => planOf({ onKey: true })
+    await mount()
+
+    expect(button('Renew ultrafast')).toBeTruthy()
+    expect(text()).not.toContain('days free')
+    expect(text()).not.toContain('Free until')
+  })
+})
+
 describe('Use a licence key', () => {
   async function openDialog() {
     await mount()
