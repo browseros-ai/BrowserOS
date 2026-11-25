@@ -214,7 +214,9 @@ impl ErrorCode {
                 Self::TargetClosed
             }
             CoreError::PageScript(_) => Self::PageError,
-            CoreError::NativeFeatureUnavailable { .. } => Self::Unsupported,
+            CoreError::NativeFeatureUnavailable { .. } | CoreError::FeatureWithheld { .. } => {
+                Self::Unsupported
+            }
             CoreError::UnknownRef(_)
             | CoreError::StaleRef { .. }
             | CoreError::DocumentChanged
