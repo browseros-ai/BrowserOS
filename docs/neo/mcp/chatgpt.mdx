@@ -1,0 +1,61 @@
+---
+title: "ChatGPT ↔ BrowserOS"
+description: "Use ChatGPT as BrowserOS' model provider and understand the secure path for remote ChatGPT browser control."
+---
+
+This guide covers the two directions of the ChatGPT and BrowserOS integration. They are separate connections with different trust boundaries.
+
+## Direction 1: Use your ChatGPT subscription inside BrowserOS
+
+BrowserOS already includes a ChatGPT Plus / Pro OAuth provider.
+
+1. Open BrowserOS and visit **Settings** (`chrome://browseros/settings`).
+2. Find **AI Providers** and select **USE** on **ChatGPT Plus/Pro**.
+3. Sign in with the OpenAI account that has the eligible subscription and approve the authorization.
+4. Select an available model in BrowserOS.
+
+No OpenAI API key is required for this subscription-based provider. Available models depend on the account and provider response. See [ChatGPT Pro / Plus](/browseros/features/chatgpt-pro-oauth) for the existing provider guide.
+
+## Direction 2: Let ChatGPT control BrowserOS
+
+BrowserOS neo exposes a Streamable HTTP MCP server for browser automation. Its default endpoint is local to the computer:
+
+```text
+http://127.0.0.1:9200/mcp
+```
+
+This local endpoint is intentionally not a public ChatGPT connector URL. ChatGPT custom MCP connections need a remotely reachable HTTPS endpoint and an OAuth-protected MCP resource. A cloud tunnel by itself does not add authentication.
+
+### Current support boundary
+
+- BrowserOS local MCP works with compatible MCP clients running on the same computer.
+- ChatGPT Plus / Pro OAuth inside BrowserOS authenticates the model provider; it does **not** authenticate incoming ChatGPT MCP requests.
+- ChatGPT cannot reach `127.0.0.1` on the user's computer from ChatGPT's hosted service.
+- The BrowserOS neo MCP endpoint must not be exposed directly to the public internet. It currently must be treated as a local, trusted endpoint.
+
+### Secure remote bridge required
+
+A production-ready remote connection needs a separately reviewed bridge between ChatGPT and the local browser. That bridge must:
+
+1. Terminate HTTPS and implement OAuth 2.1 Authorization Code with PKCE (S256), including protected-resource and authorization-server metadata.
+2. Validate token signature, issuer, audience/resource, expiry, and granted scopes on every MCP request.
+3. Bind each authorized identity to an explicitly paired local BrowserOS instance; never accept an arbitrary browser target.
+4. Require user approval for consequential actions such as purchases, sending messages, publishing, account changes, and destructive operations.
+5. Keep the local MCP listener private. The bridge must not turn a tunnel into an unauthenticated public proxy.
+6. Redact credentials, cookies, authorization headers, and sensitive page contents from logs; support revocation and audit events.
+7. Fail closed when the local browser is offline, pairing expires, or authorization cannot be verified.
+
+Do not point ChatGPT at a raw tunnel URL for the current local MCP endpoint. Do not copy ChatGPT OAuth tokens into BrowserOS settings, environment variables, or repository files.
+
+## Connection test checklist
+
+- [ ] ChatGPT Plus / Pro provider can be authorized in BrowserOS Settings.
+- [ ] A local MCP client can list BrowserOS tools through the endpoint shown in BrowserOS' MCP page.
+- [ ] The local MCP endpoint remains bound to loopback and is not publicly exposed.
+- [ ] A future remote bridge passes OAuth, scope, pairing, revocation, and action-approval tests before ChatGPT is allowed to control a browser.
+
+## Related documentation
+
+- [BrowserOS neo MCP setup](/neo/mcp/index)
+- [Manual MCP client setup](/neo/mcp/manual)
+- [ChatGPT Plus / Pro provider](/browseros/features/chatgpt-pro-oauth)
