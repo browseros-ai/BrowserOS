@@ -1,0 +1,33 @@
+name: ChatGPT Remote Gateway
+
+on:
+  pull_request:
+    paths:
+      - "infra/cloudflare/chatgpt-remote-gateway/**"
+      - ".github/workflows/chatgpt-remote-gateway.yml"
+  push:
+    branches:
+      - "feat/chatgpt-two-way-integration"
+    paths:
+      - "infra/cloudflare/chatgpt-remote-gateway/**"
+      - ".github/workflows/chatgpt-remote-gateway.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  worker-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/cloudflare/chatgpt-remote-gateway/worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/cloudflare/chatgpt-remote-gateway/worker/package.json
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npx wrangler deploy --dry-run --outdir=dist

@@ -28,7 +28,8 @@
               "neo/mcp/index",
               "neo/mcp/claude-desktop",
               "neo/mcp/manual",
-              "neo/mcp/chatgpt"
+              "neo/mcp/chatgpt",
+              "neo/mcp/remote-gateway"
             ]
           },
           {
