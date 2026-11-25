@@ -84,7 +84,7 @@ mod tests {
         let plain = row(r#"{"isError":true}"#);
         let refused = row(r#"{"isError":true,"planWithheld":"profileLocked"}"#);
         let stopped = row(r#"{"isError":true,"planWithheld":"profileStop"}"#);
-        assert_eq!(task_mark(&[plain.clone()]), None);
+        assert_eq!(task_mark(std::slice::from_ref(&plain)), None);
         assert_eq!(
             task_mark(&[plain.clone(), refused.clone()]),
             Some(ProfileMark::Refused)
