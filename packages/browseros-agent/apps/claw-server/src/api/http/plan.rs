@@ -144,6 +144,28 @@ pub(super) async fn remove_computer(
     Ok(Json(PlanKeyChange::new(to_plan(plan), key.map(to_key))))
 }
 
+/// GET /api/v1/plan/dev, debug builds only. Answers so the app knows it may offer the
+/// developer tools below; release builds never register it, so it reads 404 there.
+#[cfg(debug_assertions)]
+pub(super) async fn dev_tools() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
+/// POST /api/v1/plan/dev/forget-this-computer, debug builds only: see
+/// `Billing::forget_this_computer`.
+#[cfg(debug_assertions)]
+pub(super) async fn forget_this_computer(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+) -> PlanResult<Plan> {
+    let plan = state
+        .billing
+        .forget_this_computer()
+        .await
+        .map_err(|source| fail(&request_id, source))?;
+    Ok(Json(to_plan(plan)))
+}
+
 /// POST /api/v1/plan/key/computers/{installId}/rename
 pub(super) async fn rename_computer(
     Extension(request_id): Extension<RequestId>,

@@ -1244,3 +1244,68 @@ async fn a_web_page_cannot_reach_the_plan_routes() -> anyhow::Result<()> {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     Ok(())
 }
+
+/// A debug build can take this computer off its plan to test buying again: its seat on the key
+/// is freed, the plan reads Free, and the next action registers it as a new computer.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_debug_build_can_take_this_computer_off_its_plan() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let a = computer(Some(&gateway)).await?;
+    buy(&a, &gateway).await?;
+    let before = a.install_id().await?;
+
+    let probe = a.call("GET", "/api/v1/plan/dev", None).await?;
+    assert_eq!(probe.status, StatusCode::NO_CONTENT, "{}", probe.raw);
+
+    let forgot = a
+        .call("POST", "/api/v1/plan/dev/forget-this-computer", None)
+        .await?;
+    assert_eq!(forgot.status, StatusCode::OK, "{}", forgot.raw);
+    assert_eq!(forgot.body["status"], "none");
+    assert_eq!(forgot.body["features"], json!([]));
+    assert_eq!(
+        gateway.count("POST", "/v1/keys/deactivate"),
+        1,
+        "the seat on the key is freed"
+    );
+    let freed: Value = serde_json::from_str(
+        &gateway
+            .requests()
+            .iter()
+            .rfind(|logged| logged.path == "/v1/keys/deactivate")
+            .map(|logged| logged.body.clone())
+            .unwrap_or_default(),
+    )?;
+    assert_eq!(freed["installId"], before.as_str());
+    assert!(!a.data_dir().join("billing/install.json").exists());
+    assert_eq!(a.plan().await?["status"], "none");
+
+    // The next action that needs the gateway registers this computer again, as a new one.
+    let started = a
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
+        )
+        .await?;
+    assert_eq!(started.status, StatusCode::CREATED, "{}", started.raw);
+    assert_ne!(a.install_id().await?, before);
+    Ok(())
+}
+
+/// Release builds compile no developer tools, so both routes read 404 there.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn release_builds_have_no_developer_routes() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let a = computer(Some(&gateway)).await?;
+    for (method, uri) in [
+        ("GET", "/api/v1/plan/dev"),
+        ("POST", "/api/v1/plan/dev/forget-this-computer"),
+    ] {
+        let reply = a.call(method, uri, None).await?;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{uri}: {}", reply.raw);
+    }
+    Ok(())
+}

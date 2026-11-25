@@ -153,6 +153,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/v1/plan/resume", post(plan::resume))
         .route("/api/v1/plan/portal", post(plan::portal))
         .route("/api/v1/plan/refresh", post(plan::refresh))
+        .merge(dev_routes())
         .route("/api/v1/skills/{name}/flow", get(skills::flow))
         .route(
             "/api/v1/skills/{name}/ultrafast/approve-write",
@@ -167,6 +168,23 @@ pub fn router(state: AppState) -> Router<AppState> {
         )
         .fallback(route_fallback)
         .layer(middleware::from_fn(options_preflight))
+}
+
+/// Developer tools for testing billing on this computer. Only debug builds compile them, so
+/// staging, alpha and stable servers answer 404 and the app never shows them there.
+#[cfg(debug_assertions)]
+fn dev_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/v1/plan/dev", get(plan::dev_tools))
+        .route(
+            "/api/v1/plan/dev/forget-this-computer",
+            post(plan::forget_this_computer),
+        )
+}
+
+#[cfg(not(debug_assertions))]
+fn dev_routes() -> Router<AppState> {
+    Router::new()
 }
 
 pub(super) fn error(
