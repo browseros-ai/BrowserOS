@@ -1,6 +1,21 @@
 SessionStatus:
   type: string
   enum: [live, done, failed, cancelled]
+SessionStopReason:
+  type: string
+  description: >-
+    Why the task stopped on its own. profileNeedsUltrafast: the task was set to
+    work in a browser profile, and choosing a profile comes with ultrafast,
+    which is off on this computer.
+  enum: [profileNeedsUltrafast]
+SessionBrowserProfile:
+  type: object
+  additionalProperties: false
+  required: [name]
+  properties:
+    name:
+      type: string
+      description: The profile's display name, such as Work.
 LiveSessionActivityState:
   type: string
   enum: [active, idle]
@@ -289,6 +304,20 @@ SessionSummary:
     skillName:
       type: string
       description: The skill saved from this task, when there is one.
+    browserProfile:
+      allOf:
+        - $ref: '#/SessionBrowserProfile'
+      description: >-
+        The browser profile this task was set to work in, when it is not the
+        original Default profile. Present on task detail only.
+    profileLocked:
+      type: boolean
+      description: >-
+        True when an agent asked to choose a browser profile on a plan without
+        ultrafast, so the task stayed in the Default profile. Present on task
+        detail only.
+    stopReason:
+      $ref: '#/SessionStopReason'
 SessionList:
   type: object
   additionalProperties: false

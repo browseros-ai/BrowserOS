@@ -1082,6 +1082,15 @@ export interface components {
     }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'
+    /**
+     * @description Why the task stopped on its own. profileNeedsUltrafast: the task was set to work in a browser profile, and choosing a profile comes with ultrafast, which is off on this computer.
+     * @enum {string}
+     */
+    SessionStopReason: 'profileNeedsUltrafast'
+    SessionBrowserProfile: {
+      /** @description The profile's display name, such as Work. */
+      name: string
+    }
     /** @enum {string} */
     LiveSessionActivityState: 'active' | 'idle'
     LiveSessionState: {
@@ -1212,6 +1221,11 @@ export interface components {
       live?: components['schemas']['LiveSessionState']
       /** @description The skill saved from this task, when there is one. */
       skillName?: string
+      /** @description The browser profile this task was set to work in, when it is not the original Default profile. Present on task detail only. */
+      browserProfile?: components['schemas']['SessionBrowserProfile']
+      /** @description True when an agent asked to choose a browser profile on a plan without ultrafast, so the task stayed in the Default profile. Present on task detail only. */
+      profileLocked?: boolean
+      stopReason?: components['schemas']['SessionStopReason']
     }
     SessionList: {
       items: components['schemas']['SessionSummary'][]

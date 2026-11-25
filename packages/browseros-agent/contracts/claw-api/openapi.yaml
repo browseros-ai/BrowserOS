@@ -196,6 +196,10 @@ components:
       $ref: ./schemas/settings.yaml#/UpdateAgentSettingsRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
+    SessionStopReason:
+      $ref: ./schemas/sessions.yaml#/SessionStopReason
+    SessionBrowserProfile:
+      $ref: ./schemas/sessions.yaml#/SessionBrowserProfile
     LiveSessionActivityState:
       $ref: ./schemas/sessions.yaml#/LiveSessionActivityState
     LiveSessionState:
