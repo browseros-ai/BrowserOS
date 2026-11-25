@@ -60,6 +60,17 @@ pub(crate) struct RunView {
     pub(crate) epoch: u64,
 }
 
+impl RunView {
+    /// The same view with `withheld` refused on every call the run makes through it: what the
+    /// host's plan leaves out, raw CDP included.
+    pub(crate) fn withholding(self, withheld: browseros_core::WithheldFeatures) -> Self {
+        Self {
+            view: self.view.withholding(withheld),
+            ..self
+        }
+    }
+}
+
 /// What `/system/health` and `/system/ready` report about the browser. A plain data bag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LinkStatus {

@@ -64,6 +64,15 @@ impl NativeFeature {
         }
     }
 
+    /// The feature named by [`Self::key`], for hosts that pass features by name.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|feature| feature.key() == key)
+    }
+
     const fn bit(self) -> u8 {
         match self {
             Self::ProfileTargeting => 1,
@@ -122,6 +131,14 @@ impl WithheldFeatures {
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// Each withheld feature, in [`NativeFeature::ALL`] order.
+    pub fn features(self) -> impl Iterator<Item = NativeFeature> {
+        NativeFeature::ALL
+            .iter()
+            .copied()
+            .filter(move |feature| self.contains(*feature))
     }
 }
 

@@ -424,6 +424,14 @@ impl BrowserView {
             withheld: crate::WithheldFeatures::none(),
         }
     }
+    /// Withholds `withheld` from this view's calls on top of what the browser lacks: discovery,
+    /// typed calls and raw CDP all refuse them. For views that are not captured per task (a
+    /// script engine's own view); captured views take it through `capture_withholding`.
+    #[must_use]
+    pub fn withholding(mut self, withheld: crate::WithheldFeatures) -> Self {
+        self.withheld = withheld;
+        self
+    }
     #[must_use]
     pub fn with_pointer(mut self, pointer: Pointer) -> Self {
         self.pointer = Some(pointer);

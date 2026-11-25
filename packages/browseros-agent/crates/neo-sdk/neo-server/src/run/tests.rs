@@ -375,6 +375,7 @@ fn meta(request: Option<&str>, task: Option<&str>) -> Result<RunMeta, TestError>
         task_id: task.map(TaskId::parse).transpose()?,
         host_data: None,
         access: None,
+        withheld: Default::default(),
         trace: None,
     })
 }

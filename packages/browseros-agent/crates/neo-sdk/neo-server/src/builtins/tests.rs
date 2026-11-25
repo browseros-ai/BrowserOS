@@ -110,13 +110,21 @@ impl Harness {
         hosted: bool,
         tabs: Arc<TabRegistry>,
     ) -> Result<Self, Box<dyn Error>> {
+        Self::with_native::<SCRIPT_CDP>(solver, hosted, tabs, NativeCapabilities::default()).await
+    }
+
+    /// [`Harness::with_tabs`] on a browser that reports `native`, for native-gated calls.
+    async fn with_native<const SCRIPT_CDP: bool>(
+        solver: Option<Arc<CaptchaSolver>>,
+        hosted: bool,
+        tabs: Arc<TabRegistry>,
+        native: NativeCapabilities,
+    ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
         let connect = Arc::clone(&fake);
-        let link = BrowserLink::start_with(
-            NativeCapabilities::default(),
-            Arc::clone(&tabs),
-            move || future::ready(connect.connect()),
-        );
+        let link = BrowserLink::start_with(native, Arc::clone(&tabs), move || {
+            future::ready(connect.connect())
+        });
         // Linked, with target discovery on, so a tab closed by the fake reaches the registry.
         within(async {
             while !link.is_ready() || fake.count("Target.setDiscoverTargets") == 0 {
@@ -220,7 +228,16 @@ impl Harness {
 
     /// A recorded script run with no task and no default page yet.
     fn run(&self) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
-        let view = self.link.view().ok_or("the link is up")?;
+        self.run_withholding(browseros_core::WithheldFeatures::none())
+    }
+
+    /// [`Harness::run`] for a host that withholds `withheld` from the run, as a plan does.
+    fn run_withholding(
+        &self,
+        withheld: browseros_core::WithheldFeatures,
+    ) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+        let mut view = self.link.view().ok_or("the link is up")?;
+        view.view = view.view.withholding(withheld);
         let start = RunStart {
             id: RunId::new(),
             code: "await page.title()".to_owned(),
@@ -2518,6 +2535,54 @@ async fn script_cdp_withholds_page_data_when_takeover_blocks_reads_before_reply(
     });
     harness.locks.unlock_host(lock?.id)?;
     assert_withheld_by_the_lock(&harness, operation, reply, Answers::Read).await?;
+    Ok(())
+}
+
+/// A host that withholds profile targeting from a run (a plan without it) gets raw profile
+/// commands refused as a plan matter, with nothing sent; the same run without it reaches them.
+#[tokio::test]
+async fn script_cdp_refuses_profile_commands_the_host_withholds() -> Result<(), Box<dyn Error>> {
+    let capable = NativeCapabilities::from_browseros_version(Some("0.53.0.1"));
+    let harness =
+        Harness::with_native::<true>(None, DESKTOP_MODE, Arc::new(TabRegistry::new()), capable)
+            .await?;
+    harness
+        .fake
+        .answer("Browser.getProfiles", json!({ "profiles": [] }));
+    let withheld = browseros_core::WithheldFeatures::none()
+        .with(browseros_core::NativeFeature::ProfileTargeting);
+    for method in ["Browser.getProfiles", "Browser.loadProfile"] {
+        let (run, _guard) = harness.run_withholding(withheld)?;
+        let reply = harness
+            .dispatcher
+            .submit(
+                &run,
+                Call::script("neo.cdp".to_owned(), json!({ "method": method }), None),
+            )
+            .wait()
+            .await;
+        let text = format!("{reply:?}");
+        assert!(
+            text.contains("plan_feature_unavailable"),
+            "{method}: {text}"
+        );
+        assert_eq!(harness.fake.count(method), 0, "{method} was sent");
+    }
+    let (run, _guard) = harness.run()?;
+    let reply = harness
+        .dispatcher
+        .submit(
+            &run,
+            Call::script(
+                "neo.cdp".to_owned(),
+                json!({ "method": "Browser.getProfiles" }),
+                None,
+            ),
+        )
+        .wait()
+        .await;
+    assert!(!format!("{reply:?}").contains("plan_feature_unavailable"));
+    assert_eq!(harness.fake.count("Browser.getProfiles"), 1);
     Ok(())
 }
 
