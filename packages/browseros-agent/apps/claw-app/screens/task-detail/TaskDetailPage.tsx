@@ -22,6 +22,7 @@ import {
 } from '@/modules/api/agent-settings.hooks'
 import { toastApiError } from '@/modules/toast/toast'
 import { PagesVisited } from './PagesVisited'
+import { ProfileNote } from './ProfileNote'
 import { ReplayTheater } from './ReplayTheater'
 import { SnapshotGallery } from './SnapshotGallery'
 import { TaskHelpRequest } from './TaskHelpRequest'
@@ -163,6 +164,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
     <Page>
       <TaskPageHeader session={session} lastPageUrl={data.lastPageUrl} />
       <TaskHelpRequest session={session} />
+      <ProfileNote session={session} />
       {session.status === 'failed' && !data.humanHelpEnabled ? (
         <AskForHelpTip />
       ) : null}
