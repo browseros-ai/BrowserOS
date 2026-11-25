@@ -42,7 +42,6 @@ use neo_snapshot_apc::tree::{
     NameVisibility, NodeBuilder, NodeKey, Role, SnapshotTree, TreeNode,
 };
 use oracle::{Oracle, OracleElement, OracleFrame};
-use serde::Deserialize;
 
 const CONTRACT_NAMES_VERSION: u32 = 4;
 const CONTRACT_GAP_G6_ERROR_MESSAGE: &str = "error message: shown because validity fails";
@@ -271,6 +270,8 @@ fn load_pb(name: &str) -> Result<AnnotatedPageContent, Box<dyn Error>> {
 }
 
 fn load_oracle(name: &str) -> Result<Oracle, Box<dyn Error>> {
+    use serde::Deserialize;
+
     let path = fixtures_dir().join(format!("{name}.oracle.json"));
     let text = fs::read_to_string(&path).map_err(|err| format!("{}: {err}", path.display()))?;
     let mut reader = serde_json::Deserializer::from_str(&text);

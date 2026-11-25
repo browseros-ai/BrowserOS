@@ -17,7 +17,7 @@ use neo_snapshot_apc::tree::{
     MIN_CONTRACT_VERSION, Name, NameCache, NameVisibility, NodeBuilder, NodeId, NodeKey, Role,
     SnapshotTree, TreeNode,
 };
-use rquickjs::{CatchResultExt, Context, Runtime};
+use rquickjs::{Context, Runtime};
 use serde::Deserialize;
 
 fn build_tree(root: NodeBuilder) -> Result<SnapshotTree, Box<dyn Error>> {
@@ -821,6 +821,113 @@ fn step2_labelledby_unrendered_private_boxes_alone_and_with_sibling() -> Result<
     )
 }
 
+fn build_private_failure_fields_tree() -> Result<SnapshotTree, Box<dyn Error>> {
+    build_tree(
+        NodeBuilder::root()
+            .dom_id(1)
+            .child(
+                NodeBuilder::element("span")
+                    .dom_id(10)
+                    .child(NodeBuilder::text("Public label")),
+            )
+            .child(
+                NodeBuilder::form_control(FormControlType::TextArea)
+                    .tag("textarea")
+                    .role("searchbox")
+                    .dom_id(11)
+                    .aria_label("Private textarea")
+                    .field_value("TypedCanary-2")
+                    .redaction(RedactionDecision::RedactedHasBeenPassword)
+                    .redacted_value_length(13)
+                    .child(NodeBuilder::text("TextCanary-3")),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(12)
+                    .labelledby(vec![ref_id(10), ref_id(11)])
+                    .child(NodeBuilder::text("Name target")),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(13)
+                    .describedby(vec![ref_id(12)])
+                    .child(NodeBuilder::text("Description target")),
+            )
+            .child(
+                NodeBuilder::element("div")
+                    .dom_id(14)
+                    .child(NodeBuilder::text("Wrong: "))
+                    .child(
+                        NodeBuilder::element("button")
+                            .dom_id(15)
+                            .labelledby(vec![ref_id(11)])
+                            .child(NodeBuilder::text("Error source")),
+                    ),
+            )
+            .child(
+                NodeBuilder::form_control(FormControlType::InputText)
+                    .tag("input")
+                    .dom_id(16)
+                    .aria_label("Invalid private reference")
+                    .aria_invalid("true")
+                    .errormessage(vec![ref_id(14)]),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(17)
+                    .describedby(vec![ref_id(11)])
+                    .child(NodeBuilder::text("Direct description control")),
+            )
+            .child(
+                NodeBuilder::form_control(FormControlType::InputPassword)
+                    .tag("input")
+                    .dom_id(18)
+                    .placeholder("PIN")
+                    .field_value("SECRET")
+                    .redaction(RedactionDecision::RedactedHasBeenPassword)
+                    .redacted_value_length(6),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(19)
+                    .describedby(vec![ref_id(18)])
+                    .aria_invalid("true")
+                    .errormessage(vec![ref_id(18)])
+                    .child(NodeBuilder::text("Direct placeholder control")),
+            ),
+    )
+}
+
+#[test]
+fn private_failure_fields_direct_vs_indirect_descriptions_and_errors() -> Result<(), Box<dyn Error>>
+{
+    let bullets = "•".repeat(13);
+    let tree = build_private_failure_fields_tree()?;
+    let desc = |dom: i32| -> Result<String, Box<dyn Error>> {
+        Ok(tree
+            .accessible_description(
+                node_id(&tree, "doc-main", dom)?,
+                NameVisibility::VisibleOnly,
+            )
+            .into_text())
+    };
+    let err = |dom: i32| -> Result<String, Box<dyn Error>> {
+        Ok(tree.accessible_error_message(node_id(&tree, "doc-main", dom)?))
+    };
+
+    assert_eq!(visible_name(&tree, 12)?, format!("Public label {bullets}"));
+    assert_eq!(desc(13)?, format!("Public label {bullets}"));
+    assert_eq!(err(16)?, format!("Wrong: {bullets}"));
+    assert_eq!(
+        desc(17)?,
+        "Private textarea",
+        "#description-direct follows Playwright roleUtils.ts:745 (aria-label, never secret)"
+    );
+    assert_eq!(desc(19)?, "PIN");
+    assert_eq!(err(19)?, "PIN");
+    Ok(())
+}
+
 // ============================================================================
 // Step 3 — Embedded controls
 // ============================================================================
@@ -986,7 +1093,7 @@ fn step3_embedded_collapsed_and_listbox_select_controls() -> Result<(), Box<dyn 
                     .child(
                         NodeBuilder::form_control(FormControlType::SelectOne)
                             .tag("select")
-                            .select_option(select_opt(None, Some("fallback-val"), false))
+                            .select_option(select_opt(Some("FirstFallback"), Some("1"), false))
                             .select_option(select_opt(Some("Second"), Some("2"), false)),
                     ),
             )
@@ -1047,8 +1154,8 @@ fn step3_embedded_collapsed_and_listbox_select_controls() -> Result<(), Box<dyn 
             ),
             (
                 11,
-                "Default: fallback-val",
-                "collapsed <select> with no selected option falls back to first option",
+                "Default: FirstFallback",
+                "collapsed <select> with no selected option falls back to first option text",
             ),
             (
                 12,
@@ -1059,6 +1166,51 @@ fn step3_embedded_collapsed_and_listbox_select_controls() -> Result<(), Box<dyn 
                 13,
                 "First: FirstOpt",
                 "list-box <select> with no selected <option> falls back to first <option>",
+            ),
+        ],
+    )
+}
+
+#[test]
+fn step3_collapsed_select_never_invents_name_from_submission_value() -> Result<(), Box<dyn Error>> {
+    let tree = build_tree(
+        NodeBuilder::root()
+            .dom_id(1)
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(14)
+                    .child(NodeBuilder::text("EmptyUnselected:"))
+                    .child(
+                        NodeBuilder::form_control(FormControlType::SelectOne)
+                            .tag("select")
+                            .select_option(select_opt(None, Some("id-123"), false))
+                            .select_option(select_opt(Some("Second"), Some("2"), false)),
+                    ),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(15)
+                    .child(NodeBuilder::text("EmptySelected:"))
+                    .child(
+                        NodeBuilder::form_control(FormControlType::SelectMultiple)
+                            .tag("select")
+                            .select_option(select_opt(None, Some("secret-id"), true)),
+                    ),
+            ),
+    )?;
+
+    assert_visible_names(
+        &tree,
+        &[
+            (
+                14,
+                "EmptyUnselected:",
+                "collapsed <select> with no text on first option does not invent name from submission value",
+            ),
+            (
+                15,
+                "EmptySelected:",
+                "collapsed <select> with no text on selected option does not invent name from submission value",
             ),
         ],
     )
@@ -1900,6 +2052,75 @@ fn step5_table_svg_and_presentational_step2e_skip() -> Result<(), Box<dyn Error>
                 "<img role=none> skips Step 2e alt and Step 2i title",
             ),
             (31, "", "<fieldset role=none> skips Step 2e direct <legend>"),
+        ],
+    )
+}
+
+#[test]
+fn step5_svg_descendant_title_and_foreign_object_boundary() -> Result<(), Box<dyn Error>> {
+    let tree = build_tree(
+        NodeBuilder::root().dom_id(1).child(
+            NodeBuilder::element("svg")
+                .dom_id(20)
+                .child(
+                    NodeBuilder::element("g")
+                        .dom_id(21)
+                        .role("img")
+                        .child(
+                            NodeBuilder::element("title")
+                                .aria_hidden(true)
+                                .child(NodeBuilder::text("Revenue")),
+                        )
+                        .child(NodeBuilder::element("rect")),
+                )
+                .child(
+                    NodeBuilder::element("a").dom_id(22).href("#chart").child(
+                        NodeBuilder::element("title")
+                            .aria_hidden(true)
+                            .child(NodeBuilder::text("Chart link")),
+                    ),
+                )
+                .child(
+                    NodeBuilder::element("foreignobject")
+                        .child(NodeBuilder::element("div").dom_id(23).role("img").child(
+                            NodeBuilder::element("title").child(NodeBuilder::text("Not SVG title")),
+                        ))
+                        .child(
+                            NodeBuilder::element("svg").child(
+                                NodeBuilder::element("g").dom_id(24).role("img").child(
+                                    NodeBuilder::element("title")
+                                        .aria_hidden(true)
+                                        .child(NodeBuilder::text("Inner SVG")),
+                                ),
+                            ),
+                        ),
+                ),
+        ),
+    )?;
+
+    assert_visible_names(
+        &tree,
+        &[
+            (
+                21,
+                "Revenue",
+                "SVG descendant <g role=img> uses its direct SVG <title> child",
+            ),
+            (
+                22,
+                "Chart link",
+                "SVG descendant <a href> uses its direct SVG <title> child",
+            ),
+            (
+                23,
+                "",
+                "HTML element inside <foreignObject> does not treat HTML <title> as an SVG title",
+            ),
+            (
+                24,
+                "Inner SVG",
+                "nested <svg> inside <foreignObject> re-enters the SVG namespace for <g><title>",
+            ),
         ],
     )
 }
@@ -3239,6 +3460,8 @@ fn whitespace_corpus() -> Vec<String> {
 #[test]
 fn quickjs_differential_as_flat_string_and_normalize_whitespace_parity()
 -> Result<(), Box<dyn Error>> {
+    use rquickjs::CatchResultExt;
+
     // Exact expressions from Playwright 1.64.1:
     // - `packages/injected/src/roleUtils.ts:395` (`asFlatString`)
     // - `packages/isomorphic/stringUtils.ts:89` (`normalizeWhiteSpace`)

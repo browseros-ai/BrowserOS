@@ -323,6 +323,10 @@ pub fn normalize_whitespace(text: &str) -> String {
 impl SnapshotTree {
     /// Creates an on-demand memoized [`NameCache`] for computing names, descriptions, and error
     /// messages across many nodes in this tree.
+    ///
+    /// Contract version gating happens once at [`SnapshotTree::build`] via
+    /// [`BuildOptions::with_min_contract_version`](super::BuildOptions::with_min_contract_version);
+    /// fields added in higher contract versions simply read as unset on lower-version trees.
     #[must_use]
     pub fn name_cache(&self) -> NameCache<'_> {
         NameCache::new(self)
@@ -356,6 +360,7 @@ struct LookupIndex<'a> {
     tree: &'a SnapshotTree,
     by_doc_dom: OnceLock<HashMap<(DocId, DomNodeId), NodeId>>,
     labels_for: OnceLock<HashMap<(DocId, DomNodeId), Vec<NodeId>>>,
+    in_svg_scope: OnceLock<Vec<bool>>,
 }
 
 impl<'a> LookupIndex<'a> {
@@ -364,7 +369,46 @@ impl<'a> LookupIndex<'a> {
             tree,
             by_doc_dom: OnceLock::new(),
             labels_for: OnceLock::new(),
+            in_svg_scope: OnceLock::new(),
         }
+    }
+
+    /// Whether `node_id` is an `<svg>` element or an SVG descendant (`ownerSVGElement != null`)
+    /// whose direct `<title>` children live in the SVG namespace.
+    ///
+    /// Computed once in a single O(N) preorder pass on first demand so deep trees never incur
+    /// quadratic ancestor walks. Stops at `<foreignObject>` and document boundaries, and treats
+    /// untagged HTML `div`/`span` nodes (`raw_tag == None`) as outside SVG.
+    fn is_in_svg_scope(&self, node_id: NodeId) -> bool {
+        let flags = self.in_svg_scope.get_or_init(|| {
+            let nodes = self.tree.nodes();
+            let mut in_svg = vec![false; nodes.len()];
+            for node in nodes {
+                let Some(raw) = node.raw_attributes() else {
+                    continue;
+                };
+                let parent_in_svg = node
+                    .parent()
+                    .and_then(|pid| nodes.get(pid.index()).filter(|p| p.doc() == node.doc()))
+                    .and_then(|p| in_svg.get(p.id().index()).copied())
+                    .unwrap_or(false);
+                let value = if hidden::is_ua_shadow(raw) || hidden::is_text_node(raw) {
+                    parent_in_svg
+                } else {
+                    match hidden::raw_tag(raw) {
+                        Some(tag) if tag.eq_ignore_ascii_case("svg") => true,
+                        Some(tag) if tag.eq_ignore_ascii_case("foreignobject") => false,
+                        Some(_) => parent_in_svg,
+                        None => false,
+                    }
+                };
+                if let Some(slot) = in_svg.get_mut(node.id().index()) {
+                    *slot = value;
+                }
+            }
+            in_svg
+        });
+        flags.get(node_id.index()).copied().unwrap_or(false)
     }
 
     fn node_by_doc_dom(&self, doc: DocId, dom_id: DomNodeId) -> Option<NodeId> {
@@ -808,37 +852,60 @@ fn push_children_reversed(
     }
 }
 
-/// Collects direct logical children of `parent_id` in flat-tree preorder within the same document,
-/// skipping `ua_shadow` text nodes and transparently descending through `ua_shadow` containers.
-fn collect_logical_children(tree: &SnapshotTree, parent_id: NodeId) -> Vec<NodeId> {
-    let Some(parent) = tree.node(parent_id) else {
-        return Vec::new();
-    };
-    let doc = parent.doc();
-    let mut result = Vec::new();
-    let mut stack = Vec::new();
-    push_children_reversed(tree, parent_id, doc, &mut stack);
+/// Iterative walker over direct logical children of a node in flat-tree preorder within the same
+/// document, skipping `ua_shadow` text nodes and transparently descending through `ua_shadow`
+/// containers.
+struct LogicalChildren<'a> {
+    tree: &'a SnapshotTree,
+    doc: DocId,
+    stack: Vec<NodeId>,
+}
 
-    while let Some(child_id) = stack.pop() {
-        let Some(child) = tree.node(child_id) else {
-            continue;
+impl<'a> LogicalChildren<'a> {
+    fn new(tree: &'a SnapshotTree, parent_id: NodeId) -> Self {
+        let Some(parent) = tree.node(parent_id) else {
+            return Self {
+                tree,
+                doc: DocId::MAIN,
+                stack: Vec::new(),
+            };
         };
-        if child.doc() != doc {
-            continue;
-        }
-        let Some(raw) = child.raw_attributes() else {
-            continue;
-        };
-        if hidden::is_ua_shadow(raw) {
-            if !hidden::is_text_node(raw) {
-                push_children_reversed(tree, child_id, doc, &mut stack);
-            }
-            continue;
-        }
-        result.push(child_id);
+        let doc = parent.doc();
+        let mut stack = Vec::new();
+        push_children_reversed(tree, parent_id, doc, &mut stack);
+        Self { tree, doc, stack }
     }
+}
 
-    result
+impl Iterator for LogicalChildren<'_> {
+    type Item = NodeId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(child_id) = self.stack.pop() {
+            let Some(child) = self.tree.node(child_id) else {
+                continue;
+            };
+            if child.doc() != self.doc {
+                continue;
+            }
+            let Some(raw) = child.raw_attributes() else {
+                continue;
+            };
+            if hidden::is_ua_shadow(raw) {
+                if !hidden::is_text_node(raw) {
+                    push_children_reversed(self.tree, child_id, self.doc, &mut self.stack);
+                }
+                continue;
+            }
+            return Some(child_id);
+        }
+        None
+    }
+}
+
+/// Collects direct logical children of `parent_id` in flat-tree preorder within the same document.
+fn collect_logical_children(tree: &SnapshotTree, parent_id: NodeId) -> Vec<NodeId> {
+    LogicalChildren::new(tree, parent_id).collect()
 }
 
 fn find_first_direct_child_tag(
@@ -846,35 +913,16 @@ fn find_first_direct_child_tag(
     parent_id: NodeId,
     expected_tag: &str,
 ) -> Option<NodeId> {
-    let parent = tree.node(parent_id)?;
-    let doc = parent.doc();
-    let mut stack = Vec::new();
-    push_children_reversed(tree, parent_id, doc, &mut stack);
-
-    while let Some(child_id) = stack.pop() {
+    LogicalChildren::new(tree, parent_id).find(|&child_id| {
         let Some(child) = tree.node(child_id) else {
-            continue;
+            return false;
         };
-        if child.doc() != doc {
-            continue;
-        }
         let Some(raw) = child.raw_attributes() else {
-            continue;
+            return false;
         };
-        if hidden::is_ua_shadow(raw) {
-            if !hidden::is_text_node(raw) {
-                push_children_reversed(tree, child_id, doc, &mut stack);
-            }
-            continue;
-        }
-        if !hidden::is_text_node(raw)
+        !hidden::is_text_node(raw)
             && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case(expected_tag))
-        {
-            return Some(child_id);
-        }
-    }
-
-    None
+    })
 }
 
 fn collect_dom_text_in_subtree(tree: &SnapshotTree, root_id: NodeId) -> Option<String> {
@@ -961,7 +1009,7 @@ fn select_options_fallback_text(raw: &ContentAttributes) -> String {
             if count > 0 {
                 out.push(' ');
             }
-            out.push_str(opt.text.as_deref().or(opt.value.as_deref()).unwrap_or(""));
+            out.push_str(opt.text.as_deref().unwrap_or(""));
             count += 1;
         }
     }
@@ -971,7 +1019,7 @@ fn select_options_fallback_text(raw: &ContentAttributes) -> String {
     control
         .select_options
         .first()
-        .and_then(|opt| opt.text.as_deref().or(opt.value.as_deref()))
+        .and_then(|opt| opt.text.as_deref())
         .unwrap_or("")
         .to_owned()
 }
@@ -1670,7 +1718,7 @@ fn eval_step_2e<'a>(
         return Some(StepOutcome::Done(result.to_owned()));
     }
 
-    eval_step_2e_containers_and_media(index.tree, facts, tag_name, opts, has_labelledby, visited)
+    eval_step_2e_containers_and_media(index, facts, tag_name, opts, has_labelledby, visited)
 }
 
 fn eval_step_2e_special_input<'a>(
@@ -1725,13 +1773,14 @@ fn eval_step_2e_special_input<'a>(
 }
 
 fn eval_step_2e_containers_and_media<'a>(
-    tree: &SnapshotTree,
+    index: &LookupIndex<'a>,
     facts: NodeFacts<'_>,
     tag_name: &str,
     opts: EvalOptions,
     has_labelledby: bool,
     visited: &mut HashSet<NodeId>,
 ) -> Option<StepOutcome<'a>> {
+    let tree = index.tree;
     if !has_labelledby && tag_name.eq_ignore_ascii_case("fieldset") {
         visited.insert(facts.id);
         if let Some(legend_id) = find_first_direct_child_tag(tree, facts.id, "legend") {
@@ -1779,21 +1828,21 @@ fn eval_step_2e_containers_and_media<'a>(
         return None;
     }
 
-    if tag_name.eq_ignore_ascii_case("svg") {
+    if !tag_name.eq_ignore_ascii_case("foreignobject")
+        && let Some(title_id) = find_first_direct_child_tag(tree, facts.id, "title")
+        && index.is_in_svg_scope(facts.id)
+    {
         visited.insert(facts.id);
-        if let Some(title_id) = find_first_direct_child_tag(tree, facts.id, "title") {
-            let title_hidden = tree
-                .node(title_id)
-                .is_some_and(|child| child.hidden().is_hidden_for_aria());
-            return Some(StepOutcome::TailCall {
-                node_id: title_id,
-                opts: EvalOptions {
-                    embedded_in_labelledby: RefTraversal::from_hidden(title_hidden),
-                    ..opts.child_options()
-                },
-            });
-        }
-        return None;
+        let title_hidden = tree
+            .node(title_id)
+            .is_some_and(|child| child.hidden().is_hidden_for_aria());
+        return Some(StepOutcome::TailCall {
+            node_id: title_id,
+            opts: EvalOptions {
+                embedded_in_labelledby: RefTraversal::from_hidden(title_hidden),
+                ..opts.child_options()
+            },
+        });
     }
 
     None
@@ -2020,10 +2069,7 @@ mod tests {
         BrowserOsContentAttributes, BrowserOsRef, FormControlType, RedactionDecision, SelectOption,
     };
 
-    use super::{
-        Description, Name, NameCache, NameVisibility, allows_name_from_content, as_flat_string,
-        is_name_prohibited, normalize_whitespace,
-    };
+    use super::{Description, Name, NameCache, NameVisibility};
     use crate::tree::{
         ApcBuilder, BuildOptions, DocToken, DomNodeId, FrameBuilder, NodeBuilder, NodeId, NodeKey,
         Role, SnapshotTree,
@@ -2101,7 +2147,7 @@ mod tests {
         ];
 
         for &(input, expected, reason) in cases {
-            assert_eq!(as_flat_string(input), expected, "{reason}");
+            assert_eq!(super::as_flat_string(input), expected, "{reason}");
         }
     }
 
@@ -2142,7 +2188,7 @@ mod tests {
         ];
 
         for &(input, expected, reason) in cases {
-            assert_eq!(normalize_whitespace(input), expected, "{reason}");
+            assert_eq!(super::normalize_whitespace(input), expected, "{reason}");
         }
     }
 
@@ -2167,18 +2213,18 @@ mod tests {
         ];
 
         assert!(
-            !is_name_prohibited(None),
+            !super::is_name_prohibited(None),
             "elements without a concrete role must not prohibit naming"
         );
         assert!(
-            !is_name_prohibited(Some(Role::None)),
+            !super::is_name_prohibited(Some(Role::None)),
             "Role::None is intentionally not in Playwright's name-prohibited list"
         );
 
         for &role in Role::ALL {
             let expected = expected_prohibited.contains(&role);
             assert_eq!(
-                is_name_prohibited(Some(role)),
+                super::is_name_prohibited(Some(role)),
                 expected,
                 "name-prohibited classification mismatch for role {role}"
             );
@@ -2232,15 +2278,15 @@ mod tests {
         ];
 
         assert!(
-            !allows_name_from_content(None, false),
+            !super::allows_name_from_content(None, false),
             "unroled elements do not allow name from content at self"
         );
         assert!(
-            allows_name_from_content(None, true),
+            super::allows_name_from_content(None, true),
             "unroled elements allow name from content as target descendants"
         );
         assert!(
-            !allows_name_from_content(Some(Role::Generic), true),
+            !super::allows_name_from_content(Some(Role::Generic), true),
             "explicit Role::Generic does not allow name from content even as a descendant"
         );
 
@@ -2248,12 +2294,12 @@ mod tests {
             let in_always = expected_always.contains(&role);
             let in_desc = in_always || expected_descendant_only.contains(&role);
             assert_eq!(
-                allows_name_from_content(Some(role), false),
+                super::allows_name_from_content(Some(role), false),
                 in_always,
                 "self name-from-content mismatch for role {role}"
             );
             assert_eq!(
-                allows_name_from_content(Some(role), true),
+                super::allows_name_from_content(Some(role), true),
                 in_desc,
                 "descendant name-from-content mismatch for role {role}"
             );
