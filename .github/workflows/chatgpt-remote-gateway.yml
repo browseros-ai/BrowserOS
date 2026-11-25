@@ -42,6 +42,8 @@ jobs:
           npm --version
       - name: Install dependencies
         run: npm install --no-audit --no-fund --verbose
+      - name: Pairing and OAuth protocol tests
+        run: npm test
       - name: TypeScript typecheck
         run: npm run typecheck -- --pretty false
       - name: Wrangler dry-run
