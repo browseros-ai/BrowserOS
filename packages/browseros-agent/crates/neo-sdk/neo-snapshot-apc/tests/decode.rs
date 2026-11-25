@@ -159,6 +159,7 @@ fn build_form_control_node() -> ContentNode {
             aria_role: Some(i32::from(AxRole::TextField)),
             is_ad_related: Some(false),
             redaction_decision: Some(i32::from(RedactionDecision::NoRedactionNecessary)),
+            browseros: None,
         }),
     }
 }
@@ -300,6 +301,7 @@ fn build_structured_and_iframe_children() -> Vec<ContentNode> {
             data: Some(IframeDataContent::RedactedFrameMetadata(
                 RedactedFrameMetadata {
                     reason: Some(i32::from(RedactedFrameReason::CrossSite)),
+                    browseros: None,
                 },
             )),
         })),
@@ -377,6 +379,7 @@ fn build_main_frame_data() -> FrameData {
             tool: Some(tool),
         }],
         default_line_height_px: Some(20),
+        browseros: None,
     }
 }
 
@@ -416,6 +419,7 @@ fn build_full_apc() -> AnnotatedPageContent {
             is_screenshot_relative: Some(false),
         }),
         tab_id: Some(42),
+        browseros: None,
         popup_window: Some(PopupWindow {
             root_node: Some(ContentNode {
                 children_nodes: Vec::new(),
@@ -589,22 +593,22 @@ fn open_enums_and_field_1000_extensions_survive_decode() -> Result<(), Box<dyn E
         &mut attrs_bytes,
     );
     push_varint_field(15, 777, &mut attrs_bytes);
-    // Unknown BrowserOS field 1000 extension payload on ContentAttributes.
-    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, b"ext-node", &mut attrs_bytes);
+    // Empty BrowserOS field 1000 submessage on ContentAttributes.
+    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, &[], &mut attrs_bytes);
 
     let mut root_bytes = Vec::new();
     push_length_delimited_field(2, &attrs_bytes, &mut root_bytes);
 
     let mut frame_bytes = Vec::new();
     push_length_delimited_field(4, b"https://example.com", &mut frame_bytes);
-    // Unknown BrowserOS field 1000 extension payload on FrameData.
-    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, b"ext-frame", &mut frame_bytes);
+    // Empty BrowserOS field 1000 submessage on FrameData.
+    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, &[], &mut frame_bytes);
 
     let mut apc_bytes = Vec::new();
     push_length_delimited_field(2, &root_bytes, &mut apc_bytes);
     push_length_delimited_field(3, &frame_bytes, &mut apc_bytes);
-    // Unknown BrowserOS field 1000 extension payload on AnnotatedPageContent.
-    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, b"ext-page", &mut apc_bytes);
+    // Empty BrowserOS field 1000 submessage on AnnotatedPageContent.
+    push_length_delimited_field(BROWSEROS_EXTENSION_TAG, &[], &mut apc_bytes);
 
     let decoded = decode_protobuf(&apc_bytes)?;
     let attrs = decoded

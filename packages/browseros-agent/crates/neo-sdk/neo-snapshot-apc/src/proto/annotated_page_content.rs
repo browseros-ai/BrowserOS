@@ -1,5 +1,6 @@
 use prost::{Enumeration, Message};
 
+use super::browseros::BrowserOsPageContentData;
 use super::content_node::ContentNode;
 use super::frame_data::{DocumentIdentifier, FrameData, SecurityOrigin};
 use super::geometry::{BoundingRect, BoundingSize};
@@ -42,8 +43,9 @@ pub struct AnnotatedPageContent {
     /// Deprecated upstream (`crbug.com/484011242`): Gemini in Chrome screenshot capture metadata.
     #[prost(message, optional, tag = "10")]
     pub gemini_in_chrome_page_metadata: Option<GeminiInChromePageMetadata>,
-    // Field 1000 (`BROWSEROS_EXTENSION_TAG`): reserved for BrowserOS page-level extension
-    // submessage per `apc-contract-design`.
+    /// BrowserOS contract metadata; absent on stock Chromium, which is how the engine refuses it.
+    #[prost(message, optional, tag = "1000")]
+    pub browseros: Option<BrowserOsPageContentData>,
 }
 
 /// Wire format version reported on [`AnnotatedPageContent::version`].
