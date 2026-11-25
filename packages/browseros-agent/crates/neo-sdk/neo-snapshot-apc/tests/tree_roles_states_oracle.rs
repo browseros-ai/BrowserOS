@@ -2,9 +2,9 @@
 //! against the 16 recorded Playwright oracles (`tests/fixtures/<name>.{pb,oracle.json}`).
 //!
 //! Frames join by `owner` `<iframe>` `DomNodeId` and elements join by `backendNodeId`. Every
-//! recording carries contract v4, so focus, `ContentHidden` and box visibility must agree on every
-//! joined element, and the elements that fail to join or disagree on role, hidden or state must
-//! equal the parity ledger (`support/parity_ledger.rs`).
+//! recording carries contract v4, so the elements that fail to join or disagree on role, hidden,
+//! box visibility or any state must equal the parity ledger (`support/parity_ledger.rs`), and every
+//! `ContentHidden` node must be hidden for the oracle.
 
 #[path = "support/fixture_pages.rs"]
 #[expect(
@@ -33,8 +33,8 @@ mod parity_ledger;
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs;
 use std::path::PathBuf;
+use std::{fmt, fs};
 
 use fixture_pages::FIXTURES;
 use neo_snapshot::{Invalid, Tristate};
@@ -79,14 +79,9 @@ struct FixtureComparison {
     joined_frames: usize,
     partial_frames: usize,
     joined_elements: usize,
-    active_matches: usize,
-    active_true_oracle: usize,
     active_true_matches: usize,
-    box_visible_matches: usize,
     content_hidden_total: usize,
     content_hidden_implies_oracle_hidden: usize,
-    active_mismatches: Vec<String>,
-    box_visible_mismatches: Vec<String>,
     disagreements: Vec<Measured>,
 }
 
@@ -164,46 +159,110 @@ fn to_oracle_invalid(value: InvalidState) -> Invalid {
     }
 }
 
-fn states_equal(actual: State, expected: &OracleStates) -> bool {
-    let checked_eq = actual.checked().map(to_oracle_tristate) == expected.checked;
-    let pressed_eq = actual.pressed().map(to_oracle_tristate) == expected.pressed;
-    let expanded_eq = actual.expanded() == expected.expanded;
-    let selected_eq = actual.selected() == expected.selected;
-    let disabled_eq = actual.disabled() == expected.disabled;
-    let invalid_eq = actual.invalid().map(to_oracle_invalid) == expected.invalid;
-    let level_eq = match (actual.level(), expected.level.as_ref()) {
-        (None, None) => true,
-        (Some(level), Some(number)) => number.as_u64() == Some(u64::from(level)),
-        _ => false,
-    };
-    let active_eq = actual.active() == expected.active;
-    checked_eq
-        && pressed_eq
-        && expanded_eq
-        && selected_eq
-        && disabled_eq
-        && invalid_eq
-        && level_eq
-        && active_eq
+/// One element's view of a single fact, as `check` compares it.
+struct Fact<'a> {
+    field: Field,
+    equal: bool,
+    tree: &'a dyn fmt::Debug,
+    oracle: &'a dyn fmt::Debug,
 }
 
-/// Records one disagreement on `field`, keyed for the parity ledger: a child frame by its URL,
-/// the main frame (the only one with no `parent`) by `None`.
-fn disagree(
+/// Records `fact` when the two sides differ, keyed for the parity ledger: a child frame by its
+/// URL, the main frame (the only one with no `parent`) by `None`.
+fn check(
     stats: &mut FixtureComparison,
     fixture: &'static str,
     frame: &OracleFrame,
     element: &OracleElement,
-    field: Field,
-    detail: String,
+    fact: &Fact<'_>,
 ) {
+    if fact.equal {
+        return;
+    }
     stats.disagreements.push(Measured {
         fixture,
         frame: frame.parent.as_ref().map(|_| frame.url.clone()),
         backend_node_id: element.backend_node_id,
-        field,
-        detail,
+        field: fact.field,
+        detail: format!(
+            "{fixture} [{}] node {} ({:?}): {:?} tree={:?} oracle={:?}",
+            frame.url, element.backend_node_id, element.role, fact.field, fact.tree, fact.oracle
+        ),
     });
+}
+
+/// Each state `toAriaNode` offers, compared on its own so a ledger entry for one state cannot
+/// hide a regression in another on the same node.
+fn check_states(
+    stats: &mut FixtureComparison,
+    fixture: &'static str,
+    frame: &OracleFrame,
+    element: &OracleElement,
+    actual: State,
+) {
+    let expected: &OracleStates = &element.states;
+    let checked = actual.checked().map(to_oracle_tristate);
+    let pressed = actual.pressed().map(to_oracle_tristate);
+    let invalid = actual.invalid().map(to_oracle_invalid);
+    let level = actual.level();
+    let level_equal = match (level, expected.level.as_ref()) {
+        (None, None) => true,
+        (Some(level), Some(number)) => number.as_u64() == Some(u64::from(level)),
+        _ => false,
+    };
+    let facts = [
+        Fact {
+            field: Field::Checked,
+            equal: checked == expected.checked,
+            tree: &checked,
+            oracle: &expected.checked,
+        },
+        Fact {
+            field: Field::Pressed,
+            equal: pressed == expected.pressed,
+            tree: &pressed,
+            oracle: &expected.pressed,
+        },
+        Fact {
+            field: Field::Expanded,
+            equal: actual.expanded() == expected.expanded,
+            tree: &actual.expanded(),
+            oracle: &expected.expanded,
+        },
+        Fact {
+            field: Field::Selected,
+            equal: actual.selected() == expected.selected,
+            tree: &actual.selected(),
+            oracle: &expected.selected,
+        },
+        Fact {
+            field: Field::Disabled,
+            equal: actual.disabled() == expected.disabled,
+            tree: &actual.disabled(),
+            oracle: &expected.disabled,
+        },
+        Fact {
+            field: Field::Invalid,
+            equal: invalid == expected.invalid,
+            tree: &invalid,
+            oracle: &expected.invalid,
+        },
+        Fact {
+            field: Field::Level,
+            equal: level_equal,
+            tree: &level,
+            oracle: &expected.level,
+        },
+        Fact {
+            field: Field::Active,
+            equal: actual.active() == expected.active,
+            tree: &actual.active(),
+            oracle: &expected.active,
+        },
+    ];
+    for fact in &facts {
+        check(stats, fixture, frame, element, fact);
+    }
 }
 
 fn compare_joined_element(
@@ -214,38 +273,9 @@ fn compare_joined_element(
     stats: &mut FixtureComparison,
 ) {
     stats.joined_elements += 1;
-
-    if element.states.active {
-        stats.active_true_oracle += 1;
+    if element.states.active && node.state().active() {
+        stats.active_true_matches += 1;
     }
-    if node.state().active() == element.states.active {
-        stats.active_matches += 1;
-        if element.states.active {
-            stats.active_true_matches += 1;
-        }
-    } else {
-        stats.active_mismatches.push(format!(
-            "{fixture} [{}] node {}: active tree={} oracle={}",
-            frame.url,
-            element.backend_node_id,
-            node.state().active(),
-            element.states.active,
-        ));
-    }
-
-    if node.hidden().is_box_visible() == element.visible {
-        stats.box_visible_matches += 1;
-    } else {
-        stats.box_visible_mismatches.push(format!(
-            "{fixture} [{}] node {}: box_visible tree={} oracle={} (role={:?})",
-            frame.url,
-            element.backend_node_id,
-            node.hidden().is_box_visible(),
-            element.visible,
-            element.role,
-        ));
-    }
-
     if node.hidden().is_content_hidden() {
         stats.content_hidden_total += 1;
         if element.hidden {
@@ -253,37 +283,47 @@ fn compare_joined_element(
         }
     }
 
+    let role = node.role();
     let expected_role = Role::parse(&element.role);
-    if node.role() != expected_role {
-        let detail = format!(
-            "{fixture} [{}] node {}: role tree={:?} oracle={:?}",
-            frame.url,
-            element.backend_node_id,
-            node.role(),
-            expected_role
-        );
-        disagree(stats, fixture, frame, element, Field::Role, detail);
-    }
-    if node.hidden().is_hidden_for_aria() != element.hidden {
-        let detail = format!(
-            "{fixture} [{}] node {}: hidden tree={} oracle={}",
-            frame.url,
-            element.backend_node_id,
-            node.hidden().is_hidden_for_aria(),
-            element.hidden
-        );
-        disagree(stats, fixture, frame, element, Field::Hidden, detail);
-    }
-    if !states_equal(node.state(), &element.states) {
-        let detail = format!(
-            "{fixture} [{}] node {}: state tree={:?} oracle={:?}",
-            frame.url,
-            element.backend_node_id,
-            node.state(),
-            element.states
-        );
-        disagree(stats, fixture, frame, element, Field::State, detail);
-    }
+    check(
+        stats,
+        fixture,
+        frame,
+        element,
+        &Fact {
+            field: Field::Role,
+            equal: role == expected_role,
+            tree: &role,
+            oracle: &expected_role,
+        },
+    );
+    let hidden = node.hidden().is_hidden_for_aria();
+    check(
+        stats,
+        fixture,
+        frame,
+        element,
+        &Fact {
+            field: Field::Hidden,
+            equal: hidden == element.hidden,
+            tree: &hidden,
+            oracle: &element.hidden,
+        },
+    );
+    let box_visible = node.hidden().is_box_visible();
+    check(
+        stats,
+        fixture,
+        frame,
+        element,
+        &Fact {
+            field: Field::BoxVisible,
+            equal: box_visible == element.visible,
+            tree: &box_visible,
+            oracle: &element.visible,
+        },
+    );
+    check_states(stats, fixture, frame, element, node.state());
 }
 
 fn compare_fixture(name: &'static str) -> Result<FixtureComparison, Box<dyn Error>> {
@@ -331,11 +371,18 @@ fn compare_fixture(name: &'static str) -> Result<FixtureComparison, Box<dyn Erro
             if let Some(node) = node {
                 compare_joined_element(name, frame, element, node, &mut stats);
             } else {
-                let detail = format!(
-                    "{name} [{}] node {}: no SnapshotTree node for oracle {:?} {:?}",
-                    frame.url, element.backend_node_id, element.role, element.name
+                check(
+                    &mut stats,
+                    name,
+                    frame,
+                    element,
+                    &Fact {
+                        field: Field::Join,
+                        equal: false,
+                        tree: &"no SnapshotTree node",
+                        oracle: &element.name,
+                    },
                 );
-                disagree(&mut stats, name, frame, element, Field::Join, detail);
             }
         }
     }
@@ -392,43 +439,28 @@ fn recorded_fixtures_agree_with_playwright_oracles_on_all_expressible_facts()
             fixture.name
         );
         assert_eq!(
-            stats.active_matches, stats.joined_elements,
-            "{}: active focus mismatches: {:?}",
-            fixture.name, stats.active_mismatches
-        );
-        assert_eq!(
-            stats.active_true_matches, stats.active_true_oracle,
-            "{}: every focused oracle element must be active in SnapshotTree",
-            fixture.name
-        );
-        assert_eq!(
             stats.content_hidden_implies_oracle_hidden, stats.content_hidden_total,
             "{}: every ContentHidden node must be hidden in the Playwright oracle",
             fixture.name
         );
-        // Blink repairs a zero-size ancestor's outer_bounding_box from its descendants
-        // (design §5.2): the two zero-size <input type="file"> controls on `zero-size-controls`
-        // inherit their UA shadow button's box in APC.
-        if fixture.name == "zero-size-controls" {
-            assert_eq!(
-                stats.box_visible_mismatches.len(),
-                2,
-                "{}: expected only the two zero-size file inputs to differ on box_visible, got {:?}",
-                fixture.name,
-                stats.box_visible_mismatches
-            );
-        } else {
-            assert_eq!(
-                stats.box_visible_matches, stats.joined_elements,
-                "{}: box_visible mismatches: {:?}",
-                fixture.name, stats.box_visible_mismatches
-            );
-        }
         disagreements.extend(stats.disagreements);
     }
     parity_ledger::assert_measured_equals_ledger(
         &disagreements,
-        &[Field::Join, Field::Role, Field::Hidden, Field::State],
+        &[
+            Field::Join,
+            Field::Role,
+            Field::Hidden,
+            Field::BoxVisible,
+            Field::Checked,
+            Field::Pressed,
+            Field::Expanded,
+            Field::Selected,
+            Field::Disabled,
+            Field::Invalid,
+            Field::Level,
+            Field::Active,
+        ],
     );
 
     assert!(

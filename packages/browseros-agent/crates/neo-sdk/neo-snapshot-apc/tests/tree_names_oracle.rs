@@ -159,19 +159,7 @@ fn compare_joined_element(
         .text();
     let actual_error = cache.error_message(node.id());
 
-    for (field, actual, expected) in [
-        (Field::Name, actual_name, element.name.as_str()),
-        (
-            Field::Description,
-            actual_description,
-            element.description.as_str(),
-        ),
-        (
-            Field::ErrorMessage,
-            actual_error,
-            element.error_message.as_str(),
-        ),
-    ] {
+    let mut check = |field: Field, actual: &str, expected: &str| {
         if actual != expected {
             stats.disagreements.push(Measured {
                 fixture,
@@ -186,7 +174,10 @@ fn compare_joined_element(
                 ),
             });
         }
-    }
+    };
+    check(Field::Name, actual_name, &element.name);
+    check(Field::Description, actual_description, &element.description);
+    check(Field::ErrorMessage, actual_error, &element.error_message);
 }
 
 fn compare_fixture(name: &'static str) -> Result<FixtureNameComparison, Box<dyn Error>> {

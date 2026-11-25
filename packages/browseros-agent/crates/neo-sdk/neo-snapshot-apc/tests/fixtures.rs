@@ -398,16 +398,15 @@ fn sensitive_form_fixture_redacts_password_and_classifies_card_and_otp()
          OTP values, and with them the two value text nodes each field had on stock"
     );
 
-    for (value, field) in [
-        (&b"example-pass-value"[..], "password"),
-        (&b"4111111111111111"[..], "card number"),
-        (&b"123456"[..], "one-time code"),
-    ] {
+    let assert_withheld = |value: &[u8], field: &str| {
         assert!(
             !raw_bytes.windows(value.len()).any(|window| window == value),
             "the {field} value set in markup must be redacted out of the wire protobuf bytes"
         );
-    }
+    };
+    assert_withheld(b"example-pass-value", "password");
+    assert_withheld(b"4111111111111111", "card number");
+    assert_withheld(b"123456", "one-time code");
 
     let nodes = walk_nodes(&apc);
     let label_for = |target_dom_id: i32| -> Option<String> {

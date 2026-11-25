@@ -1,7 +1,8 @@
 //! The parity ledger: every oracle element where [`neo_snapshot_apc::tree`] and the recorded
 //! Playwright oracle still disagree on the contract-v4 recordings, with the reason.
 //!
-//! `tree_roles_states_oracle.rs` (join, role, hidden, states) and `tree_names_oracle.rs` (name,
+//! `tree_roles_states_oracle.rs` (join, role, hidden, box visibility, each state) and
+//! `tree_names_oracle.rs` (name,
 //! description, error message) compare every joined element of all 16 fixtures and require the
 //! disagreements to equal this ledger exactly. A change that fixes a rule removes its entries; one
 //! that breaks a rule fails with the new disagreement spelled out. Each entry names its owner:
@@ -18,8 +19,17 @@ pub(crate) enum Field {
     Join,
     Role,
     Hidden,
-    /// Any of the states `toAriaNode` offers the role, plus `active`.
-    State,
+    /// Has a box and is not `visibility: hidden` (`isElementVisible`).
+    BoxVisible,
+    // One field per state `toAriaNode` offers, plus `active`.
+    Checked,
+    Pressed,
+    Expanded,
+    Selected,
+    Disabled,
+    Invalid,
+    Level,
+    Active,
     Name,
     Description,
     ErrorMessage,
@@ -171,6 +181,17 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         ],
     },
     KnownMismatch {
+        field: Field::BoxVisible,
+        cause: Cause::ContractFact,
+        why: "APC repairs a zero-size <input type=file>'s outer box from its browser-made button, \
+              so the tree sees a box Playwright does not; apc-engine-design 5.2 keeps the \
+              `visible` filter in the page for this reason",
+        nodes: &[
+            main("zero-size-controls", 43),
+            main("zero-size-controls", 44),
+        ],
+    },
+    KnownMismatch {
         field: Field::Role,
         cause: Cause::RustRule,
         why: "APC sends <input type=image> as an Image node with no FormControlData; the role \
@@ -179,13 +200,19 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         nodes: IMAGE_INPUTS,
     },
     KnownMismatch {
-        field: Field::State,
+        field: Field::Pressed,
         cause: Cause::RustRule,
-        why: "follows the image input's textbox role: pressed is not offered, invalid is",
+        why: "follows the image input's textbox role, which is not offered pressed",
         nodes: IMAGE_INPUTS,
     },
     KnownMismatch {
-        field: Field::State,
+        field: Field::Invalid,
+        cause: Cause::RustRule,
+        why: "follows the image input's textbox role, which is offered invalid",
+        nodes: IMAGE_INPUTS,
+    },
+    KnownMismatch {
+        field: Field::Disabled,
         cause: Cause::AcceptedGap("G2"),
         why: "a nested aria-disabled=\"false\" does not stop aria-disabled inheritance",
         nodes: &[
