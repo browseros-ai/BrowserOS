@@ -8,6 +8,7 @@ repository.workspace = true
 description = "A page's aria snapshot as a typed tree, and the JavaScript semantics its text is printed with (BrowserOS Neo)"
 
 [dependencies]
+regress.workspace = true
 serde.workspace = true
 # `float_roundtrip`: the same numbers neo-playwright reads, so a level or a box coordinate is the
 # double JavaScript's `JSON.parse` makes of it, also when this crate is built alone.
