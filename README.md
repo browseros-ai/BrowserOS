@@ -66,7 +66,7 @@ Claude Code, Codex and Cursor work in it <strong>signed in as you, in their own 
 
 ## Benchmarks
 
-About **63% faster** and **40% fewer tokens** than the browsers built into Claude and ChatGPT, and it finishes about **96%** of tasks. These are approximate figures from our own runs.
+About **63% faster** and **40% fewer tokens** than the browsers built into Claude and ChatGPT, and it finishes about **96%** of tasks. These figures are approximate, and the full benchmark write-up is not published yet.
 
 | Tool | Time per task | Tokens per task | Tasks finished |
 | :-- | --: | --: | --: |
@@ -89,7 +89,7 @@ About **63% faster** and **40% fewer tokens** than the browsers built into Claud
 <details>
 <summary><strong>Which agents work with neo?</strong></summary>
 
-Any agent that speaks MCP. Claude Code, the Claude desktop app, ChatGPT, Codex, Cursor, OpenCode, VS Code and Zed connect in one click.
+Any agent that speaks MCP. Claude Code, Codex, Cursor, OpenCode, Antigravity, VS Code and Zed connect in one click. Claude Desktop takes a one-file extension, and anything else connects with the endpoint URL. [Setup guide](https://docs.browseros.com/neo/mcp).
 </details>
 
 <details>
