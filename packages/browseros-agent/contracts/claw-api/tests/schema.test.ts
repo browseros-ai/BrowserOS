@@ -431,6 +431,12 @@ describe('plan API schema', () => {
     '/api/v1/plan/resume': ['resume', 'post', 'resumePlan'],
     '/api/v1/plan/portal': ['portal', 'post', 'openPlanPortal'],
     '/api/v1/plan/refresh': ['refresh', 'post', 'refreshPlan'],
+    '/api/v1/plan/dev': ['devTools', 'get', 'getPlanDevTools'],
+    '/api/v1/plan/dev/forget-this-computer': [
+      'forgetThisComputer',
+      'post',
+      'forgetThisComputer',
+    ],
   } as const
 
   test('registers every plan route under its operation', () => {
@@ -442,7 +448,7 @@ describe('plan API schema', () => {
       Record<string, { operationId?: string }>
     >
 
-    expect(Object.keys(routes)).toHaveLength(14)
+    expect(Object.keys(routes)).toHaveLength(16)
     for (const [route, [name, method, operationId]] of Object.entries(routes)) {
       expect(openapi.paths[route]).toEqual({
         $ref: `./paths/plan.yaml#/${name}`,

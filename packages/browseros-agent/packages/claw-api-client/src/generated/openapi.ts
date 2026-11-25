@@ -898,6 +898,46 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/plan/dev': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Whether this build offers developer tools for the plan.
+     * @description Debug builds only. Release builds, staging included, do not have this route and answer 404, so the app shows no developer tools there.
+     */
+    get: operations['getPlanDevTools']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/dev/forget-this-computer': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Take this computer off its plan, the way a new computer starts.
+     * @description Debug builds only, for testing buying and the free trial again. Frees this computer's seat on its key when it is on one, then forgets the install and licence, so the next billing call registers a fresh install. The key, its other computers and the subscription do not change. Release builds answer 404.
+     */
+    post: operations['forgetThisComputer']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/plan/savings': {
     parameters: {
       query?: never
@@ -3838,6 +3878,49 @@ export interface operations {
       }
       403: components['responses']['PlanForbidden']
       404: components['responses']['PlanNotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlanDevTools: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description This is a debug build; the developer tools below are available. */
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['NotFound']
+    }
+  }
+  forgetThisComputer: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan afterwards, which reads none. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['NotFound']
       500: components['responses']['InternalError']
     }
   }

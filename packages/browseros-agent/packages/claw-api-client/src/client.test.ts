@@ -450,6 +450,53 @@ describe('ClawApiClient', () => {
     await expect(requests[2]?.json()).resolves.toEqual({})
   })
 
+  it('finds the developer tools only on a debug build and forgets this computer', async () => {
+    const free: Plan = {
+      available: true,
+      plan: null,
+      planName: null,
+      features: [],
+      status: 'none',
+      periodEnd: null,
+      endsAt: null,
+      graceUntil: null,
+      onKey: false,
+      checkedAt: null,
+      stale: false,
+    }
+    const requests: Request[] = []
+    const debug = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return new URL(request.url).pathname === '/api/v1/plan/dev'
+          ? new Response(null, { status: 204 })
+          : Response.json(free)
+      },
+    })
+    await expect(debug.hasPlanDevTools()).resolves.toBe(true)
+    await expect(debug.forgetThisComputer()).resolves.toEqual(free)
+    expect(
+      requests.map((request) => [
+        request.method,
+        new URL(request.url).pathname,
+      ]),
+    ).toEqual([
+      ['GET', '/api/v1/plan/dev'],
+      ['POST', '/api/v1/plan/dev/forget-this-computer'],
+    ])
+
+    const release = new ClawApiClient(baseUrl, {
+      fetch: async () =>
+        Response.json(
+          { code: 'not_found', message: 'not found' },
+          { status: 404 },
+        ),
+    })
+    await expect(release.hasPlanDevTools()).resolves.toBe(false)
+  })
+
   it('does not clone successful response bodies', async () => {
     const response = Response.json({ items: [] })
     const originalClone = response.clone.bind(response)

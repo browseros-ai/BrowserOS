@@ -387,6 +387,40 @@ refresh:
         $ref: ../responses.yaml#/PlanNotFound
       '500':
         $ref: ../responses.yaml#/InternalError
+devTools:
+  get:
+    operationId: getPlanDevTools
+    summary: Whether this build offers developer tools for the plan.
+    description: Debug builds only. Release builds, staging included, do not have this route and answer 404, so the app shows no developer tools there.
+    responses:
+      '204':
+        description: This is a debug build; the developer tools below are available.
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/NotFound
+forgetThisComputer:
+  post:
+    operationId: forgetThisComputer
+    summary: Take this computer off its plan, the way a new computer starts.
+    description: >-
+      Debug builds only, for testing buying and the free trial again. Frees this computer's
+      seat on its key when it is on one, then forgets the install and licence, so the next
+      billing call registers a fresh install. The key, its other computers and the
+      subscription do not change. Release builds answer 404.
+    responses:
+      '200':
+        description: The plan afterwards, which reads none.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/Plan
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError
 savings:
   get:
     operationId: getPlanSavings
