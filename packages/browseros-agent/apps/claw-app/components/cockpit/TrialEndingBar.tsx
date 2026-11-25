@@ -28,7 +28,7 @@ import {
 import { formatDate, formatPrice, proPrices } from '@/screens/pro/pro.helpers'
 import { PromoCard } from './PromoCard'
 
-const DISMISS_KEY = 'ultrafastTrialEndingBarDismissed:v1'
+export const DISMISS_KEY = 'ultrafastTrialEndingBarDismissed:v1'
 
 function readDismissed(): boolean {
   try {

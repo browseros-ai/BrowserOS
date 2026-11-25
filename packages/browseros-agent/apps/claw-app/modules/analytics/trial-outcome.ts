@@ -15,7 +15,7 @@ import { isCardTrial } from '@/modules/plan/trial.helpers'
 import { AnalyticsEvent, type AnalyticsEventName, track } from './events'
 import { isCapturing } from './posthog'
 
-const MARK_KEY = 'ultrafastTrialWatch:v1'
+export const MARK_KEY = 'ultrafastTrialWatch:v1'
 // Every new tab page reads the same marker, so reading and clearing it is one
 // exclusive step across tabs; without it two tabs could both report the outcome.
 const LOCK_NAME = 'ultrafast-trial-outcome'

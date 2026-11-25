@@ -53,6 +53,17 @@ export const usePlanKey = createQuery<PlanKey, void>({
   fetcher: async () => (await apiClient()).getPlanKey(),
 })
 
+/** Debug builds only. Pass `skipToken` as the variables outside a development build. */
+export const usePlanDevTools = createQuery<boolean, void>({
+  queryKey: ['api', 'plan-dev-tools'],
+  fetcher: async () => (await apiClient()).hasPlanDevTools(),
+})
+
+/** Debug builds only: takes this computer off its plan, the way a new computer starts. */
+export const useForgetThisComputer = createMutation<Plan>({
+  mutationFn: async () => (await apiClient()).forgetThisComputer(),
+})
+
 export const usePlanCheckout = createQuery<
   PlanCheckoutStatus,
   PlanCheckoutRequest
