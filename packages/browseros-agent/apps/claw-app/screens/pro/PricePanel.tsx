@@ -34,8 +34,10 @@ interface PricePanelProps {
   plan: Plan
   pricing: { isPending: boolean; isError: boolean; error: unknown }
   prices: ProPrices | null
-  /** The free trial the monthly price is offered with here, or 0. */
+  /** The free trial the copy promises for Monthly: the checkout's grant once one started, or 0. */
   trialDays: number
+  /** The free trial the price list offers for Monthly, or 0. */
+  offeredTrialDays: number
   period: BillingPeriod
   onPeriodChange: (period: BillingPeriod) => void
   checkout: ProCheckout
@@ -49,6 +51,7 @@ export function PricePanel({
   pricing,
   prices,
   trialDays,
+  offeredTrialDays,
   period,
   onPeriodChange,
   checkout,
@@ -92,7 +95,11 @@ export function PricePanel({
         amount={amount}
         trial={(checkout.trialDays ?? 0) > 0}
         // Offered, but the gateway said no at checkout: not eligible, or trials are paused.
-        trialRefused={trial && checkout.trialDays === 0}
+        trialRefused={
+          offeredTrialDays > 0 &&
+          price.interval === 'month' &&
+          checkout.trialDays === 0
+        }
         paid={checkout.phase === 'confirming'}
         onReopen={checkout.reopen}
         onCancel={checkout.cancel}

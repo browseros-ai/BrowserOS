@@ -1102,6 +1102,14 @@ describe('the free trial', () => {
     expect(text()).toContain('Trial temporarily unavailable')
     expect(text()).toContain('Pay $20 with Stripe')
     expect(text()).toContain('Nothing is charged until you subscribe.')
+    await click('When am I charged?')
+    expect(text()).toContain('Today, then on the same date each month')
+    expect(text()).not.toContain('after your 7 free days')
+
+    await click('Cancel')
+    expect(text()).toContain('Make your agents ultrafast')
+    expect(text()).not.toContain('Try ultrafast free for 7 days')
+    expect(button('Get ultrafast')).toBeTruthy()
     expect(events('ultrafast_trial_unavailable_shown')[0]?.properties).toEqual({
       interval: 'month',
     })

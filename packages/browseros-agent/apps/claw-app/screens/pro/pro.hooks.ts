@@ -56,6 +56,8 @@ export interface ProCheckout {
    * starts, or when the gateway doesn't say.
    */
   trialDays: number | undefined
+  /** The billing period of the started checkout, which `trialDays` belongs to. */
+  interval: PriceInterval | undefined
   /** Opens the payment page again, for a tab that was closed. */
   reopen: () => void
   /** The person says they won't pay this time. */
@@ -166,6 +168,7 @@ export function useProCheckout(): ProCheckout {
     },
     isStarting: start.isPending,
     trialDays,
+    interval: start.variables?.interval,
     reopen: () => {
       if (start.data) openInNewTab(start.data.url)
     },

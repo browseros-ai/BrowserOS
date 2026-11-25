@@ -102,7 +102,13 @@ export function Pro() {
   const ended = keyHasEnded(current)
   const period = prices ? pickPeriod(prices, wantedPeriod) : wantedPeriod
   const idle = checkout.phase !== 'waiting' && checkout.phase !== 'confirming'
-  const trialDays = trialOfferDays(current, pricing.data)
+  const offeredDays = trialOfferDays(current, pricing.data)
+  // Once a monthly checkout has started, what the gateway granted it outranks
+  // the price list: a refused trial must not be promised anywhere on the page.
+  const trialDays =
+    checkout.trialDays !== undefined && checkout.interval === 'month'
+      ? checkout.trialDays
+      : offeredDays
   const trial = trialDays > 0 && period === 'month'
 
   const buy = () => {
@@ -114,7 +120,7 @@ export function Pro() {
     checkout.start({
       plan: prices.plan,
       interval: price.interval,
-      offeredTrialDays: trial ? trialDays : 0,
+      offeredTrialDays: period === 'month' ? offeredDays : 0,
     })
   }
   const pickPeriodAndTrack = (next: BillingPeriod) => {
@@ -180,6 +186,7 @@ export function Pro() {
                   pricing={pricing}
                   prices={prices}
                   trialDays={trialDays}
+                  offeredTrialDays={offeredDays}
                   period={period}
                   onPeriodChange={pickPeriodAndTrack}
                   checkout={checkout}
