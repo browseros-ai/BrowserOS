@@ -9,6 +9,7 @@ use super::frame_stitch::{self, StitchedTree};
 use super::node_key::{DocId, DocSeq, DocToken, FrameToken, NodeId, NodeKey, NodeRange};
 use super::tree_doc::{PartialFrame, TreeDoc};
 use super::tree_node::TreeNode;
+use super::{hidden, role, state};
 
 /// Minimum BrowserOS APC contract version required to construct a [`SnapshotTree`].
 pub const MIN_CONTRACT_VERSION: u32 = 1;
@@ -115,13 +116,24 @@ impl SnapshotTree {
         let contract_version = check_contract_version(meta.version, options.min_contract_version)?;
 
         let StitchedTree {
-            nodes,
+            mut nodes,
             docs,
             partial_frames,
             by_key,
             doc_by_token,
             viewport,
         } = frame_stitch::frame_stitch(apc, options, meta.subframe_timeout_ms)?;
+
+        let hidden_flags = hidden::compute_hidden(&nodes);
+        let roles = role::compute_roles(&nodes, &hidden_flags);
+        let states = state::compute_states(&nodes, &docs, &roles);
+        for (((node, hidden), role), state) in
+            nodes.iter_mut().zip(hidden_flags).zip(roles).zip(states)
+        {
+            node.set_hidden(hidden);
+            node.set_role(role);
+            node.set_state(state);
+        }
 
         Ok(Self {
             nodes,
