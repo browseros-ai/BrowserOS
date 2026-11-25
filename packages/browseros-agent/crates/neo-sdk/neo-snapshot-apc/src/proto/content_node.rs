@@ -3,6 +3,7 @@ use std::mem;
 use prost::{Enumeration, Message, Oneof};
 
 use super::ax_role::AxRole;
+use super::browseros::BrowserOsContentAttributes;
 use super::form_control_data::{FormControlData, FormInfo};
 use super::frame_data::IframeData;
 use super::geometry::Geometry;
@@ -79,8 +80,9 @@ pub struct ContentAttributes {
     /// Sensitive-field redaction classification for this node (open [`RedactionDecision`] enum).
     #[prost(enumeration = "RedactionDecision", optional, tag = "29")]
     pub redaction_decision: Option<i32>,
-    // Field 1000 (`BROWSEROS_EXTENSION_TAG`): reserved for BrowserOS per-node extension
-    // submessage per `apc-contract-design`.
+    /// BrowserOS per-node facts, boxed because most nodes carry none.
+    #[prost(message, optional, boxed, tag = "1000")]
+    pub browseros: Option<Box<BrowserOsContentAttributes>>,
 }
 
 /// Type-specific payload carried by [`ContentAttributes::content_data`].

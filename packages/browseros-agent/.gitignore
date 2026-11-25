@@ -78,6 +78,8 @@ docs/plans/
 **/tests/**/*.js
 # Fixture scripts the crate's live tests serve to a browser are sources.
 !crates/neo-sdk/neo-playwright/tests/data/**/*.js
+# The oracle reader the fixture recorder splices into injected.js is a source.
+!crates/neo-sdk/neo-snapshot-apc/tests/support/oracle.js
 **/tests/**/*.d.ts
 **/tests/**/*.d.ts.map
 

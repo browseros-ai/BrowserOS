@@ -1,0 +1,704 @@
+{
+  "fixture": "shadow-roots",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "E9F9B3E4E5AC17CDC29490C984921E4F",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/shadow-roots.html",
+      "elements": [
+        {
+          "backendNodeId": 15,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "heading",
+          "name": "heading: light document",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 28,
+          "role": "button",
+          "name": "button: light document",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "textbox: light document",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "heading",
+          "name": "heading: open root, level 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 35,
+          "role": "button",
+          "name": "button: open root, level 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "textbox",
+          "name": "textbox: open root, level 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 21,
+          "role": "heading",
+          "name": "heading: closed root inside open root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 48,
+          "role": "button",
+          "name": "button: closed root inside open root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "textbox",
+          "name": "textbox: closed root inside open root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 55,
+          "role": "button",
+          "name": "button: open-root child slotted into closed root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 42,
+          "role": "button",
+          "name": "button: light child of open host, named slot",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 45,
+          "role": "button",
+          "name": "button: light child of open host, default slot",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 147,
+          "role": "button",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 23,
+          "role": "heading",
+          "name": "heading: closed root, level 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 58,
+          "role": "button",
+          "name": "button: closed root, level 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "textbox: closed root, level 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 25,
+          "role": "heading",
+          "name": "heading: open root inside closed root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 3,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 67,
+          "role": "button",
+          "name": "button: open root inside closed root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "textbox",
+          "name": "textbox: open root inside closed root, level 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 64,
+          "role": "button",
+          "name": "button: light child of closed host, default slot",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 77,
+          "role": "button",
+          "name": "button: light document, after the hosts",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 16,
+        "e10": 42,
+        "e11": 20,
+        "e12": 45,
+        "e13": 10,
+        "e14": 21,
+        "e15": 48,
+        "e16": 6,
+        "e17": 22,
+        "e18": 55,
+        "e19": 11,
+        "e2": 17,
+        "e20": 23,
+        "e21": 58,
+        "e22": 7,
+        "e23": 24,
+        "e24": 64,
+        "e25": 12,
+        "e26": 25,
+        "e27": 67,
+        "e28": 8,
+        "e29": 26,
+        "e3": 28,
+        "e30": 77,
+        "e4": 4,
+        "e5": 9,
+        "e6": 18,
+        "e7": 35,
+        "e8": 5,
+        "e9": 19
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "heading: light document",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "name": "button: light document",
+                "ref": "e3",
+                "role": "button"
+              },
+              "textbox: light document",
+              {
+                "name": "textbox: light document",
+                "ref": "e4",
+                "role": "textbox"
+              },
+              {
+                "children": [
+                  {
+                    "level": 2,
+                    "name": "heading: open root, level 1",
+                    "ref": "e6",
+                    "role": "heading"
+                  },
+                  {
+                    "name": "button: open root, level 1",
+                    "ref": "e7",
+                    "role": "button"
+                  },
+                  "textbox: open root, level 1",
+                  {
+                    "name": "textbox: open root, level 1",
+                    "ref": "e8",
+                    "role": "textbox"
+                  },
+                  {
+                    "children": [
+                      "named slot:",
+                      {
+                        "name": "button: light child of open host, named slot",
+                        "ref": "e10",
+                        "role": "button"
+                      }
+                    ],
+                    "ref": "e9",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "default slot:",
+                      {
+                        "name": "button: light child of open host, default slot",
+                        "ref": "e12",
+                        "role": "button"
+                      }
+                    ],
+                    "ref": "e11",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "level": 3,
+                        "name": "heading: closed root inside open root, level 2",
+                        "ref": "e14",
+                        "role": "heading"
+                      },
+                      {
+                        "name": "button: closed root inside open root, level 2",
+                        "ref": "e15",
+                        "role": "button"
+                      },
+                      "textbox: closed root inside open root, level 2",
+                      {
+                        "name": "textbox: closed root inside open root, level 2",
+                        "ref": "e16",
+                        "role": "textbox"
+                      },
+                      {
+                        "children": [
+                          "default slot:",
+                          {
+                            "name": "button: open-root child slotted into closed root, level 2",
+                            "ref": "e18",
+                            "role": "button"
+                          }
+                        ],
+                        "ref": "e17",
+                        "role": "generic"
+                      }
+                    ],
+                    "ref": "e13",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e5",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "level": 2,
+                    "name": "heading: closed root, level 1",
+                    "ref": "e20",
+                    "role": "heading"
+                  },
+                  {
+                    "name": "button: closed root, level 1",
+                    "ref": "e21",
+                    "role": "button"
+                  },
+                  "textbox: closed root, level 1",
+                  {
+                    "name": "textbox: closed root, level 1",
+                    "ref": "e22",
+                    "role": "textbox"
+                  },
+                  {
+                    "children": [
+                      "default slot:",
+                      {
+                        "name": "button: light child of closed host, default slot",
+                        "ref": "e24",
+                        "role": "button"
+                      }
+                    ],
+                    "ref": "e23",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "level": 3,
+                        "name": "heading: open root inside closed root, level 2",
+                        "ref": "e26",
+                        "role": "heading"
+                      },
+                      {
+                        "name": "button: open root inside closed root, level 2",
+                        "ref": "e27",
+                        "role": "button"
+                      },
+                      "textbox: open root inside closed root, level 2",
+                      {
+                        "name": "textbox: open root inside closed root, level 2",
+                        "ref": "e28",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e25",
+                    "role": "generic"
+                  },
+                  {
+                    "ref": "e29",
+                    "role": "iframe"
+                  }
+                ],
+                "ref": "e19",
+                "role": "generic"
+              },
+              {
+                "name": "button: light document, after the hosts",
+                "ref": "e30",
+                "role": "button"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "heading: light document",
+            "role": "heading"
+          },
+          {
+            "name": "button: light document",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "textbox: light document"
+          },
+          {
+            "name": "textbox: light document",
+            "role": "textbox"
+          },
+          {
+            "level": 2,
+            "name": "heading: open root, level 1",
+            "role": "heading"
+          },
+          {
+            "name": "button: open root, level 1",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "textbox: open root, level 1"
+          },
+          {
+            "name": "textbox: open root, level 1",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "named slot:"
+          },
+          {
+            "name": "button: light child of open host, named slot",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "default slot:"
+          },
+          {
+            "name": "button: light child of open host, default slot",
+            "role": "button"
+          },
+          {
+            "level": 3,
+            "name": "heading: closed root inside open root, level 2",
+            "role": "heading"
+          },
+          {
+            "name": "button: closed root inside open root, level 2",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "textbox: closed root inside open root, level 2"
+          },
+          {
+            "name": "textbox: closed root inside open root, level 2",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "default slot:"
+          },
+          {
+            "name": "button: open-root child slotted into closed root, level 2",
+            "role": "button"
+          },
+          {
+            "level": 2,
+            "name": "heading: closed root, level 1",
+            "role": "heading"
+          },
+          {
+            "name": "button: closed root, level 1",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "textbox: closed root, level 1"
+          },
+          {
+            "name": "textbox: closed root, level 1",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "default slot:"
+          },
+          {
+            "name": "button: light child of closed host, default slot",
+            "role": "button"
+          },
+          {
+            "level": 3,
+            "name": "heading: open root inside closed root, level 2",
+            "role": "heading"
+          },
+          {
+            "name": "button: open root inside closed root, level 2",
+            "role": "button"
+          },
+          {
+            "role": "text",
+            "text": "textbox: open root inside closed root, level 2"
+          },
+          {
+            "name": "textbox: open root inside closed root, level 2",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          },
+          {
+            "name": "button: light document, after the hosts",
+            "role": "button"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "F4404074C455A5D6D6C7716CBD52EB1D",
+      "parent": "E9F9B3E4E5AC17CDC29490C984921E4F",
+      "owner": 26,
+      "url": "about:srcdoc",
+      "elements": [
+        {
+          "backendNodeId": 73,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 75,
+          "role": "button",
+          "name": "button: inside frame in closed root",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f1e1": 74,
+        "f1e2": 75
+      },
+      "aria": {
+        "ai": [
+          {
+            "name": "button: inside frame in closed root",
+            "ref": "f1e2",
+            "role": "button"
+          }
+        ],
+        "default": [
+          {
+            "name": "button: inside frame in closed root",
+            "role": "button"
+          }
+        ]
+      }
+    }
+  ]
+}

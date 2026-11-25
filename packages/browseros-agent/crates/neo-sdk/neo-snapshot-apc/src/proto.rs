@@ -14,15 +14,15 @@
 //!                                      preserving unknown enum values across decode
 //! ```
 //!
-//! BrowserOS extension slots (tag [`BROWSEROS_EXTENSION_TAG`] = 1000 and
-//! [`REASON_BROWSEROS_TIMEOUT`] = 1000) are documented on [`AnnotatedPageContent`],
-//! [`ContentAttributes`], [`FrameData`], and [`RedactedFrameReason`] per `apc-contract-design`.
-//! Unknown fields at tag 1000 are skipped cleanly during decode, and open enum storage retains
-//! unknown enum values such as `1000` without failing.
+//! A patched BrowserOS Chromium adds its half of the wire contract at tag
+//! [`BROWSEROS_EXTENSION_TAG`] (1000): a `browseros` submessage on [`AnnotatedPageContent`],
+//! [`ContentAttributes`], [`FrameData`] and [`RedactedFrameMetadata`], plus
+//! [`RedactedFrameReason::BrowserOsTimeout`]. The `browseros` module holds those messages. Stock
+//! Chromium sends none of them, and the same types decode both.
 
 mod annotated_page_content;
 mod ax_role;
-mod browseros_extension_tag;
+mod browseros;
 mod content_node;
 mod form_control_data;
 mod frame_data;
@@ -36,7 +36,11 @@ pub use annotated_page_content::{
     Point, PopupWindow, ProfileInformation, ScreenshotInfo,
 };
 pub use ax_role::AxRole;
-pub use browseros_extension_tag::{BROWSEROS_EXTENSION_TAG, REASON_BROWSEROS_TIMEOUT};
+pub use browseros::{
+    BROWSEROS_EXTENSION_TAG, BrowserOsContentAttributes, BrowserOsFrameData,
+    BrowserOsPageContentData, BrowserOsRedactedFrame, BrowserOsRef, BrowserOsTriState,
+    REASON_BROWSEROS_TIMEOUT,
+};
 pub use content_node::{
     AnnotatedRole, ContentAttributeType, ContentAttributes, ContentData, ContentNode,
     RedactionDecision,

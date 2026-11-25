@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: private forms</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  .row { margin: 4px 0; }
+  label { display: inline-block; min-width: 360px; }
+</style>
+</head>
+<body>
+<h1>heading: private forms</h1>
+<form id="sign-in" aria-label="form: sign-in">
+  <fieldset>
+    <legend>group: password fields</legend>
+    <div class="row"><label for="pf-password">textbox: input type=password</label><input id="pf-password" type="password" data-typed></div>
+    <div class="row"><label for="pf-show">textbox: show-password field, typed as password, then shown</label><input id="pf-show" type="password" autocomplete="current-password" data-typed>
+      <button type="button" id="pf-toggle" aria-pressed="false" aria-controls="pf-show">Show password</button></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>group: autocomplete tokens on input type=text</legend>
+    <div class="row"><label for="pf-in-current">textbox: input autocomplete=current-password</label><input id="pf-in-current" type="text" autocomplete="current-password" data-typed="contract"></div>
+    <div class="row"><label for="pf-in-new">textbox: input autocomplete=new-password</label><input id="pf-in-new" type="text" autocomplete="new-password" data-typed="contract"></div>
+    <div class="row"><label for="pf-in-otp">textbox: input autocomplete=one-time-code</label><input id="pf-in-otp" type="text" autocomplete="one-time-code" data-typed="contract"></div>
+    <div class="row"><label for="pf-in-cc">textbox: input autocomplete=cc-number</label><input id="pf-in-cc" type="text" autocomplete="cc-number" data-typed="contract"></div>
+    <div class="row"><label for="pf-in-csc">textbox: input autocomplete=cc-csc</label><input id="pf-in-csc" type="text" autocomplete="cc-csc" data-typed="contract"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>group: autocomplete tokens on textarea</legend>
+    <div class="row"><label for="pf-ta-current">textbox: textarea autocomplete=current-password</label><textarea id="pf-ta-current" autocomplete="current-password" data-typed="contract"></textarea></div>
+    <div class="row"><label for="pf-ta-new">textbox: textarea autocomplete=new-password</label><textarea id="pf-ta-new" autocomplete="new-password" data-typed="contract"></textarea></div>
+    <div class="row"><label for="pf-ta-otp">textbox: textarea autocomplete=one-time-code</label><textarea id="pf-ta-otp" autocomplete="one-time-code" data-typed="contract"></textarea></div>
+    <div class="row"><label for="pf-ta-cc">textbox: textarea autocomplete=cc-number</label><textarea id="pf-ta-cc" autocomplete="cc-number" data-typed="contract"></textarea></div>
+    <div class="row"><label for="pf-ta-csc">textbox: textarea autocomplete=cc-csc</label><textarea id="pf-ta-csc" autocomplete="cc-csc" data-typed="contract"></textarea></div>
+  </fieldset>
+
+  <div class="row"><label for="pf-plain">textbox: plain input with a public value</label><input id="pf-plain" type="text" value="plain: public note"></div>
+  <button type="submit">button: submit sign-in</button>
+</form>
+
+<script>
+  const showField = document.getElementById('pf-show');
+  const toggle = document.getElementById('pf-toggle');
+  toggle.addEventListener('click', () => {
+    const show = toggle.getAttribute('aria-pressed') !== 'true';
+    showField.type = show ? 'text' : 'password';
+    toggle.setAttribute('aria-pressed', String(show));
+  });
+  // Safe to call after every typed field: it reveals the field once, and only after it holds the typed value.
+  window.__afterTyping = () => {
+    if (showField.value && showField.type === 'password') toggle.click();
+  };
+  document.getElementById('sign-in').addEventListener('submit', (event) => event.preventDefault());
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>
