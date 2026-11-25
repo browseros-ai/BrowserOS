@@ -4,15 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Home's way to the ultrafast page, for Free installs on a build that sells
- * Pro. Impressions are not tracked: the cockpit is the new tab page, and the
- * Pro page's own view event is the funnel's denominator.
+ * Pro. The plain bar's impressions are not tracked: the cockpit is the new tab
+ * page, and the Pro page's own view event is the funnel's denominator. The
+ * free trial bar's are, once per page load, as the top of the trial funnel.
  */
 
 import { ArrowRight, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useHref } from 'react-router'
 import { ButtonLink } from '@/components/motion/button/base'
-import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import {
+  AnalyticsEvent,
+  track,
+  trackOncePerSession,
+} from '@/modules/analytics/events'
 import { usePlan, usePlanPricing } from '@/modules/api/plan.hooks'
 import { trialOfferDays } from '@/modules/plan/trial.helpers'
 import { formatPrice, proPrices } from '@/screens/pro/pro.helpers'
@@ -45,6 +50,8 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
     [DISMISS_KEY, TRIAL_DISMISS_KEY].filter(readDismissed),
   )
   const dismissed = hidden.includes(key)
+  const month = pricing.data ? proPrices(pricing.data)?.month : undefined
+  const trialShown = trialDays > 0 && !dismissed && month !== undefined
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -57,7 +64,17 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
     return () => window.removeEventListener('storage', onStorage)
   }, [key, onClosed])
 
+  // Reports what was on screen, which only a rendered bar knows.
+  useEffect(() => {
+    if (trialShown) {
+      trackOncePerSession(AnalyticsEvent.TrialBarShown, {
+        trial_days: trialDays,
+      })
+    }
+  }, [trialShown, trialDays])
+
   const dismiss = () => {
+    if (trialDays > 0) track(AnalyticsEvent.TrialBarDismissed)
     setHidden((previous) => [...previous, key])
     try {
       localStorage.setItem(key, 'true')
@@ -69,7 +86,6 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
 
   // The line quotes the monthly price, so the bar waits for it and stays away
   // when the prices can't be read.
-  const month = pricing.data ? proPrices(pricing.data)?.month : undefined
   if (dismissed || pricing.isPending || pricing.isError || !month) return null
   const price = formatPrice(month)
   return (
@@ -93,7 +109,12 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
           href={proHref}
           size="sm"
           variant="ghost"
-          onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
+          onClick={() => {
+            track(AnalyticsEvent.UltrafastBannerClicked)
+            if (trialDays > 0) {
+              track(AnalyticsEvent.TrialStartClicked, { source: 'home_bar' })
+            }
+          }}
           className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
         >
           {trialDays > 0 ? 'Start free trial' : 'See ultrafast'}

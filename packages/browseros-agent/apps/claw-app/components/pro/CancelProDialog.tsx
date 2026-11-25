@@ -62,6 +62,11 @@ export function CancelProDialog({
             : `ultrafast will end on ${date}`,
       )
       track(AnalyticsEvent.ProCancelConfirmed, { gave_feedback: Boolean(said) })
+      if (trial) {
+        track(AnalyticsEvent.TrialCancelConfirmed, {
+          gave_feedback: Boolean(said),
+        })
+      }
       onOpenChange(false)
     },
     onError: (error) =>
@@ -140,7 +145,17 @@ export function CancelProDialog({
               {confirm}
             </StatefulButton>
             <CenterMorphModalClose>
-              <Button disabled={cancel.isPending} className="font-semibold">
+              <Button
+                disabled={cancel.isPending}
+                onClick={() => {
+                  if (trial) {
+                    track(AnalyticsEvent.TrialKept, {
+                      source: 'cancel_dialog',
+                    })
+                  }
+                }}
+                className="font-semibold"
+              >
                 Keep ultrafast
               </Button>
             </CenterMorphModalClose>

@@ -31,6 +31,7 @@ import {
   isCardTrial,
   monthlyTrialDays,
   TRIAL_ENDING_DAYS,
+  trialDaysLeft,
   trialEndFrom,
   trialOfferDays,
 } from '@/modules/plan/trial.helpers'
@@ -107,7 +108,28 @@ export function Pro() {
   const buy = () => {
     const price = prices?.[period]
     if (!prices || !price) return
-    checkout.start({ plan: prices.plan, interval: price.interval })
+    if (trial) {
+      track(AnalyticsEvent.TrialStartClicked, { source: 'plan_picker' })
+    }
+    checkout.start({
+      plan: prices.plan,
+      interval: price.interval,
+      offeredTrialDays: trial ? trialDays : 0,
+    })
+  }
+  const pickPeriodAndTrack = (next: BillingPeriod) => {
+    setWantedPeriod(next)
+    track(AnalyticsEvent.ProPeriodSelected, {
+      interval: next,
+      trial_offered: next === 'month' && trialDays > 0,
+    })
+  }
+  const openCancel = () => {
+    setCancelOpen(true)
+    const daysLeft = trialDaysLeft(current, Date.now())
+    if (daysLeft !== null) {
+      track(AnalyticsEvent.TrialCancelOpened, { days_left: daysLeft })
+    }
   }
 
   return (
@@ -125,7 +147,7 @@ export function Pro() {
           <PlanPanel
             plan={current}
             portal={portal}
-            onCancel={() => setCancelOpen(true)}
+            onCancel={openCancel}
             monthlyPrice={prices?.month ? formatPrice(prices.month) : undefined}
             trialLength={monthlyTrialDays(pricing.data) || DEFAULT_TRIAL_DAYS}
           />
@@ -159,7 +181,7 @@ export function Pro() {
                   prices={prices}
                   trialDays={trialDays}
                   period={period}
-                  onPeriodChange={setWantedPeriod}
+                  onPeriodChange={pickPeriodAndTrack}
                   checkout={checkout}
                   onBuy={buy}
                   onUseKey={() => {

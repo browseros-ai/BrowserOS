@@ -66,9 +66,20 @@ mock.module('@/modules/analytics/telemetry.hooks', () => ({
 }))
 
 const tracked: string[] = []
+const shownOnce = new Set<string>()
 mock.module('@/modules/analytics/events', () => ({
-  AnalyticsEvent: { UltrafastBannerClicked: 'ultrafast_banner_clicked' },
+  AnalyticsEvent: {
+    UltrafastBannerClicked: 'ultrafast_banner_clicked',
+    TrialBarShown: 'ultrafast_trial_bar_shown',
+    TrialBarDismissed: 'ultrafast_trial_bar_dismissed',
+    TrialStartClicked: 'ultrafast_trial_start_clicked',
+  },
   track: (event: string) => tracked.push(event),
+  trackOncePerSession: (event: string) => {
+    if (shownOnce.has(event)) return
+    shownOnce.add(event)
+    tracked.push(event)
+  },
 }))
 
 const storage: Record<string, string> = {}
@@ -104,6 +115,7 @@ let client: QueryClient
 
 beforeEach(async () => {
   tracked.length = 0
+  shownOnce.clear()
   storageUnavailable = false
   server.pricing = async () => PRICING
   server.plan = async () => FREE
@@ -190,6 +202,33 @@ describe('ProBanner', () => {
     const link = container.querySelector('a')
     expect(link?.textContent).toContain('Start free trial')
     expect(link?.getAttribute('href')).toBe('/pro')
+  })
+
+  it('tests that the trial bar reports being seen once, a start and a hide', async () => {
+    server.pricing = async () => withTrial(7)
+    await render()
+    await render('new-tab')
+    expect(tracked).toEqual(['ultrafast_trial_bar_shown'])
+
+    await act(async () => {
+      container
+        .querySelector('a')
+        ?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(tracked).toContain('ultrafast_trial_start_clicked')
+
+    await act(async () => {
+      closeButton()?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(tracked).toContain('ultrafast_trial_bar_dismissed')
+  })
+
+  it('tests that the plain bar reports no trial events', async () => {
+    await render()
+    await act(async () => {
+      closeButton()?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(tracked).toEqual([])
   })
 
   it('tests that a lapsed key gets the plain bar, not the trial', async () => {

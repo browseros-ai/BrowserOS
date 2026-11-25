@@ -7,11 +7,15 @@
 import type { Plan } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
 import { CalendarX, CreditCard, ExternalLink, Gift } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { cn } from '@/lib/utils'
-import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import {
+  AnalyticsEvent,
+  track,
+  trackOncePerSession,
+} from '@/modules/analytics/events'
 import { usePlan, useResumePlan } from '@/modules/api/plan.hooks'
 import {
   daysLabel,
@@ -50,6 +54,9 @@ export function PlanPanel({
           : `ultrafast stays on. It renews on ${formatDate(next.periodEnd)}`,
       )
       track(AnalyticsEvent.ProResumed)
+      if (isCardTrial(next)) {
+        track(AnalyticsEvent.TrialKept, { source: 'plan_row' })
+      }
     },
     onError: (error) => toastApiError('Couldn’t keep ultrafast', error),
   })
@@ -85,6 +92,17 @@ export function PlanPanel({
   // A trial from a free trial link reads as a paid plan, so only a card trial gets these rows.
   const trialEnd = isCardTrial(plan) ? plan.trialEndsAt : undefined
   const daysLeft = trialDaysLeft(plan, Date.now())
+  const daysLeftShown =
+    trialEnd !== undefined && daysLeft !== null && plan.status === 'active'
+
+  // Reports what was on screen, which only the rendered row knows.
+  useEffect(() => {
+    if (daysLeftShown && daysLeft !== null) {
+      trackOncePerSession(AnalyticsEvent.TrialDaysLeftViewed, {
+        days_left: daysLeft,
+      })
+    }
+  }, [daysLeftShown, daysLeft])
 
   if (trialEnd !== undefined && plan.status === 'ending') {
     return (
@@ -109,7 +127,7 @@ export function PlanPanel({
     )
   }
 
-  if (trialEnd !== undefined && daysLeft !== null && plan.status === 'active') {
+  if (trialEnd !== undefined && daysLeft !== null && daysLeftShown) {
     return (
       <PlanRow
         stale={plan.stale}

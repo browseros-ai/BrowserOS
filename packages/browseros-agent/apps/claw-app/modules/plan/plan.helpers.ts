@@ -8,6 +8,7 @@
 
 import type { Plan } from '@browseros/claw-api'
 import type { PlanContext } from '@/modules/analytics/posthog'
+import { isCardTrial } from './trial.helpers'
 
 export const ULTRAFAST_FEATURE = 'claw.ultrafast'
 
@@ -22,14 +23,17 @@ export function hasUltrafast(
  * Whether to tell this person that ultrafast runs their skills in seconds: only where ultrafast is
  * on sale and the plan does not have it yet, so the link never leads to a plan that cannot be bought.
  */
-/** The plan analytics events are tagged with, or `null` before the plan has loaded. */
+/**
+ * The plan analytics events are tagged with, or `null` before the plan has loaded. Only a card
+ * trial counts as a trial: a free trial link is a paid plan as far as the app is concerned.
+ */
 export function planContextFor(
-  plan: Pick<Plan, 'features' | 'trial'> | undefined,
+  plan: Pick<Plan, 'features' | 'trial' | 'trialKind'> | undefined,
 ): PlanContext | null {
   if (!plan) return null
   return {
     plan: hasUltrafast(plan) ? 'ultrafast' : 'free',
-    ...(plan.trial === undefined ? {} : { trial: plan.trial }),
+    ...(plan.trial === undefined ? {} : { trial: isCardTrial(plan) }),
   }
 }
 

@@ -5,7 +5,7 @@
  */
 
 import { skipToken } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { Link, useHref, useLocation } from 'react-router'
 import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
@@ -22,6 +22,11 @@ import {
 } from '@/components/motion/animated-sidebar'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
+import {
+  AnalyticsEvent,
+  track,
+  trackOncePerSession,
+} from '@/modules/analytics/events'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
 import { usePlan, usePlanPricing } from '@/modules/api/plan.hooks'
@@ -51,7 +56,15 @@ export function SidebarBrand() {
   )
 }
 
-function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
+function NavLinkButton({
+  item,
+  badge,
+  onSelect,
+}: {
+  item: NavItem
+  badge?: ReactNode
+  onSelect?: () => void
+}) {
   const { pathname } = useLocation()
   const href = useHref(item.to)
   const active = isNavItemActive(item.to, pathname)
@@ -61,6 +74,7 @@ function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
       href={href}
       isActive={active}
       badge={badge}
+      onSelect={onSelect}
       icon={<Icon className="size-[18px]" strokeWidth={1.75} />}
       className={cn('text-[15px]', active && 'font-semibold text-primary')}
     >
@@ -74,15 +88,21 @@ function NavLinkButton({ item, badge }: { item: NavItem; badge?: ReactNode }) {
 function NavMenu({
   items,
   badges = {},
+  onSelects = {},
 }: {
   items: NavItem[]
   badges?: Record<string, ReactNode>
+  onSelects?: Record<string, () => void>
 }) {
   return (
     <AnimatedSidebarMenu>
       {items.map((item) => (
         <AnimatedSidebarMenuItem key={item.to}>
-          <NavLinkButton item={item} badge={badges[item.to]} />
+          <NavLinkButton
+            item={item}
+            badge={badges[item.to]}
+            onSelect={onSelects[item.to]}
+          />
         </AnimatedSidebarMenuItem>
       ))}
     </AnimatedSidebarMenu>
@@ -103,7 +123,18 @@ export function AppSidebar() {
         ? undefined
         : skipToken,
   })
-  const tag = planTagFor(plan.data, trialOfferDays(plan.data, pricing.data))
+  const trialDays = trialOfferDays(plan.data, pricing.data)
+  const tag = planTagFor(plan.data, trialDays)
+
+  // Reports what was on screen, which only the rendered sidebar knows.
+  useEffect(() => {
+    if (trialDays > 0) {
+      trackOncePerSession(AnalyticsEvent.TrialTagShown, {
+        trial_days: trialDays,
+      })
+    }
+  }, [trialDays])
+
   return (
     <AnimatedSidebar
       ariaLabel="Sidebar"
@@ -125,6 +156,16 @@ export function AppSidebar() {
         <nav aria-label="Settings">
           <NavMenu
             items={secondaryNavItemsFor(plan.data)}
+            onSelects={
+              trialDays > 0
+                ? {
+                    '/pro': () =>
+                      track(AnalyticsEvent.TrialStartClicked, {
+                        source: 'sidebar_tag',
+                      }),
+                  }
+                : undefined
+            }
             badges={
               tag
                 ? {

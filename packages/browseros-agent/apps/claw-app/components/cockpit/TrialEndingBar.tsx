@@ -9,9 +9,14 @@
 
 import type { Plan } from '@browseros/claw-api'
 import { ArrowRight, CalendarClock } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useHref } from 'react-router'
 import { ButtonLink } from '@/components/motion/button/base'
+import {
+  AnalyticsEvent,
+  track,
+  trackOncePerSession,
+} from '@/modules/analytics/events'
 import { usePlanPricing } from '@/modules/api/plan.hooks'
 import {
   daysLabel,
@@ -54,11 +59,23 @@ export function TrialEndingBar({
   const plansHref = useHref('/pro')
   const [dismissed, setDismissed] = useState(readDismissed)
   const left = trialDaysLeft(plan, Date.now())
-  if (dismissed || left === null || plan.trialEndsAt === undefined) return null
+  const shown = !dismissed && left !== null && plan.trialEndsAt !== undefined
+
+  // Reports what was on screen, which only a rendered bar knows.
+  useEffect(() => {
+    if (shown && left !== null) {
+      trackOncePerSession(AnalyticsEvent.TrialEndingBarShown, {
+        days_left: left,
+      })
+    }
+  }, [shown, left])
+
+  if (!shown || left === null || plan.trialEndsAt === undefined) return null
 
   const month = pricing.data ? proPrices(pricing.data)?.month : undefined
   const date = formatDate(plan.trialEndsAt)
   const dismiss = () => {
+    track(AnalyticsEvent.TrialEndingBarDismissed, { days_left: left })
     setDismissed(true)
     try {
       localStorage.setItem(DISMISS_KEY, 'true')
@@ -85,6 +102,9 @@ export function TrialEndingBar({
           href={plansHref}
           size="sm"
           variant="ghost"
+          onClick={() =>
+            track(AnalyticsEvent.TrialEndingBarClicked, { days_left: left })
+          }
           className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
         >
           See your plan

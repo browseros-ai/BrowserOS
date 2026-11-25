@@ -16,6 +16,7 @@ import { planContextFor } from '@/modules/plan/plan.helpers'
 import { AnalyticsEvent, screenEventForPath, track } from './events'
 import { applyTelemetry, isCapturing, setPlanContext } from './posthog'
 import { useTelemetryState } from './telemetry.hooks'
+import { syncTrialOutcome } from './trial-outcome'
 
 export function Analytics() {
   const { data } = useTelemetryState()
@@ -34,8 +35,10 @@ export function Analytics() {
   //     burned while capture was a no-op).
   // Runs on telemetry state changes and on navigation.
   // Tag events with the plan before any of them fires; posthog reads it at capture time.
+  // A card trial's outcome is reported from the first plan read after it ends.
   useEffect(() => {
     setPlanContext(planContextFor(plan.data))
+    if (plan.data?.available) syncTrialOutcome(plan.data)
   }, [plan.data])
 
   useEffect(() => {

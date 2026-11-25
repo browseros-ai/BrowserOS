@@ -20,6 +20,7 @@ import {
   useRefreshPlan,
   useStartCheckout,
 } from '@/modules/api/plan.hooks'
+import { isCardTrial, trialDaysLeft } from '@/modules/plan/trial.helpers'
 import { toast, toastApiError } from '@/modules/toast/toast'
 import { apiErrorCode, type CheckoutPhase, checkoutPhase } from './pro.helpers'
 
@@ -31,9 +32,18 @@ function openInNewTab(url: string): void {
   void chrome.tabs.create({ url })
 }
 
+/** `trial_days` for checkout events, left out when the gateway didn't say. */
+function trialDaysProperty(
+  trialDays: number | undefined,
+): Record<string, number> {
+  return trialDays === undefined ? {} : { trial_days: trialDays }
+}
+
 export interface StartProCheckout {
   plan: string
   interval: PriceInterval
+  /** The free trial the page offered for this price, to tell when the gateway refuses it. */
+  offeredTrialDays?: number
 }
 
 export interface ProCheckout {
@@ -64,11 +74,18 @@ export function useProCheckout(): ProCheckout {
   const [cancelled, setCancelled] = useState(false)
   const [welcomeClosed, setWelcomeClosed] = useState(false)
   const settled = useRef<string | null>(null)
+  const offered = useRef(0)
 
   const start = useStartCheckout({
     onSuccess: (checkout, { interval }) => {
       openInNewTab(checkout.url)
-      track(AnalyticsEvent.ProCheckoutStarted, { interval })
+      track(AnalyticsEvent.ProCheckoutStarted, {
+        interval,
+        ...trialDaysProperty(checkout.trialDays),
+      })
+      if (offered.current > 0 && checkout.trialDays === 0) {
+        track(AnalyticsEvent.TrialUnavailableShown, { interval })
+      }
     },
     onError: (error) => {
       const code = apiErrorCode(error)
@@ -90,6 +107,7 @@ export function useProCheckout(): ProCheckout {
   })
 
   const checkoutId = start.data?.checkoutId
+  const trialDays = start.data?.trialDays
   const progressOf = (
     lastCheckedAt: number,
     status: PlanCheckoutStatus | undefined,
@@ -126,28 +144,34 @@ export function useProCheckout(): ProCheckout {
     if (paidPlan) {
       settled.current = checkoutId
       queryClient.setQueryData(usePlan.getKey(), paidPlan)
-      track(AnalyticsEvent.ProCheckoutCompleted)
+      const trial = isCardTrial(paidPlan)
+      track(AnalyticsEvent.ProCheckoutCompleted, { trial })
+      const daysLeft = trialDaysLeft(paidPlan, Date.now())
+      if (trial && daysLeft !== null) {
+        track(AnalyticsEvent.TrialStarted, { days_left: daysLeft })
+      }
     } else if (phase === 'abandoned' && !cancelled) {
       settled.current = checkoutId
-      track(AnalyticsEvent.ProCheckoutAbandoned)
+      track(AnalyticsEvent.ProCheckoutAbandoned, trialDaysProperty(trialDays))
     }
-  }, [checkoutId, paidPlan, phase, cancelled, queryClient])
+  }, [checkoutId, paidPlan, phase, cancelled, queryClient, trialDays])
 
   return {
     phase: phase === 'complete' ? 'idle' : phase,
     start: (checkout) => {
       setCancelled(false)
       setWelcomeClosed(false)
+      offered.current = checkout.offeredTrialDays ?? 0
       start.mutate({ plan: checkout.plan, interval: checkout.interval })
     },
     isStarting: start.isPending,
-    trialDays: start.data?.trialDays,
+    trialDays,
     reopen: () => {
       if (start.data) openInNewTab(start.data.url)
     },
     cancel: () => {
       setCancelled(true)
-      track(AnalyticsEvent.ProCheckoutAbandoned)
+      track(AnalyticsEvent.ProCheckoutAbandoned, trialDaysProperty(trialDays))
     },
     welcoming: Boolean(paidPlan) && !welcomeClosed,
     closeWelcome: () => setWelcomeClosed(true),

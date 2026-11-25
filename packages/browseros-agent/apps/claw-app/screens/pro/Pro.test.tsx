@@ -1023,6 +1023,10 @@ describe('the free trial', () => {
     expect(button('Get ultrafast')).toBeTruthy()
     expect(text()).toContain('The free trial comes with Monthly.')
     expect(text()).not.toContain('Free until')
+    expect(events('pro_period_selected')[0]?.properties).toEqual({
+      interval: 'year',
+      trial_offered: false,
+    })
   })
 
   it('tests that a trial checkout asks for a card and says nothing is charged today', async () => {
@@ -1038,6 +1042,52 @@ describe('the free trial', () => {
     expect(text()).toContain('Your free trial starts here')
     expect(text()).toContain('You won’t be charged today.')
     expect(text()).not.toContain('Pay $20 with Stripe')
+    expect(events('ultrafast_trial_start_clicked')[0]?.properties).toEqual({
+      source: 'plan_picker',
+    })
+    expect(events('pro_checkout_started')[0]?.properties).toEqual({
+      interval: 'month',
+      trial_days: 7,
+    })
+    expect(events('ultrafast_trial_unavailable_shown')).toHaveLength(0)
+  })
+
+  it('tests that a finished card trial checkout reports the trial started, and a free trial link doesn’t', async () => {
+    const trialPlan: Plan = {
+      ...PRO,
+      trial: true,
+      trialKind: 'card',
+      trialEndsAt: Date.now() + 7 * 86_400_000,
+    }
+    server.startCheckout = async () => ({
+      checkoutId: 'checkout-1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_1',
+      trialDays: 7,
+    })
+    server.checkout = async () => ({ status: 'complete', plan: trialPlan })
+    await mount()
+    await click('Start free trial')
+
+    expect(events('pro_checkout_completed')[0]?.properties).toEqual({
+      trial: true,
+    })
+    expect(events('ultrafast_trial_started')[0]?.properties).toEqual({
+      days_left: 7,
+    })
+  })
+
+  it('tests that a finished checkout on a free trial link reports no trial', async () => {
+    server.checkout = async () => ({
+      status: 'complete',
+      plan: { ...PRO, trial: true, trialKind: 'grant' },
+    })
+    await mount()
+    await click('Start free trial')
+
+    expect(events('pro_checkout_completed')[0]?.properties).toEqual({
+      trial: false,
+    })
+    expect(events('ultrafast_trial_started')).toHaveLength(0)
   })
 
   it('tests that a trial the gateway refuses at checkout says so and asks to pay', async () => {
@@ -1052,6 +1102,9 @@ describe('the free trial', () => {
     expect(text()).toContain('Trial temporarily unavailable')
     expect(text()).toContain('Pay $20 with Stripe')
     expect(text()).toContain('Nothing is charged until you subscribe.')
+    expect(events('ultrafast_trial_unavailable_shown')[0]?.properties).toEqual({
+      interval: 'month',
+    })
   })
 
   it('tests that a key whose ultrafast ended is offered Renew, not a trial', async () => {
@@ -1097,8 +1150,21 @@ describe('a running free trial', () => {
     await click('Cancel trial')
     expect(dialog().getAttribute('aria-label')).toBe('Cancel your free trial?')
     expect(dialog().textContent).toContain('and you won’t be charged.')
+    expect(events('ultrafast_trial_cancel_opened')[0]?.properties).toEqual({
+      days_left: 5,
+    })
+    await click('Keep ultrafast', dialog())
+    expect(events('ultrafast_trial_kept')[0]?.properties).toEqual({
+      source: 'cancel_dialog',
+    })
+    expect(callsTo('cancelPlan')).toHaveLength(0)
+
+    await click('Cancel trial')
     await click('Cancel trial', dialog())
     expect(callsTo('cancelPlan')).toHaveLength(1)
+    expect(events('ultrafast_trial_cancel_confirmed')[0]?.properties).toEqual({
+      gave_feedback: false,
+    })
     expect(text()).toMatch(/Trial ends .+\./)
     expect(text()).toContain('You won’t be charged.')
     expect(button('Keep ultrafast')).toBeTruthy()
@@ -1111,7 +1177,11 @@ describe('a running free trial', () => {
     expect(text()).toContain('You’re on ultrafast')
     expect(text()).not.toContain('Free trial')
     expect(text()).not.toContain('days left')
-    expect(button('Cancel ultrafast')).toBeTruthy()
+    await click('Cancel ultrafast')
+    expect(dialog().getAttribute('aria-label')).toBe('Cancel ultrafast?')
+    expect(
+      captured.filter((entry) => entry.event.startsWith('ultrafast_trial_')),
+    ).toEqual([])
   })
 })
 
