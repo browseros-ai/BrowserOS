@@ -4,7 +4,7 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "1F4BC4059B66224158BF59755560D8E4",
+      "frame": "809EBE8FC9BD2219851B2100D9EF6294",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/hung-subframe/top.html",
@@ -105,8 +105,8 @@
       }
     },
     {
-      "frame": "2586501C59286192358E6FB817B32625",
-      "parent": "1F4BC4059B66224158BF59755560D8E4",
+      "frame": "49D1C59064EA7FCE84F9448D273FFE9A",
+      "parent": "809EBE8FC9BD2219851B2100D9EF6294",
       "owner": 11,
       "url": "http://[::1]/hung-subframe/hung.html",
       "elements": [
@@ -189,8 +189,8 @@
       }
     },
     {
-      "frame": "2EE33634CBC91B927CBA5700C70271C4",
-      "parent": "1F4BC4059B66224158BF59755560D8E4",
+      "frame": "DABF83216ADFE1BFD7D490A5F35AED96",
+      "parent": "809EBE8FC9BD2219851B2100D9EF6294",
       "owner": 10,
       "url": "http://localhost/hung-subframe/healthy.html",
       "elements": [

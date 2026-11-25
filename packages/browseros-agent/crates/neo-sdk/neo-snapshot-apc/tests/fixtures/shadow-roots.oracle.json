@@ -4,7 +4,7 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "E9F9B3E4E5AC17CDC29490C984921E4F",
+      "frame": "D86475A3E22A7E91459D038B12807514",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/edge/shadow-roots.html",
@@ -117,7 +117,7 @@
           }
         },
         {
-          "backendNodeId": 48,
+          "backendNodeId": 47,
           "role": "button",
           "name": "button: closed root inside open root, level 2",
           "description": "",
@@ -145,7 +145,7 @@
           }
         },
         {
-          "backendNodeId": 55,
+          "backendNodeId": 54,
           "role": "button",
           "name": "button: open-root child slotted into closed root, level 2",
           "description": "",
@@ -159,7 +159,7 @@
           }
         },
         {
-          "backendNodeId": 42,
+          "backendNodeId": 41,
           "role": "button",
           "name": "button: light child of open host, named slot",
           "description": "",
@@ -173,7 +173,7 @@
           }
         },
         {
-          "backendNodeId": 45,
+          "backendNodeId": 44,
           "role": "button",
           "name": "button: light child of open host, default slot",
           "description": "",
@@ -214,7 +214,7 @@
           }
         },
         {
-          "backendNodeId": 58,
+          "backendNodeId": 57,
           "role": "button",
           "name": "button: closed root, level 1",
           "description": "",
@@ -255,7 +255,7 @@
           }
         },
         {
-          "backendNodeId": 67,
+          "backendNodeId": 66,
           "role": "button",
           "name": "button: open root inside closed root, level 2",
           "description": "",
@@ -283,7 +283,7 @@
           }
         },
         {
-          "backendNodeId": 64,
+          "backendNodeId": 63,
           "role": "button",
           "name": "button: light child of closed host, default slot",
           "description": "",
@@ -297,7 +297,7 @@
           }
         },
         {
-          "backendNodeId": 77,
+          "backendNodeId": 76,
           "role": "button",
           "name": "button: light document, after the hosts",
           "description": "",
@@ -313,29 +313,29 @@
       ],
       "refs": {
         "e1": 16,
-        "e10": 42,
+        "e10": 41,
         "e11": 20,
-        "e12": 45,
+        "e12": 44,
         "e13": 10,
         "e14": 21,
-        "e15": 48,
+        "e15": 47,
         "e16": 6,
         "e17": 22,
-        "e18": 55,
+        "e18": 54,
         "e19": 11,
         "e2": 17,
         "e20": 23,
-        "e21": 58,
+        "e21": 57,
         "e22": 7,
         "e23": 24,
-        "e24": 64,
+        "e24": 63,
         "e25": 12,
         "e26": 25,
-        "e27": 67,
+        "e27": 66,
         "e28": 8,
         "e29": 26,
         "e3": 28,
-        "e30": 77,
+        "e30": 76,
         "e4": 4,
         "e5": 9,
         "e6": 18,
@@ -648,13 +648,13 @@
       }
     },
     {
-      "frame": "F4404074C455A5D6D6C7716CBD52EB1D",
-      "parent": "E9F9B3E4E5AC17CDC29490C984921E4F",
+      "frame": "C39C6F3081671D7C51D915AC9CE2A4BA",
+      "parent": "D86475A3E22A7E91459D038B12807514",
       "owner": 26,
       "url": "about:srcdoc",
       "elements": [
         {
-          "backendNodeId": 73,
+          "backendNodeId": 72,
           "role": "document",
           "name": "",
           "description": "",
@@ -666,7 +666,7 @@
           }
         },
         {
-          "backendNodeId": 75,
+          "backendNodeId": 74,
           "role": "button",
           "name": "button: inside frame in closed root",
           "description": "",
@@ -681,8 +681,8 @@
         }
       ],
       "refs": {
-        "f1e1": 74,
-        "f1e2": 75
+        "f1e1": 73,
+        "f1e2": 74
       },
       "aria": {
         "ai": [
