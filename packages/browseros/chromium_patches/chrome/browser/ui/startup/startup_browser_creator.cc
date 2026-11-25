@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/browser/ui/startup/startup_browser_creator.cc
-index 661831f8e98d65b9e2b4767f3424b49701be4665..d5964284f8c649152a271de1915bc1a9255dae0f 100644
+index 661831f8e98d65b9e2b4767f3424b49701be4665..ca37ae4ddd4d8d04cb597bf0274c1896406a7988 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
 @@ -42,6 +42,9 @@
@@ -15,7 +15,7 @@ index 661831f8e98d65b9e2b4767f3424b49701be4665..d5964284f8c649152a271de1915bc1a9
 @@ -486,6 +489,72 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
  }
  #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
- 
+
 +#if !BUILDFLAG(IS_CHROMEOS)
 +// Exit callback for the BrowserOS onboarding first-run flow. Opens a browser
 +// window whether onboarding completed or was dismissed (close/cancel/crash),
@@ -85,9 +85,9 @@ index 661831f8e98d65b9e2b4767f3424b49701be4665..d5964284f8c649152a271de1915bc1a9
  #if BUILDFLAG(IS_CHROMEOS)
  // Returns the app id of the kiosk app associated with the current user session.
  // Returns nullopt for non-kiosk user sessions and for ARCVM kiosk sessions,
-@@ -732,6 +801,26 @@ void StartupBrowserCreator::LaunchBrowser(
+@@ -732,6 +801,28 @@ void StartupBrowserCreator::LaunchBrowser(
        command_line, {profile, StartupProfileMode::kBrowserWindow});
- 
+
    if (!IsSilentLaunchEnabled(command_line, profile)) {
 +#if !BUILDFLAG(IS_CHROMEOS)
 +    if (browseros::IsBrowserOSProduct()) {
@@ -95,6 +95,8 @@ index 661831f8e98d65b9e2b4767f3424b49701be4665..d5964284f8c649152a271de1915bc1a9
 +    }
 +
 +    if (!command_line.HasSwitch(switches::kNoFirstRun) &&
++        !base::CommandLine::ForCurrentProcess()->HasSwitch(
++            switches::kNoFirstRun) &&
 +        browseros::onboarding::ShouldShow(profile)) {
 +      // BrowserOS onboarding is now the first-run experience. Stand down
 +      // Chromium's DICE first-run so it does not re-intercept the browser
@@ -112,3 +114,39 @@ index 661831f8e98d65b9e2b4767f3424b49701be4665..d5964284f8c649152a271de1915bc1a9
  #if BUILDFLAG(ENABLE_DICE_SUPPORT)
      auto* fre_service = FirstRunServiceFactory::GetForBrowserContext(profile);
      if (fre_service && fre_service->ShouldOpenFirstRun()) {
+@@ -1417,6 +1508,7 @@ void StartupBrowserCreator::ProcessLastOpenedProfiles(
+                                                  switch_pair.second);
+   }
+
++  bool launched_any = false;
+   // Launch the profiles in the order they became active.
+   for (Profile* profile : last_opened_profiles) {
+     DCHECK(!profile->IsGuestSession());
+@@ -1454,10 +1546,27 @@ void StartupBrowserCreator::ProcessLastOpenedProfiles(
+                                                  : command_line_without_urls,
+                   profile, cur_dir, process_startup, is_first_run,
+                   /*restore_tabbed_browser=*/true);
++    launched_any = true;
+     // We've launched at least one browser.
+     process_startup = chrome::startup::IsProcessStartup::kNo;
+   }
+
++  // If this is a relaunch into an already running browser process and every
++  // profile in |last_opened_profiles| was skipped (e.g. none matched
++  // |last_used_profile| and all used SessionStartupPref::DEFAULT), fall back
++  // to launching |last_used_profile| so the relaunch still opens a window.
++  if (!launched_any &&
++      process_startup == chrome::startup::IsProcessStartup::kNo &&
++      last_used_profile && !last_used_profile->IsGuestSession()
++#if !BUILDFLAG(IS_CHROMEOS)
++      && CanOpenProfileOnStartup(
++             {last_used_profile, StartupProfileMode::kBrowserWindow})
++#endif
++  ) {
++    LaunchBrowser(command_line, last_used_profile, cur_dir, process_startup,
++                  is_first_run, /*restore_tabbed_browser=*/true);
++  }
++
+ // Set the |last_used_profile| to activate if a browser is launched for at
+ // least one profile. Otherwise, show UserManager.
+ // Note that this must be done after all profiles have
