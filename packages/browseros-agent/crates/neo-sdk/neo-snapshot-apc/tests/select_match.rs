@@ -30,25 +30,39 @@ enum Field {
     Description,
 }
 
+/// One call a stage made to the name seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TextRead {
+    field: Field,
+    node: NodeId,
+    hidden: IncludeHidden,
+}
+
 /// Names and descriptions set directly, standing in for the name pass (engine chunk 4). Every
 /// read is recorded, so a test can check what the stage asked for and with which `IncludeHidden`.
 #[derive(Default)]
 struct Text {
     names: HashMap<NodeId, String>,
     descriptions: HashMap<NodeId, String>,
-    reads: RefCell<Vec<(Field, NodeId, IncludeHidden)>>,
+    reads: RefCell<Vec<TextRead>>,
 }
 
 impl AccessibleText for Text {
     fn name(&self, node: NodeId, hidden: IncludeHidden) -> Cow<'_, str> {
-        self.reads.borrow_mut().push((Field::Name, node, hidden));
+        self.reads.borrow_mut().push(TextRead {
+            field: Field::Name,
+            node,
+            hidden,
+        });
         Cow::Borrowed(self.names.get(&node).map_or("", String::as_str))
     }
 
     fn description(&self, node: NodeId, hidden: IncludeHidden) -> Cow<'_, str> {
-        self.reads
-            .borrow_mut()
-            .push((Field::Description, node, hidden));
+        self.reads.borrow_mut().push(TextRead {
+            field: Field::Description,
+            node,
+            hidden,
+        });
         Cow::Borrowed(self.descriptions.get(&node).map_or("", String::as_str))
     }
 }
@@ -1483,7 +1497,11 @@ fn names_are_read_only_for_nodes_past_every_cheaper_check() -> Result<(), Box<dy
     )?;
     assert_eq!(
         page.text.reads.take(),
-        [(Field::Name, go, IncludeHidden::No)],
+        [TextRead {
+            field: Field::Name,
+            node: go,
+            hidden: IncludeHidden::No
+        }],
         "the link fails on role, the disabled button on state and the hidden one on hidden-ness, \
          all before the name"
     );
@@ -1495,8 +1513,16 @@ fn names_are_read_only_for_nodes_past_every_cheaper_check() -> Result<(), Box<dy
     assert_eq!(
         page.text.reads.take(),
         [
-            (Field::Name, go, IncludeHidden::Yes),
-            (Field::Name, hidden, IncludeHidden::Yes)
+            TextRead {
+                field: Field::Name,
+                node: go,
+                hidden: IncludeHidden::Yes
+            },
+            TextRead {
+                field: Field::Name,
+                node: hidden,
+                hidden: IncludeHidden::Yes
+            }
         ],
         "include-hidden reaches the hidden button and asks for names with hidden content"
     );
@@ -1514,10 +1540,26 @@ fn names_are_read_only_for_nodes_past_every_cheaper_check() -> Result<(), Box<dy
     assert_eq!(
         page.text.reads.take(),
         [
-            (Field::Name, go, IncludeHidden::No),
-            (Field::Description, go, IncludeHidden::No),
-            (Field::Name, page.node(12)?, IncludeHidden::No),
-            (Field::Description, page.node(12)?, IncludeHidden::No),
+            TextRead {
+                field: Field::Name,
+                node: go,
+                hidden: IncludeHidden::No
+            },
+            TextRead {
+                field: Field::Description,
+                node: go,
+                hidden: IncludeHidden::No
+            },
+            TextRead {
+                field: Field::Name,
+                node: page.node(12)?,
+                hidden: IncludeHidden::No
+            },
+            TextRead {
+                field: Field::Description,
+                node: page.node(12)?,
+                hidden: IncludeHidden::No
+            },
         ],
         "the description is read after the name matched, node by node"
     );

@@ -121,11 +121,9 @@ impl TreeStage {
     /// Plans `selector` as one tree stage, or names the first part, nested ones included, that
     /// only the page evaluates.
     pub fn new(selector: &ParsedSelector) -> Result<Self, NotTreeStage> {
-        let mut steps = selector
-            .parts
-            .iter()
-            .map(plan_part)
-            .collect::<Result<Vec<Step>, NotTreeStage>>()?;
+        let planned: Result<Vec<Step>, NotTreeStage> =
+            selector.parts.iter().map(plan_part).collect();
+        let mut steps = planned?;
         let body = match selector.capture {
             None => StageBody::Steps(steps),
             // Only this selector's own parts count: a nested `nth` is its nested selector's
@@ -488,7 +486,6 @@ fn js_length(len: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::nth;
     use crate::tree::NodeId;
 
     #[test]
@@ -523,10 +520,10 @@ mod tests {
         ];
         for (index, expected, why) in cases {
             let expected: Vec<NodeId> = expected.iter().copied().map(NodeId::new).collect();
-            assert_eq!(nth(&list, index), expected, "nth={index}: {why}");
+            assert_eq!(super::nth(&list, index), expected, "nth={index}: {why}");
         }
         assert_eq!(
-            nth(&[], -1.0),
+            super::nth(&[], -1.0),
             Vec::<NodeId>::new(),
             "-1 on an empty set is `slice(-1, 0)`, which is empty"
         );

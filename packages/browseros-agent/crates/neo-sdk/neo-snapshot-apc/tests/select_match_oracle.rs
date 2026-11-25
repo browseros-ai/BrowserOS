@@ -384,7 +384,7 @@ impl Page {
             .document(DocId::MAIN)
             .and_then(TreeDoc::root_node)
             .ok_or("the main document has no root node")?;
-        let elements = tree
+        let elements: Vec<NodeId> = tree
             .nodes()
             .iter()
             .filter(|node| {

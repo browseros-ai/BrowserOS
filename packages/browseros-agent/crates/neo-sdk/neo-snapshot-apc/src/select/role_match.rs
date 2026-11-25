@@ -3,6 +3,7 @@ use neo_snapshot::Tristate;
 use crate::tree::{Role, TreeNode, TriState};
 
 use super::accessible_text::{AccessibleText, IncludeHidden};
+use super::attribute_selector;
 use super::js_regex::JsRegex;
 use super::role_query::{RoleQuery, StringMatchOperator, TextFilter};
 
@@ -228,7 +229,7 @@ fn normalize_white_space(text: &str) -> String {
         .chars()
         .filter(|&ch| ch != '\u{200b}' && ch != '\u{ad}')
     {
-        if is_js_white_space(ch) {
+        if attribute_selector::is_js_space(ch) {
             pending_space = !normalized.is_empty();
         } else {
             if pending_space {
@@ -241,30 +242,11 @@ fn normalize_white_space(text: &str) -> String {
     normalized
 }
 
-/// ECMAScript's `\s`, which is also the set `String.prototype.trim` removes. U+0085 is Unicode
-/// white space but not ECMAScript's.
-fn is_js_white_space(ch: char) -> bool {
-    matches!(
-        ch,
-        '\t'..='\r'
-            | ' '
-            | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
-            | '\u{feff}'
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::error::Error;
 
-    use super::{RoleEngine, RoleMatch, TextMatch, normalize_white_space};
+    use super::{RoleEngine, RoleMatch, TextMatch};
     use crate::select::RoleQuery;
 
     /// The prepared `name` filter of `body` under `engine`.
@@ -313,7 +295,7 @@ mod tests {
             ),
         ];
         for (input, expected, why) in cases {
-            assert_eq!(normalize_white_space(input), expected, "{why}");
+            assert_eq!(super::normalize_white_space(input), expected, "{why}");
         }
     }
 
