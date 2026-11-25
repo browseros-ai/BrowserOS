@@ -1,0 +1,276 @@
+{
+  "fixture": "hung-subframe",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "1F4BC4059B66224158BF59755560D8E4",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/hung-subframe/top.html",
+      "elements": [
+        {
+          "backendNodeId": 7,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "heading",
+          "name": "Hung Subframe Fixture",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "button",
+          "name": "Top button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 8,
+        "e2": 9,
+        "e3": 13,
+        "e4": 10,
+        "e5": 11
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "Hung Subframe Fixture",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "name": "Top button",
+                "ref": "e3",
+                "role": "button"
+              },
+              {
+                "ref": "e4",
+                "role": "iframe"
+              },
+              {
+                "ref": "e5",
+                "role": "iframe"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "Hung Subframe Fixture",
+            "role": "heading"
+          },
+          {
+            "name": "Top button",
+            "role": "button"
+          },
+          {
+            "role": "iframe"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "2586501C59286192358E6FB817B32625",
+      "parent": "1F4BC4059B66224158BF59755560D8E4",
+      "owner": 11,
+      "url": "http://[::1]/hung-subframe/hung.html",
+      "elements": [
+        {
+          "backendNodeId": 2,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "heading",
+          "name": "Hung Frame",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "button",
+          "name": "Hung frame button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f1e1": 3,
+        "f1e2": 4,
+        "f1e3": 6
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 2,
+                "name": "Hung Frame",
+                "ref": "f1e2",
+                "role": "heading"
+              },
+              {
+                "name": "Hung frame button",
+                "ref": "f1e3",
+                "role": "button"
+              }
+            ],
+            "ref": "f1e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 2,
+            "name": "Hung Frame",
+            "role": "heading"
+          },
+          {
+            "name": "Hung frame button",
+            "role": "button"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "2EE33634CBC91B927CBA5700C70271C4",
+      "parent": "1F4BC4059B66224158BF59755560D8E4",
+      "owner": 10,
+      "url": "http://localhost/hung-subframe/healthy.html",
+      "elements": [
+        {
+          "backendNodeId": 2,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "heading",
+          "name": "Healthy Frame",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "button",
+          "name": "Healthy frame button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f2e1": 3,
+        "f2e2": 4,
+        "f2e3": 6
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 2,
+                "name": "Healthy Frame",
+                "ref": "f2e2",
+                "role": "heading"
+              },
+              {
+                "name": "Healthy frame button",
+                "ref": "f2e3",
+                "role": "button"
+              }
+            ],
+            "ref": "f2e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 2,
+            "name": "Healthy Frame",
+            "role": "heading"
+          },
+          {
+            "name": "Healthy frame button",
+            "role": "button"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,258 @@
+{
+  "fixture": "shadow-dom",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "AB1220A2A3457DDBAADD98809F9D96B8",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/shadow-dom/index.html",
+      "elements": [
+        {
+          "backendNodeId": 7,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "heading",
+          "name": "Shadow DOM Fixture",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "button",
+          "name": "Light button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "button",
+          "name": "Open shadow button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "Open shadow input",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 23,
+          "role": "button",
+          "name": "Closed shadow button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "textbox",
+          "name": "Closed shadow input",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 8,
+        "e10": 14,
+        "e11": 23,
+        "e12": 5,
+        "e13": 15,
+        "e2": 9,
+        "e3": 17,
+        "e4": 10,
+        "e5": 11,
+        "e6": 19,
+        "e7": 4,
+        "e8": 12,
+        "e9": 13
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "Shadow DOM Fixture",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "name": "Light button",
+                "ref": "e3",
+                "role": "button"
+              },
+              {
+                "children": [
+                  {
+                    "name": "Open shadow button",
+                    "ref": "e6",
+                    "role": "button"
+                  },
+                  {
+                    "name": "Open shadow input",
+                    "ref": "e7",
+                    "role": "textbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "role": "generic",
+                        "text": "Open slotted text"
+                      }
+                    ],
+                    "ref": "e8",
+                    "role": "paragraph"
+                  }
+                ],
+                "ref": "e5",
+                "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "Closed shadow button",
+                    "ref": "e11",
+                    "role": "button"
+                  },
+                  {
+                    "name": "Closed shadow input",
+                    "ref": "e12",
+                    "role": "textbox"
+                  },
+                  {
+                    "children": [
+                      {
+                        "role": "generic",
+                        "text": "Closed slotted text"
+                      }
+                    ],
+                    "ref": "e13",
+                    "role": "paragraph"
+                  }
+                ],
+                "ref": "e10",
+                "role": "generic"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "Shadow DOM Fixture",
+            "role": "heading"
+          },
+          {
+            "name": "Light button",
+            "role": "button"
+          },
+          {
+            "name": "Open shadow button",
+            "role": "button"
+          },
+          {
+            "name": "Open shadow input",
+            "role": "textbox"
+          },
+          {
+            "role": "paragraph",
+            "text": "Open slotted text"
+          },
+          {
+            "name": "Closed shadow button",
+            "role": "button"
+          },
+          {
+            "name": "Closed shadow input",
+            "role": "textbox"
+          },
+          {
+            "role": "paragraph",
+            "text": "Closed slotted text"
+          }
+        ]
+      }
+    }
+  ]
+}

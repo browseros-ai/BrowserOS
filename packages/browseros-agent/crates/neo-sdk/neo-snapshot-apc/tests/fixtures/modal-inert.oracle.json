@@ -1,0 +1,342 @@
+{
+  "fixture": "modal-inert",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "E6AF6A582402BE569D449A7ED4F3110B",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/edge/modal-inert.html",
+      "elements": [
+        {
+          "backendNodeId": 6,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "heading",
+          "name": "heading: page behind the modal",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "button",
+          "name": "button: behind modal",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "button",
+          "name": "button: in an inert div outside the dialog",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "dialog",
+          "name": "heading: modal title, also the dialog name",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "heading",
+          "name": "heading: modal title, also the dialog name",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 2,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 20,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 24,
+          "role": "button",
+          "name": "button: modal confirm",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": true
+          }
+        },
+        {
+          "backendNodeId": 27,
+          "role": "button",
+          "name": "button: modal cancel",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 61,
+          "role": "link",
+          "name": "link: inert inside the modal",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 31,
+          "role": "button",
+          "name": "button: inert inside the modal",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "textbox: inert inside the modal",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 7,
+        "e10": 24,
+        "e11": 27,
+        "e12": 21,
+        "e13": 61,
+        "e14": 31,
+        "e15": 4,
+        "e2": 8,
+        "e3": 12,
+        "e4": 9,
+        "e5": 10,
+        "e6": 15,
+        "e7": 18,
+        "e8": 19,
+        "e9": 20
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "heading: page behind the modal",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "name": "button: behind modal",
+                "ref": "e3",
+                "role": "button"
+              },
+              {
+                "ref": "e4",
+                "role": "paragraph",
+                "text": "paragraph: page text behind the modal"
+              },
+              {
+                "name": "button: in an inert div outside the dialog",
+                "ref": "e6",
+                "role": "button"
+              },
+              {
+                "children": [
+                  {
+                    "level": 2,
+                    "name": "heading: modal title, also the dialog name",
+                    "ref": "e8",
+                    "role": "heading"
+                  },
+                  {
+                    "ref": "e9",
+                    "role": "paragraph",
+                    "text": "paragraph: modal text"
+                  },
+                  {
+                    "active": true,
+                    "name": "button: modal confirm",
+                    "ref": "e10",
+                    "role": "button"
+                  },
+                  {
+                    "name": "button: modal cancel",
+                    "ref": "e11",
+                    "role": "button"
+                  },
+                  {
+                    "children": [
+                      {
+                        "cursor": "pointer",
+                        "name": "link: inert inside the modal",
+                        "ref": "e13",
+                        "role": "link",
+                        "url": "#inert-link"
+                      },
+                      {
+                        "name": "button: inert inside the modal",
+                        "ref": "e14",
+                        "role": "button"
+                      },
+                      "textbox: inert inside the modal",
+                      {
+                        "name": "textbox: inert inside the modal",
+                        "ref": "e15",
+                        "role": "textbox"
+                      }
+                    ],
+                    "ref": "e12",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e7",
+                "role": "dialog"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "heading: page behind the modal",
+            "role": "heading"
+          },
+          {
+            "name": "button: behind modal",
+            "role": "button"
+          },
+          {
+            "role": "paragraph",
+            "text": "paragraph: page text behind the modal"
+          },
+          {
+            "name": "button: in an inert div outside the dialog",
+            "role": "button"
+          },
+          {
+            "children": [
+              {
+                "level": 2,
+                "name": "heading: modal title, also the dialog name",
+                "role": "heading"
+              },
+              {
+                "role": "paragraph",
+                "text": "paragraph: modal text"
+              },
+              {
+                "name": "button: modal confirm",
+                "role": "button"
+              },
+              {
+                "name": "button: modal cancel",
+                "role": "button"
+              },
+              {
+                "name": "link: inert inside the modal",
+                "role": "link",
+                "url": "#inert-link"
+              },
+              {
+                "name": "button: inert inside the modal",
+                "role": "button"
+              },
+              "textbox: inert inside the modal",
+              {
+                "name": "textbox: inert inside the modal",
+                "role": "textbox"
+              }
+            ],
+            "name": "heading: modal title, also the dialog name",
+            "role": "dialog"
+          }
+        ]
+      }
+    }
+  ]
+}

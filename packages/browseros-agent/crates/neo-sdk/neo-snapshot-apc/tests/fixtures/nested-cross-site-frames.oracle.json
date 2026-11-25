@@ -1,0 +1,928 @@
+{
+  "fixture": "nested-cross-site-frames",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "EA3E6700C12B91F26A659A7FF3AA8BA5",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/nested/top.html",
+      "elements": [
+        {
+          "backendNodeId": 8,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "heading",
+          "name": "Top",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "button",
+          "name": "Top button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "Top field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 9,
+        "e2": 10,
+        "e3": 14,
+        "e4": 4,
+        "e5": 11,
+        "e6": 12
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "Top",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "name": "Top button",
+                "ref": "e3",
+                "role": "button"
+              },
+              {
+                "name": "Top field",
+                "ref": "e4",
+                "role": "textbox"
+              },
+              {
+                "ref": "e5",
+                "role": "iframe"
+              },
+              {
+                "ref": "e6",
+                "role": "iframe"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "Top",
+            "role": "heading"
+          },
+          {
+            "name": "Top button",
+            "role": "button"
+          },
+          {
+            "name": "Top field",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "7BF9C04D6E3955975A4CF07D9920F9C6",
+      "parent": "EA3E6700C12B91F26A659A7FF3AA8BA5",
+      "owner": 11,
+      "url": "http://127.0.0.1/nested/a1.html",
+      "elements": [
+        {
+          "backendNodeId": 25,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 27,
+          "role": "heading",
+          "name": "A1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 30,
+          "role": "button",
+          "name": "A1 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "textbox",
+          "name": "A1 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f1e1": 26,
+        "f1e2": 27,
+        "f1e3": 30,
+        "f1e4": 22,
+        "f1e5": 28
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "A1",
+                "ref": "f1e2",
+                "role": "heading"
+              },
+              {
+                "name": "A1 button",
+                "ref": "f1e3",
+                "role": "button"
+              },
+              {
+                "name": "A1 field",
+                "ref": "f1e4",
+                "role": "textbox"
+              },
+              {
+                "ref": "f1e5",
+                "role": "iframe"
+              }
+            ],
+            "ref": "f1e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "A1",
+            "role": "heading"
+          },
+          {
+            "name": "A1 button",
+            "role": "button"
+          },
+          {
+            "name": "A1 field",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "568CAB9C616CAD8AE4A97D2C6D767AB5",
+      "parent": "7BF9C04D6E3955975A4CF07D9920F9C6",
+      "owner": 28,
+      "url": "http://localhost/nested/b2.html",
+      "elements": [
+        {
+          "backendNodeId": 7,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "heading",
+          "name": "B2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "button",
+          "name": "B2 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 3,
+          "role": "textbox",
+          "name": "B2 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f2e1": 8,
+        "f2e2": 9,
+        "f2e3": 12,
+        "f2e4": 3,
+        "f2e5": 10
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "B2",
+                "ref": "f2e2",
+                "role": "heading"
+              },
+              {
+                "name": "B2 button",
+                "ref": "f2e3",
+                "role": "button"
+              },
+              {
+                "name": "B2 field",
+                "ref": "f2e4",
+                "role": "textbox"
+              },
+              {
+                "ref": "f2e5",
+                "role": "iframe"
+              }
+            ],
+            "ref": "f2e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "B2",
+            "role": "heading"
+          },
+          {
+            "name": "B2 button",
+            "role": "button"
+          },
+          {
+            "name": "B2 field",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "663C2F4AD9553DD545603A927A3DC2B9",
+      "parent": "568CAB9C616CAD8AE4A97D2C6D767AB5",
+      "owner": 10,
+      "url": "http://localhost/nested/b3.html",
+      "elements": [
+        {
+          "backendNodeId": 20,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "heading",
+          "name": "B3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 24,
+          "role": "button",
+          "name": "B3 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "textbox",
+          "name": "B3 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f3e1": 21,
+        "f3e2": 22,
+        "f3e3": 24,
+        "f3e4": 18
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "B3",
+                "ref": "f3e2",
+                "role": "heading"
+              },
+              {
+                "name": "B3 button",
+                "ref": "f3e3",
+                "role": "button"
+              },
+              {
+                "name": "B3 field",
+                "ref": "f3e4",
+                "role": "textbox"
+              }
+            ],
+            "ref": "f3e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "B3",
+            "role": "heading"
+          },
+          {
+            "name": "B3 button",
+            "role": "button"
+          },
+          {
+            "name": "B3 field",
+            "role": "textbox"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "AEDF568CC178E5B5F884A5F7C5E3EEAF",
+      "parent": "EA3E6700C12B91F26A659A7FF3AA8BA5",
+      "owner": 12,
+      "url": "http://localhost/nested/b1.html",
+      "elements": [
+        {
+          "backendNodeId": 61,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 28,
+          "role": "heading",
+          "name": "B1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 30,
+          "role": "button",
+          "name": "B1 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "B1 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f4e1": 67,
+        "f4e2": 28,
+        "f4e3": 30,
+        "f4e4": 4,
+        "f4e5": 33
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "B1",
+                "ref": "f4e2",
+                "role": "heading"
+              },
+              {
+                "name": "B1 button",
+                "ref": "f4e3",
+                "role": "button"
+              },
+              {
+                "name": "B1 field",
+                "ref": "f4e4",
+                "role": "textbox"
+              },
+              {
+                "ref": "f4e5",
+                "role": "iframe"
+              }
+            ],
+            "ref": "f4e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "B1",
+            "role": "heading"
+          },
+          {
+            "name": "B1 button",
+            "role": "button"
+          },
+          {
+            "name": "B1 field",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "504E7629FB07B2560E12529DAEB24EA0",
+      "parent": "AEDF568CC178E5B5F884A5F7C5E3EEAF",
+      "owner": 33,
+      "url": "http://[::1]/nested/c2.html",
+      "elements": [
+        {
+          "backendNodeId": 18,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "heading",
+          "name": "C2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "button",
+          "name": "C2 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 1,
+          "role": "textbox",
+          "name": "C2 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f5e1": 24,
+        "f5e2": 6,
+        "f5e3": 8,
+        "f5e4": 1,
+        "f5e5": 11
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "C2",
+                "ref": "f5e2",
+                "role": "heading"
+              },
+              {
+                "name": "C2 button",
+                "ref": "f5e3",
+                "role": "button"
+              },
+              {
+                "name": "C2 field",
+                "ref": "f5e4",
+                "role": "textbox"
+              },
+              {
+                "ref": "f5e5",
+                "role": "iframe"
+              }
+            ],
+            "ref": "f5e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "C2",
+            "role": "heading"
+          },
+          {
+            "name": "C2 button",
+            "role": "button"
+          },
+          {
+            "name": "C2 field",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "B5EFDCB40E292465A5706F2F0391B88D",
+      "parent": "504E7629FB07B2560E12529DAEB24EA0",
+      "owner": 11,
+      "url": "http://127.0.0.1/nested/a3.html",
+      "elements": [
+        {
+          "backendNodeId": 72,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 39,
+          "role": "heading",
+          "name": "A3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 41,
+          "role": "button",
+          "name": "A3 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 36,
+          "role": "textbox",
+          "name": "A3 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f6e1": 78,
+        "f6e2": 39,
+        "f6e3": 41,
+        "f6e4": 36,
+        "f6e5": 44
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "A3",
+                "ref": "f6e2",
+                "role": "heading"
+              },
+              {
+                "name": "A3 button",
+                "ref": "f6e3",
+                "role": "button"
+              },
+              {
+                "name": "A3 field",
+                "ref": "f6e4",
+                "role": "textbox"
+              },
+              {
+                "ref": "f6e5",
+                "role": "iframe"
+              }
+            ],
+            "ref": "f6e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "A3",
+            "role": "heading"
+          },
+          {
+            "name": "A3 button",
+            "role": "button"
+          },
+          {
+            "name": "A3 field",
+            "role": "textbox"
+          },
+          {
+            "role": "iframe"
+          }
+        ]
+      }
+    },
+    {
+      "frame": "6E6104156B1BC5444FB96CF441E44F27",
+      "parent": "B5EFDCB40E292465A5706F2F0391B88D",
+      "owner": 44,
+      "url": "http://[::1]/nested/c4.html",
+      "elements": [
+        {
+          "backendNodeId": 34,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "heading",
+          "name": "C4",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "button",
+          "name": "C4 button",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "C4 field",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "f7e1": 40,
+        "f7e2": 12,
+        "f7e3": 14,
+        "f7e4": 4
+      },
+      "aria": {
+        "ai": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "C4",
+                "ref": "f7e2",
+                "role": "heading"
+              },
+              {
+                "name": "C4 button",
+                "ref": "f7e3",
+                "role": "button"
+              },
+              {
+                "name": "C4 field",
+                "ref": "f7e4",
+                "role": "textbox"
+              }
+            ],
+            "ref": "f7e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "C4",
+            "role": "heading"
+          },
+          {
+            "name": "C4 button",
+            "role": "button"
+          },
+          {
+            "name": "C4 field",
+            "role": "textbox"
+          }
+        ]
+      }
+    }
+  ]
+}

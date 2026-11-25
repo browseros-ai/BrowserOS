@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: zero-size controls</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  /* Browser input borders and padding would otherwise give a zero-width control a layout box. */
+  .nosize { position: absolute; width: 0; height: 0; margin: 0; padding: 0; border: 0; opacity: 0; }
+  .row { margin: 6px 0; }
+</style>
+</head>
+<body>
+<h1>heading: zero-size controls</h1>
+
+<fieldset>
+  <legend>group: zero-size controls</legend>
+  <div class="row"><input type="checkbox" id="z-check-for" class="nosize" checked><label for="z-check-for">checkbox: zero-size, label by for, checked</label></div>
+  <div class="row"><label><input type="checkbox" class="nosize">checkbox: zero-size, nested in label, unchecked</label></div>
+  <div class="row"><input type="radio" name="zero-radio" id="z-radio-for" class="nosize"><label for="z-radio-for">radio: zero-size, label by for, unchecked</label></div>
+  <div class="row"><label><input type="radio" name="zero-radio" class="nosize" checked>radio: zero-size, nested in label, checked</label></div>
+  <div class="row"><input type="file" id="z-file-for" class="nosize"><label for="z-file-for">button: zero-size file input, label by for</label></div>
+  <div class="row"><label><input type="file" class="nosize">button: zero-size file input, nested in label</label></div>
+</fieldset>
+
+<fieldset>
+  <legend>group: normal-size controls</legend>
+  <div class="row"><input type="checkbox" id="n-check-for"><label for="n-check-for">checkbox: normal size, label by for, unchecked</label></div>
+  <div class="row"><label><input type="radio" name="normal-radio" checked>radio: normal size, nested in label, checked</label></div>
+  <div class="row"><input type="file" id="n-file-for"><label for="n-file-for">button: normal-size file input, label by for</label></div>
+</fieldset>
+
+<script>
+  window.__fixtureReady = true;
+</script>
+</body>
+</html>

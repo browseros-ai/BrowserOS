@@ -1,0 +1,213 @@
+{
+  "fixture": "sensitive-form",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "1EAE15DE701AAB0515E1F8111FC79F03",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/sensitive-form/index.html",
+      "elements": [
+        {
+          "backendNodeId": 10,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "heading",
+          "name": "Sensitive Form Fixture",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "textbox",
+          "name": "Password",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "textbox",
+          "name": "Card number",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "One-time code",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "button",
+          "name": "Pay now",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 11,
+        "e10": 8,
+        "e2": 12,
+        "e3": 4,
+        "e4": 13,
+        "e5": 5,
+        "e6": 14,
+        "e7": 6,
+        "e8": 15,
+        "e9": 7
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "level": 1,
+                "name": "Sensitive Form Fixture",
+                "ref": "e2",
+                "role": "heading"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "Password",
+                      {
+                        "name": "Password",
+                        "ref": "e5",
+                        "role": "textbox",
+                        "text": "••••••••••••••••••"
+                      }
+                    ],
+                    "ref": "e4",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "Card number",
+                      {
+                        "name": "Card number",
+                        "ref": "e7",
+                        "role": "textbox",
+                        "text": "••••••••••••••••"
+                      }
+                    ],
+                    "ref": "e6",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      "One-time code",
+                      {
+                        "name": "One-time code",
+                        "ref": "e9",
+                        "role": "textbox",
+                        "text": "••••••"
+                      }
+                    ],
+                    "ref": "e8",
+                    "role": "generic"
+                  },
+                  {
+                    "name": "Pay now",
+                    "ref": "e10",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e3",
+                "role": "generic"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "level": 1,
+            "name": "Sensitive Form Fixture",
+            "role": "heading"
+          },
+          {
+            "role": "text",
+            "text": "Password"
+          },
+          {
+            "name": "Password",
+            "role": "textbox",
+            "text": "••••••••••••••••••"
+          },
+          {
+            "role": "text",
+            "text": "Card number"
+          },
+          {
+            "name": "Card number",
+            "role": "textbox",
+            "text": "••••••••••••••••"
+          },
+          {
+            "role": "text",
+            "text": "One-time code"
+          },
+          {
+            "name": "One-time code",
+            "role": "textbox",
+            "text": "••••••"
+          },
+          {
+            "name": "Pay now",
+            "role": "button"
+          }
+        ]
+      }
+    }
+  ]
+}

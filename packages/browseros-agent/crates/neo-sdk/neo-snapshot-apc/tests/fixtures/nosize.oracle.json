@@ -1,0 +1,819 @@
+{
+  "fixture": "nosize",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "B00491DFE73F78F21313EFC4D2E821D6",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/prelude/nosize.html",
+      "elements": [
+        {
+          "backendNodeId": 25,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 27,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 4,
+          "role": "textbox",
+          "name": "Verification code",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 35,
+          "role": "button",
+          "name": "Verify",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 5,
+          "role": "textbox",
+          "name": "Digit 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 6,
+          "role": "textbox",
+          "name": "Digit 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "textbox",
+          "name": "Digit 3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "textbox",
+          "name": "Digit 4",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 9,
+          "role": "textbox",
+          "name": "Digit 5",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "textbox",
+          "name": "Digit 6",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 11,
+          "role": "textbox",
+          "name": "Code",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 12,
+          "role": "spinbutton",
+          "name": "Number code",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 29,
+          "role": "textbox",
+          "name": "Message",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 30,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 31,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 68,
+          "role": "radio",
+          "name": "Monthly",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 70,
+          "role": "radio",
+          "name": "Yearly",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "combobox",
+          "name": "Quantity",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 72,
+          "role": "option",
+          "name": "1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": true,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 74,
+          "role": "option",
+          "name": "2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "selected": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "textbox",
+          "name": "Homepage",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 15,
+          "role": "textbox",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": true,
+          "visible": false,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "textbox",
+          "name": "Sized transparent trap",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 17,
+          "role": "checkbox",
+          "name": "Material 1",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 18,
+          "role": "checkbox",
+          "name": "Material 2",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": true,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "checkbox",
+          "name": "Material 3",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": "mixed",
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 20,
+          "role": "checkbox",
+          "name": "Material 4",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": true,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 21,
+          "role": "checkbox",
+          "name": "Material 5",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 22,
+          "role": "checkbox",
+          "name": "Material 6",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 23,
+          "role": "checkbox",
+          "name": "Material 7",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "checked": false,
+            "disabled": false,
+            "invalid": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 26,
+        "e10": 83,
+        "e11": 85,
+        "e12": 87,
+        "e13": 89,
+        "e14": 91,
+        "e2": 27,
+        "e3": 28,
+        "e4": 35,
+        "e5": 62,
+        "e6": 16,
+        "e7": 32,
+        "e8": 79,
+        "e9": 81
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "ref": "e2",
+                "role": "paragraph",
+                "text": "Enter the code we sent you"
+              },
+              {
+                "name": "Verification code",
+                "role": "textbox"
+              },
+              {
+                "cursor": "pointer",
+                "ref": "e3",
+                "role": "generic",
+                "text": "Drawn code entry"
+              },
+              {
+                "name": "Verify",
+                "ref": "e4",
+                "role": "button"
+              },
+              {
+                "children": [
+                  {
+                    "name": "Digit 1",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "Digit 2",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "Digit 3",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "Digit 4",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "Digit 5",
+                    "role": "textbox"
+                  },
+                  {
+                    "name": "Digit 6",
+                    "role": "textbox"
+                  }
+                ],
+                "role": "generic"
+              },
+              {
+                "children": [
+                  "Code",
+                  {
+                    "name": "Code",
+                    "role": "textbox"
+                  }
+                ],
+                "ref": "e5",
+                "role": "generic"
+              },
+              {
+                "name": "Number code",
+                "role": "spinbutton"
+              },
+              {
+                "children": [
+                  {
+                    "role": "paragraph",
+                    "text": "First paragraph"
+                  },
+                  {
+                    "role": "paragraph",
+                    "text": "Second paragraph"
+                  }
+                ],
+                "name": "Message",
+                "role": "textbox"
+              },
+              {
+                "name": "Monthly",
+                "role": "radio"
+              },
+              {
+                "checked": true,
+                "name": "Yearly",
+                "role": "radio"
+              },
+              {
+                "children": [
+                  {
+                    "name": "1",
+                    "role": "option",
+                    "selected": true
+                  },
+                  {
+                    "name": "2",
+                    "role": "option"
+                  }
+                ],
+                "name": "Quantity",
+                "role": "combobox"
+              },
+              {
+                "name": "Homepage",
+                "role": "textbox"
+              },
+              {
+                "name": "Sized transparent trap",
+                "ref": "e6",
+                "role": "textbox"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "name": "Material 1",
+                        "role": "checkbox"
+                      },
+                      "Material 1"
+                    ],
+                    "ref": "e8",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": true,
+                        "name": "Material 2",
+                        "role": "checkbox"
+                      },
+                      "Material 2"
+                    ],
+                    "ref": "e9",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "checked": "mixed",
+                        "name": "Material 3",
+                        "role": "checkbox"
+                      },
+                      "Material 3"
+                    ],
+                    "ref": "e10",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "disabled": true,
+                        "name": "Material 4",
+                        "role": "checkbox"
+                      },
+                      "Material 4"
+                    ],
+                    "ref": "e11",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "Material 5",
+                        "role": "checkbox"
+                      },
+                      "Material 5"
+                    ],
+                    "ref": "e12",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "Material 6",
+                        "role": "checkbox"
+                      },
+                      "Material 6"
+                    ],
+                    "ref": "e13",
+                    "role": "generic"
+                  },
+                  {
+                    "children": [
+                      {
+                        "name": "Material 7",
+                        "role": "checkbox"
+                      },
+                      "Material 7"
+                    ],
+                    "ref": "e14",
+                    "role": "generic"
+                  }
+                ],
+                "ref": "e7",
+                "role": "generic"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "role": "paragraph",
+            "text": "Enter the code we sent you"
+          },
+          {
+            "name": "Verification code",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "Drawn code entry"
+          },
+          {
+            "name": "Verify",
+            "role": "button"
+          },
+          {
+            "name": "Digit 1",
+            "role": "textbox"
+          },
+          {
+            "name": "Digit 2",
+            "role": "textbox"
+          },
+          {
+            "name": "Digit 3",
+            "role": "textbox"
+          },
+          {
+            "name": "Digit 4",
+            "role": "textbox"
+          },
+          {
+            "name": "Digit 5",
+            "role": "textbox"
+          },
+          {
+            "name": "Digit 6",
+            "role": "textbox"
+          },
+          {
+            "role": "text",
+            "text": "Code"
+          },
+          {
+            "name": "Code",
+            "role": "textbox"
+          },
+          {
+            "name": "Number code",
+            "role": "spinbutton"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "First paragraph"
+              },
+              {
+                "role": "paragraph",
+                "text": "Second paragraph"
+              }
+            ],
+            "name": "Message",
+            "role": "textbox"
+          },
+          {
+            "name": "Monthly",
+            "role": "radio"
+          },
+          {
+            "checked": true,
+            "name": "Yearly",
+            "role": "radio"
+          },
+          {
+            "children": [
+              {
+                "name": "1",
+                "role": "option",
+                "selected": true
+              },
+              {
+                "name": "2",
+                "role": "option"
+              }
+            ],
+            "name": "Quantity",
+            "role": "combobox"
+          },
+          {
+            "name": "Homepage",
+            "role": "textbox"
+          },
+          {
+            "name": "Sized transparent trap",
+            "role": "textbox"
+          },
+          {
+            "name": "Material 1",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 1"
+          },
+          {
+            "checked": true,
+            "name": "Material 2",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 2"
+          },
+          {
+            "checked": "mixed",
+            "name": "Material 3",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 3"
+          },
+          {
+            "disabled": true,
+            "name": "Material 4",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 4"
+          },
+          {
+            "name": "Material 5",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 5"
+          },
+          {
+            "name": "Material 6",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 6"
+          },
+          {
+            "name": "Material 7",
+            "role": "checkbox"
+          },
+          {
+            "role": "text",
+            "text": "Material 7"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -12,7 +12,7 @@
 #[path = "support/fixture_pages.rs"]
 #[expect(
     dead_code,
-    reason = "ALL_FIXTURES serves record_fixtures while live_capture tests nested-cross-site-frames"
+    reason = "loading for the oracle and the canary rules serve record_fixtures; this test only captures"
 )]
 mod fixture_pages;
 #[path = "support/fixture_server.rs"]

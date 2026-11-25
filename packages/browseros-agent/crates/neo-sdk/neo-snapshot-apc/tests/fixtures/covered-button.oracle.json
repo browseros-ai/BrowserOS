@@ -1,0 +1,213 @@
+{
+  "fixture": "covered-button",
+  "engine": "Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.",
+  "browser": "Chrome/158.0.8127.18",
+  "frames": [
+    {
+      "frame": "02ACB045FC4ABED160B3FBBA6355239D",
+      "parent": null,
+      "owner": null,
+      "url": "http://127.0.0.1/covered-button/index.html",
+      "elements": [
+        {
+          "backendNodeId": 5,
+          "role": "document",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 7,
+          "role": "main",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 8,
+          "role": "heading",
+          "name": "Covered Button Fixture",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "level": 1,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 10,
+          "role": "button",
+          "name": "Buy",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 13,
+          "role": "dialog",
+          "name": "What You Need To Know",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 14,
+          "role": "paragraph",
+          "name": "",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 16,
+          "role": "button",
+          "name": "Accept & Continue",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 19,
+          "role": "button",
+          "name": "Dismiss",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        }
+      ],
+      "refs": {
+        "e1": 6,
+        "e2": 7,
+        "e3": 8,
+        "e4": 10,
+        "e5": 12,
+        "e6": 13,
+        "e7": 14,
+        "e8": 16,
+        "e9": 19
+      },
+      "aria": {
+        "ai": [
+          {
+            "active": true,
+            "children": [
+              {
+                "children": [
+                  {
+                    "level": 1,
+                    "name": "Covered Button Fixture",
+                    "ref": "e3",
+                    "role": "heading"
+                  },
+                  {
+                    "name": "Buy",
+                    "ref": "e4",
+                    "role": "button"
+                  }
+                ],
+                "ref": "e2",
+                "role": "main"
+              },
+              {
+                "children": [
+                  {
+                    "ref": "e7",
+                    "role": "paragraph",
+                    "text": "Resale prices often exceed face value."
+                  },
+                  {
+                    "name": "Accept & Continue",
+                    "ref": "e8",
+                    "role": "button"
+                  },
+                  {
+                    "name": "Dismiss",
+                    "ref": "e9",
+                    "role": "button"
+                  }
+                ],
+                "name": "What You Need To Know",
+                "ref": "e6",
+                "role": "dialog"
+              }
+            ],
+            "ref": "e1",
+            "role": "generic"
+          }
+        ],
+        "default": [
+          {
+            "children": [
+              {
+                "level": 1,
+                "name": "Covered Button Fixture",
+                "role": "heading"
+              },
+              {
+                "name": "Buy",
+                "role": "button"
+              }
+            ],
+            "role": "main"
+          },
+          {
+            "children": [
+              {
+                "role": "paragraph",
+                "text": "Resale prices often exceed face value."
+              },
+              {
+                "name": "Accept & Continue",
+                "role": "button"
+              },
+              {
+                "name": "Dismiss",
+                "role": "button"
+              }
+            ],
+            "name": "What You Need To Know",
+            "role": "dialog"
+          }
+        ]
+      }
+    }
+  ]
+}

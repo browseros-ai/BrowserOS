@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edge: shadow roots</title>
+<style>
+  body { margin: 16px; font: 13px sans-serif; }
+  .host { display: block; margin: 8px 0; padding: 8px; border: 1px solid #888; }
+</style>
+</head>
+<body>
+<h1>heading: light document</h1>
+<button type="button">button: light document</button>
+<label for="light-input">textbox: light document</label>
+<input id="light-input" type="text">
+
+<div id="open-host" class="host">
+  <button type="button" slot="named">button: light child of open host, named slot</button>
+  <button type="button">button: light child of open host, default slot</button>
+  <!-- No slot in the open root has this name, so the child is not rendered. -->
+  <button type="button" slot="no-such-slot">button: light child of open host, assigned to no slot</button>
+</div>
+
+<div id="closed-host" class="host">
+  <button type="button">button: light child of closed host, default slot</button>
+</div>
+
+<button type="button">button: light document, after the hosts</button>
+
+<script>
+  {
+    const openRoot = document.getElementById('open-host').attachShadow({ mode: 'open' });
+    openRoot.innerHTML = `
+      <h2>heading: open root, level 1</h2>
+      <button type="button">button: open root, level 1</button>
+      <label for="open1-input">textbox: open root, level 1</label>
+      <input id="open1-input" type="text">
+      <div>named slot: <slot name="named"></slot></div>
+      <div>default slot: <slot></slot></div>
+      <div id="closed-in-open-host">
+        <button type="button">button: open-root child slotted into closed root, level 2</button>
+      </div>`;
+
+    const closedInOpen = openRoot.getElementById('closed-in-open-host').attachShadow({ mode: 'closed' });
+    closedInOpen.innerHTML = `
+      <h3>heading: closed root inside open root, level 2</h3>
+      <button type="button">button: closed root inside open root, level 2</button>
+      <label for="closed2-input">textbox: closed root inside open root, level 2</label>
+      <input id="closed2-input" type="text">
+      <div>default slot: <slot></slot></div>`;
+
+    const closedRoot = document.getElementById('closed-host').attachShadow({ mode: 'closed' });
+    closedRoot.innerHTML = `
+      <h2>heading: closed root, level 1</h2>
+      <button type="button">button: closed root, level 1</button>
+      <label for="closed1-input">textbox: closed root, level 1</label>
+      <input id="closed1-input" type="text">
+      <div>default slot: <slot></slot></div>
+      <div id="open-in-closed-host"></div>`;
+
+    closedRoot.getElementById('open-in-closed-host').attachShadow({ mode: 'open' }).innerHTML = `
+      <h3>heading: open root inside closed root, level 2</h3>
+      <button type="button">button: open root inside closed root, level 2</button>
+      <label for="open2-input">textbox: open root inside closed root, level 2</label>
+      <input id="open2-input" type="text">`;
+
+    const frame = document.createElement('iframe');
+    frame.title = 'iframe: srcdoc in closed root';
+    frame.style.cssText = 'display:block;width:360px;height:60px;border:1px solid #888;margin-top:8px';
+    // Ready only once the srcdoc document itself has loaded, not an initial about:blank.
+    frame.addEventListener('load', () => {
+      if (frame.contentDocument && frame.contentDocument.querySelector('button')) {
+        window.__fixtureReady = true;
+      }
+    });
+    frame.srcdoc = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>frame in closed root</title></head>' +
+      '<body><button type="button">button: inside frame in closed root</button></body></html>';
+    closedRoot.append(frame);
+  }
+</script>
+</body>
+</html>
