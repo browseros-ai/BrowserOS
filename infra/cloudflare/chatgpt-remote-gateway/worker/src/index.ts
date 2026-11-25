@@ -179,13 +179,14 @@ export class GatewayState {
     const ip = request.headers.get("cf-connecting-ip") || "unknown";
     const now = Date.now();
     const key = "rate:" + action + ":" + await sha256(ip);
-    const previous = await this.ctx.storage.get<{ count: number; resetAt: number }>(key);
-    const current = !previous || previous.resetAt <= now ? { count: 0, resetAt: now + windowMs } : previous;
-    if (current.count >= limit) {
-      const retryAfter = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
-      return new Response(JSON.stringify({ error: "rate_limited", retry_after: retryAfter }), { status: 429, headers: { "content-type": "application/json", "cache-control": "no-store", "retry-after": String(retryAfter) } });
-    }
-    await this.ctx.storage.put(key, { count: current.count + 1, resetAt: current.resetAt });
+    const retryAfter = await this.ctx.storage.transaction(async (txn) => {
+      const previous = await txn.get<{ count: number; resetAt: number }>(key);
+      const current = !previous || previous.resetAt <= now ? { count: 0, resetAt: now + windowMs } : previous;
+      if (current.count >= limit) return Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      await txn.put(key, { count: current.count + 1, resetAt: current.resetAt });
+      return 0;
+    });
+    if (retryAfter > 0) return new Response(JSON.stringify({ error: "rate_limited", retry_after: retryAfter }), { status: 429, headers: { "content-type": "application/json", "cache-control": "no-store", "retry-after": String(retryAfter) } });
     return null;
   }
 
