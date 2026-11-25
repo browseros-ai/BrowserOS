@@ -41,7 +41,7 @@ pub use profiles::{
     ProfileMeta, ProfileSelector, default_profile, resolve_profile,
 };
 pub use runtime_lease::{RuntimeLease, RuntimeLeases};
-pub use session::{BrowserSession, BrowserSessionHooks};
+pub use session::{AccessibilityDomain, BrowserSession, BrowserSessionHooks};
 pub use target::{
     BrowserView, CapturedScope, OpenedPage, PageAdmission, PageListing, TargetBinding,
     TargetIntent, TargetSource, TargetStatus, WindowSelection,

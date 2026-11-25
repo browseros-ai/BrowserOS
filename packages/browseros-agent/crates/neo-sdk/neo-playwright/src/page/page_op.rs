@@ -892,12 +892,7 @@ mod browser_only_tests {
     /// Far under the CDP client's 60 s, which a page command would wait for.
     const BROWSER_ONLY: Duration = Duration::from_secs(5);
     /// What core's attach and a write's admission send a page's renderer.
-    const RENDERER: [&str; 4] = [
-        "Page.enable",
-        "DOM.enable",
-        "Accessibility.enable",
-        "Runtime.evaluate",
-    ];
+    const RENDERER: [&str; 3] = ["Page.enable", "DOM.enable", "Runtime.evaluate"];
 
     /// A tab whose renderer outlasts the client on every command. The browser drops it from
     /// its tab list once told to close it, unless it `stays` listed.
