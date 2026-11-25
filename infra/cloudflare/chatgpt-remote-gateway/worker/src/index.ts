@@ -194,7 +194,7 @@ export class GatewayState {
     const scope = String(form.get("scope") || "browser:read");
     const codeInput = String(form.get("pairing_code") || "").trim().toUpperCase();
     if (form.get("approve") !== "yes" || !codeInput || !state || !/^[A-Za-z0-9_-]{43}$/.test(challenge)) return json({ error: "access_denied" }, 400);
-    const requestedScopes = scope.split(/\\s+/).filter((s) => ["browser:read", "browser:control"].includes(s));
+    const requestedScopes = scope.split(/\s+/).filter((s) => ["browser:read", "browser:control"].includes(s));
     if (!requestedScopes.includes("browser:read")) return json({ error: "invalid_scope" }, 400);
     const client = await this.ctx.storage.get<Client>("client:" + clientId);
     if (!client || !client.redirectUris.includes(redirectUri)) return json({ error: "invalid_client" }, 400);
