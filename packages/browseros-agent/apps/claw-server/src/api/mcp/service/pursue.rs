@@ -12,7 +12,6 @@ use crate::{
     ids::DispatchId,
     services::sessions::ClawTargetStore,
 };
-use browseros_core::target::BrowserView;
 use browseros_decide::{
     offer::{Destination, NamedValue},
     pursue::{Status, advance_writing},
@@ -266,7 +265,7 @@ impl ClawMcpService {
             Err(error) => return not_started(page, &error.to_string()),
         };
         let view = hosted::with_viewports(
-            BrowserView::capture(browser_session.clone(), binding, None).await,
+            super::capture_view(&self.state, browser_session.clone(), binding, false).await,
             self.state.viewports.as_ref(),
         );
         let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {

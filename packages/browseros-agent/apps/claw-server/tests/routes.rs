@@ -523,9 +523,8 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
+    // Free: choosing a browser profile comes with ultrafast, so the profile tools are not listed.
     let expected = vec![
-        "browser_profiles",
-        "browser_target",
         "tabs",
         "tab_groups",
         "history",
