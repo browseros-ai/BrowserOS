@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "browseros-chatgpt-remote-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-25",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GATEWAY_STATE",
+        "class_name": "GatewayState"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GatewayState"]
+    }
+  ],
+  "vars": {
+    "GATEWAY_ISSUER": "https://REPLACE_WITH_WORKER_HOSTNAME",
+    "BROWSEROS_MCP_ORIGIN": "https://REPLACE_WITH_ACCESS_PROTECTED_TUNNEL_HOSTNAME",
+    "ALLOWED_TOOL_NAMES": "[]"
+  }
+}
