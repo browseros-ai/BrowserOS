@@ -1,4 +1,7 @@
 //! Randomized differential test of `TreeStage` against the query code Neo ships (`injected.js`, Playwright 1.64.1) run in QuickJS.
+//!
+//! Names and descriptions are injected on both sides instead of computed by the name pass, because
+//! the test judges query and string semantics with adversarial strings in names and needles alike.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -8,12 +11,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use neo_snapshot_apc::proto::BrowserOsTriState;
-use neo_snapshot_apc::select::{
-    AccessibleText, IncludeHidden, ParsedSelector, RefResolver, Scope, TreeStage,
-};
+use neo_snapshot_apc::select::{AccessibleText, ParsedSelector, RefResolver, Scope, TreeStage};
 use neo_snapshot_apc::tree::{
-    ApcBuilder, BuildOptions, DocId, DocToken, DomNodeId, NodeBuilder, NodeId, NodeKey, Role,
-    SnapshotTree, TreeDoc, TreeNode, TriState,
+    ApcBuilder, BuildOptions, DocId, DocToken, DomNodeId, NameVisibility, NodeBuilder, NodeId,
+    NodeKey, Role, SnapshotTree, TreeDoc, TreeNode, TriState,
 };
 use rquickjs::{CatchResultExt, Context, Function, Runtime};
 use serde::Deserialize;
@@ -322,11 +323,12 @@ struct Page {
     refs: Refs,
 }
 
-/// The test's accessible names and descriptions, standing in for the name pass (engine chunk 4).
+/// The test's accessible names and descriptions, injected in place of the name pass so that both
+/// sides read the same generated strings.
 #[derive(Default)]
 struct Names(HashMap<NodeId, NodeText>);
 
-/// One element's text, one value per [`IncludeHidden`] mode.
+/// One element's text, one value per [`NameVisibility`].
 #[derive(Clone, Debug, Default)]
 struct NodeText {
     name: String,
@@ -336,17 +338,17 @@ struct NodeText {
 }
 
 impl AccessibleText for Names {
-    fn name(&self, node: NodeId, hidden: IncludeHidden) -> Cow<'_, str> {
-        Cow::Borrowed(self.0.get(&node).map_or("", |text| match hidden {
-            IncludeHidden::No => text.name.as_str(),
-            IncludeHidden::Yes => text.name_hidden.as_str(),
+    fn name(&self, node: NodeId, visibility: NameVisibility) -> Cow<'_, str> {
+        Cow::Borrowed(self.0.get(&node).map_or("", |text| match visibility {
+            NameVisibility::VisibleOnly => text.name.as_str(),
+            NameVisibility::IncludeHidden => text.name_hidden.as_str(),
         }))
     }
 
-    fn description(&self, node: NodeId, hidden: IncludeHidden) -> Cow<'_, str> {
-        Cow::Borrowed(self.0.get(&node).map_or("", |text| match hidden {
-            IncludeHidden::No => text.description.as_str(),
-            IncludeHidden::Yes => text.description_hidden.as_str(),
+    fn description(&self, node: NodeId, visibility: NameVisibility) -> Cow<'_, str> {
+        Cow::Borrowed(self.0.get(&node).map_or("", |text| match visibility {
+            NameVisibility::VisibleOnly => text.description.as_str(),
+            NameVisibility::IncludeHidden => text.description_hidden.as_str(),
         }))
     }
 }

@@ -461,10 +461,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// ECMAScript's `WhiteSpace` and `LineTerminator`: the set behind `\s` and `String.prototype.trim`,
-/// shared by the parser and the role filters' `normalizeWhiteSpace`. U+0085 is Unicode white space
-/// but not ECMAScript's.
-pub(super) fn is_js_space(ch: char) -> bool {
+fn is_js_space(ch: char) -> bool {
     matches!(
         ch,
         '\t'..='\r'

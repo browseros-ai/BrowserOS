@@ -1,6 +1,6 @@
-//! `TreeStage` through the public API over hand-built trees: Playwright 1.64.1's
-//! `selectors-role.spec.ts` restated test by test, nested chains, documents, `aria-ref`, and
-//! strict mode against recorded messages.
+//! `TreeStage` through the public API over hand-built trees named by the name pass: Playwright
+//! 1.64.1's `selectors-role.spec.ts` restated test by test, nested chains, documents, `aria-ref`,
+//! the `NameCache` seam, and strict mode against recorded messages.
 
 #[path = "support/prelude_chunks.rs"]
 mod prelude_chunks;
@@ -12,12 +12,12 @@ use std::error::Error;
 
 use neo_snapshot_apc::proto::{AnnotatedRole, BrowserOsTriState, FormControlType};
 use neo_snapshot_apc::select::{
-    AccessibleText, IncludeHidden, NestedSelectorBody, ParsedSelector, RefResolver, Scope,
-    SelectorBody, SelectorPart, StrictPreview, TreeMatches, TreeStage, TreeStageError,
+    AccessibleText, NestedSelectorBody, ParsedSelector, RefResolver, Scope, SelectorBody,
+    SelectorPart, StrictPreview, TreeMatches, TreeStage, TreeStageError,
 };
 use neo_snapshot_apc::tree::{
-    ApcBuilder, BuildOptions, DocId, DocToken, DomNodeId, FrameBuilder, NodeBuilder, NodeId,
-    NodeKey, SnapshotTree,
+    ApcBuilder, BuildOptions, DocId, DocToken, DomNodeId, FrameBuilder, NameCache, NameVisibility,
+    NodeBuilder, NodeId, NodeKey, SnapshotTree,
 };
 use prelude_chunks::Prelude;
 
@@ -35,35 +35,34 @@ enum Field {
 struct TextRead {
     field: Field,
     node: NodeId,
-    hidden: IncludeHidden,
+    visibility: NameVisibility,
 }
 
-/// Names and descriptions set directly, standing in for the name pass (engine chunk 4). Every
-/// read is recorded, so a test can check what the stage asked for and with which `IncludeHidden`.
-#[derive(Default)]
-struct Text {
-    names: HashMap<NodeId, String>,
-    descriptions: HashMap<NodeId, String>,
+/// The name pass behind a recorder, for the test about the seam itself: each read is logged, then
+/// answered by the [`NameCache`] impl that production passes, so the test sees what the stage
+/// asked for, in which order and with which visibility.
+struct RecordingText<'a> {
+    names: NameCache<'a>,
     reads: RefCell<Vec<TextRead>>,
 }
 
-impl AccessibleText for Text {
-    fn name(&self, node: NodeId, hidden: IncludeHidden) -> Cow<'_, str> {
+impl AccessibleText for RecordingText<'_> {
+    fn name(&self, node: NodeId, visibility: NameVisibility) -> Cow<'_, str> {
         self.reads.borrow_mut().push(TextRead {
             field: Field::Name,
             node,
-            hidden,
+            visibility,
         });
-        Cow::Borrowed(self.names.get(&node).map_or("", String::as_str))
+        AccessibleText::name(&self.names, node, visibility)
     }
 
-    fn description(&self, node: NodeId, hidden: IncludeHidden) -> Cow<'_, str> {
+    fn description(&self, node: NodeId, visibility: NameVisibility) -> Cow<'_, str> {
         self.reads.borrow_mut().push(TextRead {
             field: Field::Description,
             node,
-            hidden,
+            visibility,
         });
-        Cow::Borrowed(self.descriptions.get(&node).map_or("", String::as_str))
+        AccessibleText::description(&self.names, node, visibility)
     }
 }
 
@@ -77,10 +76,10 @@ impl RefResolver for Refs {
     }
 }
 
-/// A hand-built capture and what the stage reads beside it.
+/// A hand-built capture and the ref table the stage reads beside it. Names come from the tree's
+/// own name pass.
 struct Page {
     tree: SnapshotTree,
-    text: Text,
     refs: Refs,
 }
 
@@ -89,7 +88,6 @@ impl Page {
         let apc = ApcBuilder::new(MAIN).root(root).build();
         Ok(Self {
             tree: SnapshotTree::build(apc, BuildOptions::default())?,
-            text: Text::default(),
             refs: Refs::default(),
         })
     }
@@ -126,16 +124,6 @@ impl Page {
             .id())
     }
 
-    fn name(&mut self, dom: i32, name: &str) -> Result<(), Box<dyn Error>> {
-        let id = self.node(dom)?;
-        self.name_node(id, name);
-        Ok(())
-    }
-
-    fn name_node(&mut self, id: NodeId, name: &str) {
-        self.text.names.insert(id, name.to_owned());
-    }
-
     fn document(&self) -> Result<Scope<'static>, Box<dyn Error>> {
         Scope::document(&self.tree, DocId::MAIN).ok_or_else(|| "no main document root".into())
     }
@@ -154,7 +142,7 @@ impl Page {
         scope: Scope<'_>,
     ) -> Result<Result<TreeMatches, TreeStageError>, Box<dyn Error>> {
         let stage = TreeStage::new(&js.chunk(locator)?)?;
-        Ok(stage.select(&self.tree, scope, &self.text, &self.refs))
+        Ok(stage.select(&self.tree, scope, &self.tree.name_cache(), &self.refs))
     }
 
     fn try_select(
@@ -220,7 +208,7 @@ fn locator(selector: &str) -> Result<String, Box<dyn Error>> {
 }
 
 /// `selectors-role.spec.ts`, one test per spec test. Each page is built from the facts Chromium
-/// sends for the spec's markup, and each expected list is the spec's, by node.
+/// sends for the spec's markup, names included, and each expected list is the spec's, by node.
 mod selectors_role_spec {
     use super::*;
 
@@ -692,7 +680,7 @@ mod selectors_role_spec {
     #[test]
     fn should_support_name() -> Result<(), Box<dyn Error>> {
         let js = Prelude::load()?;
-        let mut page = Page::new(NodeBuilder::root().children(vec![
+        let page = Page::new(NodeBuilder::root().children(vec![
             plain(10).role("button").aria_label(" Hello "),
             plain(11).role("button").aria_label("Hallo"),
             plain(12).role("button").aria_label("Hello").aria_hidden(true),
@@ -702,16 +690,6 @@ mod selectors_role_spec {
                 .aria_label("foo\"bar")
                 .aria_hidden(true),
         ]))?;
-        // The seam may hand back text that is not normalized; the stage normalizes it.
-        for (dom, name) in [
-            (10, " Hello "),
-            (11, "Hallo"),
-            (12, "Hello"),
-            (13, "123"),
-            (14, "foo\"bar"),
-        ] {
-            page.name(dom, name)?;
-        }
         let cases: [(&str, &[i32], &str); 14] = [
             (
                 r#"page.locator(`role=button[name="Hello"]`)"#,
@@ -793,11 +771,12 @@ mod selectors_role_spec {
     #[test]
     fn should_support_option_name_with_html_whitespace() -> Result<(), Box<dyn Error>> {
         let js = Prelude::load()?;
-        let mut page =
-            Page::new(NodeBuilder::root().child(el("select", 10).child(synthesized_option())))?;
+        // `<option>&nbsp;HTML</option>`: the option's text keeps the U+00A0, and its name comes
+        // from that content.
+        let page = Page::new(NodeBuilder::root().child(
+            el("select", 10).child(synthesized_option().child(NodeBuilder::text("\u{a0}HTML"))),
+        ))?;
         let option = page.child(10, 0)?;
-        // `&nbsp;HTML`: the name keeps the U+00A0.
-        page.name_node(option, "\u{a0}HTML");
         let count = page
             .select(&js, "page.getByRole('option', { name: 'HTML' })")?
             .len();
@@ -909,11 +888,13 @@ mod selectors_role_spec {
     #[test]
     fn should_support_output_accessible_name() -> Result<(), Box<dyn Error>> {
         let js = Prelude::load()?;
-        let mut page = Page::new(NodeBuilder::root().child(el("label", 10).children(vec![
-            NodeBuilder::text("Output1"),
-            el("output", 11).child(NodeBuilder::text("output")),
-        ])))?;
-        page.name(11, "Output1")?;
+        // Chromium sends a wrapping label's control as its `label_for`, as it does for `for=`.
+        let page = Page::new(
+            NodeBuilder::root().child(el("label", 10).label_for(11).children(vec![
+                NodeBuilder::text("Output1"),
+                el("output", 11).child(NodeBuilder::text("output")),
+            ])),
+        )?;
         page.check(
             &js,
             "page.getByRole('status', { name: 'Output1' })",
@@ -926,7 +907,7 @@ mod selectors_role_spec {
     #[test]
     fn should_not_match_scope_by_default() -> Result<(), Box<dyn Error>> {
         let js = Prelude::load()?;
-        let mut page = Page::new(NodeBuilder::root().child(el("ul", 10).child(
+        let page = Page::new(NodeBuilder::root().child(el("ul", 10).child(
             el("li", 11).aria_label("Parent list").children(vec![
                 NodeBuilder::text("Parent list"),
                 el("ul", 12).children(vec![
@@ -935,9 +916,6 @@ mod selectors_role_spec {
                 ]),
             ]),
         )))?;
-        for (dom, name) in [(11, "Parent list"), (13, "child 1"), (14, "child 2")] {
-            page.name(dom, name)?;
-        }
         let children = page.select(
             &js,
             "page.getByRole('listitem', { name: 'Parent list' }).getByRole('listitem')",
@@ -952,7 +930,8 @@ mod selectors_role_spec {
     }
 }
 
-/// A list page for chains:
+/// A list page for chains. Each listitem is named by its `aria-label`, since a listitem takes no
+/// name from its content, and each button by its text:
 ///
 /// ```text
 /// ul 10
@@ -963,31 +942,17 @@ mod selectors_role_spec {
 /// nav 20 > button 21 "Go", button 22 "Stop"
 /// ```
 fn list_page() -> Result<Page, Box<dyn Error>> {
-    let mut page = Page::new(NodeBuilder::root().children(vec![
+    Page::new(NodeBuilder::root().children(vec![
         el("ul", 10).children(vec![
-            el("li", 11).child(button(12, "Edit")),
-            el("li", 13).child(
-                el("ul", 14).children(vec![el("li", 15).child(button(16, "Edit")), el("li", 17)]),
-            ),
-            el("li", 18).child(button(19, "Delete")),
+            el("li", 11).aria_label("A").child(button(12, "Edit")),
+            el("li", 13).aria_label("B").child(el("ul", 14).children(vec![
+                el("li", 15).aria_label("B1").child(button(16, "Edit")),
+                el("li", 17).aria_label("B2"),
+            ])),
+            el("li", 18).aria_label("C").child(button(19, "Delete")),
         ]),
         el("nav", 20).children(vec![button(21, "Go"), button(22, "Stop")]),
-    ]))?;
-    for (dom, name) in [
-        (11, "A"),
-        (12, "Edit"),
-        (13, "B"),
-        (15, "B1"),
-        (16, "Edit"),
-        (17, "B2"),
-        (18, "C"),
-        (19, "Delete"),
-        (21, "Go"),
-        (22, "Stop"),
-    ] {
-        page.name(dom, name)?;
-    }
-    Ok(page)
+    ]))
 }
 
 /// The parts of `chunk` after its first, as `ChunkPlan` hands a later stage of one chunk.
@@ -1024,11 +989,12 @@ fn has_and_has_not_keep_element_roots_by_their_nested_query() -> Result<(), Box<
     // Playwright's parser refuses a nested part first, so a stage that starts with one is a later
     // stage of its chunk; run from the document root, it meets the `Document` itself.
     let document = page.document()?;
+    let names = page.tree.name_cache();
     let has = TreeStage::new(&after_first(
         &js.chunk("page.getByRole('list').filter({ has: page.getByRole('button') })")?,
     ))?;
     assert!(
-        has.select(&page.tree, document, &page.text, &page.refs)?
+        has.select(&page.tree, document, &names, &page.refs)?
             .is_empty(),
         "the document root is not an element, so `internal:has` never keeps it"
     );
@@ -1037,7 +1003,7 @@ fn has_and_has_not_keep_element_roots_by_their_nested_query() -> Result<(), Box<
     ))?;
     assert_eq!(
         chain
-            .select(&page.tree, document, &page.text, &page.refs)?
+            .select(&page.tree, document, &names, &page.refs)?
             .nodes(),
         page.nodes(&[12, 16, 19, 21, 22])?,
         "`internal:chain` has no element check, so it runs from the document"
@@ -1265,6 +1231,7 @@ fn a_later_stage_keeps_its_roots_order_and_and_keeps_the_nested_order() -> Resul
     let js = Prelude::load()?;
     let page = list_page()?;
     let root = page.root()?;
+    let names = page.tree.name_cache();
 
     // Out-of-order roots, as a page stage sorted by layout would hand them over.
     let roots = page.nodes(&[18, 11])?;
@@ -1275,7 +1242,7 @@ fn a_later_stage_keeps_its_roots_order_and_and_keeps_the_nested_order() -> Resul
             root,
             roots: &roots,
         },
-        &page.text,
+        &names,
         &page.refs,
     )?;
     assert_eq!(
@@ -1294,7 +1261,7 @@ fn a_later_stage_keeps_its_roots_order_and_and_keeps_the_nested_order() -> Resul
             root,
             roots: &reversed,
         },
-        &page.text,
+        &names,
         &page.refs,
     )?;
     assert_eq!(
@@ -1313,7 +1280,7 @@ fn a_later_stage_keeps_its_roots_order_and_and_keeps_the_nested_order() -> Resul
             root,
             roots: &roots,
         },
-        &page.text,
+        &names,
         &page.refs,
     )?;
     assert_eq!(
@@ -1332,7 +1299,7 @@ fn a_later_stage_keeps_its_roots_order_and_and_keeps_the_nested_order() -> Resul
             root,
             roots: &roots,
         },
-        &page.text,
+        &names,
         &page.refs,
     )?;
     assert_eq!(
@@ -1350,7 +1317,7 @@ fn a_later_stage_keeps_its_roots_order_and_and_keeps_the_nested_order() -> Resul
                     root,
                     roots: &roots
                 },
-                &page.text,
+                &names,
                 &page.refs
             )
             .err(),
@@ -1409,7 +1376,7 @@ fn an_element_scope_and_unknown_roots() -> Result<(), Box<dyn Error>> {
             root,
             roots: &roots,
         },
-        &page.text,
+        &page.tree.name_cache(),
         &page.refs,
     )?;
     assert_eq!(
@@ -1480,89 +1447,125 @@ fn not_tree_stage_names_the_first_page_part() -> Result<(), Box<dyn Error>> {
 #[test]
 fn names_are_read_only_for_nodes_past_every_cheaper_check() -> Result<(), Box<dyn Error>> {
     let js = Prelude::load()?;
-    let mut page = Page::new(NodeBuilder::root().children(vec![
-        button(10, "Go"),
+    let page = Page::new(NodeBuilder::root().children(vec![
+        button(10, "Go").aria_description("first"),
         button(11, "Go").aria_hidden(true),
         button(12, "Go").contract_disabled(true),
-        plain(13).role("link"),
+        plain(13).role("link").aria_label("Go"),
     ]))?;
-    for dom in [10, 11, 12, 13] {
-        page.name(dom, "Go")?;
-    }
-    let (go, hidden) = (page.node(10)?, page.node(11)?);
+    let (go, hidden, disabled) = (page.node(10)?, page.node(11)?, page.node(12)?);
+    let text = RecordingText {
+        names: page.tree.name_cache(),
+        reads: RefCell::default(),
+    };
+    let select = |locator: &str| -> Result<TreeMatches, Box<dyn Error>> {
+        let stage = TreeStage::new(&js.chunk(locator)?)?;
+        Ok(stage.select(&page.tree, page.document()?, &text, &page.refs)?)
+    };
+    let read = |field, node, visibility| TextRead {
+        field,
+        node,
+        visibility,
+    };
 
-    page.select(
-        &js,
-        "page.getByRole('button', { name: 'Go', disabled: false })",
-    )?;
+    select("page.getByRole('button', { name: 'Go', disabled: false })")?;
     assert_eq!(
-        page.text.reads.take(),
-        [TextRead {
-            field: Field::Name,
-            node: go,
-            hidden: IncludeHidden::No
-        }],
+        text.reads.take(),
+        [read(Field::Name, go, NameVisibility::VisibleOnly)],
         "the link fails on role, the disabled button on state and the hidden one on hidden-ness, \
          all before the name"
     );
 
-    page.select(
-        &js,
-        "page.getByRole('button', { name: 'Go', disabled: false, includeHidden: true })",
-    )?;
+    select("page.getByRole('button', { name: 'Go', disabled: false, includeHidden: true })")?;
     assert_eq!(
-        page.text.reads.take(),
+        text.reads.take(),
         [
-            TextRead {
-                field: Field::Name,
-                node: go,
-                hidden: IncludeHidden::Yes
-            },
-            TextRead {
-                field: Field::Name,
-                node: hidden,
-                hidden: IncludeHidden::Yes
-            }
+            read(Field::Name, go, NameVisibility::IncludeHidden),
+            read(Field::Name, hidden, NameVisibility::IncludeHidden),
         ],
         "include-hidden reaches the hidden button and asks for names with hidden content"
     );
 
-    page.text.descriptions.insert(go, "first".to_owned());
-    let described = page.select(
-        &js,
-        "page.locator('role=button[name=\"Go\"][description=\"first\"]')",
-    )?;
+    let described = select("page.locator('role=button[name=\"Go\"][description=\"first\"]')")?;
     assert_eq!(
         described.nodes(),
         [go],
         "the description filter keeps the first"
     );
     assert_eq!(
-        page.text.reads.take(),
+        text.reads.take(),
         [
-            TextRead {
-                field: Field::Name,
-                node: go,
-                hidden: IncludeHidden::No
-            },
-            TextRead {
-                field: Field::Description,
-                node: go,
-                hidden: IncludeHidden::No
-            },
-            TextRead {
-                field: Field::Name,
-                node: page.node(12)?,
-                hidden: IncludeHidden::No
-            },
-            TextRead {
-                field: Field::Description,
-                node: page.node(12)?,
-                hidden: IncludeHidden::No
-            },
+            read(Field::Name, go, NameVisibility::VisibleOnly),
+            read(Field::Description, go, NameVisibility::VisibleOnly),
+            read(Field::Name, disabled, NameVisibility::VisibleOnly),
+            read(Field::Description, disabled, NameVisibility::VisibleOnly),
         ],
         "the description is read after the name matched, node by node"
     );
+    Ok(())
+}
+
+/// Production passes `&tree.name_cache()`, so a filter matches the name pass's answer for the
+/// visibility the part asks for: a hidden span inside a button that takes its name from content
+/// is in its `IncludeHidden` name and not in its `VisibleOnly` one.
+#[test]
+fn the_name_cache_hands_the_stage_the_name_pass_answers() -> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let page = Page::new(
+        NodeBuilder::root().child(
+            el("button", 10)
+                .aria_description("Charges the card")
+                .children(vec![
+                    NodeBuilder::text("Pay "),
+                    plain(11).aria_hidden(true).child(NodeBuilder::text("now")),
+                ]),
+        ),
+    )?;
+    let pay = page.node(10)?;
+    let names = page.tree.name_cache();
+    assert_eq!(
+        (
+            names.name(pay, NameVisibility::VisibleOnly).text(),
+            names.name(pay, NameVisibility::IncludeHidden).text(),
+        ),
+        ("Pay", "Pay now"),
+        "the fixture's two names differ, so each case below tells the visibilities apart"
+    );
+    let cases: [(&str, &[NodeId], &str); 6] = [
+        (
+            "page.getByRole('button', { name: 'Pay', exact: true })",
+            &[pay],
+            "without include-hidden the stage reads the VisibleOnly name",
+        ),
+        (
+            "page.getByRole('button', { name: 'Pay now', exact: true })",
+            &[],
+            "the aria-hidden span is not in the VisibleOnly name",
+        ),
+        (
+            "page.getByRole('button', { name: 'Pay now', exact: true, includeHidden: true })",
+            &[pay],
+            "include-hidden reads the IncludeHidden name, which holds the hidden span",
+        ),
+        (
+            "page.getByRole('button', { name: 'Pay', exact: true, includeHidden: true })",
+            &[],
+            "include-hidden does not fall back to the VisibleOnly name",
+        ),
+        (
+            "page.locator('role=button[description=\"Charges the card\"]')",
+            &[pay],
+            "the description filter reads the name pass's description",
+        ),
+        (
+            "page.locator('role=button[description=\"Pay\"]')",
+            &[],
+            "the description is not the name",
+        ),
+    ];
+    for (locator, expected, why) in cases {
+        page.check(&js, locator, expected, why)?;
+    }
     Ok(())
 }
 
@@ -1811,10 +1814,7 @@ fn strict_mode_lists_ten_and_marks_the_rest() -> Result<(), Box<dyn Error>> {
 #[test]
 fn strict_mode_accepts_zero_or_one_match() -> Result<(), Box<dyn Error>> {
     let js = Prelude::load()?;
-    let mut page =
-        Page::new(NodeBuilder::root().children(vec![button(10, "Go"), button(11, "Stop")]))?;
-    page.name(10, "Go")?;
-    page.name(11, "Stop")?;
+    let page = Page::new(NodeBuilder::root().children(vec![button(10, "Go"), button(11, "Stop")]))?;
     assert_eq!(
         page.select(&js, "page.getByRole('link')")?.strict(),
         Ok(None),

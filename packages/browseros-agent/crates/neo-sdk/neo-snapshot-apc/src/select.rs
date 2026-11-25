@@ -21,12 +21,14 @@
 //!                    TreeStage::new ◀───────────┘
 //!                             │
 //!   SnapshotTree, Scope ─▶ TreeStage::select ─▶ TreeMatches ─▶ count, nth, strict mode
-//!   AccessibleText (names, engine chunk 4) ┘    (NodeIds in      └─▶ StrictViolation::message
+//!   AccessibleText (NameCache, chunk 4) ───┘    (NodeIds in      └─▶ StrictViolation::message
 //!   RefResolver (refs, engine chunk 5) ────┘     Playwright's order)
 //! ```
 //!
-//! A stage reads names and refs through two seams, [`AccessibleText`] and [`RefResolver`],
-//! because the name pass and the tab's ref table are built by other chunks of the engine.
+//! A stage reads names through [`AccessibleText`], which the tree's
+//! [`NameCache`](crate::tree::NameCache) implements, so one cache built per locator attempt serves
+//! every stage and hint of that attempt. It reads refs through [`RefResolver`], because the tab's
+//! ref table belongs to engine chunk 5.
 
 mod accessible_text;
 mod attribute_selector;
@@ -38,7 +40,7 @@ mod role_query;
 mod tree_matches;
 mod tree_stage;
 
-pub use accessible_text::{AccessibleText, IncludeHidden};
+pub use accessible_text::AccessibleText;
 pub use attribute_selector::{
     AttributeSelector, AttributeSelectorError, AttributeSelectorOperator, AttributeSelectorPart,
     AttributeValue, UnquotedStrings, parse_attribute_selector,

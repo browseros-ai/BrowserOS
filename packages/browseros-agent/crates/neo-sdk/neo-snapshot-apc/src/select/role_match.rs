@@ -1,9 +1,8 @@
 use neo_snapshot::Tristate;
 
-use crate::tree::{Role, TreeNode, TriState};
+use crate::tree::{self, NameVisibility, Role, TreeNode, TriState};
 
-use super::accessible_text::{AccessibleText, IncludeHidden};
-use super::attribute_selector;
+use super::accessible_text::AccessibleText;
 use super::js_regex::JsRegex;
 use super::role_query::{RoleQuery, StringMatchOperator, TextFilter};
 
@@ -117,18 +116,18 @@ impl RoleMatch {
         if !include_hidden && node.hidden().is_hidden_for_aria() {
             return false;
         }
-        let hidden = if include_hidden {
-            IncludeHidden::Yes
+        let visibility = if include_hidden {
+            NameVisibility::IncludeHidden
         } else {
-            IncludeHidden::No
+            NameVisibility::VisibleOnly
         };
         if let Some(name) = &self.name
-            && !name.matches(&text.name(node.id(), hidden))
+            && !name.matches(&text.name(node.id(), visibility))
         {
             return false;
         }
         if let Some(description) = &self.description
-            && !description.matches(&text.description(node.id(), hidden))
+            && !description.matches(&text.description(node.id(), visibility))
         {
             return false;
         }
@@ -155,7 +154,7 @@ impl TextMatch {
                     *op
                 };
                 Self::String {
-                    needle: case.apply(normalize_white_space(value)),
+                    needle: case.apply(tree::normalize_whitespace(value)),
                     op,
                     case,
                 }
@@ -163,12 +162,14 @@ impl TextMatch {
         }
     }
 
-    /// `matchesAttributePart(normalizeWhiteSpace(text), filter)`.
+    /// `matchesAttributePart(normalizeWhiteSpace(text), filter)`. The name pass already
+    /// normalizes its answers, but [`AccessibleText`] does not promise it, and upstream normalizes
+    /// again here too, so the haystack is normalized whatever the seam returns.
     fn matches(&self, text: &str) -> bool {
         match self {
-            Self::Regex(regex) => regex.is_match(&normalize_white_space(text)),
+            Self::Regex(regex) => regex.is_match(&tree::normalize_whitespace(text)),
             Self::String { needle, op, case } => {
-                let hay = case.apply(normalize_white_space(text));
+                let hay = case.apply(tree::normalize_whitespace(text));
                 let needle = needle.as_str();
                 match op {
                     StringMatchOperator::Eq => hay == needle,
@@ -220,28 +221,6 @@ fn js_numbers_equal(left: f64, right: f64) -> bool {
     left == right
 }
 
-/// Playwright's `normalizeWhiteSpace` (`isomorphic/stringUtils.ts:86-93`): drop U+200B and U+00AD,
-/// trim, and collapse each run of whitespace to one space.
-fn normalize_white_space(text: &str) -> String {
-    let mut normalized = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for ch in text
-        .chars()
-        .filter(|&ch| ch != '\u{200b}' && ch != '\u{ad}')
-    {
-        if attribute_selector::is_js_space(ch) {
-            pending_space = !normalized.is_empty();
-        } else {
-            if pending_space {
-                normalized.push(' ');
-                pending_space = false;
-            }
-            normalized.push(ch);
-        }
-    }
-    normalized
-}
-
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -254,49 +233,6 @@ mod tests {
         RoleMatch::new(RoleQuery::parse(body)?, engine)
             .name
             .ok_or_else(|| format!("{body} has no name filter").into())
-    }
-
-    #[test]
-    fn normalize_white_space_drops_invisibles_trims_and_collapses() {
-        let cases = [
-            (
-                "  a  b  ",
-                "a b",
-                "runs collapse to one space and both ends are trimmed",
-            ),
-            (
-                "\u{a0}HTML",
-                "HTML",
-                "U+00A0 is ECMAScript white space, so `&nbsp;` trims",
-            ),
-            (
-                "a\u{200b}b",
-                "ab",
-                "U+200B is removed, not turned into a space",
-            ),
-            ("soft\u{ad}hyphen", "softhyphen", "U+00AD is removed"),
-            (" \u{200b} a", "a", "removal happens before the trim"),
-            ("a \u{200b} b", "a b", "removal happens before the collapse"),
-            (
-                "a\t\n\u{3000}\u{feff}b",
-                "a b",
-                "tabs, newlines, U+3000 and U+FEFF are white space",
-            ),
-            (
-                "a\u{85}b",
-                "a\u{85}b",
-                "U+0085 is Unicode white space but not ECMAScript's",
-            ),
-            ("", "", "the empty string stays empty"),
-            (
-                " \u{2028} ",
-                "",
-                "white space alone normalizes to the empty string",
-            ),
-        ];
-        for (input, expected, why) in cases {
-            assert_eq!(super::normalize_white_space(input), expected, "{why}");
-        }
     }
 
     #[test]
