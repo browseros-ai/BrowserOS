@@ -3,7 +3,10 @@ use std::num::NonZeroU32;
 
 use crate::proto::ContentAttributes;
 
+use super::hidden::Hidden;
 use super::node_key::{DocId, DomNodeId, NodeId, NodeRange};
+use super::role::Role;
+use super::state::State;
 
 pub(crate) struct TreeNodeInit {
     pub(crate) id: NodeId,
@@ -18,9 +21,10 @@ pub(crate) struct TreeNodeInit {
 /// Single node stored in a [`SnapshotTree`](super::SnapshotTree)'s flat-tree preorder arena.
 ///
 /// Owns its parent/child/sibling arena links, non-empty preorder subtree extent, iframe boundary
-/// link, and internal raw `ContentAttributes` (with `ContentData::Iframe` already extracted). Its
-/// manual `Debug` implementation prints only structural IDs and booleans so debug logs never expose
-/// page text, form values, labels, or URLs.
+/// link, precomputed [`Hidden`], [`Role`], and [`State`], and internal raw `ContentAttributes`
+/// (with `ContentData::Iframe` already extracted). Its manual `Debug` implementation prints only
+/// structural IDs, closed enums, and booleans so debug logs never expose page text, form values,
+/// labels, or URLs.
 pub struct TreeNode {
     id: NodeId,
     doc: DocId,
@@ -32,6 +36,9 @@ pub struct TreeNode {
     subtree_len: NonZeroU32,
     child_doc: Option<DocId>,
     partial_frame: Option<usize>,
+    hidden: Hidden,
+    role: Option<Role>,
+    state: State,
     raw: Option<ContentAttributes>,
 }
 
@@ -48,6 +55,9 @@ impl TreeNode {
             subtree_len: NonZeroU32::MIN,
             child_doc: init.child_doc,
             partial_frame: init.partial_frame,
+            hidden: Hidden::default(),
+            role: None,
+            state: State::default(),
             raw: init.raw,
         }
     }
@@ -125,6 +135,40 @@ impl TreeNode {
         self.child_doc.is_some() || self.partial_frame.is_some()
     }
 
+    /// Precomputed ARIA visibility, box visibility, and folding inputs for this node.
+    #[must_use]
+    pub const fn hidden(&self) -> Hidden {
+        self.hidden
+    }
+
+    /// Precomputed WAI-ARIA role for this node, or `None` for unroled, text, or `ua_shadow` nodes.
+    #[must_use]
+    pub const fn role(&self) -> Option<Role> {
+        self.role
+    }
+
+    /// Precomputed WAI-ARIA states, focus flag, and inert flag for this node.
+    #[must_use]
+    pub const fn state(&self) -> State {
+        self.state
+    }
+
+    pub(crate) const fn raw_attributes(&self) -> Option<&ContentAttributes> {
+        self.raw.as_ref()
+    }
+
+    pub(crate) fn set_hidden(&mut self, hidden: Hidden) {
+        self.hidden = hidden;
+    }
+
+    pub(crate) fn set_role(&mut self, role: Option<Role>) {
+        self.role = role;
+    }
+
+    pub(crate) fn set_state(&mut self, state: State) {
+        self.state = state;
+    }
+
     pub(crate) fn set_first_child(&mut self, child: NodeId) {
         self.first_child = Some(child);
     }
@@ -161,6 +205,9 @@ impl fmt::Debug for TreeNode {
             .field("subtree_len", &self.subtree_len)
             .field("child_doc", &self.child_doc)
             .field("partial_frame", &self.partial_frame)
+            .field("role", &self.role)
+            .field("hidden", &self.hidden)
+            .field("state", &self.state)
             .field("has_raw_attributes", &self.raw.is_some())
             .finish()
     }
