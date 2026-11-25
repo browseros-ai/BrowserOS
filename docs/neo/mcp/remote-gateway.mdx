@@ -1,0 +1,43 @@
+---
+title: "Remote ChatGPT Gateway"
+description: "Connect ChatGPT to a local BrowserOS MCP server through Cloudflare Workers and an Access-protected Tunnel."
+---
+
+This is an opt-in remote bridge for users who understand that MCP page content is relayed to ChatGPT. It does not upload the BrowserOS profile, browser cookies, saved passwords, or browser login tokens.
+
+## Trust boundaries
+
+- BrowserOS MCP remains on loopback (default: `http://127.0.0.1:9200/mcp`).
+- `cloudflared` creates an outbound-only connection from the user's computer to Cloudflare. The tunnel hostname must be protected by Cloudflare Access.
+- A Cloudflare Worker acts as the OAuth 2.1 / PKCE authorization server and MCP gateway.
+- The Worker uses an Access service token to reach the protected tunnel. The service token is stored as a Worker secret, never in the BrowserOS browser profile.
+- The Worker forwards only MCP protocol headers. It never forwards browser cookies, `Set-Cookie`, browser `Authorization` headers, or arbitrary headers.
+- MCP payloads and results are not logged. Do not add request/response body logging.
+
+## Pairing
+
+The desktop-side BrowserOS integration requests a one-time pairing code from `POST /pair/start` using the locally stored gateway pairing bootstrap secret. The user enters that code on the OAuth approval page. The code expires after ten minutes and is stored hashed at rest. A paired device can be revoked using `POST /pair/revoke`.
+
+The pairing bootstrap secret is not a browser password or cookie. It authorizes only pairing/revocation API calls and must be stored in the desktop OS credential store and the Worker secret store. Never commit it.
+
+## OAuth
+
+The gateway publishes OAuth authorization-server and protected-resource metadata, supports dynamic client registration, and uses Authorization Code with PKCE S256. Access tokens are audience-bound to the MCP endpoint and expire after one hour. A new authorization is required after expiry; this first iteration does not issue refresh tokens.
+
+## Tool admission
+
+No browser tool is enabled by default. Set `ALLOWED_TOOL_NAMES` to a JSON array containing only tool names reviewed from BrowserOS' upstream `tools/list` response. Tool names associated with cookies, credentials, passwords, arbitrary scripts, form filling, uploads, or payment flows are blocked. Calls containing credential-like argument keys are rejected.
+
+An allowlisted tool can still return sensitive page content. Do not enable tools that expose account secrets or personal data. Start with read-only tools and add control tools only after reviewing their exact schemas and behavior.
+
+## Tunnel configuration
+
+Use `infra/cloudflare/chatgpt-remote-gateway/cloudflared/config.example.yml` as a local template. The tunnel ingress must target `127.0.0.1:9200`, not a public interface. The public hostname must require Cloudflare Access service authentication. Do not use a quick tunnel or publish the raw MCP endpoint without Access.
+
+## Free plan
+
+Cloudflare Tunnel is available on all plans. Workers Free currently includes 100,000 requests per day, and Durable Objects with SQLite have a Free allocation. If a limit is reached, requests can fail rather than automatically upgrading the account. This integration must not enable a paid Workers plan or paid add-ons without the user's approval.
+
+## Known integration gap
+
+The gateway Worker is a deployable infrastructure candidate, but the BrowserOS desktop UI/agent still needs to call `/pair/start`, store the pairing bootstrap secret in the OS credential store, display the one-time code, and manage tunnel lifecycle. Until that desktop component is implemented and tested, pairing is not end-to-end and the remote gateway must not be considered ready for use.
