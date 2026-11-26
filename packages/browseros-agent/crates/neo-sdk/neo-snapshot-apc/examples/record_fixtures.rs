@@ -2,7 +2,7 @@
 //! oracle (`tests/fixtures/<name>.oracle.json`: what Playwright's own ARIA engine says about the
 //! same page load) from a live Chromium 158.
 //!
-//! Run from `packages/browseros-agent` against a contract-v4 BrowserOS build
+//! Run from `packages/browseros-agent` against a contract-v6 BrowserOS build
 //! (`tests/fixtures/README.md`, "Recording environment"):
 //! ```sh
 //! NEO_E2E_BROWSER="/Users/shadowfax/code/chromium-1/src/out/Default_browseros_arm64/BrowserOS Dev.app/Contents/MacOS/BrowserOS Dev" \

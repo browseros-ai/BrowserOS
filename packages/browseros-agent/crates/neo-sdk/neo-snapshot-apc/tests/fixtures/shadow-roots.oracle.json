@@ -4,13 +4,13 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "D86475A3E22A7E91459D038B12807514",
+      "frame": "EB633AB580A369708CC9F178BBBA415E",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/edge/shadow-roots.html",
       "elements": [
         {
-          "backendNodeId": 15,
+          "backendNodeId": 14,
           "role": "document",
           "name": "",
           "description": "",
@@ -22,7 +22,7 @@
           }
         },
         {
-          "backendNodeId": 17,
+          "backendNodeId": 16,
           "role": "heading",
           "name": "heading: light document",
           "description": "",
@@ -35,7 +35,7 @@
           }
         },
         {
-          "backendNodeId": 28,
+          "backendNodeId": 27,
           "role": "button",
           "name": "button: light document",
           "description": "",
@@ -63,7 +63,7 @@
           }
         },
         {
-          "backendNodeId": 18,
+          "backendNodeId": 17,
           "role": "heading",
           "name": "heading: open root, level 1",
           "description": "",
@@ -76,7 +76,7 @@
           }
         },
         {
-          "backendNodeId": 35,
+          "backendNodeId": 34,
           "role": "button",
           "name": "button: open root, level 1",
           "description": "",
@@ -104,7 +104,7 @@
           }
         },
         {
-          "backendNodeId": 21,
+          "backendNodeId": 20,
           "role": "heading",
           "name": "heading: closed root inside open root, level 2",
           "description": "",
@@ -117,7 +117,7 @@
           }
         },
         {
-          "backendNodeId": 47,
+          "backendNodeId": 46,
           "role": "button",
           "name": "button: closed root inside open root, level 2",
           "description": "",
@@ -145,7 +145,7 @@
           }
         },
         {
-          "backendNodeId": 54,
+          "backendNodeId": 53,
           "role": "button",
           "name": "button: open-root child slotted into closed root, level 2",
           "description": "",
@@ -159,7 +159,7 @@
           }
         },
         {
-          "backendNodeId": 41,
+          "backendNodeId": 40,
           "role": "button",
           "name": "button: light child of open host, named slot",
           "description": "",
@@ -173,7 +173,7 @@
           }
         },
         {
-          "backendNodeId": 44,
+          "backendNodeId": 43,
           "role": "button",
           "name": "button: light child of open host, default slot",
           "description": "",
@@ -201,7 +201,7 @@
           }
         },
         {
-          "backendNodeId": 23,
+          "backendNodeId": 22,
           "role": "heading",
           "name": "heading: closed root, level 1",
           "description": "",
@@ -214,7 +214,7 @@
           }
         },
         {
-          "backendNodeId": 57,
+          "backendNodeId": 56,
           "role": "button",
           "name": "button: closed root, level 1",
           "description": "",
@@ -242,7 +242,7 @@
           }
         },
         {
-          "backendNodeId": 25,
+          "backendNodeId": 24,
           "role": "heading",
           "name": "heading: open root inside closed root, level 2",
           "description": "",
@@ -255,7 +255,7 @@
           }
         },
         {
-          "backendNodeId": 66,
+          "backendNodeId": 65,
           "role": "button",
           "name": "button: open root inside closed root, level 2",
           "description": "",
@@ -283,7 +283,7 @@
           }
         },
         {
-          "backendNodeId": 63,
+          "backendNodeId": 62,
           "role": "button",
           "name": "button: light child of closed host, default slot",
           "description": "",
@@ -297,7 +297,7 @@
           }
         },
         {
-          "backendNodeId": 76,
+          "backendNodeId": 71,
           "role": "button",
           "name": "button: light document, after the hosts",
           "description": "",
@@ -312,36 +312,36 @@
         }
       ],
       "refs": {
-        "e1": 16,
-        "e10": 41,
-        "e11": 20,
-        "e12": 44,
+        "e1": 15,
+        "e10": 40,
+        "e11": 19,
+        "e12": 43,
         "e13": 10,
-        "e14": 21,
-        "e15": 47,
+        "e14": 20,
+        "e15": 46,
         "e16": 6,
-        "e17": 22,
-        "e18": 54,
+        "e17": 21,
+        "e18": 53,
         "e19": 11,
-        "e2": 17,
-        "e20": 23,
-        "e21": 57,
+        "e2": 16,
+        "e20": 22,
+        "e21": 56,
         "e22": 7,
-        "e23": 24,
-        "e24": 63,
+        "e23": 23,
+        "e24": 62,
         "e25": 12,
-        "e26": 25,
-        "e27": 66,
+        "e26": 24,
+        "e27": 65,
         "e28": 8,
-        "e29": 26,
-        "e3": 28,
-        "e30": 76,
+        "e29": 25,
+        "e3": 27,
+        "e30": 71,
         "e4": 4,
         "e5": 9,
-        "e6": 18,
-        "e7": 35,
+        "e6": 17,
+        "e7": 34,
         "e8": 5,
-        "e9": 19
+        "e9": 18
       },
       "aria": {
         "ai": [
@@ -648,13 +648,13 @@
       }
     },
     {
-      "frame": "C39C6F3081671D7C51D915AC9CE2A4BA",
-      "parent": "D86475A3E22A7E91459D038B12807514",
-      "owner": 26,
+      "frame": "2FEDB726C0BAB1D712F20D58D9E22FCB",
+      "parent": "EB633AB580A369708CC9F178BBBA415E",
+      "owner": 25,
       "url": "about:srcdoc",
       "elements": [
         {
-          "backendNodeId": 72,
+          "backendNodeId": 74,
           "role": "document",
           "name": "",
           "description": "",
@@ -666,7 +666,7 @@
           }
         },
         {
-          "backendNodeId": 74,
+          "backendNodeId": 76,
           "role": "button",
           "name": "button: inside frame in closed root",
           "description": "",
@@ -681,8 +681,8 @@
         }
       ],
       "refs": {
-        "f1e1": 73,
-        "f1e2": 74
+        "f1e1": 75,
+        "f1e2": 76
       },
       "aria": {
         "ai": [

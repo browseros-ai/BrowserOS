@@ -360,7 +360,6 @@ struct LookupIndex<'a> {
     tree: &'a SnapshotTree,
     by_doc_dom: OnceLock<HashMap<(DocId, DomNodeId), NodeId>>,
     labels_for: OnceLock<HashMap<(DocId, DomNodeId), Vec<NodeId>>>,
-    in_svg_scope: OnceLock<Vec<bool>>,
 }
 
 impl<'a> LookupIndex<'a> {
@@ -369,46 +368,7 @@ impl<'a> LookupIndex<'a> {
             tree,
             by_doc_dom: OnceLock::new(),
             labels_for: OnceLock::new(),
-            in_svg_scope: OnceLock::new(),
         }
-    }
-
-    /// Whether `node_id` is an `<svg>` element or an SVG descendant (`ownerSVGElement != null`)
-    /// whose direct `<title>` children live in the SVG namespace.
-    ///
-    /// Computed once in a single O(N) preorder pass on first demand so deep trees never incur
-    /// quadratic ancestor walks. Stops at `<foreignObject>` and document boundaries, and treats
-    /// untagged HTML `div`/`span` nodes (`raw_tag == None`) as outside SVG.
-    fn is_in_svg_scope(&self, node_id: NodeId) -> bool {
-        let flags = self.in_svg_scope.get_or_init(|| {
-            let nodes = self.tree.nodes();
-            let mut in_svg = vec![false; nodes.len()];
-            for node in nodes {
-                let Some(raw) = node.raw_attributes() else {
-                    continue;
-                };
-                let parent_in_svg = node
-                    .parent()
-                    .and_then(|pid| nodes.get(pid.index()).filter(|p| p.doc() == node.doc()))
-                    .and_then(|p| in_svg.get(p.id().index()).copied())
-                    .unwrap_or(false);
-                let value = if hidden::is_ua_shadow(raw) || hidden::is_text_node(raw) {
-                    parent_in_svg
-                } else {
-                    match hidden::raw_tag(raw) {
-                        Some(tag) if tag.eq_ignore_ascii_case("svg") => true,
-                        Some(tag) if tag.eq_ignore_ascii_case("foreignobject") => false,
-                        Some(_) => parent_in_svg,
-                        None => false,
-                    }
-                };
-                if let Some(slot) = in_svg.get_mut(node.id().index()) {
-                    *slot = value;
-                }
-            }
-            in_svg
-        });
-        flags.get(node_id.index()).copied().unwrap_or(false)
     }
 
     fn node_by_doc_dom(&self, doc: DocId, dom_id: DomNodeId) -> Option<NodeId> {
@@ -736,6 +696,12 @@ fn raw_title(raw: &ContentAttributes) -> &str {
         .as_deref()
         .and_then(|browseros| browseros.title.as_deref())
         .unwrap_or("")
+}
+
+fn raw_svg_title(raw: &ContentAttributes) -> Option<&str> {
+    raw.browseros
+        .as_deref()
+        .and_then(|browseros| browseros.svg_title.as_deref())
 }
 
 fn raw_alt(raw: &ContentAttributes) -> &str {
@@ -1137,7 +1103,13 @@ enum Frame<'a> {
 
 enum StepOutcome<'a> {
     Done(String),
-    TailCall { node_id: NodeId, opts: EvalOptions },
+    /// A finished result that is also content inside the target, so the [`Name`] reports
+    /// `derived_from_content` as Playwright's content step would have.
+    DoneFromContent(String),
+    TailCall {
+        node_id: NodeId,
+        opts: EvalOptions,
+    },
     Push(Frame<'a>),
 }
 
@@ -1164,6 +1136,10 @@ impl<'a> EvalState<'a> {
     fn apply_outcome(&mut self, outcome: StepOutcome<'a>) {
         match outcome {
             StepOutcome::Done(text) => self.returned = Some(text),
+            StepOutcome::DoneFromContent(text) => {
+                self.derived_from_content = true;
+                self.returned = Some(text);
+            }
             StepOutcome::TailCall { node_id, opts } => self.active = Some((node_id, opts)),
             StepOutcome::Push(frame) => self.stack.push(frame),
         }
@@ -1849,21 +1825,22 @@ fn eval_step_2e_containers_and_media<'a>(
         return None;
     }
 
-    if !tag_name.eq_ignore_ascii_case("foreignobject")
-        && let Some(title_id) = find_first_direct_child_tag(tree, facts.id, "title")
-        && index.is_in_svg_scope(facts.id)
-    {
+    // Playwright names `<svg>`, and any element whose `ownerSVGElement` is set, from its first
+    // direct SVG `<title>` child, even an empty one, and then stops before the `title` attribute.
+    // A `<title>` is never rendered, so it has no APC node. Chromium sends its `textContent` as
+    // `svg_title` (contract field 34, version 6) and makes the namespace check itself, so an HTML
+    // `<title>` inside `<foreignObject>` never sets it. Presence alone decides. Playwright reads
+    // the title through its content step, so a non-blank title inside the target counts as content.
+    if let Some(svg_title) = raw_svg_title(facts.raw) {
         visited.insert(facts.id);
-        let title_hidden = tree
-            .node(title_id)
-            .is_some_and(|child| child.hidden().is_hidden_for_aria());
-        return Some(StepOutcome::TailCall {
-            node_id: title_id,
-            opts: EvalOptions {
-                embedded_in_labelledby: RefTraversal::from_hidden(title_hidden),
-                ..opts.child_options()
+        let text = svg_title.to_owned();
+        return Some(
+            if opts.inside_target() && !role::trim_js_whitespace(&text).is_empty() {
+                StepOutcome::DoneFromContent(text)
+            } else {
+                StepOutcome::Done(text)
             },
-        });
+        );
     }
 
     None
@@ -2652,54 +2629,56 @@ mod tests {
 
     #[test]
     fn select_and_native_naming_precedence() -> Result<(), Box<dyn Error>> {
-        let tree =
-            build_tree(
-                NodeBuilder::root()
-                    .child(
-                        NodeBuilder::element("button")
-                            .dom_id(10)
-                            .child(NodeBuilder::text("Choose "))
-                            .child(
-                                NodeBuilder::form_control(FormControlType::SelectOne)
-                                    .tag("select")
-                                    .dom_id(11)
-                                    .select_option(SelectOption {
-                                        value: Some("a".to_owned()),
-                                        text: Some("Alpha".to_owned()),
-                                        is_selected: Some(false),
-                                        is_disabled: None,
-                                    })
-                                    .select_option(SelectOption {
-                                        value: Some("b".to_owned()),
-                                        text: Some("Beta".to_owned()),
-                                        is_selected: Some(true),
-                                        is_disabled: None,
-                                    }),
-                            ),
-                    )
-                    .child(
-                        NodeBuilder::form_control(FormControlType::InputText)
-                            .tag("input")
-                            .dom_id(20)
-                            .placeholder("Email address"),
-                    )
-                    .child(
-                        NodeBuilder::element("fieldset").dom_id(30).child(
-                            NodeBuilder::element("legend").child(NodeBuilder::text("Billing")),
+        let tree = build_tree(
+            NodeBuilder::root()
+                .child(
+                    NodeBuilder::element("button")
+                        .dom_id(10)
+                        .child(NodeBuilder::text("Choose "))
+                        .child(
+                            NodeBuilder::form_control(FormControlType::SelectOne)
+                                .tag("select")
+                                .dom_id(11)
+                                .select_option(SelectOption {
+                                    value: Some("a".to_owned()),
+                                    text: Some("Alpha".to_owned()),
+                                    is_selected: Some(false),
+                                    is_disabled: None,
+                                })
+                                .select_option(SelectOption {
+                                    value: Some("b".to_owned()),
+                                    text: Some("Beta".to_owned()),
+                                    is_selected: Some(true),
+                                    is_disabled: None,
+                                }),
                         ),
-                    )
-                    .child(
-                        NodeBuilder::element("table")
-                            .dom_id(40)
-                            .title("Summary Table")
-                            .child(NodeBuilder::element("tr").child(
-                                NodeBuilder::element("td").child(NodeBuilder::text("Cell")),
-                            )),
-                    )
-                    .child(NodeBuilder::element("svg").dom_id(50).child(
-                        NodeBuilder::element("title").child(NodeBuilder::text("Icon Title")),
-                    )),
-            )?;
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputText)
+                        .tag("input")
+                        .dom_id(20)
+                        .placeholder("Email address"),
+                )
+                .child(
+                    NodeBuilder::element("fieldset")
+                        .dom_id(30)
+                        .child(NodeBuilder::element("legend").child(NodeBuilder::text("Billing"))),
+                )
+                .child(
+                    NodeBuilder::element("table")
+                        .dom_id(40)
+                        .title("Summary Table")
+                        .child(
+                            NodeBuilder::element("tr")
+                                .child(NodeBuilder::element("td").child(NodeBuilder::text("Cell"))),
+                        ),
+                )
+                .child(
+                    NodeBuilder::element("svg")
+                        .dom_id(50)
+                        .svg_title("Icon Title"),
+                ),
+        )?;
 
         let btn = node_id(&tree, "doc-main", 10)?;
         let input = node_id(&tree, "doc-main", 20)?;

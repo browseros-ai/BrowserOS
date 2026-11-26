@@ -2119,11 +2119,9 @@ fn step5_table_svg_and_presentational_step2e_skip() -> Result<(), Box<dyn Error>
                 ),
             )
             .child(
-                NodeBuilder::element("svg").dom_id(20).child(
-                    NodeBuilder::element("title")
-                        .aria_hidden(true)
-                        .child(NodeBuilder::text("Bell Icon")),
-                ),
+                NodeBuilder::element("svg")
+                    .dom_id(20)
+                    .svg_title("Bell Icon"),
             )
             .child(
                 NodeBuilder::element("img")
@@ -2157,7 +2155,7 @@ fn step5_table_svg_and_presentational_step2e_skip() -> Result<(), Box<dyn Error>
             (
                 20,
                 "Bell Icon",
-                "<svg> uses its first direct <title> child even when hidden",
+                "<svg> uses its first direct <title> child, sent as svg_title",
             ),
             (
                 30,
@@ -2170,45 +2168,40 @@ fn step5_table_svg_and_presentational_step2e_skip() -> Result<(), Box<dyn Error>
 }
 
 #[test]
-fn step5_svg_descendant_title_and_foreign_object_boundary() -> Result<(), Box<dyn Error>> {
+fn step5_svg_title_names_svg_elements_and_an_empty_title_still_wins() -> Result<(), Box<dyn Error>>
+{
     let tree = build_tree(
-        NodeBuilder::root().dom_id(1).child(
-            NodeBuilder::element("svg")
-                .dom_id(20)
-                .child(
-                    NodeBuilder::element("g")
-                        .dom_id(21)
-                        .role("img")
-                        .child(
-                            NodeBuilder::element("title")
-                                .aria_hidden(true)
-                                .child(NodeBuilder::text("Revenue")),
-                        )
-                        .child(NodeBuilder::element("rect")),
-                )
-                .child(
-                    NodeBuilder::element("a").dom_id(22).href("#chart").child(
-                        NodeBuilder::element("title")
-                            .aria_hidden(true)
-                            .child(NodeBuilder::text("Chart link")),
+        NodeBuilder::root()
+            .dom_id(1)
+            .child(
+                NodeBuilder::element("svg")
+                    .dom_id(20)
+                    .child(
+                        NodeBuilder::element("g")
+                            .dom_id(21)
+                            .role("img")
+                            .svg_title("Revenue")
+                            .child(NodeBuilder::element("rect")),
+                    )
+                    .child(
+                        NodeBuilder::element("a")
+                            .dom_id(22)
+                            .href("#chart")
+                            .svg_title("Chart link"),
                     ),
-                )
-                .child(
-                    NodeBuilder::element("foreignobject")
-                        .child(NodeBuilder::element("div").dom_id(23).role("img").child(
-                            NodeBuilder::element("title").child(NodeBuilder::text("Not SVG title")),
-                        ))
-                        .child(
-                            NodeBuilder::element("svg").child(
-                                NodeBuilder::element("g").dom_id(24).role("img").child(
-                                    NodeBuilder::element("title")
-                                        .aria_hidden(true)
-                                        .child(NodeBuilder::text("Inner SVG")),
-                                ),
-                            ),
-                        ),
-                ),
-        ),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(30)
+                    .child(NodeBuilder::element("svg").svg_title("Close")),
+            )
+            .child(
+                NodeBuilder::element("svg")
+                    .dom_id(31)
+                    .svg_title("")
+                    .title("Tooltip"),
+            )
+            .child(NodeBuilder::element("svg").dom_id(32).title("attr")),
     )?;
 
     assert_visible_names(
@@ -2225,17 +2218,39 @@ fn step5_svg_descendant_title_and_foreign_object_boundary() -> Result<(), Box<dy
                 "SVG descendant <a href> uses its direct SVG <title> child",
             ),
             (
-                23,
-                "",
-                "HTML element inside <foreignObject> does not treat HTML <title> as an SVG title",
+                30,
+                "Close",
+                "a <button> named from content reads its <svg>'s <title>",
             ),
             (
-                24,
-                "Inner SVG",
-                "nested <svg> inside <foreignObject> re-enters the SVG namespace for <g><title>",
+                31,
+                "",
+                "an empty <title> child names the <svg> empty, ahead of its title attribute",
+            ),
+            (
+                32,
+                "attr",
+                "an <svg> with no <title> child falls through to its title attribute",
             ),
         ],
-    )
+    )?;
+
+    for (dom, from_content, reason) in [
+        (
+            21,
+            true,
+            "a non-blank <title> is content of its target, as in Playwright",
+        ),
+        (31, false, "an empty <title> contributes no content"),
+        (32, false, "a title attribute is not content"),
+    ] {
+        let name = tree.accessible_name(
+            node_id(&tree, "doc-main", dom)?,
+            NameVisibility::VisibleOnly,
+        );
+        assert_eq!(name.derived_from_content(), from_content, "{reason}");
+    }
+    Ok(())
 }
 
 // ============================================================================
