@@ -311,7 +311,7 @@ fn name_prohibited_nodes() -> Vec<NodeBuilder> {
         ),
         NodeBuilder::container().child(
             NodeBuilder::element("code")
-                .dom_id(265)
+                .dom_id(274)
                 .aria_label("leak: code aria-label")
                 .child(NodeBuilder::text(
                     "code: code with aria-label, name prohibited",
@@ -319,7 +319,7 @@ fn name_prohibited_nodes() -> Vec<NodeBuilder> {
         ),
         NodeBuilder::container().child(
             NodeBuilder::element("strong")
-                .dom_id(267)
+                .dom_id(276)
                 .aria_label("leak: strong aria-label")
                 .child(NodeBuilder::text(
                     "strong: strong with aria-label, name prohibited",
@@ -327,7 +327,7 @@ fn name_prohibited_nodes() -> Vec<NodeBuilder> {
         ),
         NodeBuilder::container().child(
             NodeBuilder::element("em")
-                .dom_id(269)
+                .dom_id(278)
                 .aria_label("leak: em aria-label")
                 .child(NodeBuilder::text(
                     "emphasis: em with aria-label, name prohibited",
@@ -355,13 +355,13 @@ fn labelledby_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text("second id")),
             )
             .child(
-                button(76, "content loses to labelledby with several ids")
+                button(77, "content loses to labelledby with several ids")
                     .labelledby(vec![ref_node(1001), ref_node(1002)]),
             ),
         NodeBuilder::container()
             .child(
-                button(78, "labelledby: self reference")
-                    .labelledby(vec![ref_node(78), ref_node(1003)]),
+                button(79, "labelledby: self reference")
+                    .labelledby(vec![ref_node(79), ref_node(1003)]),
             )
             .child(
                 NodeBuilder::container()
@@ -369,7 +369,7 @@ fn labelledby_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text("plus a second id")),
             ),
         NodeBuilder::container().child(
-            button(82, "content loses to a hidden referent").labelledby(vec![ref_unrendered(
+            button(83, "content loses to a hidden referent").labelledby(vec![ref_unrendered(
                 "labelledby: display-none referent still counts",
             )]),
         ),
@@ -381,7 +381,7 @@ fn labelledby_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text("referent content loses")),
             )
             .child(
-                button(86, "content loses to a referent with aria-label")
+                button(87, "content loses to a referent with aria-label")
                     .labelledby(vec![ref_node(1005)]),
             ),
         NodeBuilder::container()
@@ -399,11 +399,11 @@ fn labelledby_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text("leak: second hop of a labelledby chain")),
             )
             .child(
-                button(92, "content loses to a referent with labelledby")
+                button(93, "content loses to a referent with labelledby")
                     .labelledby(vec![ref_node(1006)]),
             ),
         NodeBuilder::container().child(
-            button(94, "labelledby: every id missing, falls to content")
+            button(95, "labelledby: every id missing, falls to content")
                 .labelledby(vec![ref_node(9_999)]),
         ),
         NodeBuilder::container()
@@ -424,7 +424,7 @@ fn labelledby_nodes() -> Vec<NodeBuilder> {
                     .redacted_value_length(25),
             )
             .child(
-                button(101, "content loses to labelledby with a private box")
+                button(102, "content loses to labelledby with a private box")
                     .labelledby(vec![ref_node(1008), ref_node(4)]),
             ),
     ]
@@ -457,13 +457,13 @@ fn embedded_and_label_nodes() -> Vec<NodeBuilder> {
                             .aria_label("combobox: embedded in a label")
                             .child(
                                 NodeBuilder::element("option")
-                                    .dom_id(307)
+                                    .dom_id(316)
                                     .selected(false)
                                     .child(NodeBuilder::text("red")),
                             )
                             .child(
                                 NodeBuilder::element("option")
-                                    .dom_id(309)
+                                    .dom_id(318)
                                     .selected(true)
                                     .child(NodeBuilder::text("blue")),
                             ),
@@ -471,7 +471,7 @@ fn embedded_and_label_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text(" ink")),
             ),
         NodeBuilder::container()
-            .child(button(111, "aria-label blank: falls to content").aria_label("   "))
+            .child(button(112, "aria-label blank: falls to content").aria_label("   "))
             .child(label_for(7, "aria-label blank: falls to label"))
             .child(
                 NodeBuilder::form_control(FormControlType::InputText)
@@ -513,36 +513,36 @@ fn native_button_and_image_input_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::InputButton)
                     .tag("input")
-                    .dom_id(126)
+                    .dom_id(127)
                     .field_value("native: input type=button by value"),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputButton)
                     .tag("input")
-                    .dom_id(129)
+                    .dom_id(130)
                     .title("native: input type=button without value falls to title"),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputSubmit)
                     .tag("input")
-                    .dom_id(131)
+                    .dom_id(132)
                     .field_value("native: input type=submit by value"),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputSubmit)
                     .tag("input")
-                    .dom_id(133),
+                    .dom_id(134),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputReset)
                     .tag("input")
-                    .dom_id(136)
+                    .dom_id(137)
                     .field_value("native: input type=reset by value"),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputReset)
                     .tag("input")
-                    .dom_id(139),
+                    .dom_id(140),
             ),
         NodeBuilder::container()
             .child(label_for(19, "native: file input by label"))
@@ -554,7 +554,7 @@ fn native_button_and_image_input_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::InputFile)
                     .tag("input")
-                    .dom_id(146),
+                    .dom_id(147),
             ),
         NodeBuilder::container()
             .child(label_for(20, "native: image input by label"))
@@ -567,20 +567,20 @@ fn native_button_and_image_input_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::InputImage)
                     .tag("input")
-                    .dom_id(153)
+                    .dom_id(154)
                     .alt("native: image input by alt")
                     .title("image input title becomes the description, alt wins the name"),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputImage)
                     .tag("input")
-                    .dom_id(155)
+                    .dom_id(156)
                     .title("native: image input by title"),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::InputImage)
                     .tag("input")
-                    .dom_id(157),
+                    .dom_id(158),
             ),
     ]
 }
@@ -614,7 +614,7 @@ fn native_text_and_select_input_nodes() -> Vec<NodeBuilder> {
                     .title("native: select by title")
                     .child(
                         NodeBuilder::element("option")
-                            .dom_id(340)
+                            .dom_id(349)
                             .selected(true)
                             .child(NodeBuilder::text("option: in a select named by title")),
                     ),
@@ -622,7 +622,7 @@ fn native_text_and_select_input_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::InputCheckbox)
                     .tag("input")
-                    .dom_id(172)
+                    .dom_id(173)
                     .title("native: checkbox by title"),
             ),
     ]
@@ -633,25 +633,25 @@ fn native_media_and_container_nodes() -> Vec<NodeBuilder> {
         NodeBuilder::container()
             .child(
                 NodeBuilder::element("img")
-                    .dom_id(173)
+                    .dom_id(174)
                     .alt("native: img by alt")
                     .title("img title becomes the description, alt wins the name"),
             )
             .child(
                 NodeBuilder::element("img")
-                    .dom_id(175)
+                    .dom_id(176)
                     .title("native: img by title"),
             )
             .child(
                 NodeBuilder::element("img")
-                    .dom_id(177)
+                    .dom_id(178)
                     .alt("native: img carrying an image map"),
             )
             .child(
                 NodeBuilder::element("map")
                     .child(
                         NodeBuilder::element("area")
-                            .dom_id(348)
+                            .dom_id(357)
                             .href("#area-alt")
                             .alt("native: area by alt")
                             .title("area title becomes the description, alt wins the name")
@@ -659,7 +659,7 @@ fn native_media_and_container_nodes() -> Vec<NodeBuilder> {
                     )
                     .child(
                         NodeBuilder::element("area")
-                            .dom_id(350)
+                            .dom_id(359)
                             .href("#area-title")
                             .title("native: area by title")
                             .visibility_hidden(true),
@@ -698,8 +698,8 @@ fn native_media_and_container_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text("native: table caption")),
             )
             .child(
-                NodeBuilder::element("tbody").dom_id(356).child(
-                    NodeBuilder::element("tr").dom_id(357).child(
+                NodeBuilder::element("tbody").dom_id(365).child(
+                    NodeBuilder::element("tr").dom_id(366).child(
                         NodeBuilder::element("td")
                             .dom_id(55)
                             .child(NodeBuilder::text("cell: in a table named by caption")),
@@ -715,7 +715,7 @@ fn content_button_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(184)
+                    .dom_id(185)
                     .child(NodeBuilder::text("content: block"))
                     .child(
                         NodeBuilder::container()
@@ -727,7 +727,7 @@ fn content_button_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(190)
+                    .dom_id(191)
                     .child(NodeBuilder::text("content: inline"))
                     .child(NodeBuilder::container().child(NodeBuilder::text("span")))
                     .child(NodeBuilder::text("join")),
@@ -735,7 +735,7 @@ fn content_button_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(194)
+                    .dom_id(195)
                     .child(NodeBuilder::text("[before] ").without_dom_id())
                     .child(NodeBuilder::text("content: css pseudo"))
                     .child(NodeBuilder::text(" [after attr]").without_dom_id()),
@@ -743,7 +743,7 @@ fn content_button_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(197)
+                    .dom_id(198)
                     .child(NodeBuilder::text("content: block pseudo"))
                     .child(
                         NodeBuilder::text("block-after")
@@ -754,18 +754,18 @@ fn content_button_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(200)
+                    .dom_id(201)
                     .child(NodeBuilder::text("content: icon "))
                     .child(
                         NodeBuilder::element("img")
-                            .dom_id(202)
+                            .dom_id(203)
                             .alt("nested img alt"),
                     ),
             )
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(204)
+                    .dom_id(205)
                     .child(NodeBuilder::text("content: visible"))
                     .child(
                         NodeBuilder::container()
@@ -782,14 +782,14 @@ fn content_button_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(208)
+                    .dom_id(209)
                     .child(
                         NodeBuilder::text("CONTENT: TEXT-TRANSFORM UPPERCASE SOURCE")
                             .dom_text("content: text-transform uppercase source"),
                     ),
             )
             .child(button(
-                210,
+                211,
                 "content: whitespace\u{00A0}nbsp zero\u{200B}width soft\u{00AD}hyphen\n    newline\ttab",
             )),
     ]
@@ -800,7 +800,7 @@ fn link_group_and_title_nodes() -> Vec<NodeBuilder> {
         NodeBuilder::anchor("#heading-link")
             .tag("a")
             .href("#heading-link")
-            .dom_id(374)
+            .dom_id(383)
             .child(
                 NodeBuilder::element("h3")
                     .dom_id(57)
@@ -816,13 +816,13 @@ fn link_group_and_title_nodes() -> Vec<NodeBuilder> {
             .child(
                 NodeBuilder::form_control(FormControlType::ButtonButton)
                     .tag("button")
-                    .dom_id(214)
+                    .dom_id(215)
                     .title("title: empty button with only a title"),
             )
             .child(
                 NodeBuilder::container()
                     .role("button")
-                    .dom_id(216)
+                    .dom_id(217)
                     .title("title: div role=button with only a title"),
             ),
     ]
@@ -832,7 +832,7 @@ fn description_and_error_nodes() -> Vec<NodeBuilder> {
     vec![
         NodeBuilder::container()
             .child(
-                button(217, "description: describedby two ids")
+                button(218, "description: describedby two ids")
                     .describedby(vec![ref_node(1009), ref_node(1010)]),
             )
             .child(
@@ -846,21 +846,21 @@ fn description_and_error_nodes() -> Vec<NodeBuilder> {
                     .child(NodeBuilder::text("second description part")),
             ),
         NodeBuilder::container().child(
-            button(223, "description: describedby a hidden referent")
+            button(224, "description: describedby a hidden referent")
                 .describedby(vec![ref_unrendered("hidden description text still counts")]),
         ),
         NodeBuilder::container()
             .child(
-                button(225, "description: aria-description")
+                button(226, "description: aria-description")
                     .aria_description("aria-description text"),
             )
             .child(
-                button(228, "description: describedby beats aria-description")
+                button(229, "description: describedby beats aria-description")
                     .describedby(vec![ref_node(1009)])
                     .aria_description("unused: aria-description loses to describedby"),
             )
             .child(
-                button(230, "description: title on a button named by content")
+                button(231, "description: title on a button named by content")
                     .title("title text becomes the description"),
             ),
         NodeBuilder::container()
@@ -912,6 +912,33 @@ fn description_and_error_nodes() -> Vec<NodeBuilder> {
     ]
 }
 
+fn inline_whitespace_nodes() -> Vec<NodeBuilder> {
+    vec![
+        NodeBuilder::container()
+            .child(
+                NodeBuilder::form_control(FormControlType::ButtonButton)
+                    .tag("button")
+                    .dom_id(247)
+                    .child(NodeBuilder::container().child(NodeBuilder::text("Add")))
+                    .child(
+                        NodeBuilder::container()
+                            .child(NodeBuilder::text("to cart").break_before(true)),
+                    ),
+            )
+            .child(
+                NodeBuilder::anchor("#inline-whitespace")
+                    .tag("a")
+                    .href("#inline-whitespace")
+                    .dom_id(425)
+                    .child(NodeBuilder::element("b").child(NodeBuilder::text("New")))
+                    .child(
+                        NodeBuilder::element("i")
+                            .child(NodeBuilder::text("message").break_before(true)),
+                    ),
+            ),
+    ]
+}
+
 fn build_contract_v4_names_page() -> AnnotatedPageContent {
     let mut body_children = Vec::new();
     body_children.extend(name_prohibited_nodes());
@@ -923,6 +950,7 @@ fn build_contract_v4_names_page() -> AnnotatedPageContent {
     body_children.extend(content_button_nodes());
     body_children.extend(link_group_and_title_nodes());
     body_children.extend(description_and_error_nodes());
+    body_children.extend(inline_whitespace_nodes());
 
     ApcBuilder::new("doc-names-v4")
         .contract_version(CONTRACT_NAMES_VERSION)
@@ -1034,8 +1062,8 @@ fn contract_v4_names_page_matches_recorded_playwright_oracle() -> Result<(), Box
     }
 
     assert_eq!(
-        verified_elements, 77,
-        "contract-v4 mirror must verify every single one of the 77 elements recorded in names.oracle.json"
+        verified_elements, 79,
+        "contract-v4 mirror must verify every single one of the 79 elements recorded in names.oracle.json"
     );
     assert_eq!(
         gap_g6_elements, 1,
@@ -1043,11 +1071,11 @@ fn contract_v4_names_page_matches_recorded_playwright_oracle() -> Result<(), Box
     );
 
     let area_alt = tree
-        .node_by_key(&NodeKey::new(main_doc.token().clone(), DomNodeId::new(348)))
-        .ok_or("area-alt node 348 must exist in contract-v4 mirror")?;
+        .node_by_key(&NodeKey::new(main_doc.token().clone(), DomNodeId::new(357)))
+        .ok_or("area-alt node 357 must exist in contract-v4 mirror")?;
     let area_title = tree
-        .node_by_key(&NodeKey::new(main_doc.token().clone(), DomNodeId::new(350)))
-        .ok_or("area-title node 350 must exist in contract-v4 mirror")?;
+        .node_by_key(&NodeKey::new(main_doc.token().clone(), DomNodeId::new(359)))
+        .ok_or("area-title node 359 must exist in contract-v4 mirror")?;
     assert_eq!(
         cache
             .name(area_alt.id(), NameVisibility::IncludeHidden)

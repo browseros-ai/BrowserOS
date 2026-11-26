@@ -76,9 +76,9 @@ pub struct BrowserOsContentAttributes {
     /// Version 3.
     #[prost(bool, optional, tag = "8")]
     pub aria_hidden: Option<bool>,
-    /// A block boundary, `<br>`, or (from version 6) a non-inline `::before` or `::after` box lies
-    /// between this node and the previous text in document order, so names and snapshot text put a
-    /// space here. Version 3.
+    /// A block boundary, `<br>`, (from version 6) a non-inline `::before` or `::after` box, or
+    /// (from version 7) a skipped collapsible-whitespace text box lies between this node and the
+    /// previous text in document order, so names and snapshot text put a space here. Version 3.
     #[prost(bool, optional, tag = "9")]
     pub break_before: Option<bool>,
     /// DOM text of a text node whose rendered (`text-transform`ed) text differs from it.

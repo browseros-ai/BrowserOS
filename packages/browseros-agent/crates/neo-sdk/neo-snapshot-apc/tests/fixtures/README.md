@@ -10,8 +10,8 @@ The registry is `FIXTURES` in `tests/support/fixture_pages.rs`. A fixture that i
 ## Recording environment
 
 - Browser binary: `BrowserOS Dev` (`/Users/shadowfax/code/chromium-1/src/out/Default_browseros_arm64/BrowserOS Dev.app/Contents/MacOS/BrowserOS Dev`).
-- Browser version: BrowserOS Chromium `158.0.8127.18` at `735d57e27` (BrowserOS-internal #66 to #71, Chromium contract PRs C1 to C6), APC contract v6. Every `.pb` reports `contract_version: 6`. Each oracle records `Browser.getVersion`'s product in `browser`, which does not tell a patched build from stock.
-- What v5 and v6 added to the captures: an `<html>` node in every document (P12: 4 on `nested-cross-site-frames`, 1 each on `shadow-roots` and `modal-inert`), a node per `display: contents` element (P11: 5 on `roles`), `svg_title` (P13) and `break_before` at a non-inline `::before` or `::after` box (P14). The oracles are the same as on v4 apart from CDP frame ids and `backendNodeId`s, which each page load assigns afresh.
+- Browser version: BrowserOS Chromium `158.0.8127.18` at `735d57e27` (BrowserOS-internal #66 to #71, Chromium contract PRs C1 to C6, APC contract v6) for 15 fixtures, and at `9bbc6ad5d` (BrowserOS-internal #72, Chromium contract PR C7 / P15 inline whitespace breaks, APC contract v7) for `names`. `names.pb` reports `contract_version: 7`; the other 15 `.pb` files report `contract_version: 6`. Each oracle records `Browser.getVersion`'s product in `browser`, which does not tell a patched build from stock.
+- What v5 to v7 added to the captures: an `<html>` node in every document (P12: 4 on `nested-cross-site-frames`, 1 each on `shadow-roots` and `modal-inert`), a node per `display: contents` element (P11: 5 on `roles`), `svg_title` (P13), `break_before` at a non-inline `::before` or `::after` box (P14), and (from v7) `break_before` at a skipped collapsible-whitespace text box between inline boxes (P15, verified on `names`, which now matches Playwright's default-mode tree outright). The oracles are the same as on v4 apart from the two span-built lines added to `names.html` and fresh CDP frame ids and `backendNodeId`s.
 
 Run from `packages/browseros-agent` (in a heavy slot on the shared machine), with `--contract` so the contract's private fields are typed into too. Pass fixture names after the flag to re-record a subset:
 
@@ -62,7 +62,7 @@ new tab ─▶ Emulation.setFocusEmulationEnabled ─▶ navigate ─▶ ready p
 | `nosize` | Zero-size controls (`data/prelude/nosize.html`) | 1 | 72 | 30 | 14 | 5,977 | 20,650 |
 | `ua-shadow` | Browser-made shadow content | 1 | 88 | 18 | 23 | 7,734 | 13,640 |
 | `roles` | Roles | 1 | 384 | 178 | 218 | 30,643 | 125,646 |
-| `names` | Names | 1 | 223 | 77 | 107 | 21,465 | 62,352 |
+| `names` | Names | 1 | 229 | 79 | 110 | 21,991 | 63,845 |
 | `states` | States | 1 | 314 | 147 | 174 | 30,181 | 121,159 |
 | `private-forms` | Private forms | 1 | 70 | 21 | 50 | 6,523 | 26,237 |
 | `sensitive-form` | Private forms (values set in markup, not typed) | 1 | 20 | 6 | 10 | 1,854 | 5,599 |
@@ -72,7 +72,7 @@ new tab ─▶ Emulation.setFocusEmulationEnabled ─▶ navigate ─▶ ready p
 
 Frames is the oracle's count; APC's frame count (main plus iframe nodes) is the same on every fixture.
 
-Total: 16 fixtures, 32 files, 990,104 bytes (141,841 in `.pb` files, 848,263 in oracles). `deep-nesting.oracle.json` is 388,209 of them: pretty-printing indents its 120-level tree. Compressed, as git stores it, the directory is about 82 KB (`deep-nesting.oracle.json` about 5.5 KB), so the oracles stay pretty-printed for review.
+Total: 16 fixtures, 32 files, 992,123 bytes (142,367 in `.pb` files, 849,756 in oracles). `deep-nesting.oracle.json` is 388,209 of them: pretty-printing indents its 120-level tree. Compressed, as git stores it, the directory is about 82 KB (`deep-nesting.oracle.json` about 5.5 KB), so the oracles stay pretty-printed for review.
 
 ## Secrets and the canary guard
 
