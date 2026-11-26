@@ -1947,6 +1947,9 @@ fn should_remove_name_repeating_child(
     text == Some(parent_name)
 }
 
+/// Upstream's `unwrapSingleChildGenerics` (ariaSnapshotDistiller.ts at v1.64.1). Unlike the
+/// two rules above it does not spare an active generic: a focused document's body that holds a
+/// single control unwraps, and its `[active]` goes with it, as upstream prints.
 fn should_unwrap_single_child_generic(
     nodes: &[DraftNode],
     node: &DraftNode,
@@ -1954,7 +1957,6 @@ fn should_unwrap_single_child_generic(
 ) -> bool {
     if node.role != "generic"
         || !node.name.is_empty()
-        || node.active == Some(true)
         || node.has_props()
         || node.children.len() > 1
     {
@@ -2738,6 +2740,57 @@ mod tests {
             .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
             .build();
         Ok(SnapshotTree::build(apc, BuildOptions::new())?)
+    }
+
+    /// A `<body>` holding `buttons` buttons, in the document that holds the page's focus with
+    /// nothing focused in it, so the body is its active element.
+    fn focused_body(buttons: i32) -> Result<SnapshotTree, Box<dyn Error>> {
+        let mut body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 400, 200);
+        for n in 0..buttons {
+            body = body.child(
+                NodeBuilder::form_control(FormControlType::ButtonButton)
+                    .dom_id(10 + n)
+                    .tag("button")
+                    .bounding_box(0, 30 * n, 80, 24)
+                    .child(NodeBuilder::text("Go")),
+            );
+        }
+        let apc = ApcBuilder::new("doc-focus")
+            .focused_frame("doc-focus")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        Ok(SnapshotTree::build(apc, BuildOptions::new())?)
+    }
+
+    #[test]
+    fn tests_that_an_active_body_holding_one_control_unwraps_as_upstream()
+    -> Result<(), Box<dyn Error>> {
+        let tree = focused_body(1)?;
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let [button] = ai.nodes() else {
+            return Err("the button alone at the top".into());
+        };
+        assert_eq!(button.role, "button", "the body's generic unwraps");
+        assert_eq!(button.active, None, "and its [active] goes with it");
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_an_active_body_holding_two_controls_prints_active() -> Result<(), Box<dyn Error>>
+    {
+        let tree = focused_body(2)?;
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let [body] = ai.nodes() else {
+            return Err("the body's generic alone at the top".into());
+        };
+        assert_eq!(body.role, "generic");
+        assert_eq!(body.active, Some(true));
+        assert_eq!(body.children.len(), 2);
+        Ok(())
     }
 
     #[test]
