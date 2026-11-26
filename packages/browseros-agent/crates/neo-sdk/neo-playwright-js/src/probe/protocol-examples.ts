@@ -25,6 +25,16 @@ const chunk = (selector: string): ProbeTarget => ({
 
 const GO_BUTTON = chunk('internal:role=button[name="Go"i]')
 
+/**
+ * A tree leaf as Rust's ChunkPlan hands it to a `stage`: a call-scoped engine naming candidate
+ * set `index`, keeping the original part's source.
+ */
+const candidate = (
+  name: 'internal:neo-below' | 'internal:neo-inside',
+  index: number,
+  source: string,
+) => ({ name, body: String(index), source })
+
 export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   describe: [{ op: 'describe' }],
   screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
@@ -430,6 +440,74 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   ],
   armInput: [{ op: 'armInput', pin: 4 }],
   inputArrived: [{ op: 'inputArrived', pin: 4 }],
+  stage: [
+    {
+      op: 'stage',
+      selector: {
+        parts: [
+          candidate('internal:neo-below', 0, 'button[name="Go"i]'),
+          ...parseSelector('internal:has-text="Go"i').parts,
+        ],
+      },
+      sets: [{ members: [{ pin: 3 }, { node: 0 }] }],
+    },
+    {
+      op: 'stage',
+      selector: parseSelector('css=li >> nth=1'),
+      from: [{ pin: 3 }, 'document'],
+      strict: parseSelector('internal:role=list >> li >> nth=1'),
+    },
+    {
+      op: 'stage',
+      selector: {
+        parts: [
+          ...parseSelector('css=li').parts,
+          {
+            name: 'internal:has',
+            body: {
+              parsed: { parts: [candidate('internal:neo-inside', 0, 'e7')] },
+            },
+            source: '"aria-ref=e7"',
+          },
+          candidate('internal:neo-below', 1, 'button[pressd]'),
+        ],
+      },
+      from: [{ node: 0 }],
+      sets: [
+        { staleRef: 'e7' },
+        {
+          error: {
+            message:
+              'Unknown attribute "pressd", must be one of "checked", "description", "disabled", "expanded", "include-hidden", "level", "name", "pressed", "selected".',
+            class: 'script',
+          },
+        },
+      ],
+    },
+    {
+      op: 'stage',
+      selector: { parts: [candidate('internal:neo-below', 0, 'button[')] },
+      sets: [
+        {
+          error: {
+            message:
+              'Unexpected end of selector while parsing selector `button[`',
+            class: 'selector',
+          },
+        },
+      ],
+    },
+  ],
+  describePins: [
+    {
+      op: 'describePins',
+      members: [{ pin: 3 }, { node: 0 }],
+      chunk: parseSelector('internal:role=button'),
+    },
+    { op: 'describePins', members: [{ pin: 4 }] },
+  ],
+  coverSurvey: [{ op: 'coverSurvey' }],
+  privateMarks: [{ op: 'privateMarks' }],
   // Last: it replaces the document, so the protocol test's later requests would find none of
   // the elements they name.
   setContent: [
@@ -855,6 +933,89 @@ const REPLY_EXAMPLES: {
     },
   ],
   replaced: [{ kind: 'replaced' }],
+  staged: [
+    { kind: 'staged', matches: [{ pin: 5 }, { pin: 6 }] },
+    { kind: 'staged', matches: ['document', { pin: 7 }] },
+    { kind: 'staged', matches: [] },
+    { kind: 'staged', matches: [{ pin: 8 }], staleRef: 'e7' },
+  ],
+  pinsDescribed: [
+    {
+      kind: 'pinsDescribed',
+      locator: "getByRole('button')",
+      items: [
+        {
+          preview: '<button>Go</button>',
+          aka: "getByRole('button', { name: 'Go' })",
+        },
+        {
+          preview: '<button>Stop</button>',
+          aka: "getByRole('button', { name: 'Stop' })",
+        },
+      ],
+    },
+    {
+      kind: 'pinsDescribed',
+      items: [
+        {
+          preview: '<input id="pw" type="password" value="<7 characters>"/>',
+          aka: "locator('#pw')",
+        },
+      ],
+    },
+  ],
+  surveyed: [
+    {
+      kind: 'surveyed',
+      layers: [
+        {
+          pin: 9,
+          blank: false,
+          loading: false,
+          wholeView: true,
+          controls: [10],
+          firstWords: 'Read first Close',
+          holders: [9],
+        },
+        {
+          pin: 11,
+          blank: true,
+          loading: true,
+          wholeView: false,
+          controls: [],
+          holders: [],
+        },
+      ],
+      tested: 3,
+      surveyMs: 1,
+      phases: {
+        hits: 1,
+        count: 0,
+        naming: 1,
+        linking: 0,
+        marks: 0,
+        stopped: false,
+      },
+    },
+    {
+      kind: 'surveyed',
+      layers: [],
+      tested: 300,
+      surveyMs: 20.5,
+      phases: {
+        hits: 20.5,
+        count: 0,
+        naming: 0,
+        linking: 0,
+        marks: 0,
+        stopped: true,
+      },
+    },
+  ],
+  marks: [
+    { kind: 'marks', pins: [12, 13] },
+    { kind: 'marks', pins: [] },
+  ],
   error: [
     {
       kind: 'error',

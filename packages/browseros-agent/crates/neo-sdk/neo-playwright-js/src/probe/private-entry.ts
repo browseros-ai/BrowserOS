@@ -128,6 +128,32 @@ export function anyPrivatelyTyped(): boolean {
   return anyMarked
 }
 
+/**
+ * `privateMarks`: every element of this document that carries the mark, pinned as one entry,
+ * which is how Rust's mirror of the marks learns a document an earlier `Playwright` filled
+ * (apc-engine-design 8.1). The key is registered, so a mark that another protocol's probe made in
+ * this world, before this bundle replaced it, is found too.
+ *
+ * The walk is the DOM's, not the rendered tree's: the document, then each shadow root this world
+ * opens (open roots, and closed ones it was handed), every element of each. A mark outlives
+ * rendering, so a marked box in a slot's fallback content, unrendered while the slot has assigned
+ * nodes, must still reach the mirror before a change of assignment shows its value again.
+ */
+export function privateMarks(world: World): ReplyTo<'privateMarks'> {
+  const marked: Element[] = []
+  const scopes: (Document | ShadowRoot)[] = [world.injected.document]
+  for (let index = 0; index < scopes.length; index++) {
+    const scope = scopes[index]
+    if (!scope) continue
+    for (const element of scope.querySelectorAll('*')) {
+      if (privatelyTyped(element)) marked.push(element)
+      const shadow = element.shadowRoot
+      if (shadow) scopes.push(shadow)
+    }
+  }
+  return { kind: 'marks', pins: world.pins.addAll(marked) }
+}
+
 function mark(element: Element): void {
   // Neither enumerable, writable nor configurable: no walk lists it, and nothing unmarks a box.
   if (!Object.hasOwn(element, MARK))

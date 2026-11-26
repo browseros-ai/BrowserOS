@@ -1,9 +1,17 @@
 /**
- * A whole page surveys covers in the same isolated-world request as its snapshot tree.
+ * The survey behind a snapshot's `# on top:` lines: which layers cover the page's controls.
  * The click module owns hits, faces, control eligibility and names. This module owns grouping,
  * reach and weak per-document memory; child frames and pressing are outside its scope.
+ *
+ * One survey, two answers (apc-engine-design 8.2):
+ *   surveyCovers  inside a `snapshot` request, over the engine snapshot it just took: the layers
+ *                 worded by role, name and ref, and the snapshot's whole-view nodes marked
+ *   coverSurvey   a request of its own, for a page whose snapshot comes from APC and so has no
+ *                 engine snapshot under it: the page's own controls are tested, and every element
+ *                 the answer names comes back pinned, for Rust to word from its tree
  */
 import type { AriaNodeJSON, AriaSnapshotJSON } from '../prelude/vendored'
+import { composedElements } from './composed-tree'
 import {
   controlRole,
   controlsOf,
@@ -17,6 +25,7 @@ import {
   inTopLayer,
   isBlank,
   kindOf,
+  listedControls,
   nameOf,
   pageElement,
   parentOrHost,
@@ -27,7 +36,13 @@ import {
 } from './cover'
 import type { FailureOutput } from './failure-output'
 import { renderedText } from './private-look'
-import type { Point } from './protocol'
+import type {
+  CoverControl,
+  CoverSurveyRequest,
+  PinnedLayer,
+  Point,
+  ReplyTo,
+} from './protocol'
 import { type SnapshotAria, snapshotAriaFor } from './snapshot-aria'
 import type { World } from './world'
 
@@ -71,16 +86,33 @@ type Remembered = {
 }
 const memory = new WeakMap<Document, Remembered[]>()
 
-/** Page facts are masked here; the shared Rust formatter owns their public words. */
-export type SurveyLayer = {
-  role: string
-  name: string
-  ref: string
+/** What a layer is called by in the snapshot's answer. */
+type RefName = { role: string; name: string; ref: string }
+
+/**
+ * A layer's facts, `N` naming it and `C` each of its listed controls. Page facts are masked
+ * here; the shared Rust formatter owns their public words.
+ */
+type Note<N, C> = N & {
   blank: boolean
   loading: boolean
   wholeView: boolean
-  controls: ReturnType<typeof controlsOf>
+  controls: C[]
   firstWords?: string
+}
+
+export type SurveyLayer = Note<RefName, CoverControl>
+
+/**
+ * How an answer names what a layer holds. The survey asks in a fixed order (a layer's controls,
+ * then what names it, layer by layer), which the snapshot's answer depends on: its refs are
+ * minted as they are first named, and the agent reads their numbers.
+ */
+type Wording<N, C> = {
+  /** A root's listed controls, the identity that dedupes them across roots, and what names it. */
+  controls(root: Element): C[]
+  same(control: C): unknown
+  named(element: Element): N
 }
 
 type Phases = {
@@ -91,9 +123,10 @@ type Phases = {
   marks: number
   stopped: boolean
 }
-type Layer = { order: number; held: Element[]; note: SurveyLayer }
+type Layer<N, C> = { order: number; held: Element[]; note: Note<N, C> }
 type Group = { faces: Face[]; held: Element[]; controlsFrom: Element[] }
 
+/** The survey of a `snapshot` request, over the engine snapshot `json` it took. */
 export function surveyCovers(
   world: World,
   output: FailureOutput,
@@ -102,13 +135,171 @@ export function surveyCovers(
 ): {
   layers: SurveyLayer[]
   tested: number
-  elapsed: number
   marksSkipped: boolean
   phases: Phases
 } {
+  const { layers, tested, phases } = surveyLayers(
+    world,
+    output,
+    aria.surveyElements(),
+    aria,
+    {
+      controls: (root) => controlsOf(world, output, root, undefined, aria),
+      same: (control) => control.ref,
+      named: (element) => ({
+        role: controlRole(world, element, aria),
+        name: nameOf(world, output, element, aria),
+        ref: aria.refOf(element),
+      }),
+    },
+  )
+  const marksSkipped = markBlocks(json, layers, inside, phases, aria)
+  return {
+    layers: layers.map(({ note }) => note),
+    tested,
+    marksSkipped,
+    phases,
+  }
+}
+
+/**
+ * `coverSurvey`: the survey of a page whose snapshot comes from APC. It tests the page's own
+ * controls instead of an engine snapshot's refs, and names each layer by pins: the element it is
+ * named by, its listed controls and, for a whole-view layer with words, the elements that hold
+ * it, under which Rust marks the tree's top-most nodes. Decisions read the same SnapshotAria
+ * provider as the snapshot's survey; only names and refs are left to Rust.
+ */
+export function coverSurvey(
+  world: World,
+  _request: CoverSurveyRequest,
+  _root: Node | undefined,
+  _nodes: readonly unknown[],
+  output: FailureOutput,
+): ReplyTo<'coverSurvey'> {
+  const aria = snapshotAriaFor(world)
+  // One budget for the whole survey: finding the population spends from it first, and the list
+  // is built once, since the page guard reads the population again.
+  const started = performance.now()
+  const population = pageControls(world, started + BUDGET_MS)
+  const { layers, tested, phases } = surveyLayers(
+    world,
+    output,
+    population.controls,
+    aria,
+    {
+      controls: (root) => listedControls(world, root, undefined, aria),
+      same: (control) => control,
+      named: (element) => ({ named: element }),
+    },
+    started,
+  )
+  phases.stopped ||= population.stopped
+  const holdersOf = ({ held, note }: (typeof layers)[number]) =>
+    note.wholeView && !note.blank ? held : []
+  // One entry for everything the answer names, each element once, so none is evicted before
+  // Rust has described them all.
+  const named = [
+    ...new Set(
+      layers.flatMap((layer) => [
+        layer.note.named,
+        ...layer.note.controls,
+        ...holdersOf(layer),
+      ]),
+    ),
+  ]
+  const pins = world.pins.addAll(named)
+  const pinOf = new Map(
+    named.map((element, index) => [element, pins[index] ?? 0]),
+  )
+  const pin = (element: Element) => pinOf.get(element) ?? 0
+  return {
+    kind: 'surveyed',
+    layers: layers.map(
+      (layer): PinnedLayer => ({
+        pin: pin(layer.note.named),
+        blank: layer.note.blank,
+        loading: layer.note.loading,
+        wholeView: layer.note.wholeView,
+        controls: layer.note.controls.map(pin),
+        ...(layer.note.firstWords === undefined
+          ? {}
+          : { firstWords: layer.note.firstWords }),
+        holders: holdersOf(layer).map(pin),
+      }),
+    ),
+    tested,
+    // What the snapshot's answer reports as its survey time: hits and the tested prefix.
+    surveyMs: phases.hits,
+    phases,
+  }
+}
+
+/**
+ * The page's own controls in composed-tree order, filtered as a snapshot's ref is (apc-engine-
+ * design 3.6, upstream's `computeAriaRef`): box-visible and taking the pointer, a test an iframe
+ * always passes there. The refs the engine's snapshot would have held, without its aria walk.
+ *
+ * The walk and its style reads are the survey's own work now, so they count against its budget:
+ * past `deadline` the list ends where the walk stopped, and the survey reports it stopped, as it
+ * does for a budget spent testing. The deadline is read before each control's style reads, and
+ * every 64 elements in between, which keeps a page of a hundred thousand plain elements cheap.
+ */
+function pageControls(
+  world: World,
+  deadline: number,
+): { controls: Element[]; stopped: boolean } {
+  const { injected } = world
+  const controls: Element[] = []
+  const root = injected.document.documentElement
+  if (!root) return { controls, stopped: false }
+  let walked = 0
+  for (const element of composedElements(root)) {
+    walked++
+    const candidate = coverControl(element)
+    if ((candidate || walked % 64 === 0) && performance.now() >= deadline)
+      return { controls, stopped: true }
+    if (
+      candidate &&
+      (isFrame(element) || takesPointer(element)) &&
+      injected.utils.isElementVisible(element)
+    )
+      controls.push(element)
+  }
+  return { controls, stopped: false }
+}
+
+function isFrame(element: Element): boolean {
+  return element.nodeName === 'IFRAME' || element.nodeName === 'FRAME'
+}
+
+/**
+ * Layer membership follows the rendered flat tree, so a panel owns its slotted controls and
+ * content as well; the engine's scope walk crosses hosts but not slots.
+ */
+function inside(root: Element, element: Element): boolean {
+  for (
+    let at: Element | undefined = element;
+    at;
+    at = at.assignedSlot ?? parentOrHost(at)
+  )
+    if (at === root) return true
+  return false
+}
+
+/**
+ * The survey both answers share, over `elements` in tree order. It finds, groups and names the
+ * layers, layer by layer through `wording`, and keeps the document's memory of them.
+ */
+function surveyLayers<N, C>(
+  world: World,
+  output: FailureOutput,
+  elements: Iterable<Element>,
+  aria: SnapshotAria,
+  wording: Wording<N, C>,
+  started: number = performance.now(),
+): { layers: Layer<N, C>[]; tested: number; phases: Phases } {
   const { injected } = world
   const document = injected.document
-  const elements = aria.surveyElements()
   const phases: Phases = {
     hits: 0,
     count: 0,
@@ -119,7 +310,6 @@ export function surveyCovers(
   }
   // Five document-only hits always precede the budgeted prefix of controls. A shadow host
   // remains a host here: only the click's own root list can take a hit into that root.
-  const started = performance.now()
   const samples: Sample[] = viewPoints().map((point) => ({
     point,
     hit: hitAtRoots([document], point),
@@ -133,17 +323,6 @@ export function surveyCovers(
     aria,
   )
   phases.hits = performance.now() - started
-  // The engine's scope walk crosses hosts but not slots. Layer membership follows the
-  // rendered flat tree so a panel owns its slotted controls and content as well.
-  const inside: Inside = (root, element) => {
-    for (
-      let at: Element | undefined = element;
-      at;
-      at = at.assignedSlot ?? parentOrHost(at)
-    )
-      if (at === root) return true
-    return false
-  }
   const page = pageGuard(elements, phases, main, aria)
   const resolving = performance.now()
   const found = facesFromHits(world, hits, page, aria)
@@ -159,13 +338,7 @@ export function surveyCovers(
   }
   if (!found.size) {
     memory.delete(document)
-    return {
-      layers: [],
-      tested: tested.length,
-      elapsed: performance.now() - started,
-      marksSkipped: false,
-      phases,
-    }
+    return { layers: [], tested: tested.length, phases }
   }
   const naming = performance.now()
   // Isolate guard time spent while naming: a carrier's guard belongs to count, not both phases.
@@ -192,6 +365,7 @@ export function surveyCovers(
         samples,
         inside,
         aria,
+        wording,
       ),
     )
     .filter((layer) => layer !== undefined)
@@ -204,14 +378,7 @@ export function surveyCovers(
   memory.set(document, next)
   phases.naming += Math.max(0, performance.now() - naming - phases.count)
   phases.count += countedBeforeNaming
-  const marksSkipped = markBlocks(json, layers, inside, phases, aria)
-  return {
-    layers: layers.map(({ note }) => note),
-    tested: tested.length,
-    elapsed: performance.now() - started,
-    marksSkipped,
-    phases,
-  }
+  return { layers, tested: tested.length, phases }
 }
 
 /** Samples seed candidates; only a foreign hit on an outside control makes one a layer. */
@@ -504,7 +671,7 @@ function holdersOf(
   return { held, controlsFrom }
 }
 
-function describeLayer(
+function describeLayer<N, C>(
   world: World,
   output: FailureOutput,
   group: Group,
@@ -515,7 +682,8 @@ function describeLayer(
   samples: Sample[],
   inside: Inside,
   aria: SnapshotAria,
-): Layer | undefined {
+  wording: Wording<N, C>,
+): Layer<N, C> | undefined {
   const { faces, held, controlsFrom } = group
   const face =
     faces.find((face) => isBlank(world, output, face.element, aria)) ?? faces[0]
@@ -539,8 +707,8 @@ function describeLayer(
   const controls = Array.from(
     new Map(
       controlsFrom
-        .flatMap((root) => controlsOf(world, output, root, undefined, aria))
-        .map((control) => [control.ref, control]),
+        .flatMap((root) => wording.controls(root))
+        .map((control) => [wording.same(control), control]),
     ).values(),
   )
   const words = output.tree(named, () =>
@@ -562,9 +730,7 @@ function describeLayer(
     order,
     held,
     note: {
-      role: controlRole(world, named, aria),
-      name: nameOf(world, output, named, aria),
-      ref: aria.refOf(named),
+      ...wording.named(named),
       blank,
       loading: controlsFrom.some(saysLoading),
       wholeView,
@@ -577,7 +743,7 @@ function describeLayer(
 /** Link and mark only an actual whole-view layer, after its reach is known. */
 function markBlocks(
   json: AriaSnapshotJSON,
-  layers: Layer[],
+  layers: Layer<RefName, CoverControl>[],
   inside: Inside,
   phases: Phases,
   aria: Pick<SnapshotAria, 'snapshotNodes'>,

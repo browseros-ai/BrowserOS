@@ -9260,16 +9260,18 @@ ${value.stack}`;
       return !inView || hitChain(control, middle) === null;
     });
   }
-  function controlsOf(world, output, shown, taking = takingControls(world, shown), aria = coverAriaFor(world)) {
-    const roleOf = (control) => controlRole(world, control, aria);
-    const kept = new Set(taking.filter((control) => roleOf(control) === "button").slice(0, MAX_CONTROLS));
+  function listedControls(world, shown, taking = takingControls(world, shown), aria = coverAriaFor(world)) {
+    const kept = new Set(taking.filter((control) => controlRole(world, control, aria) === "button").slice(0, MAX_CONTROLS));
     for (const control of taking) {
       if (kept.size >= MAX_CONTROLS)
         break;
       kept.add(control);
     }
-    return taking.filter((control) => kept.has(control)).map((control) => ({
-      role: roleOf(control),
+    return taking.filter((control) => kept.has(control));
+  }
+  function controlsOf(world, output, shown, taking = takingControls(world, shown), aria = coverAriaFor(world)) {
+    return listedControls(world, shown, taking, aria).map((control) => ({
+      role: controlRole(world, control, aria),
       name: nameOf(world, output, control, aria),
       ref: aria.refOf(control)
     }));
@@ -9953,6 +9955,510 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/composed-tree.ts
+  function* composedElements(root) {
+    const visited = new Set;
+    const pending = [root];
+    while (pending.length) {
+      const element = pending.pop();
+      if (!element || visited.has(element))
+        continue;
+      visited.add(element);
+      yield element;
+      const children = childrenOf(element);
+      for (let index = children.length - 1;index >= 0; index--) {
+        const child = children[index];
+        if (child)
+          pending.push(child);
+      }
+    }
+  }
+  function childrenOf(element) {
+    const assigned = element.nodeName === "SLOT" ? element.assignedNodes() : [];
+    if (assigned.length)
+      return assigned.filter(isElement);
+    const children = [];
+    for (let child = element.firstElementChild;child; child = child.nextElementSibling)
+      if (!child.assignedSlot)
+        children.push(child);
+    const shadow = element.shadowRoot;
+    for (let child = shadow?.firstElementChild;child; child = child.nextElementSibling)
+      children.push(child);
+    return children;
+  }
+  function isElement(node) {
+    return node.nodeType === 1;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-aria.ts
+  var providers2 = new WeakMap;
+  function snapshotAriaFor(world) {
+    let provider = providers2.get(world);
+    if (!provider) {
+      provider = createEngineSnapshotAria(world);
+      providers2.set(world, provider);
+    }
+    return provider;
+  }
+  function createEngineSnapshotAria(world) {
+    const base = coverAriaFor(world);
+    return {
+      ...base,
+      surveyElements() {
+        const refs = lastSnapshotRefs(world.injected);
+        return {
+          *[Symbol.iterator]() {
+            for (const { element } of refs.values())
+              yield element;
+          }
+        };
+      },
+      snapshotRefs() {
+        const refs = lastSnapshotRefs(world.injected);
+        return {
+          elementFor: (ref) => refs.get(ref)?.element,
+          *elements() {
+            for (const { element } of refs.values())
+              yield element;
+          }
+        };
+      },
+      snapshotNodes: (json) => lastSnapshotNodes(world.injected, json).nodes
+    };
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/cover-survey.ts
+  var MAX_CONTROLS2 = 300;
+  var BUDGET_MS = 20;
+  var MAX_LAYERS = 3;
+  var DIALOGS2 = new Set([
+    "dialog",
+    "alertdialog",
+    "menu",
+    "listbox",
+    "tooltip",
+    "status",
+    "alert",
+    "log"
+  ]);
+  var memory = new WeakMap;
+  function surveyCovers(world, output, json, aria = snapshotAriaFor(world)) {
+    const { layers, tested, phases } = surveyLayers(world, output, aria.surveyElements(), aria, {
+      controls: (root) => controlsOf(world, output, root, undefined, aria),
+      same: (control) => control.ref,
+      named: (element) => ({
+        role: controlRole(world, element, aria),
+        name: nameOf(world, output, element, aria),
+        ref: aria.refOf(element)
+      })
+    });
+    const marksSkipped = markBlocks(json, layers, inside, phases, aria);
+    return {
+      layers: layers.map(({ note }) => note),
+      tested,
+      marksSkipped,
+      phases
+    };
+  }
+  function coverSurvey(world, _request, _root, _nodes, output) {
+    const aria = snapshotAriaFor(world);
+    const started = performance.now();
+    const population = pageControls(world, started + BUDGET_MS);
+    const { layers, tested, phases } = surveyLayers(world, output, population.controls, aria, {
+      controls: (root) => listedControls(world, root, undefined, aria),
+      same: (control) => control,
+      named: (element) => ({ named: element })
+    }, started);
+    phases.stopped ||= population.stopped;
+    const holdersOf = ({ held, note }) => note.wholeView && !note.blank ? held : [];
+    const named = [
+      ...new Set(layers.flatMap((layer) => [
+        layer.note.named,
+        ...layer.note.controls,
+        ...holdersOf(layer)
+      ]))
+    ];
+    const pins = world.pins.addAll(named);
+    const pinOf = new Map(named.map((element, index) => [element, pins[index] ?? 0]));
+    const pin = (element) => pinOf.get(element) ?? 0;
+    return {
+      kind: "surveyed",
+      layers: layers.map((layer) => ({
+        pin: pin(layer.note.named),
+        blank: layer.note.blank,
+        loading: layer.note.loading,
+        wholeView: layer.note.wholeView,
+        controls: layer.note.controls.map(pin),
+        ...layer.note.firstWords === undefined ? {} : { firstWords: layer.note.firstWords },
+        holders: holdersOf(layer).map(pin)
+      })),
+      tested,
+      surveyMs: phases.hits,
+      phases
+    };
+  }
+  function pageControls(world, deadline) {
+    const { injected } = world;
+    const controls = [];
+    const root = injected.document.documentElement;
+    if (!root)
+      return { controls, stopped: false };
+    let walked = 0;
+    for (const element of composedElements(root)) {
+      walked++;
+      const candidate = coverControl(element);
+      if ((candidate || walked % 64 === 0) && performance.now() >= deadline)
+        return { controls, stopped: true };
+      if (candidate && (isFrame2(element) || takesPointer(element)) && injected.utils.isElementVisible(element))
+        controls.push(element);
+    }
+    return { controls, stopped: false };
+  }
+  function isFrame2(element) {
+    return element.nodeName === "IFRAME" || element.nodeName === "FRAME";
+  }
+  function inside(root, element) {
+    for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
+      if (at === root)
+        return true;
+    return false;
+  }
+  function surveyLayers(world, output, elements, aria, wording, started = performance.now()) {
+    const { injected } = world;
+    const document2 = injected.document;
+    const phases = {
+      hits: 0,
+      count: 0,
+      naming: 0,
+      linking: 0,
+      marks: 0,
+      stopped: false
+    };
+    const samples = viewPoints().map((point) => ({
+      point,
+      hit: hitAtRoots([document2], point)
+    }));
+    const { hits, tested, main } = findFaces(world, elements, samples, started, phases, aria);
+    phases.hits = performance.now() - started;
+    const page = pageGuard(elements, phases, main, aria);
+    const resolving = performance.now();
+    const found = facesFromHits(world, hits, page, aria);
+    if (hits.length)
+      phases.naming += Math.max(0, performance.now() - resolving - phases.count);
+    const remembered = memory.get(document2) ?? [];
+    retainFaces(world, found, remembered, page);
+    for (const [element, face] of found) {
+      if (!face.observed || page(element))
+        found.delete(element);
+      else
+        for (const root of face.roots)
+          if (page(root))
+            face.roots.delete(root);
+    }
+    if (!found.size) {
+      memory.delete(document2);
+      return { layers: [], tested: tested.length, phases };
+    }
+    const naming = performance.now();
+    const countedBeforeNaming = phases.count;
+    phases.count = 0;
+    const centre = { x: innerWidth / 2, y: innerHeight / 2 };
+    for (const face of found.values())
+      face.named = shownAs(world, output, face.named, centre, undefined, aria);
+    const groups = joinFaces(found, inside).map((faces) => ({
+      faces,
+      ...holdersOf(faces, inside, page)
+    }));
+    const next = [];
+    const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside, aria, wording)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
+    memory.set(document2, next);
+    phases.naming += Math.max(0, performance.now() - naming - phases.count);
+    phases.count += countedBeforeNaming;
+    return { layers, tested: tested.length, phases };
+  }
+  function findFaces(world, elements, samples, started, phases, aria) {
+    const main = world.injected.document.querySelector('main, [role="main"]');
+    const hits = [];
+    const tested = [];
+    for (const sample of samples) {
+      const { point, hit } = sample;
+      const chain = [];
+      for (let at = hit;at; at = at.assignedSlot ?? parentOrHost2(at))
+        chain.push(at);
+      const top = chain.at(-1);
+      if (top)
+        sample.deepest = rememberHit(hits, chain, top, point, false, main);
+    }
+    for (const element of elements) {
+      if (tested.length >= MAX_CONTROLS2 || performance.now() - started >= BUDGET_MS) {
+        phases.stopped = true;
+        break;
+      }
+      if (!coverControl(element))
+        continue;
+      if (!world.injected.elementState(element, "visible", true).matches || !world.injected.elementState(element, "enabled", true).matches)
+        continue;
+      const point = middle(element);
+      if (!point)
+        continue;
+      const subject = world.injected.retarget(element, "button-link") ?? element;
+      const chain = hitChain(subject, point);
+      const kind = chain ? kindOf(world, subject, chain, point, false, aria).is : "nothing";
+      const covered = kind === "page" || kind === "frame";
+      tested.push({ element, clear: !covered });
+      if (chain && covered)
+        rememberHit(hits, chain, coverRoot(subject, chain), point, true, main, subject);
+    }
+    return { hits, tested, main };
+  }
+  function rememberHit(hits, chain, root, point, observed, main, subject) {
+    const path = coverPath(chain, root, point);
+    const filtered = path.filter((element) => !pageElement(element, main));
+    const face = coverFace(filtered);
+    if (face && !edgeBar(face))
+      hits.push({ path: filtered, chain, root, point, face, observed, subject });
+    return path[0];
+  }
+  function facesFromHits(world, hits, page, aria) {
+    const found = new Map;
+    for (const hit of hits) {
+      if (!hit.observed)
+        continue;
+      let path = hit.path;
+      let element = hit.face;
+      let peeled = false;
+      while (element && page(element)) {
+        path = path.slice(0, path.indexOf(element));
+        element = coverFace(path);
+        peeled = true;
+      }
+      if (!element || edgeBar(element))
+        continue;
+      const root = peeled ? hit.subject ? coverRoot(hit.subject, path) : path.at(-1) ?? element : hit.root;
+      const known = found.get(element);
+      if (known) {
+        known.observed = true;
+        if (!page(root))
+          known.roots.add(root);
+        continue;
+      }
+      const named = whichDialog(world, hit.chain, root, hit.point, aria);
+      found.set(element, {
+        element,
+        named: page(named) ? element : named,
+        roots: new Set(!page(root) ? [root] : []),
+        observed: true
+      });
+    }
+    return found;
+  }
+  function pageGuard(elements, phases, main, aria) {
+    let controls;
+    const cached = new Map;
+    const meanings = new Map;
+    const meaning = (element) => {
+      let known = meanings.get(element);
+      if (!known) {
+        const role = aria.roleOf(element) ?? "";
+        const top = inTopLayer(element);
+        known = {
+          dialog: role === "dialog" || role === "alertdialog" || top,
+          exempt: DIALOGS2.has(role) || top
+        };
+        meanings.set(element, known);
+      }
+      return known;
+    };
+    const ownControl = (root, control) => {
+      let inDialog = false;
+      for (let at = control;at; at = at.assignedSlot ?? parentOrHost2(at)) {
+        if (at === root)
+          return !inDialog;
+        inDialog ||= meaning(at).dialog;
+      }
+      return false;
+    };
+    return (element) => {
+      const known = cached.get(element);
+      if (known !== undefined)
+        return known;
+      const started = performance.now();
+      let page = false;
+      try {
+        if (meaning(element).exempt)
+          return false;
+        for (let at = element.assignedSlot ?? parentOrHost2(element);at; at = at.assignedSlot ?? parentOrHost2(at))
+          if (meaning(at).dialog)
+            return false;
+        if (pageElement(element, main)) {
+          page = true;
+          return true;
+        }
+        controls ??= Array.from(elements).filter((element) => coverControl(element));
+        page = controls.filter((control) => ownControl(element, control)).length > controls.length / 2;
+        return page;
+      } finally {
+        cached.set(element, page);
+        phases.count += performance.now() - started;
+      }
+    };
+  }
+  function retainFaces(world, found, remembered, page) {
+    for (const entry of remembered) {
+      const element = entry.face.deref();
+      if (!element || !stands(world, element) || page(element))
+        continue;
+      const known = found.get(element);
+      if (known) {
+        known.observed = true;
+        continue;
+      }
+      const named = entry.named.deref();
+      found.set(element, {
+        element,
+        named: named?.isConnected && world.injected.elementState(named, "visible", true).matches ? named : element,
+        roots: new Set(entry.roots.flatMap((root) => {
+          const live = root.deref();
+          return live?.isConnected && !page(live) ? [live] : [];
+        })),
+        observed: true
+      });
+    }
+  }
+  function joinFaces(found, inside) {
+    const groups = [];
+    for (const face of found.values()) {
+      const joins = groups.filter((group) => group.some((other) => Array.from(face.roots).some((root) => other.roots.has(root)) || face.named === other.element || other.named === face.element || face.named !== face.element && inside(face.named, other.element) || other.named !== other.element && inside(other.named, face.element)));
+      const first = joins[0];
+      if (!first) {
+        groups.push([face]);
+        continue;
+      }
+      first.push(face);
+      for (const joined of joins.slice(1)) {
+        first.push(...joined);
+        groups.splice(groups.indexOf(joined), 1);
+      }
+    }
+    return groups;
+  }
+  function holdersOf(faces, inside, page) {
+    const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter((root) => faces.filter((face) => face.roots.has(root)).length > 1);
+    const held = shared.length ? shared : faces.map((face) => face.element);
+    const controlsFrom = [...held];
+    for (const { named } of faces) {
+      if (!controlsFrom.some((root) => inside(root, named)))
+        controlsFrom.push(named);
+      if (held.some((root) => inside(root, named)))
+        continue;
+      const path = [];
+      for (let at = named;at; at = at.assignedSlot ?? parentOrHost2(at))
+        path.push(at);
+      let carrier = coverFace(path);
+      while (carrier && page(carrier)) {
+        path.splice(path.indexOf(carrier));
+        carrier = coverFace(path);
+      }
+      held.push(carrier ?? named);
+    }
+    return { held, controlsFrom };
+  }
+  function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside, aria, wording) {
+    const { faces, held, controlsFrom } = group;
+    const face = faces.find((face) => isBlank(world, output, face.element, aria)) ?? faces[0];
+    if (!face)
+      return;
+    const old = remembered.find((entry) => faces.some((face) => entry.face.deref() === face.element));
+    const order = old?.order ?? remembered.reduce((last, entry) => Math.max(last, entry.order + 1), 0) + next.length;
+    const named = face.named;
+    const belongs = (element) => held.some((root) => inside(root, element));
+    const ownOfAny = (element) => groups.some(({ held }) => held.some((root) => inside(root, element)));
+    const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
+    const controls = Array.from(new Map(controlsFrom.flatMap((root) => wording.controls(root)).map((control) => [wording.same(control), control])).values());
+    const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
+    const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named, aria);
+    for (const member of faces)
+      next.push({
+        face: new WeakRef(member.element),
+        named: new WeakRef(member.named),
+        roots: Array.from(member.roots, (root) => new WeakRef(root)),
+        order
+      });
+    return {
+      order,
+      held,
+      note: {
+        ...wording.named(named),
+        blank,
+        loading: controlsFrom.some(saysLoading),
+        wholeView,
+        controls,
+        ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}
+      }
+    };
+  }
+  function markBlocks(json, layers, inside, phases, aria) {
+    if (!layers.some(({ note }) => note.wholeView && !note.blank))
+      return false;
+    const started = performance.now();
+    let nodes;
+    try {
+      nodes = aria.snapshotNodes(json);
+    } catch {
+      phases.linking = performance.now() - started;
+      return true;
+    }
+    phases.linking = performance.now() - started;
+    const marking = performance.now();
+    const pending = [...json];
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node)
+        continue;
+      const element = nodes.get(node);
+      const layer = element && layers.find(({ held, note }) => note.wholeView && !note.blank && held.some((root) => inside(root, element)));
+      if (layer) {
+        node.onTop = layer.note.ref;
+      } else
+        for (const child of node.children ?? [])
+          if (typeof child !== "string")
+            pending.push(child);
+    }
+    phases.marks = performance.now() - marking;
+    return false;
+  }
+  function middle(element) {
+    const box = element.getBoundingClientRect();
+    const left = Math.max(0, box.left), right = Math.min(innerWidth, box.right);
+    const top = Math.max(0, box.top), bottom = Math.min(innerHeight, box.bottom);
+    return right > left && bottom > top ? { x: (left + right) / 2, y: (top + bottom) / 2 } : undefined;
+  }
+  function viewPoints() {
+    return [
+      [1 / 2, 1 / 2],
+      [1 / 6, 1 / 6],
+      [5 / 6, 1 / 6],
+      [1 / 6, 5 / 6],
+      [5 / 6, 5 / 6]
+    ].map(([x = 0, y = 0]) => ({ x: x * innerWidth, y: y * innerHeight }));
+  }
+  function edgeBar(element) {
+    if (element.matches(":modal"))
+      return false;
+    const box = element.getBoundingClientRect();
+    const centre = box.left <= innerWidth / 2 && box.right > innerWidth / 2 && box.top <= innerHeight / 2 && box.bottom > innerHeight / 2;
+    return getComputedStyle(element).position === "sticky" || !centre && (box.width < innerWidth / 4 || box.height < innerHeight / 4);
+  }
+  function stands(world, element) {
+    if (!element.isConnected || !takesPointer(element) || !world.injected.elementState(element, "visible", true).matches)
+      return false;
+    let carried = false;
+    for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
+      carried ||= getComputedStyle(at).position === "fixed" || inTopLayer(at);
+    const point = middle(element);
+    return carried && point !== undefined && hitChain(element, point) === null;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
   function documentText(world, request, _root, _nodes, output) {
     const { injected } = world;
@@ -10106,18 +10612,18 @@ ${value.stack}`;
     if (element.localName !== "label")
       return null;
     const control = Reflect.get(element, "control");
-    return isElement(control) ? control : null;
+    return isElement2(control) ? control : null;
   }
   function holdsFocus(target) {
     const found = Reflect.get(target.getRootNode(), "activeElement");
-    const active = isElement(found) ? found : null;
+    const active = isElement2(found) ? found : null;
     if (!active)
       return false;
     if (target === active || target.contains(active))
       return true;
     return isEditable(target) && isEditable(active) && active.contains(target);
   }
-  function isElement(node) {
+  function isElement2(node) {
     return typeof node === "object" && node !== null && Reflect.get(node, "nodeType") === Node.ELEMENT_NODE;
   }
   function isEditable(element) {
@@ -10195,6 +10701,23 @@ ${value.stack}`;
   }
   function anyPrivatelyTyped() {
     return anyMarked;
+  }
+  function privateMarks(world) {
+    const marked = [];
+    const scopes = [world.injected.document];
+    for (let index = 0;index < scopes.length; index++) {
+      const scope = scopes[index];
+      if (!scope)
+        continue;
+      for (const element of scope.querySelectorAll("*")) {
+        if (privatelyTyped(element))
+          marked.push(element);
+        const shadow = element.shadowRoot;
+        if (shadow)
+          scopes.push(shadow);
+      }
+    }
+    return { kind: "marks", pins: world.pins.addAll(marked) };
   }
   function mark(element) {
     if (!Object.hasOwn(element, MARK))
@@ -10707,7 +11230,7 @@ ${value.stack}`;
   var SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 53;
+  var PROTOCOL = 54;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -10979,417 +11502,6 @@ ${value.stack}`;
     return { kind: "value", value: null };
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-aria.ts
-  var providers2 = new WeakMap;
-  function snapshotAriaFor(world) {
-    let provider = providers2.get(world);
-    if (!provider) {
-      provider = createEngineSnapshotAria(world);
-      providers2.set(world, provider);
-    }
-    return provider;
-  }
-  function createEngineSnapshotAria(world) {
-    const base = coverAriaFor(world);
-    return {
-      ...base,
-      surveyElements() {
-        const refs = lastSnapshotRefs(world.injected);
-        return {
-          *[Symbol.iterator]() {
-            for (const { element } of refs.values())
-              yield element;
-          }
-        };
-      },
-      snapshotRefs() {
-        const refs = lastSnapshotRefs(world.injected);
-        return {
-          elementFor: (ref) => refs.get(ref)?.element,
-          *elements() {
-            for (const { element } of refs.values())
-              yield element;
-          }
-        };
-      },
-      snapshotNodes: (json) => lastSnapshotNodes(world.injected, json).nodes
-    };
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/cover-survey.ts
-  var MAX_CONTROLS2 = 300;
-  var BUDGET_MS = 20;
-  var MAX_LAYERS = 3;
-  var DIALOGS2 = new Set([
-    "dialog",
-    "alertdialog",
-    "menu",
-    "listbox",
-    "tooltip",
-    "status",
-    "alert",
-    "log"
-  ]);
-  var memory = new WeakMap;
-  function surveyCovers(world, output, json, aria = snapshotAriaFor(world)) {
-    const { injected } = world;
-    const document2 = injected.document;
-    const elements = aria.surveyElements();
-    const phases = {
-      hits: 0,
-      count: 0,
-      naming: 0,
-      linking: 0,
-      marks: 0,
-      stopped: false
-    };
-    const started = performance.now();
-    const samples = viewPoints().map((point) => ({
-      point,
-      hit: hitAtRoots([document2], point)
-    }));
-    const { hits, tested, main } = findFaces(world, elements, samples, started, phases, aria);
-    phases.hits = performance.now() - started;
-    const inside = (root, element) => {
-      for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
-        if (at === root)
-          return true;
-      return false;
-    };
-    const page = pageGuard(elements, phases, main, aria);
-    const resolving = performance.now();
-    const found = facesFromHits(world, hits, page, aria);
-    if (hits.length)
-      phases.naming += Math.max(0, performance.now() - resolving - phases.count);
-    const remembered = memory.get(document2) ?? [];
-    retainFaces(world, found, remembered, page);
-    for (const [element, face] of found) {
-      if (!face.observed || page(element))
-        found.delete(element);
-      else
-        for (const root of face.roots)
-          if (page(root))
-            face.roots.delete(root);
-    }
-    if (!found.size) {
-      memory.delete(document2);
-      return {
-        layers: [],
-        tested: tested.length,
-        elapsed: performance.now() - started,
-        marksSkipped: false,
-        phases
-      };
-    }
-    const naming = performance.now();
-    const countedBeforeNaming = phases.count;
-    phases.count = 0;
-    const centre = { x: innerWidth / 2, y: innerHeight / 2 };
-    for (const face of found.values())
-      face.named = shownAs(world, output, face.named, centre, undefined, aria);
-    const groups = joinFaces(found, inside).map((faces) => ({
-      faces,
-      ...holdersOf(faces, inside, page)
-    }));
-    const next = [];
-    const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside, aria)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
-    memory.set(document2, next);
-    phases.naming += Math.max(0, performance.now() - naming - phases.count);
-    phases.count += countedBeforeNaming;
-    const marksSkipped = markBlocks(json, layers, inside, phases, aria);
-    return {
-      layers: layers.map(({ note }) => note),
-      tested: tested.length,
-      elapsed: performance.now() - started,
-      marksSkipped,
-      phases
-    };
-  }
-  function findFaces(world, elements, samples, started, phases, aria) {
-    const main = world.injected.document.querySelector('main, [role="main"]');
-    const hits = [];
-    const tested = [];
-    for (const sample of samples) {
-      const { point, hit } = sample;
-      const chain = [];
-      for (let at = hit;at; at = at.assignedSlot ?? parentOrHost2(at))
-        chain.push(at);
-      const top = chain.at(-1);
-      if (top)
-        sample.deepest = rememberHit(hits, chain, top, point, false, main);
-    }
-    for (const element of elements) {
-      if (tested.length >= MAX_CONTROLS2 || performance.now() - started >= BUDGET_MS) {
-        phases.stopped = true;
-        break;
-      }
-      if (!coverControl(element))
-        continue;
-      if (!world.injected.elementState(element, "visible", true).matches || !world.injected.elementState(element, "enabled", true).matches)
-        continue;
-      const point = middle(element);
-      if (!point)
-        continue;
-      const subject = world.injected.retarget(element, "button-link") ?? element;
-      const chain = hitChain(subject, point);
-      const kind = chain ? kindOf(world, subject, chain, point, false, aria).is : "nothing";
-      const covered = kind === "page" || kind === "frame";
-      tested.push({ element, clear: !covered });
-      if (chain && covered)
-        rememberHit(hits, chain, coverRoot(subject, chain), point, true, main, subject);
-    }
-    return { hits, tested, main };
-  }
-  function rememberHit(hits, chain, root, point, observed, main, subject) {
-    const path = coverPath(chain, root, point);
-    const filtered = path.filter((element) => !pageElement(element, main));
-    const face = coverFace(filtered);
-    if (face && !edgeBar(face))
-      hits.push({ path: filtered, chain, root, point, face, observed, subject });
-    return path[0];
-  }
-  function facesFromHits(world, hits, page, aria) {
-    const found = new Map;
-    for (const hit of hits) {
-      if (!hit.observed)
-        continue;
-      let path = hit.path;
-      let element = hit.face;
-      let peeled = false;
-      while (element && page(element)) {
-        path = path.slice(0, path.indexOf(element));
-        element = coverFace(path);
-        peeled = true;
-      }
-      if (!element || edgeBar(element))
-        continue;
-      const root = peeled ? hit.subject ? coverRoot(hit.subject, path) : path.at(-1) ?? element : hit.root;
-      const known = found.get(element);
-      if (known) {
-        known.observed = true;
-        if (!page(root))
-          known.roots.add(root);
-        continue;
-      }
-      const named = whichDialog(world, hit.chain, root, hit.point, aria);
-      found.set(element, {
-        element,
-        named: page(named) ? element : named,
-        roots: new Set(!page(root) ? [root] : []),
-        observed: true
-      });
-    }
-    return found;
-  }
-  function pageGuard(elements, phases, main, aria) {
-    let controls;
-    const cached = new Map;
-    const meanings = new Map;
-    const meaning = (element) => {
-      let known = meanings.get(element);
-      if (!known) {
-        const role = aria.roleOf(element) ?? "";
-        const top = inTopLayer(element);
-        known = {
-          dialog: role === "dialog" || role === "alertdialog" || top,
-          exempt: DIALOGS2.has(role) || top
-        };
-        meanings.set(element, known);
-      }
-      return known;
-    };
-    const ownControl = (root, control) => {
-      let inDialog = false;
-      for (let at = control;at; at = at.assignedSlot ?? parentOrHost2(at)) {
-        if (at === root)
-          return !inDialog;
-        inDialog ||= meaning(at).dialog;
-      }
-      return false;
-    };
-    return (element) => {
-      const known = cached.get(element);
-      if (known !== undefined)
-        return known;
-      const started = performance.now();
-      let page = false;
-      try {
-        if (meaning(element).exempt)
-          return false;
-        for (let at = element.assignedSlot ?? parentOrHost2(element);at; at = at.assignedSlot ?? parentOrHost2(at))
-          if (meaning(at).dialog)
-            return false;
-        if (pageElement(element, main)) {
-          page = true;
-          return true;
-        }
-        controls ??= Array.from(elements).filter((element) => coverControl(element));
-        page = controls.filter((control) => ownControl(element, control)).length > controls.length / 2;
-        return page;
-      } finally {
-        cached.set(element, page);
-        phases.count += performance.now() - started;
-      }
-    };
-  }
-  function retainFaces(world, found, remembered, page) {
-    for (const entry of remembered) {
-      const element = entry.face.deref();
-      if (!element || !stands(world, element) || page(element))
-        continue;
-      const known = found.get(element);
-      if (known) {
-        known.observed = true;
-        continue;
-      }
-      const named = entry.named.deref();
-      found.set(element, {
-        element,
-        named: named?.isConnected && world.injected.elementState(named, "visible", true).matches ? named : element,
-        roots: new Set(entry.roots.flatMap((root) => {
-          const live = root.deref();
-          return live?.isConnected && !page(live) ? [live] : [];
-        })),
-        observed: true
-      });
-    }
-  }
-  function joinFaces(found, inside) {
-    const groups = [];
-    for (const face of found.values()) {
-      const joins = groups.filter((group) => group.some((other) => Array.from(face.roots).some((root) => other.roots.has(root)) || face.named === other.element || other.named === face.element || face.named !== face.element && inside(face.named, other.element) || other.named !== other.element && inside(other.named, face.element)));
-      const first = joins[0];
-      if (!first) {
-        groups.push([face]);
-        continue;
-      }
-      first.push(face);
-      for (const joined of joins.slice(1)) {
-        first.push(...joined);
-        groups.splice(groups.indexOf(joined), 1);
-      }
-    }
-    return groups;
-  }
-  function holdersOf(faces, inside, page) {
-    const shared = [...new Set(faces.flatMap((face) => [...face.roots]))].filter((root) => faces.filter((face) => face.roots.has(root)).length > 1);
-    const held = shared.length ? shared : faces.map((face) => face.element);
-    const controlsFrom = [...held];
-    for (const { named } of faces) {
-      if (!controlsFrom.some((root) => inside(root, named)))
-        controlsFrom.push(named);
-      if (held.some((root) => inside(root, named)))
-        continue;
-      const path = [];
-      for (let at = named;at; at = at.assignedSlot ?? parentOrHost2(at))
-        path.push(at);
-      let carrier = coverFace(path);
-      while (carrier && page(carrier)) {
-        path.splice(path.indexOf(carrier));
-        carrier = coverFace(path);
-      }
-      held.push(carrier ?? named);
-    }
-    return { held, controlsFrom };
-  }
-  function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside, aria) {
-    const { faces, held, controlsFrom } = group;
-    const face = faces.find((face) => isBlank(world, output, face.element, aria)) ?? faces[0];
-    if (!face)
-      return;
-    const old = remembered.find((entry) => faces.some((face) => entry.face.deref() === face.element));
-    const order = old?.order ?? remembered.reduce((last, entry) => Math.max(last, entry.order + 1), 0) + next.length;
-    const named = face.named;
-    const belongs = (element) => held.some((root) => inside(root, element));
-    const ownOfAny = (element) => groups.some(({ held }) => held.some((root) => inside(root, element)));
-    const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
-    const controls = Array.from(new Map(controlsFrom.flatMap((root) => controlsOf(world, output, root, undefined, aria)).map((control) => [control.ref, control])).values());
-    const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
-    const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named, aria);
-    for (const member of faces)
-      next.push({
-        face: new WeakRef(member.element),
-        named: new WeakRef(member.named),
-        roots: Array.from(member.roots, (root) => new WeakRef(root)),
-        order
-      });
-    return {
-      order,
-      held,
-      note: {
-        role: controlRole(world, named, aria),
-        name: nameOf(world, output, named, aria),
-        ref: aria.refOf(named),
-        blank,
-        loading: controlsFrom.some(saysLoading),
-        wholeView,
-        controls,
-        ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}
-      }
-    };
-  }
-  function markBlocks(json, layers, inside, phases, aria) {
-    if (!layers.some(({ note }) => note.wholeView && !note.blank))
-      return false;
-    const started = performance.now();
-    let nodes;
-    try {
-      nodes = aria.snapshotNodes(json);
-    } catch {
-      phases.linking = performance.now() - started;
-      return true;
-    }
-    phases.linking = performance.now() - started;
-    const marking = performance.now();
-    const pending = [...json];
-    while (pending.length) {
-      const node = pending.pop();
-      if (!node)
-        continue;
-      const element = nodes.get(node);
-      const layer = element && layers.find(({ held, note }) => note.wholeView && !note.blank && held.some((root) => inside(root, element)));
-      if (layer) {
-        node.onTop = layer.note.ref;
-      } else
-        for (const child of node.children ?? [])
-          if (typeof child !== "string")
-            pending.push(child);
-    }
-    phases.marks = performance.now() - marking;
-    return false;
-  }
-  function middle(element) {
-    const box = element.getBoundingClientRect();
-    const left = Math.max(0, box.left), right = Math.min(innerWidth, box.right);
-    const top = Math.max(0, box.top), bottom = Math.min(innerHeight, box.bottom);
-    return right > left && bottom > top ? { x: (left + right) / 2, y: (top + bottom) / 2 } : undefined;
-  }
-  function viewPoints() {
-    return [
-      [1 / 2, 1 / 2],
-      [1 / 6, 1 / 6],
-      [5 / 6, 1 / 6],
-      [1 / 6, 5 / 6],
-      [5 / 6, 5 / 6]
-    ].map(([x = 0, y = 0]) => ({ x: x * innerWidth, y: y * innerHeight }));
-  }
-  function edgeBar(element) {
-    if (element.matches(":modal"))
-      return false;
-    const box = element.getBoundingClientRect();
-    const centre = box.left <= innerWidth / 2 && box.right > innerWidth / 2 && box.top <= innerHeight / 2 && box.bottom > innerHeight / 2;
-    return getComputedStyle(element).position === "sticky" || !centre && (box.width < innerWidth / 4 || box.height < innerHeight / 4);
-  }
-  function stands(world, element) {
-    if (!element.isConnected || !takesPointer(element) || !world.injected.elementState(element, "visible", true).matches)
-      return false;
-    let carried = false;
-    for (let at = element;at; at = at.assignedSlot ?? parentOrHost2(at))
-      carried ||= getComputedStyle(at).position === "fixed" || inTopLayer(at);
-    const point = middle(element);
-    return carried && point !== undefined && hitChain(element, point) === null;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-inert.ts
   function parent(element) {
     if (element.assignedSlot)
@@ -11590,6 +11702,138 @@ ${value.stack}`;
     } catch {
       return { result: snapshot(), skipped: true };
     }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/stage.ts
+  var FROM = "internal:neo-from";
+  var BELOW = "internal:neo-below";
+  var INSIDE = "internal:neo-inside";
+  var SDK_LANGUAGE = "javascript";
+  function held(world, member, nodes) {
+    const { document: document2 } = world.injected;
+    if (member === "document")
+      return document2;
+    const node = "pin" in member ? world.pins.live(member.pin) : nodes[member.node];
+    return node instanceof Element && node.isConnected && node.ownerDocument === document2 ? node : undefined;
+  }
+  function allHeld(world, members, nodes) {
+    const live = [];
+    for (const member of members) {
+      const element = held(world, member, nodes);
+      if (!element)
+        return null;
+      live.push(element);
+    }
+    return live;
+  }
+  function setAt(sets, body) {
+    const set = typeof body === "string" && /^(0|[1-9]\d*)$/.test(body) ? sets[Number(body)] : undefined;
+    if (!set)
+      throw new ProbeError("internal", `a call-scoped engine body ${JSON.stringify(body)} names none of the stage's ${sets.length} candidate sets`);
+    return set;
+  }
+  function scoped(world, sets, inclusive, reached) {
+    const { utils } = world.injected;
+    return {
+      queryAll(root, body) {
+        const set = setAt(sets, body);
+        if ("error" in set)
+          throw new ProbeError(set.error.class, set.error.message);
+        if ("staleRef" in set) {
+          reached.push(set.staleRef);
+          return [];
+        }
+        const inside = set.members.filter((member) => member === root ? inclusive : member instanceof Element && utils.isInsideScope(root, member));
+        return inside;
+      }
+    };
+  }
+  function startingFrom(selector) {
+    return {
+      parts: [{ name: FROM, body: "", source: "" }, ...selector.parts],
+      ...selector.capture === undefined ? {} : { capture: selector.capture + 1 }
+    };
+  }
+  function stage(world, request, root, nodes) {
+    const { injected } = world;
+    const from = request.from && allHeld(world, request.from, nodes);
+    if (from === null)
+      return { kind: "detached" };
+    const sets = (request.sets ?? []).map((set) => ("members" in set) ? {
+      members: set.members.flatMap((member) => held(world, member, nodes) ?? [])
+    } : set);
+    visitAllSelectorParts(request.selector, (part) => {
+      if (part.name === FROM)
+        throw new ProbeError("internal", `a stage selector names ${FROM}, which only the probe prepends`);
+      if (part.name === BELOW || part.name === INSIDE)
+        setAt(sets, part.body);
+    });
+    const selector = from ? startingFrom(request.selector) : request.selector;
+    const reached = [];
+    const scopedEngines = new Map([
+      [BELOW, scoped(world, sets, false, reached)],
+      [INSIDE, scoped(world, sets, true, reached)]
+    ]);
+    if (from)
+      scopedEngines.set(FROM, { queryAll: () => from });
+    const engines = engineTable(injected);
+    for (const [name, engine] of scopedEngines)
+      engines.set(name, engine);
+    let elements;
+    try {
+      checkEngines(injected, selector);
+      elements = injected.querySelectorAll(selector, root ?? injected.document);
+    } finally {
+      for (const name of scopedEngines.keys())
+        engines.delete(name);
+    }
+    if (request.strict && elements.length > 1)
+      return {
+        kind: "strict",
+        message: injected.strictModeViolationError(request.strict, elements).message
+      };
+    const [staleRef] = reached;
+    return {
+      kind: "staged",
+      matches: pinMatches(world, elements),
+      ...staleRef === undefined ? {} : { staleRef }
+    };
+  }
+  function pinMatches(world, matches) {
+    const { document: document2 } = world.injected;
+    const elements = [];
+    for (const match of matches) {
+      if (match === document2)
+        continue;
+      if (!(match instanceof Element))
+        throw new ProbeError("internal", "a stage matched a node that is neither an element nor this document");
+      elements.push(match);
+    }
+    const pins = world.pins.addAll(elements);
+    let next = 0;
+    return matches.map((match) => match === document2 ? "document" : { pin: pins[next++] ?? 0 });
+  }
+  function describePins(world, request, _root, nodes, output) {
+    const { injected } = world;
+    const elements = [];
+    for (const member of request.members) {
+      if (member === "document")
+        throw new ProbeError("internal", "describePins describes elements, never the document");
+      const element = held(world, member, nodes);
+      if (!(element instanceof Element))
+        return { kind: "detached" };
+      elements.push(element);
+    }
+    const [first] = elements;
+    const items = first ? output.tree(first, () => elements.map((element) => ({
+      preview: injected.previewNode(element),
+      aka: asLocator(SDK_LANGUAGE, injected.generateSelectorSimple(element))
+    }))) : [];
+    return {
+      kind: "pinsDescribed",
+      ...request.chunk ? { locator: asLocator(SDK_LANGUAGE, stringifySelector(request.chunk)) } : {},
+      items
+    };
   }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/urlMatch.ts
@@ -11828,7 +12072,11 @@ ${value.stack}`;
     setContent: replaceDocument,
     armInput,
     inputArrived,
-    webStorage
+    webStorage,
+    stage,
+    describePins,
+    coverSurvey,
+    privateMarks
   };
   var UNINSTALLED = { kind: "uninstalled" };
   function described2(world) {

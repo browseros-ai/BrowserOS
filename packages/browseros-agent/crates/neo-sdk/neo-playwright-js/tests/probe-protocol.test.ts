@@ -116,7 +116,8 @@ it('tests that every example request gets a reply its op allows from the built p
         NEEDS_A_BROWSER.has(op) ||
         (request.op === 'document' && request.includeShadow === true) ||
         // A survey needs real viewport points and pointer hits; linkedom has no layout.
-        (request.op === 'snapshot' && request.surveyCovers === true)
+        (request.op === 'snapshot' && request.surveyCovers === true) ||
+        request.op === 'coverSurvey'
       if (
         !unbuilt &&
         !needsBrowser &&

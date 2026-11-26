@@ -16,12 +16,13 @@ import { isInvalidSelectorError } from '../../../neo-playwright/third_party/play
 import { act, disarm, frameBox, listenForMoves, moves, verdict } from './act'
 import { RefMap } from './aria-ref'
 import { cover } from './cover'
+import { coverSurvey } from './cover-survey'
 import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
 import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
-import { privateStep } from './private-entry'
+import { privateMarks, privateStep } from './private-entry'
 import { look } from './private-look'
 import {
   type BootOptions,
@@ -43,6 +44,7 @@ import { generatedSelector, pinned, resolve } from './resolve'
 import { screenshotMask, screenshotMaskCleanup } from './screenshot'
 import { installShadowRoots } from './shadow-roots'
 import { snapshot } from './snapshot'
+import { describePins, stage } from './stage'
 import { matchUrl } from './url'
 import { webStorage } from './web-storage'
 import {
@@ -93,6 +95,10 @@ const HANDLERS: Handlers = {
   armInput,
   inputArrived,
   webStorage,
+  stage,
+  describePins,
+  coverSurvey,
+  privateMarks,
 }
 
 const UNINSTALLED: Uninstalled = { kind: 'uninstalled' }

@@ -21,7 +21,7 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * answering the old way. `boot` reports it, and an install whose number differs from Rust's
  * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 53
+export const PROTOCOL = 54
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -64,6 +64,10 @@ export type InputArrivedRequest = RequestOf<'inputArrived'>
 export type ScreenshotMaskRequest = RequestOf<'screenshotMask'>
 export type ScreenshotMaskCleanupRequest = RequestOf<'screenshotMaskCleanup'>
 export type WebStorageRequest = RequestOf<'webStorage'>
+export type StageRequest = RequestOf<'stage'>
+export type DescribePinsRequest = RequestOf<'describePins'>
+export type CoverSurveyRequest = RequestOf<'coverSurvey'>
+export type PrivateMarksRequest = RequestOf<'privateMarks'>
 
 export type Described = Extract<ProbeReply, { kind: 'described' }>
 export type NoMatch = Extract<ProbeReply, { kind: 'none' }>
@@ -89,6 +93,10 @@ export type ExpectPoll = Extract<ProbeReply, { kind: 'expect' }>
 export type UrlMatch = Extract<ProbeReply, { kind: 'urlMatch' }>
 export type DocumentText = Extract<ProbeReply, { kind: 'documentText' }>
 export type Replaced = Extract<ProbeReply, { kind: 'replaced' }>
+export type Staged = Extract<ProbeReply, { kind: 'staged' }>
+export type PinsDescribed = Extract<ProbeReply, { kind: 'pinsDescribed' }>
+export type Surveyed = Extract<ProbeReply, { kind: 'surveyed' }>
+export type Marks = Extract<ProbeReply, { kind: 'marks' }>
 export type ErrorReply = Extract<ProbeReply, { kind: 'error' }>
 export type Uninstalled = Extract<ProbeReply, { kind: 'uninstalled' }>
 
@@ -118,6 +126,10 @@ export const REPLY_KINDS = {
   screenshotMask: ['value'],
   screenshotMaskCleanup: ['value'],
   webStorage: ['value'],
+  stage: ['staged', 'strict', 'detached'],
+  describePins: ['pinsDescribed', 'detached'],
+  coverSurvey: ['surveyed'],
+  privateMarks: ['marks'],
 } as const satisfies Record<ValueOp, readonly ReplyKind[]>
 
 /** Everything a by-value request may answer, including universal failure replies. */
