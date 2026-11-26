@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 
-use neo_snapshot_apc::proto::{AnnotatedRole, BrowserOsTriState, FormControlType};
+use neo_snapshot_apc::proto::{AnnotatedRole, BrowserOsTriState, FormControlType, SelectOption};
 use neo_snapshot_apc::select::{
     AccessibleText, NestedSelectorBody, ParsedSelector, RefResolver, Scope, SelectorBody,
     SelectorPart, StrictPreview, TreeMatches, TreeStage, TreeStageError,
@@ -113,8 +113,8 @@ impl Page {
         doms.iter().map(|&dom| self.node(dom)).collect()
     }
 
-    /// The `index`th child of the main-document node `parent`: how a test finds the option
-    /// nodes chunk 5 synthesizes, which have no DOM id.
+    /// The `index`th child of the main-document node `parent`: how a test finds a collapsed
+    /// select's option slots, which have no DOM id.
     fn child(&self, parent: i32, index: usize) -> Result<NodeId, Box<dyn Error>> {
         Ok(self
             .tree
@@ -188,10 +188,31 @@ fn input(dom: i32, control: FormControlType) -> NodeBuilder {
     NodeBuilder::form_control(control).tag("input").dom_id(dom)
 }
 
-/// An `<option>` of a collapsed `<select>` as engine chunk 5 will synthesize it from the select's
-/// `select_options`: a node of its own with no DOM id (design 3.5).
-fn synthesized_option() -> NodeBuilder {
-    NodeBuilder::element("option").without_dom_id()
+/// A collapsed `<select>` as Chromium sends it: its options as `select_options` entries, which
+/// the tree turns into option slots, the select's last children (design 3.5).
+fn collapsed_select(dom: i32, entries: Vec<SelectOption>) -> NodeBuilder {
+    entries
+        .into_iter()
+        .fold(el("select", dom), NodeBuilder::select_option)
+}
+
+/// What Chromium reads of an option besides its text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marked {
+    Plain,
+    Selected,
+    /// `IsDisabledFormControl()`: its own `disabled`, or its `<optgroup>`'s.
+    Disabled,
+}
+
+/// One `select_options` entry, as Chromium sends it for an option with this text.
+fn entry(text: &str, marked: Marked) -> SelectOption {
+    SelectOption {
+        value: Some(text.to_owned()),
+        text: Some(text.to_owned()),
+        is_selected: Some(marked == Marked::Selected),
+        is_disabled: Some(marked == Marked::Disabled),
+    }
 }
 
 /// A slot of browser-made shadow content, such as a `<details>` element's content slot.
@@ -251,10 +272,10 @@ mod selectors_role_spec {
     fn should_support_selected() -> Result<(), Box<dyn Error>> {
         let js = Prelude::load()?;
         let page = Page::new(NodeBuilder::root().children(vec![
-            el("select", 10).children(vec![
-                synthesized_option().selected(false),
-                synthesized_option().selected(true),
-            ]),
+            collapsed_select(
+                10,
+                vec![entry("Hi", Marked::Plain), entry("Hello", Marked::Selected)],
+            ),
             plain(13).children(vec![
                 plain(14).role("option").selected(true),
                 plain(15).role("option").selected(false),
@@ -441,13 +462,16 @@ mod selectors_role_spec {
             el("fieldset", 14)
                 .contract_disabled(true)
                 .child(button(15, "Yay").contract_disabled(true)),
-            el("select", 16).children(vec![
-                // `<optgroup disabled><option>one</option></optgroup>`: Chromium marks the
-                // option disabled through its group, and chunk 5 carries that fact over.
-                synthesized_option().contract_disabled(true),
-                synthesized_option(),
-                synthesized_option().contract_disabled(true),
-            ]),
+            collapsed_select(
+                16,
+                vec![
+                    // `<optgroup disabled><option>one</option></optgroup>`: Chromium marks the
+                    // entry disabled through its group, and the slot carries that fact.
+                    entry("one", Marked::Disabled),
+                    entry("two", Marked::Plain),
+                    entry("three", Marked::Disabled),
+                ],
+            ),
         ]))?;
         let (one, two, three) = (page.child(16, 0)?, page.child(16, 1)?, page.child(16, 2)?);
         for locator in [
@@ -632,13 +656,14 @@ mod selectors_role_spec {
                         input(26, FormControlType::InputText),
                     ])),
             ]),
-            // `<option style="display:none">Two</option>` is hidden for ARIA upstream and absent
-            // here, as D2 drops every element with no box; if chunk 5 synthesizes it from
-            // `select_options`, it must mark it hidden.
-            el("select", 27).children(vec![
-                synthesized_option().visibility_hidden(true),
-                synthesized_option(),
-            ]),
+            // Chromium lists `<option style="display:none">Two</option>` among the entries too, and
+            // upstream hides it. An entry carries no display fact, so its slot cannot be hidden:
+            // a contract gap, left out here so the page tests visibility. An entry carries no
+            // visibility either, and needs none: visibility never hides an option in a select.
+            collapsed_select(
+                27,
+                vec![entry("One", Marked::Plain), entry("Three", Marked::Plain)],
+            ),
         ]))?;
         let visible = page.nodes(&[10, 13, 18, 21])?;
         for locator in [
@@ -771,11 +796,17 @@ mod selectors_role_spec {
     #[test]
     fn should_support_option_name_with_html_whitespace() -> Result<(), Box<dyn Error>> {
         let js = Prelude::load()?;
-        // `<option>&nbsp;HTML</option>`: the option's text keeps the U+00A0, and its name comes
-        // from that content.
-        let page = Page::new(NodeBuilder::root().child(
-            el("select", 10).child(synthesized_option().child(NodeBuilder::text("\u{a0}HTML"))),
-        ))?;
+        // `<option value="html">&nbsp;HTML</option>`: the entry's text keeps the U+00A0, and the
+        // option's name comes from that content.
+        let page = Page::new(NodeBuilder::root().child(collapsed_select(
+            10,
+            vec![SelectOption {
+                value: Some("html".to_owned()),
+                text: Some("\u{a0}HTML".to_owned()),
+                is_selected: Some(true),
+                is_disabled: Some(false),
+            }],
+        )))?;
         let option = page.child(10, 0)?;
         let count = page
             .select(&js, "page.getByRole('option', { name: 'HTML' })")?

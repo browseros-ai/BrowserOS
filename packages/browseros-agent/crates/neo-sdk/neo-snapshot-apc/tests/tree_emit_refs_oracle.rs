@@ -616,7 +616,7 @@ fn measure_printed_nodes(
                     printed_options(tree_node),
                     printed_options(oracle_node),
                     "{} node {bid}: a collapsed select's options are synthesized from \
-                     select_options (fold.rs SyntheticOption) as Playwright lists them",
+                     select_options (tree/option_slot.rs) as Playwright lists them",
                     page.name
                 );
             }

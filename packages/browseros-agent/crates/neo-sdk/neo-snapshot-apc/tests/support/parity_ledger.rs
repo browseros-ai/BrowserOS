@@ -125,7 +125,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         tree: "",
         cause: Cause::RustRule,
         why: "a collapsed <select>'s options have no box and no APC node. Chunk 5 \
-              (tree-emit-refs) synthesizes them from select_options as fold.rs SyntheticOption \
+              (tree-emit-refs) synthesizes them from select_options as option slots \
               (apc-engine-design 3.5); one has no DOM id, so a follow-up joins it to the oracle \
               by select and index and removes these entries",
         nodes: &[

@@ -11,7 +11,7 @@ use super::node_key::{DocId, DomNodeId, NodeId, NodeKey};
 use super::role::Role;
 use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
-use super::{hidden, name, role};
+use super::{hidden, role};
 
 const FLAG_CLICKABLE: u8 = 1 << 0;
 const FLAG_PRUNABLE: u8 = 1 << 1;
@@ -30,64 +30,6 @@ pub struct ClickProxy {
     pub label_node: NodeId,
     /// Composite cross-frame key of [`Self::label_node`].
     pub label_key: NodeKey,
-}
-
-/// Option synthesized from [`FormControlData::select_options`] for a native menu-list `<select>`
-/// whose same-document subtree contains no real `<option>` elements.
-///
-/// Its manual `Debug` implementation prints structural indices, boolean states, and byte length
-/// only, never option label text.
-#[derive(Clone, PartialEq, Eq)]
-pub struct SyntheticOption {
-    select_node: NodeId,
-    index: usize,
-    name: String,
-    selected: bool,
-    disabled: bool,
-}
-
-impl SyntheticOption {
-    /// Arena index of the owning `<select>` node.
-    #[must_use]
-    pub const fn select_node(&self) -> NodeId {
-        self.select_node
-    }
-
-    /// Zero-based position of this option inside the `<select>`'s option list.
-    #[must_use]
-    pub const fn index(&self) -> usize {
-        self.index
-    }
-
-    /// Normalized accessible option label text.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Whether this synthesized option is currently selected.
-    #[must_use]
-    pub const fn selected(&self) -> bool {
-        self.selected
-    }
-
-    /// Whether this synthesized option is disabled.
-    #[must_use]
-    pub const fn disabled(&self) -> bool {
-        self.disabled
-    }
-}
-
-impl fmt::Debug for SyntheticOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SyntheticOption")
-            .field("select_node", &self.select_node)
-            .field("index", &self.index)
-            .field("name_len", &self.name.len())
-            .field("selected", &self.selected)
-            .field("disabled", &self.disabled)
-            .finish()
-    }
 }
 
 /// Iterative walker over direct logical children of a [`TreeNode`] in flat-tree preorder within
@@ -161,16 +103,13 @@ impl fmt::Debug for LogicalChildrenIter<'_> {
 
 /// Precomputed logical folding and pruning overlay over a `SnapshotTree`'s flat-tree arena.
 ///
-/// Keeps raw arena indices intact while exposing synthesized `<select>` options, zero-size control
-/// [`ClickProxy`] pairings, folded-label targets, clickable-container flags, plain-container
+/// Keeps raw arena indices intact while exposing zero-size control [`ClickProxy`] pairings, folded-label targets, clickable-container flags, plain-container
 /// pruning decisions, and `ua_shadow`-transparent logical child iteration. Its manual `Debug`
-/// implementation prints counts only, never page text or option names.
+/// implementation prints counts only, never page text.
 pub struct FoldInfo {
     click_proxies: Vec<ClickProxy>,
     click_proxy_index: HashMap<NodeId, usize>,
     folded_label_for: HashMap<NodeId, NodeId>,
-    synthetic_options: HashMap<NodeId, Vec<SyntheticOption>>,
-    synthetic_option_count: usize,
     node_flags: Vec<u8>,
     clickable_count: usize,
     prunable_count: usize,
@@ -196,15 +135,6 @@ impl FoldInfo {
     #[must_use]
     pub fn folded_label_target(&self, label: NodeId) -> Option<NodeId> {
         self.folded_label_for.get(&label).copied()
-    }
-
-    /// Returns synthesized [`SyntheticOption`] entries for `select_node`, or an empty slice if the
-    /// node is not a menu-list `<select>` requiring option synthesis.
-    #[must_use]
-    pub fn synthetic_options(&self, select_node: NodeId) -> &[SyntheticOption] {
-        self.synthetic_options
-            .get(&select_node)
-            .map_or(&[], Vec::as_slice)
     }
 
     /// Whether `node` is a non-text, non-`ua_shadow` element whose `clickability_reasons` carry
@@ -245,8 +175,6 @@ impl fmt::Debug for FoldInfo {
         f.debug_struct("FoldInfo")
             .field("click_proxy_count", &self.click_proxies.len())
             .field("folded_label_count", &self.folded_label_for.len())
-            .field("synthetic_select_count", &self.synthetic_options.len())
-            .field("synthetic_option_count", &self.synthetic_option_count)
             .field("clickable_count", &self.clickable_count)
             .field("prunable_count", &self.prunable_count)
             .finish_non_exhaustive()
@@ -276,8 +204,6 @@ pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
         click_proxies: proxies.click_proxies,
         click_proxy_index: proxies.click_proxy_index,
         folded_label_for: proxies.folded_label_for,
-        synthetic_options: top_down.synthetic_options,
-        synthetic_option_count: top_down.synthetic_option_count,
         node_flags: top_down.node_flags,
         clickable_count: top_down.clickable_count,
         prunable_count: top_down.prunable_count,
@@ -285,7 +211,6 @@ pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
 }
 
 struct DescendantSummary {
-    has_real_option: Vec<bool>,
     first_labelable: Vec<Option<NodeId>>,
     has_live: Vec<bool>,
     /// Whether a same-document descendant is a target the page draws ([`is_drawn_target`]): what
@@ -296,8 +221,6 @@ struct DescendantSummary {
 struct TopDownSummary {
     labels_for: HashMap<(DocId, DomNodeId), Vec<NodeId>>,
     nearest_ancestor_unlinked_label: Vec<Option<NodeId>>,
-    synthetic_options: HashMap<NodeId, Vec<SyntheticOption>>,
-    synthetic_option_count: usize,
     node_flags: Vec<u8>,
     clickable_count: usize,
     prunable_count: usize,
@@ -384,7 +307,6 @@ fn is_unlinked_label(node: &TreeNode) -> bool {
 }
 
 fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
-    let mut has_real_option = vec![false; nodes.len()];
     let mut first_labelable: Vec<Option<NodeId>> = vec![None; nodes.len()];
     let mut has_live = vec![false; nodes.len()];
     let mut has_drawn_target_below = vec![false; nodes.len()];
@@ -396,18 +318,6 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
         let Some(parent_id) = same_doc_parent(nodes, node) else {
             continue;
         };
-
-        let is_real_option = node.raw_attributes().is_some_and(|raw| {
-            !hidden::is_text_node(raw)
-                && !hidden::is_ua_shadow(raw)
-                && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
-        });
-        let child_has_option = has_real_option.get(index).copied().unwrap_or(false);
-        if (is_real_option || child_has_option)
-            && let Some(parent_slot) = has_real_option.get_mut(parent_id.index())
-        {
-            *parent_slot = true;
-        }
 
         let is_live_element = node.raw_attributes().is_some_and(|raw| {
             !hidden::is_text_node(raw) && !hidden::is_ua_shadow(raw) && !node.state().inert()
@@ -440,7 +350,6 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
     }
 
     DescendantSummary {
-        has_real_option,
         first_labelable,
         has_live,
         has_drawn_target_below,
@@ -480,51 +389,6 @@ const fn is_section_role(role: Role) -> bool {
             | Role::Region
             | Role::Article
     )
-}
-
-fn synthesize_select_options(
-    select_node: NodeId,
-    raw: &ContentAttributes,
-    has_real_option: bool,
-) -> Option<Vec<SyntheticOption>> {
-    if has_real_option {
-        return None;
-    }
-    let tag = hidden::raw_tag(raw)?;
-    if !tag.eq_ignore_ascii_case("select") {
-        return None;
-    }
-    let is_list_box = raw
-        .browseros
-        .as_deref()
-        .is_some_and(|browseros| browseros.list_box == Some(true));
-    if is_list_box {
-        return None;
-    }
-    let control = form_control_data(raw)?;
-    if control.select_options.is_empty() {
-        return None;
-    }
-
-    let options = control
-        .select_options
-        .iter()
-        .enumerate()
-        .map(|(index, opt)| {
-            let raw_label = match opt.text.as_deref() {
-                Some(text) => text,
-                None => opt.value.as_deref().unwrap_or(""),
-            };
-            SyntheticOption {
-                select_node,
-                index,
-                name: name::normalize_whitespace(raw_label),
-                selected: opt.is_selected == Some(true),
-                disabled: opt.is_disabled == Some(true),
-            }
-        })
-        .collect();
-    Some(options)
 }
 
 fn is_clickable_element(raw: &ContentAttributes) -> bool {
@@ -617,8 +481,6 @@ fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDow
     let mut nearest_ancestor_unlinked_label: Vec<Option<NodeId>> = Vec::with_capacity(nodes.len());
     let mut unlinked_label_for_descendants: Vec<Option<NodeId>> = Vec::with_capacity(nodes.len());
     let mut logical_inert_for_descendants: Vec<bool> = Vec::with_capacity(nodes.len());
-    let mut synthetic_options: HashMap<NodeId, Vec<SyntheticOption>> = HashMap::new();
-    let mut synthetic_option_count: usize = 0;
     let mut node_flags: Vec<u8> = Vec::with_capacity(nodes.len());
     let mut clickable_count: usize = 0;
     let mut prunable_count: usize = 0;
@@ -671,16 +533,6 @@ fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDow
                 .push(node.id());
         }
 
-        let has_real_option = bottom_up
-            .has_real_option
-            .get(index)
-            .copied()
-            .unwrap_or(false);
-        if let Some(options) = synthesize_select_options(node.id(), raw, has_real_option) {
-            synthetic_option_count += options.len();
-            synthetic_options.insert(node.id(), options);
-        }
-
         let parent_raw = parent_id
             .and_then(|pid| nodes.get(pid.index()))
             .and_then(TreeNode::raw_attributes);
@@ -712,8 +564,6 @@ fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDow
     TopDownSummary {
         labels_for,
         nearest_ancestor_unlinked_label,
-        synthetic_options,
-        synthetic_option_count,
         node_flags,
         clickable_count,
         prunable_count,
@@ -892,7 +742,7 @@ mod tests {
 
     use crate::proto::{
         AnnotatedRole, BrowserOsContentAttributes, BrowserOsRef, ClickabilityReason,
-        FormControlType, SelectOption,
+        FormControlType,
     };
     use crate::tree::{
         ApcBuilder, BuildOptions, DocToken, DomNodeId, FrameBuilder, NodeBuilder, NodeId, NodeKey,
@@ -992,149 +842,6 @@ mod tests {
             .logical_children(tree.nodes(), NodeId::new(9_999))
             .collect();
         assert!(oob.is_empty(), "out-of-bounds NodeId must yield empty");
-        Ok(())
-    }
-
-    #[test]
-    fn synthetic_select_options_normalize_text_and_redact_debug() -> Result<(), Box<dyn Error>> {
-        let secret_opt = "SECRET_OPTION_TEXT_42";
-        let tree = build_tree(
-            NodeBuilder::root().dom_id(1).child(
-                NodeBuilder::form_control(FormControlType::SelectOne)
-                    .tag("select")
-                    .dom_id(10)
-                    .select_option(SelectOption {
-                        value: Some("v1".to_owned()),
-                        text: Some(format!("  {secret_opt}\u{00A0}A  ")),
-                        is_selected: Some(true),
-                        is_disabled: Some(false),
-                    })
-                    .select_option(SelectOption {
-                        value: Some("  Fallback\tValue  ".to_owned()),
-                        text: None,
-                        is_selected: None,
-                        is_disabled: Some(true),
-                    })
-                    .select_option(SelectOption {
-                        value: Some("unused-value".to_owned()),
-                        text: Some(String::new()),
-                        is_selected: Some(false),
-                        is_disabled: None,
-                    }),
-            ),
-        )?;
-
-        let fold = compute_fold(tree.nodes(), tree.documents());
-        let menu_select = node_id(&tree, "doc-main", 10)?;
-        let synth = fold.synthetic_options(menu_select);
-        assert_eq!(synth.len(), 3, "menu-list select must synthesize 3 options");
-
-        let first = synth.first().ok_or("missing first synthetic option")?;
-        assert_eq!(first.select_node(), menu_select);
-        assert_eq!(first.index(), 0);
-        assert_eq!(first.name(), format!("{secret_opt} A"));
-        assert!(first.selected());
-        assert!(!first.disabled());
-
-        let second = synth.get(1).ok_or("missing second synthetic option")?;
-        assert_eq!(second.index(), 1);
-        assert_eq!(second.name(), "Fallback Value");
-        assert!(!second.selected());
-        assert!(second.disabled());
-
-        let third = synth.get(2).ok_or("missing third synthetic option")?;
-        assert_eq!(third.index(), 2);
-        assert_eq!(
-            third.name(),
-            "",
-            "explicit empty text must not fall back to value"
-        );
-
-        let opt_dbg = format!("{first:?}");
-        let fold_dbg = format!("{fold:?}");
-        assert!(
-            !opt_dbg.contains(secret_opt),
-            "SyntheticOption Debug must never expose option name text"
-        );
-        assert!(
-            !fold_dbg.contains(secret_opt),
-            "FoldInfo Debug must never expose option name text"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn synthetic_select_options_skip_listbox_and_real_options_within_same_doc()
-    -> Result<(), Box<dyn Error>> {
-        let iframe_with_option = FrameBuilder::new("doc-iframe").root(
-            NodeBuilder::root()
-                .dom_id(1)
-                .child(NodeBuilder::element("option").dom_id(2)),
-        );
-
-        let tree = build_tree(
-            NodeBuilder::root()
-                .dom_id(1)
-                .child(
-                    NodeBuilder::form_control(FormControlType::SelectMultiple)
-                        .tag("select")
-                        .dom_id(20)
-                        .list_box(true)
-                        .select_option(SelectOption {
-                            value: Some("lb".to_owned()),
-                            text: Some("ShouldNotSynthesize".to_owned()),
-                            is_selected: Some(true),
-                            is_disabled: None,
-                        }),
-                )
-                .child(
-                    NodeBuilder::form_control(FormControlType::SelectOne)
-                        .tag("select")
-                        .dom_id(30)
-                        .select_option(SelectOption {
-                            value: Some("dup".to_owned()),
-                            text: Some("Duplicate".to_owned()),
-                            is_selected: Some(true),
-                            is_disabled: None,
-                        })
-                        .child(
-                            NodeBuilder::element("optgroup")
-                                .dom_id(31)
-                                .child(NodeBuilder::element("option").dom_id(32)),
-                        ),
-                )
-                .child(
-                    NodeBuilder::form_control(FormControlType::SelectOne)
-                        .tag("select")
-                        .dom_id(40)
-                        .select_option(SelectOption {
-                            value: Some("x".to_owned()),
-                            text: Some("CrossDocAllowed".to_owned()),
-                            is_selected: Some(false),
-                            is_disabled: None,
-                        })
-                        .child(NodeBuilder::iframe(iframe_with_option).dom_id(41)),
-                ),
-        )?;
-
-        let fold = compute_fold(tree.nodes(), tree.documents());
-        let listbox_select = node_id(&tree, "doc-main", 20)?;
-        let real_opt_select = node_id(&tree, "doc-main", 30)?;
-        let iframe_select = node_id(&tree, "doc-main", 40)?;
-
-        assert!(
-            fold.synthetic_options(listbox_select).is_empty(),
-            "list_box == Some(true) must never synthesize options"
-        );
-        assert!(
-            fold.synthetic_options(real_opt_select).is_empty(),
-            "select with real descendant <option> must not synthesize options"
-        );
-        assert_eq!(
-            fold.synthetic_options(iframe_select).len(),
-            1,
-            "<option> inside nested child_doc iframe must not suppress synthesis"
-        );
         Ok(())
     }
 

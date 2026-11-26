@@ -14,7 +14,6 @@ use crate::proto::{
 };
 use crate::refs::TabRefTable;
 
-use super::fold::SyntheticOption;
 use super::hidden;
 use super::mask::{self, MaskSource, NodeMask};
 use super::name::{self, NameCache, NameVisibility};
@@ -155,23 +154,6 @@ impl StateForm {
                 draft.level = level.filter(|&level| level > 0).map(Number::from);
                 draft.pressed = pressed.filter(|&pressed| pressed != Tristate::False);
                 draft.selected = state.selected().filter(|&selected| selected);
-            }
-        }
-    }
-
-    /// Writes a `<select>`'s synthesized option's states onto `draft`. Role `option` owns
-    /// `checked`, `disabled` and `selected`; the option carries no `aria-checked`, so upstream's
-    /// `getAriaChecked` reads it `false`.
-    fn write_option(self, option: &SyntheticOption, draft: &mut DraftNode) {
-        match self {
-            Self::Explicit => {
-                draft.checked = Some(Tristate::False);
-                draft.disabled = Some(option.disabled());
-                draft.selected = Some(option.selected());
-            }
-            Self::Wire => {
-                draft.disabled = option.disabled().then_some(true);
-                draft.selected = option.selected().then_some(true);
             }
         }
     }
@@ -1454,7 +1436,6 @@ fn visit_element_node(
 
     let child_suppress = populate_field_value_and_mask(node, raw, &mut draft, frame.flags);
     let draft_idx = ctx.arena.push(draft);
-    push_synthetic_options(ctx.tree, node, draft_idx, ctx.state_form, &mut ctx.arena);
     ctx.arena
         .push_child(frame.parent_draft, DraftChild::Node(draft_idx));
 
@@ -1549,28 +1530,6 @@ fn populate_field_value_and_mask(
     }
 
     flags.suppress_text()
-}
-
-fn push_synthetic_options(
-    tree: &SnapshotTree,
-    select_node: &TreeNode,
-    select_draft_idx: usize,
-    state_form: StateForm,
-    arena: &mut DraftArena,
-) {
-    let synthetic = tree.fold().synthetic_options(select_node.id());
-    if synthetic.is_empty() {
-        return;
-    }
-    let flags = DraftFlags::default()
-        .with_element(true)
-        .with_inert(select_node.state().inert());
-    for opt in synthetic {
-        let mut draft = DraftNode::new("option", opt.name().to_owned(), flags);
-        state_form.write_option(opt, &mut draft);
-        let opt_idx = arena.push(draft);
-        arena.push_child(select_draft_idx, DraftChild::Node(opt_idx));
-    }
 }
 
 fn push_logical_children_reversed(

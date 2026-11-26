@@ -7,10 +7,11 @@
 //! error messages on demand via [`NameCache`]:
 //!
 //! ```text
-//!  AnnotatedPageContent ─▶ contract check ─▶ frame_stitch ─▶ hidden ─▶ roles ─▶ states ─▶ mask ─▶ fold ─▶ SnapshotTree ─▶ name (NameCache)
-//!                                                │                                                            ├─ nodes: Vec<TreeNode>  ─▶ aria_emit (AriaTree)
-//!                                                ├─ populated frame ──▶ TreeDoc                               ├─ docs: Vec<TreeDoc>
-//!                                                └─ omitted/redacted ─▶ PartialFrame                          └─ by_key / doc_by_token
+//!  AnnotatedPageContent ─▶ contract check ─▶ frame_stitch ─▶ hidden ─▶ roles ─▶ states ─▶ mask ─▶ withhold ─▶ fold ─▶ SnapshotTree ─▶ name (NameCache)
+//!                                                │                                                                        ├─ nodes: Vec<TreeNode>  ─▶ aria_emit (AriaTree)
+//!                                                ├─ populated frame ───▶ TreeDoc                                          ├─ docs: Vec<TreeDoc>
+//!                                                ├─ omitted/redacted ──▶ PartialFrame                                     └─ by_key / doc_by_token
+//!                                                └─ collapsed <select> ─▶ option slots (OptionSlot)
 //! ```
 //!
 //! Key invariants enforced here:
@@ -18,12 +19,17 @@
 //! - **Zero recursion:** [`frame_stitch`], [`hidden`], [`role`], [`state`], [`mask`], [`fold`],
 //!   [`name`], and [`aria_emit`] run iteratively so arbitrarily deep DOM and iframe trees cannot
 //!   overflow the call stack.
+//! - **One identity per element:** a collapsed `<select>`'s options, which APC sends as data on
+//!   the select, are arena nodes like any other ([`option_slot`]), so selection, names and the
+//!   emitter read them by [`NodeId`]. They have no `DomNodeId`; the page reaches one through its
+//!   select and index ([`OptionSlot`]), and a pinned `<option>` finds its slot through
+//!   [`SnapshotTree::node_at`].
 //! - **Document-scoped identity:** raw `DomNodeId` values collide across iframes, so external
 //!   lookups, inheritance walks, relation resolution, and containment checks always stay scoped to
 //!   one document.
 //! - **Privacy-safe diagnostics:** [`SnapshotTree`], [`TreeDoc`], [`TreeNode`], [`Hidden`],
 //!   [`Role`], [`State`], [`NodeMask`], [`PrivateNodes`], [`SiteKey`], [`FoldInfo`],
-//!   [`SyntheticOption`], [`Name`], [`Description`], [`NameCache`], [`AriaTree`], and
+//!   [`OptionSlot`], [`Name`], [`Description`], [`NameCache`], [`AriaTree`], and
 //!   [`AriaPartialFrame`] print only structural IDs, tokens, closed enums, booleans, and counts
 //!   or lengths.
 
@@ -37,6 +43,7 @@ mod hidden;
 mod mask;
 mod name;
 mod node_key;
+mod option_slot;
 mod private_nodes;
 mod role;
 mod site_key;
@@ -51,13 +58,14 @@ pub use aria_emit::{
     AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, AriaTooDeep, AriaTree, MAX_JSON_DEPTH,
 };
 pub use build_error::BuildError;
-pub use fold::{ClickProxy, FoldInfo, LogicalChildrenIter, SyntheticOption};
+pub use fold::{ClickProxy, FoldInfo, LogicalChildrenIter};
 pub use hidden::Hidden;
 pub use mask::{MAX_REDACTED_BULLETS, MaskSource, NodeMask};
 pub use name::{
     Description, Name, NameCache, NameVisibility, as_flat_string, normalize_whitespace,
 };
 pub use node_key::{DocId, DocSeq, DocToken, DomNodeId, FrameToken, NodeId, NodeKey, NodeRange};
+pub use option_slot::{ElementPlace, OptionPlace, OptionSlot};
 pub use private_nodes::PrivateNodes;
 pub use role::Role;
 pub use site_key::SiteKey;
