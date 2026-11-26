@@ -104,8 +104,9 @@ pub(crate) trait ChunkPage {
     /// a frame hop enters. `None` when it is gone.
     async fn hydrate(&mut self, node: NodeId) -> Result<Option<Pin>, Self::Error>;
 
-    /// The key of each pinned element, in order (`probe::pinned_nodes` and the document token
-    /// the world is proven to hold): `None` when one is gone.
+    /// The key of each pinned element, in order (`probe::pinned_nodes_in_document` and the
+    /// document token the world is proven to hold): `None` when one is gone, evicted or out of
+    /// the world's document.
     async fn keys(&mut self, pins: &[Pin]) -> Result<Option<Vec<NodeKey>>, Self::Error>;
 }
 

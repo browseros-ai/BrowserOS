@@ -1,10 +1,10 @@
 //! The scripted tab that `TabTree`'s and `ChunkWorld`'s tests share: a fake CDP connection
 //! whose world installs each get their own context and global, whose captures answer queued APC
-//! replies, and whose hydration answers (`DOM.resolveNode`, and the probe's `resolve`, `stage`,
-//! `describePins` and batched `pinned`) each test configures; plus the encoders for those APC
-//! replies.
+//! replies, and whose hydration answers (`DOM.resolveNode`, and the probe's `resolve`, `stage`
+//! and `describePins`) each test configures; the batched `pinned` reads answer from the pins the
+//! probe holds and where their elements are. Plus the encoders for those APC replies.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -19,6 +19,11 @@ use serde_json::{Value, json};
 
 use crate::probe::PROBE_PROTOCOL;
 use crate::test_support::{ProbeAnswer, SCRIPTED_CHILD, SCRIPTED_MAIN, TabScript, TestResult};
+use crate::world::Pin;
+
+/// The condition a batched `pinned` read's function applies when it answers only elements of
+/// the world's own document (`probe::pinned_nodes_in_document`), as the page would run it.
+const IN_DOCUMENT: &str = "node.isConnected && node.ownerDocument === document";
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -204,7 +209,13 @@ pub(super) struct TreeScript {
     resolve_node_error: Mutex<Option<&'static str>>,
     resolve_probe_error: Mutex<Option<&'static str>>,
     resolve_probe_reply: Mutex<Option<Value>>,
-    pinned_nodes_reply: Mutex<Option<Value>>,
+    /// The backend node id of the element under each pin the probe holds: every element a
+    /// `resolve` pinned, and the pins a test hands the page ([`Self::hold_pin`]). A pin not
+    /// here is one the probe evicted.
+    held_pins: Mutex<HashMap<u32, i64>>,
+    /// Held pins whose element the page moved out of the world's document: the probe still
+    /// answers them by pin, and an in-document read answers null.
+    moved_out: Mutex<HashSet<u32>>,
     next_pin: AtomicU32,
     rekey_first_main: AtomicBool,
     rekey_retired_seq: u32,
@@ -228,8 +239,9 @@ pub(super) struct TreeScript {
 }
 
 /// One probe request a `Runtime.callFunctionOn` carried: its op (`pinned` for the batch
-/// `probe::pinned_nodes` sends) and the call's `arguments`: the envelope, then the call's root
-/// and the nodes it hands over, when it has any.
+/// `probe::pinned_nodes` sends, `pinnedInDocument` for `probe::pinned_nodes_in_document`'s) and
+/// the call's `arguments`: the envelope, then the call's root and the nodes it hands over, when
+/// it has any.
 #[derive(Clone)]
 pub(super) struct ProbeSent {
     pub(super) op: String,
@@ -258,7 +270,8 @@ impl TreeScript {
             resolve_node_error: Mutex::default(),
             resolve_probe_error: Mutex::default(),
             resolve_probe_reply: Mutex::default(),
-            pinned_nodes_reply: Mutex::default(),
+            held_pins: Mutex::default(),
+            moved_out: Mutex::default(),
             next_pin: AtomicU32::new(1),
             rekey_first_main: AtomicBool::new(false),
             rekey_retired_seq: 0,
@@ -327,11 +340,22 @@ impl TreeScript {
             .unwrap_or_else(PoisonError::into_inner) = reply;
     }
 
-    pub(super) fn set_pinned_nodes_reply(&self, reply: Value) {
-        *self
-            .pinned_nodes_reply
+    /// The probe holds `pin` for the element `backend_node_id`, as for a pin a `stage` reply
+    /// names.
+    pub(super) fn hold_pin(&self, pin: Pin, backend_node_id: i32) {
+        self.held_pins
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(reply);
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(pin.0, i64::from(backend_node_id));
+    }
+
+    /// The page moves `pin`'s element out of the world's document (into another document, or
+    /// out of the page) while the probe still holds it.
+    pub(super) fn move_out_of_document(&self, pin: Pin) {
+        self.moved_out
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(pin.0);
     }
 
     pub(super) fn set_after_world_install(&self, hook: impl Fn() + Send + Sync + 'static) {
@@ -450,14 +474,19 @@ impl TreeScript {
         let object_id = params["objectId"].as_str().unwrap_or_default();
         let first = &params["arguments"][0]["value"];
 
-        // Batch pinned_nodes call (array of envelopes): mark_private_pins and a chunk run's keys.
-        if first.is_array() {
-            self.record_probe("pinned", params);
-            return self
-                .pinned_nodes_reply
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
+        // A batched `pinned` read (an array of envelopes): mark_private_pins, a chunk run's keys
+        // and a hydration's document check.
+        if let Some(calls) = first.as_array() {
+            let in_document = params["functionDeclaration"]
+                .as_str()
+                .is_some_and(|function| function.contains(IN_DOCUMENT));
+            let op = if in_document {
+                "pinnedInDocument"
+            } else {
+                "pinned"
+            };
+            self.record_probe(op, params);
+            return Some(self.pinned_batch(calls, in_document));
         }
 
         if let Some(seq) = first["frameSeq"].as_u64() {
@@ -506,27 +535,72 @@ impl TreeScript {
                     "src": "https://a.test/child",
                 })
             }
-            "resolve" => self
-                .resolve_probe_reply
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone()
-                .unwrap_or_else(|| {
-                    let pin = self.next_pin.fetch_add(1, Ordering::SeqCst);
-                    let root_obj = params["arguments"][1]["objectId"]
-                        .as_str()
-                        .unwrap_or("node");
-                    json!({
-                        "kind": "element",
-                        "pin": pin,
-                        "preview": format!("<button data-obj=\"{root_obj}\">Go</button>"),
-                    })
-                }),
+            "resolve" => {
+                let root_obj = params["arguments"][1]["objectId"]
+                    .as_str()
+                    .unwrap_or("node");
+                let reply = self
+                    .resolve_probe_reply
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone()
+                    .unwrap_or_else(|| {
+                        let pin = self.next_pin.fetch_add(1, Ordering::SeqCst);
+                        json!({
+                            "kind": "element",
+                            "pin": pin,
+                            "preview": format!("<button data-obj=\"{root_obj}\">Go</button>"),
+                        })
+                    });
+                if reply["kind"] == "element"
+                    && let Some(pin) = reply["pin"]
+                        .as_u64()
+                        .and_then(|pin| u32::try_from(pin).ok())
+                    && let Some(backend) = resolved_backend_id(root_obj)
+                {
+                    self.held_pins
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(pin, backend);
+                }
+                reply
+            }
             _ => return None,
         };
         Some(json!({
             "result": { "type": "string", "value": reply.to_string() }
         }))
+    }
+
+    /// The deep-serialized answer to a batched `pinned` read of `calls`: each held pin's
+    /// element by backend id, null for an evicted pin, and with `in_document` null too for an
+    /// element the page moved out of the world's document.
+    fn pinned_batch(&self, calls: &[Value], in_document: bool) -> Value {
+        let held = self
+            .held_pins
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let moved_out = self
+            .moved_out
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let nodes: Vec<Value> = calls
+            .iter()
+            .map(|call| {
+                let pin = call["request"]["pin"]
+                    .as_u64()
+                    .and_then(|pin| u32::try_from(pin).ok());
+                let element = pin
+                    .filter(|pin| !(in_document && moved_out.contains(pin)))
+                    .and_then(|pin| held.get(&pin));
+                match element {
+                    Some(id) => json!({ "type": "node", "value": { "backendNodeId": id } }),
+                    None => json!({ "type": "null" }),
+                }
+            })
+            .collect();
+        json!({ "result": { "type": "object",
+            "deepSerializedValue": { "type": "array", "value": nodes } } })
     }
 
     fn boot_reply(&self, object_id: &str, seq: u32) -> Value {
@@ -567,6 +641,17 @@ impl TreeScript {
         }
         json!({ "result": { "type": "string", "value": reply.to_string() } })
     }
+}
+
+/// The backend node id in an object id this script's `DOM.resolveNode` hands out
+/// (`node-{context}-{backend id}`).
+fn resolved_backend_id(object_id: &str) -> Option<i64> {
+    object_id
+        .strip_prefix("node-")?
+        .rsplit_once('-')?
+        .1
+        .parse()
+        .ok()
 }
 
 impl TabScript for TreeScript {

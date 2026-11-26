@@ -1447,18 +1447,8 @@ mod tests {
         let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         let tree = TabTree::new(TabOriginState::ExistedAtStart);
 
-        tab.script().set_pinned_nodes_reply(json!({
-            "result": {
-                "type": "object",
-                "deepSerializedValue": {
-                    "type": "array",
-                    "value": [
-                        { "type": "node", "value": { "backendNodeId": 42 } },
-                        { "type": "node", "value": { "backendNodeId": 84 } }
-                    ]
-                }
-            }
-        }));
+        tab.script().hold_pin(Pin(1), 42);
+        tab.script().hold_pin(Pin(2), 84);
         let main_world = op_page.world(&op_page.main_endpoint(), Place::Main).await?;
         // The private entry's world reads its origin in another spelling than APC's.
         let site_a = SiteKey::from_origin("https://A.TEST:443");

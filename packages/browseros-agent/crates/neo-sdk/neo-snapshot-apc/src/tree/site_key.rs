@@ -187,7 +187,11 @@ mod tests {
     }
 
     #[test]
-    fn anything_but_a_bare_origin_is_an_unknown_site() {
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the SDK test contract (STYLE P10) requires Result even when no step can fail"
+    )]
+    fn anything_but_a_bare_origin_is_an_unknown_site() -> Result<(), Box<dyn Error>> {
         for refused in [
             "",
             "  \t ",
@@ -210,6 +214,7 @@ mod tests {
                 "{refused:?} is not an origin as the browser serializes one, so its site is unknown"
             );
         }
+        Ok(())
     }
 
     #[test]

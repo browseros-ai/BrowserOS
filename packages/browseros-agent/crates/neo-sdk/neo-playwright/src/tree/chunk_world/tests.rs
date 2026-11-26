@@ -1,7 +1,8 @@
 //! `ChunkWorld` over a scripted tab whose captures `TabTree::capture` takes, so design 6.2's
 //! state (each world's install time, each document's binding in `DocTable`) is the real one: the
 //! start's two proofs, the positional handover of a call's nodes, a node or a world gone, the pin
-//! and the keys a run asks for, and a mixed chunk run end to end.
+//! and the keys a run asks for (only of elements still in the run's document), and a mixed chunk
+//! run end to end.
 
 use std::time::Duration;
 
@@ -14,15 +15,15 @@ use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{ProbeFailure, ProbeReply, ProbeRequest, SetMember};
+use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, SetMember};
 use crate::resolve::{ChunkOutcome, ChunkPage, ChunkSet, First};
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::{SCRIPTED_CHILD, ScriptedRun, ScriptedTab, TestResult, count_op};
 use crate::tree::tree_script::{ChildFrameSpec, TreeScript, apc_reply, encode_apc_reply, key};
 use crate::tree::{
-    AttemptStart, ChunkWorld, RunAttempt, RunRoot, TabOriginState, TabTree, Unproven,
+    AttemptStart, ChunkWorld, RunAttempt, RunRoot, StartedRun, TabOriginState, TabTree, Unproven,
 };
-use crate::world::{DocLookup, Pin, Place};
+use crate::world::{BackendNodeId, DocLookup, Pin, Place};
 
 const DOC: &str = "doc-main";
 const CHILD_DOC: &str = "doc-child";
@@ -85,20 +86,6 @@ fn describe(count: u32) -> ProbeRequest {
         members: (0..count).map(SetMember::Node).collect(),
         chunk: None,
     }
-}
-
-/// `probe::pinned_nodes`'s deep-serialized reply: each pin's node by backend id, `None` for a pin
-/// the probe evicted.
-fn pinned(nodes: &[Option<i32>]) -> Value {
-    let value: Vec<Value> = nodes
-        .iter()
-        .map(|node| match node {
-            Some(id) => json!({ "type": "node", "value": { "backendNodeId": id } }),
-            None => json!({ "type": "null" }),
-        })
-        .collect();
-    json!({ "result": { "type": "object",
-        "deepSerializedValue": { "type": "array", "value": value } } })
 }
 
 /// The ops of the probe requests sent after the first `from`.
@@ -216,9 +203,9 @@ async fn a_call_hands_its_nodes_over_in_order_after_the_root_eight_resolves_at_a
     let ctx = world.context().0;
     let object = |id: i32| json!({ "objectId": format!("node-{ctx}-{id}") });
 
-    let (_run, mut side) =
-        ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
-            .map_err(|unproven| format!("{unproven:?}"))?;
+    let mut side = ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
+        .map_err(|unproven| format!("{unproven:?}"))?
+        .page;
     let from = tab.script().probe_calls().len();
     tab.script()
         .push_probe_reply(json!({ "kind": "pinsDescribed", "items": [] }));
@@ -296,8 +283,9 @@ async fn a_run_from_an_element_handle_sends_the_handles_node_as_every_calls_root
             object: "handle-node".to_owned(),
             node: tracked,
         };
-        let (_run, mut side) = ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, handle)
-            .map_err(|unproven| format!("{unproven:?}"))?;
+        let mut side = ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, handle)
+            .map_err(|unproven| format!("{unproven:?}"))?
+            .page;
         let from = tab.script().probe_calls().len();
         tab.script()
             .push_probe_reply(json!({ "kind": "pinsDescribed", "items": [] }));
@@ -339,9 +327,9 @@ async fn a_node_gone_makes_the_run_stale_and_a_world_gone_retires_its_document_a
     };
     let (first, second) = (node(captured.tree(), 10)?, node(captured.tree(), 20)?);
     let foreign = node_in(captured.tree(), CHILD_DOC, 33)?;
-    let (_run, mut side) =
-        ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
-            .map_err(|unproven| format!("{unproven:?}"))?;
+    let mut side = ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
+        .map_err(|unproven| format!("{unproven:?}"))?
+        .page;
     let world_is_live = || {
         page.frames()
             .cached_world_for_frame(&main_frame)
@@ -436,8 +424,9 @@ async fn a_target_crash_stays_the_ops_failure_and_retires_nothing() -> TestResul
         names: &names,
     };
     let pay = node(captured.tree(), PAY)?;
-    let (_run, mut side) = ChunkWorld::start(&attempt, world, DocId::MAIN, RunRoot::Document)
-        .map_err(|unproven| format!("{unproven:?}"))?;
+    let mut side = ChunkWorld::start(&attempt, world, DocId::MAIN, RunRoot::Document)
+        .map_err(|unproven| format!("{unproven:?}"))?
+        .page;
 
     tab.script().set_resolve_node_error(Some("Target crashed"));
     let called = side.call(&describe(1), &[pay]).await;
@@ -486,9 +475,29 @@ async fn hydrate_pins_through_the_proven_world_and_binds_it() -> TestResult {
         names: &names,
     };
     let pay = node(captured.tree(), PAY)?;
-    let (_run, mut side) =
-        ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
-            .map_err(|unproven| format!("{unproven:?}"))?;
+    let mut side = ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
+        .map_err(|unproven| format!("{unproven:?}"))?
+        .page;
+
+    tab.script().set_resolve_probe_reply(Some(
+        json!({ "kind": "element", "pin": 41, "preview": "<button>Pay</button>" }),
+    ));
+    tab.script().move_out_of_document(Pin(41));
+    let from = tab.script().probe_calls().len();
+    assert_eq!(
+        side.hydrate(pay).await?,
+        None,
+        "an element the probe pins but the page moved into another document makes the run stale"
+    );
+    assert_eq!(
+        ops_since(&tab, from),
+        ["resolve", "pinnedInDocument"],
+        "the probe's pin, then the check that it is of the world's document"
+    );
+    assert!(
+        matches!(page.frames().lookup_doc(&doc), DocLookup::Reserved { .. }),
+        "such a pin proves nothing: the document stays reserved"
+    );
 
     tab.script().set_resolve_probe_reply(Some(
         json!({ "kind": "element", "pin": 42, "preview": "<button>Pay</button>" }),
@@ -553,31 +562,48 @@ async fn keys_read_a_runs_pins_in_one_batch_under_its_document() -> TestResult {
         capture: &captured,
         names: &names,
     };
-    let (_run, mut side) = ChunkWorld::start(&attempt, world, DocId::MAIN, RunRoot::Document)
-        .map_err(|unproven| format!("{unproven:?}"))?;
+    let mut side = ChunkWorld::start(&attempt, world.clone(), DocId::MAIN, RunRoot::Document)
+        .map_err(|unproven| format!("{unproven:?}"))?
+        .page;
 
+    tab.script().hold_pin(Pin(5), CARD);
+    tab.script().hold_pin(Pin(6), PAY);
     let from = tab.script().probe_calls().len();
-    tab.script()
-        .set_pinned_nodes_reply(pinned(&[Some(CARD), Some(PAY)]));
     assert_eq!(
         side.keys(&[Pin(5), Pin(6)]).await?,
         Some(vec![key(DOC, CARD)?, key(DOC, PAY)?]),
         "each pin's node, keyed with the run's document"
     );
-    assert_eq!(ops_since(&tab, from), ["pinned"], "one batch for every pin");
-
-    tab.script()
-        .set_pinned_nodes_reply(pinned(&[Some(CARD), None]));
     assert_eq!(
-        side.keys(&[Pin(5), Pin(6)]).await?,
+        ops_since(&tab, from),
+        ["pinnedInDocument"],
+        "one batch for every pin, answering only elements of the world's document"
+    );
+
+    assert_eq!(
+        side.keys(&[Pin(5), Pin(7)]).await?,
         None,
         "a pin the probe evicted makes the run stale"
     );
-    tab.script()
-        .set_pinned_nodes_reply(pinned(&[Some(CARD), Some(PAY)]));
-    let _ = tab_tree.retire_doc(page.frames(), &token(DOC)?);
+
+    tab.script().move_out_of_document(Pin(6));
     assert_eq!(
         side.keys(&[Pin(5), Pin(6)]).await?,
+        None,
+        "a match the page moved out of the run's document after its stage makes the run stale"
+    );
+    assert_eq!(
+        probe::pinned_nodes(&scope, &page, &world, vec![Pin(5), Pin(6)]).await?,
+        Some(vec![
+            BackendNodeId(i64::from(CARD)),
+            BackendNodeId(i64::from(PAY))
+        ]),
+        "though the probe still holds it, which is why keys never reads the held batch"
+    );
+
+    let _ = tab_tree.retire_doc(page.frames(), &token(DOC)?);
+    assert_eq!(
+        side.keys(&[Pin(5)]).await?,
         None,
         "keys DocTable will not bind to the run's document are never handed out"
     );
@@ -602,7 +628,10 @@ async fn a_mixed_chunk_runs_its_page_part_then_its_tree_part_and_pins_the_match(
         capture: &captured,
         names: &names,
     };
-    let (chunk_run, mut side) = ChunkWorld::start(&attempt, world, DocId::MAIN, RunRoot::Document)
+    let StartedRun {
+        run: chunk_run,
+        page: mut side,
+    } = ChunkWorld::start(&attempt, world, DocId::MAIN, RunRoot::Document)
         .map_err(|unproven| format!("{unproven:?}"))?;
     let plan = plan(&[
         part("internal:attr", "[data-card]"),
@@ -612,7 +641,7 @@ async fn a_mixed_chunk_runs_its_page_part_then_its_tree_part_and_pins_the_match(
     // card's button; the button is pinned.
     tab.script()
         .push_probe_reply(json!({ "kind": "staged", "matches": [{ "pin": 7 }] }));
-    tab.script().set_pinned_nodes_reply(pinned(&[Some(CARD)]));
+    tab.script().hold_pin(Pin(7), CARD);
     tab.script().set_resolve_probe_reply(Some(
         json!({ "kind": "element", "pin": 42, "preview": "<button>Pay</button>" }),
     ));
@@ -638,8 +667,8 @@ async fn a_mixed_chunk_runs_its_page_part_then_its_tree_part_and_pins_the_match(
     );
     assert_eq!(
         ops_since(&tab, from),
-        ["stage", "pinned", "resolve"],
-        "the page part, its match's key, then the one hydration"
+        ["stage", "pinnedInDocument", "resolve", "pinnedInDocument"],
+        "the page part, its match's key, then the one hydration and its document check"
     );
     Ok(())
 }

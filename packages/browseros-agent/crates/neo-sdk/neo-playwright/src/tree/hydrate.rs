@@ -10,7 +10,7 @@
 //!  Key ─▶ Case 4: doc_matches_frame(capture, key.doc, frame)?
 //!           no  ─▶ retire absent doc; return StaleDocument (zero DOM.resolveNode)
 //!           yes ─▶ Case 1: cached world with installed_at < capture.requested_at?
-//!                    yes ─▶ DOM.resolveNode + probe resolve(Root)
+//!                    yes ─▶ DOM.resolveNode + probe resolve(Root) + in-document check
 //!                             Pinned       ─▶ bind_proven_world ─▶ Hydrated
 //!                             WorldGone    ─▶ Case 2: invalidate_world ─▶ WorldStale
 //!                             NodeDetached ─▶ NodeDetached (world stays live)
@@ -391,8 +391,8 @@ pub(super) fn doc_matches_frame(
 }
 
 /// Resolves `node` into `world` via [`resolve_node`] and pins it with [`pin_object`], which
-/// verifies both world-identity matching (via V8 cross-world argument rejection) and DOM
-/// attachment.
+/// verifies world identity (V8 refuses another world's argument), and that the element is
+/// connected to the world's own document.
 async fn pin_in_world(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
@@ -459,8 +459,11 @@ pub(super) async fn resolve_node(
 }
 
 /// Pins the element `object` names (a node [`resolve_node`] resolved in `world`) with the probe's
-/// `Resolve { target: Root, strictness: Strict, want: Element }`, which takes the node only while
-/// it is connected and of the world's document (design 6.2).
+/// `Resolve { target: Root, strictness: Strict, want: Element }`, then checks the pin with
+/// [`probe::pinned_nodes_in_document`]: design 6.2 takes the node only while it is connected and
+/// of the world's document. The probe's root pin checks only `isConnected`, and an element the
+/// page moved into a same-origin iframe still resolves in this world, so without the second call
+/// a ref or a run would act on an element of another document.
 pub(super) async fn pin_object(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
@@ -472,11 +475,15 @@ pub(super) async fn pin_object(
         strictness: Strictness::Strict,
         want: Want::Element,
     };
+    let (pin, preview) = match probe::call_on(scope, page, world, &request, object).await? {
+        ProbeReply::Element { pin, preview, .. } => (pin, preview),
+        ProbeReply::Detached | ProbeReply::None { .. } => return Ok(ObjectPin::Detached),
+        other => return Ok(ObjectPin::Refused(other)),
+    };
     Ok(
-        match probe::call_on(scope, page, world, &request, object).await? {
-            ProbeReply::Element { pin, preview, .. } => ObjectPin::Pinned { pin, preview },
-            ProbeReply::Detached | ProbeReply::None { .. } => ObjectPin::Detached,
-            other => ObjectPin::Refused(other),
+        match probe::pinned_nodes_in_document(scope, page, world, vec![pin]).await? {
+            Some(_) => ObjectPin::Pinned { pin, preview },
+            None => ObjectPin::Detached,
         },
     )
 }

@@ -16,6 +16,8 @@
 
 mod chunk_world;
 mod hydrate;
+#[cfg(test)]
+mod live_tests;
 mod page_capture;
 mod private_mirror;
 mod tab_tree;
@@ -23,7 +25,7 @@ mod tab_tree;
 mod tree_script;
 
 #[cfg_attr(not(test), expect(unused_imports, reason = "wired by the switch-over"))]
-pub(crate) use chunk_world::{ChunkWorld, RunAttempt, RunRoot, Unproven};
+pub(crate) use chunk_world::{ChunkWorld, RunAttempt, RunRoot, StartedRun, Unproven};
 pub(crate) use hydrate::{Hydrate, HydrateOutcome, HydratedNode};
 pub(crate) use page_capture::{AttemptStart, CaptureError, CapturedTree, PageCapture};
 pub(crate) use private_mirror::{PrivateMirror, TabOriginState};

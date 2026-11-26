@@ -14,8 +14,10 @@
 //!  call       each node ─ DOM.resolveNode in the world, RESOLVES_IN_FLIGHT at once, order kept
 //!               a node gone ─▶ None, nothing sent
 //!             probe::call_with_nodes(root, objects) ─▶ the reply
-//!  hydrate    DOM.resolveNode ─ probe resolve(Root) ─ pin ─ bind_proven_world ─▶ the pin
-//!  keys       probe::pinned_nodes ─ backend ids, with the run's DocToken ─ bind_proven_world
+//!  hydrate    DOM.resolveNode ─ probe resolve(Root) ─ pin, if in the world's document
+//!               ─ bind_proven_world ─▶ the pin
+//!  keys       probe::pinned_nodes_in_document ─ backend ids, with the run's DocToken
+//!               ─ bind_proven_world
 //!
 //!  any of them failing Gone ─ TabTree::invalidate_world, then the error
 //! ```
@@ -71,6 +73,13 @@ pub(crate) enum Unproven {
     DocumentNotInFrame,
 }
 
+/// What [`ChunkWorld::start`] hands back: a run and its page side, made from one document and
+/// one root so the two cannot disagree.
+pub(crate) struct StartedRun<'a> {
+    pub(crate) run: ChunkRun<'a>,
+    pub(crate) page: ChunkWorld<'a>,
+}
+
 /// The page side of one [`ChunkRun`]: the frame's isolated world, which [`Self::start`] checked
 /// against the capture the run reads.
 pub(crate) struct ChunkWorld<'a> {
@@ -90,13 +99,14 @@ pub(crate) struct ChunkWorld<'a> {
 }
 
 impl<'a> ChunkWorld<'a> {
-    /// The run and its page from one document and one root, so the two cannot disagree.
+    /// The run over `doc` from `root`, and its page side in `world`, once `world` is proven to
+    /// serve this capture.
     pub(crate) fn start(
         attempt: &RunAttempt<'a>,
         world: IsolatedWorld,
         doc: DocId,
         root: RunRoot,
-    ) -> Result<(ChunkRun<'a>, Self), Unproven> {
+    ) -> Result<StartedRun<'a>, Unproven> {
         let tree = attempt.capture.tree();
         if world.installed_at() >= attempt.capture.requested_at() {
             return Err(Unproven::WorldAfterCapture);
@@ -121,7 +131,7 @@ impl<'a> ChunkWorld<'a> {
         };
         let run = ChunkRun::new(tree, attempt.names, attempt.tab, doc, query_root)
             .ok_or(Unproven::DocumentNotInFrame)?;
-        let side = Self {
+        let page = Self {
             scope: attempt.scope,
             page: attempt.page,
             tab: attempt.tab,
@@ -131,7 +141,7 @@ impl<'a> ChunkWorld<'a> {
             token: document.token(),
             root: call_root,
         };
-        Ok((run, side))
+        Ok(StartedRun { run, page })
     }
 
     /// `node`'s DOM node id. The run hands over only nodes of its own document's tree, each an
@@ -206,13 +216,18 @@ impl<'a> ChunkWorld<'a> {
     }
 
     async fn keys_of(&self, pins: &[Pin]) -> Result<Option<Vec<NodeKey>>, ProbeFailure> {
+        // Only pins in the world's document: the probe still holds an element that left the
+        // page or moved into another document, and a page stage's match gone before the join
+        // must not join as its node in the capture, whose subtree the next tree stage would
+        // then search.
         let Some(backend_ids) =
-            probe::pinned_nodes(self.scope, self.page, &self.world, pins.to_vec()).await?
+            probe::pinned_nodes_in_document(self.scope, self.page, &self.world, pins.to_vec())
+                .await?
         else {
             return Ok(None);
         };
         // The world holds the run's document (`start`, then this call's success), so every pin
-        // it answers for is an element of that document.
+        // the batch answers for is an element of that document.
         let keys: Vec<NodeKey> = backend_ids
             .into_iter()
             .map(|id| {
