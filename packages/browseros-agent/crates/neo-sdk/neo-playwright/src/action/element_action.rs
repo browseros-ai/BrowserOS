@@ -81,7 +81,7 @@ impl<'a> ElementRunner<'a> {
                 continue;
             };
             let resolve = ProbeRequest::Resolve {
-                target: self.subject.first_target(),
+                target: Subject::first_target(&located),
                 strictness: self.strictness,
                 want: Want::Element,
             };
@@ -172,7 +172,7 @@ impl<'a> ElementRunner<'a> {
                 continue;
             };
             let inner = Backoff::inner();
-            let mut target = self.subject.first_target();
+            let mut target = Subject::first_target(&located);
             // The attempt's lines wait until the element is seen (`attempt_log.rs`).
             let mut attempt = AttemptLog::new(self.scope, false);
             for retry in 0.. {

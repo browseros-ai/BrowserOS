@@ -628,7 +628,7 @@ fn tests_the_failure_snapshot_decision_table() {
     ];
     for (frame, element, snapshot) in rows {
         assert_eq!(
-            FailureSnapshot::for_failed_property(Visibility { frame, element }),
+            FailureSnapshot::for_failed_poll(Visibility { frame, element }),
             snapshot,
             "upstream snapshots the element's line only when both the frame and the element are \
              visible (frame {frame}, element {element})"

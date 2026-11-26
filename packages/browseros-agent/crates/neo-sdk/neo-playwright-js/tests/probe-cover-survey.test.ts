@@ -1,10 +1,9 @@
-// `coverSurvey` on the built asset, over a hand-laid page: linkedom has no layout, so each test
-// gives its elements boxes, styles and what is on top at a point. The answer must name, by pin,
-// the same layers the `snapshot` request's survey names by ref on the same page. Real hit tests,
-// the top layer, shadow-root hits, the 20 ms budget and closed roots need a browser: the
-// snapshot-on-top matrix (prelude_live.rs) covers the survey there.
+// `coverSurvey` on the built asset, the ARIA engine out of it, over a hand-laid page: linkedom
+// has no layout, so each test gives its elements boxes, styles and what is on top at a point. The
+// answer names each layer, its controls and its holders by pin, for Rust to word from its tree.
+// Real hit tests, the top layer, shadow-root hits, the 20 ms budget and closed roots need a
+// browser: the snapshot-on-top matrix (prelude_live.rs) covers the survey there.
 import { afterEach, expect, it } from 'bun:test'
-import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import type { PinnedLayer } from '../src/probe/protocol'
 import { openProbePage, type ProbePage } from './support/probe-page'
 
@@ -157,17 +156,6 @@ const field = (value: unknown, name: string): unknown =>
 const pinned = (probe: ProbePage, pin: number): unknown =>
   probe.call({ op: 'pinned', pin })
 
-/** A snapshot ref's element, through Neo's aria-ref engine. */
-function byRef(probe: ProbePage, ref: string): unknown {
-  const reply = probe.call({
-    op: 'resolve',
-    target: { chunk: parseSelector(`aria-ref=${ref}`) },
-    strictness: 'strict',
-    want: 'element',
-  })
-  return pinned(probe, Number(field(reply, 'pin')))
-}
-
 function survey(probe: ProbePage) {
   const reply = probe.call({ op: 'coverSurvey' })
   expect(field(reply, 'kind')).toBe('surveyed')
@@ -179,7 +167,7 @@ function survey(probe: ProbePage) {
   }
 }
 
-/** Both answers as elements and facts, so the pinned one can be held against the worded one. */
+/** The survey's layers as elements and facts, each pin read back through the probe. */
 function asElements(probe: ProbePage) {
   const pinnedSurvey = survey(probe)
   const pinnedLayers = pinnedSurvey.layers.map((layer) => ({
@@ -192,46 +180,7 @@ function asElements(probe: ProbePage) {
       layer.firstWords,
     ] as unknown[],
   }))
-  const snapshot = probe.call({
-    op: 'snapshot',
-    root: 'document',
-    mode: 'ai',
-    surveyCovers: true,
-  })
-  const onTop = field(snapshot, 'onTop')
-  if (!Array.isArray(onTop)) throw new Error(JSON.stringify(snapshot))
-  const wordedLayers = onTop.map((layer) => ({
-    named: byRef(probe, String(field(layer, 'ref'))),
-    controls: (field(layer, 'controls') as { ref: string }[]).map(({ ref }) =>
-      byRef(probe, ref),
-    ),
-    facts: ['blank', 'loading', 'wholeView', 'firstWords'].map((name) =>
-      field(layer, name),
-    ),
-  }))
-  return {
-    pinnedSurvey,
-    pinnedLayers,
-    wordedLayers,
-    snapshot,
-    tested: [pinnedSurvey.tested, field(snapshot, 'surveyTested')],
-  }
-}
-
-function expectSameLayers(
-  pinnedLayers: ReturnType<typeof asElements>['pinnedLayers'],
-  wordedLayers: ReturnType<typeof asElements>['wordedLayers'],
-) {
-  expect(pinnedLayers.length).toBe(wordedLayers.length)
-  pinnedLayers.forEach((layer, index) => {
-    const worded = wordedLayers[index]
-    expect(layer.named).toBe(worded?.named)
-    expect(layer.controls.length).toBe(worded?.controls.length ?? -1)
-    layer.controls.forEach((control, at) => {
-      expect(control).toBe(worded?.controls[at])
-    })
-    expect(layer.facts).toEqual(worded?.facts ?? [])
-  })
+  return { pinnedSurvey, pinnedLayers }
 }
 
 const OVERLAY = `<html><body>
@@ -288,15 +237,6 @@ it('tests that a whole-view layer comes back pinned, with no snapshot taken befo
   expect(phases.stopped).toBe(false)
 })
 
-it("tests that the pinned layers are the snapshot survey's layers, by element", () => {
-  const probe = laidOut(OVERLAY, OVERLAY_LAYOUT)
-  const { pinnedLayers, wordedLayers, tested, snapshot } = asElements(probe)
-  expectSameLayers(pinnedLayers, wordedLayers)
-  expect(tested[0]).toBe(tested[1])
-  // The snapshot's answer still marks its whole-view node; coverSurvey marks no JSON at all.
-  expect(JSON.stringify(field(snapshot, 'json'))).toContain('"onTop":"e5"')
-})
-
 const BACKDROP = `<html><body>
   <main id="main"><button id="behind">Pay</button><a id="foot" href="/f">Footer</a></main>
   <div id="backdrop"></div>
@@ -306,7 +246,7 @@ const BACKDROP = `<html><body>
   <button id="ghost">Ghost</button><button id="tiny">Tiny</button>
 </body></html>`
 
-it('tests that a blank layer and a part-view layer pin as the snapshot names them, over the same controls', () => {
+it('tests that a blank layer and a part-view layer pin by element, each with its own controls', () => {
   const laid = laidOut(BACKDROP, {
     boxes: {
       behind: { x: 100, y: 100, width: 100, height: 40 },
@@ -338,8 +278,18 @@ it('tests that a blank layer and a part-view layer pin as the snapshot names the
               ? ['banner']
               : ['backdrop'],
   })
-  const { pinnedLayers, wordedLayers, tested, pinnedSurvey } = asElements(laid)
-  expectSameLayers(pinnedLayers, wordedLayers)
+  const { pinnedLayers, pinnedSurvey } = asElements(laid)
+  const element = (id: string) => laid.document.getElementById(id)
+  // The blank backdrop stands under no dialog at the dialog's own centre, so it is named as
+  // itself; the banner is named as itself and lists its checkbox.
+  expect(pinnedLayers.map(({ named }) => named)).toEqual([
+    element('backdrop'),
+    element('banner'),
+  ])
+  expect(pinnedLayers.map(({ controls }) => controls)).toEqual([
+    [],
+    [element('agree')],
+  ])
   expect(pinnedLayers.map(({ facts }) => facts)).toEqual([
     [true, false, false, undefined],
     [false, false, false, 'We use cookies'],
@@ -348,7 +298,7 @@ it('tests that a blank layer and a part-view layer pin as the snapshot names the
   expect(pinnedSurvey.layers.map(({ holders }) => holders)).toEqual([[], []])
   // Tested: Pay, Footer, Close, the checkbox and the frame (a frame takes the pointer whatever
   // its own style says); not the pointer-free Ghost nor the boxless Tiny.
-  expect(tested).toEqual([5, 5])
+  expect(pinnedSurvey.tested).toBe(5)
 })
 
 it('tests that a control in an open shadow root is in the population, in composed-tree order', () => {

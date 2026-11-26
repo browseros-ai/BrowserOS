@@ -39,7 +39,7 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, OpTarget, TARGET};
 use crate::page::OpPage;
-use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read};
+use crate::probe::{ProbeReply, ProbeRequest, QueryState, Read};
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{LocatorTarget, Strictness, Target};
 use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
@@ -344,8 +344,8 @@ async fn visible(
 ) -> Result<bool, PlaywrightError> {
     let resolver = Resolver::new(page, scope, target, Strictness::Strict);
     let landed = resolver
-        .attempt_at(|last, frame_visible| ProbeRequest::Read {
-            target: ProbeTarget::Chunk(last),
+        .attempt_at(|target, frame_visible| ProbeRequest::Read {
+            target,
             strictness: Strictness::Strict,
             frame_visible,
             read: Read::State {

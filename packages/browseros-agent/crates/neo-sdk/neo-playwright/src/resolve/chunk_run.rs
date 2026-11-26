@@ -54,8 +54,6 @@
 //! ([`class_of`]) and the page throws it with that class once a root reaches the part, so the
 //! page's `error` reply is the run's outcome as it stands.
 
-#![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
-
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -64,11 +62,13 @@ use neo_snapshot_apc::select::{
     self, AccessibleText, ChunkPlan, PageForm, PlannedStage, RefResolver, RoleQueryError, Scope,
     StrictPreview, StrictViolation, TreeMatches, TreeStage, TreeStageError,
 };
-use neo_snapshot_apc::tree::{DocId, DocToken, NodeId, NodeKey, SnapshotTree};
+use neo_snapshot_apc::tree::{DocId, DocToken, NodeId, NodeKey, SnapshotTree, TreeNode};
 
 use crate::probe::{
     self, ErrorClass, PinPreview, ProbeReply, ProbeRequest, SetMember, StageMatch, StageSet,
+    StrictListing,
 };
+use crate::resolve::strict_akas;
 use crate::target::Strictness;
 use crate::world::Pin;
 
@@ -206,6 +206,17 @@ pub(crate) enum First {
     Document,
     /// The first match left the page since the capture.
     Stale,
+}
+
+/// A final set as the op's request names it ([`ChunkRun::pinned`]).
+#[derive(Debug)]
+pub(crate) enum Pinned {
+    /// Every member pinned in the frame's world, in the set's order.
+    Members(Vec<StageMatch>),
+    /// A member left the page since the capture: the attempt starts over.
+    Stale,
+    /// What pinning never answers, worded for an `internal` failure.
+    Broken(String),
 }
 
 /// The set a stage starts from.
@@ -396,6 +407,51 @@ impl<'a> ChunkRun<'a> {
         Ok(page.hydrate(node).await?.map_or(First::Stale, First::Pin))
     }
 
+    /// Every element of `set` pinned in the frame's world, in the set's order, for the op's own
+    /// request to name (`ProbeTarget::Set`). A page stage's matches are pinned already; a tree
+    /// set is handed over and pinned in one `stage` call that starts from it and has no parts of
+    /// its own, so its members come back exactly as they went.
+    pub(crate) async fn pinned<P: ChunkPage>(
+        &self,
+        set: ChunkSet,
+        page: &mut P,
+    ) -> Result<Pinned, P::Error> {
+        let nodes = match set {
+            ChunkSet::Pins(matches) => return Ok(Pinned::Members(matches)),
+            ChunkSet::Keys(matches) if matches.is_empty() => {
+                return Ok(Pinned::Members(Vec::new()));
+            }
+            ChunkSet::Keys(matches) => matches.nodes().to_vec(),
+        };
+        let mut handover = Handover::default();
+        let from: Vec<SetMember> = nodes
+            .into_iter()
+            .map(|node| handover.member(node, self.doc_root))
+            .collect();
+        let selector = match probe::ParsedSelector::no_parts() {
+            Ok(selector) => selector,
+            Err(error) => {
+                return Ok(Pinned::Broken(format!(
+                    "a pin stage did not encode: {error}"
+                )));
+            }
+        };
+        let request = ProbeRequest::Stage {
+            selector,
+            from: Some(from),
+            sets: Vec::new(),
+            strict: None,
+        };
+        Ok(match page.call(&request, &handover.nodes).await? {
+            Some(ProbeReply::Staged { matches, .. }) => Pinned::Members(matches),
+            Some(ProbeReply::Detached) | None => Pinned::Stale,
+            Some(other) => Pinned::Broken(format!(
+                "the probe answered `{}` to pinning a tree stage's matches",
+                other.kind()
+            )),
+        })
+    }
+
     /// One stage from `current`, by the transfer table.
     async fn step<P: ChunkPage>(
         &self,
@@ -530,7 +586,41 @@ impl<'a> ChunkRun<'a> {
         let Some(reply) = page.call(&request, &nodes).await? else {
             return Ok(ControlFlow::Break(ChunkOutcome::Stale));
         };
+        let reply = match reply {
+            ProbeReply::Strict {
+                message,
+                listing: Some(listing),
+            } => ProbeReply::Strict {
+                message: self.worded(message, listing, page).await?,
+                listing: None,
+            },
+            reply => reply,
+        };
         Ok(staged(reply, stale_ref))
+    }
+
+    /// A violation a page stage decided, with the tree's role locators in its `aka` lines where
+    /// they win (`strict_akas`): the listed pins joined to this tree's nodes, as a join does.
+    /// The page's message as it stands when no line improves or a pin no longer joins.
+    async fn worded<P: ChunkPage>(
+        &self,
+        message: String,
+        listing: StrictListing,
+        page: &mut P,
+    ) -> Result<String, P::Error> {
+        let Some(keys) = page.keys(&listing.pins).await? else {
+            return Ok(message);
+        };
+        let nodes = keys
+            .iter()
+            .map(|key| self.tree.node_by_key(key).map(TreeNode::id));
+        let count = usize::try_from(listing.count).unwrap_or(usize::MAX);
+        Ok(
+            strict_akas::with_roles(self.tree, self.text, self.refs, &listing.items, nodes)
+                .map_or(message, |lines| {
+                    select::strict_message(&listing.locator, count, &lines)
+                }),
+        )
     }
 
     /// The `stage` request for `call`, and the tree nodes it hands over: its start's and its
@@ -628,10 +718,15 @@ impl<'a> ChunkRun<'a> {
                 locator: Some(locator),
                 items,
             } if items.len() == previews.len() => {
-                let lines: Vec<StrictPreview> = items
-                    .into_iter()
-                    .map(|PinPreview { preview, aka }| StrictPreview { preview, aka })
-                    .collect();
+                // The page's generator offers no role locator; the tree's goes in where it wins.
+                let nodes = previews.iter().map(|&node| Some(node));
+                let lines = strict_akas::with_roles(self.tree, self.text, self.refs, &items, nodes)
+                    .unwrap_or_else(|| {
+                        items
+                            .into_iter()
+                            .map(|PinPreview { preview, aka }| StrictPreview { preview, aka })
+                            .collect()
+                    });
                 ChunkOutcome::Strict(violation.message(&locator, &lines))
             }
             ProbeReply::Detached => ChunkOutcome::Stale,
@@ -660,7 +755,7 @@ fn staged(
             }
             return ControlFlow::Continue(ChunkSet::Pins(matches));
         }
-        ProbeReply::Strict { message } => ChunkOutcome::Strict(message),
+        ProbeReply::Strict { message, .. } => ChunkOutcome::Strict(message),
         ProbeReply::Detached => ChunkOutcome::Stale,
         ProbeReply::Error { message, class, .. } => ChunkOutcome::Thrown { message, class },
         other => internal(format!(

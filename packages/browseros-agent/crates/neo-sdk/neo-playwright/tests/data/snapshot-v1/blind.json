@@ -1,7 +1,6 @@
 {
   "json": [
     {
-      "active": true,
       "children": [
         {
           "children": [
@@ -75,32 +74,20 @@
               "ref": "e14",
               "role": "heading"
             },
+            "Sensodyne Repair 3.4oz $7.49",
             {
-              "children": [
-                "Sensodyne Repair 3.4oz $7.49",
-                {
-                  "name": "Add to cart",
-                  "ref": "e16",
-                  "role": "button"
-                }
-              ],
+              "name": "Add to cart",
               "ref": "e15",
-              "role": "generic"
+              "role": "button"
+            },
+            "Sensodyne Repair 6-pack $41.00",
+            {
+              "name": "Add to cart",
+              "ref": "e16",
+              "role": "button"
             },
             {
-              "children": [
-                "Sensodyne Repair 6-pack $41.00",
-                {
-                  "name": "Add to cart",
-                  "ref": "e18",
-                  "role": "button"
-                }
-              ],
               "ref": "e17",
-              "role": "generic"
-            },
-            {
-              "ref": "e19",
               "role": "status",
               "text": "Saved 2 minutes ago"
             }
@@ -113,26 +100,26 @@
             {
               "level": 2,
               "name": "Delete project?",
-              "ref": "e21",
+              "ref": "e19",
               "role": "heading"
             },
             {
-              "ref": "e22",
+              "ref": "e20",
               "role": "paragraph",
               "text": "This permanently deletes \"Acme\" and its 14 files. This cannot be undone."
             },
             {
               "name": "Cancel",
-              "ref": "e23",
+              "ref": "e21",
               "role": "button"
             },
             {
               "name": "Delete",
-              "ref": "e24",
+              "ref": "e22",
               "role": "button"
             }
           ],
-          "ref": "e20",
+          "ref": "e18",
           "role": "dialog"
         }
       ],

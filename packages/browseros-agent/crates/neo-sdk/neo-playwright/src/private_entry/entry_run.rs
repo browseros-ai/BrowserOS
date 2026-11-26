@@ -26,6 +26,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::{ProtocolSession, TabId};
+use neo_snapshot_apc::tree::SiteKey;
 use neo_trace::ErrorOwner;
 use tokio::runtime::Handle;
 
@@ -116,6 +117,9 @@ pub(crate) struct EntryRun<'a> {
     max_length_moved: Vec<usize>,
     /// The main frame's navigations since admission, raced with every look and the read-back.
     navigation: Option<MainNavigation>,
+    /// The site of the box being typed, which a mark the entry adds in the box's document
+    /// (ruling R26's focus holder) is mirrored on too.
+    box_site: Option<SiteKey>,
 }
 
 impl<'a> EntryRun<'a> {
@@ -128,6 +132,7 @@ impl<'a> EntryRun<'a> {
             drawings: vec![Drawing::None; fields],
             max_length_moved: Vec::new(),
             navigation: None,
+            box_site: None,
         }
     }
 
@@ -306,6 +311,8 @@ impl<'a> EntryRun<'a> {
             session: &session,
             own_frame,
         };
+        self.box_site = SiteKey::from_origin(&looked.facts.origin);
+        self.mirror_box(page, &box_at).await?;
         self.focus_step(page, sent, input, &box_at, &text, spaced)
             .await?;
         // A box with no size that already holds text is emptied by a key before the first
@@ -624,11 +631,14 @@ impl<'a> EntryRun<'a> {
                     ..
                 }) => Ok(ReadBack::Ended(BoxEnd::Entered)),
                 // The page side marked the text control holding the focus, if it is not the box,
-                // before it forgot the box (ruling R26).
+                // before it forgot the box (ruling R26); the tree's copy takes that mark too.
                 Some(PrivateAnswer::ReadBack {
                     state: BoxState::Other,
                     ..
-                }) => Err(self.stop(EntryCode::ValueNotTaken)),
+                }) => {
+                    self.mirror_marks(page, world).await;
+                    Err(self.stop(EntryCode::ValueNotTaken))
+                }
                 // The box left a living document: its own listener says whether it held the
                 // whole value at its last input event (ruling R10).
                 Some(PrivateAnswer::ReadBack {
@@ -651,11 +661,61 @@ impl<'a> EntryRun<'a> {
         }
     }
 
+    /// Privacy layer 2's copy (design 8.1): the box joins the tab's private nodes, on the site
+    /// of its frame, before its first character reaches the page, so every APC capture from now
+    /// on masks it (a capture copies the mirror after its reply arrives). The page's own mark,
+    /// set by the focus step, stays the record; this is the tree's copy of it. An entry whose box
+    /// cannot be mirrored types nothing: a snapshot would print the value in clear.
+    async fn mirror_box(&self, page: &OpPage<'_>, box_at: &BoxAt<'_>) -> Result<(), Stop> {
+        // Boxed: it runs inside every box's typing, whose future the entry's op holds.
+        let mirrored = Box::pin(page.tree().mark_private_pins(
+            self.scope,
+            page,
+            box_at.world,
+            self.box_site.clone(),
+            vec![box_at.pin],
+        ))
+        .await;
+        match mirrored {
+            Ok(1) => Ok(()),
+            // The box left its document since the look.
+            Ok(_) => Err(self.stop(EntryCode::PageMoved)),
+            Err(failure) => Err(self.stop(look_op::failure_code(failure))),
+        }
+    }
+
     /// Marks the text control holding the focus in the box's document, when it is not the
-    /// box, so a snapshot masks it as well (ruling R26). Best effort: the entry is stopping
+    /// box, so a snapshot masks it as well (ruling R26), and mirrors the document's marks into
+    /// the tab's private nodes, that control's among them. Best effort: the entry is stopping
     /// either way, and its answer does not wait on this.
     async fn mark_focused(&self, page: &OpPage<'_>, world: &IsolatedWorld, pin: Pin) {
-        let _marked = self.step(page, world, pin, PrivateStep::MarkFocused).await;
+        let marked = self.step(page, world, pin, PrivateStep::MarkFocused).await;
+        if matches!(
+            marked,
+            Ok(Some(PrivateAnswer::MarkedFocused { marked: true }))
+        ) {
+            self.mirror_marks(page, world).await;
+        }
+    }
+
+    /// Copies the document's private marks into the tab's private nodes (design 8.1), so a mark
+    /// the page side set on its own, the control a stray value went into (ruling R26), masks it
+    /// in every capture as it does in the page's own reads. Best effort: the entry is stopping
+    /// either way, and its answer does not wait on this.
+    async fn mirror_marks(&self, page: &OpPage<'_>, world: &IsolatedWorld) {
+        let Ok(ProbeReply::Marks { pins }) =
+            probe::call(self.scope, page, world, &ProbeRequest::PrivateMarks).await
+        else {
+            return;
+        };
+        let _mirrored = Box::pin(page.tree().mark_private_pins(
+            self.scope,
+            page,
+            world,
+            self.box_site.clone(),
+            pins,
+        ))
+        .await;
     }
 
     async fn focused(

@@ -10,7 +10,15 @@ import {
   parseSelector,
 } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import type { SetMember, StageSet } from '../src/probe/protocol'
-import { openProbePage, type ProbePage } from './support/probe-page'
+import {
+  openProbePage,
+  oracleAsset,
+  type ProbePage,
+} from './support/probe-page'
+
+// The stage runs the page form, which holds no role part; the vendored role engine of the
+// oracle bundle is what each stage is compared with (`readAll` of the original chunk).
+const ORACLE = oracleAsset()
 
 const PAGE = `<html><body>
   <div id="plans">
@@ -51,7 +59,7 @@ function showFixture(probe: ProbePage) {
 }
 
 function booted(): ProbePage {
-  page = openProbePage(PAGE)
+  page = openProbePage(PAGE, undefined, ORACLE)
   page.boot({ frameSeq: 0, epoch: 'stage' })
   showFixture(page)
   const host = page.document.getElementById('host')
@@ -597,7 +605,18 @@ it("tests that a strict stage with several matches answers upstream's own strict
     sets: [candidates(probe, 'internal:role=button[name="Edit"i]')],
     strict: chunk,
   })
-  expect(reply).toEqual({ kind: 'strict', message: field(resolved, 'message') })
+  expect(reply).toMatchObject({
+    kind: 'strict',
+    message: field(resolved, 'message'),
+  })
+  // What the message was written from, for Rust to put the tree's role locators in: the same
+  // lines `resolve` listed for the same chunk, its elements pinned.
+  const listing = field(reply, 'listing')
+  expect(field(listing, 'items')).toEqual(
+    field(field(resolved, 'listing'), 'items'),
+  )
+  expect(field(listing, 'count')).toBe(2)
+  expect(field(listing, 'pins')).toHaveLength(2)
   const one = probe.call({
     op: 'stage',
     selector: selector('css=#pro', below(0)),

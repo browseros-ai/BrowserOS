@@ -21,9 +21,7 @@ pub(super) enum MaskLocator {
 }
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{
-    self, Control, ParsedSelector, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest, ProbeTarget,
-};
+use crate::probe::{self, Control, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest};
 use crate::resolve::Resolver;
 use crate::target::{LocatorTarget, Strictness};
 use crate::world::IsolatedWorld;
@@ -68,7 +66,7 @@ impl ScreenshotMasks {
                 policy: ProbePolicy::for_cleanup(scope),
             });
             let request = ProbeRequest::ScreenshotMask {
-                target: ProbeTarget::Chunk(ParsedSelector::of(locator.chunks.last())),
+                target: resolved.target().clone(),
                 color: color.to_owned(),
             };
             match resolved.call(scope, page, &request).await {

@@ -7,11 +7,11 @@
   - alert: Invalid password. 2 attempts left before lockout.
   - button "Sign in" [ref=e13]
   - heading "Cart" [level=2]
+  - button "Add to cart" [ref=e15]
   - button "Add to cart" [ref=e16]
-  - button "Add to cart" [ref=e18]
   - status: Saved 2 minutes ago
-- dialog [ref=e20]:
+- dialog [ref=e18]:
   - heading "Delete project?" [level=2]
   - text: This permanently deletes "Acme" and its 14 files. This cannot be undone.
-  - button "Cancel" [ref=e23]
-  - button "Delete" [ref=e24]
+  - button "Cancel" [ref=e21]
+  - button "Delete" [ref=e22]

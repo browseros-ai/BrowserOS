@@ -4,7 +4,15 @@
 import { afterEach, expect, it } from 'bun:test'
 import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import type { PinPreview, SetMember } from '../src/probe/protocol'
-import { openProbePage, type ProbePage } from './support/probe-page'
+import {
+  openProbePage,
+  oracleAsset,
+  type ProbePage,
+} from './support/probe-page'
+
+// Strict messages are compared with `resolve`'s own, which only the vendored role engine of the
+// oracle bundle can write for a role chunk.
+const ORACLE = oracleAsset()
 
 const ITEMS = Array.from(
   { length: 12 },
@@ -25,7 +33,11 @@ afterEach(() => {
 
 function booted(conformance = false): ProbePage {
   page?.close()
-  page = openProbePage(PAGE, { conformance, discoverMovedFields: false })
+  page = openProbePage(
+    PAGE,
+    { conformance, discoverMovedFields: false },
+    ORACLE,
+  )
   page.boot({ frameSeq: 0, epoch: 'describe-pins' })
   const view = page.document.defaultView
   if (!view) throw new Error('the fixture has a window')

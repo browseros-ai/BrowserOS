@@ -19,25 +19,40 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use browseros_core::FrameId;
 use futures_util::future;
 use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
 use neo_snapshot_apc::select::RefResolver;
 use neo_snapshot_apc::tree::{
-    BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SiteKey, SnapshotTree, TreeDoc,
+    AriaAsk, AriaRoot, AriaTooDeep, AriaTree, BuildOptions, DocSeq, DocToken, DomNodeId,
+    FrameToken, NodeKey, SiteKey, SnapshotTree, TreeDoc,
 };
+use tokio::time;
 
-use crate::PlaywrightError;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{self, ProbeFailure, ProbeReply};
+use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
 use crate::target::AriaRefJump;
 use crate::tree::{
-    AttemptStart, CaptureError, CapturedTree, Hydrate, HydrateOutcome, HydratedNode, PageCapture,
-    PrivateMirror, TabOriginState, private_mirror,
+    AttemptStart, CaptureError, CapturedTree, Hydrate, PageCapture, PrivateMirror, RefLanding,
+    TabOriginState, hydrate, private_mirror,
 };
+#[cfg(test)]
+use crate::tree::{HydrateOutcome, HydratedNode};
 use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, Pin, Stamp};
+use crate::{ErrorCode, PlaywrightError, resolve};
+
+/// What [`TabTree::aria`] emits: ai mode (refs) or Playwright's default, from where, how deep,
+/// and with boxes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TreeAsk {
+    pub(crate) ai: bool,
+    pub(crate) root: AriaRoot,
+    pub(crate) depth: Option<usize>,
+    pub(crate) boxes: bool,
+}
 
 /// Per-tab APC capture, ref table, hydration, and private-node state.
 ///
@@ -64,6 +79,7 @@ impl TabTree {
     /// Creates a new [`TabTree`] enforcing at least `min_contract_version` (clamped up to
     /// `MIN_CONTRACT_VERSION`).
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn with_min_contract_version(
         origin_state: TabOriginState,
         min_contract_version: u32,
@@ -173,7 +189,133 @@ impl TabTree {
         }
     }
 
+    /// [`Self::capture`] for every op that prints the tree or matches against it: first, each
+    /// document of a tab that was open before this `Playwright` started has its private marks
+    /// read from its frame's world once (design 8.1, "Keeping the copy complete").
+    ///
+    /// A host may have typed a secret into such a document under an earlier instance, whose
+    /// mark lives only in the page's isolated world. The capture that finds the document builds
+    /// before the mirror knows that mark, so when a seed brings any mark in, the tab is captured
+    /// again and that tree, which masks it, is the one returned. A document whose world does not
+    /// answer stays unseeded: the tab is captured again, which a frame that left no longer shows,
+    /// and a tree that still holds an unseeded document is never returned (fail closed).
+    pub(crate) async fn capture_seeded(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        started: AttemptStart,
+    ) -> Result<Arc<CapturedTree>, PlaywrightError> {
+        let mut captured = self.capture(scope, page, started).await?;
+        for pass in 0..=SEED_RECAPTURES {
+            let (marked, unread) = self.seed_unseeded(scope, page, &captured).await?;
+            if unread == 0 && marked == 0 {
+                return Ok(captured);
+            }
+            if pass == SEED_RECAPTURES {
+                break;
+            }
+            // A mark read in makes this tree stale: the next one masks it. A document that did
+            // not answer may have left with its frame, which the next tree shows.
+            captured = self.capture(scope, page, AttemptStart::now()).await?;
+        }
+        // Fail closed: a document whose marks could not be read could print in clear what a
+        // host typed into it under an earlier instance.
+        Err(scope.fail(
+            ErrorCode::Internal,
+            "a document open before this browser session did not answer for its private fields, \
+             so it is not printed",
+        ))
+    }
+
+    /// Seeds every document of `captured` that still needs it: how many marks came in, and how
+    /// many documents could not be read.
+    async fn seed_unseeded(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        captured: &CapturedTree,
+    ) -> Result<(usize, usize), PlaywrightError> {
+        let tree = captured.tree();
+        let (mut marked, mut unread) = (0, 0);
+        for doc in tree.documents() {
+            if !self.needs_private_seed(doc.token()) {
+                continue;
+            }
+            match self.seed_document(scope, page, tree, doc).await? {
+                Seed::Read(count) => marked += count,
+                Seed::Unread => unread += 1,
+            }
+        }
+        Ok((marked, unread))
+    }
+
+    /// Reads `doc`'s private marks from its frame's world (the probe's `privateMarks`) into the
+    /// mirror, on the document's own site, and records it seeded. The document's closed shadow
+    /// roots are opened to that world first, every one the capture found, since `privateMarks`
+    /// walks only the roots the world can reach. A document whose frame has no world to ask, or
+    /// whose world does not answer within the budget, is [`Seed::Unread`] and stays unseeded.
+    async fn seed_document(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        tree: &SnapshotTree,
+        doc: &TreeDoc,
+    ) -> Result<Seed, PlaywrightError> {
+        let main_frame = page.main_endpoint().frame;
+        let Some(frame) = hydrate::doc_frame(doc, &main_frame) else {
+            return Ok(Seed::Unread);
+        };
+        // Twice, as a hydration installs: a world on the way can go away under the install.
+        for _ in 0..2 {
+            let world = match hydrate::ensure_world(page, scope, self, &frame).await? {
+                hydrate::EnsuredWorld::Ready(world) => world,
+                hydrate::EnsuredWorld::Gone => continue,
+                hydrate::EnsuredWorld::Missing => return Ok(Seed::Unread),
+            };
+            // Bounded as a world's proof is: a hung frame leaves its document unseeded.
+            let opened = time::timeout(
+                PROOF_BUDGET,
+                hydrate::open_closed_roots(scope, page, &world, tree, doc.id(), None),
+            )
+            .await;
+            if !matches!(opened, Ok(true)) {
+                return Ok(Seed::Unread);
+            }
+            let asked = time::timeout(
+                PROOF_BUDGET,
+                probe::call(scope, page, &world, &ProbeRequest::PrivateMarks),
+            )
+            .await;
+            let Ok(asked) = asked else {
+                return Ok(Seed::Unread);
+            };
+            let pins = match asked {
+                Ok(ProbeReply::Marks { pins }) => pins,
+                Ok(other) => return Err(resolve::refused(scope, other)),
+                Err(ProbeFailure::Gone(_)) => {
+                    self.invalidate_world(page.frames(), &world);
+                    continue;
+                }
+                Err(failure) => return Err(resolve::failed(scope, failure)),
+            };
+            let nodes =
+                match private_mirror::describe_pins_node_ids(scope, page, &world, pins).await {
+                    Ok(nodes) => nodes,
+                    Err(ProbeFailure::Gone(_)) => {
+                        self.invalidate_world(page.frames(), &world);
+                        continue;
+                    }
+                    Err(failure) => return Err(resolve::failed(scope, failure)),
+                };
+            let count = nodes.len();
+            self.record_private_seed(doc, nodes);
+            return Ok(Seed::Read(count));
+        }
+        Ok(Seed::Unread)
+    }
+
     /// Hydrates `key` (expected in `frame`) against `capture` under section 6.2's four cases.
+    #[cfg(test)]
     pub(crate) async fn hydrate_key(
         &self,
         scope: &OpScope<'_>,
@@ -187,7 +329,19 @@ impl TabTree {
             .await
     }
 
-    /// Hydrates a snapshot or minted ref jump under section 6.4 (zero captures when already bound).
+    /// Lands a snapshot or minted ref jump under section 6.4 (zero captures when already bound):
+    /// its element, or its live document's world when the element left it.
+    pub(crate) async fn land_ref(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        jump: AriaRefJump,
+    ) -> Result<RefLanding, PlaywrightError> {
+        Hydrate::new(page, scope, self).land_ref(jump).await
+    }
+
+    /// [`Self::land_ref`] for the element itself: one that left fails `element_detached`.
+    #[cfg(test)]
     pub(crate) async fn hydrate_ref(
         &self,
         scope: &OpScope<'_>,
@@ -210,6 +364,35 @@ impl TabTree {
         let seq = frames.retire_doc(doc);
         retire_refs_of_retired_docs(frames, &self.refs);
         seq
+    }
+
+    /// `tree`'s aria tree under `ask`, which a snapshot prints. In ai mode the tab's ref table
+    /// assigns the refs the text prints, under the seqs `DocTable` gave the tree's documents, so
+    /// every printed ref is one `aria-ref` resolves; the lock is held for the emission only,
+    /// which is synchronous.
+    pub(crate) fn aria(&self, tree: &SnapshotTree, ask: TreeAsk) -> Result<AriaTree, AriaTooDeep> {
+        let TreeAsk {
+            ai,
+            root,
+            depth,
+            boxes,
+        } = ask;
+        if ai {
+            let mut refs = self.refs.lock().unwrap_or_else(PoisonError::into_inner);
+            tree.aria(
+                AriaAsk::ai(&mut refs)
+                    .with_root(root)
+                    .with_depth(depth)
+                    .with_boxes(boxes),
+            )
+        } else {
+            tree.aria(
+                AriaAsk::default_mode()
+                    .with_root(root)
+                    .with_depth(depth)
+                    .with_boxes(boxes),
+            )
+        }
     }
 
     /// Resolves `r` against the tab's ref table.
@@ -239,6 +422,7 @@ impl TabTree {
     ///
     /// The caller mirrors the mark before the first character is typed into the box: a capture
     /// copies the marks after its APC reply arrives, which masks only what was mirrored by then.
+    #[cfg(test)]
     pub(crate) fn mark_private(&self, site: Option<SiteKey>, node: DomNodeId) {
         self.private
             .lock()
@@ -326,6 +510,24 @@ impl RefResolver for TabTree {
     }
 }
 
+/// How many more times [`TabTree::capture_seeded`] captures when a seed brought marks in or a
+/// document did not answer, before it fails closed.
+const SEED_RECAPTURES: usize = 2;
+
+/// What reading one document's private marks came to.
+enum Seed {
+    /// The marks were read into the mirror, and the document recorded seeded: how many.
+    Read(usize),
+    /// No world of the document's frame answered in time, or the frame is gone: the document
+    /// stays unseeded, and no tree that holds it may be returned.
+    Unread,
+}
+
+/// How long a cached world has to answer the proof that it outlived a capture: the browser's own
+/// deadline for a subframe's content (contract P6, `subframe_timeout_ms`), so a hung frame costs a
+/// capture no more than it costs the capture itself.
+const PROOF_BUDGET: Duration = Duration::from_secs(2);
+
 /// Probes every cached world installed strictly before `requested_at` with `probe::describe` in
 /// parallel after the APC reply arrives (design sections 6.2 and 6.3).
 ///
@@ -342,14 +544,20 @@ async fn prove_pre_capture_worlds(
         .filter(|world| world.installed_at() < requested_at)
         .collect();
 
+    // Each proof waits at most as long as the browser waits for a subframe's content: a world
+    // whose renderer hangs never answers, and without a bound every capture of its tab would
+    // wait on it forever. A world that does not answer in time is left unproven, not gone.
     let checks = eligible.into_iter().map(|world| async move {
-        let reply = probe::describe(&world).await;
+        let reply = time::timeout(PROOF_BUDGET, probe::describe(&world)).await;
         (world, reply)
     });
     let results = future::join_all(checks).await;
 
     let mut proven: HashMap<FrameId, IsolatedWorld> = HashMap::new();
     for (world, reply) in results {
+        let Ok(reply) = reply else {
+            continue;
+        };
         match reply {
             Ok(ProbeReply::Described { .. }) => {
                 let frame = world.frame().clone();
@@ -1185,9 +1393,13 @@ mod tests {
         );
         assert_eq!(tab.script().apc_count(), baseline_captures);
 
-        // Unknown never-issued seq and unknown ref number on live seq fail InvalidInput with 0
-        // captures.
-        for unknown in ["f99e1", "e99"] {
+        // A never-issued seq is no ref at all (InvalidInput); an unknown ref number under a live
+        // document's seq names an element that is not on the page (ElementDetached), as the
+        // page's own ref map answered before the switch-over (frames_live). Neither captures.
+        for (unknown, code) in [
+            ("f99e1", ErrorCode::InvalidInput),
+            ("e99", ErrorCode::ElementDetached),
+        ] {
             let err = tree
                 .hydrate_ref(&scope, &page, jump(unknown)?)
                 .await
@@ -1195,8 +1407,8 @@ mod tests {
                 .ok_or("unknown ref must fail")?;
             assert_eq!(
                 err.error_code(),
-                Some(ErrorCode::InvalidInput),
-                "unknown ref {unknown} must fail InvalidInput: {err}"
+                Some(code),
+                "unknown ref {unknown} must fail {code:?}: {err}"
             );
             assert_eq!(tab.script().apc_count(), baseline_captures);
         }

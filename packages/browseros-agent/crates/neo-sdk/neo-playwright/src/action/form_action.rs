@@ -312,7 +312,7 @@ impl<'a> FormRunner<'a> {
         row: &Row,
         found: bool,
     ) -> Result<Checked, PlaywrightError> {
-        let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
+        let target = pin.map_or_else(|| Subject::first_target(located), ProbeTarget::Pin);
         let request = if self.force {
             ProbeRequest::Resolve {
                 target,

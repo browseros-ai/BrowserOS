@@ -7,7 +7,7 @@ import type { FrameExpectParams } from '../../../neo-playwright/third_party/play
 import type { FailureOutput } from './failure-output'
 import type { ExpectPoll, ExpectRequest, ReplyTo } from './protocol'
 import { type Found, queryAll, resolveTarget } from './resolve'
-import { type ExpectCheck, expectFailureSnapshot, type World } from './world'
+import type { ExpectCheck, World } from './world'
 
 /**
  * Where `expect(page).toMatchAriaSnapshot` matches its template: upstream's `body`
@@ -52,23 +52,9 @@ export async function expect(
   const { element } = found
   const resolved = world.injected.previewNode(element)
   const check = await output.check(element, params, request.frameVisible)
-  const reply = poll(check, resolved)
-  // Upstream's InjectedScript.expect snapshots only a poll that fails the matcher, so a passing
-  // poll costs no aria tree.
-  if (check.matches === params.isNot) {
-    // Dispatch's synchronous hooks ended at the await. The captured request owner must
-    // guard this later tree, even when the matcher itself compared a real field value.
-    const ariaSnapshot = output.tree(element, () =>
-      expectFailureSnapshot(
-        world.injected,
-        element,
-        params,
-        request.frameVisible,
-      ),
-    )
-    if (ariaSnapshot !== undefined) reply.ariaSnapshot = ariaSnapshot
-  }
-  return reply
+  // No aria snapshot rides on a failing poll: the page has no ARIA engine any more
+  // (apc-engine-design 9.3). Rust attaches the tree's for the matchers it answers itself.
+  return poll(check, resolved)
 }
 
 function poll(check: ExpectCheck, resolved: string): ExpectPoll {

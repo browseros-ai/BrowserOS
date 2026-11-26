@@ -18,7 +18,7 @@
 use crate::locator_handler::{self, Prechecks};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
+use crate::probe::{ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, HandleSite, Resolved, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, Strictness, Target};
 use crate::{ErrorCode, PlaywrightError};
@@ -95,15 +95,11 @@ impl<'a> Subject<'a> {
         locator_handler::checkpoint(self.scope, self.page).await
     }
 
-    /// The target of each pass's first request, before anything is pinned: the locator's last
-    /// chunk, or the handle's node.
-    pub(crate) fn first_target(&self) -> ProbeTarget {
-        match &self.of {
-            Of::Locator { target, .. } => {
-                ProbeTarget::Chunk(ParsedSelector::of(target.chunks.last()))
-            }
-            Of::Handle(_) => ProbeTarget::Root,
-        }
+    /// The target of each pass's first request, before anything is pinned: what the pass's
+    /// locator named in its last world (its chunk, or the set the APC tree resolved it to), or
+    /// the handle's node.
+    pub(crate) fn first_target(located: &Resolved) -> ProbeTarget {
+        located.target().clone()
     }
 
     /// The element left its document between two requests: a locator logs upstream's line and

@@ -1218,7 +1218,7 @@ class Printer {
   control(node, level, text, hidden) {
     let value;
     if (node.text !== undefined && node.text !== node.name)
-      value = node.text;
+      value = text || node.role !== "generic" || node.name ? node.text : clip(node.text, OWN_TEXT_CLIP);
     else if (FIELD.has(node.role) && node.text === undefined) {
       const own = ownText(node, this.inert);
       if (own !== "" && own !== node.name)

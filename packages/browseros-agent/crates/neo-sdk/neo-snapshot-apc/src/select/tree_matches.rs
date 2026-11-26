@@ -108,28 +108,33 @@ impl StrictViolation {
     /// When there are fewer lines than matches, upstream ends the list with `...`.
     #[must_use]
     pub fn message(&self, locator: &str, previews: &[StrictPreview]) -> String {
-        let mut message = format!(
-            "strict mode violation: {locator} resolved to {} elements:",
-            self.count
-        );
-        let listed = previews.iter().take(Self::PREVIEW_LIMIT);
-        let mut lines = 0;
-        for (index, line) in listed.enumerate() {
-            let _ = write!(
-                message,
-                "\n    {}) {} aka {}",
-                index + 1,
-                line.preview,
-                line.aka
-            );
-            lines += 1;
-        }
-        if lines < self.count {
-            message.push_str("\n    ...");
-        }
-        message.push('\n');
-        message
+        strict_message(locator, self.count, previews)
     }
+}
+
+/// Upstream's `strictModeViolationError` text for `count` matches of `locator`, the first of them
+/// worded by `previews`: the one formatter of a violation Rust decided ([`StrictViolation`]) and
+/// of one the page decided whose `aka` lines Rust rewrote with the tree's role locators.
+#[must_use]
+pub fn strict_message(locator: &str, count: usize, previews: &[StrictPreview]) -> String {
+    let mut message = format!("strict mode violation: {locator} resolved to {count} elements:");
+    let listed = previews.iter().take(StrictViolation::PREVIEW_LIMIT);
+    let mut lines = 0;
+    for (index, line) in listed.enumerate() {
+        let _ = write!(
+            message,
+            "\n    {}) {} aka {}",
+            index + 1,
+            line.preview,
+            line.aka
+        );
+        lines += 1;
+    }
+    if lines < count {
+        message.push_str("\n    ...");
+    }
+    message.push('\n');
+    message
 }
 
 /// The page's lines for one element of a strict-mode violation: `previewNode`'s markup and the

@@ -1,32 +1,24 @@
 //! The snapshot ops: `page.ariaSnapshot` and `locator.ariaSnapshot`, and their JSON twins
-//! `page.ariaSnapshotJSON` and `locator.ariaSnapshotJSON`, every frame read by its own probe in
-//! its own isolated world, as upstream's server reads them (`ariaSnapshotJSONForFrame`,
-//! server/page.ts at v1.64.1).
+//! `page.ariaSnapshotJSON` and `locator.ariaSnapshotJSON`, read from the tab's APC tree
+//! (`tree_snapshot.rs`): one capture holds every frame, child frames in place, so nothing is
+//! read frame by frame or stitched.
 //!
 //! ```text
-//!  root frame   snapshot { root }       the op: its own retry loop and Playwright timeout
-//!     │           → json, iframes [{ ref, depth, src }]
-//!     └─ every iframe ref, all at once, each child inside its own FRAME_BUDGET:
-//!          the world that printed the ref (its f<seq> prefix) ─ hop(aria-ref=<ref>)
-//!            ─ the child's world ─ snapshot { root: document }
-//!          read      → the same below it, each grandchild on a fresh budget
-//!          not read  → PartialFrame { ref, frame: src, reason }; the iframe keeps its ref
-//!  aria_snapshot::stitch: merge, the name rule → { json, partial }
+//!  page     capture ─ TabTree::aria(Page) ─ marked: the cover survey's `# on top:` lines
+//!  locator  the resolver pins the one element ─ capture ─ TabTree::aria(its subtree)
 //!
 //!  then, by the input:
-//!    no `format`          the stitched tree, which the prelude renders   (until piece 8)
+//!    no `format`          the tree, which the prelude renders   (until piece 8)
 //!    `format`             the text, printed by neo_snapshot::render (snapshot_text.rs)
 //!    `format`, `compare`  both, from this one read (test harnesses only)
 //!    ariaSnapshotJSON     `{ snapshot: tree }`, never marked
 //! ```
 //!
 //! Marked (`clickable` on the tree path, Neo's format or `mode: 'full'` on the text path, in
-//! mode `ai` only), each frame's snapshot call also carries that frame's clickable targets and
-//! the seeds of its closed shadow roots (`clickable_targets`), read before it; a locator's own
-//! frame resolves its element first, so they come from the world it landed in.
+//! mode `ai` only): the page's cover survey and the closed-root seeds. What Chromium reports
+//! clickable and what is inert come with the tree itself.
 //!
-//! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
-//! prints no iframes to follow: it reads one frame, as upstream's does.
+//! A snapshot only reads, so it never calls `send_effect`.
 //!
 //! The tab's delta baseline (`snapshot_baselines.rs`, `pending_baselines.rs`): on the text path a
 //! whole page in Neo's format reads the stored text and records its own as pending itself, after
@@ -34,43 +26,27 @@
 //! does both through `page.snapshotBaseline` and `page.snapshotPending`, Neo's own ops, once it
 //! has rendered the text; the host commits or drops what is pending when the run ends.
 
-use std::borrow::Cow;
-use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
-use std::{fmt, mem};
-
-use futures_util::future::{self, BoxFuture};
 use neo_snapshot::AriaNode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::time::{self, Instant};
+use tokio::time::Instant;
 use ts_rs::TS;
 
-use super::aria_snapshot::{
-    self, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame, SnapshotResult, Unmarked,
-};
-use super::clickable_targets::{Feed, Marking};
+use super::aria_snapshot::SnapshotResult;
 use super::snapshot_text::{
     self, Finish, LocatorFormat, PageFormat, ScopeClock, SnapshotAnswer, SnapshotCompared,
     SnapshotText, TabStore, TextAsk,
 };
+use super::tree_snapshot::{self, TreeRead};
 use super::{Baseline, SnapshotForm};
-use crate::action::{self, OnTopNote};
-use crate::backoff::Backoff;
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::{MAX_VALUE_DEPTH, OpPage};
-use crate::playwright_error::TARGET_CRASH_MESSAGE;
-use crate::probe::{
-    self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe,
-    SnapshotMode, SurveyLayer, Want,
-};
-use crate::resolve::{self, Hopped, Landed, Resolver};
-use crate::target::{Chunk, PageRef, Strictness, Target};
+use crate::page::OpPage;
+use crate::probe::SnapshotMode;
+use crate::target::{PageRef, Strictness, Target};
 use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
-use crate::world::{IsolatedWorld, Pin, Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
@@ -196,13 +172,6 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
     }
 }
 
-/// How long one child frame's own calls may take: the hop into it, its world's install and its
-/// snapshot (decisions.md). A frame that misses it is reported partial and
-/// the rest of the page is returned; upstream instead waits on a hung frame until the whole call
-/// times out. Its children start budgets of their own, so a slow level does not eat the levels
-/// below.
-const FRAME_BUDGET: Duration = Duration::from_secs(2);
-
 /// `page.ariaSnapshot`.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -303,9 +272,11 @@ struct LocatorTreeInput {
 }
 options!(LocatorTreeInput);
 
-/// Upstream's `FrameAriaSnapshotJSONResult`: the tree, for `ariaSnapshotJSON()`.
+/// Upstream's `FrameAriaSnapshotJSONResult`: the tree, for `ariaSnapshotJSON()`. Not the
+/// engine's `SnapshotTree`, the capture this reply's nodes are emitted from.
 #[derive(Debug, Serialize, TS)]
-struct SnapshotTree {
+#[ts(rename = "SnapshotTree")]
+struct AriaTreeReply {
     // As on `SnapshotResult`: the nodes' type lives in neo-snapshot, which knows nothing of ts-rs.
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     snapshot: Vec<AriaNode>,
@@ -369,16 +340,6 @@ pub(crate) async fn invoke(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     route(op, Run { pw, scope, args }).await
-}
-
-/// What one tree read asks of every frame.
-#[derive(Clone, Copy, Debug)]
-struct TreeRead {
-    mode: SnapshotMode,
-    depth: Option<i64>,
-    boxes: bool,
-    /// Neo's marks: clickable marking, the cover survey and the inert marks.
-    marked: bool,
 }
 
 /// How a snapshot call answers, decided from its input before anything is sent.
@@ -512,7 +473,7 @@ async fn page_tree(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageTreeInput,
-) -> Result<SnapshotTree, PlaywrightError> {
+) -> Result<AriaTreeReply, PlaywrightError> {
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
     if input.mode == SnapshotMode::Ai {
         scope.run_state().opened_tabs.refs_issued(page.tab());
@@ -524,7 +485,7 @@ async fn page_tree(
         marked: false,
     };
     let stitched = read_page(scope, &page, read).await?;
-    Ok(SnapshotTree {
+    Ok(AriaTreeReply {
         snapshot: stitched.json,
     })
 }
@@ -544,47 +505,13 @@ fn with_call(scope: &OpScope<'_>, tree: SnapshotResult, document: u32) -> Snapsh
     }
 }
 
-/// The page's snapshot from the main frame's body. The main frame is the op: while its
-/// document has no body yet, or its world went away under a navigation, it tries again on the
-/// outer backoff until the op's timeout, as upstream polls for the body. Its child frames never
-/// make it wait.
+/// The page's snapshot, from the tab's APC tree (`tree_snapshot`).
 async fn read_page(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     read: TreeRead,
 ) -> Result<SnapshotResult, PlaywrightError> {
-    let request = ProbeRequest::Snapshot {
-        survey_covers: read.marked,
-        mark_inert: read.marked,
-        root: ProbeTarget::Document,
-        mode: read.mode,
-        depth: read.depth,
-        boxes: read.boxes,
-        closed_roots: 0,
-    };
-    let backoff = Backoff::outer(scope.timeout());
-    for attempt in 0.. {
-        if scope.sleep(backoff.wait(attempt)).await.is_err() {
-            return Err(scope.timed_out(ErrorCode::WaitTimeout));
-        }
-        // Each attempt captures afresh: a document read before its body existed has no targets.
-        let snapshotter = Snapshotter {
-            scope,
-            page,
-            mode: read.mode,
-            boxes: read.boxes,
-            marking: read.marked.then(Marking::new),
-            reading: Mutex::default(),
-        };
-        let Ok(main) = scope.within(snapshotter.main_frame(&request)).await else {
-            snapshotter.cut_off();
-            return Err(scope.timed_out(ErrorCode::WaitTimeout));
-        };
-        if let Some(root) = main? {
-            return snapshotter.stitched(root, read.depth).await;
-        }
-    }
-    Err(scope.timed_out(ErrorCode::WaitTimeout))
+    tree_snapshot::read_page(scope, page, read).await
 }
 
 /// `locator.ariaSnapshot`: one element's tree, then its text when the input names a format. A
@@ -632,7 +559,7 @@ async fn locator_tree(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: LocatorTreeInput,
-) -> Result<SnapshotTree, PlaywrightError> {
+) -> Result<AriaTreeReply, PlaywrightError> {
     let read = TreeRead {
         mode: input.mode,
         depth: input.depth,
@@ -640,14 +567,14 @@ async fn locator_tree(
         marked: false,
     };
     let tree = read_locator(pw, scope, &input.target, input.strict, read).await?;
-    Ok(SnapshotTree {
+    Ok(AriaTreeReply {
         snapshot: tree.json,
     })
 }
 
-/// One element's snapshot, with the frames inside it. It waits for the locator's one element
-/// in both modes, as upstream's default mode does, through the resolver's frame hops and ref
-/// jumps; a strict violation, a stale ref and an error the page throws end it at once.
+/// One element's snapshot, with the frames inside it, from the tab's APC tree
+/// (`tree_snapshot`). It waits for the locator's one element in both modes, as upstream's
+/// default mode does, through the resolver's frame hops and ref jumps.
 async fn read_locator(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -662,83 +589,7 @@ async fn read_locator(
     if read.mode == SnapshotMode::Ai {
         scope.run_state().opened_tabs.refs_issued(page.tab());
     }
-    let marked = read.marked;
-    let resolver = Resolver::new(&page, scope, target, strict);
-    scope.log(format!("waiting for {}", target.display));
-    let backoff = Backoff::outer(scope.timeout());
-    for attempt in 0.. {
-        if scope.sleep(backoff.wait(attempt)).await.is_err() {
-            return Err(scope.timed_out(ErrorCode::NoMatch));
-        }
-        let snapshotter = Snapshotter {
-            scope,
-            page: &page,
-            mode: read.mode,
-            boxes: read.boxes,
-            marking: marked.then(Marking::new),
-            reading: Mutex::default(),
-        };
-        // Marked, the element is pinned first: its frame's targets are read in the world it
-        // landed in, then the snapshot is taken there with them. Unmarked, one call does both.
-        let request = |last, _frame_visible| {
-            let root = ProbeTarget::Chunk(last);
-            if marked {
-                ProbeRequest::Resolve {
-                    target: root,
-                    strictness: Strictness::Strict,
-                    want: Want::Element,
-                }
-            } else {
-                snapshotter.request(root, read.depth)
-            }
-        };
-        let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
-            return Err(scope.timed_out(ErrorCode::NoMatch));
-        };
-        let Some(Landed { reply, world, path }) = attempt? else {
-            continue;
-        };
-        let SnapshotRead { reply, unmarked } = match reply {
-            ProbeReply::Element { pin, .. } => {
-                let parent = path.hops().last().map(|hop| &hop.parent);
-                let pinned = snapshotter.pinned(&world, parent, pin, read.depth);
-                let Ok(pinned) = scope.within(pinned).await else {
-                    return Err(scope.timed_out(ErrorCode::NoMatch));
-                };
-                pinned?
-            }
-            reply => SnapshotRead {
-                reply,
-                unmarked: None,
-            },
-        };
-        match reply {
-            ProbeReply::Snapshot { json, iframes, .. } => {
-                let root = FrameReply {
-                    json,
-                    iframes,
-                    on_top: Vec::new(),
-                    unmarked,
-                };
-                return snapshotter.stitched(root, read.depth).await;
-            }
-            ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
-            other => return Err(resolver.refused(other)),
-        }
-    }
-    Err(scope.timed_out(ErrorCode::NoMatch))
-}
-
-/// `request` as it goes with `seeds` closed-root seeds first among its nodes; borrowed when it
-/// carries none, which is every request but a marked snapshot's on a page with a closed root.
-fn with_closed_roots(request: &ProbeRequest, seeds: usize) -> Cow<'_, ProbeRequest> {
-    let mut request = Cow::Borrowed(request);
-    if seeds > 0
-        && let ProbeRequest::Snapshot { closed_roots, .. } = request.to_mut()
-    {
-        *closed_roots = u32::try_from(seeds).unwrap_or(u32::MAX);
-    }
-    request
+    tree_snapshot::read_locator(scope, &page, target, strict, read).await
 }
 
 /// The tab's stored baseline for the snapshot's document, or `null`: none yet, its main frame
@@ -815,533 +666,10 @@ fn within_snapshot_call(
     }
 }
 
-/// What every frame of one snapshot op shares.
-struct Snapshotter<'op> {
-    scope: &'op OpScope<'op>,
-    page: &'op OpPage<'op>,
-    mode: SnapshotMode,
-    /// Asked of every frame, as upstream passes its options down to each child frame.
-    boxes: bool,
-    /// Clickable marking, for `clickable` in mode `ai`, the only mode that mints refs.
-    marking: Option<Marking>,
-    /// When the main frame's tree read began, while it runs: what a timeout logs as the phase it
-    /// cut off ([`Snapshotter::cut_off`]).
-    reading: Mutex<Option<Instant>>,
-}
-
-/// The probe reply and its frame's clickable-check status travel together. Only the caller
-/// reading the snapshot's root promotes that status; descendants retain their log notes.
-struct SnapshotRead {
-    reply: ProbeReply,
-    unmarked: Option<Unmarked>,
-}
-
-/// One frame's `snapshot` reply, decoded at the boundary.
-struct FrameReply {
-    json: Vec<AriaNode>,
-    iframes: Vec<SnapshotIframe>,
-    on_top: Vec<aria_snapshot::SnapshotTop>,
-    /// Carried only by the snapshot's root. Descendants keep their own failures in the log.
-    unmarked: Option<Unmarked>,
-}
-
-impl FrameReply {
-    /// A frame whose document has no body yet. Upstream reads it as no nodes, so its iframe
-    /// stays a leaf without a partial line.
-    fn empty() -> Self {
-        Self {
-            json: Vec::new(),
-            iframes: Vec::new(),
-            on_top: Vec::new(),
-            unmarked: None,
-        }
-    }
-}
-
-/// Why a child frame was not read: the reason its `# partial` line prints.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Unread {
-    /// Its calls missed [`FRAME_BUDGET`], as an unresponsive renderer's do.
-    Timeout,
-    /// The iframe, its document or its session went away during the read.
-    Detached,
-    /// The iframe has no frame to enter yet.
-    Loading,
-    /// CDP or the probe failed there in the way the code names.
-    Failed(ErrorCode),
-    /// The child replied promptly, but its tree cannot fit the admitted JSON depth.
-    Depth(usize),
-}
-
-impl fmt::Display for Unread {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Timeout => write!(f, "timeout after {} ms", FRAME_BUDGET.as_millis()),
-            Self::Detached => f.write_str("frame detached"),
-            Self::Loading => f.write_str("frame not loaded"),
-            Self::Depth(levels) => f.write_str(&probe::depth_error(*levels)),
-            Self::Failed(ErrorCode::TargetCrashed) => f.write_str(TARGET_CRASH_MESSAGE),
-            Self::Failed(code) => f.write_str(&code.as_str().replace('_', " ")),
-        }
-    }
-}
-
 /// Whether a snapshot is marked: `clickable` asks for it, and only mode `ai` mints the refs
 /// marking names. Default mode ignores the key, as it prints no refs.
 fn marks(mode: SnapshotMode, clickable: bool) -> bool {
     clickable && mode == SnapshotMode::Ai
-}
-
-impl Snapshotter<'_> {
-    /// Each locator, pin and child frame inherits this snapshot's rendering options. The
-    /// common probe sender carries the scope's output policy independently of these options.
-    fn request(&self, root: ProbeTarget, depth: Option<i64>) -> ProbeRequest {
-        ProbeRequest::Snapshot {
-            survey_covers: false,
-            mark_inert: self.marking.is_some(),
-            root,
-            mode: self.mode,
-            depth,
-            boxes: self.boxes,
-            closed_roots: 0,
-        }
-    }
-
-    /// `request` in `world`, with that frame's clickable targets and closed-root seeds when the
-    /// snapshot is marked.
-    /// `parent` is the world of the frame that holds its iframe, `None` for the main frame;
-    /// `frame_deadline` is when a child frame's [`FRAME_BUDGET`] ends.
-    ///
-    /// A whole page's main frame logs its two phases, the two that grow with the page: Neo's
-    /// clickable marking, then Playwright's walk of the page with the tree's transfer. An op
-    /// that times out shows them in its error: one that ran out during the walk ends with
-    /// `reading the main frame's tree: unfinished after N ms` ([`Snapshotter::cut_off`]), under
-    /// the marking line that says how much of the timeout marking took.
-    async fn call(
-        &self,
-        world: &IsolatedWorld,
-        parent: Option<&IsolatedWorld>,
-        frame_deadline: Option<Instant>,
-        request: &ProbeRequest,
-    ) -> Result<SnapshotRead, ProbeFailure> {
-        let main = parent.is_none()
-            && matches!(
-                request,
-                ProbeRequest::Snapshot {
-                    root: ProbeTarget::Document,
-                    ..
-                }
-            );
-        let mut unmarked = None;
-        let feed = match &self.marking {
-            Some(marking) => {
-                let started = Instant::now();
-                let feed = marking
-                    .feed(self.scope, world, parent, frame_deadline)
-                    .await;
-                // A frame marking skipped has a line of its own, with its time.
-                if main && let Ok(feed) = &feed {
-                    let seeds = match feed.seeds.len() {
-                        0 => String::new(),
-                        seeds => format!(", closed shadow root seeds: {seeds}"),
-                    };
-                    self.scope.log(format!(
-                        "  clickable marking: {} ms, {} elements to mark{seeds}",
-                        started.elapsed().as_millis(),
-                        feed.targets.len()
-                    ));
-                }
-                feed.unwrap_or_else(|skipped| {
-                    unmarked = Some(Unmarked {
-                        reason: skipped.words().to_owned(),
-                    });
-                    Feed::default()
-                })
-            }
-            None => Feed::default(),
-        };
-        let request = with_closed_roots(request, feed.seeds.len());
-        let nodes = [feed.seeds, feed.targets].concat();
-        let started = Instant::now();
-        if main {
-            *self.reading() = Some(started);
-        }
-        let reply =
-            probe::call_with_nodes(self.scope, self.page, world, &request, None, &nodes).await;
-        if main {
-            self.log_main_read(&reply, started);
-        }
-        if let Ok(ProbeReply::Snapshot {
-            marks_skipped: true,
-            ..
-        }) = &reply
-        {
-            self.scope
-                .log("  clickable marking skipped a frame (page shape)".to_owned());
-        }
-        reply.map(|reply| {
-            // Keep the earlier capture failure when both steps failed. A locator's root may
-            // have a parent frame, so callers promote this status by scope, never by ancestry.
-            if unmarked.is_none()
-                && self.marking.is_some()
-                && matches!(
-                    &reply,
-                    ProbeReply::Snapshot {
-                        marks_skipped: true,
-                        ..
-                    }
-                )
-            {
-                unmarked = Some(Unmarked {
-                    reason: "page shape".to_owned(),
-                });
-            }
-            SnapshotRead { reply, unmarked }
-        })
-    }
-
-    /// Keep the main frame's existing timings on its operation log. Child and locator reads
-    /// still carry check status, but do not acquire whole-page phase logging with the notice.
-    fn log_main_read(&self, reply: &Result<ProbeReply, ProbeFailure>, started: Instant) {
-        if let Ok(ProbeReply::Snapshot {
-            survey_phases: Some(phases),
-            survey_tested,
-            ..
-        }) = reply
-        {
-            self.scope.log(format!("  cover survey phases: hits {:.3} ms, count {:.3} ms, naming {:.3} ms, linking {:.3} ms, marks {:.3} ms", phases.hits, phases.count, phases.naming, phases.linking, phases.marks));
-            if phases.stopped {
-                self.scope.log(format!(
-                    "  cover survey stopped at its budget after {} controls",
-                    survey_tested.unwrap_or_default()
-                ));
-            }
-        }
-        if let Ok(ProbeReply::Snapshot {
-            on_top_skipped: true,
-            ..
-        }) = reply
-        {
-            self.scope
-                .log("  cover survey or content move skipped (page or engine shape)".to_owned());
-        }
-        if let Ok(ProbeReply::Snapshot {
-            survey_tested: Some(tested),
-            survey_ms: Some(elapsed),
-            ..
-        }) = reply
-        {
-            self.scope.log(format!(
-                "  cover survey: {tested} controls tested in {elapsed:.3} ms"
-            ));
-        }
-        if let Ok(ProbeReply::Snapshot {
-            inert_marking_ms: Some(elapsed),
-            ..
-        }) = reply
-        {
-            self.scope.log(format!("  inert marking: {elapsed:.3} ms"));
-        }
-        *self.reading() = None;
-        if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
-            self.scope.log(format!(
-                "  read the main frame's tree in {} ms",
-                started.elapsed().as_millis()
-            ));
-        }
-    }
-
-    /// The op's deadline dropped the main frame's read: logs the tree read it cut off, with how
-    /// long it had run, so the timeout's error ends at the phase that ran out.
-    fn cut_off(&self) {
-        if let Some(started) = self.reading().take() {
-            self.scope.log(format!(
-                "  reading the main frame's tree: unfinished after {} ms",
-                started.elapsed().as_millis()
-            ));
-        }
-    }
-
-    fn reading(&self) -> MutexGuard<'_, Option<Instant>> {
-        self.reading.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// A marked locator's snapshot, from the element its resolve pinned in `world`. A world
-    /// that went away answers `detached`, so the locator tries again.
-    async fn pinned(
-        &self,
-        world: &IsolatedWorld,
-        parent: Option<&IsolatedWorld>,
-        pin: Pin,
-        depth: Option<i64>,
-    ) -> Result<SnapshotRead, PlaywrightError> {
-        let request = self.request(ProbeTarget::Pin(pin), depth);
-        match self.call(world, parent, None, &request).await {
-            Ok(reply) => Ok(reply),
-            Err(ProbeFailure::Gone(_)) => {
-                self.page.frames().invalidate(world);
-                Ok(SnapshotRead {
-                    reply: ProbeReply::Detached,
-                    unmarked: None,
-                })
-            }
-            Err(failure) => Err(resolve::failed(self.scope, failure)),
-        }
-    }
-
-    /// One read of the main frame: its reply, or `None` to try again.
-    async fn main_frame(
-        &self,
-        request: &ProbeRequest,
-    ) -> Result<Option<FrameReply>, PlaywrightError> {
-        let world = match self
-            .page
-            .world(&self.page.main_endpoint(), Place::Main)
-            .await
-        {
-            Ok(world) => world,
-            Err(ProbeFailure::Gone(_)) => return Ok(None),
-            Err(failure) => return Err(resolve::failed(self.scope, failure)),
-        };
-        match self.call(&world, None, None, request).await {
-            Ok(SnapshotRead {
-                reply:
-                    ProbeReply::Snapshot {
-                        json,
-                        iframes,
-                        on_top,
-                        ..
-                    },
-                unmarked,
-            }) => Ok(Some(FrameReply {
-                json,
-                iframes,
-                on_top: on_top.iter().map(top_note).collect(),
-                unmarked,
-            })),
-            Ok(SnapshotRead {
-                reply: ProbeReply::None { stale_ref: None },
-                ..
-            }) => Ok(None),
-            Ok(SnapshotRead { reply: other, .. }) => Err(resolve::refused(self.scope, other)),
-            // A navigation replaced the document: the next try installs in the new one.
-            Err(ProbeFailure::Gone(_)) => {
-                self.page.frames().invalidate(&world);
-                Ok(None)
-            }
-            Err(failure) => Err(resolve::failed(self.scope, failure)),
-        }
-    }
-
-    /// `root` with every frame below it read and stitched, and, once every frame is read, the
-    /// closed-root seeds marking found but could not send.
-    async fn stitched(
-        &self,
-        mut root: FrameReply,
-        depth: Option<i64>,
-    ) -> Result<SnapshotResult, PlaywrightError> {
-        let on_top = mem::take(&mut root.on_top);
-        let unmarked = root.unmarked.take();
-        let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
-        // The levels of JSON the result is sent as, its object above the deepest of `json`.
-        // `partial`, the only other field written here, is an array of flat notes. With the
-        // object that is three levels, far under the bound, so the walk leaves it out.
-        let nesting = 1 + neo_snapshot::json_depth(&result.json);
-        if nesting > MAX_VALUE_DEPTH {
-            return Err(self.scope.fail(
-                ErrorCode::Unsupported,
-                &probe::depth_error(nesting.saturating_sub(1) / 2),
-            ));
-        }
-        result.on_top = on_top;
-        result.unmarked = unmarked;
-        let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
-        result.closed_roots = self
-            .marking
-            .as_ref()
-            .and_then(Marking::unsent_seeds)
-            .map(|seeds| ClosedRoots {
-                sent: count(seeds.sent),
-                found: count(seeds.found),
-            });
-        Ok(result)
-    }
-
-    /// `frame`'s tree: every iframe it rendered, read at once (upstream's `Promise.all`). The
-    /// first child that withholds the snapshot drops the others. Boxed, because each child
-    /// below is read the same way.
-    fn below(
-        &self,
-        frame: FrameReply,
-        depth: Option<i64>,
-    ) -> BoxFuture<'_, Result<FrameSnapshot, PlaywrightError>> {
-        Box::pin(async move {
-            let FrameReply { json, iframes, .. } = frame;
-            let children =
-                future::try_join_all(iframes.into_iter().map(|iframe| self.child(iframe, depth)))
-                    .await?;
-            Ok(FrameSnapshot { json, children })
-        })
-    }
-
-    /// One child frame: entered and read inside [`FRAME_BUDGET`], then its own children on
-    /// budgets of their own. A frame that was not read is a partial frame, so one frame never
-    /// costs the rest of the page. The host's cancel and the run deadline still drop the op.
-    async fn child(
-        &self,
-        iframe: SnapshotIframe,
-        depth: Option<i64>,
-    ) -> Result<ChildFrame, PlaywrightError> {
-        let depth = child_depth(depth, iframe.depth);
-        // A dropped read leaves nothing behind: an install interrupted inside its cell
-        // leaves the cell empty for the next op, and the op's objects go with its scope.
-        let deadline = Instant::now() + FRAME_BUDGET;
-        let read = time::timeout_at(deadline, self.enter(&iframe.r#ref, depth, deadline))
-            .await
-            .unwrap_or(Err(Unread::Timeout));
-        match read {
-            Ok(frame) => Ok(ChildFrame::Read {
-                iframe_ref: iframe.r#ref,
-                src: iframe.src,
-                snapshot: self.below(frame, depth).await?,
-            }),
-            Err(unread) => Ok(ChildFrame::Partial(PartialFrame {
-                r#ref: iframe.r#ref,
-                frame: iframe.src,
-                reason: unread.to_string(),
-            })),
-        }
-    }
-
-    /// Enters the frame behind the iframe `iframe_ref` and reads it at its body. The hop starts in the world that printed the ref, named by its
-    /// prefix (upstream jumps there the same way, `_jumpToAriaRefFrameIfNeeded`), and goes
-    /// through `aria-ref=<ref>`, so it records the child's parent link like any resolver hop. A
-    /// child world that went away under the read (its frame navigated since the install) is
-    /// dropped and entered once more, as the resolver's liveness rule does. `deadline`, when
-    /// the frame's [`FRAME_BUDGET`] ends, bounds its clickable marking too.
-    async fn enter(
-        &self,
-        iframe_ref: &str,
-        depth: Option<i64>,
-        deadline: Instant,
-    ) -> Result<FrameReply, Unread> {
-        // The engine mints every ref this reads, so one that is not a ref is a probe bug.
-        let Ok(chunk) = Chunk::aria_ref(iframe_ref) else {
-            return Err(Unread::Failed(ErrorCode::Internal));
-        };
-        let Some(printer) = chunk.jump else {
-            return Err(Unread::Failed(ErrorCode::Internal));
-        };
-        let request = self.request(ProbeTarget::Document, depth);
-        for _ in 0..2 {
-            let SeqLookup::Live { world: parent, .. } = self.page.frames().by_seq(printer.seq)
-            else {
-                return Err(Unread::Detached);
-            };
-            let hopped =
-                resolve::hop(self.page, self.scope, &parent, &chunk, Strictness::Strict).await;
-            let child = match hopped {
-                Ok(Hopped::Into { child, .. }) => child,
-                Ok(Hopped::Missing) => return Err(Unread::Loading),
-                Ok(Hopped::ParentGone) => {
-                    self.page.frames().invalidate(&parent);
-                    return Err(Unread::Detached);
-                }
-                Ok(Hopped::ChildGone) => continue,
-                Err(error) => {
-                    return Err(Unread::Failed(
-                        error.error_code().unwrap_or(ErrorCode::Internal),
-                    ));
-                }
-            };
-            match self
-                .call(&child, Some(&parent), Some(deadline), &request)
-                .await
-            {
-                Ok(SnapshotRead {
-                    reply: ProbeReply::Snapshot { json, iframes, .. },
-                    ..
-                }) => {
-                    return Ok(FrameReply {
-                        json,
-                        iframes,
-                        on_top: Vec::new(),
-                        unmarked: None,
-                    });
-                }
-                Ok(SnapshotRead {
-                    reply: ProbeReply::None { .. },
-                    ..
-                }) => return Ok(FrameReply::empty()),
-                Ok(SnapshotRead {
-                    reply:
-                        ProbeReply::Error {
-                            class: ErrorClass::Unsupported,
-                            tree_depth: Some(levels),
-                            ..
-                        },
-                    ..
-                }) => return Err(Unread::Depth(levels)),
-                Ok(SnapshotRead { reply: other, .. }) => {
-                    let refused = resolve::refused(self.scope, other);
-                    return Err(Unread::Failed(
-                        refused.error_code().unwrap_or(ErrorCode::Internal),
-                    ));
-                }
-                Err(ProbeFailure::Gone(_)) => self.page.frames().invalidate(&child),
-                Err(ProbeFailure::Cdp(error)) => {
-                    return Err(Unread::Failed(ErrorCode::from_core(&error)));
-                }
-                // A reply this build cannot read, a node of its tree included (`reply_of`).
-                Err(ProbeFailure::Broken(_why)) => {
-                    return Err(Unread::Failed(ErrorCode::Internal));
-                }
-            }
-        }
-        Err(Unread::Detached)
-    }
-}
-
-/// A child frame's depth, as upstream computes it: the parent's minus the iframe's own depth
-/// minus one, and none when the parent has none or zero. It can come out zero or negative;
-/// the engine then renders the child whole, as upstream's does.
-fn child_depth(depth: Option<i64>, iframe_depth: u32) -> Option<i64> {
-    depth
-        .filter(|depth| *depth != 0)
-        .map(|depth| depth - i64::from(iframe_depth) - 1)
-}
-
-/// Names are already masked page facts; this is the same wording the covered answer owns.
-fn top_note(layer: &SurveyLayer) -> aria_snapshot::SnapshotTop {
-    let controls: Vec<_> = layer
-        .controls
-        .iter()
-        .map(|control| {
-            (
-                control.role.as_str(),
-                control.name.as_value(),
-                control.r#ref.as_str(),
-            )
-        })
-        .collect();
-    let note = OnTopNote {
-        role: &layer.role,
-        name: layer.name.as_value(),
-        reference: &layer.r#ref,
-        blank: layer.blank,
-        loading: layer.loading,
-        whole_view: layer.whole_view,
-        controls: &controls,
-        first_words: layer
-            .first_words
-            .as_ref()
-            .and_then(|words| words.as_value().as_str()),
-    };
-    aria_snapshot::SnapshotTop {
-        r#ref: layer.r#ref.clone(),
-        line: action::on_top_line(&note),
-        whole_view: layer.whole_view,
-    }
 }
 
 #[cfg(test)]
@@ -1350,41 +678,8 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{LocatorInput, PageInput, Unread, child_depth};
-    use crate::ErrorCode;
+    use super::{LocatorInput, PageInput};
     use crate::probe::SnapshotMode;
-
-    #[test]
-    fn tests_that_a_child_frame_s_depth_follows_upstream_s_arithmetic() {
-        // `options.depth ? options.depth - iframeDepths[ref] - 1 : undefined`
-        assert_eq!(child_depth(None, 2), None, "no depth stays unlimited");
-        assert_eq!(child_depth(Some(0), 2), None, "zero is falsy upstream");
-        assert_eq!(child_depth(Some(5), 1), Some(3));
-        assert_eq!(child_depth(Some(2), 1), Some(0));
-        assert_eq!(
-            child_depth(Some(1), 1),
-            Some(-1),
-            "an iframe at the limit still sends its child a depth"
-        );
-    }
-
-    #[test]
-    fn tests_that_partial_reasons_read_as_the_prelude_prints_them() {
-        assert_eq!(Unread::Timeout.to_string(), "timeout after 2000 ms");
-        assert_eq!(Unread::Detached.to_string(), "frame detached");
-        assert_eq!(
-            Unread::Failed(ErrorCode::TargetClosed).to_string(),
-            "target closed"
-        );
-    }
-
-    #[test]
-    fn target_crashed_partial_snapshot_keeps_plain_recovery_guidance() {
-        assert_eq!(
-            Unread::Failed(ErrorCode::TargetCrashed).to_string(),
-            "The tab's page crashed. Close it with page.close() and open a new page with context.newPage()."
-        );
-    }
 
     #[test]
     fn tests_that_snapshot_inputs_decode_as_wire_ts_declares_them() -> Result<(), Box<dyn Error>> {
@@ -1426,13 +721,5 @@ mod tests {
             );
         }
         Ok(())
-    }
-    #[test]
-    fn a_child_depth_reason_uses_tree_levels_and_an_actionable_cut() {
-        let reason = Unread::Depth(149).to_string();
-        assert!(reason.contains("149 levels deep"));
-        assert!(reason.contains("about 147"));
-        assert!(reason.contains("140 or less"));
-        assert!(reason.contains("locator's snapshot"));
     }
 }

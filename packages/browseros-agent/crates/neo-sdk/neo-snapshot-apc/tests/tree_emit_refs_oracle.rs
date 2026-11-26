@@ -39,8 +39,8 @@ mod parity_ledger;
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::fs;
 use std::path::PathBuf;
-use std::{fs, mem};
 
 use fixture_pages::{CANARY_PREFIX, FIXTURES};
 use neo_snapshot::{AriaChild, AriaNode, Baseline, Call, Earlier, Passed};
@@ -93,17 +93,10 @@ const AI_NODE_FIELDS: [Field; 10] = [
 
 /// Pages whose default-mode tree differs from the oracle's, and why. A page that starts to match
 /// fails until it leaves the list.
-const DEFAULT_TREE_DIFFERS: &[(&str, &str)] = &[
-    (
-        "hung-subframe",
-        "the hung frame has no document in the .pb (ledger Join, fixture design), so the tree \
-         holds a partial frame where the oracle holds the frame's content",
-    ),
-    (
-        "states",
-        "a nested aria-disabled=\"false\" does not stop inheritance (ledger Disabled, G2)",
-    ),
-];
+const DEFAULT_TREE_DIFFERS: &[(&str, &str)] = &[(
+    "states",
+    "a nested aria-disabled=\"false\" does not stop inheritance (ledger Disabled, G2)",
+)];
 /// Pages whose ai tree pairs zero-size controls with their labels (design 3.5), and how many.
 const CLICK_PROXIES: &[(&str, usize)] = &[("zero-size-checkbox", 2), ("zero-size-controls", 4)];
 
@@ -155,48 +148,6 @@ fn normalize_oracle_d20(nodes: &mut [AriaNode]) {
             }
         }
     }
-}
-
-/// Hangs each child frame's oracle tree under its `iframe` node, in the order the recorder lists
-/// frames, which is the order their iframes appear in the stitched tree.
-fn stitch_oracle_trees(mut per_frame: Vec<Vec<AriaNode>>) -> Result<Vec<AriaNode>, Box<dyn Error>> {
-    if per_frame.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut cursor = 1_usize;
-    let mut root_nodes = per_frame
-        .first_mut()
-        .map(mem::take)
-        .ok_or("missing root frame nodes")?;
-
-    let mut stack: Vec<&mut AriaNode> = root_nodes.iter_mut().rev().collect();
-    while let Some(node) = stack.pop() {
-        if node.role == "iframe" {
-            let child_nodes = per_frame
-                .get_mut(cursor)
-                .map(mem::take)
-                .ok_or_else(|| format!("missing child oracle frame at preorder index {cursor}"))?;
-            cursor += 1;
-            node.children = child_nodes
-                .into_iter()
-                .map(|child| AriaChild::Node(Box::new(child)))
-                .collect();
-        }
-        for child in node.children.iter_mut().rev() {
-            if let AriaChild::Node(child_node) = child {
-                stack.push(child_node);
-            }
-        }
-    }
-
-    if cursor != per_frame.len() {
-        return Err(format!(
-            "{} oracle frames, but the stitched tree has {cursor} documents",
-            per_frame.len()
-        )
-        .into());
-    }
-    Ok(root_nodes)
 }
 
 /// A recorded page: the tree built from its `.pb`, its oracle, and the tree document behind each
@@ -725,15 +676,13 @@ fn assert_click_proxies(
     Ok(proxied)
 }
 
-/// The default-mode tree against the oracle's, child frames stitched under their iframes.
+/// The default-mode tree against the oracle main frame's: default mode reads one document, as
+/// upstream's `ariaSnapshot` reads one frame, so each iframe is a leaf in both.
 fn default_tree_matches(page: &RecordedPage, default: &AriaTree) -> Result<bool, Box<dyn Error>> {
-    let frames = page
-        .oracle
-        .frames
-        .iter()
-        .map(|frame| parse_oracle_aria(&frame.aria.default))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(stitch_oracle_trees(frames).is_ok_and(|expected| default.nodes() == expected.as_slice()))
+    let Some(main) = page.oracle.frames.first() else {
+        return Ok(default.nodes().is_empty());
+    };
+    Ok(default.nodes() == parse_oracle_aria(&main.aria.default)?.as_slice())
 }
 
 /// Everything the all-16 test measures across pages, checked once every page has run.
@@ -779,10 +728,9 @@ fn check_recorded_page(
         page.partial_frames,
         "{name}: ai partial count"
     );
-    assert_eq!(
-        default.partial().len(),
-        page.partial_frames,
-        "{name}: default partial count"
+    assert!(
+        default.partial().is_empty(),
+        "{name}: default mode reads one document, so no frame of it is partial"
     );
     measurements
         .default_verdicts
@@ -819,9 +767,12 @@ fn check_recorded_page(
         assert!(
             rendered.ai_playwright.contains("# partial:")
                 && rendered.ai_full.contains("# partial:")
-                && rendered.ai_page.contains("# partial:")
-                && rendered.default_playwright.contains("# partial:"),
-            "hung-subframe partial frame must render `# partial:` across output formats"
+                && rendered.ai_page.contains("# partial:"),
+            "hung-subframe partial frame must render `# partial:` across ai output formats"
+        );
+        assert!(
+            !rendered.default_playwright.contains("# partial:"),
+            "default mode never reads the hung frame, so it has nothing partial to say"
         );
     }
     Ok(counts)

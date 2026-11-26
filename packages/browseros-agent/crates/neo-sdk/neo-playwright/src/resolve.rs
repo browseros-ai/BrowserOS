@@ -27,11 +27,12 @@ mod frame_path;
 mod frame_start;
 mod handle_site;
 mod resolver;
+mod strict_akas;
+mod tree_chunk;
 
-#[cfg(test)]
-pub(crate) use chunk_run::{ChunkOutcome, ChunkSet, First};
-pub(crate) use chunk_run::{ChunkPage, ChunkRun, QueryRoot};
+pub(crate) use chunk_run::{ChunkOutcome, ChunkPage, ChunkRun, ChunkSet, First, Pinned, QueryRoot};
 pub(crate) use frame_path::{FramePath, Hop, HopIframe};
 pub(crate) use frame_start::{FrameStart, Started};
 pub(crate) use handle_site::{HandleSite, handle_detached};
-pub(crate) use resolver::{Hopped, Landed, Resolved, Resolver, ask, failed, hop, refused};
+pub(crate) use resolver::{Landed, Resolved, Resolver, SentRequest, ask, failed, refused};
+pub(crate) use tree_chunk::{Aim, AimFailure, PassTree, Reads, aim, aim_from_ref};

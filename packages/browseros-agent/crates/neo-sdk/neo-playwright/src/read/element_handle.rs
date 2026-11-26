@@ -7,7 +7,7 @@ use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, ReadAll};
+use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, Read, ReadAll};
 use crate::read::element_read;
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, PageRef, RootHandle, Strictness};
@@ -129,8 +129,8 @@ pub(crate) async fn every_match(
 ) -> Result<Option<(IsolatedWorld, Vec<BackendNodeId>)>, PlaywrightError> {
     let resolver = Resolver::new(page, scope, target, Strictness::FirstMatch);
     let landed = resolver
-        .attempt_at(|last, _| ProbeRequest::ReadAll {
-            target: ProbeTarget::Chunk(last),
+        .attempt_at(|target, _| ProbeRequest::ReadAll {
+            target,
             read: ReadAll::Pins,
         })
         .await?;
@@ -173,8 +173,8 @@ pub(crate) async fn find_one(
 ) -> Result<Option<RootHandle>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
-    let request = |last, frame_visible| ProbeRequest::Read {
-        target: ProbeTarget::Chunk(last),
+    let request = |target, frame_visible| ProbeRequest::Read {
+        target,
         strictness: strict,
         frame_visible,
         read: Read::Located,
@@ -217,8 +217,8 @@ pub(crate) async fn query_all(
 ) -> Result<Vec<RootHandle>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
-    let request = |last, _| ProbeRequest::ReadAll {
-        target: ProbeTarget::Chunk(last),
+    let request = |target, _| ProbeRequest::ReadAll {
+        target,
         read: ReadAll::Pins,
     };
     // Each match's preview becomes its handle's display.

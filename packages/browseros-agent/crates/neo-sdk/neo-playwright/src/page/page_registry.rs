@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::input::Platform;
 use crate::op_scope::AdmittedPage;
 use crate::page::PageState;
+use crate::tree::TabOriginState;
 use crate::world::{FrameAttachLog, FrameSeq, FrameWorlds};
 
 /// The lowest seq a page that was already open may start at.
@@ -108,14 +109,14 @@ impl PageRegistry {
         if let Some(page) = self.get(admitted.tab) {
             return page;
         }
-        let first = if self
+        let open_at_start = self
             .open_at_start(browser)
             .await
-            .includes(&admitted.session.target_id)
-        {
-            self.reopened_base
+            .includes(&admitted.session.target_id);
+        let (first, origin) = if open_at_start {
+            (self.reopened_base, TabOriginState::ExistedAtStart)
         } else {
-            FrameSeq(0)
+            (FrameSeq(0), TabOriginState::OpenedUnderInstance)
         };
         let platform = self.platform(browser).await;
         let frames = || {
@@ -127,7 +128,7 @@ impl PageRegistry {
         Arc::clone(
             self.lock()
                 .entry(admitted.tab)
-                .or_insert_with(|| Arc::new(PageState::new(frames(), platform))),
+                .or_insert_with(|| Arc::new(PageState::new(frames(), platform, origin))),
         )
     }
 

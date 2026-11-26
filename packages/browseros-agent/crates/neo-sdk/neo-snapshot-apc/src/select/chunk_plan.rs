@@ -185,6 +185,20 @@ impl ChunkPlan {
         &self.chunk
     }
 
+    /// Whether the page alone runs the chunk: one page stage with no tree leaf at any depth, so
+    /// sending the chunk as it stands is the whole answer and no capture is needed. A captured
+    /// chunk with a top-level `nth` is not: its error is the run's to raise.
+    #[must_use]
+    pub fn is_page_only(&self) -> bool {
+        match &self.body {
+            PlanBody::Stages(stages) => {
+                stages.rest.is_empty()
+                    && matches!(&stages.first, PlannedStage::Page(form) if form.candidates.is_empty())
+            }
+            PlanBody::NthWithCapture => false,
+        }
+    }
+
     /// The stages that run the chunk, or the error upstream throws once it runs.
     pub fn stages(&self) -> Result<&Stages, TreeStageError> {
         match &self.body {

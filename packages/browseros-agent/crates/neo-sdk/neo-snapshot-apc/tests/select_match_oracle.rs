@@ -270,8 +270,13 @@ fn assets_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../neo-playwright/assets")
 }
 
+/// The probe with upstream's ARIA engine still bundled (`tests/data/oracle-injected.js`, which
+/// the page build writes): the page asset itself holds Neo's stand-ins since the switch-over,
+/// and the role engine this test compares the tree stage with is upstream's.
 fn probe_script() -> Result<String, Box<dyn Error>> {
-    let source = fs::read_to_string(assets_dir().join("injected.js"))?;
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/oracle-injected.js"),
+    )?;
     let Some(body) = source.trim_end().strip_suffix(PROBE_TAIL) else {
         return Err("injected.js no longer ends with `globalThis.__neoProbe ??= createProbe();\\n})();`, so the oracle glue cannot replace it".into());
     };

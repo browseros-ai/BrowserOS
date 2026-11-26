@@ -4,6 +4,7 @@
 //! ```text
 //!  ref ─ a locator `aria-ref=<ref>` ─ Resolver: jump to the ref's frame document
 //!      ─ resolve { want: element } ─ pin            none, detached: element_detached
+//!      ─ a capture of the tab ─ the pin's node ─ its name, the look's hint (`BoxAsk::name`)
 //!      ─ look { pin, ask } in that world ─ facts and the first refusal
 //!  tab address (main frame's `describe`) ─ page_changed, after the page side's origin check
 //!  dead refs, at a check (ruling R63) ─ the frame each ref's world was installed in, from the
@@ -18,6 +19,7 @@ use std::time::Duration;
 
 use browseros_core::{FrameId, TabId};
 use futures_util::future::{self, Either};
+use neo_snapshot_apc::tree::{NameCache, NameVisibility};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
@@ -32,13 +34,11 @@ use crate::private_entry::{
     LookRefusal, LookRefused, LookScroll, Looked, PageSecret, PrivateAnswer, PrivateStep, Sending,
     Unread, entry_run,
 };
-use crate::probe::{
-    ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
-};
+use crate::probe::{Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want};
 use crate::resolve::{self, Resolved, Resolver};
 use crate::target::{AriaRefJump, LocatorTarget, Strictness};
 use crate::world::{Pin, Place};
-use crate::{ErrorCode, Playwright, PlaywrightError, Refusal, TimedOut};
+use crate::{ErrorCode, Playwright, PlaywrightError, Refusal, TimedOut, snapshot};
 
 /// A box the look found: where it lives, its pin there, its facts, and the first check it
 /// fails now (`None` when it passed every one).
@@ -158,8 +158,9 @@ pub(crate) async fn look_at(
         else {
             return Ok(Look::Unfound(EntryCode::ElementDetached));
         };
+        // What the locator named in the box's world: the element its ref was hydrated into.
         let resolve = ProbeRequest::Resolve {
-            target: ProbeTarget::Chunk(ParsedSelector::of(target.chunks.last())),
+            target: site.target().clone(),
             strictness: Strictness::Strict,
             want: Want::Element,
         };
@@ -199,6 +200,8 @@ pub(crate) async fn look_at(
             }
             Err(failure) => return Err(failure_code(failure)),
         }
+        // Boxed: a capture's future is large, and the look runs inside every entry's own.
+        let name = within(scope, Box::pin(tree_name(scope, page, &site, pin))).await?;
         let ask = BoxAsk {
             expect: field.expect.clone(),
             length,
@@ -206,6 +209,7 @@ pub(crate) async fn look_at(
             keys: field.keys,
             frame_visible: site.frame_visible(),
             scroll: LookScroll::AsItIs,
+            name,
         };
         let Some((looked, above)) = look_in_view(scope, page, &site, pin, &ask).await? else {
             return Ok(Look::Unfound(EntryCode::ElementDetached));
@@ -213,6 +217,30 @@ pub(crate) async fn look_at(
         return Ok(found(site, pin, looked, above, address));
     }
     Ok(Look::Unfound(EntryCode::ElementDetached))
+}
+
+/// The pinned box's accessible name, read from a capture of the tab taken after it was pinned
+/// (design 8.2): the name hint the look's drawing test compares with (`BoxAsk::name`). `None`
+/// when the capture has no node for the box, the box left its document, or the capture cannot
+/// be had. The page side then reads the box's own label, so a missing hint never refuses a box
+/// by itself.
+async fn tree_name(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    site: &Resolved,
+    pin: Pin,
+) -> Option<String> {
+    let found = snapshot::element_in_tree(scope, page, site.world(), pin)
+        .await
+        .ok()??;
+    let node = found.node?;
+    let names = NameCache::new(found.captured.tree());
+    Some(
+        names
+            .name(node, NameVisibility::VisibleOnly)
+            .text()
+            .to_owned(),
+    )
 }
 
 /// The page side's look at the pinned box, where it stands in its own frame's view (ruling R62),

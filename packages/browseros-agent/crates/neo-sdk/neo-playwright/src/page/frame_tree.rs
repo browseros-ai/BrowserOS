@@ -457,6 +457,10 @@ pub(crate) async fn read(
     Ok(tree)
 }
 
+/// How long a read that may leave frames out waits for one out-of-process frame's own tree: the
+/// browser's deadline for a subframe's content in an APC capture (contract P6).
+const OOPIF_TREE_BUDGET: Duration = Duration::from_secs(2);
+
 /// What a read does with a cross-site frame whose own tree cannot be read.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Subtrees {
@@ -559,7 +563,22 @@ async fn read_oopifs(
             else {
                 continue;
             };
-            match oopif_tree_retried(browser, page, &oopif.target_id, parent).await {
+            let read_one = oopif_tree_retried(browser, page, &oopif.target_id, parent);
+            let subtree = match subtrees {
+                Subtrees::Require => read_one.await,
+                // A frame whose renderer hangs never answers its tree: a read that may leave a
+                // frame out leaves that one out once its budget passes, so the frames beside it
+                // are still found (the APC capture gives such a frame the same budget).
+                Subtrees::Skip => time::timeout(OOPIF_TREE_BUDGET, read_one)
+                    .await
+                    .unwrap_or_else(|_elapsed| {
+                        Err(CoreError::Message(format!(
+                            "its tree did not answer within {} ms",
+                            OOPIF_TREE_BUDGET.as_millis()
+                        )))
+                    }),
+            };
+            match subtree {
                 Ok(subtree) => tree.add_hosted(
                     subtree.tree.frame_tree,
                     oopif.parent_frame_id.as_deref(),

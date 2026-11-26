@@ -555,7 +555,7 @@ async fn file_input(
     files: &InputFiles,
 ) -> Result<Option<FileInput>, PlaywrightError> {
     let request = ProbeRequest::Read {
-        target: subject.first_target(),
+        target: Subject::first_target(located),
         strictness,
         frame_visible: true,
         read: files.read(),

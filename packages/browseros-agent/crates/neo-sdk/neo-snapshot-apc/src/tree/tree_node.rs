@@ -162,6 +162,18 @@ impl TreeNode {
         self.mask
     }
 
+    /// Whether this element is the first visible element inside a closed shadow root the page
+    /// made (contract field 31, retention rule 4). The page's own CSS and text engines cannot see
+    /// into such a root; handed this element, the probe opens the root to them.
+    #[must_use]
+    pub fn is_closed_root_seed(&self) -> bool {
+        self.raw
+            .as_ref()
+            .and_then(|raw| raw.browseros.as_deref())
+            .and_then(|facts| facts.closed_root_seed)
+            == Some(true)
+    }
+
     pub(crate) const fn raw_attributes(&self) -> Option<&ContentAttributes> {
         self.raw.as_ref()
     }

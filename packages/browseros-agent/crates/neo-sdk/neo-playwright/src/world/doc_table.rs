@@ -41,8 +41,6 @@
 //!   was explicitly `"about:blank"` for Playwright AR-053 reuse), and neither [`DocTable`] nor
 //!   [`DocContext`] prints URLs in [`fmt::Debug`].
 
-#![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
-
 use std::collections::HashMap;
 use std::{fmt, mem};
 

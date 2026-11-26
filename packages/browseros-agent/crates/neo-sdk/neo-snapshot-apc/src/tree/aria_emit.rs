@@ -773,7 +773,22 @@ fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooD
         emit_order.push(job.job_idx);
         let emitted = match emit_single_doc(tree, &name_cache, &mut mode, &job, boxes, scale) {
             Ok(frames) => {
-                let scheduled = schedule_child_jobs(frames.iframe_slots, &job, &mut emitted_docs);
+                // Only ai mode reads past an iframe: a child frame's snapshot hangs from its
+                // iframe's ref, and default mode mints none, so it reads one document as
+                // upstream's `ariaSnapshot` and template matcher read one frame (`- iframe`).
+                let slots = if mode.is_ai() {
+                    frames.iframe_slots
+                } else {
+                    frames
+                        .iframe_slots
+                        .into_iter()
+                        .map(|slot| EmittedIframe {
+                            kind: EmittedIframeKind::Empty,
+                            ..slot
+                        })
+                        .collect()
+                };
+                let scheduled = schedule_child_jobs(slots, &job, &mut emitted_docs);
                 job_stack.extend(scheduled.jobs.into_iter().rev());
                 EmittedDoc::Frames {
                     nodes: frames.nodes,
@@ -927,15 +942,27 @@ fn emit_single_doc(
 
     // The cap keeps every AriaNode tree within MAX_TREE_DEPTH levels. When it, and not the asked
     // depth, would cut content, the document is refused rather than shown incomplete.
-    let effective_max_depth = job.depth.print_cut().map_or(MAX_SINGLE_FRAME_DEPTH, |cut| {
+    let mut effective_max_depth = job.depth.print_cut().map_or(MAX_SINGLE_FRAME_DEPTH, |cut| {
         cut.min(MAX_SINGLE_FRAME_DEPTH)
     });
     if effective_max_depth == MAX_SINGLE_FRAME_DEPTH {
         let levels = draft_levels(&arena);
-        if levels > MAX_TREE_DEPTH {
+        // The reader's 297 levels of JSON hold one level more than MAX_TREE_DEPTH when the
+        // deepest nodes are bare leaves (no box, no child array: `neo_snapshot::MAX_TREE_DEPTH`),
+        // so a document that ends in such leaves one level past it is no deeper than one the
+        // page's engine returned.
+        let bare_extra_level = levels == MAX_TREE_DEPTH + 1
+            && job.levels_above == 0
+            && !boxes
+            && deepest_drafts_are_bare(&arena, levels);
+        if levels > MAX_TREE_DEPTH && !bare_extra_level {
             return Err(AriaTooDeep {
                 levels: job.levels_above + levels,
             });
+        }
+        // Those leaves are materialized, not cut at the usual last level.
+        if bare_extra_level {
+            effective_max_depth += 1;
         }
     }
     let frame_origin = if boxes {
@@ -977,6 +1004,41 @@ fn draft_levels(arena: &DraftArena) -> usize {
         }
     }
     deepest
+}
+
+/// Whether every draft at `level` (top-level drafts are level 1) is a leaf that writes no child
+/// array: no node child and at most one string, which the node then carries as its `text`.
+fn deepest_drafts_are_bare(arena: &DraftArena, level: usize) -> bool {
+    let mut stack: Vec<(usize, usize)> = arena.nodes.first().map_or_else(Vec::new, |root| {
+        root.children
+            .iter()
+            .filter_map(|child| match child {
+                DraftChild::Node(idx) => Some((*idx, 1)),
+                DraftChild::Text(_) => None,
+            })
+            .collect()
+    });
+    while let Some((idx, at)) = stack.pop() {
+        let Some(node) = arena.nodes.get(idx) else {
+            continue;
+        };
+        if at == level {
+            let nodes = node
+                .children
+                .iter()
+                .filter(|child| matches!(child, DraftChild::Node(_)))
+                .count();
+            if nodes > 0 || node.children.len() > 1 {
+                return false;
+            }
+            continue;
+        }
+        stack.extend(node.children.iter().filter_map(|child| match child {
+            DraftChild::Node(child_idx) => Some((*child_idx, at + 1)),
+            DraftChild::Text(_) => None,
+        }));
+    }
+    true
 }
 
 fn begin_doc_refs(mode: &mut AriaMode<'_>, doc: &TreeDoc, is_full_doc: bool) -> Option<DocSeq> {
@@ -2536,6 +2598,22 @@ mod tests {
         None
     }
 
+    fn all_by_role<'a>(nodes: &'a [AriaNode], role: &str) -> Vec<&'a AriaNode> {
+        let mut found = Vec::new();
+        let mut stack: Vec<&'a AriaNode> = nodes.iter().rev().collect();
+        while let Some(node) = stack.pop() {
+            if node.role == role {
+                found.push(node);
+            }
+            for child in node.children.iter().rev() {
+                if let AriaChild::Node(child_node) = child {
+                    stack.push(child_node);
+                }
+            }
+        }
+        found
+    }
+
     fn find_by_role_text<'a>(
         nodes: &'a [AriaNode],
         role: &str,
@@ -3490,11 +3568,17 @@ mod tests {
         assert_eq!(partial.reason, "timeout after 2000 ms");
         assert!(!partial.r#ref.is_empty());
 
+        // Default mode reads one document, as upstream's does: each iframe is a leaf, and a
+        // frame it never reads cannot be partial.
         let default = tree.aria(AriaAsk::default_mode())?;
-        let default_child_btn = find_by_role_name(default.nodes(), "button", Some("Child Go"))
-            .ok_or("child iframe button must stitch in default mode without refs")?;
-        assert_eq!(default_child_btn.r#ref, None);
-        assert_eq!(default.partial().len(), 1);
+        assert!(
+            find_by_role_name(default.nodes(), "button", Some("Child Go")).is_none(),
+            "a child frame's button is not read in default mode"
+        );
+        let iframes = all_by_role(default.nodes(), "iframe");
+        assert!(!iframes.is_empty(), "the iframes still print");
+        assert!(iframes.iter().all(|iframe| iframe.children.is_empty()));
+        assert!(default.partial().is_empty());
 
         let zero = tree.aria(AriaAsk::default_mode().with_depth(Some(0)))?;
         assert_eq!(
@@ -3541,6 +3625,33 @@ mod tests {
         assert_eq!(refusal.frame, "https://deep.example/inner");
         let expected_reason = depth_error((163 + 162 - 1) / 2);
         assert_eq!(refusal.reason, expected_reason);
+        Ok(())
+    }
+
+    /// A document that ends in bare leaves one level past `MAX_TREE_DEPTH` is no deeper than one
+    /// the page's engine returned (`neo_snapshot::MAX_TREE_DEPTH`): it is emitted whole, leaves
+    /// included, in both modes; one level more is refused.
+    #[test]
+    fn a_document_ending_in_bare_leaves_one_level_past_the_cap_is_emitted_whole()
+    -> Result<(), Box<dyn Error>> {
+        let chain = |groups| {
+            ApcBuilder::new("doc-deep")
+                .root(
+                    NodeBuilder::root()
+                        .child(build_nested_group_chain(groups, deep_button("Deep target"))),
+                )
+                .build()
+        };
+        let fits = SnapshotTree::build(chain(MAX_TREE_DEPTH), BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+        let ai = fits.aria(AriaAsk::ai(&mut refs))?;
+        assert!(find_by_role_name(ai.nodes(), "button", Some("Deep target")).is_some());
+        assert!(neo_snapshot::json_depth(ai.nodes()) < MAX_JSON_DEPTH);
+        let default = fits.aria(AriaAsk::default_mode())?;
+        assert!(find_by_role_name(default.nodes(), "button", Some("Deep target")).is_some());
+
+        let deeper = SnapshotTree::build(chain(MAX_TREE_DEPTH + 1), BuildOptions::new())?;
+        assert!(deeper.aria(AriaAsk::default_mode()).is_err());
         Ok(())
     }
 

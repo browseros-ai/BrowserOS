@@ -17,9 +17,10 @@
 use std::{fmt, iter};
 
 use browseros_core::{FrameId, TabId};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use serde_json::value::{self, RawValue};
-use serde_json::{Value, json};
 use ts_rs::TS;
 
 use crate::world::{BackendNodeId, FrameSeq};
@@ -274,14 +275,18 @@ impl<'de> Deserialize<'de> for Chunk {
 }
 
 impl Chunk {
-    /// `aria-ref=<ref>` for a ref a snapshot printed, as the prelude's `splitSelectorByFrame`
-    /// parses it: the chunk a snapshot hops through into the frame behind an iframe it printed,
-    /// as upstream's `aria-ref=<ref> >> internal:control=enter-frame` does. Decoded like the
-    /// prelude's chunks, so it jumps to the document that printed the ref.
-    pub(crate) fn aria_ref(r#ref: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_value(
-            json!({ "parts": [{ "name": "aria-ref", "body": r#ref, "source": r#ref }] }),
-        )
+    /// Whether the chunk is its leading ref and nothing else (`getByRef('e5')`): the element
+    /// the resolver hydrates for the jump is then the chunk's whole answer, with no capture.
+    pub(crate) fn is_bare_ref(&self) -> bool {
+        #[derive(Deserialize)]
+        struct Shape {
+            parts: Vec<IgnoredAny>,
+            #[serde(default)]
+            capture: Option<usize>,
+        }
+        self.jump.is_some()
+            && serde_json::from_str::<Shape>(self.parsed.get())
+                .is_ok_and(|shape| shape.parts.len() == 1 && shape.capture.is_none())
     }
 }
 
@@ -507,25 +512,31 @@ mod tests {
         Ok(())
     }
 
-    /// `tests/frames_live.rs` pins the same shape to the vendored parser's output for
-    /// `aria-ref=f7e3`.
+    /// A ref alone is the element the resolver hydrates for the jump, with no capture; a ref with
+    /// more parts after it runs those over the tree, from the ref's document.
     #[test]
-    fn tests_that_a_snapshot_hop_chunk_is_the_prelude_s_and_jumps_to_its_printer()
-    -> Result<(), Box<dyn Error>> {
-        let hop = Chunk::aria_ref("f7e3")?;
-        let sent: Value = serde_json::from_str(hop.parsed.get())?;
-        assert_eq!(sent, chunk("aria-ref", "f7e3"));
+    fn tests_that_only_a_ref_alone_is_a_bare_ref() -> Result<(), Box<dyn Error>> {
+        let bare: Chunk = serde_json::from_value(chunk("aria-ref", "f7e3"))?;
+        assert!(bare.is_bare_ref());
         assert_eq!(
-            hop.jump,
+            bare.jump,
             Some(AriaRefJump {
                 seq: FrameSeq(7),
                 element: 3,
                 kind: AriaRefKind::Snapshot,
             })
         );
+        let longer: Chunk = serde_json::from_value(json!({ "parts": [
+            { "name": "aria-ref", "body": "e5", "source": "e5" },
+            { "name": "internal:role", "body": "button", "source": "button" },
+        ] }))?;
+        assert!(longer.jump.is_some() && !longer.is_bare_ref());
+        let css: Chunk = serde_json::from_value(
+            json!({ "parts": [{ "name": "css", "body": [{ "simples": [] }], "source": "#pay" }] }),
+        )?;
         assert!(
-            Chunk::aria_ref("#4").is_err(),
-            "only printed refs, never a frame key"
+            !css.is_bare_ref(),
+            "a chunk with no leading ref is never one"
         );
         Ok(())
     }

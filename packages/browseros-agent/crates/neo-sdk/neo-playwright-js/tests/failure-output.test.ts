@@ -15,6 +15,7 @@ import type {
 import {
   decodeProbeReply,
   openProbePage,
+  oracleAsset,
   type ProbePage,
 } from './support/probe-page'
 
@@ -31,9 +32,17 @@ afterEach(() => {
   page = undefined
 })
 
-function booted(html = PAGE): ProbePage {
+/**
+ * The fixture page, booted. `asset` is the oracle bundle (`oracleAsset`) for the rows whose
+ * page-side ARIA reads Rust answers since the switch-over: they keep checking the masking the
+ * old requests applied until engine chunk 14 deletes them.
+ */
+function booted(html = PAGE, asset?: string): ProbePage {
   page?.close()
-  page = openProbePage(html)
+  page =
+    asset === undefined
+      ? openProbePage(html)
+      : openProbePage(html, undefined, asset)
   page.boot({ frameSeq: 0, epoch: 'failure-output' })
   const view = page.document.defaultView
   if (!view) throw new Error('the fixture has a window')
@@ -181,7 +190,9 @@ it('compares real private values through labels and counts code points only in d
     expect(encoded).not.toContain(SECRET)
     expect(encoded).not.toContain('SpokenCanary')
     expect(encoded).not.toContain('NumberCanary')
-    expect(encoded).toContain('••')
+    // A failing poll carries no aria snapshot: the page has no ARIA engine any more, and the
+    // snapshot a failure reports is the APC tree's, which masks in Rust.
+    expect(failed).not.toHaveProperty('ariaSnapshot')
   }
 })
 
@@ -336,7 +347,7 @@ it('uses guarded text for direct, ancestor and array comparisons', async () => {
 })
 
 it('matches an aria template copied from the masked tree and guards the document fallback', async () => {
-  const probe = booted()
+  const probe = booted(PAGE, oracleAsset())
   const fallback = probe.call({ op: 'document', part: 'expectSnapshot' })
   const yaml = textProperty(fallback, 'text')
   expect(yaml).toContain('••')
@@ -425,7 +436,7 @@ it('guards the same vendor aliases in deprecated-selector errors', () => {
 })
 
 it('restores exact diagnostic and DOM descriptors after a tree throw and before an await', async () => {
-  const probe = booted()
+  const probe = booted(PAGE, oracleAsset())
   const engine = diagnosticEngine(probe)
   const nativePreview: unknown = Reflect.get(engine, 'previewNode')
   const nativeSelectors: unknown = Reflect.get(engine, '_generateSelectors')
@@ -533,11 +544,6 @@ it('conformance installs no diagnostic, value, text or style hooks and keeps nat
     params,
     true,
   ])
-  const nativeTree = invoke(engine, '_ariaSnapshotForExpect', [
-    field,
-    params,
-    true,
-  ])
   const replacements: unknown[] = []
   const define = Object.defineProperty
   const observe = spyOn(Object, 'defineProperty').mockImplementation(
@@ -561,10 +567,10 @@ it('conformance installs no diagnostic, value, text or style hooks and keeps nat
       matches: false,
       received: SECRET,
       resolved: nativePreview,
-      ariaSnapshot: nativeTree,
     })
+    // The page attaches no aria snapshot to a poll any more; the tree's is Rust's.
+    expect(result).not.toHaveProperty('ariaSnapshot')
     expect(JSON.stringify(result)).toContain(SECRET)
-    expect(JSON.stringify(result)).toContain('SpokenCanary')
     expect(replacements).toEqual([])
   } finally {
     observe.mockRestore()
@@ -626,11 +632,14 @@ it('guards accessible error-message comparisons for declared and host-marked sou
   })
   try {
     for (const marked of [false, true]) {
-      const probe = booted(`<html><body>
+      const probe = booted(
+        `<html><body>
       <input id="source" type="${marked ? 'text' : 'password'}" value="${canary}">
       <input id="invalid" type="text" aria-invalid="true" aria-errormessage="message">
       <div id="message">Wrong: <button aria-labelledby="source">Error source</button></div>
-    </body></html>`)
+    </body></html>`,
+        oracleAsset(),
+      )
       const params: ExpectParams = {
         expression: 'to.have.accessible.error.message',
         expectedText: [{ string: 'wrong' }],

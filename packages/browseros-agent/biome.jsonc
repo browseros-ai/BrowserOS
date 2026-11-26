@@ -25,6 +25,9 @@
       "!crates/neo-sdk/neo-snapshot/tests/data",
       // The APC edge pack: each page breaks accessibility rules on purpose, to pin an engine rule.
       "!crates/neo-sdk/neo-snapshot-apc/tests/pages",
+      // The probe bundle with upstream's ARIA engine, which the page build writes for the engine's
+      // differential tests, as it writes the assets.
+      "!crates/neo-sdk/neo-snapshot-apc/tests/data/oracle-injected.js",
       "!crates/neo-sdk/neo-server/tests/behavior/pages",
       // run() bodies: a function body with top-level await and return, which Biome cannot parse as a module
       "!crates/neo-sdk/neo-server/docker/devkit/examples/*.js",

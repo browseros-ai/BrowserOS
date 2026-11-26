@@ -49,5 +49,6 @@ assert(/Timeout|timeout|exceeded/.test(missing), missing);
 await page.locator('#draw').click();
 await page.keyboard.type('123');
 const active = await page.ariaSnapshot();
-assert(active.includes('- textbox "Verification code" [active]: "123"'), active);
+// Upstream prints no ref on the focused field; the tree's ref rule (a box that takes pointer events) may give it one.
+assert(/- textbox "Verification code" \[active\](?: \[ref=[^\]]+\])?: "123"/.test(active), active);
 return { tab: page.toJSON().tab, ref, numberRef, digits, frameRef, buttonRef, baseline: active };

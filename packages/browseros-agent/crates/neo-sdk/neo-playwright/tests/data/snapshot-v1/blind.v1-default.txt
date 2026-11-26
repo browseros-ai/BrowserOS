@@ -11,12 +11,12 @@
   - button "Sign in" [ref=e13]
   - heading "Cart" [level=2]
   - text: Sensodyne Repair 3.4oz $7.49
-  - button "Add to cart" [ref=e16]
+  - button "Add to cart" [ref=e15]
   - text: Sensodyne Repair 6-pack $41.00
-  - button "Add to cart" [ref=e18]
+  - button "Add to cart" [ref=e16]
   - status: Saved 2 minutes ago
-- dialog [ref=e20]:
+- dialog [ref=e18]:
   - heading "Delete project?" [level=2]
   - text: This permanently deletes "Acme" and its 14 files. This cannot be undone.
-  - button "Cancel" [ref=e23]
-  - button "Delete" [ref=e24]
+  - button "Cancel" [ref=e21]
+  - button "Delete" [ref=e22]

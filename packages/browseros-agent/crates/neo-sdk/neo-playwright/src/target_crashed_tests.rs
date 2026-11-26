@@ -19,7 +19,6 @@ use tokio::{task, time};
 
 use crate::events::{EventFence, EventScope};
 use crate::op_scope::OpScope;
-use crate::playwright_error::TARGET_CRASH_MESSAGE;
 use crate::target::CallHeader;
 use crate::test_env::{EnvCall, TestEnv};
 use crate::test_support::{
@@ -1021,13 +1020,10 @@ impl TabScript for FrameCrashTab {
 
     fn probe(&self, frame: &str, request: &Value) -> ProbeAnswer {
         match request["op"].as_str() {
-            Some("snapshot") if frame == self.child_frame() => {
+            Some("read") if frame == self.child_frame() => {
                 self.child_reads.fetch_add(1, Ordering::SeqCst);
                 ProbeAnswer::error("Target crashed")
             }
-            Some("snapshot") => ProbeAnswer::reply(json!({ "kind": "snapshot",
-                "json": [{ "role": "iframe", "ref": self.iframe_ref() }],
-                "iframes": [{ "ref": self.iframe_ref(), "depth": 1, "src": "https://child.test/" }] })),
             Some("resolve") => ProbeAnswer::reply(json!({ "kind": "frame", "pin": 1,
                 "key": self.iframe_ref(), "visible": true, "src": "https://child.test/" })),
             _ => ProbeAnswer::unexpected(),
@@ -1059,7 +1055,10 @@ impl TabScript for FrameCrashTab {
     }
 }
 
-async fn snapshot_child_crash(
+/// A read of an element inside the child frame: the hop through the main frame's iframe, then
+/// the child's own probe, whose renderer crashed. The read fails with the child's crash; what a
+/// fresh run then makes of the parent is each test's.
+async fn child_read_crash(
     independent: bool,
 ) -> TestResult<(ScriptedRun, Arc<ScriptedTab<FrameCrashTab>>)> {
     let tab = ScriptedTab::new(FrameCrashTab {
@@ -1069,29 +1068,37 @@ async fn snapshot_child_crash(
     });
     let run = ScriptedRun::over(&tab).await?;
     settle_watcher(&run).await?;
-    let snapshot = run
+    let read = run
         .playwright
         .invoke(
             &run.env,
-            Op::from_name("page.ariaSnapshot").ok_or("page.ariaSnapshot")?,
-            json!({ "page": run.page, "mode": "ai" }),
+            Op::from_name("locator.textContent").ok_or("locator.textContent")?,
+            json!({
+                "target": { "$neo": "locator", "page": run.page, "chunks": [
+                    { "parts": [{ "name": "css", "body": "iframe", "source": "iframe" }] },
+                    { "parts": [{ "name": "css", "body": "button", "source": "button" }] },
+                ], "display": "locator('iframe').contentFrame().locator('button')" },
+                "strict": "strict",
+            }),
         )
-        .await?;
+        .await;
     assert_eq!(
         tab.script().child_reads.load(Ordering::SeqCst),
         1,
-        "the snapshot must reach the child's crashing endpoint"
+        "the read must reach the child's crashing endpoint"
     );
+    let error = read.err().ok_or("a read in a crashed frame fails")?;
     assert_eq!(
-        snapshot["partial"][0]["reason"], TARGET_CRASH_MESSAGE,
-        "partial output retains the typed crash of the frame it could not read"
+        error.error_code(),
+        Some(ErrorCode::TargetCrashed),
+        "the read fails with the typed crash of the frame it could not read: {error}"
     );
     Ok((next_run(run), tab))
 }
 
 #[tokio::test(start_paused = true)]
-async fn target_crashed_oopif_snapshot_does_not_poison_parent_in_a_fresh_run() -> TestResult {
-    let (run, tab) = snapshot_child_crash(true).await?;
+async fn target_crashed_oopif_read_does_not_poison_parent_in_a_fresh_run() -> TestResult {
+    let (run, tab) = child_read_crash(true).await?;
     let before = tab.sent("Input.dispatchMouseEvent");
     run.playwright
         .invoke(
@@ -1109,8 +1116,8 @@ async fn target_crashed_oopif_snapshot_does_not_poison_parent_in_a_fresh_run() -
 }
 
 #[tokio::test(start_paused = true)]
-async fn target_crashed_same_process_snapshot_is_cached_for_the_parent() -> TestResult {
-    let (run, tab) = snapshot_child_crash(false).await?;
+async fn target_crashed_same_process_read_is_cached_for_the_parent() -> TestResult {
+    let (run, tab) = child_read_crash(false).await?;
     let before = renderer_commands(&tab);
     let error = run
         .playwright

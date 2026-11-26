@@ -7,19 +7,23 @@
 //!                         ├ the verdict missed (a press stopped at the window) ──────▶ missed
 //!                         └ anything else ───────────────────────────────────────────▶ cleared
 //!  the op's timeout, the last completed check covered, not conformance
-//!    ─▶ one `cover` request to the world that saw it, on its own short budget
+//!    ─▶ one `cover` request to the world that saw it: the facts, the elements they name pinned
+//!    ─▶ a capture of the tab ─ the pins keyed in it, proven by that world (design 6.2)
+//!       ─ role, name and ref of each from the tree, the cover's block from `tree.aria`
 //!    ─▶ the same cover still on top there: code `covered`, the facts' lines, the `cover` field
-//!       anything else (another cover, none, a failed or slow request): today's error
+//!       anything else (another cover, none, a pin gone, a failed or slow read): today's error
 //! ```
 //!
-//! The facts change only what a covered timeout says. When an action stops waiting is section
-//! 1's rule, a later change; this module only keeps the record it needs.
+//! The page finds the cover and decides what it is from the live page; the tree names it, so
+//! every ref and name the answer prints is one a snapshot prints and `getByRef` resolves
+//! (apc-engine-design 8.2). The facts change only what a covered timeout says. When an action
+//! stops waiting is section 1's rule, a later change; this module only keeps the record it needs.
 
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use neo_snapshot::AriaNode;
-use serde::Deserialize;
+use neo_snapshot::{AriaChild, AriaNode};
+use neo_snapshot_apc::tree::AriaRoot;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
@@ -28,11 +32,14 @@ use crate::page::{LastCover, OpPage};
 use crate::probe::{
     CoverFacts, CoverKind, CoverMark, Point, ProbeReply, ProbeRequest, ProbeTarget,
 };
+use crate::snapshot::{Named, PinNames};
+use crate::tree::{AttemptStart, TreeAsk, frame_doc};
 use crate::world::IsolatedWorld;
 use crate::{ErrorCode, PlaywrightError, resolve};
 
-/// How long the facts request may take once the op's timeout has passed, as cleanup has its
-/// own: a page that cannot answer in this time leaves today's error.
+/// How long the facts may take once the op's timeout has passed, the page's request and their
+/// naming from a capture together, as cleanup has its own: a page that cannot answer in this time
+/// leaves today's error.
 const FACTS_BUDGET: Duration = Duration::from_millis(1_000);
 
 /// Where a covered check saw its cover: the world to ask for the facts, what was tested there,
@@ -305,9 +312,17 @@ pub(crate) async fn covered_answer(
         cover: mark.id,
         above: standing.seat.above.is_some(),
     };
-    let asked = resolve::ask(scope, page, &standing.seat.world, &request, None);
-    let Ok(Ok(ProbeReply::Cover { facts: Some(facts) })) = time::timeout(FACTS_BUDGET, asked).await
-    else {
+    let world = &standing.seat.world;
+    let read = async {
+        let Ok(ProbeReply::Cover { facts: Some(facts) }) =
+            resolve::ask(scope, page, world, &request, None).await
+        else {
+            return None;
+        };
+        let names = CoverNames::read(scope, page, world, &facts).await?;
+        Some((facts, names))
+    };
+    let Ok(Some((facts, names))) = time::timeout(FACTS_BUDGET, read).await else {
         return None;
     };
     let since = if standing.from_start {
@@ -324,12 +339,13 @@ pub(crate) async fn covered_answer(
     });
     let lines = Lines {
         facts: &facts,
+        names: &names,
         action,
         since,
         stopped: watch.stopped,
         again: again.map(|before| (before.action, before.at.elapsed())),
     };
-    let mut cover = field(&facts);
+    let mut cover = field(&facts, &names);
     if let (Some(stop), Value::Object(fields)) = (early, &mut cover) {
         fields.insert(
             "stoodMs".to_owned(),
@@ -347,11 +363,107 @@ pub(crate) async fn covered_answer(
     )
 }
 
+/// What the tree says of the elements a covered answer's facts pinned (design 8.2): the cover
+/// and each listed control by role, name and ref, the ref of the control a `labels` cover is,
+/// and the cover's own block.
+struct CoverNames {
+    cover: Named,
+    controls: Vec<Named>,
+    /// The ref of the control on top that the target labels: `Some` exactly for a `labels`
+    /// cover, whose line acts on it.
+    labelled: Option<String>,
+    /// The cover's own snapshot printed as the covered block (`neo_snapshot::cover_block`):
+    /// `None` for a cover that holds the control, one the tree has no node for, and one whose
+    /// tree prints nothing.
+    block: Option<String>,
+    /// The block holds words, a name or a text. The cover's drawn text is said only without them.
+    worded: bool,
+}
+
+impl CoverNames {
+    /// Names `facts` from a capture of the tab taken after the `cover` reply. `world` answered
+    /// that reply and keys the pins after the capture, which proves it held the capture's
+    /// document (design 6.2). `None` when the capture cannot be had, the world went away, or a
+    /// pin left its document: the caller then answers as it would without facts.
+    async fn read(
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        world: &IsolatedWorld,
+        facts: &CoverFacts,
+    ) -> Option<Self> {
+        let captured = page
+            .tree()
+            .capture_seeded(scope, page, AttemptStart::now())
+            .await
+            .ok()?;
+        let tree = captured.tree();
+        let doc = frame_doc(tree, &page.main_endpoint().frame, world.frame())?;
+        let pinned = PinNames::read(scope, page, world, tree, doc, facts.pins())
+            .await
+            .ok()??;
+        let cover = pinned.named(facts.pin)?;
+        let controls = facts
+            .controls
+            .iter()
+            .map(|&pin| pinned.named(pin))
+            .collect::<Option<Vec<Named>>>()?;
+        let labelled = match facts.kind {
+            CoverKind::Labels { pin } => Some(pinned.named(pin)?.r#ref),
+            _ => None,
+        };
+        // The block is a script's default snapshot of the cover. Default mode prints no ref and
+        // assigns none, and the refs named above are minted on the table's `n` counter, so the
+        // agent's next snapshot numbers its `e` refs as it would have without this answer.
+        let nodes = pinned
+            .node(facts.pin)
+            .filter(|_| !facts.surrounds)
+            .and_then(|node| {
+                let ask = TreeAsk {
+                    ai: false,
+                    root: AriaRoot::Subtree(node),
+                    depth: None,
+                    boxes: false,
+                };
+                page.tree().aria(pinned.tree(), ask).ok()
+            })
+            .map(|aria| aria.into_snapshot().tree)
+            .unwrap_or_default();
+        Some(Self {
+            cover,
+            controls,
+            labelled,
+            worded: holds_words(&nodes),
+            block: neo_snapshot::cover_block(nodes),
+        })
+    }
+}
+
+/// Whether a printed tree holds words: a node's name or text, or a string child, that is not
+/// blank. A tree nested past the stack is walked with a stack of its own.
+fn holds_words(nodes: &[AriaNode]) -> bool {
+    let worded = |text: Option<&str>| text.is_some_and(|text| !text.trim().is_empty());
+    let mut pending: Vec<&AriaNode> = nodes.iter().collect();
+    while let Some(node) = pending.pop() {
+        if worded(node.name.as_deref()) || worded(node.text.as_deref()) {
+            return true;
+        }
+        for child in &node.children {
+            match child {
+                AriaChild::Text(text) if worded(Some(text)) => return true,
+                AriaChild::Text(_) => {}
+                AriaChild::Node(node) => pending.push(node),
+            }
+        }
+    }
+    false
+}
+
 /// The facts' lines, in the order a host that cuts a long message keeps them: what is on top
 /// (the prelude puts the cover's own snapshot right under it), when it came, what was pressed,
 /// the controls, and what to do. The call log follows them.
 struct Lines<'a> {
     facts: &'a CoverFacts,
+    names: &'a CoverNames,
     /// The action's name as upstream logs it: `click`, `hover`, `check`.
     action: &'a str,
     /// The same cover answered this tab's last covered action: its name and how long ago.
@@ -364,8 +476,10 @@ struct Lines<'a> {
 impl Lines<'_> {
     fn render(&self) -> String {
         let facts = self.facts;
+        let names = self.names;
         let action = self.action;
-        let cover = node_named(&facts.role, facts.name.as_value(), &facts.r#ref, NAME_CHARS);
+        let cover = &names.cover;
+        let cover = node_named(cover.role, &cover.name, &cover.r#ref, NAME_CHARS);
         let markup = line_of(facts.markup.as_value());
         // A layer that dims a dialog: the point lies under the layer, and the dialog is open over
         // it. The dialog is not what takes the click, and the words do not say it is.
@@ -374,8 +488,8 @@ impl Lines<'_> {
         } else {
             format!("\n  On top: {cover} {markup}")
         };
-        if let Some(text) = facts.text.as_ref().map(|text| line_of(text.as_value())) {
-            let _ = write!(out, "\n    It says: {text}");
+        if let Some(text) = facts.text.as_ref().filter(|_| !names.worded) {
+            let _ = write!(out, "\n    It says: {}", line_of(text.as_value()));
         }
         let _ = match self.since {
             None => write!(out, "\n  It has been there since this {action} began."),
@@ -398,19 +512,14 @@ impl Lines<'_> {
                  window before any element of the page saw it."
             ),
         };
-        if !facts.controls.is_empty() {
+        if !names.controls.is_empty() {
             out.push_str("\n  Its controls:");
-            for control in &facts.controls {
-                let control = node_named(
-                    &control.role,
-                    control.name.as_value(),
-                    &control.r#ref,
-                    NAME_CHARS,
-                );
+            for control in &names.controls {
+                let control = node_named(control.role, &control.name, &control.r#ref, NAME_CHARS);
                 let _ = write!(out, "\n    - {control}");
             }
         }
-        let _ = write!(out, "\n  Do: {}", todo(facts));
+        let _ = write!(out, "\n  Do: {}", todo(facts, names));
         if let Some((before, ago)) = &self.again {
             let _ = write!(
                 out,
@@ -534,7 +643,8 @@ fn line_of(value: &Value) -> String {
 }
 
 /// One line of what to do, by how the cover stands to the control (spec section 2's table).
-fn todo(facts: &CoverFacts) -> String {
+fn todo(facts: &CoverFacts, names: &CoverNames) -> String {
+    let cover = &names.cover.r#ref;
     match &facts.kind {
         CoverKind::Page if facts.closed => "its content is in a closed part of the page: a new \
                                             snapshot shows it."
@@ -543,9 +653,8 @@ fn todo(facts: &CoverFacts) -> String {
             "answer or close that dialog with one of its controls, then try again.".to_owned()
         }
         CoverKind::Page if facts.notice => format!(
-            "a notice: it may go by itself. Wait for it, getByRef('{}').waitFor({{ state: \
-             'hidden' }}), or close it with one of its controls, then try again.",
-            facts.r#ref
+            "a notice: it may go by itself. Wait for it, getByRef('{cover}').waitFor({{ state: \
+             'hidden' }}), or close it with one of its controls, then try again."
         ),
         CoverKind::Page if facts.blank => {
             "a blank layer. Look for an open dialog in a new snapshot. If there is none, reload."
@@ -553,8 +662,7 @@ fn todo(facts: &CoverFacts) -> String {
         }
         CoverKind::Page => format!(
             "answer or close it with one of its controls, then try again. If it is loading, \
-             wait for it: getByRef('{}').waitFor({{ state: 'hidden' }}).",
-            facts.r#ref
+             wait for it: getByRef('{cover}').waitFor({{ state: 'hidden' }})."
         ),
         CoverKind::Frame { inside: false } => "a frame covers it. Its content is under its ref in \
                                                the snapshot. If it is a bot check, use the solver."
@@ -589,9 +697,10 @@ fn todo(facts: &CoverFacts) -> String {
         CoverKind::Wrapper => "its own wrapper takes the pointer. Click the wrapper, or press \
                                Space on the control."
             .to_owned(),
-        CoverKind::Labels { r#ref } => {
-            format!("it labels the control on top. Act on that control: getByRef('{ref}').")
-        }
+        CoverKind::Labels { .. } => format!(
+            "it labels the control on top. Act on that control: getByRef('{}').",
+            names.labelled.as_deref().unwrap_or_default()
+        ),
         CoverKind::Nothing => {
             "it takes no pointer at its centre. It may be text and not a control.".to_owned()
         }
@@ -621,36 +730,23 @@ pub(crate) fn point_text(point: Point) -> String {
 /// The block stays out of Rust's message on purpose: a trace clips a message at 2,048 bytes,
 /// and 1,500 units of the cover's lines would push its controls, the "Do" line and the call log
 /// out of every covered operation's record.
-fn field(facts: &CoverFacts) -> Value {
-    let mut cover = json!({
-        "ref": facts.r#ref,
-        "role": facts.role,
-        "name": facts.name.as_value(),
+fn field(facts: &CoverFacts, names: &CoverNames) -> Value {
+    let cover = &names.cover;
+    let mut field = json!({
+        "ref": cover.r#ref,
+        "role": cover.role,
+        "name": cover.name,
         "kind": kind_name(&facts.kind),
-        "controls": facts.controls.iter().map(|control| json!({
+        "controls": names.controls.iter().map(|control| json!({
             "ref": control.r#ref,
             "role": control.role,
-            "name": control.name.as_value(),
+            "name": control.name,
         })).collect::<Vec<_>>(),
     });
-    if let (Some(block), Value::Object(fields)) = (block(&facts.snapshot), &mut cover) {
-        fields.insert("block".to_owned(), Value::String(block));
+    if let (Some(block), Value::Object(fields)) = (&names.block, &mut field) {
+        fields.insert("block".to_owned(), Value::String(block.clone()));
     }
-    cover
-}
-
-/// The cover's own snapshot printed as the covered block (`neo_snapshot::cover_block`), or
-/// `None`: for no tree (`null`, a cover that holds the control), for a tree that prints nothing,
-/// and for a tree that does not decode as snapshot nodes.
-///
-/// The tree is decoded here and not in the probe's reply. There, one value outside the node
-/// type would fail the whole reply and turn a `covered` answer into `internal`; here it only
-/// leaves the block out, as the prelude printed none when its renderer threw, and the message,
-/// the controls and the record stand without it. The reply's decode already bounded the tree's
-/// depth (`MAX_VALUE_DEPTH`), which bounds this decode's recursion.
-fn block(tree: &Value) -> Option<String> {
-    let tree = Vec::<AriaNode>::deserialize(tree).ok()?;
-    neo_snapshot::cover_block(tree)
+    field
 }
 
 fn kind_name(kind: &CoverKind) -> &'static str {

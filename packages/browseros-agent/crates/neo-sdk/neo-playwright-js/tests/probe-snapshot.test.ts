@@ -4,7 +4,15 @@
 // tests/snapshot_live.rs on a real browser.
 import { afterEach, expect, it, spyOn } from 'bun:test'
 import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
-import { openProbePage, type ProbePage } from './support/probe-page'
+import {
+  openProbePage,
+  oracleAsset,
+  type ProbePage,
+} from './support/probe-page'
+
+// `snapshot` is a request Rust no longer sends (the APC tree prints every snapshot); it runs on
+// the vendored engine of the oracle bundle until engine chunk 14 deletes it.
+const ORACLE = oracleAsset()
 
 const PAGE = `<html><body>
   <h1>Pay</h1><p>Confirm your code</p>
@@ -16,7 +24,7 @@ let page: ProbePage | undefined
 afterEach(() => page?.close())
 
 const booted = () => {
-  page = openProbePage(PAGE)
+  page = openProbePage(PAGE, undefined, ORACLE)
   page.boot({ frameSeq: 3, epoch: 'a' })
   return page
 }
@@ -108,7 +116,11 @@ it('tests that a snapshot whose clickable marking throws is still taken, as upst
 })
 
 it('never installs any field or text override under conformance', () => {
-  page = openProbePage(PAGE, { conformance: true, discoverMovedFields: true })
+  page = openProbePage(
+    PAGE,
+    { conformance: true, discoverMovedFields: true },
+    ORACLE,
+  )
   page.boot({ frameSeq: 3, epoch: 'a' })
   const probe = page
   showFixture(probe)
@@ -140,7 +152,8 @@ it('never installs any field or text override under conformance', () => {
 })
 
 it('masks textarea child text and control attributes used as another element name', () => {
-  const probe = openProbePage(`<html><body>
+  const probe = openProbePage(
+    `<html><body>
     <textarea role="searchbox" autocomplete="new-password">CANARY-TEXTAREA</textarea>
     <input id="private-number" type="number" autocomplete="cc-number" value="938217">
     <button aria-labelledby="private-number"></button>
@@ -150,7 +163,10 @@ it('masks textarea child text and control attributes used as another element nam
     <textarea role="searchbox">PUBLIC-TEXTAREA</textarea>
     <input id="public-number" type="number" value="817236">
     <button aria-labelledby="public-number"></button>
-  </body></html>`)
+  </body></html>`,
+    undefined,
+    ORACLE,
+  )
   page = probe
   probe.boot({ frameSeq: 3, epoch: 'a' })
   showFixture(probe)
@@ -226,10 +242,11 @@ function pinOf(probe: ProbePage, selector: string): number {
 it("tests that a box the entry typed into prints bullets in the page's snapshot, with and without the conformance switch (rulings R14 and R44)", async () => {
   for (const conformance of [false, true]) {
     page?.close()
-    page = openProbePage(MARKED_PAGE, {
-      conformance,
-      discoverMovedFields: true,
-    })
+    page = openProbePage(
+      MARKED_PAGE,
+      { conformance, discoverMovedFields: true },
+      ORACLE,
+    )
     page.boot({ frameSeq: 3, epoch: 'a' })
     showFixture(page)
     const probe = page
@@ -254,37 +271,5 @@ it("tests that a box the entry typed into prints bullets in the page's snapshot,
     expect(printed).toContain(
       conformance ? '"text":"hunter2"' : '"text":"•••••••"',
     )
-  }
-})
-
-it('tests that a snapshot returns when the cover survey throws', () => {
-  const probe = booted()
-  showFixture(probe)
-  const request = { op: 'snapshot', root: 'document', mode: 'ai' }
-  const plain = probe.call(request)
-  const saved = ['innerWidth', 'innerHeight'].map(
-    (name) =>
-      [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
-  )
-  let failed = false
-  Reflect.set(probe.document, 'elementsFromPoint', () => {
-    failed = true
-    throw new Error('unforeseen survey shape')
-  })
-  try {
-    Reflect.set(globalThis, 'innerWidth', 1280)
-    Reflect.set(globalThis, 'innerHeight', 800)
-    const read = probe.call({ ...request, surveyCovers: true })
-    expect(failed).toBe(true)
-    expect(read).toMatchObject({ kind: 'snapshot', onTopSkipped: true })
-    expect(read).not.toHaveProperty('onTop')
-    expect(Reflect.get(Object(read), 'json')).toEqual(
-      Reflect.get(Object(plain), 'json'),
-    )
-  } finally {
-    for (const [name, descriptor] of saved) {
-      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
-      else Reflect.deleteProperty(globalThis, name)
-    }
   }
 })

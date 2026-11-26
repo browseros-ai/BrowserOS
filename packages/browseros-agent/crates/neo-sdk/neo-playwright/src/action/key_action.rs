@@ -155,7 +155,7 @@ impl<'a> KeyRunner<'a> {
         keys: &Keys<'_>,
     ) -> Result<bool, PlaywrightError> {
         let resolve = ProbeRequest::Resolve {
-            target: self.subject.first_target(),
+            target: Subject::first_target(located),
             strictness: self.strictness,
             want: Want::Element,
         };

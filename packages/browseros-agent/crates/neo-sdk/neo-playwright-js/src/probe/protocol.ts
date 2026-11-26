@@ -21,7 +21,7 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * answering the old way. `boot` reports it, and an install whose number differs from Rust's
  * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 54
+export const PROTOCOL = 55
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -68,6 +68,7 @@ export type StageRequest = RequestOf<'stage'>
 export type DescribePinsRequest = RequestOf<'describePins'>
 export type CoverSurveyRequest = RequestOf<'coverSurvey'>
 export type PrivateMarksRequest = RequestOf<'privateMarks'>
+export type OpenClosedRootsRequest = RequestOf<'openClosedRoots'>
 
 export type Described = Extract<ProbeReply, { kind: 'described' }>
 export type NoMatch = Extract<ProbeReply, { kind: 'none' }>
@@ -130,6 +131,7 @@ export const REPLY_KINDS = {
   describePins: ['pinsDescribed', 'detached'],
   coverSurvey: ['surveyed'],
   privateMarks: ['marks'],
+  openClosedRoots: ['value'],
 } as const satisfies Record<ValueOp, readonly ReplyKind[]>
 
 /** Everything a by-value request may answer, including universal failure replies. */

@@ -36,6 +36,23 @@ const DOM_GLOBALS = [
   'getComputedStyle',
 ] as const
 
+/**
+ * The probe with Playwright's own ARIA engine bundled in (`oracleProbe`, scripts/build.ts, which
+ * writes it beside the APC engine's tests), which the page asset no longer holds: the oracle a
+ * test compares the asset with, and the engine of the requests Rust no longer sends until engine
+ * chunk 14 deletes them.
+ */
+const ORACLE_ASSET = readFileSync(
+  new URL(
+    '../../../neo-snapshot-apc/tests/data/oracle-injected.js',
+    import.meta.url,
+  ),
+  'utf8',
+)
+export function oracleAsset(): string {
+  return ORACLE_ASSET
+}
+
 export type ProbePage = {
   document: Document
   /**
@@ -58,6 +75,7 @@ export type ProbePage = {
 export function openProbePage(
   html: string,
   policy: ProbePolicy = { conformance: false, discoverMovedFields: true },
+  asset: string = ASSET,
 ): ProbePage {
   const { window, document } = parseHTML(html)
   // linkedom omits the native defaultValue accessors. Supply their markup reads only in this
@@ -142,7 +160,7 @@ export function openProbePage(
   for (const name of DOM_GLOBALS) replace(name, Reflect.get(window, name))
   replace('location', { href: 'https://fixture.test/page' })
   replace('__neoProbe', undefined)
-  new Function(ASSET)()
+  new Function(asset)()
   const callFunction = new Function(`return (${CALL_FUNCTION})`)()
   const probe = globalThis.__neoProbe
   if (!probe) throw new Error('the asset did not define __neoProbe')

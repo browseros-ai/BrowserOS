@@ -31,6 +31,13 @@ pub(crate) struct BoxAsk {
     /// Where the page side leaves the page before its checks (ruling R62).
     #[serde(default)]
     pub(crate) scroll: LookScroll,
+    /// The box's accessible name as a capture of the tab names it, which the field's own drawing
+    /// over the box is compared with (rulings R55, R56). The page has no name computation of its
+    /// own, so Rust reads it from the tree after it resolved the box; absent when the tree has no
+    /// node for the box, and then the page side reads the box's own label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) name: Option<String>,
 }
 
 /// The page side's own part of the look's scroll. Rust's first step, the browser's own instant

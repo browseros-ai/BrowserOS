@@ -72,6 +72,7 @@ impl PrivateMirror {
 
     /// Returns whether this tab was opened under the current instance or already existed at start.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn origin_state(&self) -> TabOriginState {
         self.origin_state
     }

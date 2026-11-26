@@ -362,7 +362,6 @@ impl IsolatedWorld {
     }
 
     /// Logical timestamp recorded when this world finished installing.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) const fn installed_at(&self) -> Stamp {
         self.installed_at
     }

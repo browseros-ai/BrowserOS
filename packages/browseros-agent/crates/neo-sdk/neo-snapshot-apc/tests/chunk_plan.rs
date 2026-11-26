@@ -624,3 +624,32 @@ fn a_chunk_with_no_sided_part_runs_as_one_tree_run() -> Result<(), Box<dyn Error
     );
     Ok(())
 }
+
+/// The switch-over's routing rule: the resolver sends a page-only chunk to the page as it stands
+/// and captures nothing for it, so every locator without a tree leaf costs what it cost before.
+#[test]
+fn a_chunk_is_page_only_exactly_when_no_tree_leaf_is_in_it() -> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let cases: [(&str, bool); 9] = [
+        ("page.locator('div')", true),
+        ("page.locator('internal:text=\"Go\"i')", true),
+        ("page.locator('xpath=//li').nth(1)", true),
+        ("page.locator('li').filter({ hasText: 'Go' }).nth(1)", true),
+        ("page.getByRole('button')", false),
+        ("page.locator('aria-ref=e5')", false),
+        (
+            "page.locator('#modal').getByRole('button', { name: 'Go' })",
+            false,
+        ),
+        (
+            "page.locator('li').filter({ has: page.getByRole('button') })",
+            false,
+        ),
+        ("page.locator('li').or(page.getByRole('link'))", false),
+    ];
+    for (selector, page_only) in cases {
+        let plan = ChunkPlan::of(&js.chunk(selector)?)?;
+        assert_eq!(plan.is_page_only(), page_only, "{selector}");
+    }
+    Ok(())
+}

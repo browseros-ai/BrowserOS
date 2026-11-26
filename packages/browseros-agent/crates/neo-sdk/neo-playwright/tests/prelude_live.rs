@@ -899,8 +899,7 @@ const BLIND_PAGE: &str = include_str!("data/snapshot-v1/blind.html");
 const BLIND_DEFAULT: &str = include_str!("data/snapshot-v1/blind.v1-default.txt");
 /// What `ariaSnapshot({ text: false })` prints for it.
 const BLIND_INTERACTIVE: &str = include_str!("data/snapshot-v1/blind.v1-interactive.txt");
-/// What Playwright 1.64.1's own `ariaSnapshot({ mode: 'ai' })` printed for it, and so what
-/// Neo's `mode: 'full'` prints: the page has no element that only clickable marking finds.
+/// What `ariaSnapshot({ mode: 'full' })` prints for it: Playwright's ai text of the tree.
 const BLIND_PLAYWRIGHT_AI: &str = include_str!("data/snapshot-v1/blind.playwright-ai.yml");
 /// The snapshot op's `{ json, partial }` for the page, which the prelude's renderer tests read
 /// (neo-playwright-js/tests/snapshot-v1.test.ts). From this crate's manifest directory.
@@ -908,8 +907,8 @@ const BLIND_RESULT: &str = "tests/data/snapshot-v1/blind.json";
 
 /// The v1 text on a real engine, page and `run`: the renderer's unit tests read the JSON this
 /// test pins, so together they show the fixture's expected text is what a live page prints.
-/// `NEO_RECORD_SNAPSHOT_V1=1` rewrites the JSON instead of comparing it. The ref numbers are
-/// those of the first snapshot of a freshly loaded page.
+/// `NEO_RECORD_SNAPSHOT_V1=1` rewrites the JSON and the three texts from one live run instead of
+/// comparing them. The ref numbers are those of the first snapshot of a freshly loaded page.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> TestResult {
@@ -942,13 +941,22 @@ async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> Tes
             &path,
             format!("{}\n", serde_json::to_string_pretty(&recorded)?),
         )?;
-    } else {
-        let committed: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
-        assert_eq!(
-            recorded, committed,
-            "the engine still gives the committed tree"
-        );
+        let dir = path.parent().ok_or("the fixture directory")?;
+        for (file, key) in [
+            ("blind.v1-default.txt", "plain"),
+            ("blind.v1-interactive.txt", "interactive"),
+            ("blind.playwright-ai.yml", "full"),
+        ] {
+            let text = result[key].as_str().ok_or("a recorded text")?;
+            fs::write(dir.join(file), text)?;
+        }
+        return Ok(());
     }
+    let committed: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+    assert_eq!(
+        recorded, committed,
+        "the engine still gives the committed tree"
+    );
     assert_eq!(
         result["plain"], BLIND_DEFAULT,
         "the default is the text form"
@@ -987,9 +995,10 @@ fn full_mode_page() -> String {
 /// `ariaSnapshot({ mode: 'full' })` on a real engine, page and locator (design section 13): it
 /// prints every ref the v1 text prints in either form (the marked `div` included), the whole page
 /// is cut near 8,000 tokens with the dialog kept, a section named by the v1 text comes back whole,
-/// a ref only the full text prints can be hovered, and the snapshot counts as the run's snapshot
-/// of a tab it opened, so a stale ref after it gets the ordinary message. A second run shows it
-/// is never a delta baseline and never counted for the server's tip.
+/// a plain `div` holding only text prints as its text, with no ref (the tree keeps no plain
+/// container, apc-engine-design 3.5), and the snapshot counts as the run's snapshot of a tab it
+/// opened, so a stale ref after it gets the ordinary message. A second run shows it is never a
+/// delta baseline and never counted for the server's tip.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_mode_full_prints_every_ref_capped_on_a_live_browser() -> TestResult {
@@ -1038,14 +1047,9 @@ async fn tests_that_mode_full_prints_every_ref_capped_on_a_live_browser() -> Tes
         section.starts_with("- region \"Tools\" [ref=") && !section.contains("# cut: "),
         "the section named by the v1 text comes back whole: {section}"
     );
-    let hover_ref = result["hoverRef"].as_str().ok_or("the plain div's ref")?;
     assert!(
-        !printed_refs(&text("text")).contains(hover_ref),
-        "the plain div has no ref in the v1 text"
-    );
-    assert_eq!(
-        result["hovered"], true,
-        "the full text's ref hovers the div"
+        result["hoverRef"].is_null() && section.contains("Hover me"),
+        "the plain div prints as its text, with no ref of its own: {section}"
     );
 
     let tab = result["tab"].as_i64().ok_or("the page's tab")?;
@@ -1226,12 +1230,14 @@ fn block(text: &str, name: &str) -> Vec<String> {
 /// A `div` with only a click listener and the default cursor keeps its ref, printed with
 /// `[cursor=pointer]`, and a click through that ref reaches its listener; every listener-only
 /// element prints exactly as its twin with a real `cursor: pointer` does, also on the same page
-/// under `body { cursor: default }`, and a container that relays its buttons' clicks prints no
-/// line of its own. Under the spec harness's conformance switch the same page prints
-/// Playwright's own text: the listener-only elements have no mark.
+/// under `body { cursor: default }`, and the relaying container's buttons close the page. The
+/// lines are the tree's ai distillation (apc-engine-design 3.7): an image or a paragraph a click
+/// wrapper holds alone prints as itself, with no mark of the wrapper's. Under the spec harness's
+/// conformance switch the tree is the same, so the listener-only elements keep their mark there
+/// too: what Chromium reports clickable comes with the tree (apc-engine-design 3.5).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_switch_leaves_them()
+async fn tests_that_listener_only_elements_print_as_their_pointer_twins_under_the_switch_too()
 -> TestResult {
     let _alone = ALONE.acquire().await?;
     let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
@@ -1251,12 +1257,13 @@ async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_
     let twins = [
         "- generic [ref] [cursor=pointer]: Open menu",
         "- generic [ref] [cursor=pointer]",
-        "- img \"Settings\" [ref] [cursor=pointer]",
-        "- img \"Slotted\" [ref] [cursor=pointer]",
-        "- img \"Labelled\" [ref] [cursor=pointer]",
-        "- paragraph [ref] [cursor=pointer]: Para text",
+        "- img \"Settings\"",
+        "- img \"Slotted\"",
+        "- img \"Labelled\"",
+        "- text: Para text",
         "- generic [ref] [cursor=pointer]: Wrapped with",
-        "- text: a note Wrapped",
+        "- text: a note",
+        "- generic [ref] [cursor=pointer]: Wrapped",
     ];
     for path in ["/clickable.html", "/clickable-default.html"] {
         let script = clickable_script(&server.url("127.0.0.1", path));
@@ -1280,17 +1287,13 @@ async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_
     let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
     let upstream = js_runner::run_script(&upstream, &init, &clickable_script(&url)).await?;
     let ai = upstream["ai"].as_str().ok_or("Playwright's ai text")?;
-    let listeners = ai
-        .split("- navigation \"pointers\"")
-        .next()
-        .ok_or("the listeners' half")?;
     assert!(
-        listeners.contains("- generic [ref]: Open menu") && !listeners.contains("[cursor=pointer]"),
-        "under the switch no listener-only element is marked: {ai}"
+        !block(ai, "listeners").is_empty() && block(ai, "listeners") == block(ai, "pointers"),
+        "under the switch too each listener-only element prints as its pointer twin: {ai}"
     );
     assert!(
-        ai.contains("- generic [ref] [cursor=pointer]: Open menu"),
-        "the real pointer twin keeps upstream's own mark: {ai}"
+        block(ai, "listeners").contains(&"- generic [ref] [cursor=pointer]: Open menu".to_owned()),
+        "the listener-only menu keeps its mark: {ai}"
     );
     Ok(())
 }
@@ -1550,20 +1553,15 @@ fn assert_private_canaries_absent(value: &Value) -> TestResult {
     Ok(())
 }
 
+/// The public twins print in clear: the live values, and those values beside the boxes that hold
+/// CSS generated content. That content itself is the inputs' `::before`, `::after` and
+/// `content: url() / attr(value)`, which Chromium renders for no `<input>`, so the tree, built from
+/// what the browser renders, holds none of it, where upstream's accname read it from computed
+/// style; the private twins' canaries are still checked absent everywhere.
 fn assert_public_canaries_present(text: &str, scope: &str) {
-    let own_css = format!("PublicCanary{scope}-css-self");
-    assert!(text.contains(&own_css), "missing {own_css}: {text}");
-    for kind in ["input", "textarea"] {
+    for kind in ["input", "textarea", "css-text-before", "css-text-after"] {
         let visible = format!("PublicCanary{scope}-{kind}-value");
         assert!(text.contains(&visible), "missing {visible}: {text}");
-    }
-    // Attribute canaries prove generated content survived, independently of the live value.
-    for kind in ["checkbox", "text"] {
-        for pseudo in ["before", "after"] {
-            let suffix = if kind == "text" { "-attribute" } else { "" };
-            let visible = format!("PublicCanary{scope}-css-{kind}-{pseudo}{suffix}");
-            assert!(text.contains(&visible), "missing {visible}: {text}");
-        }
     }
 }
 
@@ -1635,9 +1633,12 @@ fn assert_private_value_delta(grown: &Value) -> TestResult {
     Ok(())
 }
 
-fn assert_conformance_private_fields_are_clear(unmasked: &Value) -> TestResult {
+/// Under the conformance switch the declared private fields stay masked: the patched browser
+/// redacts their values inside its own capture (contract version 1), which no switch of Neo's
+/// can turn off, where upstream's page engine and Neo's old one printed them in clear there.
+fn assert_conformance_private_fields_are_masked_too(snapshots: &Value) -> TestResult {
     for key in ["page", "child", "tree"] {
-        let text = serde_json::to_string(&unmasked[key])?;
+        let text = serde_json::to_string(&snapshots[key])?;
         for canary in [
             "Typed",
             "Edit🔒",
@@ -1646,9 +1647,9 @@ fn assert_conformance_private_fields_are_clear(unmasked: &Value) -> TestResult {
             "Otp246",
             "SecretCanary",
         ] {
-            assert!(text.contains(canary), "conformance {key}: {text}");
+            assert!(!text.contains(canary), "conformance {key}: {text}");
         }
-        assert!(!text.contains('•'), "conformance {key}: {text}");
+        assert!(text.contains('•'), "conformance {key}: {text}");
     }
     Ok(())
 }
@@ -1708,8 +1709,8 @@ async fn tests_that_private_field_values_are_masked_in_every_snapshot_format() -
     );
 
     let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
-    let unmasked = js_runner::run_script(&upstream, &init, PRIVATE_CONFORMANCE_SCRIPT).await?;
-    assert_conformance_private_fields_are_clear(&unmasked)
+    let conformance = js_runner::run_script(&upstream, &init, PRIVATE_CONFORMANCE_SCRIPT).await?;
+    assert_conformance_private_fields_are_masked_too(&conformance)
 }
 
 /// The live browser as the spec harness hosts it: the same ops, with the conformance switch set
@@ -1850,15 +1851,16 @@ const CARD_FRAME: &str = r#"<!doctype html><html><body>
 <input aria-label="Card number"> <button>Pay</button>
 </body></html>"#;
 
-/// An iframe whose tag holds fallback markup, on a real engine: the engine reads the markup as
-/// the iframe node's `text` and Rust stitches the frame's content under the same node. Neo's
-/// formats print that frame with its refs and never the markup: `mode: 'full'` prints every ref
-/// the default text prints, in both forms, the second card field's included. Under the spec
-/// harness's conformance switch the page prints Playwright's own text: the fallback line, and
-/// no second frame.
+/// An iframe whose tag holds fallback markup, on a real engine: the tree reads what the browser
+/// renders, which the markup never is, so neither iframe node has a `text` and each holds its
+/// frame's content. Neo's formats print that frame with its refs and never the markup:
+/// `mode: 'full'` prints every ref the default text prints, in both forms, the second card
+/// field's included. Under the spec harness's conformance switch the text is Playwright's format
+/// of the same tree: both frames, and no markup (upstream's page engine printed the markup as the
+/// second iframe's line and left its frame out).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_an_iframe_with_fallback_markup_prints_its_frame_and_the_switch_keeps_the_markup()
+async fn tests_that_an_iframe_with_fallback_markup_prints_its_frame_under_the_switch_too()
 -> TestResult {
     let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
     let server = FixtureServer::start(HashMap::from([
@@ -1942,25 +1944,20 @@ async fn tests_that_an_iframe_with_fallback_markup_prints_its_frame_and_the_swit
     )
     .await?;
     let ai = switched.as_str().ok_or("Playwright's ai text")?;
-    let fallback_line = ai
-        .lines()
-        .filter(|line| line.trim_start().starts_with("- iframe [ref="))
-        .nth(1)
-        .unwrap_or_default();
     assert!(
-        fallback_line.ends_with(&format!("]: {FALLBACK_MARKUP}")),
-        "under the switch the second iframe is Playwright's fallback line: {ai}"
+        !ai.contains(FALLBACK_MARKUP),
+        "under the switch no line prints the markup: {ai}"
     );
     assert_eq!(
         card_fields(ai),
-        1,
-        "under the switch only the first frame prints, as in Playwright: {ai}"
+        2,
+        "under the switch both frames print: {ai}"
     );
     Ok(())
 }
 
-/// The cause, read from the engine's stitched tree: the first iframe has no `text`, the second
-/// has the fallback markup as its `text`, and both hold their frame's content as children.
+/// The cause, read from the tree: neither iframe has a `text`, the markup being nothing the
+/// browser renders, and both hold their frame's content as children.
 fn assert_fallback_is_read_into_the_tree(json: &Value) -> TestResult {
     let mut iframes = Vec::new();
     // Depth first in document order: children go on reversed, so the first comes off first.
@@ -1974,11 +1971,9 @@ fn assert_fallback_is_read_into_the_tree(json: &Value) -> TestResult {
     let [plain, fallback] = iframes.as_slice() else {
         return Err(format!("two iframe nodes: {json}").into());
     };
-    assert_eq!(plain.get("text"), None, "the empty iframe has no text");
-    assert_eq!(
-        fallback["text"], FALLBACK_MARKUP,
-        "the engine reads the fallback markup as the iframe's text"
-    );
+    for iframe in [plain, fallback] {
+        assert_eq!(iframe.get("text"), None, "an iframe has no text: {iframe}");
+    }
     for iframe in [plain, fallback] {
         assert!(
             iframe["children"]
@@ -2168,9 +2163,10 @@ async fn unmarked_then_marked(url: &str) -> TestResult<(Value, Value)> {
 }
 
 /// Marking never removes a ref the v1 text prints: on a fresh copy of the same page, every ref
-/// the unmarked text prints, in both forms, is printed by the marked text too. The article's
-/// section line survives, the containers stay unmarked, and the listener items, the menu and the
-/// shadow card whose slot holds text are marked.
+/// the unmarked text prints, in both forms, is printed by the marked text too. The tree marks what
+/// Chromium reports clickable, so the listener items, the menu and the listener card are marked,
+/// the card as one line that holds its article's text, and the `tabindex` containers and shadow
+/// card are not; the region keeps its line.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResult {
@@ -2180,8 +2176,8 @@ async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResu
     let (_, marked) = unmarked_then_marked(&server.url("127.0.0.1", "/marking.html")).await?;
     let plain = marked["plain"].as_str().ok_or("the marked text")?;
     assert!(
-        plain.contains("- article [ref="),
-        "the article keeps its line: {plain}"
+        plain.contains("] [cursor=pointer]: Read on Story text"),
+        "the listener card is one clickable line with its article's text: {plain}"
     );
     assert!(
         plain.contains("- region \"Notes\" [ref="),
@@ -2192,8 +2188,8 @@ async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResu
     }
     assert!(plain.contains("] [cursor=pointer]: Open menu"), "{plain}");
     assert!(
-        plain.contains("] [cursor=pointer]: Card text"),
-        "the shadow card whose slot holds text is a leaf: {plain}"
+        plain.contains("- text: Card text") && !plain.contains("[cursor=pointer]: Card text"),
+        "a `tabindex` shadow card is not what Chromium reports clickable: {plain}"
     );
     Ok(())
 }
@@ -2217,10 +2213,12 @@ const HIDDEN_CONTROLS_PAGE: &str = r##"<!doctype html><html><head><title>Hidden 
 </main>
 </body></html>"##;
 
-/// Marking's guard counts only what the engine draws: a wrapper whose only control is not drawn
-/// gains a marked line, retaining a zero-size field's bare line (section 16.3). A wrapper around
-/// a drawn control, a 1-pixel checkbox or a drawn `aria-hidden` button stays exactly as unmarked.
-/// No ref is lost either way.
+/// A hidden control does not make a container: each wrapper whose only control is not drawn
+/// prints its text alone, and a zero-size field keeps its bare line (section 16.3). The tree
+/// marks what Chromium reports clickable, a pointer cursor or a click handler, which a
+/// `tabindex` alone is not, so no wrapper here is marked and the marked text equals the
+/// unmarked. A wrapper around a drawn control, a 1-pixel checkbox or a drawn `aria-hidden`
+/// button keeps its control's line. No ref is lost either way.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container() -> TestResult {
@@ -2230,40 +2228,28 @@ async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container
     let (unmarked, marked) = unmarked_then_marked(&server.url("127.0.0.1", "/hidden.html")).await?;
     let unmarked = without_refs(unmarked["plain"].as_str().ok_or("the unmarked text")?);
     let marked = without_refs(marked["plain"].as_str().ok_or("the marked text")?);
+    assert_eq!(marked, unmarked, "clickable marking is the tree's own");
     for (name, text) in [
         ("display none", "Open menu"),
         ("drop zone", "Drop files here"),
         ("hidden nav", "Hidden section"),
     ] {
         assert_eq!(
-            block(&unmarked, name),
-            [format!("- text: {text}")],
-            "{name}, unmarked: {unmarked}"
-        );
-        assert_eq!(
             block(&marked, name),
-            [format!("- generic [ref] [cursor=pointer]: {text}")],
-            "{name}, marked: {marked}"
+            [format!("- text: {text}")],
+            "{name}: {marked}"
         );
     }
     assert_eq!(
-        block(&unmarked, "zero size"),
-        ["- checkbox", "- text: Notifications"],
-        "the zero-size field keeps its state without a ref: {unmarked}"
-    );
-    assert_eq!(
         block(&marked, "zero size"),
-        [
-            "- generic [ref] [cursor=pointer]: Notifications",
-            "- checkbox"
-        ],
-        "the wrapper is clickable while the field still has no ref: {marked}"
+        ["- checkbox", "- text: Notifications"],
+        "the zero-size field keeps its state without a ref: {marked}"
     );
     for name in ["drawn control", "screen reader", "aria hidden"] {
         let lines = block(&marked, name);
         assert!(
-            !lines.is_empty() && lines == block(&unmarked, name),
-            "{name} stays as unmarked:\n--- unmarked\n{unmarked}\n--- marked\n{marked}"
+            !lines.is_empty() && lines.iter().any(|line| line.contains("[ref]")),
+            "{name} keeps its drawn control's line: {marked}"
         );
         assert!(
             lines.iter().all(|line| !line.contains("[cursor=pointer]")),
@@ -2367,7 +2353,7 @@ async fn tests_that_a_closed_shadow_root_reads_and_acts_as_an_open_one() -> Test
     let init = json!({ "page": { "$neo": "page", "tab": tab } });
     assert_closed_change_is_listed(&run, &host, &init).await?;
     js_runner::run_script(&host, &init, "await page.close()").await?;
-    assert_the_switch_keeps_roots_closed(&run, &url).await
+    assert_the_switch_reads_closed_roots_too(&run, &url).await
 }
 
 /// Every form prints what is inside the closed roots, and the actions through its refs land.
@@ -2469,8 +2455,10 @@ async fn assert_closed_change_is_listed(
     Ok(())
 }
 
-/// Under the switch: Playwright's own text, without what the closed roots hold, and no capture.
-async fn assert_the_switch_keeps_roots_closed(run: &Arc<LiveRun>, url: &Value) -> TestResult {
+/// Under the switch: Playwright's format of the same tree, so what the closed roots hold prints
+/// too (apc-engine-design 5.3: APC reads closed roots, and the tree searches them), and no
+/// `DOMSnapshot` capture is made.
+async fn assert_the_switch_reads_closed_roots_too(run: &Arc<LiveRun>, url: &Value) -> TestResult {
     let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(run)));
     run.record_methods();
     let ai = js_runner::run_script(
@@ -2499,13 +2487,13 @@ async fn assert_the_switch_keeps_roots_closed(run: &Arc<LiveRun>, url: &Value) -
         "Slot text",
     ] {
         assert!(
-            !ai.contains(inside),
-            "under the switch {inside} stays closed: {ai}"
+            ai.contains(inside),
+            "under the switch {inside} prints as the tree holds it: {ai}"
         );
     }
     assert!(
         ai.contains("Slotted button"),
-        "the host's own button is light content, which upstream reads: {ai}"
+        "the host's own button is light content: {ai}"
     );
     assert!(
         !methods
@@ -2602,7 +2590,7 @@ async fn tests_that_a_large_closed_root_takes_one_seed_and_prints_whole() -> Tes
     assert!(
         notes
             .iter()
-            .any(|line| line.ends_with(", closed shadow root seeds: 1")),
+            .any(|line| line == "  closed shadow roots opened to the page's engines: 1"),
         "one seed went: {notes:#?}"
     );
     Ok(())
@@ -2622,12 +2610,14 @@ fn closed_cards(count: usize) -> String {
     )
 }
 
-/// More closed roots than a frame sends seeds for: the text says so on its first line, in the
-/// default format and in `mode: 'full'`, and the op's call log names the cut; the roots that
-/// were sent print. With fewer roots than the cap, no such line and every card prints.
+/// More closed roots than a frame sends seeds for: the tree reads every root, so every card
+/// prints and no `# partial` line says otherwise, in the default format and in `mode: 'full'`;
+/// the op's call log names the cut, which only the page's own CSS and text engines see. With
+/// fewer roots than the cap, no such line and every card prints.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_more_closed_roots_than_the_cap_say_so_in_the_text() -> TestResult {
+async fn tests_that_more_closed_roots_than_the_cap_still_print_and_the_log_names_the_cut()
+-> TestResult {
     let _alone = ALONE.acquire().await?;
     let page = |html: String| Page::html(&html).with_header("cache-control", "no-store");
     let server = FixtureServer::start(HashMap::from([
@@ -2638,14 +2628,16 @@ async fn tests_that_more_closed_roots_than_the_cap_say_so_in_the_text() -> TestR
     let run = Arc::new(LiveRun::connect().await?);
     let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
     let many = server.url("127.0.0.1", "/closed/many.html");
-    let line = "# partial: closed shadow roots not all read (1000 of 1001)";
-    for options in ["{ text: false }", "{ mode: 'full' }"] {
+    for options in [
+        "{ text: false, maxTokens: 100000 }",
+        "{ mode: 'full', maxTokens: 100000 }",
+    ] {
         let text = snapshot_of(&host, &many, options).await?;
-        assert_eq!(text.lines().next(), Some(line), "{options}: {text}");
-        assert!(
-            text.contains("- button \"Card 0\" [ref="),
-            "{options}: {text}"
-        );
+        assert!(!text.contains("# partial"), "{options}: {text}");
+        for card in [0, 1_000] {
+            let line = format!("- button \"Card {card}\" [ref=");
+            assert!(text.contains(&line), "{options}: {line}\n{text}");
+        }
     }
     let notes = notes(&run);
     assert!(
@@ -2693,8 +2685,8 @@ outer.querySelector('.inner').attachShadow({ mode }).innerHTML = '<p>Inner</p><s
 /// A closed root's slots show what an open root's would: on the same page, the default format and
 /// `mode: 'full'` print the same text with closed roots as with open ones, refs aside, so the
 /// host children no slot takes stay hidden and every slotted one prints once, where its slot is.
-/// Under the conformance switch the closed page reads as upstream reads it, its roots closed:
-/// none of their own text, and the hosts' drawn children in document order.
+/// Under the conformance switch the tree is the same, so the closed page prints its roots' own
+/// text and its slots' order there too.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> TestResult {
@@ -2736,13 +2728,13 @@ async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> 
     let ai = snapshot_of(&upstream, &closed, "{ mode: 'ai' }").await?;
     for inside in ["Named", "Manual", "Outer", "Inner"] {
         assert!(
-            !ai.contains(inside),
-            "under the switch {inside} stays closed: {ai}"
+            ai.contains(inside),
+            "under the switch {inside} prints as the tree holds it: {ai}"
         );
     }
     assert!(
-        ai.find("\"Bee\"") < ai.find("\"Ay\""),
-        "upstream reads a closed host's own drawn children in their own order, not the slots': {ai}"
+        ai.find("\"Ay\"") < ai.find("\"Bee\""),
+        "under the switch too named slots show in their own order: {ai}"
     );
     Ok(())
 }

@@ -4,6 +4,7 @@
  * It never waits. "Not there yet" is the reply `none`, and Rust's retry loop owns the timing.
  */
 import type { InjectedScript } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
+import { asLocator } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/locatorGenerators'
 import {
   type ParsedSelector,
   stringifySelector,
@@ -16,8 +17,10 @@ import type {
   ProbeTarget,
   ReplyTo,
   Resolution,
+  ResolvedSet,
   ResolveRequest,
   SelectorRequest,
+  SetMember,
   Strictness,
   StrictViolation,
 } from './protocol'
@@ -51,11 +54,35 @@ export function queryAll(
     const element = world.pins.live(target.pin)
     return element ? [element] : []
   }
+  // A chunk Rust resolved over the APC tree: its matches still in this document, as a fresh
+  // query would find them. A stale ref counts nothing, as the ref engine's does.
+  if ('set' in target)
+    return target.set.members.flatMap(
+      (member) => setMember(world, member) ?? [],
+    )
   const { chunk } = target
   checkEngines(injected, chunk)
   return world.refs.query(() =>
     injected.querySelectorAll(chunk, root ?? injected.document),
   ).elements
+}
+
+/**
+ * A member of a set Rust resolved (`ProbeTarget::Set`): a pinned element while it is connected
+ * and still of this world's document, or the document's own root for the Document a chunk's
+ * `nth` or `internal:or` kept. A handed node (`node`) never reaches a target: Rust pins a tree
+ * set before an op names it.
+ */
+function setMember(world: World, member: SetMember): Element | undefined {
+  const { document } = world.injected
+  if (member === 'document') return document.documentElement
+  if ('node' in member)
+    throw new ProbeError(
+      'internal',
+      'a resolved set names a handed node, which only a stage takes',
+    )
+  const element = world.pins.live(member.pin)
+  return element?.ownerDocument === document ? element : undefined
 }
 
 /**
@@ -80,6 +107,7 @@ export function resolveTarget(
     const element = world.pins.live(target.pin)
     return element ? { kind: 'one', element } : { kind: 'detached' }
   }
+  if ('set' in target) return resolvedSet(world, target.set, strictness)
   const { chunk } = target
   checkEngines(injected, chunk)
   const { elements, staleRef } = world.refs.query(() =>
@@ -91,10 +119,68 @@ export function resolveTarget(
       ? { kind: 'none' }
       : { kind: 'none', staleRef }
   if (strictness === 'strict' && elements.length > 1)
-    return {
-      kind: 'strict',
-      message: injected.strictModeViolationError(chunk, elements).message,
-    }
+    return strictViolation(world, chunk, elements)
+  return { kind: 'one', element: first, count: elements.length }
+}
+
+/** The engine's `sdkLanguage` (world.ts `createEngine`), which its messages print in. */
+const SDK_LANGUAGE = 'javascript'
+
+/**
+ * Upstream's strict-mode violation for `elements` of `chunk`, with what its message lists: the
+ * first ten elements pinned, each with the preview and `aka` the message prints for it. The page's
+ * selector generator has no role engine, so Rust replaces an `aka` with the tree's role locator
+ * where upstream's generator would have chosen one (apc-engine-design 5.5).
+ */
+export function strictViolation(
+  world: World,
+  chunk: ParsedSelector,
+  elements: Element[],
+): StrictViolation {
+  const { injected } = world
+  const listed = elements.slice(0, 10)
+  return {
+    kind: 'strict',
+    message: injected.strictModeViolationError(chunk, elements).message,
+    listing: {
+      locator: asLocator(SDK_LANGUAGE, stringifySelector(chunk)),
+      count: elements.length,
+      pins: world.pins.addAll(listed),
+      items: listed.map((element) => ({
+        preview: injected.previewNode(element),
+        aka: asLocator(SDK_LANGUAGE, injected.generateSelectorSimple(element)),
+      })),
+    },
+  }
+}
+
+/**
+ * A chunk Rust resolved over the APC tree, answered as the page's own query of the chunk would
+ * be: its first match with how many there were, `none` (with the stale ref the chunk reported)
+ * when it matched nothing, and `detached` once a match has left its document, which makes Rust
+ * capture again. Rust decided strict mode before the request, so a strict set holds one match.
+ */
+function resolvedSet(
+  world: World,
+  set: ResolvedSet,
+  strictness: Strictness,
+): Found {
+  const elements: Element[] = []
+  for (const member of set.members) {
+    const element = setMember(world, member)
+    if (!element) return { kind: 'detached' }
+    elements.push(element)
+  }
+  const [first] = elements
+  if (first === undefined)
+    return set.staleRef === undefined
+      ? { kind: 'none' }
+      : { kind: 'none', staleRef: set.staleRef }
+  if (strictness === 'strict' && elements.length > 1)
+    throw new ProbeError(
+      'internal',
+      `a strict set holds ${elements.length} elements; Rust decides strict mode`,
+    )
   return { kind: 'one', element: first, count: elements.length }
 }
 

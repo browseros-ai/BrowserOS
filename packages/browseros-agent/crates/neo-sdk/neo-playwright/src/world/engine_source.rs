@@ -9,7 +9,10 @@ use crate::probe::PROBE_PROTOCOL;
 ///
 /// Evaluating it in a world defines one global, `__neoProbe`. Its `boot({ frameSeq, epoch })`
 /// builds the engine for that document. The inspector overlay and the `window.playwright`
-/// helper are compiled out as empty stand-ins.
+/// helper are compiled out as empty stand-ins, and so is Playwright's ARIA engine
+/// (`roleUtils`, `ariaSnapshot`, `roleSelectorEngine`): the APC tree in Rust answers roles,
+/// names, aria snapshots and refs, and the page keeps only the live state checks an action
+/// makes (apc-engine-design 9.2).
 const ENGINE_JS: &str = include_str!("../../assets/injected.js");
 
 /// The function an install calls on a world's global with `{ frameSeq, epoch }`. It returns
@@ -69,7 +72,13 @@ mod tests {
         assert!(bundles_module(
             "crates/neo-sdk/neo-playwright-js/src/probe/index.ts"
         ));
-        for stubbed in ["highlight", "consoleApi"] {
+        for stubbed in [
+            "highlight",
+            "consoleApi",
+            "roleUtils",
+            "ariaSnapshot",
+            "roleSelectorEngine",
+        ] {
             assert!(
                 !bundles_module(&format!("{UPSTREAM}/packages/injected/src/{stubbed}.ts")),
                 "{stubbed}.ts is bundled; the build must swap it for its stub"
@@ -78,6 +87,17 @@ mod tests {
                 "crates/neo-sdk/neo-playwright-js/src/stubs/{stubbed}.ts"
             )));
         }
+        // Imported only by the vendored `ariaSnapshot.ts`, so it leaves with it.
+        assert!(
+            !bundles_module(&format!(
+                "{UPSTREAM}/packages/injected/src/ariaSnapshotDistiller.ts"
+            )),
+            "ariaSnapshotDistiller.ts is bundled; only the vendored ariaSnapshot imports it"
+        );
+        // The template parser stays: the stand-ins swap only `injected/src`'s files.
+        assert!(bundles_module(&format!(
+            "{UPSTREAM}/packages/isomorphic/ariaSnapshot.ts"
+        )));
     }
 
     #[test]

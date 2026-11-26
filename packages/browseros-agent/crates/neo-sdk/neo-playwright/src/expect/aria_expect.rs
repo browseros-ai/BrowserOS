@@ -15,13 +15,11 @@
 //!   a failed property poll + Visibility ─▶ FailureSnapshot (what the caller renders)
 //! ```
 //!
-//! Every read here is pure: no CDP, no page, no clock. The caller (the expect op after the
-//! switch-over) resolves the target, builds the tree's `NameCache` once per attempt, and owns
+//! Every read here is pure: no CDP, no page, no clock. The caller (`expect_op`'s tree poll)
+//! resolves the target, builds the tree's `NameCache` once per attempt, and owns
 //! `resolved`, the failure snapshot's text and the loop. The expected values are whatever the
 //! script passed (a matcher may compare a secret), so nothing here that holds one implements
 //! `Debug` (STYLE P4).
-
-#![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 
 use std::error::Error;
 use std::fmt;
@@ -87,14 +85,14 @@ pub(crate) struct AriaVerdict {
     pub(crate) received: Value,
 }
 
-/// What a failed property poll attaches as its aria snapshot, upstream's `_ariaSnapshotForExpect`
-/// (`injectedScript.ts:1507-1520`) for these matchers. Rendering it is the caller's: design 5.6
-/// renders one `tree.aria` at the final failure from the last attempt's tree, where upstream
-/// renders one per failing poll. A template poll never attaches one.
+/// What a failed single-element poll attaches as its aria snapshot, upstream's
+/// `_ariaSnapshotForExpect` (`injectedScript.ts:1507-1520`). Rendering it is the caller's, from
+/// the tree of that poll, as upstream renders one per failing poll; a template poll, a count and
+/// an array form never attach one (`Expectation::failed_poll_snapshot`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FailureSnapshot {
-    /// The element's own line: `mode: 'default'`, `depth: 1` (a property matcher is never the
-    /// containment matcher `to.have.text`, the one upstream snapshots whole).
+    /// The element: `mode: 'default'`, to the depth its matcher takes (its own line, or whole for
+    /// the containment matcher `to.have.text`).
     Element,
     /// The body of the frame the element is in, `mode: 'default'`, whole; no snapshot at all when
     /// that document has no body (upstream's `!this.document.body`).
@@ -102,11 +100,11 @@ pub(crate) enum FailureSnapshot {
 }
 
 impl FailureSnapshot {
-    /// What a property poll that failed (its result equal to `.not`) snapshots: the element's own
-    /// line when the frame and the element are visible, else the frame's body. A poll that passed
-    /// attaches none, and the caller asks only for one that failed, as upstream's `expect` does.
+    /// What a poll that failed (its result equal to `.not`) snapshots: the element when the frame
+    /// and the element are visible, else the frame's body. A poll that passed attaches none, and
+    /// the caller asks only for one that failed, as upstream's `expect` does.
     #[must_use]
-    pub(crate) const fn for_failed_property(visibility: Visibility) -> Self {
+    pub(crate) const fn for_failed_poll(visibility: Visibility) -> Self {
         if visibility.frame && visibility.element {
             Self::Element
         } else {
@@ -305,17 +303,33 @@ impl TemplateMatcher {
     /// checkbox and `[expanded=false]` only an `aria-expanded="false"` (see
     /// `neo_snapshot::template`). The YAML is default mode's: the printer drops `false` and `0`,
     /// as upstream's does.
+    #[cfg(test)]
     pub(crate) fn check(
         &self,
         tree: &SnapshotTree,
         target: NodeId,
     ) -> Result<AriaVerdict, AriaExpectError> {
-        let ask = AriaAsk::template_mode().with_root(AriaRoot::Subtree(target));
-        let aria = tree.aria(ask).map_err(AriaExpectError::TooDeep)?;
+        self.check_roots(tree, &[AriaRoot::Subtree(target)])
+    }
+
+    /// [`Self::check`] over the aria tree emitted from each of `roots` in turn: an element's
+    /// node, a page's document, or the top-most tree nodes of a container the tree has no node
+    /// for (the snapshot's `untracked_roots`).
+    pub(crate) fn check_roots(
+        &self,
+        tree: &SnapshotTree,
+        roots: &[AriaRoot],
+    ) -> Result<AriaVerdict, AriaExpectError> {
+        let mut nodes = Vec::new();
+        for &root in roots {
+            let ask = AriaAsk::template_mode().with_root(root);
+            let aria = tree.aria(ask).map_err(AriaExpectError::TooDeep)?;
+            nodes.extend(aria.into_snapshot().tree);
+        }
         // The element's nodes alone: `Call::Playwright` with no partial frames prints upstream's
         // lines for them and nothing else.
         let snapshot = Snapshot {
-            tree: aria.into_snapshot().tree,
+            tree: nodes,
             ..Snapshot::default()
         };
         let matches = template::matches_template(&snapshot.tree, &self.template)
