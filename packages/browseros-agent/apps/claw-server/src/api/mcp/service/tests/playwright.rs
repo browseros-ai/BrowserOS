@@ -434,10 +434,305 @@ async fn desktop_host_descriptions_do_not_teach_removed_tools() -> anyhow::Resul
 }
 
 #[tokio::test]
+async fn human_help_reaches_a_tab_in_another_profile() -> anyhow::Result<()> {
+    use crate::api::mcp::test_support::{ProfileConnection, current_session};
+    let mut call = desktop_playwright_call("run", json!({})).await?;
+    let (engine, _host) = tab_inventory(json!([
+        {"tabId": 102, "targetId": "T102"},
+    ]))
+    .await?;
+    call.state.neo = engine;
+    // Tab 102 is in the ops profile while Default is loaded in a separate window.
+    let browser = current_session(ProfileConnection::new().with_default_profile());
+    call.state.browser.set_session_for_testing(browser).await;
+    let service = ClawMcpService::new(call.state.clone());
+    let started = service
+        .ensure_session_started(SessionId::new("help-another-profile"))
+        .await?;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+
+    let result = service
+        .call_request_human_help(
+            &started,
+            &json!({"page": 102, "reason": "Enter the code"}),
+            cancelled,
+        )
+        .await;
+
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let entry = call
+        .state
+        .help
+        .get(started.session.id())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("help entry missing"))?;
+    assert_eq!(entry.browser_tab_id(), Some(102));
+    Ok(())
+}
+
+#[tokio::test]
+async fn human_help_accepts_a_tab_opened_by_the_same_sessions_run() -> anyhow::Result<()> {
+    use crate::api::mcp::test_support::{ProfileConnection, current_session};
+    use crate::services::neo::TaskKey;
+    use axum::http::StatusCode;
+
+    const CODE: &str = "return (await context.newPage()).tabId";
+    let mut call = desktop_playwright_call("run", json!({})).await?;
+    let session = call
+        .state
+        .sessions
+        .lookup(&call.session_id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("fixture session missing"))?;
+    let task = TaskKey::for_session(session.convo_id());
+    let browser = current_session(ProfileConnection::new().with_default_profile());
+    let sdk_browser = browser.clone();
+    let (inventory, inventory_reads) = tokio::sync::watch::channel(json!([]));
+    let host = tab_inventory_router(inventory_reads).route(
+        "/mcp",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+            let request = &body["params"];
+            let request_task = &request["_meta"]["com.browseros.neo/run"]["taskId"];
+            let value = if request["arguments"]["code"] == CODE && request_task == task.as_str() {
+                // The SDK has its own CDP connection. The host discovers the new tab by
+                // native ID after run returns, just as it does for a real context.newPage().
+                let opened = sdk_browser
+                    .cdp(
+                        "Browser.createTab",
+                        json!({"windowId": 4, "url": "about:blank"}),
+                        None,
+                    )
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let tab = &opened["tab"];
+                inventory.send_replace(json!([{
+                    "tabId": tab["tabId"], "targetId": tab["targetId"], "taskId": task,
+                    "url": tab["url"], "title": tab["title"], "taskIds": [task],
+                }]));
+                tab["tabId"].clone()
+            } else if request_task.is_null() {
+                // The host's follow-up census has no task and reads the holder.
+                inventory.borrow().clone()
+            } else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            Ok(axum::Json(json!({
+                "jsonrpc": "2.0", "id": body["id"], "result": {
+                    "content": [], "structuredContent": {"value": value}, "isError": false,
+                    "_meta": {"com.browseros.neo/run": {
+                        "id": "fake-run", "status": "ok", "effects": "none", "tasks": []
+                    }}
+                }
+            })))
+        }),
+    );
+    let (engine, _host) = start_test_sdk(host).await?;
+    call.state.neo = engine;
+    call.state.browser.set_session_for_testing(browser).await;
+    let service = ClawMcpService::new(call.state);
+    let started = service.ensure_session_started(call.session_id).await?;
+    let run = crate::api::mcp::service::playwright::run::call(
+        &service.state,
+        &started,
+        serde_json::from_value(json!({"code": CODE}))?,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_ne!(run.is_error, Some(true), "{}", text_of(&run));
+    let tab = run
+        .structured_content
+        .and_then(|body| body["value"].as_i64())
+        .ok_or_else(|| anyhow::anyhow!("run did not return a tab ID"))?;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let help = service
+        .call_request_human_help(
+            &started,
+            &json!({"page": tab, "reason": "Enter the code"}),
+            cancelled,
+        )
+        .await;
+    assert_ne!(help.is_error, Some(true), "{}", text_of(&help));
+    let returned_page = help
+        .structured_content
+        .and_then(|body| body["page"].as_i64());
+    assert_eq!(returned_page, Some(tab));
+    Ok(())
+}
+
+#[tokio::test]
+async fn human_help_refuses_reserved_and_unreachable_tabs() -> anyhow::Result<()> {
+    use crate::api::mcp::test_support::{ProfileConnection, current_session};
+    let mut call = desktop_playwright_call("run", json!({})).await?;
+    let connection = ProfileConnection::new().with_default_profile();
+    for tab in connection
+        .tabs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter_mut()
+    {
+        match tab["tabId"].as_i64() {
+            Some(103) => tab["url"] = json!("chrome-extension://excluded/tab.html"),
+            Some(104) => tab["url"] = json!("about:blank"),
+            _ => {}
+        }
+    }
+    let browser = current_session(connection);
+    let (engine, _host) = tab_inventory(json!([
+        {"tabId": 101, "targetId": "previous-target"},
+        {"tabId": 103, "targetId": "T103"},
+        {"tabId": 104, "targetId": "T104", "owner": "neo"},
+    ]))
+    .await?;
+    call.state.neo = engine;
+    call.state.browser.set_session_for_testing(browser).await;
+    let service = ClawMcpService::new(call.state.clone());
+    let started = service
+        .ensure_session_started(SessionId::new("help-unreachable-tab"))
+        .await?;
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+
+    for (tab, message) in [
+        (104, "not one of your open pages"),
+        (103, "not open in the connected browser"),
+        (999, "not open in the connected browser"),
+        (101, "not one of your open pages"),
+    ] {
+        let result = service
+            .call_request_human_help(
+                &started,
+                &json!({"page": tab, "reason": "Enter the code"}),
+                cancelled.clone(),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true), "tab {tab}: {result:?}");
+        assert!(text_of(&result).contains(message), "tab {tab}: {result:?}");
+        assert!(call.state.help.get(started.session.id()).await.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn playwright_pursue_view_refuses_a_reused_tab_after_reconnect() -> anyhow::Result<()> {
+    use crate::api::mcp::test_support::{ProfileConnection, current_session};
+    use browseros_core::{CoreError, TargetError};
+
+    let mut call = desktop_playwright_call("run", json!({})).await?;
+    let (engine, _host) = tab_inventory(json!([
+        {"tabId": 102, "targetId": "T102"},
+    ]))
+    .await?;
+    call.state.neo = engine;
+    let connection = ProfileConnection::new().with_default_profile();
+    let browser = current_session(connection.clone());
+    call.state
+        .browser
+        .set_session_for_testing(browser.clone())
+        .await;
+    let state = call.state;
+    let service = ClawMcpService::new(state.clone());
+    let playwright = service
+        .playwright
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Playwright is off"))?;
+    let page = PageNaming::NativeTab
+        .host_page(&state, 102)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("host did not discover tab 102"))?;
+    let (_, view) = playwright
+        .resolve_page(
+            &state,
+            browser.clone(),
+            &NamedPage {
+                said: 102,
+                page: page.clone(),
+            },
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("pursue could not admit tab 102"))?;
+
+    // A decision can outlive the browser connection. Reconciliation reuses the
+    // host PageId when the replacement connection reports the same native tab id.
+    connection.reconnect();
+    {
+        let mut tabs = connection
+            .tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let replacement = tabs
+            .iter_mut()
+            .find(|tab| tab["tabId"] == 102)
+            .ok_or_else(|| anyhow::anyhow!("fixture tab is missing"))?;
+        replacement["targetId"] = json!("replacement-target");
+        replacement["url"] = json!("about:blank");
+    }
+    browser.pages.list().await?;
+    let replacement = browser
+        .pages
+        .get_info(page.clone())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("fixture did not reuse the old page id"))?;
+    assert_eq!(replacement.target_id.0, "replacement-target");
+
+    let result = view.page_session(page).await;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+        ),
+        "{result:?}"
+    );
+    Ok(())
+}
+
+async fn tab_inventory(
+    items: Value,
+) -> anyhow::Result<(crate::services::neo::NeoEngine, tokio::task::JoinSet<()>)> {
+    let (_inventory, reads) = tokio::sync::watch::channel(items);
+    start_test_sdk(tab_inventory_router(reads)).await
+}
+
+fn tab_inventory_router(inventory: tokio::sync::watch::Receiver<Value>) -> axum::Router {
+    use axum::http::{HeaderMap, StatusCode, header};
+    axum::Router::new().route(
+        "/v1/tabs",
+        axum::routing::get(move |headers: HeaderMap| async move {
+            if headers
+                .get(header::AUTHORIZATION)
+                .is_none_or(|value| value != "Bearer test-host-token")
+            {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            Ok(axum::Json(json!({"items": inventory.borrow().clone()})))
+        }),
+    )
+}
+
+async fn start_test_sdk(
+    host: axum::Router,
+) -> anyhow::Result<(crate::services::neo::NeoEngine, tokio::task::JoinSet<()>)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let engine =
+        crate::services::neo::NeoEngine::for_test_host_endpoint(listener.local_addr()?.port())?;
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move {
+        let _ = axum::serve(listener, host).await;
+    });
+    Ok((engine, tasks))
+}
+
+#[tokio::test]
 async fn human_help_translates_native_tab_ids_and_returns_them_after_resolution()
 -> anyhow::Result<()> {
     use crate::api::mcp::test_support::{ProfileConnection, current_session};
-    let call = desktop_playwright_call("run", json!({})).await?;
+    let mut call = desktop_playwright_call("run", json!({})).await?;
+    let (engine, _host) = tab_inventory(json!([
+        {"tabId": 104, "targetId": "T104"},
+    ]))
+    .await?;
+    call.state.neo = engine;
     let browser = current_session(ProfileConnection::new().with_default_profile());
     assert!(
         browser
@@ -638,6 +933,13 @@ async fn help_tools_are_listed_with_their_descriptions_and_are_safe() -> anyhow:
 async fn tests_that_turning_human_help_off_hides_both_help_tools() -> anyhow::Result<()> {
     let call = desktop_playwright_call("tabs", json!({})).await?;
     let service = ClawMcpService::new(call.state.clone());
+    for declare_agent_name in [false, true] {
+        assert_eq!(
+            tool_names(&service, declare_agent_name),
+            ["run", REQUEST_HELP_TOOL_NAME, AWAIT_HELP_TOOL_NAME]
+        );
+    }
+
     call.state
         .agent_settings
         .set_human_help(HumanHelp::Off)
@@ -743,24 +1045,23 @@ async fn internal_mark_skill_run_keeps_its_annotations() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn run_skill_and_flow_fields_follow_the_ultrafast_switch() -> anyhow::Result<()> {
+async fn playwright_keeps_skill_tools_private_when_ultrafast_changes() -> anyhow::Result<()> {
     let call = desktop_playwright_call("tabs", json!({})).await?;
     let service = ClawMcpService::new(call.state.clone());
-    let offered = |service: &ClawMcpService| {
-        let names = tool_names(service, false);
-        let save = service
-            .get_tool(SAVE_SKILL_TOOL_NAME)
-            .map(|tool| tool.input_schema["properties"].get("flow").is_some());
-        (
-            names.contains(&RUN_SKILL_TOOL_NAME.to_string()),
-            service.get_tool(RUN_SKILL_TOOL_NAME).is_some(),
-            save,
-        )
-    };
-
-    assert_eq!(offered(&service), (false, false, None));
-    call.state.ultrafast.set(true);
-    assert_eq!(offered(&service), (false, false, None));
+    for ultrafast in [false, true] {
+        call.state.ultrafast.set(ultrafast);
+        let names = tool_names(&service, false);
+        for name in [SAVE_SKILL_TOOL_NAME, RUN_SKILL_TOOL_NAME] {
+            assert!(!names.iter().any(|listed| listed == name));
+            assert!(service.get_tool(name).is_none());
+        }
+        // The shared catalog offer gains flow even though Playwright never exposes it.
+        let save = service.save_skill_offer();
+        assert_eq!(
+            save.input_schema["properties"].get("flow").is_some(),
+            ultrafast
+        );
+    }
     Ok(())
 }
 

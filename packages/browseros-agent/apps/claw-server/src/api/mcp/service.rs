@@ -651,6 +651,15 @@ impl ClawMcpService {
                 "request_human_help: the browser is not connected, so page {page_id} could not be brought to the front. Start BrowserOS neo, then ask again."
             ));
         };
+        if let Some(playwright) = &self.playwright {
+            return match playwright.resolve_page(&self.state, browser, named).await {
+                Ok(Some((info, _))) => Ok((info.tab_id.0, info.url, info.title)),
+                Ok(None) => Err(naming.help_page_not_yours(page_id)),
+                Err(error) => Err(format!(
+                    "request_human_help: could not resolve page {page_id}: {error}"
+                )),
+            };
+        }
         let binding = self
             .state
             .targets
