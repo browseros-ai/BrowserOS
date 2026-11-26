@@ -113,6 +113,11 @@ struct OneMain {
     /// cross-document navigation: its body checks fail as Chromium fails a call on a released
     /// handle, while a world installed after it answers.
     first_world_gone: bool,
+    /// How long the page takes to answer a capture's proof of its world: a renderer that hangs
+    /// once its world is installed answers none in time.
+    proof_after: Duration,
+    /// Proofs the page was asked for: its `describe` probe requests.
+    describes: AtomicUsize,
 }
 
 impl TabScript for OneMain {
@@ -167,9 +172,16 @@ impl TabScript for OneMain {
 
     fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
         match request["op"].as_str() {
-            Some("describe") => ProbeAnswer::reply(json!({ "kind": "described",
-                "protocol": PROBE_PROTOCOL, "seq": self.seq.load(Ordering::SeqCst),
-                "url": "https://a.test/" })),
+            Some("describe") => {
+                self.describes.fetch_add(1, Ordering::SeqCst);
+                let answer = ProbeAnswer::reply(json!({ "kind": "described",
+                    "protocol": PROBE_PROTOCOL, "seq": self.seq.load(Ordering::SeqCst),
+                    "url": "https://a.test/" }));
+                ProbeAnswer {
+                    after: self.proof_after,
+                    ..answer
+                }
+            }
             Some("read") => ProbeAnswer::reply(json!({ "kind": "read", "value": true })),
             Some("resolve") => ProbeAnswer::reply(
                 json!({ "kind": "element", "pin": 1, "preview": "<main></main>" }),
@@ -430,6 +442,40 @@ async fn tests_that_a_body_check_in_a_gone_world_reads_the_page_in_a_new_one() -
         json!({ "snapshot": "- main [ref=f1e1]:\n  - text: Go" })
     );
     assert_eq!(tab.script().installs.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+/// A frame whose renderer hangs makes the browser wait its 2 s subframe deadline before the
+/// capture's reply, and the proof of that frame's cached world then gets no answer either. The
+/// proofs share the capture's budget, counted from its request, so the page is read in about
+/// the browser's own wait, not that wait twice.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_hung_worlds_proof_does_not_stack_on_the_captures_wait() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        after: Duration::from_secs(2),
+        proof_after: Duration::from_secs(10),
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let started = Instant::now();
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshotJSON")?,
+            json!({ "page": run.page, "mode": "ai" }),
+        )
+        .await?;
+    let took = started.elapsed();
+    assert_eq!(answer, json!({ "snapshot": tree()? }));
+    assert!(
+        tab.script().describes.load(Ordering::SeqCst) >= 1,
+        "the cached main world was asked to prove itself"
+    );
+    assert!(
+        took < Duration::from_millis(2_600),
+        "the proof stacked on the capture's wait: {took:?}"
+    );
     Ok(())
 }
 

@@ -118,10 +118,14 @@ impl TabTree {
         let private = Arc::clone(&self.private);
         let min_contract_version = self.capture.min_contract_version();
 
+        // When this attempt's request goes out: the builder below runs only for the capture this
+        // attempt dispatches, which is sent as soon as it is awaited.
+        let requested = time::Instant::now();
         let outcome = self
             .capture
             .capture(root_session, started, move |apc, requested_at| async move {
-                let proven = prove_pre_capture_worlds(page_state.frames(), requested_at).await;
+                let proven =
+                    prove_pre_capture_worlds(page_state.frames(), requested_at, requested).await;
 
                 let main_doc_token = apc
                     .main_frame_data
@@ -523,10 +527,15 @@ enum Seed {
     Unread,
 }
 
-/// How long a cached world has to answer the proof that it outlived a capture: the browser's own
-/// deadline for a subframe's content (contract P6, `subframe_timeout_ms`), so a hung frame costs a
-/// capture no more than it costs the capture itself.
+/// How long a cached world has to answer the proof that it outlived a capture, counted from the
+/// capture's request: the browser's own deadline for a subframe's content (contract P6,
+/// `subframe_timeout_ms`). A hung frame makes the browser wait that deadline before it replies,
+/// so counting from the reply would make it cost the capture twice.
 const PROOF_BUDGET: Duration = Duration::from_secs(2);
+
+/// The least time a world has to answer its proof, after a reply that used up [`PROOF_BUDGET`]: a
+/// live world answers in milliseconds, and one that does not stays unproven (fail closed).
+const PROOF_FLOOR: Duration = Duration::from_millis(200);
 
 /// Probes every cached world installed strictly before `requested_at` with `probe::describe` in
 /// parallel after the APC reply arrives (design sections 6.2 and 6.3).
@@ -537,6 +546,7 @@ const PROOF_BUDGET: Duration = Duration::from_secs(2);
 async fn prove_pre_capture_worlds(
     frames: &FrameWorlds,
     requested_at: Stamp,
+    requested: time::Instant,
 ) -> HashMap<FrameId, IsolatedWorld> {
     let eligible: Vec<IsolatedWorld> = frames
         .cached_worlds()
@@ -544,11 +554,14 @@ async fn prove_pre_capture_worlds(
         .filter(|world| world.installed_at() < requested_at)
         .collect();
 
-    // Each proof waits at most as long as the browser waits for a subframe's content: a world
-    // whose renderer hangs never answers, and without a bound every capture of its tab would
-    // wait on it forever. A world that does not answer in time is left unproven, not gone.
+    // The proofs share one deadline, PROOF_BUDGET after the request: a world whose renderer
+    // hangs never answers, and without a bound every capture of its tab would wait on it forever.
+    // A world that does not answer in time is left unproven, not gone.
+    let budget = PROOF_BUDGET
+        .saturating_sub(requested.elapsed())
+        .max(PROOF_FLOOR);
     let checks = eligible.into_iter().map(|world| async move {
-        let reply = time::timeout(PROOF_BUDGET, probe::describe(&world)).await;
+        let reply = time::timeout(budget, probe::describe(&world)).await;
         (world, reply)
     });
     let results = future::join_all(checks).await;
