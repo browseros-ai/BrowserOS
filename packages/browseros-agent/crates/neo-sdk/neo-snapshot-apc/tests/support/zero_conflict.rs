@@ -15,6 +15,11 @@
 //! them: the printer's quoting and name rule, the selector's escaping, the attribute parser, name
 //! matching, which states print, or the frame a line belongs to. The offline corpus test, the
 //! live browser test and the site runner share this pipeline, one entry point each.
+//!
+//! Two printed roles are the snapshot's own labels, not roles: `generic` for an element with no
+//! ARIA role, and `iframe`. No `getByRole` names those elements, in Playwright or here, so such a
+//! line is counted apart as a [`Label`] once the tree confirms what the element is; its ref is
+//! the only handle. Every other line must be reached.
 
 use std::error::Error;
 use std::fmt::{self, Write as _};
@@ -25,15 +30,18 @@ use neo_snapshot_apc::refs::{RefLookup, TabRefTable};
 use neo_snapshot_apc::select::{
     ChunkPlan, ParsedSelector, PlannedStage, RefResolver, Scope, SelectorBody, SelectorPart,
 };
-use neo_snapshot_apc::tree::{AriaAsk, BuildOptions, DocId, NameCache, NodeKey, SnapshotTree};
+use neo_snapshot_apc::tree::{
+    AriaAsk, BuildOptions, DocId, NameCache, NodeKey, SnapshotTree, TreeNode,
+};
 use serde_json::{Deserializer, Map, Value};
 
 /// The two texts an agent can be shown for one capture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Format {
-    /// `ariaSnapshot()`: Neo's short list of what an agent acts on.
+    /// Neo's default format for a page: the short list of what an agent acts on.
     Neo,
-    /// `ariaSnapshot({ mode: 'default' })`: Playwright's lines for every node.
+    /// Playwright's own text of the same ai-mode tree, every node a line, as
+    /// `ariaSnapshot({ mode: 'ai' })` prints it under the conformance switch.
     Playwright,
 }
 
@@ -129,19 +137,43 @@ pub(crate) struct PrintedLine {
     pub(crate) marks: Marks,
     /// The key's `[ref=…]`.
     pub(crate) r#ref: String,
-    /// The frame the line sits in, by indentation: the innermost enclosing `iframe` line's ref,
-    /// `None` for the main document. An enclosing iframe printed without a ref is `Some("")`,
-    /// which no table resolves, so the line reports its frame unresolved.
-    pub(crate) frame: Option<String>,
+    /// The `iframe` lines the line is indented under, outermost first: each one's ref, or `None`
+    /// for an iframe printed without one (it takes no pointer events, so it gets no ref, while
+    /// its document's elements do).
+    pub(crate) frames: Vec<Option<String>>,
+    /// An enclosing line of the same frame prints `[aria-hidden]`. `aria-hidden` hides a whole
+    /// subtree, and the printer marks only the element that carries the attribute, as upstream's
+    /// does (`ariaSnapshot.ts:138-139`), so the agent reads it from the nesting. It stops at an
+    /// iframe line: hiding never crosses into a child document (`isElementHiddenForAria` walks
+    /// one document, and so does the tree's hidden pass).
+    pub(crate) under_aria_hidden: bool,
+}
+
+/// One list item still open while later, deeper lines are read: what its nesting tells them.
+struct OpenItem {
+    indent: usize,
+    opens: Opens,
+}
+
+/// What an open line tells the lines nested under it.
+enum Opens {
+    /// An `iframe` line opens its child document, named by the iframe's ref if it printed one.
+    Frame(Option<String>),
+    /// Any other line: whether it prints `[aria-hidden]`, which hides everything under it.
+    Element {
+        /// The line prints `[aria-hidden]`.
+        aria_hidden: bool,
+    },
 }
 
 /// Splits `text` into lines and reads back every line whose key carries a ref. Text, `/url`,
 /// `/placeholder` and comment lines carry none and are skipped. A line that holds `[ref=` but
-/// does not read as a key is an error: skipping it would hide a line the agent was shown.
+/// does not read as a key is an error: skipping it would hide a line the agent was shown. Every
+/// other list item is read too where it reads as a key, because its nesting (an iframe, an
+/// `[aria-hidden]`) applies to the lines under it.
 pub(crate) fn parse_lines(text: &str) -> Result<Vec<PrintedLine>, Box<dyn Error>> {
     let mut printed = Vec::new();
-    // The iframe lines still open at the current line: (their indentation, their ref).
-    let mut frames: Vec<(usize, String)> = Vec::new();
+    let mut open: Vec<OpenItem> = Vec::new();
     for (index, raw) in text.split('\n').enumerate() {
         let number = index + 1;
         let body = raw.trim_start_matches(' ');
@@ -152,17 +184,11 @@ pub(crate) fn parse_lines(text: &str) -> Result<Vec<PrintedLine>, Box<dyn Error>
             }
             continue;
         };
-        // Any list item at or left of an open iframe line's indentation closes it.
-        while frames.last().is_some_and(|&(open, _)| open >= indent) {
-            frames.pop();
+        // A list item at or left of an open item's indentation closes it.
+        while open.last().is_some_and(|parent| parent.indent >= indent) {
+            open.pop();
         }
         if item.starts_with("text:") || item.starts_with('/') {
-            continue;
-        }
-        let frame = frames.last().map(|(_, frame)| frame.clone());
-        // An iframe line opens a frame whether or not it has a ref; only a line holding `[ref=`
-        // must otherwise read as a key.
-        if !raw.contains("[ref=") && !item.starts_with("iframe") && !item.starts_with("'iframe") {
             continue;
         }
         let key = match read_key(item) {
@@ -174,9 +200,26 @@ pub(crate) fn parse_lines(text: &str) -> Result<Vec<PrintedLine>, Box<dyn Error>
             }
             Err(_) => continue,
         };
-        if key.role == "iframe" {
-            frames.push((indent, key.r#ref.clone().unwrap_or_default()));
-        }
+        let frames: Vec<Option<String>> = open
+            .iter()
+            .filter_map(|parent| match &parent.opens {
+                Opens::Frame(r#ref) => Some(r#ref.clone()),
+                Opens::Element { .. } => None,
+            })
+            .collect();
+        let under_aria_hidden = open
+            .iter()
+            .rev()
+            .take_while(|parent| !matches!(parent.opens, Opens::Frame(_)))
+            .any(|parent| matches!(parent.opens, Opens::Element { aria_hidden: true }));
+        let opens = if key.role == "iframe" {
+            Opens::Frame(key.r#ref.clone())
+        } else {
+            Opens::Element {
+                aria_hidden: key.marks.aria_hidden,
+            }
+        };
+        open.push(OpenItem { indent, opens });
         if let Some(r#ref) = key.r#ref {
             printed.push(PrintedLine {
                 number,
@@ -185,7 +228,8 @@ pub(crate) fn parse_lines(text: &str) -> Result<Vec<PrintedLine>, Box<dyn Error>
                 name: key.name,
                 marks: key.marks,
                 r#ref,
-                frame,
+                frames,
+                under_aria_hidden,
             });
         }
     }
@@ -339,10 +383,11 @@ pub(crate) struct ByRole {
 
 impl ByRole {
     /// The query for `line`: its role, its printed name matched exactly, and each printed state
-    /// `getByRole` can ask for. `[aria-hidden]` asks `includeHidden`, since `getByRole` skips an
-    /// element hidden for ARIA by default and ai mode prints such an element when its box shows.
-    /// `[active]` and `[invalid]` have no option, and an unprinted state is never asked as
-    /// `false`: the agent cannot tell an absent state from a false one.
+    /// `getByRole` can ask for. `[aria-hidden]` on the line or on a line it is nested under in the
+    /// same frame asks `includeHidden`, since `getByRole` skips an element hidden for ARIA by
+    /// default and ai mode prints such an element when its box shows. `[active]` and `[invalid]`
+    /// have no option, and an unprinted state is never asked as `false`: the agent cannot tell an
+    /// absent state from a false one.
     pub(crate) fn from_line(line: &PrintedLine) -> Self {
         let tristate = |mark: Mixable| match mark {
             Mixable::True => Tristate::True,
@@ -356,7 +401,7 @@ impl ByRole {
                 disabled: marks.disabled.then_some(true),
                 selected: marks.selected.then_some(true),
                 expanded: marks.expanded.then_some(true),
-                include_hidden: marks.aria_hidden.then_some(true),
+                include_hidden: (marks.aria_hidden || line.under_aria_hidden).then_some(true),
                 level: marks.level,
                 exact: line.name.as_ref().map(|_| true),
                 name: line.name.clone(),
@@ -461,6 +506,18 @@ fn escape_for_attribute_selector(value: &str, exact: bool) -> String {
     format!("\"{escaped}\"{}", if exact { 's' } else { 'i' })
 }
 
+/// A printed role that is the snapshot's own label for an element no `getByRole` names, in
+/// Playwright as here. The ref is the agent's only handle on such a line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Label {
+    /// `generic` for an element with no ARIA role: ai mode prints `getAriaRole(element) ??
+    /// 'generic'` (`ariaSnapshot.ts:249-250`), while the role engine matches `generic` only as
+    /// an element's role (an explicit `role="generic"`), which such a line is checked as.
+    Generic,
+    /// `iframe` for a frame element, which has no role of that name.
+    Iframe,
+}
+
 /// What a line's query came to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
@@ -469,16 +526,25 @@ pub(crate) enum Verdict {
         /// How many elements the query matched.
         matches: usize,
     },
+    /// The line's role is the snapshot's label for an element no role query can name, and the
+    /// tree confirms the element is that kind. Neither reached nor a miss.
+    Label(Label),
     /// The query ran in the right document and its matches lack the line's element.
     Missed {
         /// How many elements the query matched instead.
         matches: usize,
     },
+    /// The one known miss class until Neo's printer carries `[aria-hidden]` onto the lines it
+    /// flattens (the captain's decision of 2026-11-25, its own pull request): Neo's flat format
+    /// printed the line outside the `[aria-hidden]` line that hides it, so the agent's query
+    /// lacks `includeHidden`. The tree confirms an ancestor's `aria-hidden` hides the element,
+    /// and the same query with `includeHidden: true` reaches it. Still a miss.
+    NeoDroppedAriaHidden,
     /// The line's element is not in the document its indentation puts it in.
     WrongFrame,
     /// The line's ref names no live element in the table that printed it.
     RefUnresolved,
-    /// The enclosing iframe line's ref names no element with a child document.
+    /// An enclosing iframe line's ref names no element with a child document.
     FrameUnresolved,
     /// The query did not plan as exactly one tree stage.
     NotOneTreeStage(String),
@@ -491,13 +557,23 @@ impl Verdict {
     pub(crate) fn reached(&self) -> bool {
         matches!(self, Self::Reached { .. })
     }
+
+    /// Whether the line breaks the invariant: anything but reached or a confirmed label.
+    pub(crate) fn is_miss(&self) -> bool {
+        !matches!(self, Self::Reached { .. } | Self::Label(_))
+    }
 }
 
 impl fmt::Display for Verdict {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Reached { matches } => write!(f, "reached ({matches} matches)"),
+            Self::Label(Label::Generic) => f.write_str("label: generic, no ARIA role"),
+            Self::Label(Label::Iframe) => f.write_str("label: iframe"),
             Self::Missed { matches } => write!(f, "missed ({matches} other matches)"),
+            Self::NeoDroppedAriaHidden => {
+                f.write_str("missed: Neo's format dropped the [aria-hidden] line that hides it")
+            }
             Self::WrongFrame => f.write_str("wrong frame"),
             Self::RefUnresolved => f.write_str("ref unresolved"),
             Self::FrameUnresolved => f.write_str("frame unresolved"),
@@ -549,9 +625,17 @@ impl PageCheck {
         self.lines.len()
     }
 
-    /// The lines whose element was not reached.
+    /// How many lines print a label no role query can name.
+    pub(crate) fn labels(&self) -> usize {
+        self.lines
+            .iter()
+            .filter(|check| matches!(check.verdict, Verdict::Label(_)))
+            .count()
+    }
+
+    /// The lines that break the invariant.
     pub(crate) fn misses(&self) -> impl Iterator<Item = &LineCheck> {
-        self.lines.iter().filter(|check| !check.verdict.reached())
+        self.lines.iter().filter(|check| check.verdict.is_miss())
     }
 }
 
@@ -582,6 +666,11 @@ pub(crate) fn check_tree(
     ];
     let names = tree.name_cache();
     let resolver = TableRefs(refs);
+    let query = Query {
+        tree,
+        names: &names,
+        resolver: &resolver,
+    };
     let mut lines = Vec::new();
     for (format, text) in Format::ALL.into_iter().zip(&texts) {
         let printed =
@@ -594,7 +683,7 @@ pub(crate) fn check_tree(
             };
             let verdict = match &target {
                 None => Verdict::RefUnresolved,
-                Some(target) => run_query(tree, &names, &resolver, &line, &by_role, target),
+                Some(target) => query.verdict(format, &line, &by_role, target),
             };
             lines.push(LineCheck {
                 format,
@@ -621,54 +710,155 @@ pub(crate) fn check_apc(
     check_tree(page, &tree, &mut TabRefTable::new())
 }
 
-/// Runs `by_role` in `line`'s document and compares its matches with `target`.
-fn run_query(
-    tree: &SnapshotTree,
-    names: &NameCache<'_>,
-    resolver: &TableRefs<'_>,
-    line: &PrintedLine,
-    by_role: &ByRole,
-    target: &NodeKey,
-) -> Verdict {
-    let Some(doc) = frame_document(tree, resolver.0, line.frame.as_deref()) else {
-        return Verdict::FrameUnresolved;
-    };
-    let (Some(scope), Some(document)) = (Scope::document(tree, doc), tree.document(doc)) else {
-        return Verdict::FrameUnresolved;
-    };
-    if document.token() != &target.doc {
-        return Verdict::WrongFrame;
-    }
-    let plan = match ChunkPlan::of(&by_role.chunk()) {
-        Ok(plan) => plan,
-        Err(error) => return Verdict::NotOneTreeStage(error.to_string()),
-    };
-    let stages = match plan.stages() {
-        Ok(stages) => stages,
-        Err(error) => return Verdict::StageError(error.to_string()),
-    };
-    let (PlannedStage::Tree(run), []) = (stages.first(), stages.rest()) else {
-        return Verdict::NotOneTreeStage(format!("{} stages", stages.iter().count()));
-    };
-    match run.stage().select(tree, scope, names, resolver) {
-        Ok(matches) => {
-            let count = matches.len();
-            if matches.keys(tree).any(|key| key.as_ref() == Some(target)) {
-                Verdict::Reached { matches: count }
-            } else {
-                Verdict::Missed { matches: count }
+/// One capture's tree and the two seams a tree stage reads, shared by every line's query.
+struct Query<'a> {
+    tree: &'a SnapshotTree,
+    names: &'a NameCache<'a>,
+    resolver: &'a TableRefs<'a>,
+}
+
+/// What one planned query selected.
+struct Selected {
+    /// Every match, a synthesized option without a DOM node included.
+    count: usize,
+    /// The matches that have a `NodeKey`.
+    keys: Vec<NodeKey>,
+}
+
+impl Query<'_> {
+    /// Runs `by_role` in `target`'s own document, the element's frame, once the line's printed
+    /// nesting is checked against it, and compares its matches with `target`.
+    fn verdict(
+        &self,
+        format: Format,
+        line: &PrintedLine,
+        by_role: &ByRole,
+        target: &NodeKey,
+    ) -> Verdict {
+        let doc = match frame_of(self.tree, self.resolver.0, line, target) {
+            Ok(doc) => doc,
+            Err(verdict) => return verdict,
+        };
+        if let Some(label) = label_of(self.tree, line, target) {
+            return Verdict::Label(label);
+        }
+        let Some(scope) = Scope::document(self.tree, doc) else {
+            return Verdict::FrameUnresolved;
+        };
+        let selected = match self.select(by_role, scope) {
+            Ok(selected) => selected,
+            Err(verdict) => return verdict,
+        };
+        if selected.keys.contains(target) {
+            return Verdict::Reached {
+                matches: selected.count,
+            };
+        }
+        if format == Format::Neo
+            && by_role.options.include_hidden.is_none()
+            && hidden_by_ancestor(self.tree, target)
+        {
+            let with_hidden = ByRole {
+                options: ByRoleOptions {
+                    include_hidden: Some(true),
+                    ..by_role.options.clone()
+                },
+                ..by_role.clone()
+            };
+            if self
+                .select(&with_hidden, scope)
+                .is_ok_and(|selected| selected.keys.contains(target))
+            {
+                return Verdict::NeoDroppedAriaHidden;
             }
         }
-        Err(error) => Verdict::StageError(error.to_string()),
+        Verdict::Missed {
+            matches: selected.count,
+        }
+    }
+
+    /// What `by_role` selects from `scope`, planned by `ChunkPlan` as exactly one tree stage.
+    fn select(&self, by_role: &ByRole, scope: Scope<'_>) -> Result<Selected, Verdict> {
+        let plan = ChunkPlan::of(&by_role.chunk())
+            .map_err(|error| Verdict::NotOneTreeStage(error.to_string()))?;
+        let stages = plan
+            .stages()
+            .map_err(|error| Verdict::StageError(error.to_string()))?;
+        let (PlannedStage::Tree(run), []) = (stages.first(), stages.rest()) else {
+            return Err(Verdict::NotOneTreeStage(format!(
+                "{} stages",
+                stages.iter().count()
+            )));
+        };
+        let matches = run
+            .stage()
+            .select(self.tree, scope, self.names, self.resolver)
+            .map_err(|error| Verdict::StageError(error.to_string()))?;
+        Ok(Selected {
+            count: matches.len(),
+            keys: matches.keys(self.tree).flatten().collect(),
+        })
     }
 }
 
-/// The document a line with this enclosing iframe ref sits in: the main one with no iframe,
-/// else the child document of the iframe the ref names.
-fn frame_document(tree: &SnapshotTree, refs: &TabRefTable, frame: Option<&str>) -> Option<DocId> {
-    let Some(frame) = frame else {
-        return Some(DocId::MAIN);
-    };
-    let target = refs.resolve_str(frame);
-    tree.node_by_key(&target.as_key()?.key)?.child_doc()
+/// Whether an ancestor's `aria-hidden` hides `target`: it inherits the attribute within its
+/// document and does not carry it itself.
+fn hidden_by_ancestor(tree: &SnapshotTree, target: &NodeKey) -> bool {
+    tree.node_by_key(target).is_some_and(|node| {
+        let hidden = node.hidden();
+        hidden.is_aria_hidden() && !hidden.has_own_aria_hidden()
+    })
+}
+
+/// `target`'s document, once `line`'s iframe nesting is checked against that document's chain
+/// of parent documents: one iframe line per level, and each iframe line that printed a ref
+/// naming that level's document. A level whose iframe printed no ref is checked by depth alone.
+fn frame_of(
+    tree: &SnapshotTree,
+    refs: &TabRefTable,
+    line: &PrintedLine,
+    target: &NodeKey,
+) -> Result<DocId, Verdict> {
+    let mut chain = Vec::new();
+    let mut document = tree
+        .document_by_token(&target.doc)
+        .ok_or(Verdict::WrongFrame)?;
+    loop {
+        chain.push(document.id());
+        let Some(parent) = document.parent_doc() else {
+            break;
+        };
+        document = tree.document(parent).ok_or(Verdict::WrongFrame)?;
+    }
+    chain.reverse();
+    if chain.first() != Some(&DocId::MAIN) || chain.len() != line.frames.len() + 1 {
+        return Err(Verdict::WrongFrame);
+    }
+    for (iframe, &level) in line.frames.iter().zip(chain.iter().skip(1)) {
+        let Some(iframe) = iframe else {
+            continue;
+        };
+        let named = refs
+            .resolve_str(iframe)
+            .as_key()
+            .and_then(|frame| tree.node_by_key(&frame.key))
+            .and_then(TreeNode::child_doc)
+            .ok_or(Verdict::FrameUnresolved)?;
+        if named != level {
+            return Err(Verdict::WrongFrame);
+        }
+    }
+    chain.last().copied().ok_or(Verdict::WrongFrame)
+}
+
+/// The label `line` prints for `target` when its role is one of the snapshot's own labels and
+/// the tree confirms the element is that kind. A `generic` line for an element that does have
+/// a role, or an `iframe` line for one that is no frame, is checked like any other.
+fn label_of(tree: &SnapshotTree, line: &PrintedLine, target: &NodeKey) -> Option<Label> {
+    let node = tree.node_by_key(target)?;
+    match line.role.as_str() {
+        "generic" if node.role().is_none() => Some(Label::Generic),
+        "iframe" if node.is_iframe_boundary() => Some(Label::Iframe),
+        _ => None,
+    }
 }

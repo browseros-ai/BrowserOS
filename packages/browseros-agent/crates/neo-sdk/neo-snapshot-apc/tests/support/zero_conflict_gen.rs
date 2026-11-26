@@ -28,7 +28,7 @@ use neo_snapshot_apc::proto::{
 };
 use neo_snapshot_apc::tree::{ApcBuilder, DocToken, DomNodeId, FrameBuilder, NodeBuilder, NodeKey};
 
-use crate::zero_conflict::{InvalidMark, Mixable, PageCheck};
+use crate::zero_conflict::{InvalidMark, Mixable, PageCheck, Verdict};
 
 /// The first seed of the default run; tree `i` is seed `BASE_SEED + i`.
 pub(crate) const BASE_SEED: u64 = 0x5EED_0000_0000_0000;
@@ -761,6 +761,8 @@ struct Doc {
     referents: Vec<NodeBuilder>,
     /// The document is inside an inert iframe, which makes all of it inert.
     inert: bool,
+    /// The elements being built sit inside an `aria-hidden="true"` wrapper of this document.
+    hidden_wrapper: bool,
 }
 
 #[derive(Clone)]
@@ -772,7 +774,17 @@ struct Named {
 
 impl Doc {
     /// What every element of the document inherits from outside it.
+    /// What every node built at this point inherits: the document's inertness, and the
+    /// `aria-hidden` of a wrapper being filled.
     fn inherit(&self) -> Inherit {
+        Inherit {
+            aria_hidden: self.hidden_wrapper,
+            ..self.body_inherit()
+        }
+    }
+
+    /// What a node appended to the body itself inherits, whatever wrapper is being filled.
+    fn body_inherit(&self) -> Inherit {
         Inherit {
             inert: self.inert,
             ..Inherit::default()
@@ -867,6 +879,7 @@ impl Generator {
             focus: None,
             referents: Vec::new(),
             inert,
+            hidden_wrapper: false,
         };
         let root_id = doc.id();
         let html_id = doc.id();
@@ -920,10 +933,15 @@ impl Generator {
         })
     }
 
-    /// `count` elements, alone or inside a wrapper: a `<div>`, a list, or a landmark.
+    /// `count` elements, alone or inside a wrapper: a `<div>`, a list, a landmark, or an
+    /// `aria-hidden="true"` `<div>` around actionable content, as a carousel's off-screen slide
+    /// or an app root behind a modal is. Chromium writes `aria_hidden` on every node below the
+    /// wrapper, which `doc.inherit()` carries while the group is built.
     fn group(&mut self, doc: &mut Doc, count: usize) -> Result<Vec<NodeBuilder>, String> {
         let top = doc.y;
         let wrapper = self.rng.below(8);
+        let hidden = wrapper == 5;
+        doc.hidden_wrapper = hidden;
         let mut elements = Vec::new();
         for _ in 0..count {
             let nodes = self.element(doc, None)?;
@@ -941,8 +959,10 @@ impl Generator {
             width: 800,
             height: doc.y - top,
         };
+        let inherit = doc.inherit();
+        doc.hidden_wrapper = false;
         let wrapped = match wrapper {
-            0 => NodeBuilder::container(),
+            0 | 5 => NodeBuilder::container(),
             1 => NodeBuilder::element("ul"),
             2 => NodeBuilder::element("main"),
             3 => NodeBuilder::element("nav"),
@@ -953,7 +973,7 @@ impl Generator {
             _ => return Ok(elements),
         };
         let id = doc.id();
-        let wrapped = mark(at(wrapped.dom_id(id), rect), doc.inherit());
+        let wrapped = mark(at(wrapped.dom_id(id), rect), inherit);
         Ok(vec![wrapped.children(elements)])
     }
 
@@ -1364,8 +1384,11 @@ impl Generator {
         for piece in pieces {
             let id = doc.id();
             let rect = doc.slot(16, false);
-            let content = self.content(doc, &piece, rect, doc.inherit());
-            let span = mark(at(NodeBuilder::container().dom_id(id), rect), doc.inherit());
+            let content = self.content(doc, &piece, rect, doc.body_inherit());
+            let span = mark(
+                at(NodeBuilder::container().dom_id(id), rect),
+                doc.body_inherit(),
+            );
             doc.referents.push(span.children(content));
             refs.push(BrowserOsRef {
                 dom_node_id: Some(id),
@@ -1747,6 +1770,8 @@ pub(crate) struct Coverage {
     depths: [usize; MAX_FRAME_DEPTH + 1],
     over_900: usize,
     quoted_keys: usize,
+    under_aria_hidden: usize,
+    unnamed_frames: usize,
     kinds: Vec<usize>,
     palette: Vec<usize>,
 }
@@ -1758,6 +1783,8 @@ impl Default for Coverage {
             depths: [0; MAX_FRAME_DEPTH + 1],
             over_900: 0,
             quoted_keys: 0,
+            under_aria_hidden: 0,
+            unnamed_frames: 0,
             kinds: vec![0; KINDS.len()],
             palette: vec![0; PALETTE.len()],
         }
@@ -1765,10 +1792,24 @@ impl Default for Coverage {
 }
 
 impl Coverage {
-    /// Counts every printed ref line of `check` against what `facts` says the generator put
-    /// there.
+    /// Counts every printed ref line of `check` that the invariant checked against what `facts`
+    /// says the generator put there. A label line (`generic` with no role, `iframe`) is never
+    /// queried, so it proves no shape was exercised.
     pub(crate) fn count(&mut self, facts: &PageFacts, check: &PageCheck) {
         for line_check in &check.lines {
+            if matches!(line_check.verdict, Verdict::Label(_)) {
+                // A label line is never queried: it proves only that its kind printed.
+                if let Some(kind) = line_check
+                    .target
+                    .as_ref()
+                    .and_then(|target| facts.elements.get(target))
+                    .and_then(|element| element.kind)
+                    .and_then(|kind| self.kinds.get_mut(kind))
+                {
+                    *kind += 1;
+                }
+                continue;
+            }
             let line = &line_check.line;
             let marks = &line.marks;
             let level = marks.level.map(|level| format!("level={level}"));
@@ -1799,6 +1840,8 @@ impl Coverage {
             if line.text.trim_start_matches(' ').starts_with("- '") {
                 self.quoted_keys += 1;
             }
+            self.under_aria_hidden += usize::from(line.under_aria_hidden);
+            self.unnamed_frames += usize::from(line.frames.iter().any(Option::is_none));
             let Some(target) = &line_check.target else {
                 continue;
             };
@@ -1839,6 +1882,8 @@ impl Coverage {
         }
         self.over_900 += other.over_900;
         self.quoted_keys += other.quoted_keys;
+        self.under_aria_hidden += other.under_aria_hidden;
+        self.unnamed_frames += other.unnamed_frames;
         for (count, more) in self.kinds.iter_mut().zip(&other.kinds) {
             *count += more;
         }
@@ -1862,6 +1907,14 @@ impl Coverage {
         );
         counters.push(("name over 900 units, unprinted".to_owned(), self.over_900));
         counters.push(("quoted YAML key".to_owned(), self.quoted_keys));
+        counters.push((
+            "nested under an [aria-hidden] line".to_owned(),
+            self.under_aria_hidden,
+        ));
+        counters.push((
+            "under an iframe printed without a ref".to_owned(),
+            self.unnamed_frames,
+        ));
         counters.extend(
             KINDS
                 .iter()
