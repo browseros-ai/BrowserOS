@@ -5,9 +5,9 @@
 //!
 //! ```text
 //!  neo-playwright (effects)                              this crate (pure)
-//!  frames read, stitched ─▶ Snapshot ─┐
-//!  the script's options  ─▶ Call ─────┴─▶ render(&snapshot, call) ─▶ Answer ─▶ text()
-//!  the tab's pending baseline ◀────────────────────────────── pending() ◀──┘
+//!  frames read, stitched ─▶ Snapshot / SnapshotView ─┐
+//!  the script's options  ─▶ Call ────────────────────┴─▶ render / render_source ─▶ Answer ─▶ text()
+//!  the tab's pending baseline ◀──────────────────────────────────────────────── pending() ◀──┘
 //!
 //!  render: Call::Playwright ─▶ playwright: Playwright's own text
 //!          Call::Full ───────▶ full_text: Playwright's lines under Neo's heads, cut
@@ -21,16 +21,16 @@
 //!                       js: JavaScript's rules
 //! ```
 //!
-//! [`render`] is the only way to a snapshot's text, and only it builds an [`Answer`]: so the
-//! snapshot operation can keep for the tab only a text this crate printed, in the [`Form`] it was
-//! printed in. Every walk, printer and line is private; the tests judge the crate through
-//! `render`, except two judges whose oracle has a finer grain: upstream's printer one node at a
-//! time, and `js` one rule at a time.
+//! [`render`] and [`render_source`] are the only ways to a snapshot's text, and only they build
+//! an [`Answer`]: so the snapshot operation can keep for the tab only a text this crate printed,
+//! in the [`Form`] it was printed in. Every walk, printer and line is private; the tests judge
+//! the crate through `render`, except two judges whose oracle has a finer grain: upstream's
+//! printer one node at a time, and `js` one rule at a time.
 //!
 //! The tree ([`AriaNode`]) is Playwright's `AriaNodeJSON` at 1.64.1 plus Neo's two marks, `inert`
-//! and `onTop`. Today the page's walk writes it, and neo-playwright reads it from each frame's
-//! reply, stitches the frames and serves the result. Any producer that builds the same shape can
-//! feed this crate, which takes the tree as data and never asks where it came from.
+//! and `onTop`. Producers that build an [`AriaSource`] feed [`render_source`] directly without
+//! materializing `AriaNode`s, while callers that need the tree (`toMatchAriaSnapshot`,
+//! `ariaSnapshotJSON`, test comparisons) collect streamed events through [`AriaNodeSink`].
 //!
 //! The text must be, byte for byte, what the TypeScript renderer prints in the script engine.
 //! Where JavaScript's own rules decide a byte (UTF-16 lengths, its whitespace set,
@@ -64,6 +64,8 @@
 
 mod answer;
 mod aria_node;
+mod aria_sink;
+mod aria_source;
 mod call;
 mod cap;
 mod cover_block;
@@ -84,6 +86,8 @@ pub mod template;
 
 pub use answer::{Answer, Pending};
 pub use aria_node::{AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, Tristate, json_depth};
+pub use aria_sink::{AriaNodeSink, AriaSink, EmittedNode, INLINE_REF_CAP, NodeRef};
+pub use aria_source::{AriaSource, SnapshotView, SourceChild};
 pub use call::Call;
 pub use cap::{DEFAULT_MAX_TOKENS, MaxTokens};
 pub use cover_block::cover_block;
@@ -92,5 +96,5 @@ pub use form::{Form, Passed, TextForm};
 pub use js_regex::{JsRegex, RegexError};
 pub use neo::{KEPT_ROLES, TEXT_LIMIT_TOKENS};
 pub use playwright::{PORTED_FROM, PortedFile};
-pub use render::render;
+pub use render::{render, render_source};
 pub use snapshot::{ClosedRoots, Layer, PartialFrame, Snapshot, Unmarked};

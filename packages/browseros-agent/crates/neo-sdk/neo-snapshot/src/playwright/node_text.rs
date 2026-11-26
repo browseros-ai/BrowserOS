@@ -1,6 +1,7 @@
 use serde_json::Number;
 
 use crate::aria_node::{AriaNode, Invalid, NodeBox, Tristate};
+use crate::aria_sink::{EmittedNode, NodeRef};
 use crate::js;
 
 use super::yaml_escape::YamlEscape;
@@ -33,7 +34,7 @@ pub(crate) struct NodeAlone<'a> {
     pub(crate) pressed: Option<Tristate>,
     pub(crate) selected: Option<bool>,
     pub(crate) aria_hidden: Option<bool>,
-    pub(crate) r#ref: Option<&'a str>,
+    pub(crate) r#ref: Option<NodeRef<'a>>,
     pub(crate) cursor: Option<&'a str>,
     pub(crate) r#box: Option<&'a NodeBox>,
     /// Printed under the key as `- /url:`, which makes the key open a block.
@@ -59,7 +60,7 @@ impl<'a> From<&'a AriaNode> for NodeAlone<'a> {
             pressed: node.pressed,
             selected: node.selected,
             aria_hidden: node.aria_hidden,
-            r#ref: node.r#ref.as_deref(),
+            r#ref: node.r#ref.as_deref().map(NodeRef::borrowed),
             cursor: node.cursor.as_deref(),
             r#box: node.r#box.as_ref(),
             url: node.url.as_deref(),
@@ -69,19 +70,54 @@ impl<'a> From<&'a AriaNode> for NodeAlone<'a> {
     }
 }
 
+impl<'a> NodeAlone<'a> {
+    /// Borrows upstream's printer fields from an [`EmittedNode`].
+    pub(crate) fn from_emitted(node: &EmittedNode<'a>) -> Self {
+        Self {
+            role: node.role,
+            name: node.name,
+            checked: node.checked,
+            disabled: node.disabled,
+            expanded: node.expanded,
+            active: node.active,
+            invalid: node.invalid,
+            level: node.level,
+            pressed: node.pressed,
+            selected: node.selected,
+            aria_hidden: node.aria_hidden,
+            r#ref: node.r#ref,
+            cursor: node.cursor,
+            r#box: node.r#box,
+            url: node.url,
+            placeholder: node.placeholder,
+            text: node.text,
+        }
+    }
+}
+
 /// Appends what upstream's `renderAriaSnapshotAsYaml([node])` prints for one node without
 /// children (`visit` at depth 0): a text node's `- text:` line; otherwise `- ` and the key, with
 /// the node's text after `: `, or, when the node has a url or a placeholder, a `:` and those lines
 /// with its text one level under the key. A role or a ref holding a line break keeps it raw inside
 /// the quoted key, so the result can be more lines than these.
+#[cfg(test)]
 pub(crate) fn node_text(node: &NodeAlone<'_>, out: &mut String) {
+    let mut key_buf = String::new();
+    node_text_into(node, &mut key_buf, out);
+}
+
+/// [`node_text`] reusing `key_buf` across calls so hot line walks avoid allocating a fresh key
+/// string per node.
+pub(crate) fn node_text_into(node: &NodeAlone<'_>, key_buf: &mut String, out: &mut String) {
     if node.role == "text" {
         // `visitText(node.text || '')`: a text node prints its text, whatever else it holds.
         text_line(node.text.unwrap_or_default(), out);
         return;
     }
     out.push_str("- ");
-    YamlEscape::Key.write(&key(node), out);
+    key_buf.clear();
+    write_key(node, key_buf);
+    YamlEscape::Key.write(key_buf, out);
     if node.url.is_none() && node.placeholder.is_none() {
         // A leaf, or a leaf with just its text.
         if let Some(text) = node.text {
@@ -112,16 +148,16 @@ pub(crate) fn text_line(text: &str, out: &mut String) {
     YamlEscape::Value.write(text, out);
 }
 
-/// `createKey`: the role, the name, then each mark in upstream's order.
-fn key(node: &NodeAlone<'_>) -> String {
-    let mut key = node.role.to_owned();
+/// `createKey`: the role, the name, then each mark in upstream's order, written into `key`.
+fn write_key(node: &NodeAlone<'_>, key: &mut String) {
+    key.push_str(node.role);
     // `node.name && node.name.length <= 900`: an empty name prints nothing.
     if let Some(name) = node
         .name
         .filter(|name| !name.is_empty() && js::units(name) <= MAX_NAME_UNITS)
     {
         key.push(' ');
-        js::json_quote(name, &mut key);
+        js::json_quote(name, key);
     }
     match node.checked {
         Some(Tristate::Mixed) => key.push_str(" [checked=mixed]"),
@@ -164,7 +200,7 @@ fn key(node: &NodeAlone<'_>) -> String {
     // `if (node.ref)`: an empty ref prints neither itself nor the cursor.
     if let Some(reference) = node.r#ref.filter(|reference| !reference.is_empty()) {
         key.push_str(" [ref=");
-        key.push_str(reference);
+        reference.write_to(key);
         key.push(']');
         if node.cursor == Some("pointer") {
             key.push_str(" [cursor=pointer]");
@@ -177,12 +213,16 @@ fn key(node: &NodeAlone<'_>) -> String {
         height,
     }) = node.r#box
     {
-        let numbers = [x, y, width, height].map(js::number_text);
         key.push_str(" [box=");
-        key.push_str(&numbers.join(","));
+        key.push_str(&js::number_text(x));
+        key.push(',');
+        key.push_str(&js::number_text(y));
+        key.push(',');
+        key.push_str(&js::number_text(width));
+        key.push(',');
+        key.push_str(&js::number_text(height));
         key.push(']');
     }
-    key
 }
 
 /// `if (node.level)`: JavaScript's truth of the double `JSON.parse` makes of `number`, false for

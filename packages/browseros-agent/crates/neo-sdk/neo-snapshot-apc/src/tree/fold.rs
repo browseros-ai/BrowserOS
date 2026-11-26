@@ -120,6 +120,9 @@ impl FoldInfo {
     /// Returns the [`ClickProxy`] pairing for zero-size control `control`, if one was found.
     #[must_use]
     pub fn click_proxy(&self, control: NodeId) -> Option<&ClickProxy> {
+        if self.click_proxy_index.is_empty() {
+            return None;
+        }
         self.click_proxy_index
             .get(&control)
             .and_then(|&index| self.click_proxies.get(index))
@@ -135,6 +138,9 @@ impl FoldInfo {
     /// snapshot line.
     #[must_use]
     pub fn folded_label_target(&self, label: NodeId) -> Option<NodeId> {
+        if self.folded_label_for.is_empty() {
+            return None;
+        }
         self.folded_label_for.get(&label).copied()
     }
 
@@ -185,6 +191,55 @@ impl fmt::Debug for FoldInfo {
 /// Returns a [`LogicalChildrenIter`] over direct logical children of `parent` within its document.
 pub(crate) fn logical_children_iter(nodes: &[TreeNode], parent: NodeId) -> LogicalChildrenIter<'_> {
     LogicalChildrenIter::new(nodes, parent)
+}
+
+/// Visits direct logical children of `parent` within its document in preorder without allocating
+/// on the common path where no child is a `ua_shadow` container.
+pub(crate) fn for_each_logical_child(
+    nodes: &[TreeNode],
+    parent: NodeId,
+    mut visit: impl FnMut(NodeId),
+) {
+    let Some(parent_node) = nodes.get(parent.index()) else {
+        return;
+    };
+    let doc = parent_node.doc();
+    let mut shadow_stack = Vec::new();
+    let mut cursor = parent_node.first_child();
+    while let Some(child_id) = cursor {
+        let Some(child) = nodes.get(child_id.index()) else {
+            break;
+        };
+        if child.doc() == doc {
+            if let Some(raw) = child.raw_attributes()
+                && hidden::is_ua_shadow(raw)
+            {
+                if !hidden::is_text_node(raw) {
+                    push_children_reversed(nodes, child_id, doc, &mut shadow_stack);
+                    while let Some(desc_id) = shadow_stack.pop() {
+                        let Some(desc) = nodes.get(desc_id.index()) else {
+                            continue;
+                        };
+                        if desc.doc() != doc {
+                            continue;
+                        }
+                        if let Some(desc_raw) = desc.raw_attributes()
+                            && hidden::is_ua_shadow(desc_raw)
+                        {
+                            if !hidden::is_text_node(desc_raw) {
+                                push_children_reversed(nodes, desc_id, doc, &mut shadow_stack);
+                            }
+                            continue;
+                        }
+                        visit(desc_id);
+                    }
+                }
+            } else {
+                visit(child_id);
+            }
+        }
+        cursor = child.next_sibling();
+    }
 }
 
 /// Computes the immutable logical folding and pruning overlay for `nodes` and `docs` in O(N)

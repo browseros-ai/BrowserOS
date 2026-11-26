@@ -56,6 +56,7 @@ mod tree_node;
 pub use apc_builder::{ApcBuilder, FrameBuilder, NodeBuilder, PartialIframeSpec};
 pub use aria_emit::{
     AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, AriaTooDeep, AriaTree, MAX_JSON_DEPTH,
+    PreparedAria, PreparedNodeId,
 };
 pub use build_error::BuildError;
 pub use fold::{ClickProxy, FoldInfo, LogicalChildrenIter};

@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
+use crate::aria_source::{AriaSource, SnapshotView};
 use crate::cap::join;
 use crate::form::{Form, Passed, TextForm};
 use crate::neo::{
-    is_on_top_line, is_unmarked_line, neo_text, neo_text_as, on_top_delta, on_top_head,
-    unmarked_head,
+    is_on_top_line, is_unmarked_line, neo_text_as_source, neo_text_source, on_top_delta,
+    on_top_head, unmarked_head,
 };
-use crate::snapshot::Snapshot;
 
 use super::earlier::{Baseline, Earlier};
 use super::list_changes::list_changes;
@@ -36,14 +36,18 @@ pub(crate) struct DeltaText {
 
 /// A delta call's answer from what the tab held (`renderDelta`, and `renderUncompared` when the
 /// stored text was not read).
-pub(crate) fn delta_text(snapshot: &Snapshot, passed: &Passed, earlier: Earlier<'_>) -> DeltaText {
+pub(crate) fn delta_text_source<'a, S: AriaSource<'a>>(
+    view: &SnapshotView<'a, S>,
+    passed: &Passed,
+    earlier: Earlier<'_>,
+) -> DeltaText {
     match earlier {
         Earlier::NotRead => DeltaText {
-            returned: render_uncompared(snapshot, passed),
+            returned: render_uncompared(view, passed),
             baseline: None,
         },
-        Earlier::Nothing => render_delta(None, snapshot, passed),
-        Earlier::Text(stored) => render_delta(Some(stored), snapshot, passed),
+        Earlier::Nothing => render_delta(None, view, passed),
+        Earlier::Text(stored) => render_delta(Some(stored), view, passed),
     }
 }
 
@@ -54,16 +58,20 @@ pub(crate) fn delta_text(snapshot: &Snapshot, passed: &Passed, earlier: Earlier<
 /// or when the changes are too long, the whole page: the options passed, the rest from the stored
 /// form, a `text` neither call passed going back to the length rule, since a whole page is a new
 /// snapshot and that rule exists so a big page's text is not paid for unasked.
-fn render_delta(stored: Option<&Baseline>, snapshot: &Snapshot, passed: &Passed) -> DeltaText {
-    let unmarked = unmarked_head(snapshot);
+fn render_delta<'a, S: AriaSource<'a>>(
+    stored: Option<&Baseline>,
+    view: &SnapshotView<'a, S>,
+    passed: &Passed,
+) -> DeltaText {
+    let unmarked = unmarked_head(view.unmarked);
     let Some(stored) = stored else {
-        let whole = neo_text(snapshot, passed);
+        let whole = neo_text_source(view, passed);
         let body = without_read_heads(&whole.text);
         return DeltaText {
             returned: join(
                 [NO_BASELINE]
                     .into_iter()
-                    .chain(on_top_head(snapshot))
+                    .chain(on_top_head(view.layers))
                     .chain(unmarked.as_deref())
                     .chain([body.as_str()]),
             ),
@@ -75,7 +83,7 @@ fn render_delta(stored: Option<&Baseline>, snapshot: &Snapshot, passed: &Passed)
     };
     let form = stored.form;
     if agrees(passed, &form) {
-        let current = neo_text_as(snapshot, &form);
+        let current = neo_text_as_source(view, &form);
         if let Some(changes) = list_changes(&stored.text, &current) {
             // The first line tells unchanged, changed and whole-page answers apart, so the facts
             // of this read follow it and stay outside every hunk.
@@ -83,7 +91,7 @@ fn render_delta(stored: Option<&Baseline>, snapshot: &Snapshot, passed: &Passed)
                 Some((status, body)) => (status, Some(body)),
                 None => (changes.as_str(), None),
             };
-            let on_top = on_top_delta(&stored.text, snapshot);
+            let on_top = on_top_delta(&stored.text, view.layers);
             return DeltaText {
                 returned: join(
                     [status]
@@ -99,8 +107,8 @@ fn render_delta(stored: Option<&Baseline>, snapshot: &Snapshot, passed: &Passed)
             };
         }
     }
-    let whole = neo_text(
-        snapshot,
+    let whole = neo_text_source(
+        view,
         &Passed {
             text: passed.text.or(passed_text(form.text)),
             urls: Some(passed.urls.unwrap_or(form.urls)),
@@ -108,7 +116,7 @@ fn render_delta(stored: Option<&Baseline>, snapshot: &Snapshot, passed: &Passed)
             inert: Some(passed.inert.unwrap_or(form.inert)),
         },
     );
-    let on_top = on_top_delta(&stored.text, snapshot);
+    let on_top = on_top_delta(&stored.text, view.layers);
     let body = without_read_heads(&whole.text);
     DeltaText {
         returned: join(
@@ -127,13 +135,13 @@ fn render_delta(stored: Option<&Baseline>, snapshot: &Snapshot, passed: &Passed)
 
 /// `renderUncompared`: the whole page by the options passed, as with no stored text, under
 /// `NO_TIME`. The call that returns it records nothing, so it keeps nothing.
-fn render_uncompared(snapshot: &Snapshot, passed: &Passed) -> String {
-    let unmarked = unmarked_head(snapshot);
-    let body = without_read_heads(&neo_text(snapshot, passed).text);
+fn render_uncompared<'a, S: AriaSource<'a>>(view: &SnapshotView<'a, S>, passed: &Passed) -> String {
+    let unmarked = unmarked_head(view.unmarked);
+    let body = without_read_heads(&neo_text_source(view, passed).text);
     join(
         [NO_TIME]
             .into_iter()
-            .chain(on_top_head(snapshot))
+            .chain(on_top_head(view.layers))
             .chain(unmarked.as_deref())
             .chain([body.as_str()]),
     )

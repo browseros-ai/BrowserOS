@@ -1,10 +1,9 @@
-use crate::cap::Printed;
-use crate::snapshot::Snapshot;
+use crate::aria_source::{AriaSource, SnapshotView, SourceChild};
+use crate::cap::LineSink;
 
 use super::hidden::Hidden;
 use super::on_top::OnTop;
-use super::printer::{Inert, Omissions, Partials, Printer};
-use super::rule::Child;
+use super::printer::{Inert, Omissions, OmittedStats, Partials, Printer};
 
 /// How one walk prints the page.
 #[derive(Clone, Copy, Debug)]
@@ -17,38 +16,42 @@ pub(super) struct WalkForm {
     pub(super) inert: bool,
 }
 
-/// One form's lines, and the inert subtrees it left out, each printed with the text form it
-/// inherited where it was left out.
-#[derive(Debug)]
-pub(super) struct Walked {
-    pub(super) lines: Vec<Printed>,
-    /// The lines the inert subtrees left out would have printed, for the `# not listed:` count.
-    pub(super) omitted: Vec<Printed>,
-    /// How many inert roots were left out; the `# not listed:` line prints when any was, even if
-    /// they would have printed no line.
-    pub(super) skipped: usize,
-}
-
-/// `walk`: the page in one form. What a whole-view layer holds first, always with its text,
-/// then the rest of the page as a new text run, then the frames not read whose iframe printed no
-/// line.
-pub(super) fn walk(snapshot: &Snapshot, form: WalkForm) -> Walked {
-    let on_top = OnTop::of(snapshot);
+/// `walk`: the page in one form, streamed into `sink`. What a whole-view layer holds first,
+/// always with its text, then the rest of the page as a new text run, then the frames not read
+/// whose iframe printed no line.
+pub(super) fn walk_into<'a, S: AriaSource<'a>, K: LineSink>(
+    view: &SnapshotView<'a, S>,
+    on_top: &OnTop<S::Id, S::Key>,
+    form: WalkForm,
+    sink: K,
+) -> (K, OmittedStats) {
     let inert = if form.inert {
         Inert::Listed
     } else {
-        Inert::Omitted(Omissions::default())
+        Inert::Omitted(Box::new(Omissions::default()))
     };
-    let mut printer = Printer::new(form.urls, Partials::of(&snapshot.partial), inert, &on_top);
+    let mut printer = Printer::new(
+        &view.tree,
+        sink,
+        form.urls,
+        Partials::of(view.partial),
+        inert,
+        on_top,
+    );
     if !on_top.first.is_empty() {
         // One walk per held node, each with its own mark: a walk prints all of its children
         // before it returns, so the lines come out as one walk would print them.
         for held in &on_top.first {
-            printer.walk([Child::Node(held.node)].into_iter(), 0, true, held.hidden);
+            printer.walk(
+                [SourceChild::Node(held.id)].into_iter(),
+                0,
+                true,
+                held.hidden,
+            );
         }
         printer.separate_text();
     }
-    printer.walk(on_top.rest(&snapshot.tree), 0, form.text, Hidden::No);
+    printer.walk(on_top.rest(&view.tree), 0, form.text, Hidden::No);
     printer.comment_unplaced_partials();
     printer.finish()
 }

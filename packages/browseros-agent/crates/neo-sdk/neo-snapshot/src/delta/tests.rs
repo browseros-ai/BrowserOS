@@ -214,7 +214,7 @@ fn tests_that_a_gone_layer_is_named_as_javascripts_expression_names_it()
     let nothing_on_top = Snapshot::default();
     for index in 0..count("NEO_SNAPSHOT_DIFFERENTIAL_TREES", GATE_LINES)? {
         let line = generator.on_top_line();
-        let printed: Vec<String> = on_top_delta(&line, &nothing_on_top)
+        let printed: Vec<String> = on_top_delta(&line, &nothing_on_top.layers)
             .into_iter()
             .map(String::from)
             .collect();

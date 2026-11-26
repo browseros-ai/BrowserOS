@@ -977,9 +977,10 @@ impl Page {
         delta: bool,
         clock: &dyn CallClock,
     ) -> Result<String, PlaywrightError> {
+        let view = neo_snapshot::SnapshotView::from_snapshot(&self.snapshot);
         finish_page_text(
             &Finish {
-                snapshot: &self.snapshot,
+                view: &view,
                 passed,
                 delta,
                 tab: &self.tab,

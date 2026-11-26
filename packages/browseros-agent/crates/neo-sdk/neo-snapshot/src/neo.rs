@@ -4,17 +4,17 @@
 //! whose output it must equal byte for byte.
 //!
 //! ```text
-//!  Snapshot, Passed ─▶ neo_text: the options' defaults, the length rule, the head lines
-//!                         │ one walk per form (text on, text off)
-//!                         ▼
-//!                      walk ─▶ OnTop: what a whole-view layer holds, printed first
-//!                         │      Printer: an explicit step stack, one Rule per child, inert
-//!                         │      subtrees counted on printers of their own
-//!                         ▼
-//!                      node_text (playwright/) prints every element line
-//!                         │
-//!                         ▼
-//!                      cap: the cut, the kept blocks after it ─▶ the text and its Form
+//!  SnapshotView, Passed ─▶ neo_text_source: the options' defaults, the length rule, the head lines
+//!                             │ one streaming walk per form (text on, text off)
+//!                             ▼
+//!                          walk_into ─▶ OnTop: what a whole-view layer holds, printed first
+//!                             │          Printer: explicit step stack, one Rule per child, inert
+//!                             │          subtrees counted via CountSink
+//!                             ▼
+//!                          node_text_into (playwright/) prints every element line
+//!                             │
+//!                             ▼
+//!                          LineCap: the cut, the kept blocks after it ─▶ the text and its Form
 //! ```
 //!
 //! Each element line is upstream's printer's line for one node without its children (`NodeAlone`,
@@ -34,7 +34,7 @@
 //!
 //! No walk recurses: each keeps its own stack, as the TypeScript does, so a tree of any depth
 //! prints. Where the TypeScript relied on JavaScript's object identity (which nodes a layer
-//! holds, which line an omission follows), the Rust compares node addresses in the borrowed tree
+//! holds, which line an omission follows), the Rust compares node identity keys in the source
 //! and a serial number per line.
 
 mod hidden;
@@ -50,7 +50,7 @@ mod unmarked_head;
 mod walk;
 
 pub use neo_text::TEXT_LIMIT_TOKENS;
-pub(crate) use neo_text::{NeoText, neo_text, neo_text_as};
+pub(crate) use neo_text::{NeoText, neo_text_as_source, neo_text_source};
 pub(crate) use on_top::{is_on_top_line, on_top_delta, on_top_head};
 pub use rule::KEPT_ROLES;
 pub(crate) use rule::{SECTION, section_label, shown_text};

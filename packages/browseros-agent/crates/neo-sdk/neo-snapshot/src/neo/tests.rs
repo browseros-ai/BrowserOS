@@ -8,6 +8,7 @@ use std::{env, fs};
 
 use serde_json::json;
 
+use crate::aria_source::SnapshotView;
 use crate::call::Call;
 use crate::cap::MaxTokens;
 use crate::cover_block::cover_block;
@@ -16,7 +17,7 @@ use crate::judges::{Bundles, CaseFile, Generator, NEO_CASES, Shown, count, seed}
 use crate::render::render;
 use crate::snapshot::{Layer, Snapshot};
 
-use super::neo_text_as;
+use super::neo_text_as_source;
 
 /// How many random trees the gate's run draws.
 const GATE_TREES: usize = 300;
@@ -403,7 +404,7 @@ fn tests_that_a_text_rendered_again_in_its_own_form_is_the_same_text() -> Result
     let rendered_again = |snapshot: &Snapshot, passed: &Passed| -> Result<(), String> {
         let answer = render(snapshot, Call::Page(passed));
         let kept = answer.pending().ok_or("a whole page keeps itself")?;
-        (neo_text_as(snapshot, &kept.form) == kept.text)
+        (neo_text_as_source(&SnapshotView::from_snapshot(snapshot), &kept.form) == kept.text)
             .then_some(())
             .ok_or_else(|| format!("renders again in its form {:?} as it was", kept.form))
     };

@@ -30,14 +30,14 @@
 use std::sync::Arc;
 
 use browseros_core::{TabId, TargetId};
-use neo_snapshot::{
-    Answer, Call, ClosedRoots, Earlier, Layer, MaxTokens, PartialFrame, Passed, Snapshot, Unmarked,
-};
+use neo_snapshot::{Answer, AriaSource, Call, Earlier, Layer, MaxTokens, Passed, SnapshotView};
+use neo_snapshot_apc::tree::PreparedAria;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use ts_rs::TS;
 
-use super::aria_snapshot::{self, SnapshotResult, SnapshotTop};
+use super::aria_snapshot::{SnapshotResult, SnapshotTop};
+use super::tree_snapshot::PreparedSnapshot;
 use super::{SnapshotBaselines, SnapshotForm};
 use crate::op::Op;
 use crate::op_scope::OpScope;
@@ -297,83 +297,49 @@ impl RustText {
     }
 }
 
-/// The facts `render` prints from, moved out of the stitched tree without a copy: the tree, the
-/// frames not read, the layers worded by `action::on_top_line`, the closed roots and whether
-/// the root frame's clickable check finished. [`tree_of`] moves them back.
-pub(super) fn facts(result: SnapshotResult) -> Snapshot {
-    let SnapshotResult {
-        json,
-        partial,
-        unmarked,
-        on_top,
-        document: _,
-        snapshot_call: _,
-        closed_roots,
-    } = result;
-    Snapshot {
-        tree: json,
-        partial: partial
-            .into_iter()
-            .map(|frame| PartialFrame {
-                r#ref: frame.r#ref,
-                frame: frame.frame,
-                reason: frame.reason,
-            })
-            .collect(),
-        layers: on_top
-            .into_iter()
-            .map(|top| Layer {
-                r#ref: top.r#ref,
-                line: top.line,
-                whole_view: top.whole_view,
-            })
-            .collect(),
-        closed_roots: closed_roots.map(|roots| ClosedRoots {
-            sent: roots.sent,
-            found: roots.found,
-        }),
-        unmarked: unmarked.map(|unmarked| Unmarked {
-            reason: unmarked.reason,
-        }),
-    }
+/// Prepared snapshot facts paired with converted [`Layer`]s for direct streaming through
+/// [`neo_snapshot::render_source`] without materializing `AriaNode`s.
+pub(super) struct PreparedFacts {
+    prepared: PreparedAria,
+    layers: Vec<Layer>,
 }
 
-/// [`facts`] undone: the stitched tree the prelude renders, with no document or call id yet.
-pub(super) fn tree_of(snapshot: Snapshot) -> SnapshotResult {
-    let Snapshot {
-        tree,
-        partial,
-        layers,
-        closed_roots,
-        unmarked,
-    } = snapshot;
-    SnapshotResult {
-        json: tree,
-        partial: partial
-            .into_iter()
-            .map(|frame| aria_snapshot::PartialFrame {
-                r#ref: frame.r#ref,
-                frame: frame.frame,
-                reason: frame.reason,
-            })
-            .collect(),
-        unmarked: unmarked.map(|unmarked| aria_snapshot::Unmarked {
-            reason: unmarked.reason,
-        }),
-        on_top: layers
+impl PreparedFacts {
+    pub(super) fn from_read(read: PreparedSnapshot) -> Self {
+        Self {
+            prepared: read.prepared,
+            layers: read
+                .on_top
+                .into_iter()
+                .map(|top| Layer {
+                    r#ref: top.r#ref,
+                    line: top.line,
+                    whole_view: top.whole_view,
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn view(&self) -> SnapshotView<'_, &PreparedAria> {
+        self.prepared.snapshot_view(&self.layers, None, None)
+    }
+
+    /// Materializes the prepared tree and layers back into a [`SnapshotResult`] for compare mode.
+    pub(super) fn into_result(self) -> SnapshotResult {
+        let on_top = self
+            .layers
             .into_iter()
             .map(|layer| SnapshotTop {
                 r#ref: layer.r#ref,
                 line: layer.line,
                 whole_view: layer.whole_view,
             })
-            .collect(),
-        document: None,
-        snapshot_call: None,
-        closed_roots: closed_roots.map(|roots| aria_snapshot::ClosedRoots {
-            sent: roots.sent,
-            found: roots.found,
-        }),
+            .collect();
+        PreparedSnapshot {
+            prepared: self.prepared,
+            on_top,
+        }
+        .into_result()
     }
 }
 
@@ -436,8 +402,8 @@ impl CallClock for ScopeClock<'_, '_> {
 }
 
 /// What a whole page's call holds once its tree is in and the event wait is over.
-pub(super) struct Finish<'a> {
-    pub(super) snapshot: &'a Snapshot,
+pub(super) struct Finish<'a, S> {
+    pub(super) view: &'a SnapshotView<'a, S>,
     pub(super) passed: &'a Passed,
     /// The script passed `delta: true`.
     pub(super) delta: bool,
@@ -459,8 +425,8 @@ pub(super) struct Finish<'a> {
 /// store's stored text only); read the baseline of another document (the generation read before
 /// the tree is the one used); record a text other than the one returned, or in another form
 /// (`Answer::pending` lends both).
-pub(super) fn finish_page_text(
-    finish: &Finish<'_>,
+pub(super) fn finish_page_text<'a, S: AriaSource<'a>>(
+    finish: &Finish<'a, S>,
     clock: &dyn CallClock,
 ) -> Result<String, PlaywrightError> {
     let at = TabStore {
@@ -480,7 +446,7 @@ pub(super) fn finish_page_text(
         },
         None => Call::Page(finish.passed),
     };
-    let answer = neo_snapshot::render(finish.snapshot, call);
+    let answer = neo_snapshot::render_source(finish.view, call);
     // A delta that did not read the stored text keeps nothing, so it looks no second time.
     if let Some(pending) = answer.pending() {
         match clock.look()? {
@@ -558,23 +524,26 @@ impl StoredRead {
 
 /// A text that keeps nothing for the tab: Playwright's format, `mode: 'full'`, and a locator's in
 /// Neo's format ([`Call::Element`]). A whole page in Neo's format is [`finish_page_text`]'s.
-pub(super) fn plain_text(snapshot: &Snapshot, ask: TextAsk) -> String {
-    plain(snapshot, ask).into_text()
+pub(super) fn plain_text<'a, S: AriaSource<'a>>(
+    view: &SnapshotView<'a, S>,
+    ask: TextAsk,
+) -> String {
+    plain(view, ask).into_text()
 }
 
-fn plain(snapshot: &Snapshot, ask: TextAsk) -> Answer {
+fn plain<'a, S: AriaSource<'a>>(view: &SnapshotView<'a, S>, ask: TextAsk) -> Answer {
     match ask {
-        TextAsk::Playwright => neo_snapshot::render(snapshot, Call::Playwright),
-        TextAsk::Full(max_tokens) => neo_snapshot::render(snapshot, Call::Full { max_tokens }),
-        TextAsk::Neo { passed, .. } => neo_snapshot::render(snapshot, Call::Element(&passed)),
+        TextAsk::Playwright => neo_snapshot::render_source(view, Call::Playwright),
+        TextAsk::Full(max_tokens) => neo_snapshot::render_source(view, Call::Full { max_tokens }),
+        TextAsk::Neo { passed, .. } => neo_snapshot::render_source(view, Call::Element(&passed)),
     }
 }
 
 /// Rust's text of a compared call: what the call would answer, by the same rules, with nothing
 /// recorded. `page` is where a whole page's stored text is, `None` for a locator. A delta reads
 /// the stored text itself, under the same clock.
-pub(super) fn compared_text(
-    snapshot: &Snapshot,
+pub(super) fn compared_text<'a, S: AriaSource<'a>>(
+    view: &SnapshotView<'a, S>,
     ask: TextAsk,
     page: Option<TabStore<'_>>,
     clock: &dyn CallClock,
@@ -589,9 +558,9 @@ pub(super) fn compared_text(
                 },
                 None => Call::Page(&passed),
             };
-            neo_snapshot::render(snapshot, call)
+            neo_snapshot::render_source(view, call)
         }
-        (other, _) => plain(snapshot, other),
+        (other, _) => plain(view, other),
     };
     Ok(RustText::of(&answer))
 }
