@@ -6,9 +6,11 @@
 //! any lock held across `.await`.
 //!
 //! ```text
-//!  APC capture ──▶ DocToken ──▶ Reserved { seq, frame } ──▶ Bound { seq, world } ──▶ Retired { seq }
-//!                                      │                                                    ▲
-//!                                      └────────────── retire_doc / frame navigation ───────┘
+//!  APC capture ──▶ DocToken ──▶ Reserved { seq, frame } ──▶ Bound { seq, world } ──▶ Retired { seq, at }
+//!                                      │                                                    ▲   │
+//!                                      └────────────── retire_doc / frame navigation ───────┘   │
+//!                     ▲                                                                          │
+//!                     └──── a capture requested after `at` reports it again: a fresh seq ◀──────┘
 //! ```
 //!
 //! Invariants:
@@ -17,10 +19,16 @@
 //! - **A reserved seq survives promotion:** once a document receives a [`FrameSeq`], binding a
 //!   proven [`IsolatedWorld`] later keeps that reserved seq even if the world booted with a higher
 //!   candidate seq.
-//! - **Retirement is terminal:** a `Retired` [`DocToken`] never transitions back to `Reserved` or
-//!   `Bound`.
-//! - **Every retirement is reported once:** [`DocTable::retire_token`] is the only transition into
-//!   `Retired`, and it queues the token for [`DocTable::take_retired`]. `TabTree` drains that queue
+//! - **A retired seq stays retired:** a document that comes back (a page restored from the
+//!   back/forward cache keeps its token) takes a fresh seq, so refs from its earlier life still
+//!   answer `element_detached`. Only a capture requested after the retirement can bring it back.
+//! - **A stale capture changes nothing:** captures of one tab can be in flight together, and their
+//!   reports arrive in any order. Each frame remembers when its document was last reported; a
+//!   capture requested before that neither displaces the frame's document nor activates its own,
+//!   which it can only have seen before the frame moved on.
+//! - **Every retirement is reported once:** a document becomes `Retired` only through
+//!   [`DocTable::retire_token`] or [`DocTable::insert_retired`], and each queues the token for
+//!   [`DocTable::take_retired`]. `TabTree` drains that queue
 //!   into its ref table, so a document's refs go when its seq retires (design 2.3), including
 //!   retirements made by `FrameWorlds` paths that never pass through `TabTree`.
 //! - **No page URLs in diagnostics:** [`DocTable`] never stores raw URLs (only whether a document
@@ -35,7 +43,7 @@ use std::{fmt, mem};
 use browseros_core::FrameId;
 use neo_snapshot_apc::tree::DocToken;
 
-use crate::world::{FrameSeq, IsolatedWorld, LinkedParent};
+use crate::world::{FrameSeq, IsolatedWorld, LinkedParent, Stamp};
 
 /// Whether an APC document belongs to the tab's top-level main frame or a nested child frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +66,9 @@ pub(crate) struct DocContext<'a> {
     /// Document URL when APC reported it, inspected only to recognize explicit `"about:blank"`
     /// transitions and seed the initial `main_url`; never printed in `Debug`.
     pub(crate) url: Option<&'a str>,
+    /// When the capture that reported this document was requested: what orders its report
+    /// against other captures' reports and against retirements.
+    pub(crate) requested_at: Stamp,
 }
 
 impl fmt::Debug for DocContext<'_> {
@@ -67,6 +78,7 @@ impl fmt::Debug for DocContext<'_> {
             .field("frame", &self.frame)
             .field("place", &self.place)
             .field("has_url", &self.url.is_some())
+            .field("requested_at", &self.requested_at)
             .finish()
     }
 }
@@ -93,7 +105,38 @@ pub(crate) enum DocBinding {
     Retired {
         /// The seq this document held before retirement.
         seq: FrameSeq,
+        /// When it retired: a capture requested later that still reports the document proves it
+        /// came back.
+        at: Stamp,
     },
+}
+
+impl DocBinding {
+    /// The document's current seq, in any state.
+    pub(crate) const fn seq(&self) -> FrameSeq {
+        match self {
+            Self::Reserved { seq, .. } | Self::Bound { seq, .. } | Self::Retired { seq, .. } => {
+                *seq
+            }
+        }
+    }
+}
+
+/// What a [`FrameSeq`] names in [`DocTable`].
+pub(crate) enum SeqBinding<'a> {
+    /// `seq` is its document's current seq.
+    Current(&'a DocBinding),
+    /// `seq` belongs to an earlier life of a document that came back under a fresh seq.
+    Past,
+}
+
+/// How a capture's report of a frame's document compares with what [`DocTable`] already knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameReport {
+    /// No newer report of this frame exists; the capture's view of it is current.
+    Current,
+    /// A capture requested later, or a hydration proof, already reported this frame.
+    Stale,
 }
 
 /// Resolution result for a [`DocToken`] or [`FrameSeq`] lookup through `FrameWorlds`.
@@ -180,6 +223,9 @@ pub(crate) struct DocTable {
     by_seq: HashMap<FrameSeq, DocToken>,
     /// Currently active (`Reserved` or `Bound`) document for each known [`FrameId`].
     active_by_frame: HashMap<FrameId, DocToken>,
+    /// When each frame's document was last reported: the newest request time of a capture that
+    /// reported it, or the moment hydration proved a world on it.
+    frame_seen: HashMap<FrameId, Stamp>,
     /// Tokens retired since the last [`Self::take_retired`], in retirement order. Only documents
     /// a `TabTree` capture or hydration numbered can retire, so on a page `TabTree` never reads
     /// the queue stays empty.
@@ -205,6 +251,7 @@ impl fmt::Debug for DocTable {
             .field("retired", &retired)
             .field("seqs", &self.by_seq.len())
             .field("active_frames", &self.active_by_frame.len())
+            .field("seen_frames", &self.frame_seen.len())
             .field("retired_since_take", &self.retired_since_take.len())
             .finish()
     }
@@ -217,11 +264,13 @@ impl DocTable {
             by_token: HashMap::new(),
             by_seq: HashMap::new(),
             active_by_frame: HashMap::new(),
+            frame_seen: HashMap::new(),
             retired_since_take: Vec::new(),
         }
     }
 
-    /// Whether `seq` is currently mapped to a retired non-`about:blank` document.
+    /// Whether `seq` belonged to a non-`about:blank` document that has left it: retired, or come
+    /// back under a fresh seq.
     pub(crate) fn is_retired_real_seq(&self, seq: FrameSeq) -> bool {
         let Some(token) = self.by_seq.get(&seq) else {
             return false;
@@ -229,8 +278,21 @@ impl DocTable {
         let Some(entry) = self.by_token.get(token) else {
             return false;
         };
-        matches!(entry.binding, DocBinding::Retired { .. })
-            && entry.url_kind == PageUrlKind::RealOrUnknown
+        let left =
+            entry.binding.seq() != seq || matches!(entry.binding, DocBinding::Retired { .. });
+        left && entry.url_kind == PageUrlKind::RealOrUnknown
+    }
+
+    /// Compares a capture's report of `frame`, requested at `requested_at`, with the frame's last
+    /// report, and records it when it is the newest.
+    pub(crate) fn report_frame(&mut self, frame: &FrameId, requested_at: Stamp) -> FrameReport {
+        match self.frame_seen.get(frame) {
+            Some(&seen) if seen > requested_at => FrameReport::Stale,
+            Some(_) | None => {
+                self.frame_seen.insert(frame.clone(), requested_at);
+                FrameReport::Current
+            }
+        }
     }
 
     /// Retires every active document bound to `world` (`same_install`), in token order so the
@@ -259,13 +321,19 @@ impl DocTable {
         self.by_token.get(token).map(|entry| &entry.binding)
     }
 
-    /// Returns the binding of the most recent document assigned `seq`, if any.
-    pub(crate) fn binding_by_seq(&self, seq: FrameSeq) -> Option<&DocBinding> {
+    /// Returns what `seq` names: the current binding of the most recent document assigned it, or
+    /// a life that document has left.
+    pub(crate) fn binding_by_seq(&self, seq: FrameSeq) -> Option<SeqBinding<'_>> {
         let token = self.by_seq.get(&seq)?;
-        self.binding(token)
+        let binding = self.binding(token)?;
+        Some(if binding.seq() == seq {
+            SeqBinding::Current(binding)
+        } else {
+            SeqBinding::Past
+        })
     }
 
-    /// Returns the token currently mapped to `seq`, if any.
+    /// Returns the token that was last assigned `seq`, whether it still holds it or not.
     pub(crate) fn token_for_seq(&self, seq: FrameSeq) -> Option<&DocToken> {
         self.by_seq.get(&seq)
     }
@@ -314,6 +382,23 @@ impl DocTable {
             token,
             DocEntry {
                 binding: DocBinding::Reserved { seq, frame },
+                url_kind: PageUrlKind::from_url(url),
+            },
+        );
+    }
+
+    /// Inserts a document that only a stale capture reported: the frame had moved on by the time a
+    /// newer capture reported it, so the document is already gone.
+    pub(crate) fn insert_retired(&mut self, token: DocToken, seq: FrameSeq, url: Option<&str>) {
+        self.by_seq.insert(seq, token.clone());
+        self.retired_since_take.push(token.clone());
+        self.by_token.insert(
+            token,
+            DocEntry {
+                binding: DocBinding::Retired {
+                    seq,
+                    at: Stamp::next(),
+                },
                 url_kind: PageUrlKind::from_url(url),
             },
         );
@@ -414,7 +499,10 @@ impl DocTable {
             };
             let frame = entry.frame().cloned();
             let url_kind = entry.url_kind;
-            entry.binding = DocBinding::Retired { seq };
+            entry.binding = DocBinding::Retired {
+                seq,
+                at: Stamp::next(),
+            };
             (seq, url_kind, frame)
         };
         if let Some(frame) = frame {
@@ -454,7 +542,7 @@ mod tests {
     use neo_snapshot_apc::tree::DocToken;
 
     use super::{DocContext, DocPlace, DocTable};
-    use crate::world::FrameSeq;
+    use crate::world::{FrameSeq, Stamp};
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -468,6 +556,7 @@ mod tests {
             frame: Some(&frame),
             place: DocPlace::Main,
             url: Some(secret_url),
+            requested_at: Stamp::next(),
         };
         let mut table = DocTable::new();
         table.insert_reserved(

@@ -127,6 +127,7 @@ impl TabTree {
                         frame,
                         place,
                         url,
+                        requested_at,
                     };
                     page_state.frames().seq_for_doc(ctx, &proven)
                 };
