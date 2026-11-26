@@ -321,10 +321,11 @@
         "name": "",
         "controls": [""],
         "flags": [],
-        "controlText": "Dismiss"
+        "controlText": "Dismiss",
+        "controlHidden": true
       }
     ],
-    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Its control has no accessible name; the same ref carries Dismiss in the first block.",
+    "why": "Name the face/dialog that actually takes the hit; never choose a dialog merely by document order. Its control has no accessible name; the same ref carries Dismiss in the first block, marked [aria-hidden] since the overlay that hides it prints no line.",
     "phases": [],
     "face": "#hidden"
   },

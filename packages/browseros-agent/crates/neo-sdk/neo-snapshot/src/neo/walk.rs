@@ -1,6 +1,7 @@
 use crate::cap::Printed;
 use crate::snapshot::Snapshot;
 
+use super::hidden::Hidden;
 use super::on_top::OnTop;
 use super::printer::{Inert, Omissions, Partials, Printer};
 use super::rule::Child;
@@ -40,10 +41,14 @@ pub(super) fn walk(snapshot: &Snapshot, form: WalkForm) -> Walked {
     };
     let mut printer = Printer::new(form.urls, Partials::of(&snapshot.partial), inert, &on_top);
     if !on_top.first.is_empty() {
-        printer.walk(on_top.first.iter().copied().map(Child::Node), 0, true);
+        // One walk per held node, each with its own mark: a walk prints all of its children
+        // before it returns, so the lines come out as one walk would print them.
+        for held in &on_top.first {
+            printer.walk([Child::Node(held.node)].into_iter(), 0, true, held.hidden);
+        }
         printer.separate_text();
     }
-    printer.walk(on_top.rest(&snapshot.tree), 0, form.text);
+    printer.walk(on_top.rest(&snapshot.tree), 0, form.text, Hidden::No);
     printer.comment_unplaced_partials();
     printer.finish()
 }

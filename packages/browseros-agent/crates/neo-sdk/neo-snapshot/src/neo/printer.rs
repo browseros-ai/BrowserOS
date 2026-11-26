@@ -6,6 +6,7 @@ use crate::js;
 use crate::playwright::{NodeAlone, node_text, text_line};
 use crate::snapshot::PartialFrame;
 
+use super::hidden::Hidden;
 use super::node_line::{Keep, node_line};
 use super::on_top::OnTop;
 use super::own_text::{name_as_content, own_text};
@@ -111,6 +112,7 @@ enum Step<'a> {
         child: Child<'a>,
         level: usize,
         text: bool,
+        hidden: Hidden,
     },
     Piece {
         raw: &'a str,
@@ -122,6 +124,7 @@ enum Step<'a> {
         node: &'a AriaNode,
         header: usize,
         level: usize,
+        hidden: Hidden,
     },
     /// Closes a section after its content.
     Section { node: &'a AriaNode, header: usize },
@@ -183,19 +186,31 @@ impl<'a, 't> Printer<'a, 't> {
         children: impl DoubleEndedIterator<Item = Child<'a>>,
         level: usize,
         text: bool,
+        hidden: Hidden,
     ) {
         for child in children.rev() {
-            self.steps.push(Step::Node { child, level, text });
+            self.steps.push(Step::Node {
+                child,
+                level,
+                text,
+                hidden,
+            });
         }
         while let Some(step) = self.steps.pop() {
             match step {
-                Step::Node { child, level, text } => self.node(child, level, text),
+                Step::Node {
+                    child,
+                    level,
+                    text,
+                    hidden,
+                } => self.node(child, level, text, hidden),
                 Step::Piece { raw, level, text } => self.piece(raw, level, text),
                 Step::Kept {
                     node,
                     header,
                     level,
-                } => self.close_kept(node, header, level),
+                    hidden,
+                } => self.close_kept(node, header, level, hidden),
                 Step::Section { node, header } => self.close_section(node, header),
             }
         }
@@ -236,45 +251,47 @@ impl<'a, 't> Printer<'a, 't> {
         }
     }
 
-    /// One child of the node being walked, by the first rule that matches it.
-    fn node(&mut self, child: Child<'a>, level: usize, text: bool) {
+    /// One child of the node being walked, by the first rule that matches it. `hidden` is what its
+    /// line inherits of an `aria-hidden` node above it.
+    fn node(&mut self, child: Child<'a>, level: usize, text: bool, hidden: Hidden) {
         if let Child::Node(node) = child
             && node.inert == Some(true)
             && !self.inert.listed()
         {
-            self.omit(node, level, text);
+            self.omit(node, level, text, hidden);
             return;
         }
         match Rule::of(child) {
             Rule::Piece(raw) => self.piece(raw, level, text),
-            Rule::Kept(node) => self.kept(node, level),
-            Rule::Section(node) => self.section(node, level, text),
-            Rule::Heading(node) => self.heading(node, level),
-            Rule::Control(node) => self.control(node, level, text),
+            Rule::Kept(node) => self.kept(node, level, hidden),
+            Rule::Section(node) => self.section(node, level, text, hidden),
+            Rule::Heading(node) => self.heading(node, level, hidden),
+            Rule::Control(node) => self.control(node, level, text, hidden),
             Rule::Image(node) => {
                 if text && named(node.name.as_deref()).is_some() {
                     let keep = Keep {
                         r#ref: false,
                         urls: false,
                         text: None,
+                        hidden,
                     };
                     self.element(node_line(node, keep), level);
                 }
                 // No line of its own: its text and children belong to the level it sits in.
-                self.content(node, level, text);
+                self.content(node, level, text, hidden.beside(node));
             }
             Rule::Content(node) => {
                 if let Some(named) = name_as_content(node, self.on_top) {
                     self.piece(named, level, text);
                 }
-                self.content(node, level, text);
+                self.content(node, level, text, hidden.beside(node));
             }
         }
     }
 
     /// Leaves out an inert subtree: it is printed on the printer of its run of omissions, with
-    /// the text form it inherits here, and its frames not read go with it.
-    fn omit(&mut self, node: &'a AriaNode, level: usize, text: bool) {
+    /// the text form and the mark it inherits here, and its frames not read go with it.
+    fn omit(&mut self, node: &'a AriaNode, level: usize, text: bool, hidden: Hidden) {
         let Inert::Omitted(omissions) = &mut self.inert else {
             return;
         };
@@ -295,7 +312,7 @@ impl<'a, 't> Printer<'a, 't> {
             ));
         }
         if let Some(segment) = omissions.segments.last_mut() {
-            segment.walk([Child::Node(node)].into_iter(), level, text);
+            segment.walk([Child::Node(node)].into_iter(), level, text, hidden);
         }
         omissions.boundary = Some(boundary);
         // An omitted iframe owns its frames' `# partial:` lines, so none may reappear later.
@@ -315,10 +332,15 @@ impl<'a, 't> Printer<'a, 't> {
     /// Schedules a node's own text (none for an iframe: `shown_text`), then its children, as
     /// the next steps. Children go on in reverse so they come off in document order, ahead of the
     /// siblings already waiting.
-    fn content(&mut self, node: &'a AriaNode, level: usize, text: bool) {
+    fn content(&mut self, node: &'a AriaNode, level: usize, text: bool, hidden: Hidden) {
         let on_top = self.on_top;
         for child in on_top.children(node).rev() {
-            self.steps.push(Step::Node { child, level, text });
+            self.steps.push(Step::Node {
+                child,
+                level,
+                text,
+                hidden,
+            });
         }
         if let Some(raw) = shown_text(node) {
             self.steps.push(Step::Piece { raw, level, text });
@@ -344,24 +366,28 @@ impl<'a, 't> Printer<'a, 't> {
         self.push(level, raw.to_owned(), LineKind::Text, false);
     }
 
-    fn kept(&mut self, node: &'a AriaNode, level: usize) {
+    fn kept(&mut self, node: &'a AriaNode, level: usize, hidden: Hidden) {
+        // The cap may print the block outside the sections around it.
+        let hidden = hidden.movable();
         let keep = Keep {
             r#ref: kept_ref(node),
             urls: false,
             text: None,
+            hidden,
         };
         let header = self.header(node_line(node, keep), level);
         self.steps.push(Step::Kept {
             node,
             header,
             level,
+            hidden,
         });
         // Its text is what tells the agent what its buttons do, so it prints whatever the form.
-        self.content(node, level + 1, true);
+        self.content(node, level + 1, true, hidden.under(node));
     }
 
     /// After a kept block's content: the leaf form, a colon, or no line at all.
-    fn close_kept(&mut self, node: &'a AriaNode, header: usize, level: usize) {
+    fn close_kept(&mut self, node: &'a AriaNode, header: usize, level: usize, hidden: Hidden) {
         let only_text = match self.lines.get(header + 1..).unwrap_or_default() {
             [only] if only.kind == LineKind::Text && !separators_only(only) => {
                 Some(only.body.clone())
@@ -375,6 +401,7 @@ impl<'a, 't> Printer<'a, 't> {
                 r#ref: kept_ref(node),
                 urls: false,
                 text: Some(&only_text),
+                hidden,
             };
             self.element(node_line(node, keep), level);
         } else if !self.close(header, named(node.name.as_deref()).is_some()) {
@@ -386,11 +413,12 @@ impl<'a, 't> Printer<'a, 't> {
         }
     }
 
-    fn section(&mut self, node: &'a AriaNode, level: usize, text: bool) {
+    fn section(&mut self, node: &'a AriaNode, level: usize, text: bool, hidden: Hidden) {
         let keep = Keep {
             r#ref: true,
             urls: false,
             text: None,
+            hidden,
         };
         let header = self.header(node_line(node, keep), level);
         if node.role == "iframe"
@@ -402,7 +430,7 @@ impl<'a, 't> Printer<'a, 't> {
             }
         }
         self.steps.push(Step::Section { node, header });
-        self.content(node, level + 1, text);
+        self.content(node, level + 1, text, hidden.under(node));
     }
 
     /// After a section's content: its colon, or no line when nothing printed inside it. An
@@ -424,7 +452,7 @@ impl<'a, 't> Printer<'a, 't> {
         }
     }
 
-    fn heading(&mut self, node: &'a AriaNode, level: usize) {
+    fn heading(&mut self, node: &'a AriaNode, level: usize, hidden: Hidden) {
         let own = if named(node.name.as_deref()).is_some() {
             String::new()
         } else {
@@ -434,13 +462,14 @@ impl<'a, 't> Printer<'a, 't> {
             r#ref: actionable(node),
             urls: false,
             text: named(Some(own.as_str())),
+            hidden,
         };
         self.element(node_line(node, keep), level);
         // A link inside the heading gets its own line; the heading's text is not repeated.
-        self.content(node, level, false);
+        self.content(node, level, false, hidden.beside(node));
     }
 
-    fn control(&mut self, node: &'a AriaNode, level: usize, text: bool) {
+    fn control(&mut self, node: &'a AriaNode, level: usize, text: bool, hidden: Hidden) {
         let name = node.name.as_deref();
         let value = if let Some(own) = node.text.as_deref()
             && Some(own) != name
@@ -473,10 +502,11 @@ impl<'a, 't> Printer<'a, 't> {
             r#ref: true,
             urls: self.urls,
             text: value.as_deref(),
+            hidden,
         };
         let line = node_line(node, keep);
         let choices = if node.role == "combobox" || node.role == "listbox" {
-            native_options(node, self.on_top)
+            native_options(node, hidden.under(node), self.on_top)
         } else {
             Vec::new()
         };
@@ -488,22 +518,23 @@ impl<'a, 't> Printer<'a, 't> {
             if let Some(header) = self.lines.last_mut() {
                 header.body.push(':');
             }
-            let shown: Vec<&AriaNode> = if text || choices.len() <= LONG_SELECT {
+            let shown: Vec<Choice<'_>> = if text || choices.len() <= LONG_SELECT {
                 choices.clone()
             } else {
                 choices
                     .iter()
                     .copied()
-                    .filter(|option| option.selected == Some(true))
+                    .filter(|choice| choice.option.selected == Some(true))
                     .collect()
             };
-            for option in &shown {
+            for choice in &shown {
                 let keep = Keep {
                     r#ref: false,
                     urls: false,
-                    text: option.text.as_deref(),
+                    text: choice.option.text.as_deref(),
+                    hidden: choice.hidden,
                 };
-                self.element(node_line(option, keep), level + 1);
+                self.element(node_line(choice.option, keep), level + 1);
             }
             if shown.len() < choices.len() {
                 let more = choices.len() - shown.len();
@@ -516,7 +547,7 @@ impl<'a, 't> Printer<'a, 't> {
             }
         }
         // Nested controls get lines of their own; the control's own text is not printed again.
-        self.content(node, level, false);
+        self.content(node, level, false, hidden.beside(node));
     }
 
     /// Upstream's lines for one childless node, at `level`.
@@ -674,21 +705,37 @@ fn separators_only(line: &Line) -> bool {
         })
 }
 
+/// One option of a native select, and what its line inherits of an `aria-hidden` node above it.
+#[derive(Clone, Copy)]
+struct Choice<'a> {
+    option: &'a AriaNode,
+    hidden: Hidden,
+}
+
 /// `nativeOptions`: a native select's options, which carry no refs, in document order.
 /// `<optgroup>`s are `group` nodes, which print no line, so their options are collected through
-/// them. An empty ref counts as none here, as the TypeScript asks `!child.ref`.
-fn native_options<'a>(select: &'a AriaNode, on_top: &OnTop<'a>) -> Vec<&'a AriaNode> {
+/// them, each carrying a hidden group's mark. An empty ref counts as none here, as the
+/// TypeScript asks `!child.ref`. `hidden` is what the select's own children inherit.
+fn native_options<'a>(select: &'a AriaNode, hidden: Hidden, on_top: &OnTop<'a>) -> Vec<Choice<'a>> {
     let mut options = Vec::new();
     // The TypeScript recurses into each group in place; this stack visits in the same order.
-    let mut pending: Vec<Child<'a>> = on_top.children(select).rev().collect();
-    while let Some(child) = pending.pop() {
+    let mut pending: Vec<(Child<'a>, Hidden)> = on_top
+        .children(select)
+        .rev()
+        .map(|child| (child, hidden))
+        .collect();
+    while let Some((child, hidden)) = pending.pop() {
         let Child::Node(node) = child else {
             continue;
         };
         if node.role == "option" && named(node.r#ref.as_deref()).is_none() {
-            options.push(node);
+            options.push(Choice {
+                option: node,
+                hidden,
+            });
         } else if node.role == "group" && !actionable(node) {
-            pending.extend(on_top.children(node).rev());
+            let inside = hidden.beside(node);
+            pending.extend(on_top.children(node).rev().map(|child| (child, inside)));
         }
     }
     options

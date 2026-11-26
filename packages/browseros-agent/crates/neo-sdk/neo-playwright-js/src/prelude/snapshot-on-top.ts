@@ -1,6 +1,14 @@
 /** Rust words the layer once; the runtime pins those words and moves existing live tree nodes. */
+import { beside, type Hidden } from './snapshot-hidden'
 import type { AriaNodeJSON } from './vendored'
 import type { SnapshotResult } from './wire'
+
+/**
+ * A node a whole-view layer holds, printed first and so outside every line around it in the
+ * page: `hidden` is `'carried'` when an `aria-hidden` node is above it in its document, whose
+ * line no longer encloses it.
+ */
+export type Held = { node: AriaNodeJSON; hidden: Hidden }
 
 export function onTopHead(result: SnapshotResult): string[] {
   return (result.onTop ?? []).flatMap((layer) => layer.line.split('\n'))
@@ -30,29 +38,34 @@ export function onTopDelta(previous: string, result: SnapshotResult): string[] {
 
 /** Only the default form uses this projection; full mode keeps the engine's document order. */
 export function onTopContent(result: SnapshotResult): {
-  first: AriaNodeJSON[]
+  first: Held[]
   rest: AriaNodeJSON[]
 } {
   const layers = (result.onTop ?? []).filter((layer) => layer.wholeView)
   if (!layers.length) return { first: [], rest: result.json }
-  const front = new Map(
-    layers.map((layer) => [layer.ref, [] as AriaNodeJSON[]]),
-  )
+  const front = new Map(layers.map((layer) => [layer.ref, [] as Held[]]))
   const nodes: AriaNodeJSON[] = []
   const selected = new Set<AriaNodeJSON>()
-  const pending = [...result.json].reverse()
+  // Each node with what it inherits of an `aria-hidden` node above it once no line encloses it.
+  const pending: Held[] = [...result.json]
+    .reverse()
+    .map((node) => ({ node, hidden: 'no' }))
   while (pending.length) {
-    const node = pending.pop()
-    if (!node) continue
+    const candidate = pending.pop()
+    if (!candidate) continue
+    const { node, hidden } = candidate
     nodes.push(node)
     if (node.inert) continue
     const block = node.onTop ? front.get(node.onTop) : undefined
     if (block) {
       selected.add(node)
-      block.push(node)
-    } else
+      block.push(candidate)
+    } else {
+      const below = beside(hidden, node)
       for (const child of [...(node.children ?? [])].reverse())
-        if (typeof child !== 'string') pending.push(child)
+        if (typeof child !== 'string')
+          pending.push({ node: child, hidden: below })
+    }
   }
   // One iterative projection preserves deep trees, source order and the untouched input.
   const remaining = new Map<AriaNodeJSON, AriaNodeJSON | undefined>()

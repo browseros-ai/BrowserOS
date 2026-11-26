@@ -37,6 +37,7 @@
 //! holds, which line an omission follows), the Rust compares node addresses in the borrowed tree
 //! and a serial number per line.
 
+mod hidden;
 mod neo_text;
 mod node_line;
 mod on_top;

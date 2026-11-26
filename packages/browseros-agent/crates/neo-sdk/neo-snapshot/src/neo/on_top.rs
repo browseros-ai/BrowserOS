@@ -6,6 +6,7 @@ use crate::aria_node::{AriaChild, AriaNode};
 use crate::js;
 use crate::snapshot::Snapshot;
 
+use super::hidden::Hidden;
 use super::rule::Child;
 
 /// What the whole-view layers hold (`onTopContent` in `snapshot-on-top.ts`): Neo's default
@@ -21,9 +22,18 @@ use super::rule::Child;
 pub(super) struct OnTop<'a> {
     /// Each whole-view layer's block in layer order: the nodes marked `onTop` with its ref. Two
     /// layers with one ref each print that block, as the TypeScript's map does.
-    pub(super) first: Vec<&'a AriaNode>,
+    pub(super) first: Vec<Held<'a>>,
     /// The same nodes, by address in the borrowed tree.
     held: HashSet<*const AriaNode>,
+}
+
+/// A node a whole-view layer holds, printed first and so outside every line around it in the page.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Held<'a> {
+    pub(super) node: &'a AriaNode,
+    /// [`Hidden::Carried`] when an `aria-hidden` node is above it in its document, whose line no
+    /// longer encloses it; otherwise [`Hidden::No`].
+    pub(super) hidden: Hidden,
 }
 
 impl<'a> OnTop<'a> {
@@ -38,16 +48,26 @@ impl<'a> OnTop<'a> {
             return Self::default();
         }
         // One block per distinct ref, as a map keyed by ref holds it.
-        let mut blocks: Vec<(&str, Vec<&'a AriaNode>)> = Vec::new();
+        let mut blocks: Vec<(&str, Vec<Held<'a>>)> = Vec::new();
         for layer in &layers {
             if !blocks.iter().any(|(held_by, _)| held_by == layer) {
                 blocks.push((layer, Vec::new()));
             }
         }
         let mut held = HashSet::new();
-        // Depth first in document order, on a stack of its own.
-        let mut pending: Vec<&'a AriaNode> = snapshot.tree.iter().rev().collect();
-        while let Some(node) = pending.pop() {
+        // Depth first in document order, on a stack of its own, each node with what it inherits
+        // of an `aria-hidden` node above it once no line encloses it.
+        let mut pending: Vec<Held<'a>> = snapshot
+            .tree
+            .iter()
+            .rev()
+            .map(|node| Held {
+                node,
+                hidden: Hidden::No,
+            })
+            .collect();
+        while let Some(candidate) = pending.pop() {
+            let Held { node, hidden } = candidate;
             if node.inert == Some(true) {
                 continue;
             }
@@ -59,10 +79,14 @@ impl<'a> OnTop<'a> {
                 .and_then(|mark| blocks.iter_mut().find(|(held_by, _)| *held_by == mark));
             if let Some((_, block)) = block {
                 held.insert(ptr::from_ref(node));
-                block.push(node);
+                block.push(candidate);
             } else {
+                let below = hidden.beside(node);
                 pending.extend(node.children.iter().rev().filter_map(|child| match child {
-                    AriaChild::Node(node) => Some(&**node),
+                    AriaChild::Node(node) => Some(Held {
+                        node,
+                        hidden: below,
+                    }),
                     AriaChild::Text(_) => None,
                 }));
             }

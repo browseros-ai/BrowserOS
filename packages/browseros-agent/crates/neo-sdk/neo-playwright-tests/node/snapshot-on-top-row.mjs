@@ -49,7 +49,9 @@ function checkNotes(text, notes, withBody = false) {
       if (note.controlText && withBody) {
         const ref = /button \[ref=([^\]]+)\]/.exec(following)?.[1]
         assert.ok(ref, text)
-        const line = `- button [ref=${ref}]: ${note.controlText}`
+        // A control under an aria-hidden layer that prints no line says the mark itself.
+        const hidden = note.controlHidden ? '[aria-hidden] ' : ''
+        const line = `- button ${hidden}[ref=${ref}]: ${note.controlText}`
         const at = text.indexOf(line)
         assert.ok(
           at >= 0 && at < text.indexOf('- button "Open information"'),

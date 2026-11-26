@@ -9,11 +9,12 @@ use std::{env, fs};
 use serde_json::json;
 
 use crate::call::Call;
+use crate::cap::MaxTokens;
 use crate::cover_block::cover_block;
 use crate::form::Passed;
 use crate::judges::{Bundles, CaseFile, Generator, NEO_CASES, Shown, count, seed};
 use crate::render::render;
-use crate::snapshot::Snapshot;
+use crate::snapshot::{Layer, Snapshot};
 
 use super::neo_text_as;
 
@@ -47,6 +48,190 @@ fn tests_that_neos_format_prints_every_committed_case() -> Result<(), Box<dyn Er
         "{} of {judged} cases in Neo's format differ from the committed text:\n{}",
         differing.len(),
         differing.join("\n")
+    );
+    Ok(())
+}
+
+/// `getByRole` reaches an element under an `aria-hidden` node only with `includeHidden`, which an
+/// agent asks for only where the line, or a line it is nested under, says `[aria-hidden]`. So
+/// each line printed where such a node printed no line around it carries the mark, in both forms;
+/// a section's content, nested under its marked line, does not need it.
+#[test]
+fn tests_that_a_line_printed_in_place_of_an_aria_hidden_node_carries_its_mark()
+-> Result<(), Box<dyn Error>> {
+    let tree = serde_json::from_value(json!([
+        { "role": "generic", "ariaHidden": true, "children": [
+            { "role": "button", "name": "Next slide", "ref": "e1" },
+            { "role": "heading", "name": "Slide 2", "level": 2, "children": [
+                { "role": "link", "name": "Read more", "ref": "e2" },
+            ] },
+            { "role": "main", "ref": "e3", "children": [
+                { "role": "button", "name": "Inside main", "ref": "e4" },
+            ] },
+        ] },
+        { "role": "button", "name": "Menu", "ref": "e5", "ariaHidden": true, "children": [
+            { "role": "link", "name": "Settings", "ref": "e6" },
+        ] },
+        { "role": "combobox", "name": "Plan", "ref": "e8", "children": [
+            { "role": "option", "name": "Basic" },
+            { "role": "group", "name": "Old", "ariaHidden": true, "children": [
+                { "role": "option", "name": "Legacy", "selected": true },
+            ] },
+        ] },
+        { "role": "button", "name": "After", "ref": "e7" },
+    ]))?;
+    let snapshot = Snapshot {
+        tree,
+        ..Snapshot::default()
+    };
+    let marked = [
+        "- button \"Next slide\" [aria-hidden] [ref=e1]",
+        "- heading \"Slide 2\" [level=2] [aria-hidden]",
+        "- link \"Read more\" [aria-hidden] [ref=e2]",
+        "- main [aria-hidden] [ref=e3]:",
+        "  - button \"Inside main\" [ref=e4]",
+        "- button \"Menu\" [aria-hidden] [ref=e5]",
+        "- link \"Settings\" [aria-hidden] [ref=e6]",
+        "- combobox \"Plan\" [ref=e8]:",
+        "  - option \"Basic\"",
+        "  - option \"Legacy\" [selected] [aria-hidden]",
+        "- button \"After\" [ref=e7]",
+    ]
+    .join("\n");
+    for text in [true, false] {
+        let passed = Passed {
+            text: Some(text),
+            ..Passed::default()
+        };
+        assert_eq!(
+            render(&snapshot, Call::Page(&passed)).text(),
+            marked,
+            "with text: {text}, every line in place of the hidden wrapper, the hidden button and \
+             the hidden option group says [aria-hidden], the section's content, the group's \
+             sibling option and the button after them do not"
+        );
+    }
+    Ok(())
+}
+
+/// A cut prints each kept block after it at the left edge, outside the section lines around it,
+/// so a kept block's own line says a mark that only those lines show. A child document is not
+/// hidden by a mark above its iframe.
+#[test]
+fn tests_that_a_kept_block_printed_after_a_cut_keeps_the_mark_of_a_section_around_it()
+-> Result<(), Box<dyn Error>> {
+    let mut main = vec![];
+    for index in 1..=6 {
+        main.push(json!({ "role": "button", "name": format!("Item {index}"), "ref": format!("e{}", index + 9) }));
+    }
+    main.push(
+        json!({ "role": "dialog", "name": "Confirm", "ref": "e2", "children": [
+        { "role": "button", "name": "OK", "ref": "e3" },
+    ] }),
+    );
+    main.push(json!({ "role": "iframe", "ref": "e4", "children": [
+        { "role": "dialog", "name": "Pay", "ref": "f1e1", "children": [
+            { "role": "button", "name": "Card", "ref": "f1e2" },
+        ] },
+    ] }));
+    let snapshot = Snapshot {
+        tree: serde_json::from_value(json!([
+            { "role": "main", "ref": "e1", "ariaHidden": true, "children": main },
+        ]))?,
+        ..Snapshot::default()
+    };
+    let items: Vec<String> = (1..=6)
+        .map(|index| format!("  - button \"Item {index}\" [ref=e{}]", index + 9))
+        .collect();
+    let in_place = [
+        vec!["- main [aria-hidden] [ref=e1]:".to_owned()],
+        items.clone(),
+        [
+            "  - dialog \"Confirm\" [aria-hidden] [ref=e2]:",
+            "    - button \"OK\" [ref=e3]",
+            "  - iframe [ref=e4]:",
+            "    - dialog \"Pay\" [ref=f1e1]:",
+            "      - button \"Card\" [ref=f1e2]",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    ]
+    .concat()
+    .join("\n");
+    let cut = [
+        vec!["- main [aria-hidden] [ref=e1]:".to_owned()],
+        items.get(..3).ok_or("six items")?.to_vec(),
+        [
+            "# cut: 4 more lines (4 with refs); the whole snapshot is about 100 tokens. \
+             page.getByRef('e4').ariaSnapshot() shows the iframe section, which is not shown \
+             above. Or pass a larger maxTokens.",
+            "- dialog \"Confirm\" [aria-hidden] [ref=e2]:",
+            "  - button \"OK\" [ref=e3]",
+            "- dialog \"Pay\" [ref=f1e1]:",
+            "  - button \"Card\" [ref=f1e2]",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    ]
+    .concat()
+    .join("\n");
+    for (max_tokens, expected) in [(None, in_place), (Some(30.0), cut)] {
+        let passed = Passed {
+            text: Some(false),
+            max_tokens: max_tokens.and_then(MaxTokens::new),
+            ..Passed::default()
+        };
+        assert_eq!(
+            render(&snapshot, Call::Page(&passed)).text(),
+            expected,
+            "with maxTokens {max_tokens:?}, the dialog in the hidden main says [aria-hidden] in \
+             place and at the left edge, the one in the iframe's document does not"
+        );
+    }
+    Ok(())
+}
+
+/// What a whole-view layer holds prints first, outside every line around it in the page, so it
+/// says the mark of an `aria-hidden` node above it. A child document is not hidden by a mark on
+/// its iframe.
+#[test]
+fn tests_that_what_a_whole_view_layer_holds_keeps_the_mark_of_a_node_above_it()
+-> Result<(), Box<dyn Error>> {
+    let snapshot = Snapshot {
+        tree: serde_json::from_value(json!([
+            { "role": "generic", "ariaHidden": true, "children": [
+                { "role": "generic", "children": [
+                    { "role": "dialog", "name": "Promo", "ref": "e5", "onTop": "e5", "children": [
+                        { "role": "button", "name": "Close", "ref": "e6" },
+                    ] },
+                ] },
+            ] },
+            { "role": "iframe", "ref": "e8", "ariaHidden": true, "children": [
+                { "role": "button", "name": "Framed", "ref": "f1e1", "onTop": "e5" },
+            ] },
+            { "role": "button", "name": "Page", "ref": "e7" },
+        ]))?,
+        layers: vec![Layer {
+            r#ref: "e5".to_owned(),
+            line: "# on top: dialog \"Promo\" [ref=e5] over the whole view".to_owned(),
+            whole_view: true,
+        }],
+        ..Snapshot::default()
+    };
+    let expected = [
+        "# on top: dialog \"Promo\" [ref=e5] over the whole view",
+        "- dialog \"Promo\" [aria-hidden] [ref=e5]:",
+        "  - button \"Close\" [ref=e6]",
+        "- button \"Framed\" [ref=f1e1]",
+        "- iframe [aria-hidden] [ref=e8]",
+        "- button \"Page\" [ref=e7]",
+    ]
+    .join("\n");
+    assert_eq!(
+        render(&snapshot, Call::Page(&Passed::default())).text(),
+        expected,
+        "the dialog lifted out of the hidden wrapper says [aria-hidden], the button lifted out \
+         of the hidden iframe's document does not"
     );
     Ok(())
 }

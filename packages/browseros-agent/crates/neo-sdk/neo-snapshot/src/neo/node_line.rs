@@ -1,6 +1,7 @@
 use crate::aria_node::AriaNode;
 use crate::playwright::NodeAlone;
 
+use super::hidden::Hidden;
 use super::rule::interactive;
 
 /// What one line keeps of its node beyond the key's role, name and marks.
@@ -13,12 +14,15 @@ pub(super) struct Keep<'a> {
     /// The text after the key: a value, a label, a kept block's only text. `None` prints none,
     /// whatever the node's own `text` is.
     pub(super) text: Option<&'a str>,
+    /// What the line inherits of an `aria-hidden` node above it.
+    pub(super) hidden: Hidden,
 }
 
 /// `copy`: Playwright's node for one line of Neo's format, for upstream's printer. No children;
 /// the ref only where `keep` says; `[cursor=pointer]` only beside a kept ref on a non-interactive
 /// role, where it is what says the node is clickable; `/url` only when `keep` asks for it; the
-/// text `keep` names. `/placeholder` stays, as Playwright prints it.
+/// text `keep` names; `[aria-hidden]` where the node has it or `keep` carries it. `/placeholder`
+/// stays, as Playwright prints it.
 pub(super) fn node_line<'a>(node: &'a AriaNode, keep: Keep<'a>) -> NodeAlone<'a> {
     let r#ref = node.r#ref.as_deref().filter(|_| keep.r#ref);
     NodeAlone {
@@ -29,6 +33,10 @@ pub(super) fn node_line<'a>(node: &'a AriaNode, keep: Keep<'a>) -> NodeAlone<'a>
             .filter(|_| r#ref.is_some() && !interactive(&node.role)),
         url: node.url.as_deref().filter(|_| keep.urls),
         text: keep.text,
+        aria_hidden: match keep.hidden {
+            Hidden::No | Hidden::Enclosed => node.aria_hidden,
+            Hidden::Carried => Some(true),
+        },
         ..NodeAlone::from(node)
     }
 }
