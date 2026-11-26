@@ -2865,6 +2865,60 @@ mod tests {
         Ok(())
     }
 
+    /// Upstream's default `aria` visibility stops at an element hidden for aria, so a
+    /// `visibility: visible` child of a `visibility: hidden` parent never prints; ai mode shows it.
+    /// The cut needs the capture to carry the hidden parent, which v7 keeps for some markup only.
+    #[test]
+    fn tests_that_default_mode_skips_the_visible_children_of_a_hidden_parent()
+    -> Result<(), Box<dyn Error>> {
+        let body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 400, 200)
+            .child(
+                NodeBuilder::container()
+                    .dom_id(5)
+                    .visibility_hidden(true)
+                    .bounding_box(0, 0, 400, 100)
+                    .child(
+                        NodeBuilder::container()
+                            .dom_id(6)
+                            .bounding_box(0, 0, 400, 100)
+                            .child(
+                                NodeBuilder::form_control(FormControlType::ButtonButton)
+                                    .dom_id(7)
+                                    .tag("button")
+                                    .bounding_box(0, 0, 80, 24)
+                                    .child(NodeBuilder::text("Button")),
+                            ),
+                    ),
+            );
+        let apc = ApcBuilder::new("doc-hidden")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let body_id = tree
+            .node_by_key(&NodeKey::new(
+                DocToken::new("doc-hidden").ok_or("a token")?,
+                DomNodeId::new(3),
+            ))
+            .map(TreeNode::id)
+            .ok_or("the body")?;
+        for root in [AriaRoot::Page, AriaRoot::Subtree(body_id)] {
+            let default = tree.aria(AriaAsk::default_mode().with_root(root))?;
+            assert!(
+                find_by_role_name(default.nodes(), "button", Some("Button")).is_none(),
+                "default mode stops at the hidden parent, as upstream's 'aria' visibility does"
+            );
+        }
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        assert!(
+            find_by_role_name(ai.nodes(), "button", Some("Button")).is_some(),
+            "ai mode shows it"
+        );
+        Ok(())
+    }
+
     #[test]
     fn default_mode_omits_refs_active_cursor_and_ai_distillation() -> Result<(), Box<dyn Error>> {
         let tree = build_rich_tree()?;
