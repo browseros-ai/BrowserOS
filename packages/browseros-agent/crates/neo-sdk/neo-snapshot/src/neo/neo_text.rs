@@ -1,10 +1,11 @@
-use crate::cap::{Offer, about_tokens, as_number, cap, join, joined_units, number, partial_head};
+use crate::aria_source::{AriaSource, SnapshotView};
+use crate::cap::{LineCap, Offer, UnitsSink, about_tokens, as_number, join, number, partial_head};
 use crate::form::{Form, Passed, TextForm};
-use crate::snapshot::Snapshot;
 
-use super::on_top::on_top_head;
+use super::on_top::{OnTop, on_top_head};
+use super::printer::OmittedStats;
 use super::unmarked_head::unmarked_head;
-use super::walk::{WalkForm, Walked, walk};
+use super::walk::{WalkForm, walk_into};
 
 /// The longest text form Neo's default format returns when the script did not choose, in tokens:
 /// past it the page's text is left out under the `# text left out:` notice. Part of the
@@ -28,33 +29,41 @@ pub(crate) struct NeoText {
 /// `text: false`, the page is walked with its text first; left out by the script, the text is
 /// kept while those lines join to at most 12,000 units, and is otherwise left out under the
 /// notice. The walk is reused where the form needs it.
-pub(crate) fn neo_text(snapshot: &Snapshot, passed: &Passed) -> NeoText {
+pub(crate) fn neo_text_source<'a, S: AriaSource<'a>>(
+    view: &SnapshotView<'a, S>,
+    passed: &Passed,
+) -> NeoText {
     let urls = passed.urls.unwrap_or(false);
     let inert = passed.inert == Some(true);
+    let max_tokens = passed.max_tokens.unwrap_or_default();
+    let on_top = OnTop::of(view);
+    let abandon_above = passed.text.is_none().then_some(TEXT_LIMIT_UNITS);
     let walked = (passed.text != Some(false)).then(|| {
-        walk(
-            snapshot,
+        walk_into(
+            view,
+            &on_top,
             WalkForm {
                 text: true,
                 urls,
                 inert,
             },
+            LineCap::with_abandon(max_tokens.units(), abandon_above),
         )
     });
     let text = match (&walked, passed.text) {
         (None, _) => TextForm::Never,
         (Some(_), Some(true)) => TextForm::Always,
-        (Some(walked), _) if joined_units(&walked.lines) <= TEXT_LIMIT_UNITS => TextForm::Kept,
+        (Some((cap, _)), _) if cap.joined_units() <= TEXT_LIMIT_UNITS => TextForm::Kept,
         (Some(_), _) => TextForm::LeftOut,
     };
     let form = Form {
         text,
         urls,
-        max_tokens: passed.max_tokens.unwrap_or_default(),
+        max_tokens,
         inert,
     };
     NeoText {
-        text: render_form(snapshot, &form, walked),
+        text: render_form_source(view, &on_top, &form, walked),
         form,
     }
 }
@@ -63,8 +72,12 @@ pub(crate) fn neo_text(snapshot: &Snapshot, passed: &Passed) -> NeoText {
 /// again. `Kept` and `Always` print the page's text whatever its length, `LeftOut` prints the
 /// notice whatever its length, `Never` neither. A delta renders the new snapshot in its
 /// baseline's form, so the two differ only where the page does.
-pub(crate) fn neo_text_as(snapshot: &Snapshot, form: &Form) -> String {
-    render_form(snapshot, form, None)
+pub(crate) fn neo_text_as_source<'a, S: AriaSource<'a>>(
+    view: &SnapshotView<'a, S>,
+    form: &Form,
+) -> String {
+    let on_top = OnTop::of(view);
+    render_form_source(view, &on_top, form, None)
 }
 
 /// `renderForm`: `form`'s text, reusing the text form's walk when the caller made it. In order:
@@ -84,45 +97,73 @@ pub(crate) fn neo_text_as(snapshot: &Snapshot, form: &Form) -> String {
 /// number is what the text form's lines would add, so a `LeftOut` form walks the page with its
 /// text too, here as well when a delta renders a stored form: saving that walk would print
 /// another number.
-fn render_form(snapshot: &Snapshot, form: &Form, walked: Option<Walked>) -> String {
+fn render_form_source<'a, S: AriaSource<'a>>(
+    view: &SnapshotView<'a, S>,
+    on_top: &OnTop<S::Id, S::Key>,
+    form: &Form,
+    walked: Option<(LineCap, OmittedStats)>,
+) -> String {
     let text = matches!(form.text, TextForm::Kept | TextForm::Always);
     let walk_form = |text| WalkForm {
         text,
         urls: form.urls,
         inert: form.inert,
     };
-    let (shown, walked) = match walked {
-        Some(walked) if text => (walked, None),
-        walked => (walk(snapshot, walk_form(text)), walked),
+    let (shown_cap, omitted, text_form_units) = match walked {
+        Some((cap, omitted)) if text => (cap, omitted, None),
+        Some((cap, _)) => {
+            let text_units = cap.joined_units();
+            drop(cap);
+            let (shown_cap, omitted) = walk_into(
+                view,
+                on_top,
+                walk_form(false),
+                LineCap::new(form.max_tokens.units()),
+            );
+            (shown_cap, omitted, Some(text_units))
+        }
+        None => {
+            let (shown_cap, omitted) = walk_into(
+                view,
+                on_top,
+                walk_form(text),
+                LineCap::new(form.max_tokens.units()),
+            );
+            (shown_cap, omitted, None)
+        }
     };
-    let inert_head = (shown.skipped > 0).then(|| {
-        let with_refs = shown.omitted.iter().filter(|line| line.has_ref).count();
+    let inert_head = (omitted.skipped > 0).then(|| {
         format!(
-            "# not listed: {} lines ({with_refs} with refs) of this page are inert: nothing in \
-             them can be clicked or typed into now. Pass {{ inert: true }} to list them.",
-            shown.omitted.len()
+            "# not listed: {} lines ({} with refs) of this page are inert: nothing in them can \
+             be clicked or typed into now. Pass {{ inert: true }} to list them.",
+            omitted.lines, omitted.with_refs
         )
     });
     let notice = (form.text == TextForm::LeftOut).then(|| {
-        let text_form = walked.unwrap_or_else(|| walk(snapshot, walk_form(true)));
-        let left =
-            as_number(joined_units(&text_form.lines)) - as_number(joined_units(&shown.lines));
+        let text_units = text_form_units.unwrap_or_else(|| {
+            let (units_sink, _) = walk_into(
+                view,
+                on_top,
+                WalkForm {
+                    text: true,
+                    urls: form.urls,
+                    inert: form.inert,
+                },
+                UnitsSink::default(),
+            );
+            units_sink.joined_units()
+        });
+        let left = as_number(text_units) - as_number(shown_cap.joined_units());
         format!(
             "# text left out: about {} tokens. Pass {{ text: true }} to include it.",
             number(about_tokens(left))
         )
     });
-    let pinned = partial_head(snapshot);
-    let body = cap(
-        notice.as_slice(),
-        pinned.as_slice(),
-        &shown.lines,
-        form.max_tokens.units(),
-        Offer::Neo,
-    );
-    let unmarked = unmarked_head(snapshot);
+    let pinned = partial_head(view.closed_roots);
+    let body = shown_cap.finish(notice.as_slice(), pinned.as_slice(), Offer::Neo);
+    let unmarked = unmarked_head(view.unmarked);
     join(
-        on_top_head(snapshot)
+        on_top_head(view.layers)
             .chain(unmarked.as_deref())
             .chain(inert_head.as_deref())
             .chain(Some(body.as_str()).filter(|body| !body.is_empty())),

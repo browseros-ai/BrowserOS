@@ -3,6 +3,9 @@ use std::borrow::Cow;
 /// `s.length`: UTF-16 code units, one for each character up to U+FFFF and two above it. Rust's
 /// `str::len` counts UTF-8 bytes, and `chars().count()` counts characters.
 pub(crate) fn units(s: &str) -> usize {
+    if s.is_ascii() {
+        return s.len();
+    }
     s.chars().map(char::len_utf16).sum()
 }
 

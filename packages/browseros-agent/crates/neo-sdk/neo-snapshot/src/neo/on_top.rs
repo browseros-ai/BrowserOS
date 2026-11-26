@@ -1,44 +1,54 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::ptr;
+use std::hash::Hash;
 
-use crate::aria_node::{AriaChild, AriaNode};
+use crate::aria_source::{AriaSource, SnapshotView, SourceChild};
 use crate::js;
-use crate::snapshot::Snapshot;
+use crate::snapshot::Layer;
 
 use super::hidden::Hidden;
-use super::rule::Child;
 
 /// What the whole-view layers hold (`onTopContent` in `snapshot-on-top.ts`): Neo's default
 /// format prints it first, then the rest of the page without it.
 ///
 /// The TypeScript projects a copy of the tree with those nodes removed and finds them again by
 /// object identity. Here the walk borrows the tree as it is and leaves out the held nodes as it
-/// meets them, by address: every child list the walk, the omissions and the label rules read goes
-/// through [`OnTop::children`], so each sees the children the projection would hold. The search
-/// never enters a held node or an inert one, so no held node lies inside either, and a printer
-/// walking inside them sees the same children with or without the filter.
-#[derive(Debug, Default)]
-pub(super) struct OnTop<'a> {
+/// meets them, by identity key: every child list the walk, the omissions and the label rules read
+/// goes through [`OnTop::children`], so each sees the children the projection would hold. The
+/// search never enters a held node or an inert one, so no held node lies inside either, and a
+/// printer walking inside them sees the same children with or without the filter.
+#[derive(Debug)]
+pub(super) struct OnTop<Id, Key> {
     /// Each whole-view layer's block in layer order: the nodes marked `onTop` with its ref. Two
     /// layers with one ref each print that block, as the TypeScript's map does.
-    pub(super) first: Vec<Held<'a>>,
-    /// The same nodes, by address in the borrowed tree.
-    held: HashSet<*const AriaNode>,
+    pub(super) first: Vec<Held<Id>>,
+    /// The same nodes, by identity key in the source.
+    held: HashSet<Key>,
 }
 
 /// A node a whole-view layer holds, printed first and so outside every line around it in the page.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Held<'a> {
-    pub(super) node: &'a AriaNode,
+pub(super) struct Held<Id> {
+    pub(super) id: Id,
     /// [`Hidden::Carried`] when an `aria-hidden` node is above it in its document, whose line no
     /// longer encloses it; otherwise [`Hidden::No`].
     pub(super) hidden: Hidden,
 }
 
-impl<'a> OnTop<'a> {
-    pub(super) fn of(snapshot: &'a Snapshot) -> Self {
-        let layers: Vec<&str> = snapshot
+impl<Id, Key> Default for OnTop<Id, Key> {
+    fn default() -> Self {
+        Self {
+            first: Vec::new(),
+            held: HashSet::new(),
+        }
+    }
+}
+
+impl<Id: Copy, Key: Copy + Eq + Hash> OnTop<Id, Key> {
+    pub(super) fn of<'a, S: AriaSource<'a, Id = Id, Key = Key>>(
+        view: &SnapshotView<'a, S>,
+    ) -> Self {
+        let layers: Vec<&str> = view
             .layers
             .iter()
             .filter(|layer| layer.whole_view)
@@ -48,7 +58,7 @@ impl<'a> OnTop<'a> {
             return Self::default();
         }
         // One block per distinct ref, as a map keyed by ref holds it.
-        let mut blocks: Vec<(&str, Vec<Held<'a>>)> = Vec::new();
+        let mut blocks: Vec<(&str, Vec<Held<Id>>)> = Vec::new();
         for layer in &layers {
             if !blocks.iter().any(|(held_by, _)| held_by == layer) {
                 blocks.push((layer, Vec::new()));
@@ -57,38 +67,43 @@ impl<'a> OnTop<'a> {
         let mut held = HashSet::new();
         // Depth first in document order, on a stack of its own, each node with what it inherits
         // of an `aria-hidden` node above it once no line encloses it.
-        let mut pending: Vec<Held<'a>> = snapshot
+        let mut pending: Vec<Held<Id>> = view
             .tree
-            .iter()
+            .roots()
             .rev()
-            .map(|node| Held {
-                node,
+            .map(|id| Held {
+                id,
                 hidden: Hidden::No,
             })
             .collect();
         while let Some(candidate) = pending.pop() {
-            let Held { node, hidden } = candidate;
+            let Held { id, hidden } = candidate;
+            let node = view.tree.node(id);
             if node.inert == Some(true) {
                 continue;
             }
             // `node.onTop ? front.get(node.onTop) : undefined`: an empty mark selects nothing.
             let block = node
                 .on_top
-                .as_deref()
                 .filter(|mark| !mark.is_empty())
                 .and_then(|mark| blocks.iter_mut().find(|(held_by, _)| *held_by == mark));
             if let Some((_, block)) = block {
-                held.insert(ptr::from_ref(node));
+                held.insert(view.tree.key(id));
                 block.push(candidate);
-            } else {
-                let below = hidden.beside(node);
-                pending.extend(node.children.iter().rev().filter_map(|child| match child {
-                    AriaChild::Node(node) => Some(Held {
-                        node,
-                        hidden: below,
-                    }),
-                    AriaChild::Text(_) => None,
-                }));
+            } else if node.has_children {
+                let below = hidden.beside(&node);
+                pending.extend(
+                    view.tree
+                        .children(id)
+                        .rev()
+                        .filter_map(|child| match child {
+                            SourceChild::Node(child_id) => Some(Held {
+                                id: child_id,
+                                hidden: below,
+                            }),
+                            SourceChild::Text(_) => None,
+                        }),
+                );
             }
         }
         let mut first = Vec::new();
@@ -100,40 +115,40 @@ impl<'a> OnTop<'a> {
         Self { first, held }
     }
 
-    /// `node`'s children without the held nodes, in document order.
-    pub(super) fn children(
-        &self,
-        node: &'a AriaNode,
-    ) -> impl DoubleEndedIterator<Item = Child<'a>> + '_ {
-        self.without_held(node.children.iter().map(Child::from))
+    /// `id`'s children without the held nodes, in document order.
+    pub(super) fn children<'a, 's, S: AriaSource<'a, Id = Id, Key = Key>>(
+        &'s self,
+        source: &'s S,
+        id: Id,
+    ) -> impl DoubleEndedIterator<Item = SourceChild<'a, Id>> + 's {
+        self.without_held(source, source.children(id))
     }
 
     /// The page's top-level nodes without the held nodes, in document order.
-    pub(super) fn rest(
-        &self,
-        tree: &'a [AriaNode],
-    ) -> impl DoubleEndedIterator<Item = Child<'a>> + '_ {
-        self.without_held(tree.iter().map(Child::Node))
+    pub(super) fn rest<'a, 's, S: AriaSource<'a, Id = Id, Key = Key>>(
+        &'s self,
+        source: &'s S,
+    ) -> impl DoubleEndedIterator<Item = SourceChild<'a, Id>> + 's {
+        self.without_held(source, source.roots().map(SourceChild::Node))
     }
 
-    fn without_held(
-        &self,
-        children: impl DoubleEndedIterator<Item = Child<'a>>,
-    ) -> impl DoubleEndedIterator<Item = Child<'a>> {
+    fn without_held<'a, 's, S: AriaSource<'a, Id = Id, Key = Key>>(
+        &'s self,
+        source: &'s S,
+        children: impl DoubleEndedIterator<Item = SourceChild<'a, Id>> + 's,
+    ) -> impl DoubleEndedIterator<Item = SourceChild<'a, Id>> + 's {
+        let has_held = !self.held.is_empty();
         children.filter(move |child| match child {
-            Child::Node(node) => !self.held.contains(&ptr::from_ref(*node)),
-            Child::Text(_) => true,
+            SourceChild::Node(id) => !has_held || !self.held.contains(&source.key(*id)),
+            SourceChild::Text(_) => true,
         })
     }
 }
 
 /// `onTopHead`: each layer's line, split at its line breaks, in layer order. Neo's formats (the
 /// default format and `mode: 'full'`) print them before everything else and outside the cap.
-pub(crate) fn on_top_head(snapshot: &Snapshot) -> impl Iterator<Item = &str> {
-    snapshot
-        .layers
-        .iter()
-        .flat_map(|layer| layer.line.split('\n'))
+pub(crate) fn on_top_head(layers: &[Layer]) -> impl Iterator<Item = &str> {
+    layers.iter().flat_map(|layer| layer.line.split('\n'))
 }
 
 /// `isOnTopLine`: a line that says what is on top of the page, now or no longer. It is a fact of
@@ -152,14 +167,11 @@ pub(crate) fn is_on_top_line(line: &str) -> bool {
 /// The earlier layers are read back from `previous`, the text the caller was given, so a delta
 /// can only say a layer is gone that the caller saw. neo-playwright words every layer line
 /// (`action::on_top_line`), and this reads those words: a change to them is a change to both.
-pub(crate) fn on_top_delta<'a>(previous: &'a str, snapshot: &'a Snapshot) -> Vec<Cow<'a, str>> {
-    let mut lines: Vec<Cow<'a, str>> = on_top_head(snapshot).map(Cow::Borrowed).collect();
+pub(crate) fn on_top_delta<'a>(previous: &'a str, layers: &'a [Layer]) -> Vec<Cow<'a, str>> {
+    let mut lines: Vec<Cow<'a, str>> = on_top_head(layers).map(Cow::Borrowed).collect();
     for line in previous.split('\n') {
         if let Some(named) = named_layer(line)
-            && !snapshot
-                .layers
-                .iter()
-                .any(|layer| layer.r#ref == named.r#ref)
+            && !layers.iter().any(|layer| layer.r#ref == named.r#ref)
         {
             lines.push(Cow::Owned(format!("# no longer on top: {}", named.words)));
         }

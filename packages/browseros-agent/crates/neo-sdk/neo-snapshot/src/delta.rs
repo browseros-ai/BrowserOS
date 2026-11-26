@@ -32,5 +32,5 @@ mod list_changes;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use delta_text::{DeltaText, delta_text};
+pub(crate) use delta_text::{DeltaText, delta_text_source};
 pub use earlier::{Baseline, Earlier};

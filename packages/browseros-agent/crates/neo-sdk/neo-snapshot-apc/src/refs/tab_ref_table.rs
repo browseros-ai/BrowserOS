@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::{BuildHasher, Hasher};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::tree::{DocSeq, DocToken, NodeKey, Role};
+use crate::tree::{DocSeq, DocToken, DomNodeId, NodeKey, Role};
 
 /// Default upper bound on retained node records per tab before evicting the oldest unseen entries.
 pub const DEFAULT_MAX_RECORDS: usize = 200_000;
@@ -25,6 +26,13 @@ impl RefKind {
         match self {
             Self::Snapshot => 'e',
             Self::Minted => 'n',
+        }
+    }
+
+    pub(crate) const fn prefix_byte(self) -> u8 {
+        match self {
+            Self::Snapshot => b'e',
+            Self::Minted => b'n',
         }
     }
 }
@@ -303,6 +311,73 @@ impl SeqCounters {
     }
 }
 
+/// Fast non-cryptographic integer hasher for internal `DomNodeId` and `Ref` lookup tables.
+#[derive(Clone, Default)]
+struct FastIntBuildHasher;
+
+impl BuildHasher for FastIntBuildHasher {
+    type Hasher = FastIntHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        FastIntHasher(0)
+    }
+}
+
+struct FastIntHasher(u64);
+
+impl FastIntHasher {
+    #[inline]
+    fn mix(&mut self, value: u64) {
+        self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl Hasher for FastIntHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.mix(u64::from(byte));
+        }
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.mix(u64::from(i));
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.mix(u64::from(i));
+    }
+
+    #[inline]
+    fn write_i32(&mut self, i: i32) {
+        self.mix(u64::from(i.cast_unsigned()));
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.mix(i);
+    }
+
+    #[inline]
+    fn write_isize(&mut self, i: isize) {
+        self.mix(u64::try_from(i.cast_unsigned()).unwrap_or(0));
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.mix(u64::try_from(i).unwrap_or(0));
+    }
+}
+
+type FastIntMap<K, V> = HashMap<K, V, FastIntBuildHasher>;
+
 /// Per-tab stable reference registry mapping DOM [`NodeKey`]s to canonical [`Ref`]s across
 /// repeated and delta snapshots.
 ///
@@ -312,8 +387,8 @@ impl SeqCounters {
 /// past [`Self::max_records`]. Its manual `Debug` implementation prints counts only so cached
 /// accessible names never leak into logs.
 pub struct TabRefTable {
-    by_key: HashMap<NodeKey, NodeRecord>,
-    by_ref: HashMap<Ref, NodeKey>,
+    by_doc: HashMap<DocToken, FastIntMap<DomNodeId, NodeRecord>>,
+    by_ref: FastIntMap<Ref, NodeKey>,
     doc_to_seq: HashMap<DocToken, DocSeq>,
     seq_to_doc: HashMap<DocSeq, DocState>,
     seq_counters: HashMap<DocSeq, SeqCounters>,
@@ -321,6 +396,88 @@ pub struct TabRefTable {
     next_auto_seq: u32,
     tick: u64,
     max_records: usize,
+}
+
+/// Document-scoped ref assignment handle into a [`TabRefTable`].
+///
+/// Resolves the document's record map, sequence counters, and capture epoch once per document so
+/// snapshot emission hashes only the 4-byte [`DomNodeId`] per node instead of hashing and cloning
+/// the owning [`DocToken`] on every element.
+pub(crate) struct DocRefSession<'a> {
+    doc: DocToken,
+    doc_seq: DocSeq,
+    epoch: u64,
+    records: &'a mut FastIntMap<DomNodeId, NodeRecord>,
+    by_ref: &'a mut FastIntMap<Ref, NodeKey>,
+    counters: &'a mut SeqCounters,
+    tick: &'a mut u64,
+}
+
+impl DocRefSession<'_> {
+    pub(crate) fn assign(
+        &mut self,
+        dom_id: DomNodeId,
+        role: &str,
+        name: &str,
+        click_proxy: Option<NodeKey>,
+    ) -> Ref {
+        *self.tick = self.tick.saturating_add(1);
+        let tick = *self.tick;
+
+        if let Some(record) = self.records.get_mut(&dom_id) {
+            if record.doc_seq == self.doc_seq
+                && let Some(current) = record.current_ref
+                && record
+                    .last_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.matches(role, name))
+            {
+                record.click_proxy = click_proxy;
+                record.last_seen_doc_epoch = self.epoch;
+                record.last_seen_tick = tick;
+                return current;
+            }
+
+            let fresh = Ref::new(
+                self.doc_seq,
+                RefKind::Snapshot,
+                self.counters.alloc(RefKind::Snapshot),
+            );
+            if let Some(previous) = record.current_ref.replace(fresh) {
+                record.aliases.push(previous);
+            }
+            record.doc_seq = self.doc_seq;
+            record.last_identity = Some(PrintedIdentity::new(role, name));
+            record.click_proxy = click_proxy;
+            record.last_seen_doc_epoch = self.epoch;
+            record.last_seen_tick = tick;
+            self.by_ref
+                .insert(fresh, NodeKey::new(self.doc.clone(), dom_id));
+            return fresh;
+        }
+
+        let fresh = Ref::new(
+            self.doc_seq,
+            RefKind::Snapshot,
+            self.counters.alloc(RefKind::Snapshot),
+        );
+        self.records.insert(
+            dom_id,
+            NodeRecord {
+                doc_seq: self.doc_seq,
+                current_ref: Some(fresh),
+                minted_ref: None,
+                aliases: Vec::new(),
+                last_identity: Some(PrintedIdentity::new(role, name)),
+                click_proxy,
+                last_seen_doc_epoch: self.epoch,
+                last_seen_tick: tick,
+            },
+        );
+        self.by_ref
+            .insert(fresh, NodeKey::new(self.doc.clone(), dom_id));
+        fresh
+    }
 }
 
 impl TabRefTable {
@@ -334,8 +491,8 @@ impl TabRefTable {
     #[must_use]
     pub fn with_max_records(max_records: usize) -> Self {
         Self {
-            by_key: HashMap::new(),
-            by_ref: HashMap::new(),
+            by_doc: HashMap::new(),
+            by_ref: HashMap::with_hasher(FastIntBuildHasher),
             doc_to_seq: HashMap::new(),
             seq_to_doc: HashMap::new(),
             seq_counters: HashMap::new(),
@@ -355,7 +512,7 @@ impl TabRefTable {
     /// Number of live DOM node records currently tracked by this table.
     #[must_use]
     pub fn record_count(&self) -> usize {
-        self.by_key.len()
+        self.by_doc.values().map(HashMap::len).sum()
     }
 
     /// Number of live [`Ref`] entries (including aliases and `n`-refs) currently resolvable.
@@ -401,6 +558,31 @@ impl TabRefTable {
         seq
     }
 
+    /// Opens a document-scoped assignment session bound to `(doc, doc_seq)`.
+    pub(crate) fn doc_session(&mut self, doc: &DocToken, doc_seq: DocSeq) -> DocRefSession<'_> {
+        if self.doc_to_seq.get(doc) != Some(&doc_seq) {
+            self.bind_assigned_seq(doc, doc_seq);
+        }
+        let epoch = self
+            .seq_to_doc
+            .get(&doc_seq)
+            .map_or(0, |state| state.capture_epoch);
+        let records = self.by_doc.entry(doc.clone()).or_default();
+        let counters = self
+            .seq_counters
+            .entry(doc_seq)
+            .or_insert_with(SeqCounters::new);
+        DocRefSession {
+            doc: doc.clone(),
+            doc_seq,
+            epoch,
+            records,
+            by_ref: &mut self.by_ref,
+            counters,
+            tick: &mut self.tick,
+        }
+    }
+
     /// Assigns or reuses a snapshot (`e`-ref) for `key` given its printed `(role, name)` and
     /// optional `click_proxy`.
     ///
@@ -415,58 +597,8 @@ impl TabRefTable {
         name: &str,
         click_proxy: Option<NodeKey>,
     ) -> Ref {
-        if self.doc_to_seq.get(&key.doc) != Some(&doc_seq) {
-            self.bind_assigned_seq(&key.doc, doc_seq);
-        }
-        let epoch = self
-            .seq_to_doc
-            .get(&doc_seq)
-            .map_or(0, |state| state.capture_epoch);
-        let tick = self.next_tick();
-
-        if let Some(record) = self.by_key.get_mut(key) {
-            if record.doc_seq == doc_seq
-                && let Some(current) = record.current_ref
-                && record
-                    .last_identity
-                    .as_ref()
-                    .is_some_and(|identity| identity.matches(role, name))
-            {
-                record.click_proxy = click_proxy;
-                record.last_seen_doc_epoch = epoch;
-                record.last_seen_tick = tick;
-                return current;
-            }
-
-            let fresh = Self::mint_ref_from(&mut self.seq_counters, doc_seq, RefKind::Snapshot);
-            if let Some(previous) = record.current_ref.replace(fresh) {
-                record.aliases.push(previous);
-            }
-            record.doc_seq = doc_seq;
-            record.last_identity = Some(PrintedIdentity::new(role, name));
-            record.click_proxy = click_proxy;
-            record.last_seen_doc_epoch = epoch;
-            record.last_seen_tick = tick;
-            self.by_ref.insert(fresh, key.clone());
-            return fresh;
-        }
-
-        let fresh = Self::mint_ref_from(&mut self.seq_counters, doc_seq, RefKind::Snapshot);
-        self.by_key.insert(
-            key.clone(),
-            NodeRecord {
-                doc_seq,
-                current_ref: Some(fresh),
-                minted_ref: None,
-                aliases: Vec::new(),
-                last_identity: Some(PrintedIdentity::new(role, name)),
-                click_proxy,
-                last_seen_doc_epoch: epoch,
-                last_seen_tick: tick,
-            },
-        );
-        self.by_ref.insert(fresh, key.clone());
-        fresh
+        self.doc_session(&key.doc, doc_seq)
+            .assign(key.node, role, name, click_proxy)
     }
 
     /// Finalizes a snapshot capture pass for `doc`; `present` says which keys the capture holds.
@@ -483,36 +615,47 @@ impl TabRefTable {
         {
             let epoch = state.capture_epoch;
             let tick = self.next_tick();
-            for (key, record) in &mut self.by_key {
-                if key.doc != *doc || record.last_seen_doc_epoch >= epoch {
-                    continue;
-                }
-                if present(key) {
-                    record.last_seen_doc_epoch = epoch;
-                    record.last_seen_tick = tick;
-                } else {
-                    record.last_identity = None;
+            if let Some(records) = self.by_doc.get_mut(doc) {
+                for (&dom_id, record) in records {
+                    if record.last_seen_doc_epoch >= epoch {
+                        continue;
+                    }
+                    let key = NodeKey::new(doc.clone(), dom_id);
+                    if present(&key) {
+                        record.last_seen_doc_epoch = epoch;
+                        record.last_seen_tick = tick;
+                    } else {
+                        record.last_identity = None;
+                    }
                 }
             }
         }
 
-        if self.by_key.len() <= self.max_records {
+        let total = self.record_count();
+        if total <= self.max_records {
             return;
         }
-        let excess = self.by_key.len() - self.max_records;
+        let excess = total - self.max_records;
 
         let mut unseen: Vec<(u64, NodeKey)> = self
-            .by_key
+            .by_doc
             .iter()
-            .filter_map(|(key, record)| {
+            .flat_map(|(doc_token, records)| {
                 let current_epoch = self
                     .doc_to_seq
-                    .get(&key.doc)
+                    .get(doc_token)
                     .and_then(|seq| self.seq_to_doc.get(seq))
                     .map(|state| state.capture_epoch);
-                let is_unseen =
-                    current_epoch.is_none_or(|epoch| record.last_seen_doc_epoch < epoch);
-                is_unseen.then(|| (record.last_seen_tick, key.clone()))
+                records.iter().filter_map(move |(&dom_id, record)| {
+                    let is_unseen =
+                        current_epoch.is_none_or(|epoch| record.last_seen_doc_epoch < epoch);
+                    is_unseen.then(|| {
+                        (
+                            record.last_seen_tick,
+                            NodeKey::new(doc_token.clone(), dom_id),
+                        )
+                    })
+                })
             })
             .collect();
 
@@ -526,7 +669,7 @@ impl TabRefTable {
     /// minted `n`-ref, or minting a fresh `n`-ref without forcing snapshot inclusion.
     pub fn ref_for(&mut self, key: &NodeKey, assigned_seq: Option<DocSeq>) -> Ref {
         let expected_seq = assigned_seq.or_else(|| self.doc_to_seq.get(&key.doc).copied());
-        if let Some(record) = self.by_key.get(key) {
+        if let Some(record) = self.by_doc.get(&key.doc).and_then(|m| m.get(&key.node)) {
             if let Some(current) = record.current_ref
                 && expected_seq.is_none_or(|seq| current.seq() == seq)
             {
@@ -547,7 +690,8 @@ impl TabRefTable {
         let tick = self.next_tick();
         let fresh = Self::mint_ref_from(&mut self.seq_counters, doc_seq, RefKind::Minted);
 
-        if let Some(record) = self.by_key.get_mut(key) {
+        let records = self.by_doc.entry(key.doc.clone()).or_default();
+        if let Some(record) = records.get_mut(&key.node) {
             if let Some(prev_current) = record.current_ref.take() {
                 record.aliases.push(prev_current);
             }
@@ -558,8 +702,8 @@ impl TabRefTable {
             record.last_identity = None;
             record.last_seen_tick = tick;
         } else {
-            self.by_key.insert(
-                key.clone(),
+            records.insert(
+                key.node,
                 NodeRecord {
                     doc_seq,
                     current_ref: None,
@@ -581,7 +725,7 @@ impl TabRefTable {
     #[must_use]
     pub fn resolve(&self, r: &Ref) -> RefLookup {
         if let Some(key) = self.by_ref.get(r)
-            && let Some(record) = self.by_key.get(key)
+            && let Some(record) = self.by_doc.get(&key.doc).and_then(|m| m.get(&key.node))
         {
             return RefLookup::Key(RefTarget {
                 key: key.clone(),
@@ -641,7 +785,7 @@ impl TabRefTable {
     /// counters so every previously issued ref resolves to [`RefLookup::Retired`] and never
     /// collides with future captures.
     pub fn forget(&mut self) {
-        self.by_key.clear();
+        self.by_doc.clear();
         self.by_ref.clear();
     }
 
@@ -723,28 +867,37 @@ impl TabRefTable {
     }
 
     fn remove_doc_records(&mut self, doc: &DocToken) {
-        let keys_to_remove: Vec<NodeKey> = self
-            .by_key
-            .keys()
-            .filter(|key| key.doc == *doc)
-            .cloned()
-            .collect();
-        for key in keys_to_remove {
-            self.remove_record(&key);
+        if let Some(records) = self.by_doc.remove(doc) {
+            for record in records.into_values() {
+                self.remove_record_refs(record);
+            }
         }
     }
 
     fn remove_record(&mut self, key: &NodeKey) {
-        if let Some(record) = self.by_key.remove(key) {
-            if let Some(current) = record.current_ref {
-                self.by_ref.remove(&current);
-            }
-            if let Some(minted) = record.minted_ref {
-                self.by_ref.remove(&minted);
-            }
-            for alias in record.aliases {
-                self.by_ref.remove(&alias);
-            }
+        let (removed, empty) = if let Some(records) = self.by_doc.get_mut(&key.doc) {
+            let removed = records.remove(&key.node);
+            (removed, records.is_empty())
+        } else {
+            (None, false)
+        };
+        if empty {
+            self.by_doc.remove(&key.doc);
+        }
+        if let Some(record) = removed {
+            self.remove_record_refs(record);
+        }
+    }
+
+    fn remove_record_refs(&mut self, record: NodeRecord) {
+        if let Some(current) = record.current_ref {
+            self.by_ref.remove(&current);
+        }
+        if let Some(minted) = record.minted_ref {
+            self.by_ref.remove(&minted);
+        }
+        for alias in record.aliases {
+            self.by_ref.remove(&alias);
         }
     }
 }
@@ -758,7 +911,7 @@ impl Default for TabRefTable {
 impl fmt::Debug for TabRefTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TabRefTable")
-            .field("record_count", &self.by_key.len())
+            .field("record_count", &self.record_count())
             .field("ref_count", &self.by_ref.len())
             .field("active_doc_count", &self.doc_to_seq.len())
             .field("retired_seq_count", &self.retired_seqs.len())

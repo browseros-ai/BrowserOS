@@ -31,11 +31,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::FrameId;
-use neo_snapshot::{AriaChild, AriaNode, Call, Snapshot};
-use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget};
+#[cfg(test)]
+use neo_snapshot::AriaChild;
+use neo_snapshot::{AriaNode, Call, PartialFrame as SnapshotPartialFrame};
+use neo_snapshot_apc::refs::{RefLookup, RefTarget};
 use neo_snapshot_apc::tree::{
-    AriaRoot, AriaTree, DocId, DocSeq, DocToken, ElementPlace, NameCache, NameVisibility, NodeId,
-    NodeKey, OptionPlace, SnapshotTree, TreeDoc, TreeNode,
+    AriaRoot, DocId, DocSeq, DocToken, ElementPlace, NameCache, NameVisibility, NodeId, NodeKey,
+    OptionPlace, PreparedAria, SnapshotTree, TreeDoc, TreeNode,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -86,14 +88,31 @@ fn depth_of(depth: Option<i64>) -> Option<usize> {
     depth.and_then(|depth| usize::try_from(depth).ok())
 }
 
-/// The page's snapshot. The main frame is the op: while the capture holds no main document
-/// yet, or its world went away under a navigation, it tries again on the outer backoff until
-/// the op's timeout, as upstream polls for the body.
-pub(super) async fn read_page(
+/// A read snapshot kept in compact draft arenas so text calls stream straight through
+/// [`neo_snapshot::render_source`] without materializing `AriaNode`s, while tree/JSON/compare
+/// callers convert through [`Self::into_result`].
+pub(super) struct PreparedSnapshot {
+    pub(super) prepared: PreparedAria,
+    pub(super) on_top: Vec<SnapshotTop>,
+}
+
+impl PreparedSnapshot {
+    /// Materializes this read into the legacy owned [`SnapshotResult`] via `AriaNodeSink`.
+    pub(super) fn into_result(self) -> SnapshotResult {
+        let tree = self.prepared.into_aria_tree().into_snapshot();
+        result_of(tree.tree, tree.partial, self.on_top)
+    }
+}
+
+/// The page's snapshot, kept in compact draft arenas until rendered or materialized. The main
+/// frame is the op: while the capture holds no main document yet, or its world went away under a
+/// navigation, it tries again on the outer backoff until the op's timeout, as upstream polls for
+/// the body.
+pub(super) async fn read_page_prepared(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     read: TreeRead,
-) -> Result<SnapshotResult, PlaywrightError> {
+) -> Result<PreparedSnapshot, PlaywrightError> {
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
@@ -122,13 +141,24 @@ pub(super) async fn read_page(
     Err(scope.timed_out(ErrorCode::WaitTimeout))
 }
 
-/// One attempt of [`read_page`]: `None` to try again.
+/// The page's snapshot materialized as owned `AriaNode`s (for `ariaSnapshotJSON`).
+pub(super) async fn read_page(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    read: TreeRead,
+) -> Result<SnapshotResult, PlaywrightError> {
+    read_page_prepared(scope, page, read)
+        .await
+        .map(PreparedSnapshot::into_result)
+}
+
+/// One attempt of [`read_page_prepared`]: `None` to try again.
 async fn page_once(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     read: TreeRead,
     reading: &Mutex<Option<Instant>>,
-) -> Result<Option<SnapshotResult>, PlaywrightError> {
+) -> Result<Option<PreparedSnapshot>, PlaywrightError> {
     // From here the op is reading the page's tree, which a timeout's call log names.
     let started = Instant::now();
     *reading.lock().unwrap_or_else(PoisonError::into_inner) = Some(started);
@@ -171,15 +201,15 @@ async fn page_once(
     if tree.document(doc).and_then(TreeDoc::root_node).is_none() {
         return Ok(None);
     }
-    let mut snapshot = emitted(scope, page, tree, read.ask(AriaRoot::Page))?;
-    label_partial_frames(scope, page, tree, &mut snapshot).await;
+    let mut prepared = emitted_prepared(scope, page, tree, read.ask(AriaRoot::Page))?;
+    label_partial_frames(scope, page, tree, prepared.partial_mut()).await;
     scope.log(format!(
         "  read the main frame's tree in {} ms",
         started.elapsed().as_millis()
     ));
     let mut on_top = Vec::new();
     if read.marked {
-        match survey(scope, page, &world, &captured, doc, &mut snapshot.tree).await {
+        match survey(scope, page, &world, &captured, doc, &mut prepared).await {
             Ok(tops) => on_top = tops,
             // The main world went away: the page is navigating, and this tree is the old one.
             Err(Surveyed::Gone) => {
@@ -191,19 +221,19 @@ async fn page_once(
         open_closed_roots(scope, page, &world, tree, doc, Some(MAX_CLOSED_ROOT_SEEDS)).await;
         open_child_closed_roots(scope, page, tree).await;
     }
-    Ok(Some(result_of(snapshot, on_top)))
+    Ok(Some(PreparedSnapshot { prepared, on_top }))
 }
 
-/// `locator.ariaSnapshot`'s read: the locator's one element, through the resolver's frame hops
-/// and ref jumps, then its subtree from a capture taken after it was pinned. A strict violation,
-/// a stale ref and an error the page throws end it at once.
-pub(super) async fn read_locator(
+/// `locator.ariaSnapshot`'s read kept in compact draft arenas: the locator's one element, through
+/// the resolver's frame hops and ref jumps, then its subtree from a capture taken after it was
+/// pinned. A strict violation, a stale ref and an error the page throws end it at once.
+pub(super) async fn read_locator_prepared(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     target: &LocatorTarget,
     strict: Strictness,
     read: TreeRead,
-) -> Result<SnapshotResult, PlaywrightError> {
+) -> Result<PreparedSnapshot, PlaywrightError> {
     let resolver = Resolver::new(page, scope, target, strict);
     scope.log(format!("waiting for {}", target.display));
     let backoff = Backoff::outer(scope.timeout());
@@ -249,7 +279,7 @@ async fn element_once(
     world: &IsolatedWorld,
     pin: Pin,
     read: TreeRead,
-) -> Result<Option<SnapshotResult>, PlaywrightError> {
+) -> Result<Option<PreparedSnapshot>, PlaywrightError> {
     let Some(found) = element_in_tree(scope, page, world, pin).await? else {
         return Ok(None);
     };
@@ -257,13 +287,12 @@ async fn element_once(
         return Ok(None);
     };
     let tree = found.captured.tree();
-    let mut snapshot = Snapshot::default();
+    let mut prepared = PreparedAria::empty();
     for root in roots {
-        let part = emitted(scope, page, tree, read.ask(root))?;
-        snapshot.tree.extend(part.tree);
-        snapshot.partial.extend(part.partial);
+        let part = emitted_prepared(scope, page, tree, read.ask(root))?;
+        prepared.extend(part);
     }
-    label_partial_frames(scope, page, tree, &mut snapshot).await;
+    label_partial_frames(scope, page, tree, prepared.partial_mut()).await;
     if read.marked {
         open_closed_roots(
             scope,
@@ -275,7 +304,10 @@ async fn element_once(
         )
         .await;
     }
-    Ok(Some(result_of(snapshot, Vec::new())))
+    Ok(Some(PreparedSnapshot {
+        prepared,
+        on_top: Vec::new(),
+    }))
 }
 
 /// An element a resolver pinned, found in a capture taken after it was pinned: its document in
@@ -429,8 +461,10 @@ pub(crate) async fn expect_body_snapshot(
         depth: None,
         boxes: false,
     };
-    let snapshot = page.tree().aria(tree, ask).ok()?.into_snapshot();
-    let text = neo_snapshot::render(&snapshot, Call::Playwright).into_text();
+    let prepared = page.tree().prepare_aria(tree, ask).ok()?;
+    let text =
+        neo_snapshot::render_source(&prepared.snapshot_view(&[], None, None), Call::Playwright)
+            .into_text();
     Some(text).filter(|text| !text.is_empty())
 }
 
@@ -531,17 +565,17 @@ fn top_most(tree: &SnapshotTree, doc: DocId, inside: &HashSet<i64>) -> Vec<AriaR
     roots
 }
 
-/// `tree`'s aria tree under `ask`, as a snapshot: the nodes and the frames not read. A tree
-/// nested deeper than a snapshot carries is the snapshot's own refusal, which says how to retry.
-fn emitted(
+/// `tree`'s aria tree under `ask` kept in compact draft arenas without materializing `AriaNode`s.
+/// A tree nested deeper than a snapshot carries is the snapshot's own refusal, which says how to
+/// retry.
+fn emitted_prepared(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     tree: &SnapshotTree,
     ask: TreeAsk,
-) -> Result<Snapshot, PlaywrightError> {
+) -> Result<PreparedAria, PlaywrightError> {
     page.tree()
-        .aria(tree, ask)
-        .map(AriaTree::into_snapshot)
+        .prepare_aria(tree, ask)
         .map_err(|too_deep| scope.fail(ErrorCode::Unsupported, &too_deep.to_string()))
 }
 
@@ -566,9 +600,9 @@ async fn label_partial_frames(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     tree: &SnapshotTree,
-    snapshot: &mut Snapshot,
+    partials: &mut [SnapshotPartialFrame],
 ) {
-    for partial in &mut snapshot.partial {
+    for partial in partials {
         if partial.frame.contains("://") {
             continue;
         }
@@ -619,12 +653,15 @@ async fn label_partial_frames(
     }
 }
 
-/// The op's output from an emitted snapshot.
-fn result_of(snapshot: Snapshot, on_top: Vec<SnapshotTop>) -> SnapshotResult {
+/// The op's output from a materialized snapshot.
+fn result_of(
+    tree: Vec<AriaNode>,
+    partial: Vec<SnapshotPartialFrame>,
+    on_top: Vec<SnapshotTop>,
+) -> SnapshotResult {
     SnapshotResult {
-        json: snapshot.tree,
-        partial: snapshot
-            .partial
+        json: tree,
+        partial: partial
             .into_iter()
             .map(|frame| PartialFrame {
                 r#ref: frame.r#ref,
@@ -656,7 +693,7 @@ async fn survey(
     world: &IsolatedWorld,
     captured: &CapturedTree,
     doc: DocId,
-    json: &mut [AriaNode],
+    prepared: &mut PreparedAria,
 ) -> Result<Vec<SnapshotTop>, Surveyed> {
     let failed = |failure| Surveyed::Failed(resolve::failed(scope, failure));
     let reply = match probe::call(scope, page, world, &ProbeRequest::CoverSurvey).await {
@@ -735,8 +772,8 @@ async fn survey(
         }
     }
     if !held.is_empty() {
-        mark_on_top(page, tree, json, &held);
-        carry_holder_text(tree, json, &held);
+        mark_on_top(page, tree, prepared, &held);
+        carry_holder_text(tree, prepared, &held);
     }
     Ok(tops)
 }
@@ -889,33 +926,18 @@ fn printed_role(node: Option<&TreeNode>) -> &'static str {
 fn mark_on_top(
     page: &OpPage<'_>,
     tree: &SnapshotTree,
-    json: &mut [AriaNode],
+    prepared: &mut PreparedAria,
     held: &[(String, Vec<NodeKey>)],
 ) {
-    let mut pending: Vec<&mut AriaNode> = json.iter_mut().collect();
-    while let Some(node) = pending.pop() {
-        let key = node
-            .r#ref
-            .as_deref()
-            .and_then(Ref::parse)
-            .and_then(|printed| match page.tree().resolve_ref(&printed) {
-                RefLookup::Key(RefTarget { key, .. }) => Some(key),
-                RefLookup::Retired | RefLookup::Unknown => None,
-            });
-        let layer = key.and_then(|key| {
-            held.iter()
-                .find(|(_, holders)| holders.iter().any(|holder| tree.contains(holder, &key)))
-                .map(|(layer, _)| layer.clone())
-        });
-        if let Some(layer) = layer {
-            node.on_top = Some(layer);
-            continue;
-        }
-        pending.extend(node.children.iter_mut().filter_map(|child| match child {
-            AriaChild::Node(node) => Some(node.as_mut()),
-            AriaChild::Text(_) => None,
-        }));
-    }
+    prepared.mark_on_top(|printed| {
+        let key = match page.tree().resolve_ref(&printed) {
+            RefLookup::Key(RefTarget { key, .. }) => key,
+            RefLookup::Retired | RefLookup::Unknown => return None,
+        };
+        held.iter()
+            .find(|(_, holders)| holders.iter().any(|holder| tree.contains(holder, &key)))
+            .map(|(layer, _)| layer.clone())
+    });
 }
 
 /// Moves each held layer's ref-less holder text with the layer. A holder the tree emits no node
@@ -927,21 +949,16 @@ fn mark_on_top(
 /// in one `generic` that carries the mark in their place, so the text prints in the layer's
 /// block. Text the tree masks is never matched (`SnapshotTree::node_text`), so such a holder is
 /// left as it is.
-fn carry_holder_text(tree: &SnapshotTree, json: &mut [AriaNode], held: &[(String, Vec<NodeKey>)]) {
+fn carry_holder_text(
+    tree: &SnapshotTree,
+    prepared: &mut PreparedAria,
+    held: &[(String, Vec<NodeKey>)],
+) {
     for (layer, holders) in held {
         let Some(texts) = holder_texts(tree, holders) else {
             continue;
         };
-        let mut pending: Vec<&mut AriaNode> = json.iter_mut().collect();
-        while let Some(node) = pending.pop() {
-            if wrap_with_layer(&mut node.children, layer, &texts) {
-                break;
-            }
-            pending.extend(node.children.iter_mut().filter_map(|child| match child {
-                AriaChild::Node(node) => Some(node.as_mut()),
-                AriaChild::Text(_) => None,
-            }));
-        }
+        prepared.carry_holder_text(layer, &texts);
     }
 }
 
@@ -1003,6 +1020,7 @@ fn printed_text(text: &str) -> String {
 /// Wraps, in `children`, the one run of the nodes marked `layer` and the strings in `texts`
 /// that holds both, side by side and nothing else, into one `generic` marked `layer`. Whether it
 /// did.
+#[cfg(test)]
 fn wrap_with_layer(children: &mut Vec<AriaChild>, layer: &str, texts: &[String]) -> bool {
     let belongs = |child: &AriaChild| match child {
         AriaChild::Node(node) => node.on_top.as_deref() == Some(layer),

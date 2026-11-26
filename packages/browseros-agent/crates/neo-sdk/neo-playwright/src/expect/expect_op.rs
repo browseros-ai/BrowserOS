@@ -644,8 +644,12 @@ fn failure_snapshot(
         depth,
         boxes: false,
     };
-    let snapshot = page.tree().aria(tree, ask).ok()?.into_snapshot();
-    let text = neo_snapshot::render(&snapshot, neo_snapshot::Call::Playwright).into_text();
+    let prepared = page.tree().prepare_aria(tree, ask).ok()?;
+    let text = neo_snapshot::render_source(
+        &prepared.snapshot_view(&[], None, None),
+        neo_snapshot::Call::Playwright,
+    )
+    .into_text();
     Some(text).filter(|text| !text.is_empty())
 }
 

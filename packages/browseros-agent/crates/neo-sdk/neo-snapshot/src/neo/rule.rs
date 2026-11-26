@@ -1,5 +1,5 @@
-use crate::aria_node::{AriaChild, AriaNode};
-use crate::js;
+use crate::aria_sink::EmittedNode;
+use crate::cap::format_section_label;
 
 /// Roles an agent acts on: the list desktop Neo's clickable observer uses.
 const INTERACTIVE: &[&str] = &[
@@ -62,84 +62,63 @@ pub const KEPT_ROLES: &[&str] = &["dialog", "alertdialog", "alert", "status"];
 /// The kept blocks whose line always prints its ref: an agent scopes to a dialog.
 const KEPT_WITH_REF: &[&str] = &["dialog", "alertdialog"];
 
-/// One child as the walk meets it: a run of text, or a node. A top-level node and a node in a
-/// `children` array are both met as a node.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Child<'a> {
-    Text(&'a str),
-    Node(&'a AriaNode),
-}
-
-impl<'a> From<&'a AriaChild> for Child<'a> {
-    fn from(child: &'a AriaChild) -> Self {
-        match child {
-            AriaChild::Text(text) => Self::Text(text),
-            AriaChild::Node(node) => Self::Node(node),
-        }
-    }
-}
-
 /// Which of the format's rules prints a child: the first that matches, in the TypeScript's order
 /// (`Printer.node` in `snapshot-v1.ts`). An inert subtree the call did not ask for is decided
 /// before any rule, by the printer that meets it.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum Rule<'a> {
+pub(super) enum Rule<'a, Id> {
     /// A string child, or a `text` node's text: joins the text line at its level.
     Piece(&'a str),
     /// A dialog, an alert or a status: its line, then all of its text.
-    Kept(&'a AriaNode),
+    Kept(Id, EmittedNode<'a>),
     /// A region an agent can scope to: its line with its ref, its content indented.
-    Section(&'a AriaNode),
+    Section(Id, EmittedNode<'a>),
     /// Its line, with its own text when it has no name.
-    Heading(&'a AriaNode),
+    Heading(Id, EmittedNode<'a>),
     /// Something to act on, or a field: one line with its ref and its value.
-    Control(&'a AriaNode),
+    Control(Id, EmittedNode<'a>),
     /// No line, unless it has a name and the page's text is printed; its content moves up.
-    Image(&'a AriaNode),
+    Image(Id, EmittedNode<'a>),
     /// No line; its name prints as text when nothing under it does, and its content moves up.
-    Content(&'a AriaNode),
+    Content(Id, EmittedNode<'a>),
 }
 
-impl<'a> Rule<'a> {
-    pub(super) fn of(child: Child<'a>) -> Self {
-        let node = match child {
-            Child::Text(text) => return Self::Piece(text),
-            Child::Node(node) => node,
-        };
-        let role = node.role.as_str();
+impl<'a, Id: Copy> Rule<'a, Id> {
+    pub(super) fn of_node(id: Id, node: EmittedNode<'a>) -> Self {
+        let role = node.role;
         if role == "text" {
-            Self::Piece(node.text.as_deref().unwrap_or_default())
+            Self::Piece(node.text.unwrap_or_default())
         } else if KEPT_ROLES.contains(&role) {
-            Self::Kept(node)
+            Self::Kept(id, node)
         } else if SECTION.contains(&role) {
-            Self::Section(node)
+            Self::Section(id, node)
         } else if role == "heading" {
-            Self::Heading(node)
-        } else if actionable(node) || field_without_ref(node) {
-            Self::Control(node)
+            Self::Heading(id, node)
+        } else if actionable(&node) || field_without_ref(&node) {
+            Self::Control(id, node)
         } else if role == "img" {
-            Self::Image(node)
+            Self::Image(id, node)
         } else {
-            Self::Content(node)
+            Self::Content(id, node)
         }
     }
 }
 
 /// `actionable`: a ref, and an interactive role or a pointer cursor. An empty ref counts, as the
 /// TypeScript asks `ref !== undefined`.
-pub(super) fn actionable(node: &AriaNode) -> bool {
-    node.r#ref.is_some() && (interactive(&node.role) || node.cursor.as_deref() == Some("pointer"))
+pub(super) fn actionable(node: &EmittedNode<'_>) -> bool {
+    node.r#ref.is_some() && (interactive(node.role) || node.cursor == Some("pointer"))
 }
 
 /// `fieldWithoutRef`: a field the engine gave no ref.
-pub(super) fn field_without_ref(node: &AriaNode) -> bool {
-    node.r#ref.is_none() && FIELD.contains(&node.role.as_str())
+pub(super) fn field_without_ref(node: &EmittedNode<'_>) -> bool {
+    node.r#ref.is_none() && FIELD.contains(&node.role)
 }
 
 /// `keptRef`: a kept block's line prints its ref always for a dialog, and for an alert or a
 /// status only when it is actionable (a toast the user can click).
-pub(super) fn kept_ref(node: &AriaNode) -> bool {
-    KEPT_WITH_REF.contains(&node.role.as_str()) || actionable(node)
+pub(super) fn kept_ref(node: &EmittedNode<'_>) -> bool {
+    KEPT_WITH_REF.contains(&node.role) || actionable(node)
 }
 
 pub(super) fn interactive(role: &str) -> bool {
@@ -151,23 +130,18 @@ pub(super) fn interactive(role: &str) -> bool {
 /// browser shows; printing it would hide the frame's content, which is stitched under the same
 /// node as children, since upstream's printer prints a node with text as one line and never
 /// visits its children.
-pub(crate) fn shown_text(node: &AriaNode) -> Option<&str> {
+pub(crate) fn shown_text<'a>(node: &EmittedNode<'a>) -> Option<&'a str> {
     if node.role == "iframe" {
         None
     } else {
-        node.text.as_deref()
+        node.text
     }
 }
 
 /// `sectionLabel`: how the cut line names a section, its role and its quoted name when it has
 /// one.
-pub(crate) fn section_label(node: &AriaNode) -> String {
-    let mut label = node.role.clone();
-    if let Some(name) = named(node.name.as_deref()) {
-        label.push(' ');
-        js::json_quote(name, &mut label);
-    }
-    label
+pub(crate) fn section_label(node: &EmittedNode<'_>) -> String {
+    format_section_label(node.role, node.name)
 }
 
 /// The string when JavaScript holds it true: there and not empty.

@@ -1,4 +1,4 @@
-use crate::snapshot::{Snapshot, Unmarked};
+use crate::snapshot::Unmarked;
 
 /// The words that open the line, which [`is_unmarked_line`] recognises it by.
 const PREFIX: &str = "# refs missing: ";
@@ -6,8 +6,8 @@ const PREFIX: &str = "# refs missing: ";
 /// `unmarkedHead`: the line a text opens with, after the on-top lines and outside the cap, when
 /// the root frame's check for clickable elements did not finish. A cut must not hide why refs
 /// may be missing.
-pub(crate) fn unmarked_head(snapshot: &Snapshot) -> Option<String> {
-    snapshot.unmarked.as_ref().map(|Unmarked { reason }| {
+pub(crate) fn unmarked_head(unmarked: Option<&Unmarked>) -> Option<String> {
+    unmarked.map(|Unmarked { reason }| {
         format!(
             "{PREFIX}the check for clickable elements did not finish on this page ({reason}). \
              Some clickable elements may have no ref here, and content inside closed shadow \

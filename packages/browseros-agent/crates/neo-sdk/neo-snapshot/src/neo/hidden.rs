@@ -1,4 +1,4 @@
-use crate::aria_node::AriaNode;
+use crate::aria_sink::EmittedNode;
 
 /// What a line inherits of an `aria-hidden` node above it in its document. Upstream marks only
 /// the node that carries the attribute, and its nesting shows what the mark hides. `getByRole`
@@ -29,7 +29,7 @@ impl Hidden {
     /// What `node`'s content inherits when it prints with no line of `node` around it, beside
     /// `node`'s line or lifted out of it: `node`'s own mark carries on, as does the one `node`
     /// carries. An iframe's content is a child document, which no mark above reaches.
-    pub(super) fn beside(self, node: &AriaNode) -> Self {
+    pub(super) fn beside(self, node: &EmittedNode<'_>) -> Self {
         if node.role == "iframe" {
             Self::No
         } else if self == Self::Carried || node.aria_hidden == Some(true) {
@@ -41,7 +41,7 @@ impl Hidden {
 
     /// What `node`'s content inherits nested under `node`'s line, which says any mark `node` has
     /// or carries. An iframe's content is a child document, which no mark above reaches.
-    pub(super) fn under(self, node: &AriaNode) -> Self {
+    pub(super) fn under(self, node: &EmittedNode<'_>) -> Self {
         if node.role == "iframe" {
             Self::No
         } else if self != Self::No || node.aria_hidden == Some(true) {

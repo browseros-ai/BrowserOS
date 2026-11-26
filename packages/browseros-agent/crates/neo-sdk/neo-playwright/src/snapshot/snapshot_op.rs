@@ -34,10 +34,10 @@ use ts_rs::TS;
 
 use super::aria_snapshot::SnapshotResult;
 use super::snapshot_text::{
-    self, Finish, LocatorFormat, PageFormat, ScopeClock, SnapshotAnswer, SnapshotCompared,
-    SnapshotText, TabStore, TextAsk,
+    self, Finish, LocatorFormat, PageFormat, PreparedFacts, ScopeClock, SnapshotAnswer,
+    SnapshotCompared, SnapshotText, TabStore, TextAsk,
 };
-use super::tree_snapshot::{self, TreeRead};
+use super::tree_snapshot::{self, PreparedSnapshot, TreeRead};
 use super::{Baseline, SnapshotForm};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -430,16 +430,21 @@ async fn page_snapshot(
         boxes: input.boxes,
         marked: reading.marked(),
     };
-    let stitched = read_page(scope, &page, read).await?;
+    let stitched = tree_snapshot::read_page_prepared(scope, &page, read).await?;
     match reading {
-        Reading::Tree { .. } => Ok(SnapshotAnswer::Tree(with_call(scope, stitched, document))),
+        Reading::Tree { .. } => Ok(SnapshotAnswer::Tree(with_call(
+            scope,
+            stitched.into_result(),
+            document,
+        ))),
         Reading::Text(TextAsk::Neo { passed, delta }) => {
-            let snapshot = snapshot_text::facts(stitched);
+            let facts = PreparedFacts::from_read(stitched);
             // The fence: every browser send of this call is behind it. The wait runs outside
             // any `scope.within`, so the call's deadline cannot cut it.
             snapshot_text::order_events_inside(pw, scope).await;
+            let view = facts.view();
             let finish = Finish {
-                snapshot: &snapshot,
+                view: &view,
                 passed: &passed,
                 delta,
                 tab: page.target_id(),
@@ -451,18 +456,22 @@ async fn page_snapshot(
             let snapshot = snapshot_text::finish_page_text(&finish, &ScopeClock(scope))?;
             Ok(SnapshotAnswer::Text(SnapshotText { snapshot }))
         }
-        Reading::Text(ask) => Ok(SnapshotAnswer::Text(SnapshotText {
-            snapshot: snapshot_text::plain_text(&snapshot_text::facts(stitched), ask),
-        })),
+        Reading::Text(ask) => {
+            let facts = PreparedFacts::from_read(stitched);
+            Ok(SnapshotAnswer::Text(SnapshotText {
+                snapshot: snapshot_text::plain_text(&facts.view(), ask),
+            }))
+        }
         Reading::Compare(ask) => {
-            let snapshot = snapshot_text::facts(stitched);
+            let facts = PreparedFacts::from_read(stitched);
             let at = TabStore {
                 store: pw.snapshot_baselines(),
                 tab: page.target_id(),
                 document,
             };
-            let rust = snapshot_text::compared_text(&snapshot, ask, Some(at), &ScopeClock(scope))?;
-            let tree = with_call(scope, snapshot_text::tree_of(snapshot), document);
+            let rust =
+                snapshot_text::compared_text(&facts.view(), ask, Some(at), &ScopeClock(scope))?;
+            let tree = with_call(scope, facts.into_result(), document);
             Ok(SnapshotAnswer::Compared(SnapshotCompared { tree, rust }))
         }
     }
@@ -537,17 +546,20 @@ async fn locator_snapshot(
         boxes: input.boxes,
         marked: reading.marked(),
     };
-    let tree = read_locator(pw, scope, &input.target, input.strict, read).await?;
+    let tree = read_locator_prepared(pw, scope, &input.target, input.strict, read).await?;
     Ok(match reading {
-        Reading::Tree { .. } => SnapshotAnswer::Tree(tree),
-        Reading::Text(ask) => SnapshotAnswer::Text(SnapshotText {
-            snapshot: snapshot_text::plain_text(&snapshot_text::facts(tree), ask),
-        }),
+        Reading::Tree { .. } => SnapshotAnswer::Tree(tree.into_result()),
+        Reading::Text(ask) => {
+            let facts = PreparedFacts::from_read(tree);
+            SnapshotAnswer::Text(SnapshotText {
+                snapshot: snapshot_text::plain_text(&facts.view(), ask),
+            })
+        }
         Reading::Compare(ask) => {
-            let snapshot = snapshot_text::facts(tree);
-            let rust = snapshot_text::compared_text(&snapshot, ask, None, &ScopeClock(scope))?;
+            let facts = PreparedFacts::from_read(tree);
+            let rust = snapshot_text::compared_text(&facts.view(), ask, None, &ScopeClock(scope))?;
             SnapshotAnswer::Compared(SnapshotCompared {
-                tree: snapshot_text::tree_of(snapshot),
+                tree: facts.into_result(),
                 rust,
             })
         }
@@ -572,6 +584,25 @@ async fn locator_tree(
     })
 }
 
+/// One element's snapshot, with the frames inside it, kept in compact draft arenas until rendered
+/// or materialized.
+async fn read_locator_prepared(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    target: &Target,
+    strict: Strictness,
+    read: TreeRead,
+) -> Result<PreparedSnapshot, PlaywrightError> {
+    let Target::Locator(target) = target else {
+        return Err(scope.not_built());
+    };
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
+    if read.mode == SnapshotMode::Ai {
+        scope.run_state().opened_tabs.refs_issued(page.tab());
+    }
+    tree_snapshot::read_locator_prepared(scope, &page, target, strict, read).await
+}
+
 /// One element's snapshot, with the frames inside it, from the tab's APC tree
 /// (`tree_snapshot`). It waits for the locator's one element in both modes, as upstream's
 /// default mode does, through the resolver's frame hops and ref jumps.
@@ -582,14 +613,9 @@ async fn read_locator(
     strict: Strictness,
     read: TreeRead,
 ) -> Result<SnapshotResult, PlaywrightError> {
-    let Target::Locator(target) = target else {
-        return Err(scope.not_built());
-    };
-    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
-    if read.mode == SnapshotMode::Ai {
-        scope.run_state().opened_tabs.refs_issued(page.tab());
-    }
-    tree_snapshot::read_locator(scope, &page, target, strict, read).await
+    read_locator_prepared(pw, scope, target, strict, read)
+        .await
+        .map(PreparedSnapshot::into_result)
 }
 
 /// The tab's stored baseline for the snapshot's document, or `null`: none yet, its main frame

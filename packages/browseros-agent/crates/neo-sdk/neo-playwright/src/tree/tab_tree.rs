@@ -27,7 +27,7 @@ use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
 use neo_snapshot_apc::select::RefResolver;
 use neo_snapshot_apc::tree::{
     AriaAsk, AriaRoot, AriaTooDeep, AriaTree, BuildOptions, DocSeq, DocToken, DomNodeId,
-    FrameToken, NodeKey, SiteKey, SnapshotTree, TreeDoc,
+    FrameToken, NodeKey, PreparedAria, SiteKey, SnapshotTree, TreeDoc,
 };
 use tokio::time;
 
@@ -401,6 +401,17 @@ impl TabTree {
     /// every printed ref is one `aria-ref` resolves; the lock is held for the emission only,
     /// which is synchronous.
     pub(crate) fn aria(&self, tree: &SnapshotTree, ask: TreeAsk) -> Result<AriaTree, AriaTooDeep> {
+        self.prepare_aria(tree, ask)
+            .map(PreparedAria::into_aria_tree)
+    }
+
+    /// [`Self::aria`] kept in compact draft arenas without materializing `AriaNode`s, for direct
+    /// streaming through [`neo_snapshot::render_source`].
+    pub(crate) fn prepare_aria(
+        &self,
+        tree: &SnapshotTree,
+        ask: TreeAsk,
+    ) -> Result<PreparedAria, AriaTooDeep> {
         let TreeAsk {
             ai,
             root,
@@ -409,14 +420,14 @@ impl TabTree {
         } = ask;
         if ai {
             let mut refs = self.refs.lock().unwrap_or_else(PoisonError::into_inner);
-            tree.aria(
+            tree.prepare_aria(
                 AriaAsk::ai(&mut refs)
                     .with_root(root)
                     .with_depth(depth)
                     .with_boxes(boxes),
             )
         } else {
-            tree.aria(
+            tree.prepare_aria(
                 AriaAsk::default_mode()
                     .with_root(root)
                     .with_depth(depth)

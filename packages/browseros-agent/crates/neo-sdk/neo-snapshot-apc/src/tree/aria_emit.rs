@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::{fmt, mem};
+use std::{fmt, mem, slice};
 
 use neo_snapshot::{
-    AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, PartialFrame as SnapshotPartialFrame,
-    Snapshot, Tristate,
+    AriaNode, AriaNodeSink, AriaSink, AriaSource, ClosedRoots, EmittedNode, Invalid, Layer,
+    MAX_TREE_DEPTH, NodeBox, NodeRef, PartialFrame as SnapshotPartialFrame, Snapshot, SnapshotView,
+    SourceChild, Tristate, Unmarked,
 };
 use serde_json::Number;
 
@@ -12,9 +12,8 @@ use crate::proto::{
     BoundingRect, ContentAttributeType, ContentAttributes, ContentData, FormControlData,
     FormControlType,
 };
-use crate::refs::TabRefTable;
+use crate::refs::{DocRefSession, Ref, TabRefTable};
 
-use super::hidden;
 use super::mask::{self, MaskSource, NodeMask};
 use super::name::{self, NameCache, NameVisibility};
 use super::node_key::{DocId, DocSeq, FrameToken, NodeId};
@@ -23,6 +22,7 @@ use super::snapshot_tree::SnapshotTree;
 use super::state::{InvalidState, State, TriState};
 use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
+use super::{fold, hidden};
 
 /// Maximum JSON nesting depth permitted for an emitted ARIA snapshot across stitched frames.
 ///
@@ -361,7 +361,489 @@ impl fmt::Debug for AriaTree {
     }
 }
 
+/// Lightweight handle identifying one node in a [`PreparedAria`] tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PreparedNodeId {
+    doc: u32,
+    node: u32,
+}
+
+struct PreparedDoc {
+    arena: DraftArena,
+    roots: Vec<u32>,
+}
+
+/// Distilled, depth-checked, stitched multi-frame ARIA tree kept in compact draft arenas so text
+/// printers can stream lines directly via [`AriaSource`] without materializing `AriaNode`s.
+///
+/// Callers that need owned [`AriaNode`]s (`toMatchAriaSnapshot`, `ariaSnapshotJSON`, compare
+/// harnesses) convert through [`Self::emit`] / [`Self::to_aria_tree`] / [`Self::into_aria_tree`],
+/// which feed [`AriaNodeSink`]. Its manual `Debug` implementation prints counts only so page text
+/// and URLs never leak into logs.
+#[derive(Default)]
+pub struct PreparedAria {
+    docs: Vec<PreparedDoc>,
+    top_roots: Vec<PreparedNodeId>,
+    partial: Vec<SnapshotPartialFrame>,
+}
+
+impl PreparedAria {
+    /// Creates an empty [`PreparedAria`] with no nodes or partial frames.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Whether this prepared tree contains no top-level nodes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.top_roots.is_empty()
+    }
+
+    /// Embedded iframes that were omitted, redacted, or refused by [`MAX_JSON_DEPTH`].
+    #[must_use]
+    pub fn partial(&self) -> &[SnapshotPartialFrame] {
+        &self.partial
+    }
+
+    /// Mutable access to partial-frame records (for labeling frame tokens with iframe `src` URLs).
+    pub fn partial_mut(&mut self) -> &mut [SnapshotPartialFrame] {
+        &mut self.partial
+    }
+
+    /// Appends another [`PreparedAria`]'s top-level roots and partial frames to this tree.
+    pub fn extend(&mut self, mut other: Self) {
+        let doc_offset = u32::try_from(self.docs.len()).unwrap_or(u32::MAX);
+        for doc in &mut other.docs {
+            for node in &mut doc.arena.nodes {
+                if let Some(child_doc) = &mut node.stitched_child_doc {
+                    *child_doc = child_doc.saturating_add(doc_offset);
+                }
+            }
+        }
+        for root in &mut other.top_roots {
+            root.doc = root.doc.saturating_add(doc_offset);
+        }
+        self.docs.extend(other.docs);
+        self.top_roots.extend(other.top_roots);
+        self.partial.extend(other.partial);
+    }
+
+    /// Borrows this prepared tree paired with page-level snapshot facts for
+    /// [`neo_snapshot::render_source`].
+    #[must_use]
+    pub fn snapshot_view<'a>(
+        &'a self,
+        layers: &'a [Layer],
+        closed_roots: Option<&'a ClosedRoots>,
+        unmarked: Option<&'a Unmarked>,
+    ) -> SnapshotView<'a, &'a Self> {
+        SnapshotView {
+            tree: self,
+            partial: self.partial.as_slice(),
+            layers,
+            closed_roots,
+            unmarked,
+        }
+    }
+
+    /// Streams every node, text run, and partial-frame record in document preorder into `sink`
+    /// without recursion.
+    pub fn emit(&self, sink: &mut impl AriaSink) {
+        enum EmitStep<'a> {
+            Enter(PreparedNodeId),
+            Text(&'a str),
+            Exit,
+        }
+
+        let mut stack: Vec<EmitStep<'_>> = self
+            .top_roots
+            .iter()
+            .rev()
+            .copied()
+            .map(EmitStep::Enter)
+            .collect();
+        while let Some(step) = stack.pop() {
+            match step {
+                EmitStep::Enter(id) => {
+                    let node = (&self).node(id);
+                    sink.begin_node(&node);
+                    stack.push(EmitStep::Exit);
+                    if node.has_children {
+                        for child in (&self).children(id).rev() {
+                            match child {
+                                SourceChild::Text(text) => stack.push(EmitStep::Text(text)),
+                                SourceChild::Node(child_id) => {
+                                    stack.push(EmitStep::Enter(child_id));
+                                }
+                            }
+                        }
+                    }
+                }
+                EmitStep::Text(text) => sink.text(text),
+                EmitStep::Exit => sink.end_node(),
+            }
+        }
+        for frame in &self.partial {
+            sink.partial_frame(SnapshotPartialFrame {
+                r#ref: frame.r#ref.clone(),
+                frame: frame.frame.clone(),
+                reason: frame.reason.clone(),
+            });
+        }
+    }
+
+    /// Materializes this prepared tree into an owned [`AriaTree`] through [`AriaNodeSink`].
+    #[must_use]
+    pub fn to_aria_tree(&self) -> AriaTree {
+        let mut sink = AriaNodeSink::new();
+        self.emit(&mut sink);
+        let (nodes, partial) = sink.into_parts();
+        AriaTree {
+            nodes,
+            partial: partial
+                .into_iter()
+                .map(|entry| AriaPartialFrame {
+                    r#ref: entry.r#ref,
+                    frame: entry.frame,
+                    reason: entry.reason,
+                })
+                .collect(),
+        }
+    }
+
+    /// Consumes this prepared tree and materializes an owned [`AriaTree`] through [`AriaNodeSink`].
+    #[must_use]
+    pub fn into_aria_tree(self) -> AriaTree {
+        self.to_aria_tree()
+    }
+
+    /// Marks the top-most printed nodes matching `resolve_layer` with that whole-view layer's ref,
+    /// mirroring `mark_on_top` on `AriaNode` trees without materializing `AriaNode`s.
+    pub fn mark_on_top(&mut self, resolve_layer: impl Fn(Ref) -> Option<String>) {
+        let mut pending: Vec<PreparedNodeId> = self.top_roots.clone();
+        while let Some(id) = pending.pop() {
+            let Some(doc) = self.docs.get_mut(id.doc as usize) else {
+                continue;
+            };
+            let Some(node) = doc.arena.nodes.get_mut(id.node as usize) else {
+                continue;
+            };
+            if let Some(printed) = node.r#ref
+                && let Some(layer) = resolve_layer(printed)
+            {
+                node.on_top = Some(layer);
+                continue;
+            }
+            if let Some(child_doc) = node.stitched_child_doc {
+                if let Some(child_roots) = self
+                    .docs
+                    .get(child_doc as usize)
+                    .map(|child| child.roots.as_slice())
+                {
+                    pending.extend(child_roots.iter().map(|&idx| PreparedNodeId {
+                        doc: child_doc,
+                        node: idx,
+                    }));
+                }
+            } else {
+                pending.extend(node.children.iter().filter_map(|child| match *child {
+                    DraftChild::Node(child_idx) => u32::try_from(child_idx).ok().map(|node_idx| {
+                        PreparedNodeId {
+                            doc: id.doc,
+                            node: node_idx,
+                        }
+                    }),
+                    DraftChild::Text(_) => None,
+                }));
+            }
+        }
+    }
+
+    /// Wraps a contiguous run of `layer`-marked nodes and holder `texts` inside one parent's child
+    /// list into a `layer`-marked `generic` draft, mirroring `carry_holder_text` on `AriaNode`s.
+    pub fn carry_holder_text(&mut self, layer: &str, texts: &[String]) {
+        let mut pending: Vec<PreparedNodeId> = self.top_roots.clone();
+        while let Some(id) = pending.pop() {
+            if self.wrap_draft_children_with_layer(id, layer, texts) {
+                break;
+            }
+            let Some(doc) = self.docs.get(id.doc as usize) else {
+                continue;
+            };
+            let Some(node) = doc.arena.nodes.get(id.node as usize) else {
+                continue;
+            };
+            if let Some(child_doc) = node.stitched_child_doc {
+                if let Some(child_roots) = self
+                    .docs
+                    .get(child_doc as usize)
+                    .map(|child| child.roots.as_slice())
+                {
+                    pending.extend(child_roots.iter().map(|&idx| PreparedNodeId {
+                        doc: child_doc,
+                        node: idx,
+                    }));
+                }
+            } else {
+                pending.extend(node.children.iter().filter_map(|child| match *child {
+                    DraftChild::Node(child_idx) => u32::try_from(child_idx).ok().map(|node_idx| {
+                        PreparedNodeId {
+                            doc: id.doc,
+                            node: node_idx,
+                        }
+                    }),
+                    DraftChild::Text(_) => None,
+                }));
+            }
+        }
+    }
+
+    fn wrap_draft_children_with_layer(
+        &mut self,
+        id: PreparedNodeId,
+        layer: &str,
+        texts: &[String],
+    ) -> bool {
+        let Some(doc) = self.docs.get_mut(id.doc as usize) else {
+            return false;
+        };
+        let node_idx = id.node as usize;
+        let nodes = &doc.arena.nodes;
+        let Some(parent) = nodes.get(node_idx) else {
+            return false;
+        };
+        if parent.stitched_child_doc.is_some() || parent.children.is_empty() {
+            return false;
+        }
+        let belongs = |child: &DraftChild| match child {
+            DraftChild::Node(cid) => nodes
+                .get(*cid)
+                .is_some_and(|node| node.on_top.as_deref() == Some(layer)),
+            DraftChild::Text(text) => texts.iter().any(|own| own == text),
+        };
+        let Some(first) = parent.children.iter().position(belongs) else {
+            return false;
+        };
+        let end = parent
+            .children
+            .iter()
+            .skip(first)
+            .position(|child| !belongs(child))
+            .map_or(parent.children.len(), |run| first + run);
+        let run = parent.children.get(first..end).unwrap_or_default();
+        let marked = run.iter().any(|child| matches!(child, DraftChild::Node(_)));
+        let text = run.iter().any(|child| matches!(child, DraftChild::Text(_)));
+        if !marked || !text {
+            return false;
+        }
+
+        let mut wrapped: Vec<DraftChild> = doc
+            .arena
+            .nodes
+            .get_mut(node_idx)
+            .map_or_else(Vec::new, |p| p.children.drain(first..end).collect());
+        for child in &wrapped {
+            if let DraftChild::Node(cid) = *child
+                && let Some(inner) = doc.arena.nodes.get_mut(cid)
+            {
+                inner.on_top = None;
+            }
+        }
+        let mut holder = DraftNode::new("generic", String::new(), DraftFlags::default());
+        holder.on_top = Some(layer.to_owned());
+        holder.children = mem::take(&mut wrapped);
+        let holder_idx = doc.arena.push(holder);
+        if let Some(p) = doc.arena.nodes.get_mut(node_idx) {
+            p.children.insert(first, DraftChild::Node(holder_idx));
+        }
+        true
+    }
+}
+
+impl fmt::Debug for PreparedAria {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PreparedAria")
+            .field("doc_count", &self.docs.len())
+            .field("root_count", &self.top_roots.len())
+            .field("partial_count", &self.partial.len())
+            .finish()
+    }
+}
+
+enum PreparedChildrenIter<'a> {
+    Empty,
+    Draft {
+        doc: u32,
+        iter: slice::Iter<'a, DraftChild>,
+    },
+    Stitched {
+        doc: u32,
+        iter: slice::Iter<'a, u32>,
+    },
+}
+
+impl<'a> Iterator for PreparedChildrenIter<'a> {
+    type Item = SourceChild<'a, PreparedNodeId>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Empty => None,
+            Self::Draft { doc, iter } => iter.next().and_then(|child| match child {
+                DraftChild::Text(text) => Some(SourceChild::Text(text.as_str())),
+                DraftChild::Node(idx) => u32::try_from(*idx)
+                    .ok()
+                    .map(|node| SourceChild::Node(PreparedNodeId { doc: *doc, node })),
+            }),
+            Self::Stitched { doc, iter } => iter
+                .next()
+                .map(|&node| SourceChild::Node(PreparedNodeId { doc: *doc, node })),
+        }
+    }
+}
+
+impl DoubleEndedIterator for PreparedChildrenIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Empty => None,
+            Self::Draft { doc, iter } => iter.next_back().and_then(|child| match child {
+                DraftChild::Text(text) => Some(SourceChild::Text(text.as_str())),
+                DraftChild::Node(idx) => u32::try_from(*idx)
+                    .ok()
+                    .map(|node| SourceChild::Node(PreparedNodeId { doc: *doc, node })),
+            }),
+            Self::Stitched { doc, iter } => iter
+                .next_back()
+                .map(|&node| SourceChild::Node(PreparedNodeId { doc: *doc, node })),
+        }
+    }
+}
+
+impl<'a> AriaSource<'a> for &'a PreparedAria {
+    type Id = PreparedNodeId;
+    type Key = PreparedNodeId;
+
+    fn key(&self, id: Self::Id) -> Self::Key {
+        id
+    }
+
+    fn roots(&self) -> impl DoubleEndedIterator<Item = Self::Id> + '_ {
+        self.top_roots.iter().copied()
+    }
+
+    fn node(&self, id: Self::Id) -> EmittedNode<'a> {
+        let Some(draft) = self
+            .docs
+            .get(id.doc as usize)
+            .and_then(|doc| doc.arena.nodes.get(id.node as usize))
+        else {
+            return EmittedNode {
+                role: "generic",
+                name: None,
+                checked: None,
+                disabled: None,
+                expanded: None,
+                active: None,
+                inert: None,
+                on_top: None,
+                invalid: None,
+                level: None,
+                pressed: None,
+                selected: None,
+                aria_hidden: None,
+                r#ref: None,
+                cursor: None,
+                r#box: None,
+                url: None,
+                placeholder: None,
+                text: None,
+                has_children: false,
+            };
+        };
+        let has_children = match draft.stitched_child_doc {
+            Some(child_doc) => self
+                .docs
+                .get(child_doc as usize)
+                .is_some_and(|doc| !doc.roots.is_empty()),
+            None => !draft.children.is_empty(),
+        };
+        EmittedNode {
+            role: draft.role,
+            name: (!draft.name.is_empty()).then_some(draft.name.as_str()),
+            checked: draft.checked,
+            disabled: draft.disabled,
+            expanded: draft.expanded,
+            active: draft.active,
+            inert: draft.flags.mark_inert().then_some(true),
+            on_top: draft.on_top.as_deref(),
+            invalid: draft.invalid,
+            level: draft.level.as_ref(),
+            pressed: draft.pressed,
+            selected: draft.selected,
+            aria_hidden: draft.aria_hidden,
+            r#ref: draft.r#ref.map(|r| {
+                NodeRef::compact(r.seq().raw(), r.kind().prefix_byte(), r.element().get())
+            }),
+            cursor: draft.flags.emit_pointer_cursor().then_some("pointer"),
+            r#box: draft.r#box.as_deref(),
+            url: draft.url.as_deref(),
+            placeholder: draft.placeholder.as_deref(),
+            text: draft.text.as_deref(),
+            has_children,
+        }
+    }
+
+    fn children(
+        &self,
+        id: Self::Id,
+    ) -> impl DoubleEndedIterator<Item = SourceChild<'a, Self::Id>> + '_ {
+        let Some(draft) = self
+            .docs
+            .get(id.doc as usize)
+            .and_then(|doc| doc.arena.nodes.get(id.node as usize))
+        else {
+            return PreparedChildrenIter::Empty;
+        };
+        if let Some(child_doc) = draft.stitched_child_doc {
+            if let Some(doc) = self.docs.get(child_doc as usize) {
+                return PreparedChildrenIter::Stitched {
+                    doc: child_doc,
+                    iter: doc.roots.iter(),
+                };
+            }
+            return PreparedChildrenIter::Empty;
+        }
+        PreparedChildrenIter::Draft {
+            doc: id.doc,
+            iter: draft.children.iter(),
+        }
+    }
+}
+
 impl SnapshotTree {
+    /// Emits a distilled, depth-bounded, multi-frame [`PreparedAria`] without materializing
+    /// `AriaNode`s, ready to feed [`neo_snapshot::render_source`] or [`PreparedAria::emit`].
+    ///
+    /// # Errors
+    ///
+    /// [`AriaTooDeep`] when the captured document is nested deeper than an [`AriaNode`] tree may
+    /// be and the requested depth does not cut it shorter. A child document that deep becomes a
+    /// partial frame instead.
+    pub fn prepare_aria(&self, ask: AriaAsk<'_>) -> Result<PreparedAria, AriaTooDeep> {
+        prepare_aria_docs(self, ask)
+    }
+
+    /// Streams this tree's distilled, depth-bounded, multi-frame ARIA nodes into `sink`.
+    ///
+    /// # Errors
+    ///
+    /// [`AriaTooDeep`] under the same depth rules as [`Self::prepare_aria`].
+    pub fn emit_aria(&self, ask: AriaAsk<'_>, sink: &mut impl AriaSink) -> Result<(), AriaTooDeep> {
+        let prepared = self.prepare_aria(ask)?;
+        prepared.emit(sink);
+        Ok(())
+    }
+
     /// Emits a distilled, depth-bounded, multi-frame [`AriaTree`] according to `ask`.
     ///
     /// # Errors
@@ -370,7 +852,7 @@ impl SnapshotTree {
     /// be and the requested depth does not cut it shorter. A child document that deep becomes a
     /// partial frame instead.
     pub fn aria(&self, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooDeep> {
-        emit_aria(self, ask)
+        self.prepare_aria(ask).map(PreparedAria::into_aria_tree)
     }
 }
 
@@ -493,9 +975,10 @@ struct DocJob {
     levels_above: usize,
 }
 
-/// A document's materialized top nodes and the iframes among them, in document order.
+/// A document's finalized draft arena, top roots, and iframe slots in document order.
 struct EmittedFrames {
-    nodes: Vec<AriaNode>,
+    arena: DraftArena,
+    roots: Vec<u32>,
     iframe_slots: Vec<EmittedIframe>,
 }
 
@@ -507,7 +990,8 @@ struct ScheduledFrames {
 
 enum EmittedDoc {
     Frames {
-        nodes: Vec<AriaNode>,
+        arena: DraftArena,
+        roots: Vec<u32>,
         iframe_slots: Vec<ResolvedIframeSlot>,
     },
     TooDeep(AriaTooDeep),
@@ -515,9 +999,11 @@ enum EmittedDoc {
 
 enum ResolvedIframeSlot {
     ChildJob {
+        draft_idx: usize,
         job_idx: usize,
         iframe_ref: String,
         frame_label: String,
+        tree_depth: usize,
     },
     Partial {
         iframe_ref: String,
@@ -527,12 +1013,8 @@ enum ResolvedIframeSlot {
     Empty,
 }
 
-struct StitchedDoc {
-    nodes: Vec<AriaNode>,
-    partial: Vec<AriaPartialFrame>,
-}
-
 struct EmittedIframe {
+    draft_idx: usize,
     iframe_ref: String,
     kind: EmittedIframeKind,
     tree_depth: usize,
@@ -597,6 +1079,7 @@ impl DraftFlags {
     const ELEMENT: u8 = 1 << 1;
     const INERT: u8 = 1 << 2;
     const MARK_INERT: u8 = 1 << 3;
+    const EMIT_POINTER_CURSOR: u8 = 1 << 4;
 
     const fn pointer_cursor(self) -> bool {
         (self.0 & Self::POINTER_CURSOR) != 0
@@ -614,8 +1097,16 @@ impl DraftFlags {
         (self.0 & Self::MARK_INERT) != 0
     }
 
+    const fn emit_pointer_cursor(self) -> bool {
+        (self.0 & Self::EMIT_POINTER_CURSOR) != 0
+    }
+
     fn set_mark_inert(&mut self) {
         self.0 |= Self::MARK_INERT;
+    }
+
+    fn set_emit_pointer_cursor(&mut self) {
+        self.0 |= Self::EMIT_POINTER_CURSOR;
     }
 
     const fn with_pointer_cursor(self, enabled: bool) -> Self {
@@ -653,6 +1144,8 @@ enum DraftIframe {
 struct DraftNode {
     role: &'static str,
     name: String,
+    text: Option<String>,
+    on_top: Option<String>,
     checked: Option<Tristate>,
     disabled: Option<bool>,
     expanded: Option<bool>,
@@ -662,13 +1155,15 @@ struct DraftNode {
     pressed: Option<Tristate>,
     selected: Option<bool>,
     aria_hidden: Option<bool>,
-    r#ref: Option<String>,
+    r#ref: Option<Ref>,
+    r#box: Option<Box<NodeBox>>,
     url: Option<String>,
     placeholder: Option<String>,
     source_node: Option<NodeId>,
     name_from_content_drafts: Vec<usize>,
     flags: DraftFlags,
     iframe: DraftIframe,
+    stitched_child_doc: Option<u32>,
     children: Vec<DraftChild>,
 }
 
@@ -681,6 +1176,8 @@ impl DraftNode {
         Self {
             role,
             name,
+            text: None,
+            on_top: None,
             checked: None,
             disabled: None,
             expanded: None,
@@ -691,12 +1188,14 @@ impl DraftNode {
             selected: None,
             aria_hidden: None,
             r#ref: None,
+            r#box: None,
             url: None,
             placeholder: None,
             source_node: None,
             name_from_content_drafts: Vec::new(),
             flags,
             iframe: DraftIframe::None,
+            stitched_child_doc: None,
             children: Vec::new(),
         }
     }
@@ -730,7 +1229,7 @@ impl DraftArena {
     }
 }
 
-fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooDeep> {
+fn prepare_aria_docs(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<PreparedAria, AriaTooDeep> {
     let AriaAsk {
         root,
         mut mode,
@@ -738,10 +1237,7 @@ fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooD
         boxes,
     } = ask;
     let Some(first_job) = resolve_initial_job(tree, root, FrameDepth::requested(depth)) else {
-        return Ok(AriaTree {
-            nodes: Vec::new(),
-            partial: Vec::new(),
-        });
+        return Ok(PreparedAria::empty());
     };
 
     let scale = if boxes { compute_box_scale(tree) } else { 1.0 };
@@ -773,7 +1269,8 @@ fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooD
                 let scheduled = schedule_child_jobs(slots, &job, &mut emitted_docs);
                 job_stack.extend(scheduled.jobs.into_iter().rev());
                 EmittedDoc::Frames {
-                    nodes: frames.nodes,
+                    arena: frames.arena,
+                    roots: frames.roots,
                     iframe_slots: scheduled.slots,
                 }
             }
@@ -786,11 +1283,7 @@ fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooD
         }
     }
 
-    let root_stitched = stitch_documents(&emit_order, &mut emitted_docs);
-    Ok(AriaTree {
-        nodes: root_stitched.nodes,
-        partial: root_stitched.partial,
-    })
+    Ok(stitch_prepared_documents(&emit_order, &mut emitted_docs))
 }
 
 fn resolve_initial_job(tree: &SnapshotTree, root: AriaRoot, depth: FrameDepth) -> Option<DocJob> {
@@ -852,9 +1345,11 @@ fn schedule_child_jobs(
                 let child_job_idx = emitted_docs.len();
                 emitted_docs.push(None);
                 resolved.push(ResolvedIframeSlot::ChildJob {
+                    draft_idx: slot.draft_idx,
                     job_idx: child_job_idx,
                     iframe_ref: slot.iframe_ref,
                     frame_label,
+                    tree_depth: slot.tree_depth,
                 });
                 child_jobs.push(DocJob {
                     job_idx: child_job_idx,
@@ -892,7 +1387,8 @@ fn emit_single_doc(
     scale: f64,
 ) -> Result<EmittedFrames, AriaTooDeep> {
     let empty = || EmittedFrames {
-        nodes: Vec::new(),
+        arena: DraftArena::new(),
+        roots: Vec::new(),
         iframe_slots: Vec::new(),
     };
     let Some(doc) = tree.document(job.doc_id) else {
@@ -909,16 +1405,16 @@ fn emit_single_doc(
         DistillMode::Default
     };
     let doc_seq = begin_doc_refs(mode, doc, is_full_doc);
-    let mut arena = run_doc_build(tree, name_cache, mode, doc, job.scope, doc_seq);
+    let (mut arena, has_inert) = run_doc_build(tree, name_cache, mode, doc, job.scope, doc_seq);
     if is_full_doc && let AriaMode::Ai { refs, .. } = mode {
         refs.finish_doc_capture(doc.token(), |key| tree.node_by_key(key).is_some());
     }
 
     if distill_mode.is_ai() {
-        resolve_name_from_content_drafts(&mut arena, name_cache);
+        resolve_name_from_content_drafts(&mut arena, name_cache, doc.node_range());
     }
     distill_draft(&mut arena, distill_mode, job.depth);
-    if distill_mode.is_ai() {
+    if distill_mode.is_ai() && has_inert {
         mark_inert_draft(&mut arena);
     }
 
@@ -960,7 +1456,7 @@ fn emit_single_doc(
         scale,
         effective_max_depth,
     };
-    Ok(materialize_draft(&mut arena, &mat_cfg))
+    Ok(finalize_doc_draft(arena, &mat_cfg))
 }
 
 /// How many levels the distilled tree has, a top-level node being level 1, walked without
@@ -1042,59 +1538,61 @@ fn run_doc_build(
     doc: &TreeDoc,
     scope: CaptureScope,
     doc_seq: Option<DocSeq>,
-) -> DraftArena {
+) -> (DraftArena, bool) {
     let state_form = StateForm::of(mode);
-    let (refs, render_active, distill_mode) = match mode {
+    let (ref_session, render_active, distill_mode) = match mode {
         AriaMode::Ai {
             refs,
             render_active,
-        } => (Some(&mut **refs), *render_active, DistillMode::Ai),
+        } => (
+            doc_seq.map(|seq| refs.doc_session(doc.token(), seq)),
+            *render_active,
+            DistillMode::Ai,
+        ),
         AriaMode::Default | AriaMode::Template => (None, false, DistillMode::Default),
     };
     let mut ctx = DocBuildCtx {
         tree,
         name_cache,
-        refs,
-        doc_seq,
+        ref_session,
         mode: distill_mode,
         state_form,
         render_active,
         scope,
+        has_inert: false,
         arena: DraftArena::new(),
     };
     build_doc_draft(&mut ctx, doc, scope);
-    ctx.arena
+    (ctx.arena, ctx.has_inert)
 }
 
 struct DocBuildCtx<'t, 'c, 'r> {
     tree: &'t SnapshotTree,
     name_cache: &'c NameCache<'t>,
-    refs: Option<&'r mut TabRefTable>,
-    doc_seq: Option<DocSeq>,
+    ref_session: Option<DocRefSession<'r>>,
     mode: DistillMode,
     state_form: StateForm,
     render_active: bool,
     scope: CaptureScope,
+    has_inert: bool,
     arena: DraftArena,
 }
 
 impl DocBuildCtx<'_, '_, '_> {
-    fn assign_ref(&mut self, node_id: NodeId, role: &str, name: &str) -> Option<String> {
-        let doc_seq = self.doc_seq?;
-        let refs = self.refs.as_deref_mut()?;
+    fn assign_ref(&mut self, node_id: NodeId, role: &str, name: &str) -> Option<Ref> {
+        let session = self.ref_session.as_mut()?;
         // A label this capture folds never gets here: it passes through before its element is
         // visited. One that reaches here stands on its own line, so the unfolded rule applies.
         if !self.tree.is_ref_worthy_unfolded(node_id) {
             return None;
         }
-        let key = self.tree.node_key(node_id)?;
+        let dom_id = self.tree.node(node_id)?.dom_node_id()?;
         let click_proxy = self
             .tree
             .fold()
             .click_proxy(node_id)
             .map(|proxy| proxy.label_key.clone());
-        let assigned = refs.assign_snapshot_ref(doc_seq, &key, role, name, click_proxy);
-        Some(assigned.to_string())
+        Some(session.assign(dom_id, role, name, click_proxy))
     }
 }
 
@@ -1323,9 +1821,11 @@ fn visit_iframe_node(
     let is_ai = ctx.mode.is_ai();
     let render_active = ctx.render_active;
     let assigned_ref = ctx.assign_ref(node.id(), "iframe", "");
+    let is_inert = node.state().inert();
+    ctx.has_inert |= is_inert;
     let flags = DraftFlags::default()
         .with_element(true)
-        .with_inert(node.state().inert())
+        .with_inert(is_inert)
         .with_pointer_cursor(is_ai && ctx.tree.fold().is_clickable_container(node.id()));
 
     let mut draft = DraftNode::new("iframe", String::new(), flags);
@@ -1432,6 +1932,9 @@ fn visit_element_node(
         .text()
         .to_owned();
     let assigned_ref = ctx.assign_ref(node.id(), role_str, &raw_name);
+    if node.state().inert() {
+        ctx.has_inert = true;
+    }
     let mut draft = build_element_draft(ctx, node, raw, role_str, raw_name, assigned_ref);
 
     let child_suppress = populate_field_value_and_mask(node, raw, &mut draft, frame.flags);
@@ -1449,7 +1952,7 @@ fn build_element_draft(
     raw: &ContentAttributes,
     role_str: &'static str,
     raw_name: String,
-    assigned_ref: Option<String>,
+    assigned_ref: Option<Ref>,
 ) -> DraftNode {
     let is_ai = ctx.mode.is_ai();
     let render_active = ctx.render_active;
@@ -1540,13 +2043,13 @@ fn push_logical_children_reversed(
     stack: &mut Vec<WalkFrame>,
 ) {
     let start = stack.len();
-    for child_id in tree.fold().logical_children(tree.nodes(), parent_id) {
+    fold::for_each_logical_child(tree.nodes(), parent_id, |child_id| {
         stack.push(WalkFrame {
             node_id: child_id,
             parent_draft,
             flags,
         });
-    }
+    });
     if let Some(added) = stack.get_mut(start..) {
         added.reverse();
     }
@@ -1562,15 +2065,28 @@ fn push_logical_children_reversed(
 /// is visited, so a contributor visited after that, such as an `aria-labelledby` target further
 /// down the page, has no ref yet and never counts. Drafts are allocated in the same preorder, so
 /// the contributors that count are the ones allocated before the node's subtree ends.
-fn resolve_name_from_content_drafts(arena: &mut DraftArena, name_cache: &NameCache<'_>) {
+fn resolve_name_from_content_drafts(
+    arena: &mut DraftArena,
+    name_cache: &NameCache<'_>,
+    doc_range: super::node_key::NodeRange,
+) {
     let subtree_ends = draft_subtree_ends(&arena.nodes);
-    let ref_draft_of: HashMap<NodeId, usize> = arena
-        .nodes
-        .iter()
-        .enumerate()
-        .filter(|(_, draft)| draft.r#ref.is_some())
-        .filter_map(|(draft_idx, draft)| Some((draft.source_node?, draft_idx)))
-        .collect();
+    let range_start = doc_range.start().index();
+    let mut ref_draft_of = vec![u32::MAX; doc_range.len()];
+    for (draft_idx, draft) in arena.nodes.iter().enumerate() {
+        if draft.r#ref.is_none() {
+            continue;
+        }
+        let Some(source) = draft.source_node else {
+            continue;
+        };
+        if let Some(rel) = source.index().checked_sub(range_start)
+            && let Some(slot) = ref_draft_of.get_mut(rel)
+            && let Ok(idx_u32) = u32::try_from(draft_idx)
+        {
+            *slot = idx_u32;
+        }
+    }
 
     for (draft_idx, draft) in arena.nodes.iter_mut().enumerate() {
         if draft.r#ref.is_none() {
@@ -1587,7 +2103,11 @@ fn resolve_name_from_content_drafts(arena: &mut DraftArena, name_cache: &NameCac
             .name(source, NameVisibility::VisibleOnly)
             .contributors()
             .iter()
-            .filter_map(|contributor| ref_draft_of.get(contributor).copied())
+            .filter_map(|contributor| {
+                let rel = contributor.index().checked_sub(range_start)?;
+                let mapped = *ref_draft_of.get(rel)?;
+                (mapped != u32::MAX).then_some(mapped as usize)
+            })
             .filter(|&contrib_draft| contrib_draft != draft_idx && contrib_draft < visited_by)
             .collect();
     }
@@ -1639,7 +2159,7 @@ fn distill_draft(arena: &mut DraftArena, mode: DistillMode, frame_depth: FrameDe
         .map_or_else(Vec::new, |root| mem::take(&mut root.children));
     root_pending.reverse();
 
-    let mut pending_content: HashSet<usize> = HashSet::new();
+    let mut pending_content = vec![false; arena.nodes.len()];
     let mut stack = vec![DistillFrame {
         node_idx: 0,
         depth: 0,
@@ -1719,40 +2239,47 @@ fn enter_redundant_name_tracking(
     draft_idx: usize,
     node: &DraftNode,
     beyond_depth: bool,
-    pending_content: &mut HashSet<usize>,
+    pending_content: &mut [bool],
 ) {
     if node.r#ref.is_none() {
         return;
     }
     for &contrib_idx in &node.name_from_content_drafts {
-        pending_content.insert(contrib_idx);
+        if let Some(slot) = pending_content.get_mut(contrib_idx) {
+            *slot = true;
+        }
     }
     let is_leaf_generic = node.role == "generic"
         && node
             .children
             .iter()
             .all(|child| matches!(child, DraftChild::Text(_)));
-    if !beyond_depth && !is_leaf_generic {
-        pending_content.remove(&draft_idx);
+    if !beyond_depth
+        && !is_leaf_generic
+        && let Some(slot) = pending_content.get_mut(draft_idx)
+    {
+        *slot = false;
     }
 }
 
 /// `removeRedundantNames.exit`: when every contributor is already shown, printed itself or carried
 /// by a name kept below, the node's name only repeats them and is cleared. Otherwise the kept name
 /// now carries their text, so they stop counting as unshown for the ancestors' names.
-fn exit_redundant_name_tracking(node: &mut DraftNode, pending_content: &mut HashSet<usize>) {
+fn exit_redundant_name_tracking(node: &mut DraftNode, pending_content: &mut [bool]) {
     if node.r#ref.is_none() || node.name_from_content_drafts.is_empty() {
         return;
     }
     if node
         .name_from_content_drafts
         .iter()
-        .all(|contrib_idx| !pending_content.contains(contrib_idx))
+        .all(|&contrib_idx| !pending_content.get(contrib_idx).copied().unwrap_or(false))
     {
         node.name.clear();
     } else {
         for &contrib_idx in &node.name_from_content_drafts {
-            pending_content.remove(&contrib_idx);
+            if let Some(slot) = pending_content.get_mut(contrib_idx) {
+                *slot = false;
+            }
         }
     }
 }
@@ -1763,7 +2290,7 @@ fn apply_distill_exit(
     parent_frame: &mut DistillFrame,
     mode: DistillMode,
     is_click_target_root: bool,
-    pending_content: &mut HashSet<usize>,
+    pending_content: &mut [bool],
 ) {
     if mode.is_ai() {
         let remove_img = nodes.get(node_idx).is_some_and(|node| {
@@ -1790,8 +2317,10 @@ fn apply_distill_exit(
         if remove_repeating {
             // The removed text now survives only in the names derived from it, so those names
             // must stay: the node counts as unprinted again, as upstream re-adds its ref.
-            if nodes.get(node_idx).is_some_and(|node| node.r#ref.is_some()) {
-                pending_content.insert(node_idx);
+            if nodes.get(node_idx).is_some_and(|node| node.r#ref.is_some())
+                && let Some(slot) = pending_content.get_mut(node_idx)
+            {
+                *slot = true;
             }
             return;
         }
@@ -1813,6 +2342,13 @@ fn apply_distill_exit(
 }
 
 fn merge_string_children(node: &mut DraftNode) {
+    if !node
+        .children
+        .iter()
+        .any(|child| matches!(child, DraftChild::Text(_)))
+    {
+        return;
+    }
     let old = mem::take(&mut node.children);
     let mut merged = Vec::with_capacity(old.len());
     let mut buf = String::new();
@@ -2001,158 +2537,88 @@ struct MaterializeConfig<'a> {
     effective_max_depth: usize,
 }
 
-struct MatFrame {
-    node: AriaNode,
-    pending_children: Vec<DraftChild>,
-    tree_depth: usize,
-    child_ancestor_has_pointer: bool,
-}
-
-fn materialize_draft(arena: &mut DraftArena, cfg: &MaterializeConfig<'_>) -> EmittedFrames {
+/// Finalizes a document's distilled draft arena in place: folds sole-text children, enforces
+/// `effective_max_depth`, computes pointer-cursor flags, boxes, and D20 prohibited names, converts
+/// top-level text runs into `text` drafts, and records iframe slots in preorder without building
+/// `AriaNode`s.
+fn finalize_doc_draft(mut arena: DraftArena, cfg: &MaterializeConfig<'_>) -> EmittedFrames {
     let root_children = arena
         .nodes
         .first_mut()
         .map_or_else(Vec::new, |root| mem::take(&mut root.children));
 
-    let mut top_nodes = Vec::with_capacity(root_children.len());
+    let mut roots: Vec<u32> = Vec::with_capacity(root_children.len());
     let mut iframe_slots = Vec::new();
-    let mut stack: Vec<MatFrame> = Vec::new();
+    let mut stack: Vec<(usize, usize, bool)> = Vec::new();
 
     for top_child in root_children {
         match top_child {
-            DraftChild::Text(text) => top_nodes.push(text_aria_node(text)),
+            DraftChild::Text(text) => {
+                let mut text_draft = DraftNode::new("text", String::new(), DraftFlags::default());
+                text_draft.text = Some(text);
+                let idx = arena.push(text_draft);
+                if let Ok(idx_u32) = u32::try_from(idx) {
+                    roots.push(idx_u32);
+                }
+            }
             DraftChild::Node(idx) => {
-                let Some(frame) = start_mat_frame(arena, cfg, idx, 0, false, &mut iframe_slots)
-                else {
-                    continue;
-                };
-                stack.push(frame);
-                drain_mat_stack(arena, cfg, &mut stack, &mut iframe_slots, &mut top_nodes);
+                if let Ok(idx_u32) = u32::try_from(idx) {
+                    roots.push(idx_u32);
+                }
+                stack.push((idx, 0, false));
+                while let Some((cur_idx, tree_depth, ancestor_has_pointer)) = stack.pop() {
+                    let Some(draft) = arena.nodes.get_mut(cur_idx) else {
+                        continue;
+                    };
+                    let is_at_depth_limit = tree_depth >= cfg.effective_max_depth;
+                    if draft.role == "iframe" {
+                        record_iframe_slot(cur_idx, draft, tree_depth, &mut iframe_slots);
+                    }
+                    let sets_pointer = cfg.mode.is_ai()
+                        && draft.r#ref.is_some()
+                        && draft.flags.pointer_cursor()
+                        && !ancestor_has_pointer;
+                    if sets_pointer {
+                        draft.flags.set_emit_pointer_cursor();
+                    }
+                    if cfg.boxes {
+                        draft.r#box = draft
+                            .source_node
+                            .and_then(|node_id| {
+                                compute_node_box(cfg.tree, node_id, cfg.frame_origin, cfg.scale)
+                            })
+                            .map(Box::new);
+                    }
+                    if draft.children.len() == 1
+                        && matches!(draft.children.first(), Some(DraftChild::Text(_)))
+                        && let Some(DraftChild::Text(only)) = draft.children.pop()
+                    {
+                        draft.text = Some(only);
+                    } else if is_at_depth_limit {
+                        draft.children.clear();
+                    }
+                    apply_d20_prohibited_name_draft(draft);
+                    let child_ancestor_pointer = ancestor_has_pointer || sets_pointer;
+                    let next_depth = tree_depth.saturating_add(1);
+                    for child in draft.children.iter().rev() {
+                        if let DraftChild::Node(child_idx) = *child {
+                            stack.push((child_idx, next_depth, child_ancestor_pointer));
+                        }
+                    }
+                }
             }
         }
     }
 
     EmittedFrames {
-        nodes: top_nodes,
+        arena,
+        roots,
         iframe_slots,
     }
 }
 
-fn drain_mat_stack(
-    arena: &mut DraftArena,
-    cfg: &MaterializeConfig<'_>,
-    stack: &mut Vec<MatFrame>,
-    iframe_slots: &mut Vec<EmittedIframe>,
-    top_nodes: &mut Vec<AriaNode>,
-) {
-    while let Some(top) = stack.last_mut() {
-        if let Some(child) = top.pending_children.pop() {
-            match child {
-                DraftChild::Text(text) => top.node.children.push(AriaChild::Text(text)),
-                DraftChild::Node(child_idx) => {
-                    let next_depth = top.tree_depth.saturating_add(1);
-                    let anc_pointer = top.child_ancestor_has_pointer;
-                    if let Some(child_frame) = start_mat_frame(
-                        arena,
-                        cfg,
-                        child_idx,
-                        next_depth,
-                        anc_pointer,
-                        iframe_slots,
-                    ) {
-                        stack.push(child_frame);
-                    }
-                }
-            }
-            continue;
-        }
-
-        let Some(mut finished) = stack.pop() else {
-            break;
-        };
-        apply_d20_prohibited_name(&mut finished.node);
-        if let Some(parent) = stack.last_mut() {
-            parent
-                .node
-                .children
-                .push(AriaChild::Node(Box::new(finished.node)));
-        } else {
-            top_nodes.push(finished.node);
-        }
-    }
-}
-
-fn start_mat_frame(
-    arena: &mut DraftArena,
-    cfg: &MaterializeConfig<'_>,
-    idx: usize,
-    tree_depth: usize,
-    ancestor_has_pointer: bool,
-    iframe_slots: &mut Vec<EmittedIframe>,
-) -> Option<MatFrame> {
-    let draft = arena.nodes.get_mut(idx)?;
-    let is_at_depth_limit = tree_depth >= cfg.effective_max_depth;
-    if draft.role == "iframe" {
-        record_iframe_slot(draft, tree_depth, iframe_slots);
-    }
-
-    let sets_pointer = cfg.mode.is_ai()
-        && draft.r#ref.is_some()
-        && draft.flags.pointer_cursor()
-        && !ancestor_has_pointer;
-    let node_box = if cfg.boxes {
-        draft
-            .source_node
-            .and_then(|node_id| compute_node_box(cfg.tree, node_id, cfg.frame_origin, cfg.scale))
-    } else {
-        None
-    };
-
-    let draft_name = mem::take(&mut draft.name);
-    let mut node = AriaNode {
-        role: draft.role.to_owned(),
-        name: (!draft_name.is_empty()).then_some(draft_name),
-        checked: draft.checked,
-        disabled: draft.disabled,
-        expanded: draft.expanded,
-        active: draft.active,
-        inert: draft.flags.mark_inert().then_some(true),
-        on_top: None,
-        invalid: draft.invalid,
-        level: draft.level.take(),
-        pressed: draft.pressed,
-        selected: draft.selected,
-        aria_hidden: draft.aria_hidden,
-        r#ref: draft.r#ref.take(),
-        cursor: sets_pointer.then(|| "pointer".to_owned()),
-        r#box: node_box,
-        url: draft.url.take(),
-        placeholder: draft.placeholder.take(),
-        text: None,
-        children: Vec::new(),
-    };
-
-    let mut draft_children = mem::take(&mut draft.children);
-    let mut pending_children = Vec::new();
-    if draft_children.len() == 1
-        && matches!(draft_children.first(), Some(DraftChild::Text(_)))
-        && let Some(DraftChild::Text(only)) = draft_children.pop()
-    {
-        node.text = Some(only);
-    } else if !is_at_depth_limit && !draft_children.is_empty() {
-        draft_children.reverse();
-        pending_children = draft_children;
-    }
-
-    Some(MatFrame {
-        node,
-        pending_children,
-        tree_depth,
-        child_ancestor_has_pointer: ancestor_has_pointer || sets_pointer,
-    })
-}
-
 fn record_iframe_slot(
+    draft_idx: usize,
     draft: &mut DraftNode,
     tree_depth: usize,
     iframe_slots: &mut Vec<EmittedIframe>,
@@ -2175,133 +2641,143 @@ fn record_iframe_slot(
         DraftIframe::None => EmittedIframeKind::Empty,
     };
     iframe_slots.push(EmittedIframe {
-        iframe_ref: draft.r#ref.clone().unwrap_or_default(),
+        draft_idx,
+        iframe_ref: draft.r#ref.map(|r| r.to_string()).unwrap_or_default(),
         kind,
         tree_depth,
     });
 }
 
-fn apply_d20_prohibited_name(node: &mut AriaNode) {
-    if NAME_PROHIBITED_ROLES.contains(&node.role.as_str()) {
-        let taken = node.name.take();
-        if node.text.is_none() && node.children.is_empty() {
-            node.text = taken;
+fn apply_d20_prohibited_name_draft(draft: &mut DraftNode) {
+    if NAME_PROHIBITED_ROLES.contains(&draft.role) {
+        let taken = mem::take(&mut draft.name);
+        if draft.text.is_none() && draft.children.is_empty() && !taken.is_empty() {
+            draft.text = Some(taken);
         }
     }
 }
 
-/// A document stitched with its children, or the refusal its iframe slot reports instead.
-type StitchedSlot = Option<Result<StitchedDoc, AriaTooDeep>>;
+enum StitchedPreparedOutcome {
+    Ready {
+        doc_slot: u32,
+        has_roots: bool,
+        partial: Vec<SnapshotPartialFrame>,
+    },
+    TooDeep(AriaTooDeep),
+}
 
-fn stitch_documents(emit_order: &[usize], emitted_docs: &mut [Option<EmittedDoc>]) -> StitchedDoc {
-    let mut stitched: Vec<StitchedSlot> = Vec::with_capacity(emitted_docs.len());
-    stitched.resize_with(emitted_docs.len(), || None);
+fn stitch_prepared_documents(
+    emit_order: &[usize],
+    emitted_docs: &mut [Option<EmittedDoc>],
+) -> PreparedAria {
+    let mut docs: Vec<PreparedDoc> = Vec::with_capacity(emitted_docs.len());
+    let mut outcomes: Vec<Option<StitchedPreparedOutcome>> = Vec::with_capacity(emitted_docs.len());
+    outcomes.resize_with(emitted_docs.len(), || None);
 
     for &job_idx in emit_order.iter().rev() {
-        let done = match emitted_docs.get_mut(job_idx).and_then(Option::take) {
+        let outcome = match emitted_docs.get_mut(job_idx).and_then(Option::take) {
             Some(EmittedDoc::Frames {
-                nodes,
+                mut arena,
+                roots,
                 iframe_slots,
-            }) => Ok(stitch_single_doc(nodes, iframe_slots, &mut stitched)),
-            Some(EmittedDoc::TooDeep(too_deep)) => Err(too_deep),
-            None => continue,
-        };
-        if let Some(slot) = stitched.get_mut(job_idx) {
-            *slot = Some(done);
-        }
-    }
-
-    match stitched.first_mut().and_then(Option::take) {
-        Some(Ok(root)) => root,
-        _ => StitchedDoc {
-            nodes: Vec::new(),
-            partial: Vec::new(),
-        },
-    }
-}
-
-fn stitch_single_doc(
-    mut nodes: Vec<AriaNode>,
-    mut iframe_slots: Vec<ResolvedIframeSlot>,
-    stitched: &mut [StitchedSlot],
-) -> StitchedDoc {
-    let mut doc_partial = Vec::new();
-
-    if !iframe_slots.is_empty() {
-        let mut walk: Vec<(&mut AriaNode, usize)> =
-            nodes.iter_mut().rev().map(|node| (node, 3)).collect();
-        let mut slot_cursor = 0usize;
-
-        while let Some((node, obj_depth)) = walk.pop() {
-            if node.role == "iframe" {
-                if let Some(slot) = iframe_slots.get_mut(slot_cursor) {
-                    slot_cursor += 1;
-                    attach_iframe_slot(
-                        node,
-                        mem::replace(slot, ResolvedIframeSlot::Empty),
-                        obj_depth,
-                        stitched,
+            }) => {
+                let mut doc_partial = Vec::new();
+                for slot in iframe_slots {
+                    attach_prepared_iframe_slot(
+                        &mut arena,
+                        slot,
+                        &docs,
+                        &mut outcomes,
                         &mut doc_partial,
                     );
                 }
-                continue;
-            }
-            let next_depth = obj_depth.saturating_add(2);
-            for child in node.children.iter_mut().rev() {
-                if let AriaChild::Node(child_node) = child {
-                    walk.push((child_node, next_depth));
+                let has_roots = !roots.is_empty();
+                let doc_slot = u32::try_from(docs.len()).unwrap_or(u32::MAX);
+                docs.push(PreparedDoc { arena, roots });
+                StitchedPreparedOutcome::Ready {
+                    doc_slot,
+                    has_roots,
+                    partial: doc_partial,
                 }
             }
+            Some(EmittedDoc::TooDeep(too_deep)) => StitchedPreparedOutcome::TooDeep(too_deep),
+            None => continue,
+        };
+        if let Some(slot) = outcomes.get_mut(job_idx) {
+            *slot = Some(outcome);
         }
     }
 
-    StitchedDoc {
-        nodes,
-        partial: doc_partial,
+    match outcomes.first_mut().and_then(Option::take) {
+        Some(StitchedPreparedOutcome::Ready {
+            doc_slot, partial, ..
+        }) => {
+            let top_roots = docs.get(doc_slot as usize).map_or_else(Vec::new, |doc| {
+                doc.roots
+                    .iter()
+                    .map(|&node| PreparedNodeId {
+                        doc: doc_slot,
+                        node,
+                    })
+                    .collect()
+            });
+            PreparedAria {
+                docs,
+                top_roots,
+                partial,
+            }
+        }
+        _ => PreparedAria::empty(),
     }
 }
 
-fn attach_iframe_slot(
-    node: &mut AriaNode,
+fn attach_prepared_iframe_slot(
+    arena: &mut DraftArena,
     slot: ResolvedIframeSlot,
-    obj_depth: usize,
-    stitched: &mut [StitchedSlot],
-    doc_partial: &mut Vec<AriaPartialFrame>,
+    docs: &[PreparedDoc],
+    outcomes: &mut [Option<StitchedPreparedOutcome>],
+    doc_partial: &mut Vec<SnapshotPartialFrame>,
 ) {
     match slot {
         ResolvedIframeSlot::ChildJob {
+            draft_idx,
             job_idx,
             iframe_ref,
             frame_label,
+            tree_depth,
         } => {
-            let child = match stitched.get_mut(job_idx).and_then(Option::take) {
-                Some(Ok(child)) => child,
-                Some(Err(too_deep)) => {
-                    doc_partial.push(AriaPartialFrame {
-                        r#ref: iframe_ref,
-                        frame: frame_label,
-                        reason: too_deep.to_string(),
-                    });
-                    return;
-                }
-                None => return,
-            };
-            if !child.nodes.is_empty() {
-                let deepest = neo_snapshot::json_depth(&child.nodes);
+            let (child_slot, has_roots, child_partial) =
+                match outcomes.get_mut(job_idx).and_then(Option::take) {
+                    Some(StitchedPreparedOutcome::Ready {
+                        doc_slot,
+                        has_roots,
+                        partial,
+                    }) => (doc_slot, has_roots, partial),
+                    Some(StitchedPreparedOutcome::TooDeep(too_deep)) => {
+                        doc_partial.push(SnapshotPartialFrame {
+                            r#ref: iframe_ref,
+                            frame: frame_label,
+                            reason: too_deep.to_string(),
+                        });
+                        return;
+                    }
+                    None => return,
+                };
+            if has_roots {
+                let deepest = prepared_doc_json_depth(docs, child_slot);
+                let obj_depth = 3_usize.saturating_add(tree_depth.saturating_mul(2));
                 let total_depth = obj_depth.saturating_add(deepest);
                 if total_depth > MAX_JSON_DEPTH {
-                    doc_partial.push(AriaPartialFrame {
+                    doc_partial.push(SnapshotPartialFrame {
                         r#ref: iframe_ref,
                         frame: frame_label,
                         reason: depth_error(total_depth.saturating_sub(1) / 2),
                     });
                 } else {
-                    node.children = child
-                        .nodes
-                        .into_iter()
-                        .map(|child_node| AriaChild::Node(Box::new(child_node)))
-                        .collect();
-                    doc_partial.extend(child.partial);
+                    if let Some(iframe) = arena.nodes.get_mut(draft_idx) {
+                        iframe.stitched_child_doc = Some(child_slot);
+                    }
+                    doc_partial.extend(child_partial);
                 }
             }
         }
@@ -2310,7 +2786,7 @@ fn attach_iframe_slot(
             frame_label,
             reason,
         } => {
-            doc_partial.push(AriaPartialFrame {
+            doc_partial.push(SnapshotPartialFrame {
                 r#ref: iframe_ref,
                 frame: frame_label,
                 reason,
@@ -2318,6 +2794,49 @@ fn attach_iframe_slot(
         }
         ResolvedIframeSlot::Empty => {}
     }
+}
+
+/// Exact equivalent of [`neo_snapshot::json_depth`] over a stitched [`PreparedDoc`] without
+/// materializing `AriaNode`s.
+fn prepared_doc_json_depth(docs: &[PreparedDoc], root_doc: u32) -> usize {
+    let Some(doc) = docs.get(root_doc as usize) else {
+        return 1;
+    };
+    let mut pending: Vec<(u32, u32, usize)> =
+        doc.roots.iter().map(|&idx| (root_doc, idx, 2)).collect();
+    let mut deepest = 1;
+    while let Some((cur_doc, idx, level)) = pending.pop() {
+        let Some(node) = docs
+            .get(cur_doc as usize)
+            .and_then(|d| d.arena.nodes.get(idx as usize))
+        else {
+            continue;
+        };
+        let has_children = match node.stitched_child_doc {
+            Some(child_doc) => docs
+                .get(child_doc as usize)
+                .is_some_and(|d| !d.roots.is_empty()),
+            None => !node.children.is_empty(),
+        };
+        let below = node.r#box.is_some() || has_children;
+        deepest = deepest.max(if below { level + 1 } else { level });
+        if let Some(child_doc) = node.stitched_child_doc {
+            if let Some(d) = docs.get(child_doc as usize) {
+                for &child_idx in &d.roots {
+                    pending.push((child_doc, child_idx, level + 2));
+                }
+            }
+        } else {
+            for child in &node.children {
+                if let DraftChild::Node(child_idx) = *child
+                    && let Ok(child_u32) = u32::try_from(child_idx)
+                {
+                    pending.push((cur_doc, child_u32, level + 2));
+                }
+            }
+        }
+    }
+    deepest
 }
 
 fn compute_box_scale(tree: &SnapshotTree) -> f64 {
@@ -2492,31 +3011,6 @@ const fn invalid(state: InvalidState) -> Invalid {
         InvalidState::True => Invalid::True,
         InvalidState::Grammar => Invalid::Grammar,
         InvalidState::Spelling => Invalid::Spelling,
-    }
-}
-
-fn text_aria_node(text: String) -> AriaNode {
-    AriaNode {
-        role: "text".to_owned(),
-        name: None,
-        checked: None,
-        disabled: None,
-        expanded: None,
-        active: None,
-        inert: None,
-        on_top: None,
-        invalid: None,
-        level: None,
-        pressed: None,
-        selected: None,
-        aria_hidden: None,
-        r#ref: None,
-        cursor: None,
-        r#box: None,
-        url: None,
-        placeholder: None,
-        text: Some(text),
-        children: Vec::new(),
     }
 }
 

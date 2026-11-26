@@ -2,17 +2,17 @@
 //! for one node, and the whole tree with the frames that could not be read.
 //!
 //! ```text
-//!  Snapshot ─▶ tree_text: walks the tree on its own stack, places each # partial: comment;
-//!                 │ yaml_lines, with an iframe's fallback text dropped, feeds mode: 'full'
-//!                 │ one node at a time, without its children (NodeAlone)
-//!                 ▼
-//!              node_text: upstream's createKey and visit ─▶ YamlEscape: upstream's quoting
+//!  SnapshotView ─▶ tree_text_source: walks the tree on its own stack, places # partial: comments;
+//!                    │ yaml_lines_source / visit_tree_lines, with an iframe's fallback text
+//!                    │ dropped, feed mode: 'full' one node at a time without children (NodeAlone)
+//!                    ▼
+//!                  node_text_into: upstream's createKey and visit ─▶ YamlEscape: upstream's quoting
 //! ```
 //!
 //! This is the crate's one copy of upstream's printer: every format prints its tree lines with
-//! `node_text`, so no two formats can print a key differently. Upstream's renderer recurses; here
-//! the walk keeps its own stack and hands the printer one node without its children, which is how
-//! the TypeScript renderer already calls upstream's function.
+//! `node_text_into`, so no two formats can print a key differently. Upstream's renderer recurses;
+//! here the walk keeps its own stack and hands the printer one node without its children, which is
+//! how the TypeScript renderer already calls upstream's function.
 //!
 //! Ported: `createKey`, `visit`, `visitText` and `indent` of `isomorphic/ariaSnapshotRenderer.ts`,
 //! and all of `isomorphic/yaml.ts`. Not ported: the regular-expression mode
@@ -31,6 +31,10 @@ mod tests;
 mod tree_text;
 mod yaml_escape;
 
-pub(crate) use node_text::{NodeAlone, node_text, text_line};
+#[cfg(test)]
+pub(crate) use node_text::node_text;
+pub(crate) use node_text::{NodeAlone, node_text_into, text_line};
 pub use ported_from::{PORTED_FROM, PortedFile};
-pub(crate) use tree_text::{IframeText, TreeLine, tree_lines, tree_text, yaml_lines};
+pub(crate) use tree_text::{
+    IframeText, TreeLine, tree_text_source, visit_tree_lines, yaml_lines_source,
+};

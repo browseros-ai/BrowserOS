@@ -13,9 +13,10 @@
 //! so a trace's clip cannot push the cover's controls and the call log out of the record.
 
 use crate::aria_node::AriaNode;
+use crate::aria_source::SnapshotView;
 use crate::form::Passed;
 use crate::js;
-use crate::neo::neo_text;
+use crate::neo::neo_text_source;
 use crate::snapshot::Snapshot;
 
 /// The most of the cover's snapshot the block carries, in UTF-16 units, each line counted with
@@ -44,7 +45,7 @@ pub fn cover_block(tree: Vec<AriaNode>) -> Option<String> {
         tree,
         ..Snapshot::default()
     };
-    let text = neo_text(&snapshot, &Passed::default()).text;
+    let text = neo_text_source(&SnapshotView::from_snapshot(&snapshot), &Passed::default()).text;
     let mut kept: Vec<String> = Vec::new();
     let mut used = 0;
     for line in text.split('\n') {

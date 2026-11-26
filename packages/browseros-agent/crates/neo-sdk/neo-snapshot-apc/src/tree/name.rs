@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::sync::OnceLock;
 use std::{fmt, mem};
 
@@ -11,6 +12,7 @@ use super::node_key::{DocId, DomNodeId, NodeId};
 use super::role::{self, Role};
 use super::snapshot_tree::SnapshotTree;
 use super::state::InvalidState;
+use super::tree_node::TreeNode;
 use super::{hidden, option_slot};
 
 static EMPTY_NAME: Name = Name {
@@ -166,6 +168,7 @@ pub struct NameCache<'a> {
     index: LookupIndex<'a>,
     names_visible: OnceLock<Vec<OnceLock<Name>>>,
     names_hidden: OnceLock<Vec<OnceLock<Name>>>,
+    desc_visible: OnceLock<Vec<OnceLock<CachedDesc>>>,
     descriptions_visible: OnceLock<Vec<OnceLock<Description>>>,
     descriptions_hidden: OnceLock<Vec<OnceLock<Description>>>,
     error_messages: OnceLock<Vec<OnceLock<String>>>,
@@ -179,6 +182,7 @@ impl<'a> NameCache<'a> {
             index: LookupIndex::new(tree),
             names_visible: OnceLock::new(),
             names_hidden: OnceLock::new(),
+            desc_visible: OnceLock::new(),
             descriptions_visible: OnceLock::new(),
             descriptions_hidden: OnceLock::new(),
             error_messages: OnceLock::new(),
@@ -189,10 +193,17 @@ impl<'a> NameCache<'a> {
     /// bounds.
     #[must_use]
     pub fn name(&self, id: NodeId, visibility: NameVisibility) -> &Name {
-        let len = self.index.tree.nodes().len();
-        if id.index() >= len {
+        let Some(node) = self.index.tree.node(id) else {
+            return &EMPTY_NAME;
+        };
+        let Some(raw) = node.raw_attributes() else {
+            return &EMPTY_NAME;
+        };
+        if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) || is_name_prohibited(node.role())
+        {
             return &EMPTY_NAME;
         }
+        let len = self.index.tree.nodes().len();
         let table = match visibility {
             NameVisibility::VisibleOnly => &self.names_visible,
             NameVisibility::IncludeHidden => &self.names_hidden,
@@ -201,7 +212,14 @@ impl<'a> NameCache<'a> {
         let Some(slot) = slots.get(id.index()) else {
             return &EMPTY_NAME;
         };
-        slot.get_or_init(|| compute_accessible_name(&self.index, id, visibility))
+        slot.get_or_init(|| {
+            let desc_cache = matches!(visibility, NameVisibility::VisibleOnly).then(|| {
+                self.desc_visible
+                    .get_or_init(|| alloc_slots(len))
+                    .as_slice()
+            });
+            compute_accessible_name_cached(&self.index, id, visibility, desc_cache)
+        })
     }
 
     /// Returns the memoized accessible [`Description`] for `id`, or an empty [`Description`] if
@@ -325,6 +343,27 @@ pub fn as_flat_string(text: &str) -> String {
 /// `U+00A0` and `U+FEFF`, excluding `U+0085`) to a single ASCII space.
 #[must_use]
 pub fn normalize_whitespace(text: &str) -> String {
+    if text.is_ascii() {
+        let mut out = String::with_capacity(text.len());
+        let mut started = false;
+        let mut pending_space = false;
+        for &byte in text.as_bytes() {
+            if matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c) {
+                if started {
+                    pending_space = true;
+                }
+            } else {
+                if pending_space {
+                    out.push(' ');
+                    pending_space = false;
+                }
+                out.push(char::from(byte));
+                started = true;
+            }
+        }
+        return out;
+    }
+
     let mut out = String::with_capacity(text.len());
     let mut started = false;
     let mut pending_space = false;
@@ -390,6 +429,10 @@ struct LookupIndex<'a> {
     tree: &'a SnapshotTree,
     by_doc_dom: OnceLock<HashMap<(DocId, DomNodeId), NodeId>>,
     labels_for: OnceLock<HashMap<(DocId, DomNodeId), Vec<NodeId>>>,
+    /// Prefix sums of nodes targeted by any `aria-labelledby` or carrying `label_for_dom_node_id`,
+    /// used to verify in O(1) that caching a descendant subtree cannot hide a node from `visited`
+    /// checks performed by later cross-reference jumps.
+    cross_ref_prefix: OnceLock<Vec<u32>>,
 }
 
 impl<'a> LookupIndex<'a> {
@@ -398,7 +441,58 @@ impl<'a> LookupIndex<'a> {
             tree,
             by_doc_dom: OnceLock::new(),
             labels_for: OnceLock::new(),
+            cross_ref_prefix: OnceLock::new(),
         }
+    }
+
+    fn subtree_has_cross_ref_target(&self, id: NodeId) -> bool {
+        let Some(node) = self.tree.node(id) else {
+            return true;
+        };
+        let prefix = self.cross_ref_prefix.get_or_init(|| {
+            let nodes = self.tree.nodes();
+            let mut flags = vec![0_u8; nodes.len()];
+            for cur in nodes {
+                let Some(raw) = cur.raw_attributes() else {
+                    continue;
+                };
+                if hidden::is_ua_shadow(raw) || hidden::is_text_node(raw) {
+                    continue;
+                }
+                if raw.label_for_dom_node_id.is_some()
+                    && let Some(slot) = flags.get_mut(cur.id().index())
+                {
+                    *slot = 1;
+                }
+                if let Some(browseros) = raw.browseros.as_deref()
+                    && !browseros.labelledby.is_empty()
+                {
+                    for item in &browseros.labelledby {
+                        if let Some(raw_dom_id) = item.dom_node_id
+                            && let Some(target_id) =
+                                self.node_by_doc_dom(cur.doc(), DomNodeId::new(raw_dom_id))
+                            && let Some(slot) = flags.get_mut(target_id.index())
+                        {
+                            *slot = 1;
+                        }
+                    }
+                }
+            }
+            let mut sums = Vec::with_capacity(nodes.len() + 1);
+            let mut acc = 0_u32;
+            sums.push(0);
+            for flag in flags {
+                acc = acc.saturating_add(u32::from(flag));
+                sums.push(acc);
+            }
+            sums
+        });
+        let start = prefix.get(id.index()).copied().unwrap_or(0);
+        let end = prefix
+            .get(node.subtree_end().index())
+            .copied()
+            .unwrap_or(start);
+        start != end
     }
 
     fn node_by_doc_dom(&self, doc: DocId, dom_id: DomNodeId) -> Option<NodeId> {
@@ -537,7 +631,7 @@ impl RefTraversal {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct EvalOptions {
     visibility: NameVisibility,
     embedded_in_target: Option<EmbeddedTarget>,
@@ -552,6 +646,17 @@ impl EvalOptions {
         Self {
             visibility,
             embedded_in_target: Some(EmbeddedTarget::SelfNode),
+            embedded_in_labelledby: RefTraversal::None,
+            embedded_in_describedby: RefTraversal::None,
+            embedded_in_label: RefTraversal::None,
+            embedded_in_native: RefTraversal::None,
+        }
+    }
+
+    const fn canonical_descendant(visibility: NameVisibility) -> Self {
+        Self {
+            visibility,
+            embedded_in_target: Some(EmbeddedTarget::Descendant),
             embedded_in_labelledby: RefTraversal::None,
             embedded_in_describedby: RefTraversal::None,
             embedded_in_label: RefTraversal::None,
@@ -777,9 +882,66 @@ fn push_children_reversed(
     }
 }
 
-/// Iterative walker over direct logical children of a node in flat-tree preorder within the same
-/// document, skipping `ua_shadow` text nodes and transparently descending through `ua_shadow`
-/// containers.
+/// Visits direct logical children of `parent_id` in flat-tree preorder within the same document,
+/// skipping `ua_shadow` text nodes (unless `keep_ua_shadow_text` is set for `<option>`) and
+/// transparently descending through `ua_shadow` containers without heap allocation on the common
+/// non-`ua_shadow` path.
+fn visit_logical_children<B>(
+    tree: &SnapshotTree,
+    parent_id: NodeId,
+    keep_ua_shadow_text: bool,
+    mut visit: impl FnMut(NodeId) -> ControlFlow<B>,
+) -> ControlFlow<B> {
+    let Some(parent) = tree.node(parent_id) else {
+        return ControlFlow::Continue(());
+    };
+    let doc = parent.doc();
+    let mut shadow_stack = Vec::new();
+    for child in tree.children(parent_id) {
+        if child.doc() != doc {
+            continue;
+        }
+        let Some(raw) = child.raw_attributes() else {
+            continue;
+        };
+        if !hidden::is_ua_shadow(raw) {
+            visit(child.id())?;
+            continue;
+        }
+        if hidden::is_text_node(raw) {
+            if keep_ua_shadow_text {
+                visit(child.id())?;
+            }
+            continue;
+        }
+        push_children_reversed(tree, child.id(), doc, &mut shadow_stack);
+        while let Some(desc_id) = shadow_stack.pop() {
+            let Some(desc) = tree.node(desc_id) else {
+                continue;
+            };
+            if desc.doc() != doc {
+                continue;
+            }
+            let Some(desc_raw) = desc.raw_attributes() else {
+                continue;
+            };
+            if hidden::is_ua_shadow(desc_raw) {
+                if !hidden::is_text_node(desc_raw) {
+                    push_children_reversed(tree, desc_id, doc, &mut shadow_stack);
+                } else if keep_ua_shadow_text {
+                    visit(desc_id)?;
+                }
+            } else {
+                visit(desc_id)?;
+            }
+        }
+    }
+    ControlFlow::Continue(())
+}
+
+/// Collects direct logical children of `parent_id` in flat-tree preorder within the same document,
+/// skipping `ua_shadow` text nodes and transparently descending through `ua_shadow` containers,
+/// using a single output buffer on the common non-`ua_shadow` path.
 ///
 /// Under an `<option>` it keeps the `ua_shadow` text. Chromium renders a list box option's
 /// `DisplayLabel()` in an `aria-hidden` span of the option's UA shadow root, and the option's own
@@ -789,70 +951,20 @@ fn push_children_reversed(
 /// reads the content, or the title when the content is empty, and this reads the label. Neither
 /// the text nor `SelectOption.text` says which one `DisplayLabel()` chose, so closing that needs a
 /// contract fact.
-struct LogicalChildren<'a> {
-    tree: &'a SnapshotTree,
-    doc: DocId,
-    keep_ua_shadow_text: bool,
-    stack: Vec<NodeId>,
-}
-
-impl<'a> LogicalChildren<'a> {
-    fn new(tree: &'a SnapshotTree, parent_id: NodeId) -> Self {
-        let Some(parent) = tree.node(parent_id) else {
-            return Self {
-                tree,
-                doc: DocId::MAIN,
-                keep_ua_shadow_text: false,
-                stack: Vec::new(),
-            };
-        };
-        let doc = parent.doc();
-        let keep_ua_shadow_text = parent.raw_attributes().is_some_and(|raw| {
+fn collect_logical_children(tree: &SnapshotTree, parent_id: NodeId) -> Vec<NodeId> {
+    let keep_ua_shadow_text = tree
+        .node(parent_id)
+        .and_then(TreeNode::raw_attributes)
+        .is_some_and(|raw| {
             !hidden::is_ua_shadow(raw)
                 && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
         });
-        let mut stack = Vec::new();
-        push_children_reversed(tree, parent_id, doc, &mut stack);
-        Self {
-            tree,
-            doc,
-            keep_ua_shadow_text,
-            stack,
-        }
-    }
-}
-
-impl Iterator for LogicalChildren<'_> {
-    type Item = NodeId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(child_id) = self.stack.pop() {
-            let Some(child) = self.tree.node(child_id) else {
-                continue;
-            };
-            if child.doc() != self.doc {
-                continue;
-            }
-            let Some(raw) = child.raw_attributes() else {
-                continue;
-            };
-            if hidden::is_ua_shadow(raw) {
-                if !hidden::is_text_node(raw) {
-                    push_children_reversed(self.tree, child_id, self.doc, &mut self.stack);
-                } else if self.keep_ua_shadow_text {
-                    return Some(child_id);
-                }
-                continue;
-            }
-            return Some(child_id);
-        }
-        None
-    }
-}
-
-/// Collects direct logical children of `parent_id` in flat-tree preorder within the same document.
-fn collect_logical_children(tree: &SnapshotTree, parent_id: NodeId) -> Vec<NodeId> {
-    LogicalChildren::new(tree, parent_id).collect()
+    let mut out = Vec::new();
+    let _ = visit_logical_children(tree, parent_id, keep_ua_shadow_text, |child_id| {
+        out.push(child_id);
+        ControlFlow::<()>::Continue(())
+    });
+    out
 }
 
 fn find_first_direct_child_tag(
@@ -860,16 +972,24 @@ fn find_first_direct_child_tag(
     parent_id: NodeId,
     expected_tag: &str,
 ) -> Option<NodeId> {
-    LogicalChildren::new(tree, parent_id).find(|&child_id| {
-        let Some(child) = tree.node(child_id) else {
-            return false;
-        };
-        let Some(raw) = child.raw_attributes() else {
-            return false;
-        };
-        !hidden::is_text_node(raw)
-            && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case(expected_tag))
-    })
+    match visit_logical_children(tree, parent_id, false, |child_id| {
+        let matches = tree
+            .node(child_id)
+            .and_then(TreeNode::raw_attributes)
+            .is_some_and(|raw| {
+                !hidden::is_text_node(raw)
+                    && hidden::raw_tag(raw)
+                        .is_some_and(|tag| tag.eq_ignore_ascii_case(expected_tag))
+            });
+        if matches {
+            ControlFlow::Break(child_id)
+        } else {
+            ControlFlow::Continue(())
+        }
+    }) {
+        ControlFlow::Break(found) => Some(found),
+        ControlFlow::Continue(()) => None,
+    }
 }
 
 fn collect_dom_text_in_subtree(tree: &SnapshotTree, root_id: NodeId) -> Option<String> {
@@ -1032,10 +1152,76 @@ fn find_selected_options_in_listbox(tree: &SnapshotTree, listbox_id: NodeId) -> 
 }
 
 /// Accumulated text together with the element [`NodeId`]s that produced it.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct CompositeText {
     text: String,
     contributors: Vec<NodeId>,
+}
+
+/// Bounds on per-node descendant cache entries so deeply nested chains of content-named elements
+/// (including `toHaveAccessibleName` queries without snapshot depth limits) cannot retain O(n^2)
+/// contributor vectors or text copies.
+const MAX_CACHED_DESC_SUBTREE_NODES: usize = 512;
+const MAX_CACHED_DESC_CONTRIBUTORS: usize = 128;
+const MAX_CACHED_DESC_TEXT_BYTES: usize = 4096;
+
+/// Pure descendant evaluation result cached on [`NameCache`] for `allows_name_from_content`
+/// elements whose subtrees contain no cross-reference targets and performed no cross-reference
+/// jumps.
+#[derive(Clone)]
+struct CachedDesc {
+    composite: CompositeText,
+    derived_from_content: bool,
+}
+
+/// Small inline set for ACCNAME cycle detection: avoids heap `HashSet` allocation on leaves and
+/// small subtrees (up to 8 visited nodes) and spills to a `HashSet` on larger walks.
+enum VisitedSet {
+    Small { items: [NodeId; 8], len: u8 },
+    Large(HashSet<NodeId>),
+}
+
+impl VisitedSet {
+    const fn new() -> Self {
+        Self::Small {
+            items: [NodeId::new(0); 8],
+            len: 0,
+        }
+    }
+
+    fn contains(&self, id: NodeId) -> bool {
+        match self {
+            Self::Small { items, len } => items
+                .get(..usize::from(*len))
+                .is_some_and(|slice| slice.contains(&id)),
+            Self::Large(set) => set.contains(&id),
+        }
+    }
+
+    fn insert(&mut self, id: NodeId) {
+        match self {
+            Self::Small { items, len } => {
+                let count = usize::from(*len);
+                if let Some(slice) = items.get(..count)
+                    && slice.contains(&id)
+                {
+                    return;
+                }
+                if let Some(slot) = items.get_mut(count) {
+                    *slot = id;
+                    *len = len.saturating_add(1);
+                    return;
+                }
+                let mut set = HashSet::with_capacity(16);
+                set.extend(items.iter().copied());
+                set.insert(id);
+                *self = Self::Large(set);
+            }
+            Self::Large(set) => {
+                set.insert(id);
+            }
+        }
+    }
 }
 
 /// Moves `part` into `into`, the shorter list into the longer. Order does not matter, since the
@@ -1096,11 +1282,20 @@ enum Frame<'a> {
         acc: String,
         contributors: Vec<NodeId>,
     },
+    CacheDesc {
+        node_id: NodeId,
+        saved_derived: bool,
+    },
 }
 
 enum StepOutcome<'a> {
     /// A finished result the evaluated element owns: an attribute, its value or a default word.
     Done(String),
+    /// Fast-path content result for a node whose direct logical children are plain text nodes.
+    ContentText {
+        text: String,
+        from_content: bool,
+    },
     /// An SVG element's `<title>` text. `from_content` marks it content inside the target, so the
     /// [`Name`] reports `derived_from_content` as Playwright's content step would have.
     SvgTitle {
@@ -1119,18 +1314,20 @@ struct EvalState<'a> {
     stack: Vec<Frame<'a>>,
     active: Option<(NodeId, EvalOptions)>,
     returned: Option<CompositeText>,
-    visited: HashSet<NodeId>,
+    visited: VisitedSet,
     derived_from_content: bool,
+    used_cross_ref: bool,
 }
 
 impl<'a> EvalState<'a> {
-    fn new(root_id: NodeId, root_opts: EvalOptions) -> Self {
+    const fn new(root_id: NodeId, root_opts: EvalOptions) -> Self {
         Self {
             stack: Vec::new(),
             active: Some((root_id, root_opts)),
             returned: None,
-            visited: HashSet::new(),
+            visited: VisitedSet::new(),
             derived_from_content: false,
+            used_cross_ref: false,
         }
     }
 
@@ -1138,6 +1335,13 @@ impl<'a> EvalState<'a> {
         match outcome {
             StepOutcome::Done(text) => {
                 self.returned = Some(CompositeText::from_leaf(current_id, text));
+            }
+            StepOutcome::ContentText { text, from_content } => {
+                self.derived_from_content |= from_content;
+                self.returned = Some(CompositeText {
+                    text,
+                    contributors: vec![current_id],
+                });
             }
             // The text is the `<title>` child's, which has no node, so no element the tree can
             // print contributed it: upstream's composite holds only the unrendered title.
@@ -1149,7 +1353,15 @@ impl<'a> EvalState<'a> {
                 });
             }
             StepOutcome::TailCall { node_id, opts } => self.active = Some((node_id, opts)),
-            StepOutcome::Push(frame) => self.stack.push(frame),
+            StepOutcome::Push(frame) => {
+                if matches!(
+                    frame,
+                    Frame::LabelledBy { .. } | Frame::JoinNonEmptyLabels { .. }
+                ) {
+                    self.used_cross_ref = true;
+                }
+                self.stack.push(frame);
+            }
         }
     }
 }
@@ -1161,11 +1373,33 @@ fn eval_text_alternative(
     root_id: NodeId,
     root_opts: EvalOptions,
     derived_from_content: &mut bool,
+    desc_cache: Option<&[OnceLock<CachedDesc>]>,
 ) -> CompositeText {
     let mut state = EvalState::new(root_id, root_opts);
 
     loop {
         if let Some((node_id, opts)) = state.active.take() {
+            if let Some(cache) = desc_cache
+                && !state.used_cross_ref
+                && opts == EvalOptions::canonical_descendant(NameVisibility::VisibleOnly)
+                && !state.visited.contains(node_id)
+                && index.tree.node(node_id).is_some_and(|node| {
+                    node.subtree_range().len() <= MAX_CACHED_DESC_SUBTREE_NODES
+                        && allows_name_from_content(node.role(), false)
+                })
+                && !index.subtree_has_cross_ref_target(node_id)
+            {
+                if let Some(cached) = cache.get(node_id.index()).and_then(OnceLock::get) {
+                    state.derived_from_content |= cached.derived_from_content;
+                    state.returned = Some(cached.composite.clone());
+                    continue;
+                }
+                state.stack.push(Frame::CacheDesc {
+                    node_id,
+                    saved_derived: state.derived_from_content,
+                });
+                state.derived_from_content = false;
+            }
             let outcome = start_node_eval(index, node_id, opts, &mut state.visited);
             state.apply_outcome(node_id, outcome);
             continue;
@@ -1176,16 +1410,41 @@ fn eval_text_alternative(
             return state.returned.unwrap_or_default();
         }
 
-        advance_top_frame(index, &mut state);
+        advance_top_frame(index, &mut state, desc_cache);
     }
 }
 
-fn advance_top_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'a>) {
+fn advance_top_frame<'a>(
+    index: &LookupIndex<'a>,
+    state: &mut EvalState<'a>,
+    desc_cache: Option<&[OnceLock<CachedDesc>]>,
+) {
     match state.stack.last() {
         Some(Frame::LabelledBy { .. }) => advance_labelledby_frame(index, state),
         Some(Frame::JoinAll { .. }) => advance_join_all_frame(state),
         Some(Frame::JoinNonEmptyLabels { .. }) => advance_labels_frame(index, state),
         Some(Frame::ContentChildren { .. }) => advance_content_frame(index, state),
+        Some(Frame::CacheDesc { .. }) => {
+            if let Some(Frame::CacheDesc {
+                node_id,
+                saved_derived,
+            }) = state.stack.pop()
+            {
+                let sub_derived = state.derived_from_content;
+                state.derived_from_content = saved_derived | sub_derived;
+                if !state.used_cross_ref
+                    && let Some(returned) = state.returned.as_ref()
+                    && returned.contributors.len() <= MAX_CACHED_DESC_CONTRIBUTORS
+                    && returned.text.len() <= MAX_CACHED_DESC_TEXT_BYTES
+                    && let Some(slot) = desc_cache.and_then(|slots| slots.get(node_id.index()))
+                {
+                    let _ = slot.set(CachedDesc {
+                        composite: returned.clone(),
+                        derived_from_content: sub_derived,
+                    });
+                }
+            }
+        }
         None => {}
     }
 }
@@ -1376,7 +1635,7 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
                 acc.push(' ');
             }
             if hidden::is_text_node(child_raw) {
-                // `LogicalChildren` yields `ua_shadow` text only as an option's label, which
+                // `collect_logical_children` yields `ua_shadow` text only as an option's label, which
                 // `hidden` marks hidden like every `ua_shadow` node. It stands in for the option's
                 // own text, which Playwright reads unchecked once the option passed step 2a.
                 if hidden::is_ua_shadow(child_raw)
@@ -1437,9 +1696,9 @@ fn start_node_eval<'a>(
     index: &LookupIndex<'a>,
     node_id: NodeId,
     opts: EvalOptions,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> StepOutcome<'a> {
-    if visited.contains(&node_id) {
+    if visited.contains(node_id) {
         return StepOutcome::Done(String::new());
     }
     let Some(node) = index.tree.node(node_id) else {
@@ -1503,7 +1762,7 @@ fn eval_from_step_2c<'a>(
     node_id: NodeId,
     opts: EvalOptions,
     labelledby: LabelledByPresence,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> StepOutcome<'a> {
     let Some(facts) = NodeFacts::from_tree(index.tree, node_id) else {
         return StepOutcome::Done(String::new());
@@ -1547,7 +1806,7 @@ fn eval_step_2c<'a>(
     facts: NodeFacts<'_>,
     opts: EvalOptions,
     labelledby: LabelledByPresence,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> Option<StepOutcome<'a>> {
     let embedded = opts.embedded_in_label.is_active()
         || opts.embedded_in_labelledby.is_active()
@@ -1696,7 +1955,7 @@ fn eval_step_2e<'a>(
     facts: NodeFacts<'_>,
     opts: EvalOptions,
     has_labelledby: bool,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> Option<StepOutcome<'a>> {
     let tag_name = facts.tag?;
     let control_type = role::form_control_type(facts.raw);
@@ -1769,7 +2028,7 @@ fn eval_step_2e_special_input<'a>(
     facts: NodeFacts<'_>,
     control_type: Option<FormControlType>,
     opts: EvalOptions,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> Option<StepOutcome<'a>> {
     match control_type? {
         FormControlType::InputButton
@@ -1821,7 +2080,7 @@ fn eval_step_2e_containers_and_media<'a>(
     tag_name: &str,
     opts: EvalOptions,
     has_labelledby: bool,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> Option<StepOutcome<'a>> {
     let tree = index.tree;
     if !has_labelledby && tag_name.eq_ignore_ascii_case("fieldset") {
@@ -1891,7 +2150,7 @@ fn eval_step_2f<'a>(
     tree: &SnapshotTree,
     facts: NodeFacts<'_>,
     opts: EvalOptions,
-    visited: &mut HashSet<NodeId>,
+    visited: &mut VisitedSet,
 ) -> Option<StepOutcome<'a>> {
     let summary_from_content = facts.tag.is_some_and(|t| t.eq_ignore_ascii_case("summary"))
         && !facts.role.is_some_and(Role::is_presentational);
@@ -1914,6 +2173,54 @@ fn eval_step_2f<'a>(
         return None;
     }
 
+    // Fast path for elements whose same-document direct children are all non-ua_shadow text nodes
+    // (or none at all): avoids allocating `Vec<NodeId>` and pushing a `ContentChildren` frame.
+    let all_plain_text = tree.children(facts.id).all(|child| {
+        child.doc() != facts.doc
+            || child
+                .raw_attributes()
+                .is_none_or(|raw| !hidden::is_ua_shadow(raw) && hidden::is_text_node(raw))
+    });
+    if all_plain_text {
+        let mut acc = option_slot::label(tree, facts.id)
+            .unwrap_or_default()
+            .to_owned();
+        for child in tree.children(facts.id) {
+            if child.doc() != facts.doc {
+                continue;
+            }
+            let Some(child_raw) = child.raw_attributes() else {
+                continue;
+            };
+            if child_raw
+                .browseros
+                .as_deref()
+                .is_some_and(|browseros| browseros.break_before == Some(true))
+            {
+                acc.push(' ');
+            }
+            if opts.visibility.include_hidden()
+                || opts.is_embedded_in_hidden_ref()
+                || !child.hidden().is_hidden_for_aria()
+            {
+                acc.push_str(text_node_content(child_raw));
+            }
+        }
+        let has_trimmed = !role::trim_js_whitespace(&acc).is_empty();
+        let is_non_empty = if opts.embedded_in_target == Some(EmbeddedTarget::SelfNode) {
+            has_trimmed
+        } else {
+            !acc.is_empty()
+        };
+        if is_non_empty {
+            return Some(StepOutcome::ContentText {
+                text: acc,
+                from_content: opts.inside_target() && has_trimmed,
+            });
+        }
+        return Some(StepOutcome::Done(eval_step_2i(tree, facts.id, visited)));
+    }
+
     let children = collect_logical_children(tree, facts.id);
     // An option slot has no children: its content is its entry's text, which stands in for the
     // text node a real `<option>` would hold.
@@ -1930,7 +2237,7 @@ fn eval_step_2f<'a>(
     }))
 }
 
-fn eval_step_2i(tree: &SnapshotTree, node_id: NodeId, visited: &mut HashSet<NodeId>) -> String {
+fn eval_step_2i(tree: &SnapshotTree, node_id: NodeId, visited: &mut VisitedSet) -> String {
     visited.insert(node_id);
     let Some(node) = tree.node(node_id) else {
         return String::new();
@@ -1955,6 +2262,15 @@ fn compute_accessible_name(
     id: NodeId,
     visibility: NameVisibility,
 ) -> Name {
+    compute_accessible_name_cached(index, id, visibility, None)
+}
+
+fn compute_accessible_name_cached(
+    index: &LookupIndex<'_>,
+    id: NodeId,
+    visibility: NameVisibility,
+    desc_cache: Option<&[OnceLock<CachedDesc>]>,
+) -> Name {
     let Some(node) = index.tree.node(id) else {
         return Name::default();
     };
@@ -1970,12 +2286,31 @@ fn compute_accessible_name(
         return Name::default();
     }
 
+    if visibility == NameVisibility::VisibleOnly
+        && allows_name_from_content(node.role(), false)
+        && let Some(cached) = desc_cache
+            .and_then(|slots| slots.get(id.index()))
+            .and_then(OnceLock::get)
+        && (cached.composite.text.is_empty()
+            || !role::trim_js_whitespace(&cached.composite.text).is_empty())
+    {
+        let mut contributors = cached.composite.contributors.clone();
+        contributors.sort_unstable();
+        contributors.dedup();
+        return Name {
+            text: normalize_whitespace(&cached.composite.text),
+            derived_from_content: cached.derived_from_content,
+            contributors,
+        };
+    }
+
     let mut derived_from_content = false;
     let mut composite = eval_text_alternative(
         index,
         id,
         EvalOptions::for_root(visibility),
         &mut derived_from_content,
+        desc_cache,
     );
     composite.contributors.sort_unstable();
     composite.contributors.dedup();
@@ -2029,6 +2364,7 @@ fn compute_accessible_description(
                         target_id,
                         EvalOptions::for_describedby(visibility, target_hidden),
                         &mut ignored_derived,
+                        None,
                     );
                     joined.push_str(&part.text);
                 }
@@ -2113,6 +2449,7 @@ fn compute_accessible_error_message(
                     target_id,
                     EvalOptions::for_describedby(NameVisibility::VisibleOnly, target_hidden),
                     &mut ignored_derived,
+                    None,
                 );
                 as_flat_string(&raw_part.text)
             }
@@ -2866,6 +3203,61 @@ mod tests {
         assert_eq!(
             result, "DeepLeaf",
             "25,000-deep tree must compute name iteratively on a 2 MiB stack"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deep_content_role_chain_bounds_descendant_cache_and_matches_uncached()
+    -> Result<(), Box<dyn Error>> {
+        let mut apc = ApcBuilder::deep_chain(4_000);
+        if let Some(root) = apc.root_node.as_mut() {
+            let mut cursor = root;
+            loop {
+                if let Some(attrs) = cursor.content_attributes.as_mut() {
+                    attrs.browseros = Some(Box::new(BrowserOsContentAttributes {
+                        tag: Some("button".to_owned()),
+                        ..BrowserOsContentAttributes::default()
+                    }));
+                }
+                if cursor.children_nodes.is_empty() {
+                    cursor.children_nodes.push(
+                        ApcBuilder::new("doc-tmp")
+                            .root(NodeBuilder::text("ChainLeaf"))
+                            .build()
+                            .root_node
+                            .ok_or("missing text node")?,
+                    );
+                    break;
+                }
+                cursor = cursor
+                    .children_nodes
+                    .first_mut()
+                    .ok_or("missing chain child")?;
+            }
+        }
+
+        let tree = SnapshotTree::build(apc, BuildOptions::default())?;
+        let cache = tree.name_cache();
+        let cached = cache.name(NodeId::new(0), NameVisibility::VisibleOnly);
+        let uncached = tree.accessible_name(NodeId::new(0), NameVisibility::VisibleOnly);
+
+        assert_eq!(cached, &uncached);
+        assert_eq!(cached.text(), "ChainLeaf");
+        assert_eq!(cached.contributors(), uncached.contributors());
+
+        let total_cached_contributors: usize = cache.desc_visible.get().map_or(0, |slots| {
+            slots
+                .iter()
+                .filter_map(|slot| slot.get())
+                .map(|entry| entry.composite.contributors.len())
+                .sum()
+        });
+        let max_expected =
+            super::MAX_CACHED_DESC_CONTRIBUTORS * (super::MAX_CACHED_DESC_CONTRIBUTORS + 1) / 2;
+        assert!(
+            total_cached_contributors <= max_expected,
+            "descendant cache must stay bounded on deep content-role chains (got {total_cached_contributors}, limit {max_expected})"
         );
         Ok(())
     }

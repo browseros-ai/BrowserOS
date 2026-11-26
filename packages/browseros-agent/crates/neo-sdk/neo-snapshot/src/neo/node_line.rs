@@ -1,4 +1,4 @@
-use crate::aria_node::AriaNode;
+use crate::aria_sink::EmittedNode;
 use crate::playwright::NodeAlone;
 
 use super::hidden::Hidden;
@@ -23,20 +23,19 @@ pub(super) struct Keep<'a> {
 /// role, where it is what says the node is clickable; `/url` only when `keep` asks for it; the
 /// text `keep` names; `[aria-hidden]` where the node has it or `keep` carries it. `/placeholder`
 /// stays, as Playwright prints it.
-pub(super) fn node_line<'a>(node: &'a AriaNode, keep: Keep<'a>) -> NodeAlone<'a> {
-    let r#ref = node.r#ref.as_deref().filter(|_| keep.r#ref);
+pub(super) fn node_line<'a>(node: &EmittedNode<'a>, keep: Keep<'a>) -> NodeAlone<'a> {
+    let r#ref = node.r#ref.filter(|_| keep.r#ref);
     NodeAlone {
         r#ref,
         cursor: node
             .cursor
-            .as_deref()
-            .filter(|_| r#ref.is_some() && !interactive(&node.role)),
-        url: node.url.as_deref().filter(|_| keep.urls),
+            .filter(|_| r#ref.is_some() && !interactive(node.role)),
+        url: node.url.filter(|_| keep.urls),
         text: keep.text,
         aria_hidden: match keep.hidden {
             Hidden::No | Hidden::Enclosed => node.aria_hidden,
             Hidden::Carried => Some(true),
         },
-        ..NodeAlone::from(node)
+        ..NodeAlone::from_emitted(node)
     }
 }

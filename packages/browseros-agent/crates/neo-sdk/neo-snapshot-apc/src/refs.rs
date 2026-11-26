@@ -7,6 +7,7 @@
 
 mod tab_ref_table;
 
+pub(crate) use tab_ref_table::DocRefSession;
 pub use tab_ref_table::{
     DEFAULT_MAX_RECORDS, Ref, RefKind, RefLookup, RefParseError, RefTarget, TabRefTable,
 };
