@@ -51,7 +51,7 @@ Put Claude Code, Codex, Cursor, and OpenCode to work on your real tasks. <strong
 - **You can watch.** Follow each step live, or replay any session later.
 - **Hand-off.** Stuck at a login? neo notifies you, you help, the agent carries on.
 - **Fewer tokens.** neo reads a page as short text, not as screenshots.
-- **Local.** Sessions, screenshots and history stay on your machine. [Privacy](https://docs.browseros.com/neo/privacy)
+- **Local.** Sessions, screenshots and history stay on your machine.
 
 <p align="center">
 <img src="docs/images/readme/how-it-works.png" width="830" alt="How BrowserOS neo works: it connects to your LLM apps, runs many agents side by side, keeps your data on your computer, and agents act in your signed-in session.">
