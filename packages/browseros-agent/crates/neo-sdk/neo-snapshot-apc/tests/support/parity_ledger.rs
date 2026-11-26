@@ -206,30 +206,10 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
 ];
 
 /// Disagreements on printed nodes the oracle lists no element for, because Playwright's role for
-/// them is the ai tree's `generic`. Only `tree_emit_refs_oracle.rs` measures these.
-pub(crate) const PRINTED_ONLY_MISMATCHES: &[KnownMismatch] = &[KnownMismatch {
-    field: Field::Active,
-    tree: "false",
-    cause: Cause::ContractFact,
-    why: "with nothing focused, APC sends no focused_node_id, while Playwright's \
-          document.activeElement falls back to the main document's <body>",
-    nodes: &[
-        main("nested-cross-site-frames", 11),
-        main("shadow-dom", 8),
-        main("zero-size-checkbox", 6),
-        main("covered-button", 6),
-        main("sensitive-form", 11),
-        main("hung-subframe", 8),
-        main("deep-nesting", 6),
-        main("shadow-roots", 15),
-        main("zero-size-controls", 6),
-        main("nosize", 26),
-        main("ua-shadow", 14),
-        main("roles", 30),
-        main("names", 23),
-        main("private-forms", 25),
-    ],
-}];
+/// them is the ai tree's `generic`. Only `tree_emit_refs_oracle.rs` measures these. None is known:
+/// the `<body>` a focused document with nothing focused reports as its active element now comes
+/// from the reply's focused frame (`state::active_elements`).
+pub(crate) const PRINTED_ONLY_MISMATCHES: &[KnownMismatch] = &[];
 
 /// One disagreement a test measured: which element, which field, and both values.
 #[derive(Debug)]

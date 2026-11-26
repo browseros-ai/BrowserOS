@@ -8,8 +8,8 @@ use crate::proto::{
     ClickabilityReason, ContentAttributeType, ContentAttributes, ContentData, ContentNode,
     DocumentIdentifier, FormControlData, FormControlType, FrameData, FrameInteractionInfo,
     Geometry, IframeData, IframeDataContent, ImageInfo, InteractionDisabledReason, InteractionInfo,
-    RedactedFrameMetadata, RedactedFrameReason, RedactionDecision, SecurityOrigin, SelectOption,
-    TextInfo,
+    PageInteractionInfo, RedactedFrameMetadata, RedactedFrameReason, RedactionDecision,
+    SecurityOrigin, SelectOption, TextInfo,
 };
 
 use super::snapshot_tree::MIN_CONTRACT_VERSION;
@@ -63,6 +63,7 @@ pub struct ApcBuilder {
     version: AnnotatedPageContentVersion,
     mode: AnnotatedPageContentMode,
     browseros: Option<BrowserOsPageContentData>,
+    focused_frame: Option<String>,
 }
 
 impl ApcBuilder {
@@ -79,6 +80,7 @@ impl ApcBuilder {
                 contract_version: Some(MIN_CONTRACT_VERSION),
                 subframe_timeout_ms: Some(2_000),
             }),
+            focused_frame: None,
         }
     }
 
@@ -99,6 +101,7 @@ impl ApcBuilder {
                 contract_version: Some(MIN_CONTRACT_VERSION),
                 subframe_timeout_ms: Some(2_000),
             }),
+            focused_frame: None,
         }
     }
 
@@ -118,6 +121,7 @@ impl ApcBuilder {
                 contract_version: Some(MIN_CONTRACT_VERSION),
                 subframe_timeout_ms: Some(2_000),
             }),
+            focused_frame: None,
         }
     }
 
@@ -184,6 +188,12 @@ impl ApcBuilder {
         self
     }
 
+    /// Names the document holding the page's focus (`PageInteractionInfo.focused_frame`).
+    pub fn focused_frame(mut self, doc_token: &str) -> Self {
+        self.focused_frame = Some(doc_token.to_owned());
+        self
+    }
+
     /// Sets the focused DOM node ID inside the main frame.
     pub fn main_focused_node_id(mut self, dom_id: i32) -> Self {
         if let Some(frame) = self.main_frame.take() {
@@ -244,6 +254,12 @@ impl ApcBuilder {
             main_frame_data,
             viewport_geometry: self.viewport,
             browseros: self.browseros,
+            page_interaction_info: self.focused_frame.map(|token| PageInteractionInfo {
+                focused_frame: Some(DocumentIdentifier {
+                    serialized_token: Some(token),
+                }),
+                ..PageInteractionInfo::default()
+            }),
             ..AnnotatedPageContent::default()
         }
     }

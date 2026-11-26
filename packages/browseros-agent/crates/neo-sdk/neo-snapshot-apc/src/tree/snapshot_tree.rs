@@ -132,6 +132,12 @@ impl SnapshotTree {
     pub fn build(apc: AnnotatedPageContent, options: BuildOptions<'_>) -> Result<Self, BuildError> {
         let meta = read_contract_meta(&apc);
         let contract_version = check_contract_version(meta.version, options.min_contract_version)?;
+        let focused_frame = apc
+            .page_interaction_info
+            .as_ref()
+            .and_then(|info| info.focused_frame.as_ref())
+            .and_then(|frame| frame.serialized_token.as_deref())
+            .and_then(DocToken::new);
 
         let StitchedTree {
             mut nodes,
@@ -144,7 +150,7 @@ impl SnapshotTree {
 
         let hidden_flags = hidden::compute_hidden(&nodes);
         let roles = role::compute_roles(&nodes, &hidden_flags);
-        let states = state::compute_states(&nodes, &docs, &roles);
+        let states = state::compute_states(&nodes, &docs, &roles, focused_frame.as_ref());
         for (((node, hidden), role), state) in
             nodes.iter_mut().zip(hidden_flags).zip(roles).zip(states)
         {

@@ -1348,7 +1348,7 @@ fn visit_iframe_node(
 
     let mut draft = DraftNode::new("iframe", String::new(), flags);
     draft.r#ref = assigned_ref;
-    draft.active = (is_ai && render_active && node.state().active()).then_some(true);
+    draft.active = (is_ai && render_active && node.state().active_element()).then_some(true);
     draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
     draft.source_node = Some(node.id());
     draft.iframe = resolve_draft_iframe(ctx.tree, node, raw);
@@ -1498,7 +1498,7 @@ fn build_element_draft(
 
     let mut draft = DraftNode::new(role_str, raw_name, flags);
     ctx.state_form.write(state, &mut draft);
-    draft.active = (is_ai && render_active && state.active()).then_some(true);
+    draft.active = (is_ai && render_active && state.active_element()).then_some(true);
     draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
     draft.r#ref = assigned_ref;
     draft.url = url;
