@@ -11,6 +11,7 @@
 //!
 //! Every expect op is a read: no poll changes the page, so none calls `send_effect`.
 
+mod aria_expect;
 pub(crate) mod expect_op;
 mod expectation;
 mod matcher_message;
