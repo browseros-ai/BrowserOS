@@ -81,6 +81,27 @@ pub(crate) async fn cleanup(
     send(world, &request, policy, Handed::NONE, Gesture::None).await
 }
 
+/// Sends a read-only `describe` liveness probe into `world` without borrowing an `OpScope`.
+///
+/// Used by coalesced APC captures (section 6.3) to prove that a cached world installed before the
+/// capture is still alive after the capture returns. `describe` reads only protocol version, seq,
+/// and URL, so it carries no conformance or moved-field policy side effects.
+#[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+pub(crate) async fn describe(world: &IsolatedWorld) -> Result<ProbeReply, ProbeFailure> {
+    let policy = ProbePolicy {
+        conformance: false,
+        discover_moved_fields: false,
+    };
+    send(
+        world,
+        &ProbeRequest::Describe,
+        policy,
+        Handed::NONE,
+        Gesture::None,
+    )
+    .await
+}
+
 /// Why a probe call or an install produced no reply.
 #[derive(Debug)]
 pub(crate) enum ProbeFailure {

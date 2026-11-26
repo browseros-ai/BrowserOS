@@ -6,11 +6,16 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::{BrowserSession, FrameId, ProtocolSession, SessionId, TargetId};
+use neo_snapshot_apc::tree::{DocSeq, DocToken};
 use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
+use crate::world::doc_table::{PageUrlKind, RetiredDoc};
 use crate::world::frame_attach_log::{FrameAttachLog, FrameEvent, Taken};
-use crate::world::{ContextWatch, Epoch, FrameSeq, Installed, IsolatedWorld};
+use crate::world::{
+    ContextWatch, DocBinding, DocContext, DocLookup, DocPlace, DocTable, Epoch, FrameSeq,
+    Installed, IsolatedWorld,
+};
 
 /// Where a world is installed: a frame on the raw session core's frame registry gave it. That is
 /// the page's own session for the main frame and its same-process children, else an OOPIF's (or
@@ -186,6 +191,9 @@ struct WorldsInner {
     follows_commits: bool,
     /// The log's gap count at the last replay.
     seen_gaps: u64,
+    /// APC document identity table sharing this mutex so seq reservation, world binding, and
+    /// retirement stay atomic with `FrameAttachLog` replay and `invalidate`.
+    docs: DocTable,
 }
 
 impl FrameWorlds {
@@ -208,6 +216,7 @@ impl FrameWorlds {
                 main_doc: None,
                 follows_commits: false,
                 seen_gaps: 0,
+                docs: DocTable::new(),
             }),
             attach_log: None,
         }
@@ -293,8 +302,9 @@ impl FrameWorlds {
     }
 
     /// A call on `world` failed `Gone`: its document is gone. Drops its cell, only if the cell
-    /// still holds this very install (a newer one by another op is kept), and retires its seq,
-    /// only if the seq still belongs to this key.
+    /// still holds this very install (a newer one by another op is kept), retires its seq only if
+    /// the seq still belongs to this key, and retires any APC [`DocToken`] bound to this install
+    /// (reported through [`Self::take_retired_docs`]).
     pub(crate) fn invalidate(&self, world: &IsolatedWorld) {
         let Some(session) = world.session_id() else {
             return;
@@ -315,6 +325,231 @@ impl FrameWorlds {
         if inner.live.get(&world.seq()) == Some(&key) {
             inner.live.remove(&world.seq());
         }
+        inner.docs.retire_by_world(world);
+    }
+
+    /// Takes every APC [`DocToken`] that `DocTable` retired since the last call, whichever path
+    /// retired it: an invalidated world, a capture that displaced a frame's document, or an
+    /// explicit [`Self::retire_doc`]. `TabTree` drops their refs.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    #[must_use = "a dropped token keeps its document's refs live"]
+    pub(crate) fn take_retired_docs(&self) -> Vec<DocToken> {
+        self.lock().docs.take_retired()
+    }
+
+    /// Returns all currently live cached worlds so a capture can check `installed_at <
+    /// requested_at` and prove them with `Describe` (design section 6.3).
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn cached_worlds(&self) -> Vec<IsolatedWorld> {
+        let inner = self.lock();
+        inner
+            .cells
+            .values()
+            .filter_map(|cell| cell.get().cloned())
+            .collect()
+    }
+
+    /// Returns a live cached world for `frame`, preferring the most recent install if two
+    /// sessions transiently hold cells for the same frame.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn cached_world_for_frame(&self, frame: &FrameId) -> Option<IsolatedWorld> {
+        let inner = self.lock();
+        inner
+            .cells
+            .iter()
+            .filter(|(key, _)| key.frame == *frame)
+            .filter_map(|(_, cell)| cell.get())
+            .max_by_key(|world| world.installed_at())
+            .cloned()
+    }
+
+    /// Atomically replays [`FrameAttachLog`] and resolves, promotes, or reserves the [`DocSeq`]
+    /// for an APC document (design section 6.3).
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn seq_for_doc(
+        &self,
+        ctx: DocContext<'_>,
+        proven: &HashMap<FrameId, IsolatedWorld>,
+    ) -> DocSeq {
+        let mut inner = self.lock();
+        self.replay_attach_log(&mut inner);
+
+        match inner.docs.binding(ctx.token) {
+            Some(DocBinding::Bound { seq, world }) => {
+                let seq = *seq;
+                let lookup_frame = ctx.frame.unwrap_or_else(|| world.frame()).clone();
+                let existing = world.clone();
+                inner.docs.note_url(ctx.token, ctx.url);
+                if let Some(candidate) = proven.get(&lookup_frame)
+                    && !candidate.same_install(&existing)
+                    && candidate.installed_at() > existing.installed_at()
+                    && !inner
+                        .docs
+                        .is_world_bound_to_other_active(candidate, ctx.token)
+                {
+                    let _ = inner.docs.bind_existing(ctx.token, candidate.clone());
+                    inner.frames.insert(seq, candidate.frame().clone());
+                }
+                return DocSeq::new(seq.0);
+            }
+            Some(DocBinding::Reserved { seq, frame: saved }) => {
+                let seq = *seq;
+                let effective_frame = ctx.frame.or(saved.as_ref()).cloned();
+                let frame_was_missing = saved.is_none();
+                inner.docs.note_url(ctx.token, ctx.url);
+                if let Some(frame) = &effective_frame
+                    && let Some(world) = proven.get(frame)
+                    && !inner.docs.is_world_bound_to_other_active(world, ctx.token)
+                {
+                    let _ = inner.docs.bind_existing(ctx.token, world.clone());
+                    inner.frames.insert(seq, world.frame().clone());
+                } else if frame_was_missing && let Some(frame) = ctx.frame {
+                    inner.docs.set_reserved_frame(ctx.token, frame.clone());
+                    inner.frames.insert(seq, frame.clone());
+                }
+                if ctx.place == DocPlace::Main {
+                    inner.record_initial_main_url(ctx.url);
+                }
+                return DocSeq::new(seq.0);
+            }
+            Some(DocBinding::Retired { seq }) => {
+                return DocSeq::new(seq.0);
+            }
+            None => {}
+        }
+
+        // A new DocToken on a known frame displaces any previous active document on that frame.
+        // Record whether the replaced doc already owned the proven world so we never bind the new
+        // document to the previous document's install.
+        let mut world_belongs_to_replaced = false;
+        if let Some(frame) = ctx.frame
+            && let Some(old_token) = inner.docs.active_for_frame(frame).cloned()
+        {
+            if let Some(world) = proven.get(frame)
+                && matches!(
+                    inner.docs.binding(&old_token),
+                    Some(DocBinding::Bound { world: bound, .. }) if bound.same_install(world)
+                )
+            {
+                world_belongs_to_replaced = true;
+            }
+            if let Some(RetiredDoc {
+                seq: old_seq,
+                url_kind: PageUrlKind::RealOrUnknown,
+            }) = inner.docs.retire_token(&old_token)
+                && ctx.place == DocPlace::Main
+                && inner.main_seq == Some(old_seq)
+            {
+                inner.main_seq = Some(inner.next_seq());
+            }
+        }
+
+        if !world_belongs_to_replaced
+            && let Some(frame) = ctx.frame
+            && let Some(world) = proven.get(frame)
+            && !inner.docs.is_world_bound_to_other_active(world, ctx.token)
+        {
+            let seq = inner.resolve_doc_seq(world.seq(), ctx.place, ctx.token);
+            inner
+                .docs
+                .insert_bound(ctx.token.clone(), seq, world.clone(), ctx.url);
+            inner.frames.insert(seq, world.frame().clone());
+            inner.next = inner.next.max(seq.0.saturating_add(1));
+            if ctx.place == DocPlace::Main {
+                if inner.follows_commits && inner.main_seq.is_none() {
+                    inner.main_seq = Some(seq);
+                }
+                inner.record_initial_main_url(ctx.url);
+            }
+            return DocSeq::new(seq.0);
+        }
+
+        let candidate = inner.candidate_for(ctx.frame, ctx.place);
+        let seq = inner.resolve_doc_seq(candidate, ctx.place, ctx.token);
+        inner
+            .docs
+            .insert_reserved(ctx.token.clone(), seq, ctx.frame.cloned(), ctx.url);
+        if let Some(frame) = ctx.frame {
+            inner.frames.insert(seq, frame.clone());
+        }
+        inner.next = inner.next.max(seq.0.saturating_add(1));
+        if ctx.place == DocPlace::Main {
+            inner.record_initial_main_url(ctx.url);
+        }
+        DocSeq::new(seq.0)
+    }
+
+    /// Binds a proven [`IsolatedWorld`] to `token`, preserving any previously reserved
+    /// [`FrameSeq`]. Returns `None` if `token` is already `Retired`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn bind_proven_world(
+        &self,
+        token: &DocToken,
+        world: &IsolatedWorld,
+    ) -> Option<FrameSeq> {
+        let mut inner = self.lock();
+        match inner.docs.binding(token) {
+            Some(DocBinding::Retired { .. }) => None,
+            Some(DocBinding::Reserved { .. } | DocBinding::Bound { .. }) => {
+                let seq = inner.docs.bind_existing(token, world.clone())?;
+                inner.frames.insert(seq, world.frame().clone());
+                Some(seq)
+            }
+            None => {
+                let place = if inner.main_seq == Some(world.seq())
+                    || inner
+                        .main_doc
+                        .as_ref()
+                        .is_some_and(|doc| doc.seq == world.seq())
+                {
+                    DocPlace::Main
+                } else {
+                    DocPlace::Child
+                };
+                let seq = inner.resolve_doc_seq(world.seq(), place, token);
+                inner
+                    .docs
+                    .insert_bound(token.clone(), seq, world.clone(), None);
+                inner.frames.insert(seq, world.frame().clone());
+                inner.next = inner.next.max(seq.0.saturating_add(1));
+                Some(seq)
+            }
+        }
+    }
+
+    /// Resolves `token` to its live bound world and parent chain, reservation, retirement, or
+    /// unknown status.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn lookup_doc(&self, token: &DocToken) -> DocLookup {
+        let inner = self.lock();
+        let Some(binding) = inner.docs.binding(token) else {
+            return DocLookup::Unknown;
+        };
+        inner.resolve_binding(binding)
+    }
+
+    /// Resolves `seq` through [`DocTable`], falling back to `WorldsInner::dead` for seqs never
+    /// recorded in `DocTable` (such as foreign seqs from an earlier `Playwright` process).
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn lookup_doc_seq(&self, seq: FrameSeq) -> DocLookup {
+        let inner = self.lock();
+        if let Some(binding) = inner.docs.binding_by_seq(seq) {
+            return inner.resolve_binding(binding);
+        }
+        match inner.dead(seq) {
+            SeqLookup::Retired => DocLookup::Retired,
+            SeqLookup::Unknown | SeqLookup::Live { .. } => DocLookup::Unknown,
+        }
+    }
+
+    /// Transitions an active (`Reserved` or `Bound`) document to `Retired` when a fresh capture
+    /// proves it is no longer present (design section 6.2 case 4).
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) fn retire_doc(&self, token: &DocToken) -> Option<FrameSeq> {
+        self.lock()
+            .docs
+            .retire_token(token)
+            .map(|retired| retired.seq)
     }
 
     /// The frame `seq`'s world was installed in, live or retired; `None` for a seq this page never
@@ -329,25 +564,9 @@ impl FrameWorlds {
         let Some(world) = inner.live_world(seq) else {
             return inner.dead(seq);
         };
-        let mut parents = Vec::new();
-        let mut child = seq;
-        // Frames form a tree, so the walk ends at the main frame; the bound only keeps a
-        // corrupted table from spinning while the lock is held.
-        for _ in 0..=inner.parents.len() {
-            let Some(link) = inner.parents.get(&child) else {
-                break;
-            };
-            let Some(parent) = inner.live_world(link.parent) else {
-                // A child document cannot outlive its parent's.
-                return SeqLookup::Retired;
-            };
-            parents.push(LinkedParent {
-                world: parent,
-                iframe_key: link.iframe_key.clone(),
-            });
-            child = link.parent;
-        }
-        parents.reverse();
+        let Some(parents) = inner.parent_chain(seq) else {
+            return SeqLookup::Retired;
+        };
         SeqLookup::Live {
             world: Box::new(world),
             parents,
@@ -360,10 +579,19 @@ impl FrameWorlds {
     /// log's; the watcher only ever holds the log's.
     fn candidate(&self, frame: &FrameId, main: bool) -> FrameSeq {
         let mut inner = self.lock();
+        self.replay_attach_log(&mut inner);
+        let place = if main {
+            DocPlace::Main
+        } else {
+            DocPlace::Child
+        };
+        inner.candidate_for(Some(frame), place)
+    }
+
+    fn replay_attach_log(&self, inner: &mut WorldsInner) {
         if let Some(AttachLogBinding { log, tab }) = &self.attach_log {
             inner.replay(log.take(tab));
         }
-        inner.candidate(frame, main)
     }
 
     fn lock(&self) -> MutexGuard<'_, WorldsInner> {
@@ -377,26 +605,72 @@ impl WorldsInner {
     /// gone; without a log, the first for its first install and the next for every later one.
     /// A child frame: the seq its attach reserved for its first document, else the next one.
     /// Never a foreign one; taken even if the install then fails.
-    fn candidate(&mut self, frame: &FrameId, main: bool) -> FrameSeq {
-        if main {
-            if self.follows_commits {
-                let seq = match self.main_seq {
-                    Some(seq) if self.left_real_page(seq) => self.next_seq(),
-                    Some(seq) => seq,
-                    None => self.first_main_seq(),
-                };
-                self.main_seq = Some(seq);
-                return seq;
+    fn candidate_for(&mut self, frame: Option<&FrameId>, place: DocPlace) -> FrameSeq {
+        match place {
+            DocPlace::Main => {
+                if self.follows_commits {
+                    let seq = match self.main_seq {
+                        Some(seq) if self.left_real_page(seq) => self.next_seq(),
+                        Some(seq) => seq,
+                        None => self.first_main_seq(),
+                    };
+                    self.main_seq = Some(seq);
+                    return seq;
+                }
+                if !self.first_used {
+                    return self.first_main_seq();
+                }
+                self.next_seq()
             }
-            if !self.first_used {
-                return self.first_main_seq();
-            }
-            return self.next_seq();
+            DocPlace::Child => match frame {
+                Some(frame) => {
+                    self.numbered.insert(frame.clone());
+                    self.reserved
+                        .remove(frame)
+                        .unwrap_or_else(|| self.next_seq())
+                }
+                None => self.next_seq(),
+            },
         }
-        self.numbered.insert(frame.clone());
-        self.reserved
-            .remove(frame)
-            .unwrap_or_else(|| self.next_seq())
+    }
+
+    /// Enforces the `DocTable` non-aliasing invariant on a candidate seq: reuse of a seq already
+    /// mapped to a different `DocToken` is permitted only for a main-frame document replacing an
+    /// explicit `"about:blank"` document (Playwright AR-053).
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    fn resolve_doc_seq(
+        &mut self,
+        candidate: FrameSeq,
+        place: DocPlace,
+        new_token: &DocToken,
+    ) -> FrameSeq {
+        if let Some(previous) = self.docs.token_for_seq(candidate)
+            && previous != new_token
+        {
+            if place == DocPlace::Main && self.docs.is_about_blank(previous) {
+                let previous = previous.clone();
+                let _ = self.docs.retire_token(&previous);
+                return candidate;
+            }
+            let fresh = self.next_seq();
+            if place == DocPlace::Main {
+                self.main_seq = Some(fresh);
+            }
+            return fresh;
+        }
+        candidate
+    }
+
+    /// Seeds `main_url` from an APC capture when no commit or world boot has recorded one yet,
+    /// so a later `MainCommitted` knows whether the main frame left a real page or `about:blank`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    fn record_initial_main_url(&mut self, url: Option<&str>) {
+        if self.main_url.is_none()
+            && let Some(url) = url
+            && !url.is_empty()
+        {
+            self.main_url = Some(url.to_owned());
+        }
     }
 
     /// Numbers what the tab's frames did since the last pick, in the order they did it, as
@@ -468,10 +742,11 @@ impl WorldsInner {
     /// number. A blank page left this way keeps its seq, as upstream does.
     fn left_real_page(&self, seq: FrameSeq) -> bool {
         !self.live.contains_key(&seq)
-            && self
+            && (self
                 .main_doc
                 .as_ref()
                 .is_some_and(|doc| doc.seq == seq && is_real_page(&doc.url))
+                || self.docs.is_retired_real_seq(seq))
     }
 
     /// The page's first seq for the main frame, unless an earlier `Playwright` gave it out.
@@ -514,6 +789,66 @@ impl WorldsInner {
         self.cells.get(key)?.get().cloned()
     }
 
+    fn parent_chain(&self, start: FrameSeq) -> Option<Vec<LinkedParent>> {
+        let mut parents = Vec::new();
+        let mut child = start;
+        // Frames form a tree, so the walk ends at the main frame; the bound only keeps a
+        // corrupted table from spinning while the lock is held.
+        for _ in 0..=self.parents.len() {
+            let Some(link) = self.parents.get(&child) else {
+                break;
+            };
+            // A child document cannot outlive its parent's.
+            let parent = self.live_world(link.parent)?;
+            parents.push(LinkedParent {
+                world: parent,
+                iframe_key: link.iframe_key.clone(),
+            });
+            child = link.parent;
+        }
+        parents.reverse();
+        Some(parents)
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    fn is_live_install(&self, world: &IsolatedWorld) -> bool {
+        let Some(session) = world.session_id() else {
+            return false;
+        };
+        let key = WorldKey {
+            session: session.clone(),
+            frame: world.frame().clone(),
+        };
+        self.cells
+            .get(&key)
+            .and_then(|cell| cell.get())
+            .is_some_and(|held| held.same_install(world))
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    fn resolve_binding(&self, binding: &DocBinding) -> DocLookup {
+        match binding {
+            DocBinding::Bound { seq, world } => {
+                if !self.is_live_install(world) {
+                    return DocLookup::Retired;
+                }
+                let Some(parents) = self.parent_chain(world.seq()) else {
+                    return DocLookup::Retired;
+                };
+                DocLookup::Bound {
+                    seq: *seq,
+                    world: Box::new(world.clone()),
+                    parents,
+                }
+            }
+            DocBinding::Reserved { seq, frame } => DocLookup::Reserved {
+                seq: *seq,
+                frame: frame.clone(),
+            },
+            DocBinding::Retired { .. } => DocLookup::Retired,
+        }
+    }
+
     fn dead(&self, seq: FrameSeq) -> SeqLookup {
         if (self.first..self.next).contains(&seq.0) || self.foreign.contains(&seq) {
             SeqLookup::Retired
@@ -531,17 +866,22 @@ fn is_real_page(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::error::Error;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use browseros_core::{FrameId, ProtocolSession, SessionId, TargetId};
+    use neo_snapshot_apc::tree::{DocSeq, DocToken};
     use tokio::task;
 
     use super::{FrameWorlds, ParentLink, Place, SeqLookup, WorldKey};
     use crate::probe::{ProbeFailure, Ran};
     use crate::test_env;
-    use crate::world::{FrameAttachLog, FrameEvent, FrameSeq, Installed, IsolatedWorld};
+    use crate::world::{
+        DocContext, DocLookup, DocPlace, FrameAttachLog, FrameEvent, FrameSeq, Installed,
+        IsolatedWorld,
+    };
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -1152,6 +1492,673 @@ mod tests {
             next.seq().0 > first.seq().0,
             "old refs cannot alias a returning tab's new document"
         );
+        Ok(())
+    }
+
+    fn doc_token(raw: &str) -> Result<DocToken, Box<dyn Error>> {
+        DocToken::new(raw).ok_or_else(|| format!("empty doc token: {raw:?}").into())
+    }
+
+    fn frame_id(raw: &str) -> FrameId {
+        FrameId(raw.to_owned())
+    }
+
+    fn seq_for(
+        worlds: &FrameWorlds,
+        token: &DocToken,
+        frame: Option<&FrameId>,
+        place: DocPlace,
+        url: Option<&str>,
+        proven: &HashMap<FrameId, IsolatedWorld>,
+    ) -> DocSeq {
+        worlds.seq_for_doc(
+            DocContext {
+                token,
+                frame,
+                place,
+                url,
+            },
+            proven,
+        )
+    }
+
+    #[tokio::test]
+    async fn tests_that_doc_reservation_follows_attach_order_and_stays_stable_across_captures()
+    -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        record(&log, ["two", "one", "uno", "dos"].map(attached));
+
+        let tok_main = doc_token("doc-main")?;
+        let tok_two = doc_token("doc-two")?;
+        let tok_one = doc_token("doc-one")?;
+        let tok_uno = doc_token("doc-uno")?;
+        let tok_dos = doc_token("doc-dos")?;
+        let tok_anon = doc_token("doc-anon")?;
+
+        let proven = HashMap::new();
+        let f_main = frame_id("main");
+        let f_two = frame_id("two");
+        let f_one = frame_id("one");
+        let f_uno = frame_id("uno");
+        let f_dos = frame_id("dos");
+        let f_anon = frame_id("anon");
+
+        // Capture encounters documents out of attach order.
+        let s_uno = seq_for(
+            &worlds,
+            &tok_uno,
+            Some(&f_uno),
+            DocPlace::Child,
+            None,
+            &proven,
+        );
+        let s_two = seq_for(
+            &worlds,
+            &tok_two,
+            Some(&f_two),
+            DocPlace::Child,
+            None,
+            &proven,
+        );
+        let s_main = seq_for(
+            &worlds,
+            &tok_main,
+            Some(&f_main),
+            DocPlace::Main,
+            Some("https://a.test/"),
+            &proven,
+        );
+        let s_dos = seq_for(
+            &worlds,
+            &tok_dos,
+            Some(&f_dos),
+            DocPlace::Child,
+            None,
+            &proven,
+        );
+        let s_one = seq_for(
+            &worlds,
+            &tok_one,
+            Some(&f_one),
+            DocPlace::Child,
+            None,
+            &proven,
+        );
+        let s_anon = seq_for(&worlds, &tok_anon, None, DocPlace::Child, None, &proven);
+
+        assert_eq!(
+            [s_main, s_two, s_one, s_uno, s_dos, s_anon],
+            [0, 1, 2, 3, 4, 5].map(DocSeq::new),
+            "child reservations follow FrameAttachLog attach order regardless of capture order"
+        );
+        assert_eq!(worlds.frame_of(FrameSeq(3)), Some(f_uno.clone()));
+        assert!(matches!(
+            worlds.lookup_doc(&tok_anon),
+            DocLookup::Reserved {
+                seq: FrameSeq(5),
+                frame: None
+            }
+        ));
+
+        // Repeated captures keep identical seqs and fill in a previously unknown frame id.
+        for (token, frame, place, expected) in [
+            (&tok_one, &f_one, DocPlace::Child, DocSeq::new(2)),
+            (&tok_main, &f_main, DocPlace::Main, DocSeq::new(0)),
+            (&tok_dos, &f_dos, DocPlace::Child, DocSeq::new(4)),
+            (&tok_two, &f_two, DocPlace::Child, DocSeq::new(1)),
+            (&tok_uno, &f_uno, DocPlace::Child, DocSeq::new(3)),
+            (&tok_anon, &f_anon, DocPlace::Child, DocSeq::new(5)),
+        ] {
+            let repeated = seq_for(&worlds, token, Some(frame), place, None, &proven);
+            assert_eq!(
+                repeated, expected,
+                "repeated captures of an existing DocToken keep its seq"
+            );
+        }
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(5)),
+            DocLookup::Reserved {
+                seq: FrameSeq(5),
+                frame: Some(ref f),
+            } if f == &f_anon
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_reserved_doc_keeps_its_seq_when_later_bound_to_a_higher_seq_world()
+    -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let main = boot(
+            &worlds,
+            ("S", "main"),
+            Place::Main,
+            &installs,
+            None,
+            "https://a.test/",
+        )
+        .await?;
+        record(&log, [attached("a"), attached("b")]);
+
+        let (tok_a, tok_b) = (doc_token("doc-a")?, doc_token("doc-b")?);
+        let (f_a, f_b) = (frame_id("a"), frame_id("b"));
+        let empty = HashMap::new();
+        assert_eq!(
+            (
+                seq_for(&worlds, &tok_a, Some(&f_a), DocPlace::Child, None, &empty),
+                seq_for(&worlds, &tok_b, Some(&f_b), DocPlace::Child, None, &empty),
+            ),
+            (DocSeq::new(1), DocSeq::new(2)),
+            "children take their attach-reserved seqs"
+        );
+
+        // Installing worlds after reservation consumes higher candidate seqs (3 and 4).
+        let world_a = install(&worlds, ("S", "a"), child_of(0, "#a"), &installs).await?;
+        let world_b = install(&worlds, ("S", "b"), child_of(0, "#b"), &installs).await?;
+        assert_eq!(
+            (world_a.seq(), world_b.seq()),
+            (FrameSeq(3), FrameSeq(4)),
+            "late installs boot with higher candidate seqs than the reserved doc seqs"
+        );
+
+        // Path 1: promote via bind_proven_world.
+        assert_eq!(
+            worlds.bind_proven_world(&tok_a, &world_a),
+            Some(FrameSeq(1)),
+            "binding a reserved doc keeps its reserved seq"
+        );
+        // Path 2: promote via seq_for_doc with proven world.
+        let mut proven = HashMap::new();
+        proven.insert(f_b.clone(), world_b.clone());
+        assert_eq!(
+            seq_for(&worlds, &tok_b, Some(&f_b), DocPlace::Child, None, &proven),
+            DocSeq::new(2),
+            "seq_for_doc promotion keeps reserved seq 2"
+        );
+
+        for (reserved_seq, expected_world, expected_key) in
+            [(FrameSeq(1), &world_a, "#a"), (FrameSeq(2), &world_b, "#b")]
+        {
+            let DocLookup::Bound {
+                seq,
+                world,
+                parents,
+            } = worlds.lookup_doc_seq(reserved_seq)
+            else {
+                return Err(format!("reserved {reserved_seq:?} should resolve as Bound").into());
+            };
+            assert_eq!(seq, reserved_seq);
+            assert!(world.same_install(expected_world));
+            assert_eq!(parents.len(), 1);
+            assert!(parents[0].world.same_install(&main));
+            assert_eq!(parents[0].iframe_key, expected_key);
+        }
+
+        assert_eq!(worlds.cached_worlds().len(), 3);
+        assert!(
+            worlds
+                .cached_world_for_frame(&f_a)
+                .is_some_and(|cached| cached.same_install(&world_a))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_proven_pre_capture_world_binds_and_invalidation_retires_doc_token()
+    -> TestResult {
+        let worlds = FrameWorlds::new(FrameSeq(0));
+        let installs = AtomicU32::new(0);
+        let main = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        let child = install(&worlds, ("S", "child"), child_of(0, "#1"), &installs).await?;
+
+        let tok_main = doc_token("doc-main")?;
+        let tok_child = doc_token("doc-child")?;
+        let f_main = frame_id("main");
+        let f_child = frame_id("child");
+
+        let mut proven = HashMap::new();
+        proven.insert(f_main.clone(), main.clone());
+        proven.insert(f_child.clone(), child.clone());
+
+        assert_eq!(
+            worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_main,
+                    frame: Some(&f_main),
+                    place: DocPlace::Main,
+                    url: Some("https://a.test/"),
+                },
+                &proven,
+            ),
+            DocSeq::new(0)
+        );
+        assert_eq!(
+            worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_child,
+                    frame: Some(&f_child),
+                    place: DocPlace::Child,
+                    url: Some("https://a.test/frame"),
+                },
+                &proven,
+            ),
+            DocSeq::new(1)
+        );
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(1)),
+            DocLookup::Bound {
+                seq: FrameSeq(1),
+                ..
+            }
+        ));
+
+        // A newer install for the same document (e.g. reached via another session) updates the
+        // bound world while keeping seq 0.
+        let main_s2 = worlds
+            .world_with(key("S2", "main"), Place::Main, |_| async {
+                Ok(installed(IsolatedWorld::for_tests(
+                    session("S2"),
+                    "main",
+                    0,
+                    "S2.main",
+                )))
+            })
+            .await?;
+        let mut newer_proven = HashMap::new();
+        newer_proven.insert(f_main.clone(), main_s2.clone());
+        assert_eq!(
+            worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_main,
+                    frame: Some(&f_main),
+                    place: DocPlace::Main,
+                    url: Some("https://a.test/"),
+                },
+                &newer_proven,
+            ),
+            DocSeq::new(0)
+        );
+        assert!(matches!(
+            worlds.lookup_doc(&tok_main),
+            DocLookup::Bound {
+                seq: FrameSeq(0),
+                ref world,
+                ..
+            } if world.same_install(&main_s2)
+        ));
+
+        // Invalidating the child world retires its DocToken and reports it exactly once.
+        let _ = worlds.take_retired_docs();
+        worlds.invalidate(&child);
+        assert_eq!(worlds.take_retired_docs(), vec![tok_child.clone()]);
+        assert!(worlds.take_retired_docs().is_empty());
+        assert!(matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired));
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(1)),
+            DocLookup::Retired
+        ));
+        assert!(worlds.cached_world_for_frame(&f_child).is_none());
+        // A retired token stays retired on any subsequent capture mention.
+        assert_eq!(
+            worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_child,
+                    frame: Some(&f_child),
+                    place: DocPlace::Child,
+                    url: None,
+                },
+                &HashMap::new(),
+            ),
+            DocSeq::new(1)
+        );
+        assert!(matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_snapshot_after_real_main_invalidation_takes_fresh_seq() -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let f_main = frame_id("main");
+        let old_world = main_at(&worlds, &installs, "https://old.test/").await?;
+        let tok_old = doc_token("doc-old")?;
+        let tok_new = doc_token("doc-new")?;
+
+        let mut proven = HashMap::new();
+        proven.insert(f_main.clone(), old_world.clone());
+        assert_eq!(
+            seq_for(
+                &worlds,
+                &tok_old,
+                Some(&f_main),
+                DocPlace::Main,
+                Some("https://old.test/"),
+                &proven,
+            ),
+            DocSeq::new(0)
+        );
+
+        worlds.invalidate(&old_world);
+        let new_seq = seq_for(
+            &worlds,
+            &tok_new,
+            Some(&f_main),
+            DocPlace::Main,
+            Some("https://new.test/"),
+            &HashMap::new(),
+        );
+        assert_eq!(
+            new_seq,
+            DocSeq::new(1),
+            "a new real page after an invalidated real main doc never aliases seq 0"
+        );
+        assert!(matches!(worlds.lookup_doc(&tok_old), DocLookup::Retired));
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(0)),
+            DocLookup::Retired
+        ));
+        assert!(matches!(
+            worlds.lookup_doc(&tok_new),
+            DocLookup::Reserved {
+                seq: FrameSeq(1),
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_about_blank_to_first_real_page_preserves_seq_zero_and_retires_blank()
+    -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let f_main = frame_id("main");
+        let blank_world = main_at(&worlds, &installs, "about:blank").await?;
+        let tok_blank = doc_token("doc-blank")?;
+        let tok_real = doc_token("doc-real")?;
+        let tok_second = doc_token("doc-second")?;
+
+        let mut proven = HashMap::new();
+        proven.insert(f_main.clone(), blank_world.clone());
+        assert_eq!(
+            seq_for(
+                &worlds,
+                &tok_blank,
+                Some(&f_main),
+                DocPlace::Main,
+                Some("about:blank"),
+                &proven,
+            ),
+            DocSeq::new(0)
+        );
+
+        worlds.invalidate(&blank_world);
+        let empty = HashMap::new();
+        assert_eq!(
+            seq_for(
+                &worlds,
+                &tok_real,
+                Some(&f_main),
+                DocPlace::Main,
+                Some("https://real.test/"),
+                &empty,
+            ),
+            DocSeq::new(0),
+            "first real page after about:blank preserves seq 0 (AR-053)"
+        );
+        assert!(
+            matches!(worlds.lookup_doc(&tok_blank), DocLookup::Retired),
+            "the replaced about:blank DocToken must retire"
+        );
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(0)),
+            DocLookup::Reserved {
+                seq: FrameSeq(0),
+                ..
+            }
+        ));
+
+        // Leaving that real page takes a fresh seq.
+        assert_eq!(
+            seq_for(
+                &worlds,
+                &tok_second,
+                Some(&f_main),
+                DocPlace::Main,
+                Some("https://second.test/"),
+                &empty,
+            ),
+            DocSeq::new(1)
+        );
+        assert!(matches!(worlds.lookup_doc(&tok_real), DocLookup::Retired));
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(0)),
+            DocLookup::Retired
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_uninstalled_main_navigation_retires_previous_doc_without_aliasing()
+    -> TestResult {
+        let f_main = frame_id("main");
+        let empty = HashMap::new();
+
+        // Both an explicit real URL and an unknown URL (None) are treated as real pages.
+        for first_url in [Some("https://first.test/"), None] {
+            let log = Arc::new(FrameAttachLog::default());
+            let worlds = logged(&log);
+            let tok_first = doc_token("doc-first")?;
+            let tok_second = doc_token("doc-second")?;
+
+            let s1 = worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_first,
+                    frame: Some(&f_main),
+                    place: DocPlace::Main,
+                    url: first_url,
+                },
+                &empty,
+            );
+            let s2 = worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_second,
+                    frame: Some(&f_main),
+                    place: DocPlace::Main,
+                    url: Some("https://second.test/"),
+                },
+                &empty,
+            );
+            assert_eq!(
+                (s1, s2),
+                (DocSeq::new(0), DocSeq::new(1)),
+                "second real main DocToken must allocate a fresh seq even before MainCommitted (first_url={first_url:?})"
+            );
+            assert!(matches!(worlds.lookup_doc(&tok_first), DocLookup::Retired));
+            assert!(matches!(
+                worlds.lookup_doc_seq(FrameSeq(0)),
+                DocLookup::Retired
+            ));
+            assert!(matches!(
+                worlds.lookup_doc(&tok_second),
+                DocLookup::Reserved {
+                    seq: FrameSeq(1),
+                    ..
+                }
+            ));
+        }
+
+        // An explicit about:blank without any installed world retires and hands seq 0 to the first
+        // real page.
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let tok_blank = doc_token("doc-blank-uninstalled")?;
+        let tok_real = doc_token("doc-real-uninstalled")?;
+        assert_eq!(
+            worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_blank,
+                    frame: Some(&f_main),
+                    place: DocPlace::Main,
+                    url: Some("about:blank"),
+                },
+                &empty,
+            ),
+            DocSeq::new(0)
+        );
+        assert_eq!(
+            worlds.seq_for_doc(
+                DocContext {
+                    token: &tok_real,
+                    frame: Some(&f_main),
+                    place: DocPlace::Main,
+                    url: Some("https://real.test/"),
+                },
+                &empty,
+            ),
+            DocSeq::new(0)
+        );
+        assert!(matches!(worlds.lookup_doc(&tok_blank), DocLookup::Retired));
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(0)),
+            DocLookup::Reserved {
+                seq: FrameSeq(0),
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_child_doc_resolves_retired_when_parent_world_is_invalidated() -> TestResult
+    {
+        let worlds = FrameWorlds::new(FrameSeq(0));
+        let installs = AtomicU32::new(0);
+        let main = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        let child = install(&worlds, ("S", "child"), child_of(0, "#1"), &installs).await?;
+
+        let tok_main = doc_token("doc-main")?;
+        let tok_child = doc_token("doc-child")?;
+        let f_main = frame_id("main");
+        let f_child = frame_id("child");
+
+        let mut proven = HashMap::new();
+        proven.insert(f_main.clone(), main.clone());
+        proven.insert(f_child.clone(), child.clone());
+
+        worlds.seq_for_doc(
+            DocContext {
+                token: &tok_main,
+                frame: Some(&f_main),
+                place: DocPlace::Main,
+                url: Some("https://a.test/"),
+            },
+            &proven,
+        );
+        worlds.seq_for_doc(
+            DocContext {
+                token: &tok_child,
+                frame: Some(&f_child),
+                place: DocPlace::Child,
+                url: None,
+            },
+            &proven,
+        );
+        assert!(matches!(
+            worlds.lookup_doc(&tok_child),
+            DocLookup::Bound { ref parents, .. } if parents.len() == 1
+        ));
+
+        worlds.invalidate(&main);
+        assert!(
+            matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired),
+            "a child document cannot outlive its parent's world"
+        );
+        assert!(
+            matches!(worlds.lookup_doc_seq(FrameSeq(1)), DocLookup::Retired),
+            "seq lookup for a child whose parent died also reports Retired"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_retire_doc_retires_reserved_doc_and_refuses_later_binding() -> TestResult {
+        let worlds = FrameWorlds::new(FrameSeq(0));
+        let installs = AtomicU32::new(0);
+        let tok_child = doc_token("doc-child-reserved")?;
+        let f_child = frame_id("child");
+
+        let seq = worlds.seq_for_doc(
+            DocContext {
+                token: &tok_child,
+                frame: Some(&f_child),
+                place: DocPlace::Child,
+                url: None,
+            },
+            &HashMap::new(),
+        );
+        assert_eq!(seq, DocSeq::new(1));
+
+        assert_eq!(worlds.retire_doc(&tok_child), Some(FrameSeq(1)));
+        assert_eq!(
+            worlds.retire_doc(&tok_child),
+            None,
+            "retiring an already-retired document is a no-op"
+        );
+        assert!(matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired));
+        assert!(matches!(
+            worlds.lookup_doc_seq(FrameSeq(1)),
+            DocLookup::Retired
+        ));
+
+        let child_world = install(&worlds, ("S", "child"), child_of(0, "#1"), &installs).await?;
+        assert_eq!(
+            worlds.bind_proven_world(&tok_child, &child_world),
+            None,
+            "a retired document refuses any later world binding"
+        );
+        assert!(matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_foreign_seqs_resolve_retired_and_never_issued_seqs_resolve_unknown()
+    -> TestResult {
+        let worlds = FrameWorlds::new(FrameSeq(500_000));
+        let installs = AtomicU32::new(0);
+        rekey(&worlds, ("S", "main"), Place::Main, &installs, Some(0)).await?;
+        rekey(
+            &worlds,
+            ("S", "child"),
+            child_of(500_000, "#1"),
+            &installs,
+            Some(500_002),
+        )
+        .await?;
+
+        assert!(
+            matches!(worlds.lookup_doc_seq(FrameSeq(0)), DocLookup::Retired),
+            "foreign seq 0 from an earlier Playwright restart resolves Retired"
+        );
+        assert!(
+            matches!(worlds.lookup_doc_seq(FrameSeq(500_002)), DocLookup::Retired),
+            "foreign seq 500_002 resolves Retired"
+        );
+        assert!(
+            matches!(worlds.lookup_doc_seq(FrameSeq(42)), DocLookup::Unknown),
+            "a seq below the base that was never foreign resolves Unknown"
+        );
+        assert!(
+            matches!(worlds.lookup_doc_seq(FrameSeq(500_999)), DocLookup::Unknown),
+            "a never-issued seq above next resolves Unknown"
+        );
+        let unseen = doc_token("doc-unseen")?;
+        assert!(matches!(worlds.lookup_doc(&unseen), DocLookup::Unknown));
         Ok(())
     }
 }

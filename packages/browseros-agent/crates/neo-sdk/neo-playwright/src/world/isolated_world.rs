@@ -13,7 +13,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 use crate::probe::{self, BootOptions, PROBE_PROTOCOL, ProbeFailure, ProbeReply, Ran};
 use crate::world::engine_source::install_function;
-use crate::world::{ContextId, Epoch, FrameSeq};
+use crate::world::{ContextId, Epoch, FrameSeq, Stamp};
 
 /// The name of the isolated world the engine runs in, one per frame document. Distinct from
 /// core's `PageJs` world, so the engine's globals never meet core's helpers. Not `browseros-sdk`:
@@ -52,6 +52,9 @@ pub(crate) struct IsolatedWorld {
     /// only ever passed as an argument to a call on [`IsolatedWorld::global`], which V8 refuses
     /// across worlds, so an id another context has since taken carries nothing anywhere.
     context: ContextId,
+    /// Logical timestamp recorded when this world finished installing, used by section 6.2 to
+    /// prove the world already existed before an APC capture was requested.
+    installed_at: Stamp,
 }
 
 /// What an install leaves: the world, and the seq its boot took over from, if it did.
@@ -284,6 +287,7 @@ impl IsolatedWorld {
                 seq,
                 global,
                 context,
+                installed_at: Stamp::next(),
             },
             retired,
             url,
@@ -357,6 +361,12 @@ impl IsolatedWorld {
         self.context
     }
 
+    /// Logical timestamp recorded when this world finished installing.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    pub(crate) const fn installed_at(&self) -> Stamp {
+        self.installed_at
+    }
+
     /// Whether `other` is this very install, not just the same frame.
     pub(crate) fn same_install(&self, other: &Self) -> bool {
         self.global == other.global && self.session.same_session(&other.session)
@@ -371,6 +381,7 @@ impl IsolatedWorld {
             seq: FrameSeq(seq),
             global: global.to_owned(),
             context: ContextId(0),
+            installed_at: Stamp::next(),
         }
     }
 }
