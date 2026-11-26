@@ -1,5 +1,5 @@
 {
-  "protocol": 53,
+  "protocol": 54,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === \"pinned\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
   "replyKinds": {
     "describe": [
@@ -107,6 +107,21 @@
     ],
     "webStorage": [
       "value"
+    ],
+    "stage": [
+      "staged",
+      "strict",
+      "detached"
+    ],
+    "describePins": [
+      "pinsDescribed",
+      "detached"
+    ],
+    "coverSurvey": [
+      "surveyed"
+    ],
+    "privateMarks": [
+      "marks"
     ]
   },
   "byHandle": [
@@ -1288,6 +1303,184 @@
       "pin": 4
     },
     {
+      "op": "stage",
+      "selector": {
+        "parts": [
+          {
+            "name": "internal:neo-below",
+            "body": "0",
+            "source": "button[name=\"Go\"i]"
+          },
+          {
+            "name": "internal:has-text",
+            "body": "\"Go\"i",
+            "source": "\"Go\"i"
+          }
+        ]
+      },
+      "sets": [
+        {
+          "members": [
+            {
+              "pin": 3
+            },
+            {
+              "node": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "stage",
+      "selector": {
+        "parts": [
+          {
+            "name": "css",
+            "body": [
+              {
+                "simples": [
+                  {
+                    "selector": {
+                      "css": "li",
+                      "functions": []
+                    },
+                    "combinator": ""
+                  }
+                ]
+              }
+            ],
+            "source": "li"
+          },
+          {
+            "name": "nth",
+            "body": "1",
+            "source": "1"
+          }
+        ]
+      },
+      "from": [
+        {
+          "pin": 3
+        },
+        "document"
+      ],
+      "strict": {
+        "parts": [
+          {
+            "name": "internal:role",
+            "body": "list",
+            "source": "list"
+          },
+          {
+            "name": "css",
+            "body": [
+              {
+                "simples": [
+                  {
+                    "selector": {
+                      "css": "li",
+                      "functions": []
+                    },
+                    "combinator": ""
+                  }
+                ]
+              }
+            ],
+            "source": "li"
+          },
+          {
+            "name": "nth",
+            "body": "1",
+            "source": "1"
+          }
+        ]
+      }
+    },
+    {
+      "op": "stage",
+      "selector": {
+        "parts": [
+          {
+            "name": "css",
+            "body": [
+              {
+                "simples": [
+                  {
+                    "selector": {
+                      "css": "li",
+                      "functions": []
+                    },
+                    "combinator": ""
+                  }
+                ]
+              }
+            ],
+            "source": "li"
+          },
+          {
+            "name": "internal:has",
+            "body": {
+              "parsed": {
+                "parts": [
+                  {
+                    "name": "internal:neo-inside",
+                    "body": "0",
+                    "source": "e7"
+                  }
+                ]
+              }
+            },
+            "source": "\"aria-ref=e7\""
+          }
+        ]
+      },
+      "from": [
+        {
+          "node": 0
+        }
+      ],
+      "sets": [
+        {
+          "error": "Unknown attribute \"pressd\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\"."
+        }
+      ]
+    },
+    {
+      "op": "describePins",
+      "members": [
+        {
+          "pin": 3
+        },
+        {
+          "node": 0
+        }
+      ],
+      "chunk": {
+        "parts": [
+          {
+            "name": "internal:role",
+            "body": "button",
+            "source": "button"
+          }
+        ]
+      }
+    },
+    {
+      "op": "describePins",
+      "members": [
+        {
+          "pin": 4
+        }
+      ]
+    },
+    {
+      "op": "coverSurvey"
+    },
+    {
+      "op": "privateMarks"
+    },
+    {
       "op": "setContent",
       "html": "<!doctype html><title>Set</title><p>new</p>"
     }
@@ -1295,19 +1488,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 53,
+      "protocol": 54,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 53,
+      "protocol": 54,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 53,
+      "protocol": 54,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -2015,6 +2208,114 @@
     },
     {
       "kind": "replaced"
+    },
+    {
+      "kind": "staged",
+      "matches": [
+        {
+          "pin": 5
+        },
+        {
+          "pin": 6
+        }
+      ]
+    },
+    {
+      "kind": "staged",
+      "matches": [
+        "document",
+        {
+          "pin": 7
+        }
+      ]
+    },
+    {
+      "kind": "staged",
+      "matches": []
+    },
+    {
+      "kind": "pinsDescribed",
+      "locator": "getByRole('button')",
+      "items": [
+        {
+          "preview": "<button>Go</button>",
+          "aka": "getByRole('button', { name: 'Go' })"
+        },
+        {
+          "preview": "<button>Stop</button>",
+          "aka": "getByRole('button', { name: 'Stop' })"
+        }
+      ]
+    },
+    {
+      "kind": "pinsDescribed",
+      "items": [
+        {
+          "preview": "<input id=\"pw\" type=\"password\" value=\"<7 characters>\"/>",
+          "aka": "locator('#pw')"
+        }
+      ]
+    },
+    {
+      "kind": "surveyed",
+      "layers": [
+        {
+          "pin": 9,
+          "blank": false,
+          "loading": false,
+          "wholeView": true,
+          "controls": [
+            10
+          ],
+          "firstWords": "Read first Close",
+          "holders": [
+            9
+          ]
+        },
+        {
+          "pin": 11,
+          "blank": true,
+          "loading": true,
+          "wholeView": false,
+          "controls": [],
+          "holders": []
+        }
+      ],
+      "tested": 3,
+      "surveyMs": 1,
+      "phases": {
+        "hits": 1,
+        "count": 0,
+        "naming": 1,
+        "linking": 0,
+        "marks": 0,
+        "stopped": false
+      }
+    },
+    {
+      "kind": "surveyed",
+      "layers": [],
+      "tested": 300,
+      "surveyMs": 20.5,
+      "phases": {
+        "hits": 20.5,
+        "count": 0,
+        "naming": 0,
+        "linking": 0,
+        "marks": 0,
+        "stopped": true
+      }
+    },
+    {
+      "kind": "marks",
+      "pins": [
+        12,
+        13
+      ]
+    },
+    {
+      "kind": "marks",
+      "pins": []
     },
     {
       "kind": "error",

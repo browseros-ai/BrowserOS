@@ -37,6 +37,7 @@
  * that frame's tree walk there; no host fill happens under the switch.
  */
 
+import { composedElements } from './composed-tree'
 import { coverWrapper, renderedText } from './private-look'
 import type {
   BoxState,
@@ -126,6 +127,18 @@ export function privatelyTyped(element: Element): boolean {
 /** Whether this world has marked a box; a moved-in marked root is checked separately. */
 export function anyPrivatelyTyped(): boolean {
   return anyMarked
+}
+
+/**
+ * `privateMarks`: every element of this document that carries the mark, in composed-tree order
+ * and pinned as one entry, which is how Rust's mirror of the marks learns a document an earlier
+ * `Playwright` filled (apc-engine-design 8.1). The key is registered, so a mark that another
+ * protocol's probe made in this world, before this bundle replaced it, is found too.
+ */
+export function privateMarks(world: World): ReplyTo<'privateMarks'> {
+  const root = world.injected.document.documentElement
+  const marked = root ? [...composedElements(root)].filter(privatelyTyped) : []
+  return { kind: 'marks', pins: world.pins.addAll(marked) }
 }
 
 function mark(element: Element): void {

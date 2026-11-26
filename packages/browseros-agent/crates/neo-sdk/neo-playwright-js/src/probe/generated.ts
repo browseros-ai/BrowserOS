@@ -474,6 +474,33 @@ export type ParsedSelector = import('../../../neo-playwright/third_party/playwri
 export type Pin = number;
 
 /**
+ * The page's words for one element: upstream's `previewNode`, and the locator its
+ * `generateSelectorSimple` writes, as `asLocator` prints it. The page masks both as it masks
+ * any failure output.
+ */
+export type PinPreview = { preview: string, aka: string, };
+
+/**
+ * A layer `coverSurvey` found, with the elements its answer names pinned (design 8.2). Rust
+ * reads their role, name and ref from the tree and words the layer as a [`SurveyLayer`] is
+ * worded.
+ */
+export type PinnedLayer = { 
+/**
+ * The element the layer is named by.
+ */
+pin: Pin, blank: boolean, loading: boolean, wholeView: boolean, 
+/**
+ * The layer's controls that take the pointer, in the survey's order.
+ */
+controls: Array<Pin>, firstWords?: string, 
+/**
+ * For a whole-view layer with words, the elements that hold it: the top-most tree nodes
+ * under them take the `onTop` mark. Empty for every other layer.
+ */
+holders: Array<Pin>, };
+
+/**
  * One value of a `readAll` `pins`.
  */
 export type PinnedMatch = { pin: Pin, preview: string, };
@@ -554,7 +581,7 @@ inertMarkingMs?: number, json: import('../prelude/vendored').AriaSnapshotJSON, i
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.
  */
-marksSkipped?: boolean, } | { "kind": "expect", matches: boolean, resolved: string, received?: PageText, ariaSnapshot?: string, } | { "kind": "urlMatch", matches: boolean, url: string, } | { "kind": "documentText", text: string, } | { "kind": "replaced" } | { "kind": "error", message: string, class: ErrorClass, 
+marksSkipped?: boolean, } | { "kind": "expect", matches: boolean, resolved: string, received?: PageText, ariaSnapshot?: string, } | { "kind": "urlMatch", matches: boolean, url: string, } | { "kind": "documentText", text: string, } | { "kind": "replaced" } | { "kind": "staged", matches: Array<StageMatch>, } | { "kind": "pinsDescribed", locator?: string, items: Array<PinPreview>, } | { "kind": "surveyed", layers: Array<PinnedLayer>, tested: number, surveyMs: number, phases: SurveyPhases, } | { "kind": "marks", pins: Array<Pin>, } | { "kind": "error", message: string, class: ErrorClass, 
 /**
  * Approximate tree levels for a depth refusal. Presence identifies the failure without
  * coupling a child frame's partial handling to the message's wording.
@@ -611,7 +638,12 @@ boxes?: boolean,
  * How many of the call's nodes, first, are seeds of closed shadow roots; none outside
  * clickable marking.
  */
-closedRoots?: number, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
+closedRoots?: number, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, } | { "op": "stage", selector: ParsedSelector, from?: Array<SetMember>, sets?: Array<StageSet>, 
+/**
+ * The whole chunk as the prelude sent it, when this stage ends a strict locator: the
+ * violation's message is upstream's `strictModeViolationError` for it.
+ */
+strict?: ParsedSelector, } | { "op": "describePins", members: Array<SetMember>, chunk?: ParsedSelector, } | { "op": "coverSurvey" } | { "op": "privateMarks" };
 
 /**
  * What a request runs on inside the world.
@@ -679,6 +711,11 @@ export type SelectRetry = "error:optionsnotfound" | "error:optionnotenabled";
 export type Selected = Array<string> | SelectRetry;
 
 /**
+ * An element, or the document, that a request names and this world already holds.
+ */
+export type SetMember = { "pin": Pin } | { "node": number } | "document";
+
+/**
  * A rendered `<iframe>` in one frame's snapshot, for Rust to hop into.
  */
 export type SnapshotIframe = { ref: string, depth: number, src: string, };
@@ -687,6 +724,18 @@ export type SnapshotIframe = { ref: string, depth: number, src: string, };
  * `ariaSnapshot`'s mode.
  */
 export type SnapshotMode = "ai" | "default";
+
+/**
+ * One match of a `stage`: a pinned element, or the Document when `nth` or `internal:or` kept
+ * the chunk's query root.
+ */
+export type StageMatch = { "pin": Pin } | "document";
+
+/**
+ * One candidate set of a `stage`: what one tree part matched over the frame's whole document,
+ * in tree order, or the error that part raised.
+ */
+export type StageSet = { "members": Array<SetMember> } | { "error": string };
 
 /**
  * Upstream's `WebStorage` methods, the call a `webStorage` request makes.

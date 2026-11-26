@@ -127,7 +127,10 @@ function attachedRoot(root: Node | undefined): Element | undefined {
  * already parsed. `ref=` gets Neo's hint: models write it from other tools, and Neo does
  * not add a third spelling for refs (design D3).
  */
-function checkEngines(injected: InjectedScript, chunk: ParsedSelector): void {
+export function checkEngines(
+  injected: InjectedScript,
+  chunk: ParsedSelector,
+): void {
   const engines = engineTable(injected)
   visitAllSelectorParts(chunk, (part) => {
     if (engines.has(part.name)) return

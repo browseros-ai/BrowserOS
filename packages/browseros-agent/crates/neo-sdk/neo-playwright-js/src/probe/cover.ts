@@ -762,9 +762,29 @@ export function takingControls(world: World, shown: Element): Element[] {
 }
 
 /**
- * Up to eight of the cover's controls that take the pointer, with their roles, names and refs. A
- * dialog puts its buttons last, so when there are more than eight the buttons are kept first.
+ * Up to eight of the cover's controls that take the pointer, in their order. A dialog puts its
+ * buttons last, so when there are more than eight the buttons are kept first. A snapshot's answer
+ * words them here (`controlsOf`); `coverSurvey` pins them for Rust to word from its tree.
  */
+export function listedControls(
+  world: World,
+  shown: Element,
+  taking: readonly Element[] = takingControls(world, shown),
+  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
+): Element[] {
+  const kept = new Set<Element>(
+    taking
+      .filter((control) => controlRole(world, control, aria) === 'button')
+      .slice(0, MAX_CONTROLS),
+  )
+  for (const control of taking) {
+    if (kept.size >= MAX_CONTROLS) break
+    kept.add(control)
+  }
+  return taking.filter((control) => kept.has(control))
+}
+
+/** The cover's listed controls with their roles, names and refs. */
 export function controlsOf(
   world: World,
   output: FailureOutput,
@@ -772,23 +792,11 @@ export function controlsOf(
   taking: readonly Element[] = takingControls(world, shown),
   aria: Pick<CoverAria, 'roleOf' | 'nameOf' | 'refOf'> = coverAriaFor(world),
 ): CoverControl[] {
-  const roleOf = (control: Element) => controlRole(world, control, aria)
-  const kept = new Set<Element>(
-    taking
-      .filter((control) => roleOf(control) === 'button')
-      .slice(0, MAX_CONTROLS),
-  )
-  for (const control of taking) {
-    if (kept.size >= MAX_CONTROLS) break
-    kept.add(control)
-  }
-  return taking
-    .filter((control) => kept.has(control))
-    .map((control) => ({
-      role: roleOf(control),
-      name: nameOf(world, output, control, aria),
-      ref: aria.refOf(control),
-    }))
+  return listedControls(world, shown, taking, aria).map((control) => ({
+    role: controlRole(world, control, aria),
+    name: nameOf(world, output, control, aria),
+    ref: aria.refOf(control),
+  }))
 }
 
 /**

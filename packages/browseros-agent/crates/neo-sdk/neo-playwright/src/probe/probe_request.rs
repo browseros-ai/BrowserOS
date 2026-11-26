@@ -845,6 +845,10 @@ mod tests {
             "setContent",
             "armInput",
             "inputArrived",
+            "stage",
+            "describePins",
+            "coverSurvey",
+            "privateMarks",
         ] {
             assert!(
                 ops.iter().any(|seen| seen == op),
