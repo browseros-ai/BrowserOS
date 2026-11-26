@@ -1,3 +1,4 @@
+/* deepscan-disable */
 /*
  * Test oracle, not a page asset: Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf) packages/injected
  * InjectedScript and its own ARIA engine (roleUtils, ariaSnapshot, roleSelectorEngine), built

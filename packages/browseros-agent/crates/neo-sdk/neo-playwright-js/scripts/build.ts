@@ -294,12 +294,15 @@ ${prelude}`
   const oracle = await oracleProbe()
   return [
     {
-      // The oracle the APC engine's Rust tests run upstream's role engine from in QuickJS
-      // (neo-snapshot-apc/tests/select_match_oracle.rs): the probe with the vendored ARIA
-      // engine still bundled, as the page asset was before the switch-over. A test file only:
-      // no browser ever loads it.
+      // The oracle the APC engine's tests run upstream's role engine from: in QuickJS
+      // (neo-snapshot-apc/tests/select_match_oracle.rs) and, in a world of its own, in the
+      // zero-conflict harness's pages (tests/support/oracle_capture.rs). The probe with the
+      // vendored ARIA engine still bundled, as the page asset was before the switch-over. A
+      // test file only: Neo never ships it. Its first line keeps DeepScan off upstream's
+      // bundled code, which its sources' own scan already covers.
       path: 'crates/neo-sdk/neo-snapshot-apc/tests/data/oracle-injected.js',
-      text: `/*
+      text: `/* deepscan-disable */
+/*
  * Test oracle, not a page asset: Neo's probe with Playwright ${tag} (${commit}) packages/injected
  * InjectedScript and its own ARIA engine (roleUtils, ariaSnapshot, roleSelectorEngine), built
  * unmodified by crates/neo-sdk/neo-playwright-js/scripts/build.ts for the APC engine's
