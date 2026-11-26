@@ -29,11 +29,12 @@ pub(crate) use probe_call::{
 };
 pub(crate) use probe_reply::{
     CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, OwnCase, OwnPress, PROBE_PROTOCOL, PageText,
-    Point, ProbeReply, Rect, Resolution, SnapshotIframe, SurveyLayer, depth_error,
+    PinPreview, Point, ProbeReply, Rect, Resolution, SnapshotIframe, StageMatch, SurveyLayer,
+    depth_error,
 };
 pub(crate) use probe_request::{
     ArmPlan, BootOptions, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload,
     FillValue, HitAction, OwnAllowed, ParsedSelector, ProbePolicy, ProbeRequest, ProbeTarget,
-    QueryState, Read, ReadAll, Retarget, ScrollPlan, SelectOption, SnapshotMode, StorageAction,
-    StorageKind, UrlPattern, Want,
+    QueryState, Read, ReadAll, Retarget, ScrollPlan, SelectOption, SetMember, SnapshotMode,
+    StageSet, StorageAction, StorageKind, UrlPattern, Want,
 };

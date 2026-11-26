@@ -32,6 +32,7 @@
 
 mod accessible_text;
 mod attribute_selector;
+mod chunk_plan;
 mod js_regex;
 mod parsed_selector;
 mod ref_resolver;
@@ -45,6 +46,7 @@ pub use attribute_selector::{
     AttributeSelector, AttributeSelectorError, AttributeSelectorOperator, AttributeSelectorPart,
     AttributeValue, UnquotedStrings, parse_attribute_selector,
 };
+pub use chunk_plan::{ChunkPlan, ChunkPlanError, PageForm, PlannedStage, Stages, TreeRun};
 pub use js_regex::{JsRegex, RegexError};
 pub use parsed_selector::{
     LAYOUT_SELECTOR_NAMES, NESTED_SELECTOR_NAMES, NestedSelectorBody, ParsedSelector, SelectorBody,
