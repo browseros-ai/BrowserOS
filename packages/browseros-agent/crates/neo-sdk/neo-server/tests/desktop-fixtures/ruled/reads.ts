@@ -887,7 +887,7 @@ export const readsCases = [
       "Build the mixed fixture URL from args.base and args.base2, switching the frame hostname between localhost and 127.0.0.1 to retain the original cross-origin condition.",
       "Wait for parent/frame-a/frame-b/grandchild readiness.",
       "Both settled default SDK v1 snapshots contain all seven original action/cursor labels in parent, frame A, grandchild, frame B order.",
-      "Every label has a ref and the label-to-ref map is identical across captures. Treat each complete ref as opaque."
+      "Every label has a ref, except frame B's cursor target while its line is exactly its plain text: a cross-site frame below the fold (apc-oopif-actionable, C8 P21), recorded in the result's skipped list. The label-to-ref map is identical across captures. Treat each complete ref as opaque."
     ]
   },
   {
@@ -949,8 +949,8 @@ export const readsCases = [
     },
     "postconditions": [
       "Create a new Page, navigate to the mixed-origin fixture using only runtime fixture bases.",
-      "Explicitly capture the created page. Require all seven original labels, a ref for each, and parent/frame A/grandchild/frame B stitch order.",
-      "Return dynamic tabId, snapshot and refs; close the created Page in finally.",
+      "Explicitly capture the created page. Require all seven original labels, a ref for each except frame B's cursor target while its line is exactly its plain text (cross-site frame below the fold, apc-oopif-actionable, C8 P21; recorded in skipped), and parent/frame A/grandchild/frame B stitch order.",
+      "Return dynamic tabId, snapshot, refs and skipped; close the created Page in finally.",
       "Do not require an automatic desktop context envelope from newPage."
     ]
   },

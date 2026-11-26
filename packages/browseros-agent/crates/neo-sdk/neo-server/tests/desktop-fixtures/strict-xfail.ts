@@ -1,4 +1,4 @@
-/** Only the five selected desktop gaps may turn their exact script assertion into an xfail. */
+/** Only the selected desktop gaps (`strictFailures`) may turn their exact script assertion into an xfail. */
 import { jsonObject, jsonValue, stringField } from './json'
 import type {
   Expectation,
@@ -7,8 +7,23 @@ import type {
   RunReply,
 } from './model'
 
-const labelPrefix =
-  'Error: exactly one label ref remains, for the hidden Remember me control; actual='
+const ownRefPattern =
+  /^Error: snapshot must give (Frame B cursor ready|Deep frame cursor ready) its own ref; actual=/
+const zeroPrefix = 'Error: the zero-sized target has no actionable ref; actual='
+/**
+ * The frame fixture's labels in DOM stitch order. The last sits in the cross-site frame B, below
+ * the fold, where APC sends no InteractionInfo (apc-oopif-actionable), so its cursor target prints
+ * as text; the six before it keep their refs.
+ */
+const frameLabels = [
+  'Parent action ready',
+  'Frame A action ready',
+  'Frame A cursor ready',
+  'Grandchild action ready',
+  'Grandchild cursor ready',
+  'Frame B action ready',
+  'Frame B cursor ready',
+] as const
 const isolatedPrefix =
   'Error: snapshot must give Card delete control its own ref; actual='
 const cardPrefix = 'Error: No ref for Card delete control; actual='
@@ -51,6 +66,47 @@ function refLine(
     )
 }
 
+function plainText(snapshot: string, name: string): boolean {
+  return snapshot.split('\n').some((line) => line.trim() === `- text: ${name}`)
+}
+
+/**
+ * The known below-fold frame gap and nothing else: every frame label in stitch order, the six
+ * in view with their refs, and the below-fold cursor targets as text. A deep frame nested in
+ * frame B keeps its action ref too.
+ */
+function belowFoldFrameGap(snapshot: string, deep: boolean) {
+  let prior = -1
+  for (const label of frameLabels) {
+    const index = snapshot.indexOf(label, prior + 1)
+    requireSignature(
+      index !== -1,
+      `Expected-failure snapshot lost ${label} or its stitch order`,
+    )
+    prior = index
+  }
+  for (const label of frameLabels.slice(0, -1)) {
+    requireSignature(
+      refLine(snapshot, label) !== undefined,
+      `Expected-failure snapshot lost ${label} ref`,
+    )
+  }
+  requireSignature(
+    plainText(snapshot, 'Frame B cursor ready'),
+    'Expected-failure snapshot no longer prints Frame B cursor ready as text',
+  )
+  if (deep) {
+    requireSignature(
+      refLine(snapshot, 'Deep frame action ready') !== undefined,
+      'Expected-failure snapshot lost Deep frame action ready ref',
+    )
+    requireSignature(
+      plainText(snapshot, 'Deep frame cursor ready'),
+      'Expected-failure snapshot no longer prints Deep frame cursor ready as text',
+    )
+  }
+}
+
 function missingCardChild(snapshot: string) {
   const pointer = refLine(snapshot, 'Pointer card')
   requireSignature(
@@ -75,29 +131,45 @@ function missingCardChild(snapshot: string) {
 
 function matchSignature(signature: FailureSignature, message: string) {
   switch (signature) {
-    case 'hidden-label-ref': {
+    case 'below-fold-oopif-ref': {
+      const match = ownRefPattern.exec(message)
+      requireSignature(
+        match !== null,
+        'Expected-failure assertion message changed',
+      )
+      const label = match[1]
       const value = jsonObject(
-        payload(message, labelPrefix),
-        'Hidden-label expected failure',
+        payload(message, match[0]),
+        'Below-fold frame expected failure',
       )
       requireSignature(
-        Object.keys(value).sort().join(',') === 'labelTargets,snapshot',
-        'Hidden-label expected-failure payload fields changed',
+        Object.keys(value).sort().join(',') === 'line,snapshot',
+        'Below-fold frame expected-failure payload fields changed',
       )
       requireSignature(
-        Array.isArray(value.labelTargets) && value.labelTargets.length === 0,
-        'Expected failure must have no label targets',
+        stringField(value, 'line').trim() === `- text: ${label}`,
+        `Expected-failure line for ${label} is no longer its plain text`,
       )
-      const snapshot = stringField(value, 'snapshot')
-      for (const name of ['Email address', 'Wrapped name', 'Pointer label']) {
-        requireSignature(
-          refLine(snapshot, name, 'textbox') !== undefined,
-          `Expected-failure snapshot lost ${name} textbox ref`,
-        )
-      }
+      belowFoldFrameGap(
+        stringField(value, 'snapshot'),
+        label === 'Deep frame cursor ready',
+      )
+      return
+    }
+    case 'zero-size-target-ref': {
+      const value = jsonObject(
+        payload(message, zeroPrefix),
+        'Zero-size target expected failure',
+      )
       requireSignature(
-        snapshot.includes('Remember me'),
-        'Expected-failure snapshot lost Remember me text',
+        Object.keys(value).join(',') === 'zero',
+        'Zero-size target expected-failure payload fields changed',
+      )
+      requireSignature(
+        /^- group "Zero-sized excluded target" \[ref=[^\]\s]+\] \[cursor=pointer\]$/.test(
+          stringField(value, 'zero'),
+        ),
+        'Expected-failure zero-size line changed',
       )
       return
     }
