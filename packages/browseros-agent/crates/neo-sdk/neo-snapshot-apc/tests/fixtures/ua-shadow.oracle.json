@@ -103,6 +103,11 @@
             "disabled": false,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 8,
+            "index": 0,
+            "count": 3
           }
         },
         {
@@ -118,6 +123,11 @@
             "disabled": false,
             "selected": true,
             "active": false
+          },
+          "option": {
+            "select": 8,
+            "index": 1,
+            "count": 3
           }
         },
         {
@@ -133,6 +143,11 @@
             "disabled": false,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 8,
+            "index": 2,
+            "count": 3
           }
         },
         {

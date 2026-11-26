@@ -1,5 +1,7 @@
 //! The recorded oracle: what Playwright's own ARIA engine said about a fixture page, read on the
-//! same page load as that fixture's `.pb`.
+//! same page load as that fixture's `.pb`. An oracle whose option places were merged in later
+//! (`record_fixtures --option-places`) took them from a re-read proved equal to that load in
+//! every id, owner and ref.
 //!
 //! ```text
 //!  record_fixtures ─▶ oracle_capture (JS engine, per frame) ─▶ Oracle ─▶ <name>.oracle.json

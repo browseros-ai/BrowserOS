@@ -23,8 +23,9 @@ pub(crate) fn joined_node<'tree>(
     doc: &TreeDoc,
     element: &OracleElement,
 ) -> Result<Option<&'tree TreeNode>, Box<dyn Error>> {
-    // One page load records both the capture and the oracle, so a select's option count can
-    // only disagree when the recording is broken.
+    // Both files describe one page load (a re-read merges option places only once it equals
+    // that load's oracle), so a select's option count can only disagree when the recording is
+    // broken.
     tree.node_at(&element_place(doc.token(), element)?)
         .map_err(|changed| {
             format!(

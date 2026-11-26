@@ -24,6 +24,21 @@ The oracle tests refuse a recording below contract v4, so a recording made on st
 
 The recorder prints one line per fixture and exits non-zero when any fixture failed. A failed fixture writes neither file.
 
+### Option places, merged in from a re-read
+
+The reader learned to write each listed `<option>`'s `option` place after these files were recorded. `--option-places` adds the places without re-recording a `.pb`:
+
+```sh
+NEO_E2E_BROWSER="<a Chromium 158 build; it needs no APC patches>" \
+  bun run test:browser -- cargo run -p neo-snapshot-apc --example record_fixtures -- --contract --option-places
+```
+
+Per fixture it loads and types as a recording does, reads the oracle and closes the tab. It runs no before-capture step and no APC, and never writes a `.pb`. The fresh read must equal the committed oracle in every value except the engine banner, each frame's CDP `frame` and `parent` ids, and the `option` fields. A different backendNodeId, owner, ref, fact, order, URL or ARIA tree fails the fixture, names the first differing JSON path, and writes nothing. On equality it writes the committed oracle (its banner and frame ids kept) with the read's places, after the canary guard, so the file's diff is the `option` fields alone. A fixture with no place to add is reported unchanged and not written.
+
+It exists because the oracle is Playwright's engine reading the DOM, so a browser without the APC patches reads the same oracle, while a fresh `.pb` from the patched browser would carry whatever its newer contract changed. The equal backendNodeIds, owners and refs are what keep every join to the committed `.pb` intact without a shared page load.
+
+Run on 2026-11-26 on the stock-158 reference build (`/Users/shadowfax/code/chromium-3/src/out/Default_browseros_arm64/BrowserOS Dev.app`, `Browser.getVersion` product `Chrome/158.0.8127.18`), headless with a throwaway profile, with `--contract`. Five oracles gained places: `nosize` 2, `ua-shadow` 3, `roles` 7, `names` 3, `states` 8. Every other value of those oracles and every `.pb` file is unchanged. Nine fixtures were unchanged (no `<select>`). `nested-cross-site-frames` and `shadow-roots` failed the equality check (a backendNodeId one or two off, alone and in the full run) and were left as recorded. Neither has a `<select>`, so neither had a place to add.
+
 ## One page load per fixture
 
 ```text
@@ -43,11 +58,13 @@ new tab ─▶ Emulation.setFocusEmulationEnabled ─▶ navigate ─▶ ready p
 - **Contents per frame.** Every element `getAriaRole` gives a role (tree order, shadow root before light children): role, name, description, error message, hidden for ARIA, visible, and the states `toAriaNode` offers that role, plus `active`. `aria.ai` and `aria.default` are `ariaSnapshotJSON` from the frame's body, exactly as returned. A child frame's refs are `f<seq>e<n>`, where seq is the frame's index in `frames`.
 - **Refs.** `refs` maps every ai-mode ref the engine minted on the read to its element. Playwright's distiller drops some nodes from the printed tree but keeps their refs resolvable, so `refs` can hold more than `aria.ai` prints: 12 more on `roles`, 9 on `names`. An iframe or a `generic` node has a ref but no entry in `elements`, which lists only elements with a role.
 - **Frames.** Main first, then depth first, each frame's children sorted by URL then frame id. `frame` is the CDP frame id (the devtools frame token). URLs have the fixture server's ephemeral port removed.
+- **Option places.** Every `<option>` a select lists carries `option: { select, index, count }`: its select's backendNodeId, its index in `select.options`, and that list's length, read from the select by `oracle.js`, separately from the probe's own option rule. An option of no select, or one in a `<datalist>`, has none.
 
 ### How it joins the `.pb`
 
 - An element joins by `backendNodeId`: it is the APC node's `common_ancestor_dom_node_id` (both are Blink's `DOMNodeIds`). Ids are per renderer, so the join is within one frame's document.
 - A child frame joins by `owner`: the backendNodeId of its `<iframe>` in the parent document, which is the APC iframe node's `common_ancestor_dom_node_id`. `tests/oracles.rs` checks that every child frame's owner is an iframe node of its parent's document in the same fixture's `.pb`.
+- An `<option>` of a collapsed `<select>` has no APC node: APC sends its options as `select_options` on the select. It joins the select's option slot by its `option` place, through `SnapshotTree::node_at` (`tests/support/oracle_join.rs`), which the roles and states, names and emit-refs oracle tests and `zero_conflict_live` all use. A slot count other than the place's `count` fails as a broken recording. `tests/oracles.rs` checks that every place names a `<select>` node of the same frame's document in the `.pb`, with the option count it sent.
 
 ## Inventory
 
@@ -59,11 +76,11 @@ new tab ─▶ Emulation.setFocusEmulationEnabled ─▶ navigate ─▶ ready p
 | `shadow-roots` | Open and closed shadow roots, two levels, slots, a frame inside a closed root | 2 | 70 | 24 | 32 | 6,581 | 19,597 |
 | `zero-size-checkbox` | Zero-size checkboxes with labels | 1 | 13 | 4 | 5 | 1,266 | 3,505 |
 | `zero-size-controls` | Zero-size checkbox, radio and file input, labels by `for` and by nesting | 1 | 59 | 13 | 22 | 5,351 | 12,762 |
-| `nosize` | Zero-size controls (`data/prelude/nosize.html`) | 1 | 72 | 30 | 14 | 5,977 | 20,650 |
-| `ua-shadow` | Browser-made shadow content | 1 | 88 | 18 | 23 | 7,734 | 13,640 |
-| `roles` | Roles | 1 | 384 | 178 | 218 | 30,643 | 125,646 |
-| `names` | Names | 1 | 229 | 79 | 110 | 21,991 | 63,845 |
-| `states` | States | 1 | 314 | 147 | 174 | 30,181 | 121,159 |
+| `nosize` | Zero-size controls (`data/prelude/nosize.html`) | 1 | 72 | 30 | 14 | 5,977 | 20,866 |
+| `ua-shadow` | Browser-made shadow content | 1 | 88 | 18 | 23 | 7,734 | 13,961 |
+| `roles` | Roles | 1 | 384 | 178 | 218 | 30,643 | 126,402 |
+| `names` | Names | 1 | 229 | 79 | 110 | 21,991 | 64,167 |
+| `states` | States | 1 | 314 | 147 | 174 | 30,181 | 122,019 |
 | `private-forms` | Private forms | 1 | 70 | 21 | 50 | 6,523 | 26,237 |
 | `sensitive-form` | Private forms (values set in markup, not typed) | 1 | 20 | 6 | 10 | 1,854 | 5,599 |
 | `covered-button` | A covered button | 1 | 16 | 8 | 9 | 1,590 | 5,308 |
@@ -72,7 +89,7 @@ new tab ─▶ Emulation.setFocusEmulationEnabled ─▶ navigate ─▶ ready p
 
 Frames is the oracle's count; APC's frame count (main plus iframe nodes) is the same on every fixture.
 
-Total: 16 fixtures, 32 files, 992,123 bytes (142,367 in `.pb` files, 849,756 in oracles). `deep-nesting.oracle.json` is 388,209 of them: pretty-printing indents its 120-level tree. Compressed, as git stores it, the directory is about 82 KB (`deep-nesting.oracle.json` about 5.5 KB), so the oracles stay pretty-printed for review.
+Total: 16 fixtures, 32 files, 994,598 bytes (142,367 in `.pb` files, 852,231 in oracles). `deep-nesting.oracle.json` is 388,209 of them: pretty-printing indents its 120-level tree. Compressed, as git stores it, the directory is about 82 KB (`deep-nesting.oracle.json` about 5.5 KB), so the oracles stay pretty-printed for review.
 
 ## Secrets and the canary guard
 

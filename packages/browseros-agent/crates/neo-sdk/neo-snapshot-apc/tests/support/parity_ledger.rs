@@ -21,7 +21,8 @@ use std::fmt;
 /// The oracle fact a ledger entry disagrees on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Field {
-    /// The oracle element has no node in the `SnapshotTree` (no APC node with its id).
+    /// The oracle element has no node in the `SnapshotTree`: no APC node with its id, or, for an
+    /// option its select lists, no option slot at its place (`support/oracle_join.rs`).
     Join,
     Role,
     Hidden,
@@ -118,29 +119,6 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
             child("hung-subframe", "http://[::1]/hung-subframe/hung.html", 2),
             child("hung-subframe", "http://[::1]/hung-subframe/hung.html", 4),
             child("hung-subframe", "http://[::1]/hung-subframe/hung.html", 6),
-        ],
-    },
-    KnownMismatch {
-        field: Field::Join,
-        tree: "",
-        cause: Cause::RustRule,
-        why: "a collapsed <select>'s options have no box and no APC node. Chunk 5 \
-              (tree-emit-refs) synthesizes them from select_options as option slots \
-              (apc-engine-design 3.5); one has no DOM id, so a follow-up joins it to the oracle \
-              by select and index and removes these entries",
-        nodes: &[
-            main("nosize", 72),
-            main("nosize", 74),
-            main("ua-shadow", 132),
-            main("ua-shadow", 135),
-            main("ua-shadow", 138),
-            main("roles", 531),
-            main("roles", 533),
-            main("names", 316),
-            main("names", 318),
-            main("names", 349),
-            main("states", 374),
-            main("states", 456),
         ],
     },
     KnownMismatch {

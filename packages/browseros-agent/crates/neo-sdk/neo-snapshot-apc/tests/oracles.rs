@@ -355,7 +355,7 @@ fn every_recorded_option_place_names_a_select_of_the_same_load_pb() -> Result<()
                 let Some(sent) = sent else {
                     panic!(
                         "{}: option {}'s select {select} is no <select> node of {} in the .pb; \
-                         both files come from one page load, so backendNodeIds must agree",
+                         both files describe one page load, so backendNodeIds must agree",
                         fixture.name, element.backend_node_id, frame.url
                     );
                 };
