@@ -99,14 +99,6 @@ pub(crate) struct KnownMismatch {
 
 const NESTED: &str = "nested-cross-site-frames";
 
-const IMAGE_INPUTS: &[OracleNode] = &[
-    main("roles", 262),
-    main("names", 20),
-    main("names", 153),
-    main("names", 155),
-    main("names", 157),
-];
-
 /// Recorded on BrowserOS Dev 158.0.8127.18 at contract v4 (`tests/fixtures/README.md`).
 pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     KnownMismatch {
@@ -140,9 +132,10 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         field: Field::Join,
         tree: "",
         cause: Cause::RustRule,
-        why: "a collapsed <select>'s options have no box and no APC node; Rust's option synthesis \
-              from select_options (apc-engine-design 3.5) is not built, and a synthesized option \
-              has no DOM id to join by",
+        why: "a collapsed <select>'s options have no box and no APC node. Chunk 5 \
+              (tree-emit-refs) synthesizes them from select_options as fold.rs SyntheticOption \
+              (apc-engine-design 3.5); one has no DOM id, so a follow-up joins it to the oracle \
+              by select and index and removes these entries",
         nodes: &[
             main("nosize", 72),
             main("nosize", 74),
@@ -203,29 +196,6 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         ],
     },
     KnownMismatch {
-        field: Field::Role,
-        tree: "Some(Textbox)",
-        cause: Cause::RustRule,
-        why: "APC sends <input type=image> as an Image node with no FormControlData; the role \
-              rule reads only form_control_type and falls back to textbox, though tag `input` \
-              plus ContentData::Image identify it",
-        nodes: IMAGE_INPUTS,
-    },
-    KnownMismatch {
-        field: Field::Pressed,
-        tree: "None",
-        cause: Cause::RustRule,
-        why: "follows the image input's textbox role, which is not offered pressed",
-        nodes: IMAGE_INPUTS,
-    },
-    KnownMismatch {
-        field: Field::Invalid,
-        tree: "Some(False)",
-        cause: Cause::RustRule,
-        why: "follows the image input's textbox role, which is offered invalid",
-        nodes: IMAGE_INPUTS,
-    },
-    KnownMismatch {
         field: Field::Disabled,
         tree: "Some(true)",
         cause: Cause::AcceptedGap("G2"),
@@ -235,40 +205,6 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
             main("states", 169),
             main("states", 307),
             main("states", 309),
-        ],
-    },
-    KnownMismatch {
-        field: Field::Name,
-        tree: "",
-        cause: Cause::RustRule,
-        why: "follows the image input's textbox role: alt and the `Submit` default are skipped",
-        nodes: &[main("roles", 262), main("names", 157)],
-    },
-    KnownMismatch {
-        field: Field::Name,
-        tree: "image input title becomes the description, alt wins the name",
-        cause: Cause::RustRule,
-        why: "follows the image input's textbox role, which takes title where Playwright takes alt",
-        nodes: &[main("names", 153)],
-    },
-    KnownMismatch {
-        field: Field::Name,
-        tree: "",
-        cause: Cause::RustRule,
-        why: "a list box's native <option> text arrives stamped ua_shadow, which the name rule \
-              skips; the select's select_options carries every label",
-        nodes: &[
-            main("roles", 305),
-            main("roles", 306),
-            main("roles", 313),
-            main("roles", 314),
-            main("roles", 543),
-            main("states", 82),
-            main("states", 83),
-            main("states", 84),
-            main("states", 222),
-            main("states", 223),
-            main("states", 224),
         ],
     },
     KnownMismatch {

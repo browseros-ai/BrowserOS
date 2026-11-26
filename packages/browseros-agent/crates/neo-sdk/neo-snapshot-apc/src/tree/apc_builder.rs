@@ -7,7 +7,7 @@ use crate::proto::{
     BrowserOsPageContentData, BrowserOsRedactedFrame, BrowserOsRef, BrowserOsTriState,
     ClickabilityReason, ContentAttributeType, ContentAttributes, ContentData, ContentNode,
     DocumentIdentifier, FormControlData, FormControlType, FrameData, FrameInteractionInfo,
-    Geometry, IframeData, IframeDataContent, InteractionDisabledReason, InteractionInfo,
+    Geometry, IframeData, IframeDataContent, ImageInfo, InteractionDisabledReason, InteractionInfo,
     RedactedFrameMetadata, RedactedFrameReason, RedactionDecision, SecurityOrigin, SelectOption,
     TextInfo,
 };
@@ -513,6 +513,15 @@ impl NodeBuilder {
             url: Some(url.to_owned()),
             rel: Vec::new(),
         }));
+        node
+    }
+
+    /// Creates an image node (`ContentAttributeType::Image`) as APC sends any element laid out
+    /// as an image: an `<img>`, or an `<input type=image>` whose image loaded, which then carries
+    /// no `FormControlData`.
+    pub fn image() -> Self {
+        let mut node = Self::new(ContentAttributeType::Image);
+        node.attrs.content_data = Some(ContentData::Image(ImageInfo::default()));
         node
     }
 

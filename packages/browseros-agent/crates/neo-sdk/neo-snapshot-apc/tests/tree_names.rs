@@ -1640,6 +1640,119 @@ fn step5_input_image_native_precedence() -> Result<(), Box<dyn Error>> {
     )
 }
 
+/// The same precedence on the shape APC sends for a loaded `<input type=image>`: an Image node
+/// with no `FormControlData` (fixtures `roles` 262, `names` 153 and 157).
+#[test]
+fn step5_input_image_sent_as_an_image_node() -> Result<(), Box<dyn Error>> {
+    let tree = build_tree(
+        NodeBuilder::root()
+            .dom_id(1)
+            .child(
+                NodeBuilder::element("label")
+                    .label_for(10)
+                    .child(NodeBuilder::text("Img Label")),
+            )
+            .child(NodeBuilder::image().tag("input").dom_id(10).alt("Img Alt"))
+            .child(
+                NodeBuilder::image()
+                    .tag("input")
+                    .dom_id(11)
+                    .alt("Go")
+                    .title("Go to checkout"),
+            )
+            .child(
+                NodeBuilder::image()
+                    .tag("input")
+                    .dom_id(12)
+                    .title("Image Title"),
+            )
+            .child(NodeBuilder::image().tag("input").dom_id(13)),
+    )?;
+
+    assert_visible_names(
+        &tree,
+        &[
+            (10, "Img Label", "a <label> wins first"),
+            (11, "Go", "alt wins over title"),
+            (12, "Image Title", "title follows a missing alt"),
+            (13, "Submit", "Submit is the default"),
+        ],
+    )?;
+    let description =
+        tree.accessible_description(node_id(&tree, "doc-main", 11)?, NameVisibility::VisibleOnly);
+    assert_eq!(
+        description.text(),
+        "Go to checkout",
+        "the title is still the description when alt names the input"
+    );
+    Ok(())
+}
+
+/// A list box's `<option>` renders `DisplayLabel()` through an `aria-hidden` span in its UA shadow
+/// root, and its own children are `display: none`, so the option's text arrives only as
+/// `ua_shadow` text (fixtures `roles` 305, `states` 82).
+#[test]
+fn list_box_option_named_from_its_ua_shadow_label_text() -> Result<(), Box<dyn Error>> {
+    let shadow_option = |dom_id: i32, selected: bool, text: &str| {
+        NodeBuilder::element("option")
+            .dom_id(dom_id)
+            .selected(selected)
+            .child(NodeBuilder::text(text).ua_shadow(true))
+    };
+    let tree = build_tree(
+        NodeBuilder::root()
+            .dom_id(1)
+            .child(
+                NodeBuilder::form_control(FormControlType::SelectMultiple)
+                    .tag("select")
+                    .list_box(true)
+                    .dom_id(10)
+                    .child(shadow_option(11, false, "Alpha"))
+                    .child(shadow_option(12, true, "Beta")),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(20)
+                    .child(NodeBuilder::text("Pick: "))
+                    .child(
+                        NodeBuilder::form_control(FormControlType::SelectMultiple)
+                            .tag("select")
+                            .list_box(true)
+                            .child(shadow_option(21, false, "Red"))
+                            .child(shadow_option(22, true, "Green")),
+                    ),
+            )
+            .child(
+                NodeBuilder::element("button")
+                    .dom_id(30)
+                    .child(NodeBuilder::text("Save"))
+                    .child(NodeBuilder::text(" UA_NOISE").ua_shadow(true)),
+            ),
+    )?;
+
+    assert_visible_names(
+        &tree,
+        &[
+            (11, "Alpha", "an option reads its ua_shadow label text"),
+            (
+                12,
+                "Beta",
+                "a selected option reads its ua_shadow label text",
+            ),
+            (
+                20,
+                "Pick: Green",
+                "a list box embedded in a button reads its selected option's label text",
+            ),
+            (
+                30,
+                "Save",
+                "ua_shadow text outside an <option> stays out of names",
+            ),
+        ],
+    )
+}
+
 #[test]
 fn step5_button_and_output_native_precedence() -> Result<(), Box<dyn Error>> {
     let tree = build_tree(

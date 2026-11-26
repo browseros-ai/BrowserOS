@@ -936,10 +936,21 @@ fn node_prevents_landmark(raw: &ContentAttributes) -> bool {
         })
 }
 
-fn form_control_type(raw: &ContentAttributes) -> Option<FormControlType> {
+/// The control kind of a node, as the role rules here and the name rules in `name.rs` read it.
+/// APC types a node by its layout object before its element, so an `<input type=image>` whose
+/// image loaded is a `LayoutImage` and arrives as an Image node with no `FormControlData`
+/// (`ai_page_content_agent.cc`, the `IsImage` branch precedes the form-control one). Tag `input`
+/// plus image content is that control. One whose image failed renders fallback content and
+/// arrives as a form control with `InputImage`.
+pub(crate) fn form_control_type(raw: &ContentAttributes) -> Option<FormControlType> {
     match raw.content_data.as_ref()? {
         ContentData::FormControl(control) => {
             FormControlType::try_from(control.form_control_type?).ok()
+        }
+        ContentData::Image(_)
+            if hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("input")) =>
+        {
+            Some(FormControlType::InputImage)
         }
         _ => None,
     }
