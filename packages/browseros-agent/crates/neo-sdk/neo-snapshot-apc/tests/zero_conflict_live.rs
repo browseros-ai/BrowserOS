@@ -38,13 +38,12 @@ mod zero_conflict;
 mod zero_conflict_live;
 
 use std::collections::BTreeSet;
-use std::env;
 use std::error::Error;
 use std::fmt::{self, Write as _};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use std::{env, fs};
 
 use browseros_cdp::{CdpClient, SessionId};
 use fixture_pages::{ApcContract, FIXTURES, Fixture};

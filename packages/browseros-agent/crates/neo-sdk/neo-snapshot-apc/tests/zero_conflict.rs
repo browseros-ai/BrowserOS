@@ -19,13 +19,11 @@ mod zero_conflict;
 mod zero_conflict_gen;
 
 use std::collections::BTreeMap;
-use std::env;
 use std::error::Error;
 use std::fmt::Write as _;
-use std::fs;
 use std::path::Path;
-use std::thread;
 use std::time::Instant;
+use std::{env, fs, thread};
 
 use neo_snapshot::Tristate;
 use neo_snapshot_apc::proto::FormControlType;
