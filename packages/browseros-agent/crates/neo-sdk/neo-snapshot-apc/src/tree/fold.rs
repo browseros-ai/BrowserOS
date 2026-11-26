@@ -261,7 +261,7 @@ pub(crate) fn logical_children_iter(nodes: &[TreeNode], parent: NodeId) -> Logic
 /// iterative time.
 pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
     let bottom_up = compute_bottom_up(nodes);
-    let top_down = compute_top_down(nodes, &bottom_up);
+    let mut top_down = compute_top_down(nodes, &bottom_up);
     let proxies = resolve_click_proxies(
         nodes,
         docs,
@@ -269,6 +269,7 @@ pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
         &top_down.nearest_ancestor_unlinked_label,
         &bottom_up.first_labelable,
     );
+    settle_label_targets(nodes, &proxies, &mut top_down);
 
     FoldInfo {
         click_proxies: proxies.click_proxies,
@@ -286,6 +287,9 @@ struct DescendantSummary {
     has_real_option: Vec<bool>,
     first_labelable: Vec<Option<NodeId>>,
     has_live: Vec<bool>,
+    /// Whether a same-document descendant is a target the page draws ([`is_drawn_target`]): what
+    /// keeps a `tabindex` wrapper from taking clicks of its own.
+    has_drawn_target_below: Vec<bool>,
 }
 
 struct TopDownSummary {
@@ -382,6 +386,7 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
     let mut has_real_option = vec![false; nodes.len()];
     let mut first_labelable: Vec<Option<NodeId>> = vec![None; nodes.len()];
     let mut has_live = vec![false; nodes.len()];
+    let mut has_drawn_target_below = vec![false; nodes.len()];
 
     for index in (0..nodes.len()).rev() {
         let Some(node) = nodes.get(index) else {
@@ -413,6 +418,13 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
             *parent_slot = true;
         }
 
+        let drawn_below = has_drawn_target_below.get(index).copied().unwrap_or(false);
+        if (drawn_below || is_drawn_target(node))
+            && let Some(parent_slot) = has_drawn_target_below.get_mut(parent_id.index())
+        {
+            *parent_slot = true;
+        }
+
         let labelable_candidate = if is_labelable_element(node) {
             Some(node.id())
         } else {
@@ -430,7 +442,23 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
         has_real_option,
         first_labelable,
         has_live,
+        has_drawn_target_below,
     }
+}
+
+/// A node the page draws that takes input on its own: a box Chromium reports clickable for any
+/// reason, or focusable. A `tabindex` wrapper around one is not a target itself, since the click
+/// or the focus belongs to what it holds.
+fn is_drawn_target(node: &TreeNode) -> bool {
+    let Some(raw) = node.raw_attributes() else {
+        return false;
+    };
+    if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) || !node.hidden().is_box_visible() {
+        return false;
+    }
+    raw.interaction_info.as_ref().is_some_and(|info| {
+        !info.clickability_reasons.is_empty() || info.is_focusable == Some(true)
+    })
 }
 
 fn synthesize_select_options(
@@ -487,6 +515,29 @@ fn is_clickable_element(raw: &ContentAttributes) -> bool {
     info.clickability_reasons
         .iter()
         .any(|&code| code == cursor_pointer || code == click_handler)
+}
+
+/// Whether Chromium reports `raw` editable (`contenteditable`) while its parent is not: the
+/// editing host, which an agent fills or types into, and not every element inside it.
+fn is_editing_host(raw: &ContentAttributes, parent: Option<&ContentAttributes>) -> bool {
+    has_reason(raw, ClickabilityReason::Editable)
+        && !parent.is_some_and(|parent| has_reason(parent, ClickabilityReason::Editable))
+}
+
+/// Whether `raw` takes focus by its `tabindex` in the tab order (`tabindex >= 0`). A
+/// `tabindex="-1"` shell, focusable from script only, is not.
+fn is_tabbable_wrapper(raw: &ContentAttributes) -> bool {
+    has_reason(raw, ClickabilityReason::TabIndex)
+        && raw
+            .interaction_info
+            .as_ref()
+            .is_some_and(|info| info.is_tabbable == Some(true))
+}
+
+fn has_reason(raw: &ContentAttributes, reason: ClickabilityReason) -> bool {
+    raw.interaction_info
+        .as_ref()
+        .is_some_and(|info| info.clickability_reasons.contains(&i32::from(reason)))
 }
 
 fn is_focusable_element(raw: &ContentAttributes) -> bool {
@@ -609,7 +660,17 @@ fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDow
             synthetic_options.insert(node.id(), options);
         }
 
-        let is_clickable = is_clickable_element(raw);
+        let parent_raw = parent_id
+            .and_then(|pid| nodes.get(pid.index()))
+            .and_then(TreeNode::raw_attributes);
+        let drawn_below = bottom_up
+            .has_drawn_target_below
+            .get(index)
+            .copied()
+            .unwrap_or(false);
+        let is_clickable = is_clickable_element(raw)
+            || is_editing_host(raw, parent_raw)
+            || (is_tabbable_wrapper(raw) && !drawn_below);
         let is_prunable =
             !is_clickable && is_plain_prunable_element(node, raw, parent_logical_inert);
         let mut flags: u8 = 0;
@@ -632,6 +693,57 @@ fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDow
         node_flags,
         clickable_count,
         prunable_count,
+    }
+}
+
+/// A `<label>` shares its control's ref (a click on it acts on the control). A label whose
+/// control the tree draws, or pairs with it as a click proxy, is no target of its own, whatever
+/// cursor or listener it has. A label whose control the tree holds no drawn node for, as a
+/// `display: none` checkbox behind a styled label, is the control's only target, so it takes
+/// clicks and keeps a ref of its own.
+fn settle_label_targets(
+    nodes: &[TreeNode],
+    proxies: &ClickProxyTables,
+    top_down: &mut TopDownSummary,
+) {
+    if top_down.labels_for.is_empty() {
+        return;
+    }
+    let by_dom: HashMap<(DocId, DomNodeId), NodeId> = nodes
+        .iter()
+        .filter_map(|node| Some(((node.doc(), node.dom_node_id()?), node.id())))
+        .collect();
+    for (key, labels) in &top_down.labels_for {
+        let control_stands = by_dom.get(key).is_some_and(|&control| {
+            proxies.click_proxy_index.contains_key(&control)
+                || nodes
+                    .get(control.index())
+                    .is_some_and(|node| node.hidden().is_box_visible())
+        });
+        for &label in labels {
+            if proxies.folded_label_for.contains_key(&label) {
+                continue;
+            }
+            let Some(flags) = top_down.node_flags.get_mut(label.index()) else {
+                continue;
+            };
+            let was_clickable = *flags & FLAG_CLICKABLE != 0;
+            let takes_clicks = !control_stands
+                && nodes.get(label.index()).is_some_and(|node| {
+                    !node.hidden().is_hidden_for_aria() && node.hidden().is_box_visible()
+                });
+            if takes_clicks && !was_clickable {
+                *flags |= FLAG_CLICKABLE;
+                top_down.clickable_count += 1;
+                if *flags & FLAG_PRUNABLE != 0 {
+                    *flags &= !FLAG_PRUNABLE;
+                    top_down.prunable_count = top_down.prunable_count.saturating_sub(1);
+                }
+            } else if !takes_clicks && was_clickable {
+                *flags &= !FLAG_CLICKABLE;
+                top_down.clickable_count = top_down.clickable_count.saturating_sub(1);
+            }
+        }
     }
 }
 
@@ -998,6 +1110,112 @@ mod tests {
             fold.synthetic_options(iframe_select).len(),
             1,
             "<option> inside nested child_doc iframe must not suppress synthesis"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_label_takes_clicks_only_when_no_drawn_node_stands_for_its_control()
+    -> Result<(), Box<dyn Error>> {
+        let label = |dom: i32, control: i32| {
+            NodeBuilder::element("label")
+                .dom_id(dom)
+                .label_for(control)
+                .bounding_box(0, 0, 120, 20)
+                .child(NodeBuilder::text("Label"))
+        };
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputText)
+                        .tag("input")
+                        .dom_id(10)
+                        .bounding_box(0, 30, 120, 20),
+                )
+                .child(label(11, 10).clickability_reason(ClickabilityReason::CursorPointer))
+                .child(label(12, 99)),
+        )?;
+        let fold = tree.fold();
+        assert!(
+            !fold.is_clickable_container(node_id(&tree, "doc-main", 11)?),
+            "a pointer label whose control is drawn shares the control's ref"
+        );
+        assert!(
+            fold.is_clickable_container(node_id(&tree, "doc-main", 12)?),
+            "a label whose control the tree does not hold (display: none) is its only target"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_editing_hosts_and_tabbable_wrappers_without_drawn_targets_take_clicks()
+    -> Result<(), Box<dyn Error>> {
+        let wrapper = |dom: i32| {
+            NodeBuilder::container()
+                .dom_id(dom)
+                .clickability_reason(ClickabilityReason::TabIndex)
+                .focusable(true)
+                .tabbable(true)
+                .bounding_box(0, 0, 200, 20)
+        };
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::container()
+                        .dom_id(20)
+                        .clickability_reason(ClickabilityReason::Editable)
+                        .bounding_box(0, 0, 200, 20)
+                        .child(
+                            NodeBuilder::container()
+                                .dom_id(21)
+                                .clickability_reason(ClickabilityReason::Editable)
+                                .bounding_box(0, 0, 200, 20)
+                                .child(NodeBuilder::text("Draft")),
+                        ),
+                )
+                .child(wrapper(30).child(NodeBuilder::text("Tabindex target")))
+                .child(
+                    wrapper(40).child(
+                        NodeBuilder::form_control(FormControlType::ButtonButton)
+                            .tag("button")
+                            .dom_id(41)
+                            .clickability_reason(ClickabilityReason::ClickableControl)
+                            .bounding_box(0, 0, 60, 20),
+                    ),
+                )
+                .child(
+                    wrapper(50).child(
+                        NodeBuilder::form_control(FormControlType::InputCheckbox)
+                            .tag("input")
+                            .dom_id(51)
+                            .clickability_reason(ClickabilityReason::ClickableControl)
+                            .bounding_box(0, 0, 0, 0),
+                    ),
+                )
+                .child(
+                    NodeBuilder::container()
+                        .dom_id(60)
+                        .clickability_reason(ClickabilityReason::TabIndex)
+                        .focusable(true)
+                        .tabbable(false)
+                        .bounding_box(0, 0, 400, 400)
+                        .child(NodeBuilder::text("App shell")),
+                ),
+        )?;
+        let fold = tree.fold();
+        let clickable = |dom: i32| -> Result<bool, Box<dyn Error>> {
+            Ok(fold.is_clickable_container(node_id(&tree, "doc-main", dom)?))
+        };
+        assert!(clickable(20)?, "the editing host");
+        assert!(!clickable(21)?, "not an editable element inside it");
+        assert!(clickable(30)?, "a tabbable wrapper holding only text");
+        assert!(!clickable(40)?, "not one around a drawn button");
+        assert!(clickable(50)?, "one whose only control is not drawn");
+        assert!(
+            !clickable(60)?,
+            "not a tabindex=-1 shell, outside the tab order"
         );
         Ok(())
     }

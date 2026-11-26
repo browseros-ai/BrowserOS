@@ -2213,12 +2213,11 @@ const HIDDEN_CONTROLS_PAGE: &str = r##"<!doctype html><html><head><title>Hidden 
 </main>
 </body></html>"##;
 
-/// A hidden control does not make a container: each wrapper whose only control is not drawn
-/// prints its text alone, and a zero-size field keeps its bare line (section 16.3). The tree
-/// marks what Chromium reports clickable, a pointer cursor or a click handler, which a
-/// `tabindex` alone is not, so no wrapper here is marked and the marked text equals the
-/// unmarked. A wrapper around a drawn control, a 1-pixel checkbox or a drawn `aria-hidden`
-/// button keeps its control's line. No ref is lost either way.
+/// Marking's guard counts only what the engine draws: a `tabindex` wrapper whose only control is
+/// not drawn takes clicks itself and prints one marked line, a zero-size field keeping its bare
+/// line beside it (section 16.3). A wrapper around a drawn control, a 1-pixel checkbox or a drawn
+/// `aria-hidden` button stays unmarked and keeps its control's line. The tree marks alike with or
+/// without the switch, so the marked text equals the unmarked. No ref is lost either way.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container() -> TestResult {
@@ -2236,14 +2235,17 @@ async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container
     ] {
         assert_eq!(
             block(&marked, name),
-            [format!("- text: {text}")],
+            [format!("- generic [ref] [cursor=pointer]: {text}")],
             "{name}: {marked}"
         );
     }
     assert_eq!(
         block(&marked, "zero size"),
-        ["- checkbox", "- text: Notifications"],
-        "the zero-size field keeps its state without a ref: {marked}"
+        [
+            "- generic [ref] [cursor=pointer]: Notifications",
+            "- checkbox"
+        ],
+        "the wrapper is clickable while the field still has no ref: {marked}"
     );
     for name in ["drawn control", "screen reader", "aria hidden"] {
         let lines = block(&marked, name);

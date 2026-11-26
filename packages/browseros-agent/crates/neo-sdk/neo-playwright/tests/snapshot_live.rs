@@ -1274,8 +1274,9 @@ async fn tests_that_a_page_snapshot_that_times_out_names_the_phase_that_ran_out(
 /// What Chromium reports clickable comes with the APC tree itself: every ai snapshot marks it,
 /// page and locator alike, and `clickable: true` changes nothing (the per-frame `DOMSnapshot` scan
 /// it once started is gone). The page's own pointer rows, the listener-only list items, `div`
-/// and empty tile are marked; the containers are not. A `tabindex` card is not clickable to
-/// Chromium, so it carries no mark, and keeps the ref every element that takes the pointer has.
+/// and empty tile are marked, and so is a `tabindex` card with text, which holds no other target.
+/// APC carries no `aria-owns`, so the `tabindex` box that owns a pointer row elsewhere holds none
+/// in the tree and takes clicks itself, where the old scan followed the relation.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
 async fn tests_that_the_tree_marks_what_chromium_reports_clickable_with_or_without_the_switch()
@@ -1314,18 +1315,12 @@ async fn tests_that_the_tree_marks_what_chromium_reports_clickable_with_or_witho
             "Item A",
             "Item B",
             "Open menu",
+            "Card text",
+            "Owner",
         ] {
             let printed = ref_with_text(field(&plain, "json"), text)
                 .ok_or_else(|| format!("{op}: {text} prints: {plain}"))?;
             assert!(marks.contains(&printed), "{op}: {text} is marked: {plain}");
-        }
-        for text in ["Owner", "Card text"] {
-            let printed = ref_with_text(field(&plain, "json"), text)
-                .ok_or_else(|| format!("{op}: {text} keeps its ref: {plain}"))?;
-            assert!(
-                !marks.contains(&printed),
-                "{op}: {text} is no target: {plain}"
-            );
         }
     }
     live.close(&page).await
