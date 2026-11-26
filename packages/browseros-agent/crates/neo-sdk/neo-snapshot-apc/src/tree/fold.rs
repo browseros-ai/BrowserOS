@@ -668,9 +668,12 @@ fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDow
             .get(index)
             .copied()
             .unwrap_or(false);
+        // An iframe is a frame host: what it holds is its own document's, which this document's
+        // guard cannot see, and focus on it moves into that document. It never takes clicks by
+        // its `tabindex`.
         let is_clickable = is_clickable_element(raw)
             || is_editing_host(raw, parent_raw)
-            || (is_tabbable_wrapper(raw) && !drawn_below);
+            || (is_tabbable_wrapper(raw) && !drawn_below && !node.is_iframe_boundary());
         let is_prunable =
             !is_clickable && is_plain_prunable_element(node, raw, parent_logical_inert);
         let mut flags: u8 = 0;
@@ -1202,6 +1205,23 @@ mod tests {
                         .tabbable(false)
                         .bounding_box(0, 0, 400, 400)
                         .child(NodeBuilder::text("App shell")),
+                )
+                .child(
+                    NodeBuilder::iframe(
+                        FrameBuilder::new("doc-frame").root(
+                            NodeBuilder::root().dom_id(1).child(
+                                NodeBuilder::form_control(FormControlType::InputText)
+                                    .tag("input")
+                                    .dom_id(2)
+                                    .bounding_box(0, 0, 100, 20),
+                            ),
+                        ),
+                    )
+                    .dom_id(70)
+                    .clickability_reason(ClickabilityReason::TabIndex)
+                    .focusable(true)
+                    .tabbable(true)
+                    .bounding_box(0, 0, 300, 150),
                 ),
         )?;
         let fold = tree.fold();
@@ -1216,6 +1236,10 @@ mod tests {
         assert!(
             !clickable(60)?,
             "not a tabindex=-1 shell, outside the tab order"
+        );
+        assert!(
+            !clickable(70)?,
+            "not a tabindex iframe, whose targets are its document's"
         );
         Ok(())
     }
