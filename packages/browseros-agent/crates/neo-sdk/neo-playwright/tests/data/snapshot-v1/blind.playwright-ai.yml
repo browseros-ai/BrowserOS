@@ -1,4 +1,4 @@
-- generic [ref=e1]:
+- generic [active] [ref=e1]:
   - main [ref=e2]:
     - heading "Access restricted" [level=1] [ref=e3]
     - paragraph [ref=e4]: Continued access by an unauthorized AI agent violates our Conditions of Use. Press Continue only if you are a person.
