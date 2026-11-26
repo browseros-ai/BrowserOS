@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::sync::OnceLock;
+use std::{fmt, mem};
 
 use crate::proto::{
     BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
@@ -1060,6 +1060,17 @@ struct CompositeText {
     contributors: Vec<NodeId>,
 }
 
+/// Moves `part` into `into`, the shorter list into the longer. Order does not matter, since the
+/// finished name sorts its contributors. Down a deep chain every level holds all the contributors
+/// below it, so extending the parent's list each time would cost O(depth²) moves; this keeps a
+/// whole name O(n log n).
+fn absorb_contributors(into: &mut Vec<NodeId>, mut part: Vec<NodeId>) {
+    if into.len() < part.len() {
+        mem::swap(into, &mut part);
+    }
+    into.extend(part);
+}
+
 impl CompositeText {
     fn from_leaf(node_id: NodeId, text: String) -> Self {
         let contributors = if text.is_empty() {
@@ -1198,7 +1209,7 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
                 acc.push(' ');
             }
             acc.push_str(&part.text);
-            contributors.extend(part.contributors);
+            absorb_contributors(contributors, part.contributors);
             *part_count += 1;
         }
         while let Some(&item) = refs.get(*next_index) {
@@ -1275,7 +1286,7 @@ fn advance_join_all_frame(state: &mut EvalState<'_>) {
                 acc.push(' ');
             }
             acc.push_str(&part.text);
-            contributors.extend(part.contributors);
+            absorb_contributors(contributors, part.contributors);
             *part_count += 1;
         }
         if let Some(&target_id) = nodes.get(*next_index) {
@@ -1312,7 +1323,7 @@ fn advance_labels_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
                 acc.push(' ');
             }
             acc.push_str(&part.text);
-            contributors.extend(part.contributors);
+            absorb_contributors(contributors, part.contributors);
         }
         if let Some(&label_id) = labels.get(*next_index) {
             *next_index += 1;
@@ -1348,7 +1359,7 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
     {
         if let Some(part) = state.returned.take() {
             acc.push_str(&part.text);
-            contributors.extend(part.contributors);
+            absorb_contributors(contributors, part.contributors);
         }
         while let Some(&child_id) = children.get(*next_index) {
             *next_index += 1;
