@@ -11,9 +11,9 @@ carries the APC contract. For each site the live test
 
 1. It waits for `document.readyState === 'complete'`, at most 30 s, then 3 s more.
 2. It reads the page's oracle, Playwright's vendored engine run in each frame, within 20 s a
-   step and 5 minutes in all. When the oracle fails, the site's recall is not measured and the
-   rest still is. An oracle step that overran its bound leaves the engine running in the page,
-   so the runner stops that script (`Runtime.terminateExecution`) before it captures.
+   step and 5 minutes in all. An oracle step that overran its bound can leave the renderer busy
+   inside it for minutes, so when the oracle fails the runner loads the site again in a fresh
+   tab and measures it there. Only its recall is lost.
 3. It captures `Page.getAnnotatedPageContent` twice and checks every line with a ref in Neo's
    format and in Playwright's.
 4. It hydrates every printed ref in its frame's CDP session.
@@ -24,9 +24,8 @@ a ref that is not one of the snapshot's own labels: `generic` for an element wit
 and `iframe`. No `getByRole` can name either, in Playwright too, so the test counts them apart
 once the tree confirms the element really has no role or is a frame. Misses of both captures are
 listed. A site whose capture does not build or check fails the gate, since that is the engine's
-or the checker's failure whatever the page did. A site that fails to load, or stays busy after
-its oracle fails, is listed as not measured. Stability, hydration and recall are reported and
-not gated.
+or the checker's failure whatever the page did. A site that fails to load or to capture is listed
+as not measured. Stability, hydration and recall are reported and not gated.
 
 ## Running it
 

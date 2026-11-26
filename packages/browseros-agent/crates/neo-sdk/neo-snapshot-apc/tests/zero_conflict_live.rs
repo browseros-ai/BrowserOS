@@ -75,13 +75,7 @@ const SITE_SETTLE: Duration = Duration::from_secs(3);
 /// CDP steps are, and its check is CPU work no timer could cut short.
 const SITE_ORACLE_BOUND: Duration = Duration::from_mins(5);
 
-/// Bound on waiting for a site's renderer to finish the work of an oracle step that overran.
-const SITE_UNBUSY_BOUND: Duration = Duration::from_mins(7);
-
-/// How long an idle renderer takes at most to answer a trivial script, after an oracle failure.
-const SITE_IDLE_PROBE: Duration = Duration::from_secs(2);
-
-/// How often a wait reads the page again: its ready state, or whether it answers a script.
+/// How often the ready state is read while waiting.
 const SITE_POLL: Duration = Duration::from_millis(250);
 
 /// How many missing backendNodeIds a report lists per frame and role.
@@ -639,7 +633,13 @@ enum SiteOutcome {
     },
 }
 
-/// Loads `site`, reads its oracle and measures it; the tab is closed again, on failure too.
+/// Loads `site`, reads its oracle and measures it; each tab is closed again, on failure too.
+///
+/// When the oracle fails, the site is loaded again in a fresh tab and measured there without it.
+/// An oracle step that overran its bound stops only its own wait: the renderer can stay inside it
+/// for minutes (a `DOMSnapshot` step is the browser's own code, which no script stop ends), and
+/// every later call to that renderer queues behind it. The fresh tab costs the site its recall,
+/// not its lines.
 async fn run_site(
     client: &CdpClient,
     engine: &OracleEngine,
@@ -659,104 +659,84 @@ async fn run_site(
             return SiteOutcome::NotMeasured { reason, detail };
         }
     };
-    let OpenedSite {
-        target_id,
-        session,
-        ready,
-    } = opened;
-    let outcome = async {
-        // The oracle is bounded as a whole too: a page that keeps its renderer busy slows each
-        // of its thousands of per-element steps without tripping any one step's bound. Cut off,
-        // it leaves its child-frame sessions attached; closing the tab ends them.
-        let oracle = time::timeout(
-            SITE_ORACLE_BOUND,
-            oracle_capture::read_oracle(client, &site.id, &session, &target_id, engine, browser),
-        )
-        .await
-        .map_err(|_elapsed| format!("the oracle did not finish within {SITE_ORACLE_BOUND:?}"))
-        .and_then(|read| read.map(Box::new).map_err(|error| error.to_string()));
-        if oracle.is_err()
-            && let Err(error) = await_responsive(client, &session).await
-        {
-            return SiteOutcome::NotMeasured {
-                reason: "the page stayed busy after the oracle failed (detail in report.md)"
-                    .to_owned(),
-                detail: oracle_note(&oracle, &error),
-            };
-        }
-        let measured = zero_conflict_live::measure(
+    // The oracle is bounded as a whole too: a page that keeps its renderer busy slows each of its
+    // thousands of per-element steps without tripping any one step's bound. Cut off, it leaves
+    // its child-frame sessions attached; closing the tab ends them.
+    let oracle = time::timeout(
+        SITE_ORACLE_BOUND,
+        oracle_capture::read_oracle(
             client,
             &site.id,
-            &session,
-            &target_id,
-            oracle.as_deref().ok(),
-            async { Ok(()) },
-        )
-        .await;
-        match measured {
-            Ok(measured) => SiteOutcome::Measured {
-                ready,
-                oracle,
-                measured: Box::new(measured),
-            },
-            Err(MeasureError::Browser(error)) => SiteOutcome::NotMeasured {
-                reason: "a capture step failed (detail in report.md)".to_owned(),
-                detail: oracle_note(&oracle, &error.to_string()),
-            },
-            Err(MeasureError::Check { error, captures }) => SiteOutcome::CheckFailed {
-                detail: error.to_string(),
-                oracle: oracle.ok(),
-                captures,
-            },
+            &opened.session,
+            &opened.target_id,
+            engine,
+            browser,
+        ),
+    )
+    .await
+    .map_err(|_elapsed| format!("the oracle did not finish within {SITE_ORACLE_BOUND:?}"))
+    .and_then(|read| read.map(Box::new).map_err(|error| error.to_string()));
+    let opened = if oracle.is_ok() {
+        opened
+    } else {
+        close_tab(client, &opened.target_id).await;
+        match open_site(client, &site.url).await {
+            Ok(reopened) => reopened,
+            Err(error) => {
+                return SiteOutcome::NotMeasured {
+                    reason: "the fresh tab after the oracle failed did not load (detail in \
+                             report.md)"
+                        .to_owned(),
+                    detail: oracle_note(&oracle, &error.to_string()),
+                };
+            }
         }
-    }
-    .await;
-    close_tab(client, &target_id).await;
+    };
+    let outcome = measure_site(client, site, &opened, oracle).await;
+    close_tab(client, &opened.target_id).await;
     outcome
 }
 
-/// `error`, with the oracle's own failure when there was one: a step it overran can leave the
-/// page busy, which is often why the next step failed.
+/// Measures the site loaded in `opened`, with `oracle` for its recall when it was read on this
+/// load.
+async fn measure_site(
+    client: &CdpClient,
+    site: &Site,
+    opened: &OpenedSite,
+    oracle: Result<Box<Oracle>, String>,
+) -> SiteOutcome {
+    let measured = zero_conflict_live::measure(
+        client,
+        &site.id,
+        &opened.session,
+        &opened.target_id,
+        oracle.as_deref().ok(),
+        async { Ok(()) },
+    )
+    .await;
+    match measured {
+        Ok(measured) => SiteOutcome::Measured {
+            ready: opened.ready.clone(),
+            oracle,
+            measured: Box::new(measured),
+        },
+        Err(MeasureError::Browser(error)) => SiteOutcome::NotMeasured {
+            reason: "a capture step failed (detail in report.md)".to_owned(),
+            detail: oracle_note(&oracle, &error.to_string()),
+        },
+        Err(MeasureError::Check { error, captures }) => SiteOutcome::CheckFailed {
+            detail: error.to_string(),
+            oracle: oracle.ok(),
+            captures,
+        },
+    }
+}
+
+/// `error`, with the oracle's own failure when there was one.
 fn oracle_note(oracle: &Result<Box<Oracle>, String>, error: &str) -> String {
     match oracle {
         Ok(_) => error.to_owned(),
         Err(oracle) => format!("{error} (after the oracle failed: {oracle})"),
-    }
-}
-
-/// Waits, within [`SITE_UNBUSY_BOUND`], until the page answers a script again, stopping the
-/// oracle's engine first if it still runs. An oracle step that overran its bound stops only its
-/// own wait: the engine still runs in the renderer, and every later call to that renderer queues
-/// behind it, so the captures would fail for the oracle's sake rather than the page's.
-async fn await_responsive(client: &CdpClient, session: &SessionId) -> Result<(), String> {
-    let answers = |answered: &Result<Option<String>, Box<dyn Error>>| matches!(answered, Ok(Some(text)) if text == "ready");
-    if let Ok(answered) =
-        time::timeout(SITE_IDLE_PROBE, evaluate_string(client, session, "'ready'")).await
-        && answers(&answered)
-    {
-        return Ok(());
-    }
-    // The renderer is busy, so a script runs: the oracle's. `Runtime.terminateExecution` is
-    // handled outside the renderer's main thread and ends it. Sent to an idle renderer it would
-    // end the next script instead, perhaps the page's, hence the probe above.
-    let _terminated = client
-        .send("Runtime.terminateExecution", json!({}), Some(session))
-        .await;
-    let deadline = Instant::now() + SITE_UNBUSY_BOUND;
-    loop {
-        // Each send is bounded by the client's request timeout, so a renderer that never
-        // answers ends the wait at the deadline.
-        let answered = evaluate_string(client, session, "'ready'").await;
-        if answers(&answered) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "the page answered no script within {SITE_UNBUSY_BOUND:?}: {}",
-                answered.map_or_else(|error| error.to_string(), |_| "no answer".to_owned())
-            ));
-        }
-        time::sleep(SITE_POLL).await;
     }
 }
 
