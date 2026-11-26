@@ -45,8 +45,8 @@ crates/neo-sdk/tools/zero-conflict/run.sh \
 Cargo and the toolchain come from your environment. A run needs the network.
 
 The test runs optimized (`cargo test --release`). Each printed line runs its own query over its
-whole document, so the check grows with lines times nodes. On 2026-11-25, against a debug
-BrowserOS build, the 50 sites took 62 minutes. The Hacker News discussion page alone took 23
+whole document, so the check grows with lines times nodes. On 2026-11-26, against a debug
+BrowserOS build, the 50 sites took 44 minutes. The Hacker News discussion page alone took 20
 of them: 87,049 role lines, each checked in both captures.
 
 ## Where the private data goes
