@@ -797,6 +797,46 @@ fn dynamic_roles_for_all_22_input_types() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// A loaded `<input type=image>` lays out as an image, so APC sends an Image node with no
+/// `FormControlData` (fixtures `roles` 262 and `names` 20, 153, 155, 157).
+#[test]
+fn image_input_sent_as_an_image_node_is_a_button_with_button_states() -> Result<(), Box<dyn Error>>
+{
+    let tree = build_tree(
+        NodeBuilder::root()
+            .dom_id(1)
+            .child(NodeBuilder::image().tag("input").alt("Go").dom_id(10))
+            .child(
+                NodeBuilder::image()
+                    .tag("input")
+                    .pressed_state(BrowserOsTriState::True)
+                    .aria_invalid("true")
+                    .dom_id(11),
+            )
+            .child(NodeBuilder::image().tag("img").alt("Logo").dom_id(12)),
+    )?;
+
+    let plain = node_by_dom(&tree, "doc-main", 10)?;
+    assert_eq!(plain.role(), Some(Role::Button));
+    assert_eq!(
+        (plain.state().pressed(), plain.state().invalid()),
+        (Some(TriState::False), None),
+        "a button is offered pressed and is not offered invalid"
+    );
+    let pressed = node_by_dom(&tree, "doc-main", 11)?;
+    assert_eq!(pressed.role(), Some(Role::Button));
+    assert_eq!(
+        (pressed.state().pressed(), pressed.state().invalid()),
+        (Some(TriState::True), None)
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 12)?.role(),
+        Some(Role::Img),
+        "an <img> Image node stays img"
+    );
+    Ok(())
+}
+
 #[test]
 fn dynamic_roles_for_select_and_td_cells() -> Result<(), Box<dyn Error>> {
     let root = NodeBuilder::root()
