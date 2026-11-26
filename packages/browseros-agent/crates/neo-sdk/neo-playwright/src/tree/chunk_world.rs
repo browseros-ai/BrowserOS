@@ -167,8 +167,8 @@ impl<'a> ChunkWorld<'a> {
     }
 
     /// Each of `nodes` as a remote object in the world, in `nodes` order: call node `i` is
-    /// `nodes[i]` (`SetMember::Node`, and the select of a `SetMember::Option`). `None` at the first node that no longer resolves, which
-    /// drops the resolves still in flight.
+    /// `nodes[i]` (`SetMember::Node`, and the select of a `SetMember::Option`). `None` at the
+    /// first node that no longer resolves, which drops the resolves still in flight.
     async fn resolve_all(&self, nodes: &[NodeId]) -> Result<Option<Vec<String>>, ProbeFailure> {
         let doms: Vec<DomNodeId> = nodes
             .iter()

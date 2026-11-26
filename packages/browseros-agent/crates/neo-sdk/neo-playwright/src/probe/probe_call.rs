@@ -31,8 +31,9 @@ use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 /// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
 /// with the call envelope, an element handle's node or null as the call's root, and any further
 /// nodes the request reads ([`call_with_nodes`]); a world without a booted probe answers
-/// `uninstalled`, which Rust treats like a stale context.
-pub(crate) const CALL_FUNCTION: &str = r#"function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === "pinned" ? { kind: "uninstalled" } : '{"kind":"uninstalled"}'; }"#;
+/// `uninstalled`, which Rust treats like a stale context. A by-handle request (`pinned`,
+/// `pinnedAt`) gets that marker as an object, since its reply is never JSON text.
+pub(crate) const CALL_FUNCTION: &str = r#"function (call, root, ...nodes) { const probe = globalThis.__neoProbe; const op = call?.request?.op; return probe ? probe.call(call, root ?? this, nodes) : op === "pinned" || op === "pinnedAt" ? { kind: "uninstalled" } : '{"kind":"uninstalled"}'; }"#;
 
 impl ProbePolicy {
     /// Drop cannot borrow an ended operation or inspect its admitted page. Cleanup never
@@ -203,11 +204,13 @@ impl ProtocolRequest<'_> {
     }
 }
 
-/// `Runtime.callFunctionOn`'s result.
+/// `Runtime.callFunctionOn`'s result. `Deep` is the shape of its deep serialization, which only
+/// the by-node reads ask for: [`DeepNodes`] for a batch of pins, [`DeepPlace`] for one pin's
+/// place.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Called {
-    result: RemoteObject,
+struct Called<Deep = DeepNodes> {
+    result: RemoteObject<Deep>,
     #[serde(default)]
     exception_details: Option<ExceptionDetails>,
 }
@@ -215,19 +218,21 @@ struct Called {
 /// The parts of a `Runtime.RemoteObject` the probe calls read.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RemoteObject {
+struct RemoteObject<Deep> {
     #[serde(default)]
     value: Value,
     #[serde(default)]
     subtype: Option<String>,
     #[serde(default)]
     object_id: Option<String>,
-    #[serde(default)]
-    deep_serialized_value: Option<DeepNodes>,
+    // No `serde(default)`: it would bound `Deep: Default`, and a missing `Option` is `None`
+    // without it.
+    deep_serialized_value: Option<Deep>,
 }
 
 /// Chromium's deep serialization names DOM nodes by backend id without walking their
-/// children. Only the batch pin reader asks for it; ordinary calls omit this field.
+/// children ([`node_serialization`]). Only the by-node reads ask for it; ordinary calls omit
+/// this field.
 #[derive(Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "camelCase")]
 enum DeepNodes {
@@ -243,6 +248,72 @@ enum DeepNode {
         backend_node_id: BackendNodeId,
     },
     Null,
+}
+
+/// `pinnedAt`'s answer as deep serialization writes it: `null`, the place array, or
+/// [`CALL_FUNCTION`]'s `{ kind: "uninstalled" }`, which it writes as the object's entries.
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+enum DeepPlace {
+    Null,
+    Array(DeepPlaceParts),
+    Object(Vec<(String, DeepText)>),
+}
+
+/// The place array: the element alone, or the element, the select that lists it, its index in
+/// `select.options` and that list's length (probe/option-slot.ts `pinnedAt`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DeepPlaceParts {
+    Element((DeepElement,)),
+    Option((DeepElement, DeepElement, DeepNumber, DeepNumber)),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+enum DeepElement {
+    Node {
+        #[serde(rename = "backendNodeId")]
+        backend_node_id: BackendNodeId,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+enum DeepNumber {
+    Number(u32),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+enum DeepText {
+    String(String),
+}
+
+impl DeepElement {
+    const fn backend_node_id(&self) -> BackendNodeId {
+        match *self {
+            Self::Node { backend_node_id } => backend_node_id,
+        }
+    }
+}
+
+impl DeepNumber {
+    const fn value(&self) -> u32 {
+        match *self {
+            Self::Number(value) => value,
+        }
+    }
+}
+
+/// The serialization options of a by-node read: each DOM node with its backend id, and none of
+/// its children or shadow roots.
+fn node_serialization() -> Value {
+    json!({
+        "serialization": "deep",
+        "maxDepth": 2,
+        "additionalParameters": { "maxNodeDepth": 0, "includeShadowTree": "none" }
+    })
 }
 
 #[derive(Deserialize)]
@@ -636,11 +707,7 @@ async fn pinned_batch(
                 "functionDeclaration": function,
                 "arguments": [{ "value": calls }],
                 "objectGroup": scope.object_group(world.session()),
-                "serializationOptions": {
-                    "serialization": "deep",
-                    "maxDepth": 2,
-                    "additionalParameters": { "maxNodeDepth": 0, "includeShadowTree": "none" }
-                }
+                "serializationOptions": node_serialization(),
             }),
         )
         .await
@@ -663,6 +730,110 @@ async fn pinned_batch(
         Some(DeepNodes::Null) => Err(ProbeFailure::Gone(Ran::No)),
         Some(DeepNodes::Array(_)) | None => Err(ProbeFailure::Broken(
             "the probe returned an incomplete batch of pinned nodes".to_owned(),
+        )),
+    }
+}
+
+/// Where a pinned element sits in its world's document, as the probe read it after a capture:
+/// the element's own node and, for an `<option>` its select lists, its place in that list. A
+/// collapsed select's options are no nodes of the capture, only data on their select, so that
+/// place is how the tree finds such an option's slot (`snapshot::element_in_tree`,
+/// `SnapshotTree::node_at`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PinnedPlace {
+    /// The element itself.
+    pub(crate) node: BackendNodeId,
+    /// Its place in its select's option list, when it is an `<option>` a select lists.
+    pub(crate) option: Option<PinnedOption>,
+}
+
+/// An `<option>`'s place in `select.options`, as the page reads it now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PinnedOption {
+    /// The select whose list holds the option.
+    pub(crate) select: BackendNodeId,
+    /// The option's index in `select.options`, below `count`.
+    pub(crate) index: u32,
+    /// How many options the select lists now: the tree joins the option only while its own
+    /// count of the select's options is the same, since `index` may name another option in a
+    /// list that changed since the capture.
+    pub(crate) count: u32,
+}
+
+/// `pin`'s [`PinnedPlace`] in the world's own document: `None` once the pin is gone or its
+/// element is not connected in that document (design 6.2's ownership check, which
+/// [`pinned_nodes_in_document`] makes for elements alone). A world that holds no probe is
+/// `Gone`.
+///
+/// One call, its result read by deep serialization as [`pinned_batch`] reads its nodes, so an
+/// option's select comes back by backend id in the same round trip as the option. The result's
+/// remote array lives in the op's object group.
+pub(crate) async fn pinned_place_in_document(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    pin: Pin,
+) -> Result<Option<PinnedPlace>, ProbeFailure> {
+    let crash = scope.begin_protocol(world.session());
+    let request = ProbeRequest::PinnedAt { pin };
+    let called = world
+        .session()
+        .send::<_, Value>(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": world.global(),
+                "functionDeclaration": CALL_FUNCTION,
+                "arguments": call_arguments(&request, policy(scope, page), Handed::NONE)?,
+                "objectGroup": scope.object_group(world.session()),
+                "serializationOptions": node_serialization(),
+            }),
+        )
+        .await
+        .map_err(ProbeFailure::from_core)
+        .inspect_err(|failure| crash.probe_failure(failure))?;
+    place_of(called)
+}
+
+/// The place in a `pinnedAt` call's deep-serialized result. [`CALL_FUNCTION`]'s marker of a
+/// world without a probe is `Gone`; any other answer is a probe this build cannot read.
+fn place_of(called: Value) -> Result<Option<PinnedPlace>, ProbeFailure> {
+    let called: Called<DeepPlace> = serde_json::from_value(called).map_err(|error| {
+        ProbeFailure::Broken(format!(
+            "the probe answered `pinnedAt` with no place this build can read: {error}"
+        ))
+    })?;
+    if let Some(exception) = called.exception_details {
+        return Err(ProbeFailure::Broken(format!(
+            "the probe threw: {}",
+            exception.message()
+        )));
+    }
+    match called.result.deep_serialized_value {
+        Some(DeepPlace::Null) => Ok(None),
+        Some(DeepPlace::Array(DeepPlaceParts::Element((element,)))) => Ok(Some(PinnedPlace {
+            node: element.backend_node_id(),
+            option: None,
+        })),
+        Some(DeepPlace::Array(DeepPlaceParts::Option((element, select, index, count))))
+            if index.value() < count.value() =>
+        {
+            Ok(Some(PinnedPlace {
+                node: element.backend_node_id(),
+                option: Some(PinnedOption {
+                    select: select.backend_node_id(),
+                    index: index.value(),
+                    count: count.value(),
+                }),
+            }))
+        }
+        Some(DeepPlace::Object(entries))
+            if matches!(entries.as_slice(),
+                [(key, DeepText::String(kind))] if key == "kind" && kind == "uninstalled") =>
+        {
+            Err(ProbeFailure::Gone(Ran::No))
+        }
+        Some(DeepPlace::Array(_) | DeepPlace::Object(_)) | None => Err(ProbeFailure::Broken(
+            "the probe answered `pinnedAt` with neither a place nor null".to_owned(),
         )),
     }
 }
@@ -700,9 +871,13 @@ mod tests {
     use neo_snapshot::AriaChild;
     use serde_json::{Value, json};
 
-    use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
+    use super::{
+        CALL_FUNCTION, Handed, PinnedOption, PinnedPlace, ProbeFailure, Ran, call_arguments,
+        place_of, reply_of,
+    };
     use crate::probe::probe_reply::{ErrorClass, ProbeReply};
     use crate::probe::probe_request::{ProbePolicy, ProbeRequest};
+    use crate::world::BackendNodeId;
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
 
@@ -841,6 +1016,121 @@ mod tests {
         assert!(matches!(unreadable, Err(ProbeFailure::Broken(_))));
         Ok(())
     }
+    /// A DOM node as Chromium's deep serialization writes one under `node_serialization`: its
+    /// own facts beside its backend id, no children.
+    fn deep_node(backend_node_id: i64, local_name: &str) -> Value {
+        json!({
+            "type": "node",
+            "sharedId": format!("f.1.d.2.e.{backend_node_id}"),
+            "value": {
+                "nodeType": 1,
+                "localName": local_name,
+                "namespaceURI": "http://www.w3.org/1999/xhtml",
+                "childNodeCount": 1,
+                "attributes": { "id": "page-text" },
+                "backendNodeId": backend_node_id,
+                "loaderId": "L1",
+            },
+        })
+    }
+
+    /// `Runtime.callFunctionOn`'s result for a `pinnedAt` call answering `deep`.
+    fn called(deep: &Value) -> Value {
+        json!({ "result": { "type": "object", "objectId": "7.1.2", "deepSerializedValue": deep } })
+    }
+
+    #[test]
+    fn tests_that_a_pinned_place_reads_its_element_and_an_options_select_and_index()
+    -> Result<(), Box<dyn Error>> {
+        let element = called(&json!({ "type": "array", "value": [deep_node(41, "button")] }));
+        assert_eq!(
+            place_of(element)?,
+            Some(PinnedPlace {
+                node: BackendNodeId(41),
+                option: None,
+            }),
+            "an element that is no listed <option> joins by its own node"
+        );
+        let option = called(&json!({ "type": "array", "value": [
+            deep_node(52, "option"),
+            deep_node(50, "select"),
+            { "type": "number", "value": 2 },
+            { "type": "number", "value": 3 },
+        ] }));
+        assert_eq!(
+            place_of(option)?,
+            Some(PinnedPlace {
+                node: BackendNodeId(52),
+                option: Some(PinnedOption {
+                    select: BackendNodeId(50),
+                    index: 2,
+                    count: 3,
+                }),
+            }),
+            "a listed <option> keeps its own node and carries its select, index and list length"
+        );
+        assert_eq!(
+            place_of(called(&json!({ "type": "null" })))?,
+            None,
+            "an evicted pin, or an element out of the world's document, has no place"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_world_without_a_probe_is_gone_and_any_other_answer_is_broken() {
+        let uninstalled = called(&json!({ "type": "object", "value": [
+            ["kind", { "type": "string", "value": "uninstalled" }],
+        ] }));
+        assert!(
+            matches!(place_of(uninstalled), Err(ProbeFailure::Gone(Ran::No))),
+            "CALL_FUNCTION's marker means the world must be installed again"
+        );
+        let index_past_count = called(&json!({ "type": "array", "value": [
+            deep_node(52, "option"),
+            deep_node(50, "select"),
+            { "type": "number", "value": 3 },
+            { "type": "number", "value": 3 },
+        ] }));
+        let error_reply = called(&json!({ "type": "object", "value": [
+            ["kind", { "type": "string", "value": "error" }],
+            ["class", { "type": "string", "value": "internal" }],
+            ["message", { "type": "string", "value": "boom" }],
+        ] }));
+        let select_missing = called(&json!({ "type": "array", "value": [
+            deep_node(52, "option"),
+            { "type": "number", "value": 0 },
+        ] }));
+        let thrown = json!({
+            "result": { "type": "object", "subtype": "error" },
+            "exceptionDetails": {
+                "text": "Uncaught",
+                "exception": { "description": "TypeError: x\n    at y" },
+            },
+        });
+        for (answer, why) in [
+            (
+                index_past_count,
+                "an index past the list's end names no option",
+            ),
+            (
+                error_reply,
+                "a by-handle request has no error reply Rust reads",
+            ),
+            (select_missing, "an option's place names its select"),
+            (thrown, "a probe that throws is a broken asset"),
+            (
+                json!({ "result": { "type": "undefined" } }),
+                "no deep value at all",
+            ),
+        ] {
+            assert!(
+                matches!(place_of(answer), Err(ProbeFailure::Broken(_))),
+                "{why}"
+            );
+        }
+    }
+
     #[test]
     fn probe_reply_text_keeps_the_numeric_tree_depth_marker() {
         let reply = reply_of(json!({ "result": { "type": "string", "value":

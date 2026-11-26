@@ -275,6 +275,12 @@ pub(crate) enum ProbeRequest {
     MatchUrl { pattern: UrlPattern, url: String },
     /// The pinned element itself, by handle (`returnByValue: false`).
     Pinned { pin: Pin },
+    /// Where the pinned element sits, by deep serialization (`probe::pinned_place_in_document`):
+    /// null unless it is connected in this world's document, else `[element]`, or `[element,
+    /// select, index, count]` for an `<option>` its select lists (probe/option-slot.ts). A
+    /// collapsed select's option has no node in the capture, so this is how the tree finds its
+    /// slot (`SnapshotTree::node_at`).
+    PinnedAt { pin: Pin },
     /// The document's title, or its doctype and root markup.
     Document {
         part: DocumentPart,
@@ -892,6 +898,7 @@ mod tests {
             "expect",
             "matchUrl",
             "pinned",
+            "pinnedAt",
             "document",
             "setContent",
             "armInput",

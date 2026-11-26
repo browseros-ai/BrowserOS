@@ -16,9 +16,11 @@
 //!              closed-root seeds (contract field 31), the main document's and each child
 //!                frame's, in its own world ─ DOM.resolveNode ─ openClosedRoots: the page's
 //!                CSS and text engines see into those roots from then on
-//!  locator   the resolver pins the one element ─ capture_seeded ─ the pin's node, proven in
-//!              the capture's document ─ TabTree::aria(Subtree), the document for <body> or
-//!              <html>, or the top-most tree nodes inside a container the tree left out
+//!  locator   the resolver pins the one element ─ capture_seeded ─ the pin's place
+//!              (pinned_place_in_document), proven in the capture's document ─ its node, or a
+//!              collapsed select's option slot (SnapshotTree::node_at) ─ TabTree::aria(Subtree),
+//!              the document for <body> or <html>, or the top-most tree nodes inside a container
+//!              the tree left out
 //! ```
 //!
 //! Each attempt captures afresh (design 7.1): a tree answers the attempt that captured it.
@@ -32,8 +34,8 @@ use browseros_core::FrameId;
 use neo_snapshot::{AriaChild, AriaNode, Call, Snapshot};
 use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget};
 use neo_snapshot_apc::tree::{
-    AriaRoot, AriaTree, DocId, DocSeq, NameCache, NameVisibility, NodeId, NodeKey, SnapshotTree,
-    TreeDoc, TreeNode,
+    AriaRoot, AriaTree, DocId, DocSeq, DocToken, ElementPlace, NameCache, NameVisibility, NodeId,
+    NodeKey, OptionPlace, SnapshotTree, TreeDoc, TreeNode,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -45,7 +47,8 @@ use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    self, PinnedLayer, ProbeFailure, ProbeReply, ProbeRequest, SnapshotMode, SurveyPhases, Want,
+    self, PinnedLayer, PinnedPlace, ProbeFailure, ProbeReply, ProbeRequest, SnapshotMode,
+    SurveyPhases, Want,
 };
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{LocatorTarget, Strictness};
@@ -280,8 +283,11 @@ async fn element_once(
 pub(crate) struct InTree {
     pub(crate) captured: Arc<CapturedTree>,
     pub(crate) doc: DocId,
-    /// The element's key, whether or not the capture has a node for it.
+    /// The element's own key, whether or not the capture has a node for it. An option slot has
+    /// no key, so a ref minted for the element ([`element_ref`]) names the real `<option>`.
     pub(crate) key: NodeKey,
+    /// The node APC sent for the element, or, for an `<option>` of a collapsed `<select>`, its
+    /// option slot: the node every tree read of the element (names, matchers, snapshots) takes.
     pub(crate) node: Option<NodeId>,
 }
 
@@ -308,6 +314,12 @@ impl InTree {
 /// The world pinned the element, so it was installed before the capture was requested; its
 /// answer after the capture proves it held the capture's document throughout (design 6.2), and
 /// the pin's node is a node of that document.
+///
+/// The page answers where the element sits (`pinnedAt`), not only which node it is: an
+/// `<option>` of a collapsed `<select>` is no node of the capture, only an entry of its select's
+/// list, so it joins its option slot through its select and index ([`SnapshotTree::node_at`]).
+/// This is the one reverse join that learns option places; every other pin-to-key read stays on
+/// `pinned_nodes_in_document`, where an option joins nothing.
 pub(crate) async fn element_in_tree(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
@@ -318,12 +330,8 @@ pub(crate) async fn element_in_tree(
         .tree()
         .capture_seeded(scope, page, AttemptStart::now())
         .await?;
-    let dom = match probe::pinned_nodes_in_document(scope, page, world, vec![pin]).await {
-        Ok(Some(ids)) => match ids.first().map(|&id| backend_to_dom_node_id(id)) {
-            Some(Ok(dom)) => dom,
-            Some(Err(failure)) => return Err(resolve::failed(scope, failure)),
-            None => return Ok(None),
-        },
+    let pinned = match probe::pinned_place_in_document(scope, page, world, pin).await {
+        Ok(Some(pinned)) => pinned,
         Ok(None) => return Ok(None),
         Err(ProbeFailure::Gone(_)) => {
             page.tree().invalidate_world(page.frames(), world);
@@ -339,14 +347,33 @@ pub(crate) async fn element_in_tree(
     let Some(document) = tree.document(doc) else {
         return Ok(None);
     };
-    let key = NodeKey::new(document.token().clone(), dom);
-    let node = tree.node_by_key(&key).map(TreeNode::id);
+    let place = element_place(document.token(), pinned)
+        .map_err(|failure| resolve::failed(scope, failure))?;
+    let node = tree.node_at(&place).map(TreeNode::id);
     Ok(Some(InTree {
         captured,
         doc,
-        key,
+        key: place.key,
         node,
     }))
+}
+
+/// `pinned` as the tree names places in the document `token`: the world's document, the only
+/// one the page answered for.
+fn element_place(token: &DocToken, pinned: PinnedPlace) -> Result<ElementPlace, ProbeFailure> {
+    let key = |node| backend_to_dom_node_id(node).map(|dom| NodeKey::new(token.clone(), dom));
+    let option = match pinned.option {
+        Some(option) => Some(OptionPlace {
+            select: key(option.select)?,
+            index: option.index,
+            count: option.count,
+        }),
+        None => None,
+    };
+    Ok(ElementPlace {
+        key: key(pinned.node)?,
+        option,
+    })
 }
 
 /// `pin`'s ref in the tab's ref table: the one a snapshot printed for the element, else one

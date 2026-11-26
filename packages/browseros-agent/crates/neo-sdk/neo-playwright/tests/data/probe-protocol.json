@@ -1,6 +1,6 @@
 {
   "protocol": 57,
-  "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === \"pinned\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
+  "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; const op = call?.request?.op; return probe ? probe.call(call, root ?? this, nodes) : op === \"pinned\" || op === \"pinnedAt\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
   "replyKinds": {
     "describe": [
       "described"
@@ -128,7 +128,8 @@
     ]
   },
   "byHandle": [
-    "pinned"
+    "pinned",
+    "pinnedAt"
   ],
   "anyRequest": [
     "error",
@@ -1308,6 +1309,10 @@
     },
     {
       "op": "pinned",
+      "pin": 4
+    },
+    {
+      "op": "pinnedAt",
       "pin": 4
     },
     {

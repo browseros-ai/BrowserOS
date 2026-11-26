@@ -28,16 +28,28 @@ export const PROTOCOL = 57
  * object, with the request, an element handle's node as the call's root (or null), and any
  * further nodes a request reads (`snapshot`'s closed-root seeds and clickable targets), so the probe treats a root that is not a Node as
  * "no root". A world whose probe is gone (or never booted) answers `uninstalled`, which Rust
- * treats like a stale context: install again, once.
+ * treats like a stale context: install again, once. A by-handle request (BY_HANDLE_OPS) gets
+ * that marker as an object, since its reply is never JSON text.
  */
-export const CALL_FUNCTION = `function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === "pinned" ? { kind: "uninstalled" } : '{"kind":"uninstalled"}'; }`
+export const CALL_FUNCTION = `function (call, root, ...nodes) { const probe = globalThis.__neoProbe; const op = call?.request?.op; return probe ? probe.call(call, root ?? this, nodes) : op === "pinned" || op === "pinnedAt" ? { kind: "uninstalled" } : '{"kind":"uninstalled"}'; }`
+
+/**
+ * The requests whose reply holds live elements, so Rust reads it by handle (`pinned`) or by deep
+ * serialization (`pinnedAt`), never as JSON text: the probe answers them as they are, and every
+ * other request through `replyText`.
+ */
+export const BY_HANDLE_OPS = [
+  'pinned',
+  'pinnedAt',
+] as const satisfies readonly Op[]
 
 /** Per-op and per-kind views add names without repeating any generated fields. */
 export type Op = ProbeRequest['op']
 export type RequestMap = { [R in ProbeRequest as R['op']]: R }
 export type RequestOf<O extends Op> = RequestMap[O]
 export type ReplyKind = ProbeReply['kind']
-export type ValueOp = Exclude<Op, 'pinned'>
+export type ByHandleOp = (typeof BY_HANDLE_OPS)[number]
+export type ValueOp = Exclude<Op, ByHandleOp>
 
 export type DescribeRequest = RequestOf<'describe'>
 export type ResolveRequest = RequestOf<'resolve'>
@@ -57,6 +69,7 @@ export type SnapshotRequest = RequestOf<'snapshot'>
 export type ExpectRequest = RequestOf<'expect'>
 export type MatchUrlRequest = RequestOf<'matchUrl'>
 export type PinnedRequest = RequestOf<'pinned'>
+export type PinnedAtRequest = RequestOf<'pinnedAt'>
 export type DocumentRequest = RequestOf<'document'>
 export type SetContentRequest = RequestOf<'setContent'>
 export type ArmInputRequest = RequestOf<'armInput'>

@@ -8,6 +8,7 @@
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import type { ProbeCall, ProbeReply, ProbeTarget } from './generated'
 import {
+  BY_HANDLE_OPS,
   CALL_FUNCTION,
   type Op,
   PROTOCOL,
@@ -447,6 +448,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     },
   ],
   pinned: [{ op: 'pinned', pin: 4 }],
+  pinnedAt: [{ op: 'pinnedAt', pin: 4 }],
   document: [
     { op: 'document', part: 'title' },
     { op: 'document', part: 'content' },
@@ -1100,7 +1102,7 @@ export function protocolDocument() {
     protocol: PROTOCOL,
     callFunction: CALL_FUNCTION,
     replyKinds: REPLY_KINDS,
-    byHandle: ['pinned'],
+    byHandle: BY_HANDLE_OPS,
     anyRequest: ['error', 'uninstalled'],
     calls: CALL_EXAMPLES,
     requests: Object.values(REQUEST_EXAMPLES).flat(),

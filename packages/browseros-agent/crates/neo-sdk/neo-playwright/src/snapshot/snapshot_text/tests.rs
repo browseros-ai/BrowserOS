@@ -137,11 +137,17 @@ impl TabScript for OneMain {
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 Some(json!({ "content": STANDARD.encode(apc().encode_to_vec()) }))
             }
-            // The pinned main section's node, for a locator's snapshot.
-            "Runtime.callFunctionOn" if params["arguments"][0]["value"].is_array() => Some(json!({
-                "result": { "type": "object", "deepSerializedValue": { "type": "array",
-                    "value": [{ "type": "node", "value": { "backendNodeId": 2 } }] } }
-            })),
+            // The pinned main section's node, for a locator's snapshot: its place (`pinnedAt`),
+            // or a batch of pins.
+            "Runtime.callFunctionOn"
+                if params["arguments"][0]["value"].is_array()
+                    || params["arguments"][0]["value"]["request"]["op"] == "pinnedAt" =>
+            {
+                Some(json!({
+                    "result": { "type": "object", "deepSerializedValue": { "type": "array",
+                        "value": [{ "type": "node", "value": { "backendNodeId": 2 } }] } }
+                }))
+            }
             _ => None,
         }
     }

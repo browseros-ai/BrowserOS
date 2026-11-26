@@ -653,7 +653,7 @@ boxes?: boolean,
  * How many of the call's nodes, first, are seeds of closed shadow roots; none outside
  * clickable marking.
  */
-closedRoots?: number, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, } | { "op": "stage", selector: ParsedSelector, from?: Array<SetMember>, sets?: Array<StageSet>, 
+closedRoots?: number, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "pinnedAt", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, } | { "op": "stage", selector: ParsedSelector, from?: Array<SetMember>, sets?: Array<StageSet>, 
 /**
  * The whole chunk as the prelude sent it, when this stage ends a strict locator: the
  * violation's message is upstream's `strictModeViolationError` for it.
