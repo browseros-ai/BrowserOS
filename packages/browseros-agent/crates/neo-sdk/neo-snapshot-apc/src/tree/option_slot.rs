@@ -146,8 +146,8 @@ pub(crate) fn label(tree: &SnapshotTree, id: NodeId) -> Option<&str> {
 }
 
 /// Withholds every slot whose entry the mask removed. The mask clears a list whole (a select
-/// inside a Chromium-redacted node), so this keeps "a cleared list synthesizes nothing" while the
-/// slots keep their arena places: every range and link around them is already final.
+/// inside a Chromium-redacted node), so a cleared list shows no option while its slots keep their
+/// arena places: every range and link around them is already final.
 pub(crate) fn withhold_cleared(nodes: &mut [TreeNode]) {
     let cleared: Vec<usize> = nodes
         .iter()

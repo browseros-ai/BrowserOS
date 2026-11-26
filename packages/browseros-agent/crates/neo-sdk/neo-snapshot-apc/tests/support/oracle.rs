@@ -117,8 +117,6 @@ pub(crate) struct OracleElement {
     /// The states Playwright offers this role.
     pub(crate) states: OracleStates,
     /// Where the element sits in its select's option list, for an `<option>` a select lists.
-    /// Absent in an oracle recorded before the field, which then joins such an option by
-    /// backendNodeId alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) option: Option<OracleOption>,
 }

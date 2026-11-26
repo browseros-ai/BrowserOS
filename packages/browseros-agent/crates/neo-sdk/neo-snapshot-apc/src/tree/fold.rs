@@ -103,9 +103,10 @@ impl fmt::Debug for LogicalChildrenIter<'_> {
 
 /// Precomputed logical folding and pruning overlay over a `SnapshotTree`'s flat-tree arena.
 ///
-/// Keeps raw arena indices intact while exposing zero-size control [`ClickProxy`] pairings, folded-label targets, clickable-container flags, plain-container
-/// pruning decisions, and `ua_shadow`-transparent logical child iteration. Its manual `Debug`
-/// implementation prints counts only, never page text.
+/// Keeps raw arena indices intact while exposing zero-size control [`ClickProxy`] pairings,
+/// folded-label targets, clickable-container flags, plain-container pruning decisions, and
+/// `ua_shadow`-transparent logical child iteration. Its manual `Debug` implementation prints
+/// counts only, never page text.
 pub struct FoldInfo {
     click_proxies: Vec<ClickProxy>,
     click_proxy_index: HashMap<NodeId, usize>,

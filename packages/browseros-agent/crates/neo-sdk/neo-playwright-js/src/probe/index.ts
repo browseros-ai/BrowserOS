@@ -189,7 +189,7 @@ function createProbe() {
     call(call: unknown, root?: unknown, nodes?: unknown) {
       try {
         const booted = world
-        // A by-handle reply holds actual nodes (or the old marker), never JSON text.
+        // A by-handle reply holds live nodes (or UNINSTALLED as an object), never JSON text.
         if (isProbeCall(call) && isByHandle(call.request.op))
           return booted ? answer(booted, call, undefined, []) : UNINSTALLED
         if (!booted) return replyText(UNINSTALLED)

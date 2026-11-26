@@ -6,7 +6,7 @@
 //! collapsed `<select>` has no node APC sent, only an entry of its select's `select_options`, so
 //! it joins the select's option slot at its recorded index (`OracleElement::option`). A select
 //! with a different number of slots than the page listed options is a broken recording, not a
-//! miss. An oracle recorded before that field joins such an option nowhere.
+//! miss.
 
 use std::error::Error;
 
