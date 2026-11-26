@@ -821,6 +821,12 @@ fn at(node: NodeBuilder, rect: Rect) -> NodeBuilder {
     node.bounding_box(rect.x, rect.y, rect.width, rect.height)
 }
 
+/// An element's node as `Generator::base` builds it, and its box grown to cover what it holds.
+struct BuiltNode {
+    node: NodeBuilder,
+    rect: Rect,
+}
+
 /// A built document: its root and what its frame records.
 struct BuiltDoc {
     token: String,
@@ -1017,7 +1023,7 @@ impl Generator {
                 ..rect
             };
         }
-        let (mut node, rect) = self.base(doc, kind, &plan, rect, inherit)?;
+        let BuiltNode { mut node, rect } = self.base(doc, kind, &plan, rect, inherit)?;
         node = self.name_source(doc, node, plan.source, &plan.drawn.name);
         for drawn in &plan.states {
             node = apply_state(doc, node, kind, drawn.state, drawn.pick, id, inherit);
@@ -1149,7 +1155,7 @@ impl Generator {
         plan: &Plan,
         rect: Rect,
         inherit: Inherit,
-    ) -> Result<(NodeBuilder, Rect), String> {
+    ) -> Result<BuiltNode, String> {
         let name = plan.drawn.name.as_str();
         // Content that names the element, or, under a label that wins over content, decoy text.
         let content = match plan.source {
@@ -1248,7 +1254,8 @@ impl Generator {
             }
             Base::Iframe => self.iframe(doc, rect, inherit)?,
         };
-        Ok((node, rect.down_to(doc.y - 4)))
+        let rect = rect.down_to(doc.y - 4);
+        Ok(BuiltNode { node, rect })
     }
 
     /// `<input type=text>`: its editor is a user-agent shadow container, which holds the value

@@ -19,9 +19,14 @@ carries the APC contract. For each site the live test
 4. It hydrates every printed ref in its frame's CDP session.
 5. It compares the tree's role sets with the oracle's (recall).
 
-The gate is 99.5% of role lines over the measured sites. A role line is a line with a ref that
-is not one of the snapshot's own labels (`generic`, `iframe`). Stability, hydration and recall
-are reported and not gated.
+The gate is 99.5% of capture #1's role lines over the measured sites. A role line is a line with
+a ref that is not one of the snapshot's own labels: `generic` for an element with no ARIA role,
+and `iframe`. No `getByRole` can name either, in Playwright too, so the test counts them apart
+once the tree confirms the element really has no role or is a frame. Misses of both captures are
+listed. A site whose capture does not build or check fails the gate, since that is the engine's
+or the checker's failure whatever the page did. A site that fails to load, or stays busy after
+its oracle fails, is listed as not measured. Stability, hydration and recall are reported and
+not gated.
 
 ## Running it
 
@@ -47,7 +52,7 @@ of them: 87,049 role lines, each checked in both captures.
 
 ## Where the private data goes
 
-Every measured site writes these files to the private folder:
+Every measured site, and every site whose check failed, writes these files to the private folder:
 
 | File | What it holds |
 | --- | --- |
@@ -60,11 +65,11 @@ A site's id is its 1-based position in the list and its host, such as `07-mui.co
 
 These files are real pages' text, cookie banners and account names included. They are never
 committed and never sent to the remote pool. The remote client uploads `packages/browseros-agent`
-as the working tree has it, so `run.sh` refuses a folder inside this worktree or inside the main
-checkout it belongs to. The test refuses one too when it is run without `run.sh`. Standard
-output holds no page text. It shows a row per site and the totals, and lists every miss by site
-and line number with its role and verdict kind. Use the line number to find the miss in
-`report.md`.
+as the working tree it runs in has it, so `run.sh` refuses a folder inside any work tree that
+`git worktree list` names: the main checkout and every linked worktree, wherever it sits. The
+test refuses the same folders when it is run without `run.sh`. Standard output holds no page
+text. It shows a row per site and the totals, and lists every miss by site, capture and line
+number with its role and verdict kind. Use the line number to find the miss in `report.md`.
 
 ## Replaying a miss offline
 

@@ -43,17 +43,18 @@ use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, SessionId};
-use fixture_pages::{ApcContract, FIXTURES, Fixture, all_fixture_pages, connect_cdp, load_fixture};
+use fixture_pages::{ApcContract, FIXTURES, Fixture};
 use fixture_server::FixtureServer;
 use oracle::Oracle;
-use oracle_capture::{OracleEngine, browser_product, read_oracle};
+use oracle_capture::OracleEngine;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 use zero_conflict::{Format, LineCheck, PageCheck, Verdict};
-use zero_conflict_live::{Instability, Measured, measure, verdict_brief, verdict_kind};
+use zero_conflict_live::{Instability, MeasureError, Measured, Recall};
 
 /// The depth of `C4` in `nested-cross-site-frames` (Top, B1, C2, A3, C4): the edge pack must
 /// hydrate a ref this many documents down.
@@ -252,9 +253,9 @@ async fn measure_fixture(
     browser: &str,
     fixture: &'static Fixture,
 ) -> Result<Measured, Box<dyn Error>> {
-    let loaded = load_fixture(client, server, fixture, ApcContract::Present).await?;
+    let loaded = fixture_pages::load_fixture(client, server, fixture, ApcContract::Present).await?;
     let measured = async {
-        let oracle = read_oracle(
+        let oracle = oracle_capture::read_oracle(
             client,
             fixture.name,
             &loaded.session,
@@ -263,7 +264,7 @@ async fn measure_fixture(
             browser,
         )
         .await?;
-        measure(
+        let measured = zero_conflict_live::measure(
             client,
             fixture.name,
             &loaded.session,
@@ -271,7 +272,8 @@ async fn measure_fixture(
             Some(&oracle),
             loaded.before_capture(client),
         )
-        .await
+        .await?;
+        Ok::<_, Box<dyn Error>>(measured)
     }
     .await;
     loaded.close(client).await;
@@ -375,10 +377,10 @@ fn recall_gaps(page: &str, measured: &Measured) -> Vec<String> {
 #[ignore = "needs a BrowserOS build carrying the APC contract on BROWSEROS_CDP_PORT; run it through bun run test:browser"]
 async fn edge_pack_lines_reach_their_elements_and_refs_hydrate() -> Result<(), Box<dyn Error>> {
     let engine = OracleEngine::new()?;
-    let server = FixtureServer::start(all_fixture_pages()).await?;
-    let client = connect_cdp().await?;
+    let server = FixtureServer::start(fixture_pages::all_fixture_pages()).await?;
+    let client = fixture_pages::connect_cdp().await?;
     let result = async {
-        let browser = browser_product(&client).await?;
+        let browser = oracle_capture::browser_product(&client).await?;
         report(&format!("zero-conflict edge pack: browser {browser}"));
         report(
             "page | neo lines | playwright lines | reached | labels | misses | refs hydrated | \
@@ -540,7 +542,7 @@ async fn evaluate_string(
 /// `active` does not depend on which tab the browser last raised), waits for it to be ready
 /// within [`SITE_READY_BOUND`], then [`SITE_SETTLE`]. A navigation the browser reports failed is
 /// an error naming the browser's reason. Every CDP call is bounded by the client's request
-/// timeout ([`connect_cdp`]).
+/// timeout ([`fixture_pages::connect_cdp`]).
 async fn open_site(client: &CdpClient, url: &str) -> Result<OpenedSite, Box<dyn Error>> {
     let created = client
         .send("Target.createTarget", json!({ "url": "about:blank" }), None)
@@ -625,9 +627,16 @@ enum SiteOutcome {
         oracle: Result<Box<Oracle>, String>,
         measured: Box<Measured>,
     },
-    /// Not measured: the reason a report outside the private folder may print, and the full
-    /// detail for `report.md`.
+    /// Not measured, for the browser's or the page's sake: the reason a report outside the
+    /// private folder may print, and the full detail for `report.md`.
     NotMeasured { reason: String, detail: String },
+    /// Captured, and a capture did not build or check: the engine's or the checker's failure,
+    /// which fails the gate. The captures, and the oracle when it was read, are kept to replay it.
+    CheckFailed {
+        detail: String,
+        oracle: Option<Box<Oracle>>,
+        captures: [Vec<u8>; 2],
+    },
 }
 
 /// Loads `site`, reads its oracle and measures it; the tab is closed again, on failure too.
@@ -650,54 +659,60 @@ async fn run_site(
             return SiteOutcome::NotMeasured { reason, detail };
         }
     };
-    let measured = async {
+    let OpenedSite {
+        target_id,
+        session,
+        ready,
+    } = opened;
+    let outcome = async {
         // The oracle is bounded as a whole too: a page that keeps its renderer busy slows each
         // of its thousands of per-element steps without tripping any one step's bound. Cut off,
         // it leaves its child-frame sessions attached; closing the tab ends them.
         let oracle = time::timeout(
             SITE_ORACLE_BOUND,
-            read_oracle(
-                client,
-                &site.id,
-                &opened.session,
-                &opened.target_id,
-                engine,
-                browser,
-            ),
+            oracle_capture::read_oracle(client, &site.id, &session, &target_id, engine, browser),
         )
         .await
         .map_err(|_elapsed| format!("the oracle did not finish within {SITE_ORACLE_BOUND:?}"))
         .and_then(|read| read.map(Box::new).map_err(|error| error.to_string()));
-        if oracle.is_err() {
-            await_responsive(client, &opened.session)
-                .await
-                .map_err(|error| oracle_note(&oracle, &error))?;
+        if oracle.is_err()
+            && let Err(error) = await_responsive(client, &session).await
+        {
+            return SiteOutcome::NotMeasured {
+                reason: "the page stayed busy after the oracle failed (detail in report.md)"
+                    .to_owned(),
+                detail: oracle_note(&oracle, &error),
+            };
         }
-        let measured = measure(
+        let measured = zero_conflict_live::measure(
             client,
             &site.id,
-            &opened.session,
-            &opened.target_id,
+            &session,
+            &target_id,
             oracle.as_deref().ok(),
             async { Ok(()) },
         )
-        .await
-        .map_err(|error| oracle_note(&oracle, &error.to_string()))?;
-        Ok::<_, String>((oracle, measured))
+        .await;
+        match measured {
+            Ok(measured) => SiteOutcome::Measured {
+                ready,
+                oracle,
+                measured: Box::new(measured),
+            },
+            Err(MeasureError::Browser(error)) => SiteOutcome::NotMeasured {
+                reason: "a capture step failed (detail in report.md)".to_owned(),
+                detail: oracle_note(&oracle, &error.to_string()),
+            },
+            Err(MeasureError::Check { error, captures }) => SiteOutcome::CheckFailed {
+                detail: error.to_string(),
+                oracle: oracle.ok(),
+                captures,
+            },
+        }
     }
     .await;
-    close_tab(client, &opened.target_id).await;
-    match measured {
-        Ok((oracle, measured)) => SiteOutcome::Measured {
-            ready: opened.ready,
-            oracle,
-            measured: Box::new(measured),
-        },
-        Err(detail) => SiteOutcome::NotMeasured {
-            reason: "capture or check failed (detail in report.md)".to_owned(),
-            detail,
-        },
-    }
+    close_tab(client, &target_id).await;
+    outcome
 }
 
 /// `error`, with the oracle's own failure when there was one: a step it overran can leave the
@@ -746,8 +761,9 @@ async fn await_responsive(client: &CdpClient, session: &SessionId) -> Result<(),
 }
 
 /// The private folder `NEO_ZERO_CONFLICT_PRIVATE` names, once it is known to exist outside every
-/// git work tree that holds this crate: a site's capture is a real page's text, which must never
-/// be committed or reach the remote pool (which uploads `packages/browseros-agent`).
+/// work tree of this repository: a site's capture is a real page's text, which must never be
+/// committed or reach the remote pool, which uploads `packages/browseros-agent` from whichever
+/// work tree it is run in. `run.sh` refuses the same folders.
 fn private_folder() -> Result<PathBuf, Box<dyn Error>> {
     let named = env::var_os("NEO_ZERO_CONFLICT_PRIVATE")
         .ok_or("NEO_ZERO_CONFLICT_PRIVATE names no folder; run.sh names and makes one")?;
@@ -757,18 +773,42 @@ fn private_folder() -> Result<PathBuf, Box<dyn Error>> {
             Path::new(&named).display()
         )
     })?;
-    for root in Path::new(env!("CARGO_MANIFEST_DIR")).ancestors() {
-        if root.join(".git").exists() && folder.starts_with(root.canonicalize()?) {
+    for tree in work_trees()? {
+        if folder.starts_with(&tree) {
             return Err(format!(
                 "NEO_ZERO_CONFLICT_PRIVATE {} is inside the git work tree {}; real pages' \
                  captures never go there",
                 folder.display(),
-                root.display()
+                tree.display()
             )
             .into());
         }
     }
     Ok(folder)
+}
+
+/// Every work tree of the repository holding this crate, as `git worktree list` names them: the
+/// main checkout and each linked worktree, wherever it sits. An error when git cannot say, so
+/// the privacy check never passes for want of an answer.
+fn work_trees() -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .map_err(|error| format!("git worktree list: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git worktree list: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    // A worktree whose folder is gone cannot hold the private folder, which exists.
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(|tree| Path::new(tree).canonicalize().ok())
+        .collect())
 }
 
 /// `site`'s section of `report.md`: everything the stdout rows leave out because it is the
@@ -778,6 +818,13 @@ fn site_section(site: &Site, outcome: &SiteOutcome) -> String {
     match outcome {
         SiteOutcome::NotMeasured { detail, .. } => {
             let _ = writeln!(out, "Not measured: {detail}\n");
+        }
+        SiteOutcome::CheckFailed { detail, .. } => {
+            let _ = writeln!(
+                out,
+                "Check failed: {detail}\n\nReplay `{0}.pb` and `{0}.2.pb` with `check_apc`.\n",
+                site.id
+            );
         }
         SiteOutcome::Measured {
             ready,
@@ -800,22 +847,24 @@ fn site_section(site: &Site, outcome: &SiteOutcome) -> String {
                     );
                 }
             }
-            out.push_str("\n### Misses, capture #1\n\n");
-            for line in measured.first.check.misses() {
-                let target = line.target.as_ref().map_or_else(
-                    || "none".to_owned(),
-                    |key| format!("{}/{}", key.doc, key.node),
-                );
-                let _ = writeln!(
-                    out,
-                    "- {} line {} ({}): `{}` | `{}` | {} | target {target}",
-                    line.format,
-                    line.line.number,
-                    line.line.role,
-                    line.line.text.trim_start(),
-                    line.query,
-                    line.verdict
-                );
+            for (capture, check) in [(1, &measured.first.check), (2, &measured.second.check)] {
+                let _ = writeln!(out, "\n### Misses, capture #{capture}\n");
+                for line in check.misses() {
+                    let target = line.target.as_ref().map_or_else(
+                        || "none".to_owned(),
+                        |key| format!("{}/{}", key.doc, key.node),
+                    );
+                    let _ = writeln!(
+                        out,
+                        "- {} line {} ({}): `{}` | `{}` | {} | target {target}",
+                        line.format,
+                        line.line.number,
+                        line.line.role,
+                        line.line.text.trim_start(),
+                        line.query,
+                        line.verdict
+                    );
+                }
             }
             out.push_str("\n### Instability\n\n");
             for instability in &measured.unstable {
@@ -833,40 +882,7 @@ fn site_section(site: &Site, outcome: &SiteOutcome) -> String {
                     let _ = writeln!(out, "Not measured: the oracle failed: {error}");
                 }
                 (None, Ok(_)) => out.push_str("Not measured.\n"),
-                (Some(recall), Ok(_)) => {
-                    let _ = writeln!(
-                        out,
-                        "{} frames without a document in the tree.\n\n\
-                         | frame | role | page | found | extra | missing backendNodeIds | unread |\n\
-                         | ---: | --- | ---: | ---: | ---: | --- | --- |",
-                        recall.frames_without_document
-                    );
-                    for role in &recall.roles {
-                        let listed: Vec<String> = role
-                            .missing
-                            .iter()
-                            .take(LISTED_MISSING)
-                            .map(u64::to_string)
-                            .collect();
-                        let more = role.missing.len().saturating_sub(LISTED_MISSING);
-                        let _ = writeln!(
-                            out,
-                            "| {} | {} | {} | {} | {} | {}{} | {} |",
-                            role.frame,
-                            role.role,
-                            role.page,
-                            role.found,
-                            role.extra,
-                            listed.join(" "),
-                            if more > 0 {
-                                format!(" (+{more})")
-                            } else {
-                                String::new()
-                            },
-                            role.unread.as_deref().unwrap_or("")
-                        );
-                    }
-                }
+                (Some(recall), Ok(_)) => out.push_str(&recall_table(recall)),
             }
             out.push('\n');
         }
@@ -874,8 +890,46 @@ fn site_section(site: &Site, outcome: &SiteOutcome) -> String {
     out
 }
 
-/// One measured site's stdout row and the misses it lists: counts, line numbers, roles and
-/// verdict kinds, never a name or other page text.
+/// `recall` as `report.md` tables it: per frame and role, the page's elements, what Rust found
+/// of them, and the backendNodeIds it missed.
+fn recall_table(recall: &Recall) -> String {
+    let mut out = format!(
+        "{} frames without a document in the tree.\n\n\
+         | frame | role | page | found | extra | missing backendNodeIds | unread |\n\
+         | ---: | --- | ---: | ---: | ---: | --- | --- |\n",
+        recall.frames_without_document
+    );
+    for role in &recall.roles {
+        let listed: Vec<String> = role
+            .missing
+            .iter()
+            .take(LISTED_MISSING)
+            .map(u64::to_string)
+            .collect();
+        let more = role.missing.len().saturating_sub(LISTED_MISSING);
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {}{} | {} |",
+            role.frame,
+            role.role,
+            role.page,
+            role.found,
+            role.extra,
+            listed.join(" "),
+            if more > 0 {
+                format!(" (+{more})")
+            } else {
+                String::new()
+            },
+            role.unread.as_deref().unwrap_or("")
+        );
+    }
+    out
+}
+
+/// One measured site's stdout row and the misses it lists, of both captures: counts, line
+/// numbers, roles and verdict kinds, never a name or other page text. The row's counts are
+/// capture #1's, whose bytes replay offline.
 fn site_row(site: &Site, ready: &str, measured: &Measured) -> Vec<String> {
     let counts = LineCounts::of(&measured.first.check.lines);
     let hydration = HydrationCounts::of(measured);
@@ -914,15 +968,17 @@ fn site_row(site: &Site, ready: &str, measured: &Measured) -> Vec<String> {
             format!(" | readyState {ready} at the bound")
         },
     )];
-    for line in measured.first.check.misses() {
-        rows.push(format!(
-            "  miss: {} {} line {}: role {} | {}",
-            site.id,
-            line.format,
-            line.line.number,
-            line.line.role,
-            verdict_kind(&line.verdict)
-        ));
+    for (capture, check) in [(1, &measured.first.check), (2, &measured.second.check)] {
+        for line in check.misses() {
+            rows.push(format!(
+                "  miss: {} capture #{capture} {} line {}: role {} | {}",
+                site.id,
+                line.format,
+                line.line.number,
+                line.line.role,
+                zero_conflict_live::verdict_kind(&line.verdict)
+            ));
+        }
     }
     for instability in &measured.unstable {
         rows.push(match instability {
@@ -943,8 +999,8 @@ fn site_row(site: &Site, ready: &str, measured: &Measured) -> Vec<String> {
             } => format!(
                 "  unstable: {} {format} line {line}: {} then {}",
                 site.id,
-                verdict_brief(first),
-                verdict_brief(second)
+                zero_conflict_live::verdict_brief(first),
+                zero_conflict_live::verdict_brief(second)
             ),
         });
     }
@@ -966,21 +1022,25 @@ fn site_row(site: &Site, ready: &str, measured: &Measured) -> Vec<String> {
     rows
 }
 
-/// Writes a measured site's captures and oracle to the private folder, so a miss replays offline:
-/// capture #1 as `check_apc` reads it, and capture #2 for a line only it missed.
+/// Writes a site's captures and oracle to the private folder, so a miss or a failed check
+/// replays offline: capture #1 as `check_apc` reads it, and capture #2 for a line only it missed.
 fn save_site(private: &Path, site: &Site, outcome: &SiteOutcome) -> Result<(), Box<dyn Error>> {
-    let SiteOutcome::Measured {
-        oracle, measured, ..
-    } = outcome
-    else {
-        return Ok(());
+    let (captures, oracle) = match outcome {
+        SiteOutcome::NotMeasured { .. } => return Ok(()),
+        SiteOutcome::Measured {
+            oracle, measured, ..
+        } => (
+            [&measured.first.pb, &measured.second.pb],
+            oracle.as_ref().ok(),
+        ),
+        SiteOutcome::CheckFailed {
+            oracle, captures, ..
+        } => ([&captures[0], &captures[1]], oracle.as_ref()),
     };
-    fs::write(private.join(format!("{}.pb", site.id)), &measured.first.pb)?;
-    fs::write(
-        private.join(format!("{}.2.pb", site.id)),
-        &measured.second.pb,
-    )?;
-    if let Ok(oracle) = oracle {
+    let [first, second] = captures;
+    fs::write(private.join(format!("{}.pb", site.id)), first)?;
+    fs::write(private.join(format!("{}.2.pb", site.id)), second)?;
+    if let Some(oracle) = oracle {
         let mut json = serde_json::to_vec_pretty(oracle)?;
         json.push(b'\n');
         fs::write(private.join(format!("{}.oracle.json", site.id)), json)?;
@@ -988,8 +1048,14 @@ fn save_site(private: &Path, site: &Site, outcome: &SiteOutcome) -> Result<(), B
     Ok(())
 }
 
-/// The site run's total rows: the gate's percentage and each site not measured.
-fn report_site_totals(sites: usize, totals: &Totals, not_measured: &[String]) {
+/// The site run's total rows: the gate's percentage, each site not measured, and each site whose
+/// check failed.
+fn report_site_totals(
+    sites: usize,
+    totals: &Totals,
+    not_measured: &[String],
+    check_failed: &[String],
+) {
     let Totals {
         lines,
         hydration,
@@ -1001,7 +1067,7 @@ fn report_site_totals(sites: usize, totals: &Totals, not_measured: &[String]) {
         "total | {} of {sites} sites measured | {} role lines | {} reached | {} labels | {} \
          misses | {} | {unstable_pages} unstable sites | {} hydration failures | recall {} \
          ({}/{}) | {} extra",
-        sites - not_measured.len(),
+        sites - not_measured.len() - check_failed.len(),
         lines.role_lines(),
         lines.reached,
         lines.labels,
@@ -1019,6 +1085,9 @@ fn report_site_totals(sites: usize, totals: &Totals, not_measured: &[String]) {
     for reason in not_measured {
         report(&format!("not measured: {reason}"));
     }
+    for id in check_failed {
+        report(&format!("check failed: {id} (detail in report.md)"));
+    }
 }
 
 #[tokio::test]
@@ -1031,9 +1100,9 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
     let sites = read_sites(&fs::read_to_string(&list)?)?;
     let private = private_folder()?;
     let engine = OracleEngine::new()?;
-    let client = connect_cdp().await?;
+    let client = fixture_pages::connect_cdp().await?;
     let result = async {
-        let browser = browser_product(&client).await?;
+        let browser = oracle_capture::browser_product(&client).await?;
         report(&format!(
             "zero-conflict sites: {} sites; browser {browser}; private folder {}",
             sites.len(),
@@ -1050,6 +1119,7 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
         );
         let mut totals = Totals::default();
         let mut not_measured = Vec::new();
+        let mut check_failed = Vec::new();
         for site in &sites {
             let started = Instant::now();
             let outcome = run_site(&client, &engine, &browser, site).await;
@@ -1060,6 +1130,10 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
                 SiteOutcome::NotMeasured { reason, .. } => {
                     report(&format!("{} | not measured: {reason}", site.id));
                     not_measured.push(format!("{}: {reason}", site.id));
+                }
+                SiteOutcome::CheckFailed { .. } => {
+                    report(&format!("{} | check failed (detail in report.md)", site.id));
+                    check_failed.push(site.id.clone());
                 }
                 SiteOutcome::Measured {
                     ready, measured, ..
@@ -1076,7 +1150,12 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
                 started.elapsed().as_secs_f64()
             ));
         }
-        report_site_totals(sites.len(), &totals, &not_measured);
+        report_site_totals(sites.len(), &totals, &not_measured, &check_failed);
+        assert!(
+            check_failed.is_empty(),
+            "a capture that does not build or check is the engine's or the checker's failure, \
+             whatever the page did, and its saved captures replay it: {check_failed:?}"
+        );
         let lines = &totals.lines;
         assert!(
             lines.role_lines() > 0,
@@ -1149,7 +1228,7 @@ fn private_site_captures_replay_offline() -> Result<(), Box<dyn Error>> {
                 line.format,
                 line.line.number,
                 line.line.role,
-                verdict_kind(&line.verdict)
+                zero_conflict_live::verdict_kind(&line.verdict)
             ));
         }
         totals.merge(counts);

@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use crate::fixture_pages;
 use crate::oracle::Oracle;
 use crate::oracle_capture::{self, FrameSite};
-use crate::zero_conflict::{self, ByRole, ByRoleOptions, Format, PageCheck, Verdict};
+use crate::zero_conflict::{self, ByRole, ByRoleOptions, Format, LineCheck, PageCheck, Verdict};
 
 /// The world each frame's refs are hydrated in: a world of its own, as the engine's resolver
 /// enters one per frame, so neither the page's scripts nor the oracle's patches reach the probe.
@@ -75,6 +75,31 @@ pub(crate) struct Measured {
     pub(crate) recall: Option<Recall>,
 }
 
+/// Why a page was not measured. A browser step can fail on any real page; a capture that does
+/// not build or check is the engine's or the checker's failure, whatever the page did, so the
+/// site run fails its gate on one and keeps the captures to replay it offline.
+#[derive(Debug)]
+pub(crate) enum MeasureError {
+    /// Frame discovery, the page's own step before capture, or a capture failed.
+    Browser(Box<dyn Error>),
+    /// Both captures were taken, and one did not build into a tree or its text did not check.
+    Check {
+        error: Box<dyn Error>,
+        /// Capture #1's and capture #2's protobuf bytes.
+        captures: [Vec<u8>; 2],
+    },
+}
+
+impl fmt::Display for MeasureError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Browser(error) | Self::Check { error, .. } => error.fmt(f),
+        }
+    }
+}
+
+impl Error for MeasureError {}
+
 /// Measures the page of the tab `target_id`, attached as `session`, on the load it is on: frame
 /// sessions, then `before_capture`, then the two captures and their checks. `oracle` is the
 /// page's oracle, read on this load before `before_capture`. Child-frame sessions attached here
@@ -89,24 +114,36 @@ pub(crate) async fn measure(
     target_id: &str,
     oracle: Option<&Oracle>,
     before_capture: impl Future<Output = Result<(), Box<dyn Error>>>,
-) -> Result<Measured, Box<dyn Error>> {
+) -> Result<Measured, MeasureError> {
     let mut attached = Vec::new();
     let measured = async {
         let sites = oracle_capture::frame_sites(client, session, target_id, &mut attached)
             .await
-            .map_err(|error| format!("{page}: frame discovery: {error}"))?;
-        before_capture.await?;
+            .map_err(|error| {
+                MeasureError::Browser(format!("{page}: frame discovery: {error}").into())
+            })?;
+        before_capture.await.map_err(MeasureError::Browser)?;
         // Back to back, so the second capture sees the page the first saw unless it changed
         // by itself.
-        let (pb1, apc1) = fixture_pages::capture_apc(client, session).await?;
-        let (pb2, apc2) = fixture_pages::capture_apc(client, session).await?;
-        let tree1 = SnapshotTree::build(apc1, BuildOptions::new())
-            .map_err(|error| format!("{page}: capture #1 does not build: {error}"))?;
-        let tree2 = SnapshotTree::build(apc2, BuildOptions::new())
-            .map_err(|error| format!("{page}: capture #2 does not build: {error}"))?;
+        let (pb1, apc1) = fixture_pages::capture_apc(client, session)
+            .await
+            .map_err(MeasureError::Browser)?;
+        let (pb2, apc2) = fixture_pages::capture_apc(client, session)
+            .await
+            .map_err(MeasureError::Browser)?;
+        let check_failed = |error: Box<dyn Error>| MeasureError::Check {
+            error,
+            captures: [pb1.clone(), pb2.clone()],
+        };
+        let tree1 = SnapshotTree::build(apc1, BuildOptions::new()).map_err(|error| {
+            check_failed(format!("{page}: capture #1 does not build: {error}").into())
+        })?;
+        let tree2 = SnapshotTree::build(apc2, BuildOptions::new()).map_err(|error| {
+            check_failed(format!("{page}: capture #2 does not build: {error}").into())
+        })?;
         let mut refs = TabRefTable::new();
-        let first = zero_conflict::check_tree(page, &tree1, &mut refs)?;
-        let second = zero_conflict::check_tree(page, &tree2, &mut refs)?;
+        let first = zero_conflict::check_tree(page, &tree1, &mut refs).map_err(&check_failed)?;
+        let second = zero_conflict::check_tree(page, &tree2, &mut refs).map_err(&check_failed)?;
         let unstable = instabilities(&first, &second);
         let mut frames = Frames {
             client,
@@ -118,7 +155,7 @@ pub(crate) async fn measure(
         };
         let hydrated = frames.hydrate(&tree2, &second, &mut attached).await;
         frames.release().await;
-        Ok::<_, Box<dyn Error>>(Measured {
+        Ok::<_, MeasureError>(Measured {
             contract_version: tree1.contract_version(),
             recall: oracle.map(|oracle| recall(&tree1, oracle)),
             first: Capture {
@@ -173,15 +210,9 @@ fn instabilities(first: &PageCheck, second: &PageCheck) -> Vec<Instability> {
         if one != two {
             found.push(Instability::Text(format));
         }
-        let lines = |check: &PageCheck| -> Vec<_> {
-            check
-                .lines
-                .iter()
-                .filter(|line| line.format == format)
-                .cloned()
-                .collect()
-        };
-        let (one, two) = (lines(first), lines(second));
+        let in_format = |line: &&LineCheck| line.format == format;
+        let one: Vec<&LineCheck> = first.lines.iter().filter(in_format).collect();
+        let two: Vec<&LineCheck> = second.lines.iter().filter(in_format).collect();
         if one.len() != two.len() {
             // Lines pair by position, so after a line comes or goes every later pair would
             // differ: the count says it.

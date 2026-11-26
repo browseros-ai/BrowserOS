@@ -82,15 +82,18 @@ if [ -z "$out" ]; then
 fi
 out="$(absolute "$out")"
 
-# Refused before anything is written: inside the worktree that holds this script, or inside the
-# main checkout that worktree belongs to (a worktree can sit inside it, as .wt/ does here).
-top="$(git -C "$here" rev-parse --show-toplevel)"
-common="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir)"
-for tree in "$(cd "$top" && pwd -P)" "$(cd "$(dirname "$common")" && pwd -P)"; do
+# Refused before anything is written: inside any work tree of this repository, the main checkout
+# or a linked worktree wherever it sits, since the remote pool uploads packages/browseros-agent
+# from whichever one it is run in. The live test refuses the same folders.
+trees="$(git -C "$here" worktree list --porcelain)"
+while IFS= read -r line; do
+  tree="${line#worktree }"
+  [ "$tree" != "$line" ] && [ -d "$tree" ] || continue
+  tree="$(cd "$tree" && pwd -P)"
   case "$out/" in
     "$tree"/*) die "the private folder $out is inside the git work tree $tree; real pages' captures never go there" ;;
   esac
-done
+done <<<"$trees"
 
 mkdir -p "$out"
 chmod 700 "$out"
