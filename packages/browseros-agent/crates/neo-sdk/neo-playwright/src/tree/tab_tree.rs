@@ -198,28 +198,47 @@ impl TabTree {
     /// read from its frame's world once (design 8.1, "Keeping the copy complete").
     ///
     /// A host may have typed a secret into such a document under an earlier instance, whose
-    /// mark lives only in the page's isolated world. The capture that finds the document builds
-    /// before the mirror knows that mark, so when a seed brings any mark in, the tab is captured
-    /// again and that tree, which masks it, is the one returned. A document whose world does not
-    /// answer stays unseeded: the tab is captured again, which a frame that left no longer shows,
-    /// and a tree that still holds an unseeded document is never returned (fail closed).
+    /// mark lives only in the page's isolated world. Every way a seed could leave it in the clear
+    /// fails closed:
+    /// - A capture that finds the document builds before the mirror knows that mark. A tree is
+    ///   returned only when no seed brought marks in after it was requested, this read's own seed
+    ///   or an overlapping read's that recorded the document seeded first; otherwise the tab is
+    ///   captured again, and that tree, which masks them, is the one returned.
+    /// - A document is seeded only through a world proven to be its own for the capture (design
+    ///   6.2, as hydration proves one); see [`Self::seed_document`].
+    /// - A document whose world does not answer stays unseeded: the tab is captured again, which a
+    ///   frame that left no longer shows, and a tree that still holds an unseeded document is
+    ///   never returned.
     pub(crate) async fn capture_seeded(
         &self,
         scope: &OpScope<'_>,
         page: &OpPage<'_>,
         started: AttemptStart,
     ) -> Result<Arc<CapturedTree>, PlaywrightError> {
-        let mut captured = self.capture(scope, page, started).await?;
+        let captured = self.capture(scope, page, started).await?;
+        self.finish_seeding(scope, page, captured).await
+    }
+
+    /// [`Self::capture_seeded`]'s rules applied to a tree already captured: seeds its unseeded
+    /// documents, and captures again until a tree holds no unseeded document and was requested
+    /// after every seed that brought marks in.
+    async fn finish_seeding(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        mut captured: Arc<CapturedTree>,
+    ) -> Result<Arc<CapturedTree>, PlaywrightError> {
         for pass in 0..=SEED_RECAPTURES {
-            let (marked, unread) = self.seed_unseeded(scope, page, &captured).await?;
-            if unread == 0 && marked == 0 {
+            let unread = self.seed_unseeded(scope, page, &captured).await?;
+            if unread == 0 && !self.seeded_after(captured.requested_at()) {
                 return Ok(captured);
             }
             if pass == SEED_RECAPTURES {
                 break;
             }
-            // A mark read in makes this tree stale: the next one masks it. A document that did
-            // not answer may have left with its frame, which the next tree shows.
+            // Marks a seed read in after this tree's request make it stale: the next one masks
+            // them. A document that could not be read may have left with its frame, which the next
+            // tree shows, or now has a world that predates the next request.
             captured = self.capture(scope, page, AttemptStart::now()).await?;
         }
         // Fail closed: a document whose marks could not be read could print in clear what a
@@ -231,26 +250,24 @@ impl TabTree {
         ))
     }
 
-    /// Seeds every document of `captured` that still needs it: how many marks came in, and how
-    /// many documents could not be read.
+    /// Seeds every document of `captured` that still needs it: how many documents could not be
+    /// read.
     async fn seed_unseeded(
         &self,
         scope: &OpScope<'_>,
         page: &OpPage<'_>,
         captured: &CapturedTree,
-    ) -> Result<(usize, usize), PlaywrightError> {
-        let tree = captured.tree();
-        let (mut marked, mut unread) = (0, 0);
-        for doc in tree.documents() {
+    ) -> Result<usize, PlaywrightError> {
+        let mut unread = 0;
+        for doc in captured.tree().documents() {
             if !self.needs_private_seed(doc.token()) {
                 continue;
             }
-            match self.seed_document(scope, page, tree, doc).await? {
-                Seed::Read(count) => marked += count,
-                Seed::Unread => unread += 1,
+            if let Seed::Unread = self.seed_document(scope, page, captured, doc).await? {
+                unread += 1;
             }
         }
-        Ok((marked, unread))
+        Ok(unread)
     }
 
     /// Reads `doc`'s private marks from its frame's world (the probe's `privateMarks`) into the
@@ -258,11 +275,18 @@ impl TabTree {
     /// roots are opened to that world first, every one the capture found, since `privateMarks`
     /// walks only the roots the world can reach. A document whose frame has no world to ask, or
     /// whose world does not answer within the budget, is [`Seed::Unread`] and stays unseeded.
+    ///
+    /// The world must be the document's own: one installed before `captured` was requested and
+    /// answering after its reply (design 6.2, Case 1). A world installed since may belong to a
+    /// document that replaced this one after the browser serialized it, and would seed this
+    /// document with that one's marks while the tree printed this one's boxes in the clear. Such a
+    /// world leaves the document [`Seed::Unread`]: the next capture, requested after the world was
+    /// installed, proves it for whichever document the frame holds then (Case 3).
     async fn seed_document(
         &self,
         scope: &OpScope<'_>,
         page: &OpPage<'_>,
-        tree: &SnapshotTree,
+        captured: &CapturedTree,
         doc: &TreeDoc,
     ) -> Result<Seed, PlaywrightError> {
         let main_frame = page.main_endpoint().frame;
@@ -276,10 +300,13 @@ impl TabTree {
                 hydrate::EnsuredWorld::Gone => continue,
                 hydrate::EnsuredWorld::Missing => return Ok(Seed::Unread),
             };
+            if world.installed_at() >= captured.requested_at() {
+                return Ok(Seed::Unread);
+            }
             // Bounded as a world's proof is: a hung frame leaves its document unseeded.
             let opened = time::timeout(
                 PROOF_BUDGET,
-                hydrate::open_closed_roots(scope, page, &world, tree, doc.id(), None),
+                hydrate::open_closed_roots(scope, page, &world, captured.tree(), doc.id(), None),
             )
             .await;
             if !matches!(opened, Ok(true)) {
@@ -311,9 +338,8 @@ impl TabTree {
                     }
                     Err(failure) => return Err(resolve::failed(scope, failure)),
                 };
-            let count = nodes.len();
             self.record_private_seed(doc, nodes);
-            return Ok(Seed::Read(count));
+            return Ok(Seed::Read);
         }
         Ok(Seed::Unread)
     }
@@ -465,6 +491,14 @@ impl TabTree {
             .needs_seed(doc)
     }
 
+    /// Whether a seed brought marks in after `requested_at` (see [`PrivateMirror::seeded_after`]).
+    fn seeded_after(&self, requested_at: Stamp) -> bool {
+        self.private
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .seeded_after(requested_at)
+    }
+
     /// Imports the pre-existing private marks `doc`'s isolated world reported, on `doc`'s own
     /// site, and records `doc` seeded; zero `nodes` records an empty seed.
     pub(crate) fn record_private_seed(
@@ -515,15 +549,17 @@ impl RefResolver for TabTree {
 }
 
 /// How many more times [`TabTree::capture_seeded`] captures when a seed brought marks in or a
-/// document did not answer, before it fails closed.
-const SEED_RECAPTURES: usize = 2;
+/// document could not be read, before it fails closed. A first read can take three: one to prove
+/// the worlds its seeds installed, one to mask what they read, and one for a frame that appeared
+/// in between.
+const SEED_RECAPTURES: usize = 3;
 
 /// What reading one document's private marks came to.
 enum Seed {
-    /// The marks were read into the mirror, and the document recorded seeded: how many.
-    Read(usize),
-    /// No world of the document's frame answered in time, or the frame is gone: the document
-    /// stays unseeded, and no tree that holds it may be returned.
+    /// The marks were read into the mirror, and the document recorded seeded.
+    Read,
+    /// No world proven for the document's capture answered in time, or the frame is gone: the
+    /// document stays unseeded, and no tree that holds it may be returned.
     Unread,
 }
 
@@ -1777,6 +1813,103 @@ mod tests {
             shown(captured.tree(), 8)?,
             Shown::Value,
             "box 8 was never marked"
+        );
+        Ok(())
+    }
+
+    /// Two first reads of a tab that predates this instance overlap. One captures; the other
+    /// captures, seeds the document and returns; only then does the first come to its seeds. The
+    /// document is recorded seeded by then, but the first read's tree was built from a copy of the
+    /// marks without the seed's, so the first read must capture again.
+    #[tokio::test]
+    async fn an_overlapping_first_read_never_returns_a_tree_built_before_anothers_seed()
+    -> TestResult {
+        let apc = page("doc-earlier", Some(("https://a.test", false)), &[42, 7]);
+        let tab = ScriptedTab::new(TreeScript::new(apc_reply(&apc)));
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = TabTree::new(TabOriginState::ExistedAtStart);
+        // The main world predates both captures, as a page op's own world does.
+        op_page.world(&op_page.main_endpoint(), Place::Main).await?;
+        // Box 42 was typed into under an earlier instance: only the page's world holds its mark.
+        tab.script().hold_pin(Pin(1), 42);
+        tab.script()
+            .push_probe_reply(json!({ "kind": "marks", "pins": [1] }));
+
+        let first = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        assert_eq!(
+            shown(first.tree(), 42)?,
+            Shown::Value,
+            "the first read's tree is built before any seed"
+        );
+        let second = tree
+            .capture_seeded(&scope, &op_page, AttemptStart::now())
+            .await?;
+        assert_eq!(
+            shown(second.tree(), 42)?,
+            Shown::Bullets,
+            "the read that seeds returns a tree that masks the box"
+        );
+        let first = tree.finish_seeding(&scope, &op_page, first).await?;
+        assert_eq!(
+            shown(first.tree(), 42)?,
+            Shown::Bullets,
+            "the overlapping read captures again rather than print the box in the clear"
+        );
+        assert_eq!(
+            shown(first.tree(), 7)?,
+            Shown::Value,
+            "box 7 was never marked"
+        );
+        Ok(())
+    }
+
+    /// The frame navigates once the browser has serialized the old document: its world is gone
+    /// when the seed asks, and the world the seed installs next is the new document's. Read
+    /// through it, the old document would be recorded seeded with the new one's marks (none) and
+    /// its tree returned with the box typed into under an earlier instance in the clear.
+    #[tokio::test]
+    async fn a_seed_reads_marks_only_through_a_world_proven_for_the_captured_document() -> TestResult
+    {
+        let on_a = Some(("https://a.test", false));
+        let tab = ScriptedTab::new(TreeScript::new(apc_reply(&page("doc-new", on_a, &[42, 7]))));
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = TabTree::new(TabOriginState::ExistedAtStart);
+        let w_old = op_page.world(&op_page.main_endpoint(), Place::Main).await?;
+        tab.script()
+            .push_apc(apc_reply(&page("doc-old", on_a, &[42, 7])));
+
+        let captured = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        let old = captured
+            .tree()
+            .main_document()
+            .ok_or("main doc")?
+            .token()
+            .clone();
+        assert_eq!(old.as_str(), "doc-old");
+        tab.script()
+            .mark_global_stale(w_old.global(), "Cannot find context with specified id");
+        // The new document holds no marks, so its world answers none.
+        tab.script()
+            .push_probe_reply(json!({ "kind": "marks", "pins": [] }));
+
+        let returned = tree.finish_seeding(&scope, &op_page, captured).await?;
+        assert_eq!(
+            returned
+                .tree()
+                .main_document()
+                .ok_or("main doc")?
+                .token()
+                .as_str(),
+            "doc-new",
+            "the old document's tree is captured again, never returned on another document's seed"
+        );
+        assert!(
+            tree.needs_private_seed(&old),
+            "the old document is never recorded seeded with the new one's marks"
         );
         Ok(())
     }

@@ -29,7 +29,7 @@ use serde_json::json;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure};
-use crate::world::{BackendNodeId, IsolatedWorld, Pin};
+use crate::world::{BackendNodeId, IsolatedWorld, Pin, Stamp};
 
 /// CDP protocol error returned by `DOM.describeNode` when a remote node handle is no longer backed
 /// by a DOM node (for example, after collection or replacement).
@@ -54,10 +54,14 @@ pub(crate) enum TabOriginState {
 /// For a tab opened under this instance every mark was made by it, so the copy is complete. For a
 /// tab that already existed, a document's earlier marks reach the copy only once its world's
 /// `privateMarks` seed is recorded, and [`Self::needs_seed`] says which documents still lack one.
+/// A seed can land after a capture copied the marks, its own or an overlapping read's, so
+/// [`Self::seeded_after`] says whether a tree may have been built without what a seed brought in.
 pub(crate) struct PrivateMirror {
     origin_state: TabOriginState,
     marks: PrivateNodes,
     seeded_docs: HashSet<DocToken>,
+    /// When the latest seed that brought marks in was recorded.
+    marks_seeded_at: Option<Stamp>,
 }
 
 impl PrivateMirror {
@@ -67,6 +71,7 @@ impl PrivateMirror {
             origin_state,
             marks: PrivateNodes::new(),
             seeded_docs: HashSet::new(),
+            marks_seeded_at: None,
         }
     }
 
@@ -106,10 +111,27 @@ impl PrivateMirror {
         nodes: impl IntoIterator<Item = DomNodeId>,
     ) {
         let site = SiteKey::of_doc(doc);
+        let mut brought = false;
         for node in nodes {
             self.marks.mark(site.clone(), node);
+            brought = true;
+        }
+        if brought {
+            // Stamped under the tab's mirror lock, which each capture's copy of the marks also
+            // takes, so the stamp orders this seed against every capture request exactly.
+            self.marks_seeded_at = Some(Stamp::next());
         }
         self.seeded_docs.insert(doc.token().clone());
+    }
+
+    /// Whether a seed brought marks in after a capture requested at `requested_at`, so the tree it
+    /// built may print them in the clear. A capture copies the marks after its reply, which comes
+    /// after its request: a seed stamped before the request is in the copy, and one stamped after
+    /// may not be. Tab-wide rather than per document, since a marked box keeps its mark when the
+    /// page moves it into another document of its site.
+    #[must_use]
+    pub(crate) fn seeded_after(&self, requested_at: Stamp) -> bool {
+        self.marks_seeded_at.is_some_and(|at| at > requested_at)
     }
 }
 
@@ -119,6 +141,7 @@ impl fmt::Debug for PrivateMirror {
             .field("origin_state", &self.origin_state)
             .field("marks", &self.marks)
             .field("seeded_docs", &self.seeded_docs.len())
+            .field("marks_seeded_at", &self.marks_seeded_at)
             .finish()
     }
 }

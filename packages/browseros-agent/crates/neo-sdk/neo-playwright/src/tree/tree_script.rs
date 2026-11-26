@@ -232,7 +232,8 @@ pub(super) struct TreeScript {
     /// While set, `describe` answers an error, so a capture proves no world alive and its
     /// documents reserve their seqs instead of binding.
     unproven_describe: AtomicBool,
-    /// The probe's replies to `stage` and `describePins`, in the order the requests come.
+    /// The probe's replies to `stage`, `describePins` and `privateMarks`, in the order the
+    /// requests come.
     probe_replies: Mutex<VecDeque<Value>>,
     /// Every probe request a `Runtime.callFunctionOn` carried, boots aside, in order.
     probe_calls: Mutex<Vec<ProbeSent>>,
@@ -407,7 +408,7 @@ impl TreeScript {
         self.unproven_describe.store(unproven, Ordering::SeqCst);
     }
 
-    /// Queues the probe's reply to the next `stage` or `describePins`.
+    /// Queues the probe's reply to the next `stage`, `describePins` or `privateMarks`.
     pub(super) fn push_probe_reply(&self, reply: Value) {
         self.probe_replies
             .lock()
@@ -502,7 +503,7 @@ impl TreeScript {
                 "class": "internal",
                 "message": "the scripted world proves nothing",
             }),
-            "stage" | "describePins" => self
+            "stage" | "describePins" | "privateMarks" => self
                 .probe_replies
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
