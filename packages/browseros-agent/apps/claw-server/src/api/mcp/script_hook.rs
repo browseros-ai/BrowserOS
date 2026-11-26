@@ -167,6 +167,12 @@ impl InnerCallHook for ScriptInnerCallHook {
             .to_owned();
         let page = record.page;
         let is_error = record.is_error;
+        let plan_withheld = record.plan_withheld;
+        if plan_withheld {
+            self.call
+                .profile_refused
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let duration_ms = record.duration_ms;
         let from_helper = record.from_helper;
         let file_chooser_open = record.file_chooser_open;
@@ -221,7 +227,10 @@ impl InnerCallHook for ScriptInnerCallHook {
                 url: live.as_ref().map(|page| page.url.clone()),
                 title: live.as_ref().map(|page| page.title.clone()),
                 args_json,
-                result_meta: child_result_meta(is_error, from_helper, file_chooser_open),
+                result_meta: crate::api::mcp::observers::audit::with_profile_mark(
+                    child_result_meta(is_error, from_helper, file_chooser_open),
+                    plan_withheld.then_some(crate::db::profile_marks::ProfileMark::Refused),
+                ),
                 duration_ms,
                 // None: child rows keep their completion time so they sort after
                 // the parent script dispatch, which is stamped with its start.
@@ -911,6 +920,7 @@ mod tests {
             args: &json!([1, "e5"]),
             from_helper: false,
             is_error: false,
+            plan_withheld: false,
             file_chooser_open: false,
             duration_ms: 3,
             output_token_estimate: 0,
@@ -927,6 +937,60 @@ mod tests {
         Ok(())
     }
 
+    /// A profile call the plan refused inside a script marks its own row, and the script's
+    /// row too even when the script caught the error, so the task page says it stayed in Default.
+    #[tokio::test]
+    async fn a_plan_refusal_inside_run_marks_the_child_and_the_script() -> anyhow::Result<()> {
+        use crate::api::mcp::{
+            dispatch::{ToolObserver, ToolObserverContext},
+            observers::audit,
+        };
+        let call = tool_call("run", json!({ "code": "return 1" })).await?;
+        let hook = hook_for(&call);
+        hook.record(InnerCallRecord {
+            method: "tool:browser_profiles",
+            page: None,
+            args: &json!([{ "action": "list" }]),
+            from_helper: false,
+            is_error: true,
+            plan_withheld: true,
+            file_chooser_open: false,
+            duration_ms: 1,
+            output_token_estimate: 0,
+        })
+        .await;
+        let observe: ToolObserver = audit::apply;
+        observe(ToolObserverContext {
+            call: &call,
+            result: &browseros_mcp::ToolResult::text("caught", None),
+            cancelled: false,
+            duration_ms: 2,
+        })
+        .await?;
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
+        let rows = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery {
+                session_id: Some(call.session_id.as_str().to_string()),
+                ..Default::default()
+            })
+            .await?
+            .rows;
+        for name in ["browser_profiles", "run"] {
+            let row = rows
+                .iter()
+                .find(|row| row.tool_name == name)
+                .ok_or_else(|| anyhow::anyhow!("{name} row recorded"))?;
+            let meta: Value = serde_json::from_str(row.result_meta.as_deref().unwrap_or("{}"))?;
+            assert_eq!(meta["planWithheld"], "profileLocked", "{name}: {meta}");
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn record_writes_child_row_linked_to_parent() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
@@ -938,6 +1002,7 @@ mod tests {
             args: &json!([4, "e5"]),
             from_helper: false,
             is_error: false,
+            plan_withheld: false,
             file_chooser_open: true,
             duration_ms: 12,
             output_token_estimate: 42,

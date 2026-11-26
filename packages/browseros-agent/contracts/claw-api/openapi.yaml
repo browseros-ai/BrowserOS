@@ -108,6 +108,10 @@ paths:
     $ref: ./paths/plan.yaml#/portal
   /api/v1/plan/refresh:
     $ref: ./paths/plan.yaml#/refresh
+  /api/v1/plan/dev:
+    $ref: ./paths/plan.yaml#/devTools
+  /api/v1/plan/dev/forget-this-computer:
+    $ref: ./paths/plan.yaml#/forgetThisComputer
   /api/v1/plan/savings:
     $ref: ./paths/plan.yaml#/savings
 components:
@@ -196,6 +200,10 @@ components:
       $ref: ./schemas/settings.yaml#/UpdateAgentSettingsRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
+    SessionStopReason:
+      $ref: ./schemas/sessions.yaml#/SessionStopReason
+    SessionBrowserProfile:
+      $ref: ./schemas/sessions.yaml#/SessionBrowserProfile
     LiveSessionActivityState:
       $ref: ./schemas/sessions.yaml#/LiveSessionActivityState
     LiveSessionState:

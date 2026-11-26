@@ -421,6 +421,28 @@ impl Billing {
         Ok((self.plan().await, change.key))
     }
 
+    /// Debug builds only: takes this computer off its plan, the way a new computer starts. Frees
+    /// its seat on the key first (best effort: a gateway that cannot be reached still leaves the
+    /// computer on Free locally), then forgets the install and licence, so the next billing call
+    /// registers a fresh install that the gateway treats as new, free trial included.
+    #[cfg(debug_assertions)]
+    pub async fn forget_this_computer(&self) -> Result<PlanSnapshot, BillingError> {
+        let inner = self.inner()?;
+        let (install, on_key) = {
+            let state = inner.state.read().await;
+            (state.install.clone(), state.on_key)
+        };
+        if let Some(install) = install {
+            if on_key
+                && let Err(error) = inner.client.deactivate(&install.secret, &install.id).await
+            {
+                tracing::warn!(error = ?error, "could not free this computer's seat on its key");
+            }
+            inner.forget_install(&install.id).await;
+        }
+        Ok(self.plan().await)
+    }
+
     pub async fn rename(&self, install_id: &str, name: &str) -> Result<Key, BillingError> {
         let inner = self.inner()?;
         let name = name.trim();

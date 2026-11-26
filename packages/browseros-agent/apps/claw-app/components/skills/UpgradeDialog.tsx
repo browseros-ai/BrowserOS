@@ -17,7 +17,7 @@ import {
 const BENEFITS = [
   'Your skills run in seconds',
   'Turn any task into a skill in one click',
-  'Robot checks solved for you',
+  'Your agent works in the right profile',
 ]
 
 interface UpgradeDialogProps {

@@ -193,6 +193,26 @@ impl SessionClient {
     }
 }
 
+/// Captures one call's browser view: the task's saved binding, under what the plan withholds.
+/// Every path that runs browser work for an agent admits through here, so a Free computer stays
+/// in the original Default profile and a task bound to another profile stops there, with
+/// `plan_feature_unavailable`, instead of acting in that account.
+pub(in crate::api::mcp) async fn capture_view(
+    state: &AppState,
+    browser: Arc<browseros_core::BrowserSession>,
+    binding: Option<browseros_core::target::TargetBinding>,
+    manages_target: bool,
+) -> BrowserView {
+    BrowserView::capture_withholding(
+        browser,
+        binding,
+        None,
+        manages_target,
+        state.withheld_features(),
+    )
+    .await
+}
+
 impl ClawMcpService {
     #[must_use]
     pub fn new(state: AppState) -> Self {
@@ -212,8 +232,15 @@ impl ClawMcpService {
         }
     }
 
+    /// The connected browser as agents see it: what it implements, less what the plan
+    /// withholds. Discovery, tool descriptions and the instructions all read this, so a Free
+    /// computer neither lists nor teaches profile choice.
     fn native(&self) -> browseros_core::NativeCapabilities {
-        self.state.config.native.capabilities
+        self.state
+            .config
+            .native
+            .capabilities
+            .withholding(self.state.withheld_features())
     }
 
     fn mode(&self) -> ServerMode {
@@ -659,7 +686,7 @@ impl ClawMcpService {
             .map_err(|error| {
                 format!("request_human_help: could not resolve page {page_id}: {error}")
             })?;
-        let view = BrowserView::capture(browser, binding, None).await;
+        let view = capture_view(&self.state, browser, binding, false).await;
         match view.page(named.page.clone()).await {
             Ok(info) => Ok((info.tab_id.0, info.url, info.title)),
             Err(_) => Err(naming.help_page_not_yours(page_id)),
@@ -1622,12 +1649,9 @@ impl ServerHandler for ClawMcpService {
                     .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
                 let manages_target = self.catalog[tool_index].metadata.manages_target;
                 match &browser_session {
-                    Some(browser) if manages_target => Some(
-                        BrowserView::capture_for_management(browser.clone(), binding, None).await,
+                    Some(browser) => Some(
+                        capture_view(&self.state, browser.clone(), binding, manages_target).await,
                     ),
-                    Some(browser) => {
-                        Some(BrowserView::capture(browser.clone(), binding, None).await)
-                    }
                     None => None,
                 }
                 .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()))
@@ -2313,6 +2337,64 @@ mod tests {
             Ok(_) => anyhow::bail!("unexpected task response"),
             Err(error) => Err(error),
         })
+    }
+
+    fn profile_tools_listed(service: &ClawMcpService) -> Vec<String> {
+        service
+            .listed_tools(true)
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .filter(|name| name == "browser_profiles" || name == "browser_target")
+            .collect()
+    }
+
+    /// Choosing a browser profile comes with ultrafast: a Free computer neither lists nor
+    /// teaches the profile tools, and turning ultrafast on offers them again.
+    #[tokio::test]
+    async fn profile_choice_is_listed_and_taught_only_with_ultrafast() -> anyhow::Result<()> {
+        let service = viewport_test_service(ServerMode::Desktop).await?;
+        assert!(profile_tools_listed(&service).is_empty());
+        let free = service.get_info().instructions.unwrap_or_default();
+        assert!(!free.contains("browser_target action=\"set\""), "{free}");
+
+        service.state.ultrafast.set(true);
+        assert_eq!(
+            profile_tools_listed(&service),
+            ["browser_profiles", "browser_target"]
+        );
+        let on = service.get_info().instructions.unwrap_or_default();
+        assert!(on.contains("browser_target action=\"set\""), "{on}");
+        Ok(())
+    }
+
+    /// Hosted servers keep profile choice whatever the plan.
+    #[tokio::test]
+    async fn hosted_keeps_profile_choice_without_ultrafast() -> anyhow::Result<()> {
+        let service = viewport_test_service(ServerMode::Hosted).await?;
+        assert!(!service.state.ultrafast.is_on());
+        assert_eq!(
+            profile_tools_listed(&service),
+            ["browser_profiles", "browser_target"]
+        );
+        Ok(())
+    }
+
+    /// An agent holding an older tool list still reaches the tool, which explains the plan.
+    #[tokio::test]
+    async fn a_cached_profile_call_on_free_is_refused_as_a_plan_matter() -> anyhow::Result<()> {
+        let service = viewport_test_service(ServerMode::Desktop).await?;
+        let result = call_tool_value(service, "browser_profiles", json!({"action": "list"}))
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(result["isError"], true, "{result}");
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains(
+                "plan_feature_unavailable: choosing a browser profile is part of ultrafast"
+            ),
+            "{text}"
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -3217,7 +3299,12 @@ mod tests {
     #[tokio::test]
     async fn initialize_info_uses_browseros_neo_identity_and_prompt() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
-        let native = call.state.config.native.capabilities;
+        let native = call
+            .state
+            .config
+            .native
+            .capabilities
+            .withholding(call.state.withheld_features());
         let service = ClawMcpService::new(call.state);
         let info = service.get_info();
         assert_eq!(info.server_info.name, SERVER_NAME);
@@ -3777,7 +3864,11 @@ mod tests {
                     ServerMode::Desktop,
                     HumanHelp::Off,
                     service.ultrafast(),
-                    call.state.config.native.capabilities,
+                    call.state
+                        .config
+                        .native
+                        .capabilities
+                        .withholding(call.state.withheld_features()),
                     service.tab_grouping()
                 )
                 .as_str(),

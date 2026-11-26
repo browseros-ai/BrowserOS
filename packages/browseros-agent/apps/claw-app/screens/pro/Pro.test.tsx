@@ -604,7 +604,7 @@ describe('the ultrafast page', () => {
       'Illustration. Each dot is a step your agent pays for.',
     )
     expect(text()).toContain('Skills run in seconds')
-    expect(text()).toContain('Robot checks, solved for you')
+    expect(text()).toContain('Works in the right profile')
     expect(text()).not.toContain('Fewer steps. Smaller AI bills.')
     expect(text()).not.toContain('Show me')
     expect(text()).toContain('$20a month')
@@ -624,6 +624,14 @@ describe('the ultrafast page', () => {
     await click('What if I cancel?')
     expect(text()).toContain(
       'Your skills keep working, with your agent at normal speed.',
+    )
+    expect(text()).toContain(
+      'Your plan also helps with long-term development of BrowserOS core features.',
+    )
+    expect(text()).not.toContain('Thanks for helping')
+    await click('What does my plan pay for?')
+    expect(text()).toContain(
+      'ultrafast on up to 5 computers, and long-term development of BrowserOS core features.',
     )
   })
 
@@ -664,6 +672,9 @@ describe('the ultrafast page', () => {
 
     expect(text()).toContain('You’re on ultrafast')
     expect(text()).toContain('Renews Nov 27, 2026')
+    expect(text()).toContain(
+      'Thanks for helping with long-term development of BrowserOS core features.',
+    )
     expect(button('Billing')).toBeTruthy()
     expect(text()).toContain('Computers2 of 5')
     expect(text()).toContain(
@@ -699,8 +710,8 @@ describe('the ultrafast page', () => {
     await click('Skip', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
 
-    await click('Show me Robot checks')
-    expect(dialog().textContent).toContain('Robot checks, solved for you')
+    await click('Show me Right profile')
+    expect(dialog().textContent).toContain('Works in the right profile')
     expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })
 
@@ -742,6 +753,8 @@ describe('the ultrafast page', () => {
     await mount()
     expect(text()).toContain('ultrafast is paused.')
     expect(text()).toContain('Update your card to turn it back on.')
+    // The card message comes first on a paused plan, so no thanks here.
+    expect(text()).not.toContain('Thanks for helping')
 
     await click('Billing')
     expect(callsTo('openPlanPortal')[0]?.body).toEqual({ flow: 'billing' })
@@ -888,7 +901,7 @@ describe('buying ultrafast', () => {
     await click('Next', dialog())
     expect(dialog().textContent).toContain('Skills run in seconds')
     await click('Next', dialog())
-    expect(dialog().textContent).toContain('Robot checks, solved for you')
+    expect(dialog().textContent).toContain('Works in the right profile')
 
     await click('Start using ultrafast', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
@@ -1483,6 +1496,9 @@ describe('cancelling ultrafast', () => {
     await click('Cancel ultrafast')
     expect(dialog().textContent).toContain(
       'You keep ultrafast until Nov 27, 2026. After that, neo goes back to Free and you aren’t charged again.',
+    )
+    expect(dialog().textContent).toContain(
+      'Thanks for helping with long-term development of BrowserOS core features.',
     )
   }
 

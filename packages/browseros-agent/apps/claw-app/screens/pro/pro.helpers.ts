@@ -12,7 +12,7 @@ import type {
   PlanPricing,
 } from '@browseros/claw-api'
 import { ApiResponseError } from '@browseros/claw-api-client'
-import { Gauge, type LucideIcon, ShieldCheck, Zap } from 'lucide-react'
+import { Gauge, type LucideIcon, UserRoundCheck, Zap } from 'lucide-react'
 
 export interface UltrafastStep {
   icon: LucideIcon
@@ -37,12 +37,20 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
     line: 'neo writes them from tasks you repeat.',
   },
   {
-    icon: ShieldCheck,
-    name: 'Robot checks',
-    title: 'Robot checks, solved for you',
-    line: 'Sign-ins and codes still come to you.',
+    icon: UserRoundCheck,
+    name: 'Right profile',
+    title: 'Works in the right profile',
+    line: 'Your agent uses the profile you’re signed in to, like Work or Personal.',
   },
 ]
+
+/** What a plan pays for, as approved: one line on the plan picker, before buying. */
+export const BACKING_LINE =
+  'Your plan also helps with long-term development of BrowserOS core features.'
+
+/** The same, as thanks, once someone pays or cancels. */
+export const BACKING_THANKS =
+  'Thanks for helping with long-term development of BrowserOS core features.'
 
 /** Shown when the plan or its prices can't be read right now. */
 export const PLAN_UNCHECKED =

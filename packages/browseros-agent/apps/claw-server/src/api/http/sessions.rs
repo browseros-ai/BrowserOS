@@ -8,6 +8,7 @@ use crate::{
     clock::now_epoch_ms,
     db::{
         audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+        profile_marks::{ProfileMark, task_mark},
         pursue_runs::{PursueOutcome, PursueRun, PursueStepKind, pursue_run},
         ultrafast_ledger::UltrafastRecord,
         ultrafast_runs::{UltrafastRunStats, ultrafast_run_stats},
@@ -32,8 +33,9 @@ use axum::{
 use claw_api::models::{
     CancelSessionResponse, Dispatch, PlanSavings, PlanSavingsMeter, PlanSavingsPeriod,
     PlanSavingsPeriods, PlanSavingsSite, ResolveHelpRequest, ResolveHelpResponse,
-    SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun, SessionPursueStep,
-    SessionStatus, SessionSummary, SessionTokenUsage, SessionUltrafastRun, SkillDraftStatus,
+    SessionBrowserProfile, SessionBrowserTab, SessionDetail, SessionList, SessionPursueRun,
+    SessionPursueStep, SessionStatus, SessionStopReason, SessionSummary, SessionTokenUsage,
+    SessionUltrafastRun, SkillDraftStatus,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -182,8 +184,10 @@ pub(super) async fn get(
     let skill_name = saved_skill(&state, &session_id)
         .await
         .map_err(|source| internal(&request_id, source))?;
-    let live = state.sessions.lookup(&SessionId::new(session_id)).await;
-    let mut detail = contract_detail(task, live.as_ref()).await;
+    let session_id = SessionId::new(session_id);
+    let binding = state.targets.get(&session_id).await;
+    let live = state.sessions.lookup(&session_id).await;
+    let mut detail = contract_detail(task, live.as_ref(), binding).await;
     detail.session.skill_name = skill_name;
     Ok(Json(detail))
 }
@@ -505,7 +509,13 @@ async fn live_sessions(state: &AppState) -> HashMap<String, Arc<Session>> {
         .collect()
 }
 
-async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> SessionDetail {
+/// `binding` is the task's saved browser profile, if one was chosen; the task page names it.
+async fn contract_detail(
+    task: TaskDetail,
+    live: Option<&Arc<Session>>,
+    binding: Option<browseros_core::target::TargetBinding>,
+) -> SessionDetail {
+    let profile_mark = task_mark(&task.dispatches);
     let screenshots = task
         .screenshot_dispatch_ids
         .into_iter()
@@ -523,6 +533,16 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
     let mut summary = contract_summary(task.summary, live).await;
     summary.ultrafast = ultrafast;
     summary.pursue = pursue;
+    summary.browser_profile = binding
+        .filter(|binding| binding.intent.directory != browseros_core::DEFAULT_PROFILE_DIRECTORY)
+        .map(|binding| Box::new(SessionBrowserProfile::new(binding.intent.name)));
+    match profile_mark {
+        Some(ProfileMark::Stopped) => {
+            summary.stop_reason = Some(SessionStopReason::ProfileNeedsUltrafast);
+        }
+        Some(ProfileMark::Refused) => summary.profile_locked = Some(true),
+        None => {}
+    }
     SessionDetail::new(summary, dispatches)
 }
 

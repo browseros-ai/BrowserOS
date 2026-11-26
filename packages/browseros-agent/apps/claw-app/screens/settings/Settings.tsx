@@ -21,6 +21,7 @@ import {
 import { useNotificationPermission } from '@/modules/attention/attention.hooks'
 import { showTestNotification } from '@/modules/attention/attention-alerts'
 import { toastApiError } from '@/modules/toast/toast'
+import { DeveloperSettings } from './DeveloperSettings'
 import { HelpSettings } from './HelpSettings'
 import { PlanLinkRow } from './PlanLinkRow'
 import { PrivacySettings } from './PrivacySettings'
@@ -43,6 +44,7 @@ export function Settings() {
       <StorageSettings />
       <PrivacySettings />
       <HelpSettings />
+      <DeveloperSettings />
     </Page>
   )
 }

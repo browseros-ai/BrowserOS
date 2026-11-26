@@ -289,8 +289,10 @@ impl RunService {
             task_id,
             host_data,
             access,
+            withheld,
             trace,
         } = meta;
+        let view = view.withholding(withheld);
         let telemetry = self.start_telemetry(handle.id(), task_id.as_ref(), trace.as_ref());
         let (run, guard) = RunCtx::start(
             &self.dispatcher,

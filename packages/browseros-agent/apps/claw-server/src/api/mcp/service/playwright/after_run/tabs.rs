@@ -258,6 +258,8 @@ async fn census(state: &AppState) -> Result<Vec<CensusTab>, ()> {
                 .unwrap_or_default(),
             task: None,
             host_data: Value::Null,
+            // The host's own census of tabs, not an agent's script.
+            withheld: browseros_core::WithheldFeatures::none(),
         })
         .await
         .map_err(|_| ())?;

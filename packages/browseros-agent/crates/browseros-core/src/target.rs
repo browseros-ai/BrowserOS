@@ -129,6 +129,9 @@ pub struct BrowserView {
     default_window: Arc<tokio::sync::Mutex<Option<WindowId>>>,
     /// Hosted viewport modes; `None` keeps every page's geometry as it is.
     viewports: Option<Arc<crate::viewport::Viewports>>,
+    /// Features the host withholds for this call (a plan limit). Every gate reads them through
+    /// [`Self::native`], so tools, run discovery and raw CDP refuse them alike.
+    withheld: crate::WithheldFeatures,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,7 +274,35 @@ impl BrowserView {
         binding: Option<TargetBinding>,
         unbound_default_window: Option<WindowId>,
     ) -> Self {
-        Self::capture_with(session, binding, unbound_default_window, true).await
+        Self::capture_with(
+            session,
+            binding,
+            unbound_default_window,
+            true,
+            crate::WithheldFeatures::none(),
+        )
+        .await
+    }
+    /// [`Self::capture`] or [`Self::capture_for_management`] for a host that withholds native
+    /// features this call. With profile targeting withheld, an unbound call still runs in the
+    /// original Default profile (the browser decides that, not the user), while a task bound to
+    /// another profile fails admission with [`TargetError::ProfileWithheld`] and sends nothing:
+    /// acting in a different signed-in account is worse than stopping.
+    pub async fn capture_withholding(
+        session: Arc<BrowserSession>,
+        binding: Option<TargetBinding>,
+        unbound_default_window: Option<WindowId>,
+        manages_target: bool,
+        withheld: crate::WithheldFeatures,
+    ) -> Self {
+        Self::capture_with(
+            session,
+            binding,
+            unbound_default_window,
+            !manages_target,
+            withheld,
+        )
+        .await
     }
     /// Admission for profile management (discovery and selection). Same precedence as
     /// [`Self::capture`], but an unloaded Default is captured as it is instead of being loaded:
@@ -281,19 +312,48 @@ impl BrowserView {
         binding: Option<TargetBinding>,
         unbound_default_window: Option<WindowId>,
     ) -> Self {
-        Self::capture_with(session, binding, unbound_default_window, false).await
+        Self::capture_with(
+            session,
+            binding,
+            unbound_default_window,
+            false,
+            crate::WithheldFeatures::none(),
+        )
+        .await
     }
     async fn capture_with(
         session: Arc<BrowserSession>,
         binding: Option<TargetBinding>,
         unbound_default_window: Option<WindowId>,
         load_default: bool,
+        withheld: crate::WithheldFeatures,
     ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
+        view.withheld = withheld;
+        if withheld.contains(NativeFeature::ProfileTargeting)
+            && view
+                .session
+                .native()
+                .implements(NativeFeature::ProfileTargeting)
+            && let Some(binding) = binding
+                .as_ref()
+                .filter(|binding| binding.intent.directory != crate::DEFAULT_PROFILE_DIRECTORY)
+        {
+            view.capture = Err(TargetError::ProfileWithheld {
+                name: binding.intent.name.clone(),
+            });
+            view.source = Some(TargetSource::Explicit);
+            view.binding = Some(binding.clone());
+            return view;
+        }
         // Older natives cannot honor regular-profile routing (they ignore the context params),
         // so they keep the unbound path, send no getProfiles, and only disclose an explicit
         // binding saved on a newer browser. A capable browser retries it on a later capture.
-        if !view.supports(NativeFeature::ProfileTargeting) {
+        if !view
+            .session
+            .native()
+            .implements(NativeFeature::ProfileTargeting)
+        {
             view.unapplied = binding;
             return view;
         }
@@ -361,7 +421,16 @@ impl BrowserView {
             source: None,
             capture: Ok(None),
             unbound_default_window,
+            withheld: crate::WithheldFeatures::none(),
         }
+    }
+    /// Withholds `withheld` from this view's calls on top of what the browser lacks: discovery,
+    /// typed calls and raw CDP all refuse them. For views that are not captured per task (a
+    /// script engine's own view); captured views take it through `capture_withholding`.
+    #[must_use]
+    pub fn withholding(mut self, withheld: crate::WithheldFeatures) -> Self {
+        self.withheld = withheld;
+        self
     }
     #[must_use]
     pub fn with_pointer(mut self, pointer: Pointer) -> Self {
@@ -481,16 +550,18 @@ impl BrowserView {
     pub fn target_source(&self) -> Option<TargetSource> {
         self.source
     }
+    /// The browser's capabilities as this call sees them: what it implements, less what the
+    /// host withholds.
     #[must_use]
     pub fn native(&self) -> NativeCapabilities {
-        self.session.native()
+        self.session.native().withholding(self.withheld)
     }
     #[must_use]
     pub fn supports(&self, feature: NativeFeature) -> bool {
-        self.session.native().supports(feature)
+        self.native().supports(feature)
     }
     pub fn require(&self, feature: NativeFeature) -> Result<(), CoreError> {
-        self.session.native().require(feature)
+        self.native().require(feature)
     }
 
     /// Derive before spawning creation follow-up work, then carry this same view through every

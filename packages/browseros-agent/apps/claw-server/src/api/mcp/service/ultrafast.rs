@@ -195,7 +195,9 @@ impl ClawMcpService {
             .await
             .map_err(|error| error.to_string())?;
         let view = match &browser_session {
-            Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
+            Some(browser) => {
+                Some(super::capture_view(&self.state, browser.clone(), binding, false).await)
+            }
             None => None,
         }
         .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()));

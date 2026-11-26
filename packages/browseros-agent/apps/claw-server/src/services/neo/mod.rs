@@ -150,6 +150,8 @@ pub struct RunCall {
     pub args: JsonObject,
     pub task: Option<TaskKey>,
     pub host_data: Value,
+    /// Browser features this computer's plan keeps from the script; the engine refuses them.
+    pub withheld: browseros_core::WithheldFeatures,
 }
 
 /// The agent-visible reply, separated from the engine's run metadata.
@@ -502,6 +504,7 @@ mod tests {
                 args: serde_json::from_value(serde_json::json!({"code": "return 1"}))?,
                 task: None,
                 host_data: serde_json::Value::Null,
+                withheld: browseros_core::WithheldFeatures::none(),
             })
             .await;
         let Err(error) = result else {

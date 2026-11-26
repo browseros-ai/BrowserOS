@@ -64,10 +64,7 @@ impl Wire {
     }
 
     pub(super) async fn run(&self, call: RunCall) -> Result<RunOutcome, EngineUnavailable> {
-        let mut host = json!({ "hostData": call.host_data });
-        if let Some(task) = call.task {
-            host["taskId"] = json!(task.as_str());
-        }
+        let host = run_meta(&call);
         // Deliberately omit requestId. The SDK then cancels at once when this
         // stream closes, rather than retaining an orphan for a possible retry.
         let result = self
@@ -249,11 +246,50 @@ fn decode_run(value: Value) -> Result<RunOutcome, EngineUnavailable> {
     })
 }
 
+/// The run's `_meta`: the host's data and task, and any features the plan withholds, which the
+/// engine refuses in the script (raw CDP included) as it would on a browser without them.
+fn run_meta(call: &RunCall) -> Value {
+    let mut host = json!({ "hostData": call.host_data });
+    if let Some(task) = &call.task {
+        host["taskId"] = json!(task.as_str());
+    }
+    if !call.withheld.is_empty() {
+        host["withheld"] = call
+            .withheld
+            .features()
+            .map(|feature| feature.key())
+            .collect();
+    }
+    host
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Events, RUN_META, decode_run};
+    use super::{Events, RUN_META, decode_run, run_meta};
     use crate::services::neo::{Effects, RunStatus};
     use serde_json::json;
+
+    /// A Free computer's runs carry the plan's limit to the engine, which refuses raw profile
+    /// commands in the script; an ultrafast computer's runs carry none.
+    #[test]
+    fn run_meta_names_what_the_plan_withholds() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::services::neo::RunCall;
+        use browseros_core::{NativeFeature, WithheldFeatures};
+        let call = |withheld| RunCall {
+            args: serde_json::Map::new(),
+            task: None,
+            host_data: json!({"session": "s"}),
+            withheld,
+        };
+        let free = run_meta(&call(
+            WithheldFeatures::none().with(NativeFeature::ProfileTargeting),
+        ));
+        assert_eq!(free["withheld"], json!(["profileTargeting"]));
+        assert_eq!(free["hostData"], json!({"session": "s"}));
+        let ultrafast = run_meta(&call(WithheldFeatures::none()));
+        assert!(ultrafast.get("withheld").is_none(), "{ultrafast}");
+        Ok(())
+    }
 
     #[test]
     fn fragmented_sse_ignores_notifications_and_other_requests()

@@ -89,6 +89,9 @@ pub struct ToolCall {
     /// hooks, including calls that fail or are cancelled before they can return
     /// runtime audit hints.
     pub sensitive_input: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when a primitive inside this script was refused because the plan withholds choosing
+    /// a browser profile, so the task page explains the task stayed in Default.
+    pub profile_refused: Arc<std::sync::atomic::AtomicBool>,
     /// Original snapshots and deep dispatch guards, captured before detached grouping.
     /// A reusable PageId must never let a later callback adopt its replacement tab.
     pub(crate) created_page_snapshots:
@@ -142,6 +145,7 @@ impl ToolCall {
         Self {
             // Conservatively classify secret-bearing source before target admission
             // or execution. The bridge also marks dynamic calls.
+            profile_refused: Arc::default(),
             sensitive_input: Arc::new(std::sync::atomic::AtomicBool::new(
                 browseros_mcp::tools::sensitive::is_sensitive_tool(tool_name)
                     || tool_name == "run"
@@ -1473,6 +1477,92 @@ mod tests {
                     .any(|tab| tab["tabId"] == page.tab_id.0)
             );
         }
+        Ok(())
+    }
+
+    /// Choosing a browser profile comes with ultrafast. When the plan no longer has it, a task
+    /// bound to another profile stops on its next call instead of running in Default, its
+    /// profile tools are refused, and the binding stays for when ultrafast comes back.
+    #[tokio::test]
+    async fn a_task_bound_to_a_profile_stops_when_the_plan_drops_profile_choice()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::{
+            service::capture_view,
+            test_support::{ProfileConnection, tool_call},
+        };
+        let transport = ProfileConnection::new();
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"list"})).await?;
+        call.state.ultrafast.set(true);
+        let binding = call
+            .state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("eng", 1, 1).intent,
+            )
+            .await?;
+        call.browser_session = Some(browser.clone());
+        call.view =
+            Some(capture_view(&call.state, browser.clone(), Some(binding.clone()), false).await);
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+
+        // The plan ends: the next call stops, says why, and sends no profile CDP.
+        call.state.ultrafast.set(false);
+        let profiles_sent = || {
+            transport
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter(|(method, _)| method == "Browser.getProfiles")
+                .count()
+        };
+        let before = profiles_sent();
+        call.view =
+            Some(capture_view(&call.state, browser.clone(), Some(binding.clone()), false).await);
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(outcome.result.is_error);
+        let text = dispatch_error_text(&outcome.result).unwrap_or_default();
+        assert!(
+            text.contains("plan_feature_unavailable: choosing a browser profile is part of ultrafast, which is off on this computer. This task was set to the eng profile, so it stopped instead of switching accounts"),
+            "{text}"
+        );
+        assert_eq!(profiles_sent(), before);
+
+        // Management is refused too, so the agent cannot pick another profile on Free.
+        call.tool_index = call
+            .catalog
+            .iter()
+            .position(|tool| tool.name == "browser_profiles")
+            .ok_or_else(|| anyhow::anyhow!("browser_profiles missing"))?;
+        call.raw_args = json!({"action":"list"});
+        call.view =
+            Some(capture_view(&call.state, browser.clone(), Some(binding.clone()), true).await);
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(outcome.result.is_error);
+        assert!(
+            dispatch_error_text(&outcome.result)
+                .is_some_and(|text| text.contains("plan_feature_unavailable")),
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        assert_eq!(
+            call.state.targets.get(&call.session_id).await,
+            Some(binding)
+        );
         Ok(())
     }
 

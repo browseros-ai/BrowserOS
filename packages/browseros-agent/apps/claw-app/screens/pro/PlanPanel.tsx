@@ -24,7 +24,7 @@ import {
   trialDaysLeft,
 } from '@/modules/plan/trial.helpers'
 import { toastApiError, toastSuccess } from '@/modules/toast/toast'
-import { formatDate, PLAN_UNCHECKED } from './pro.helpers'
+import { BACKING_THANKS, formatDate, PLAN_UNCHECKED } from './pro.helpers'
 import type { ProPortal } from './pro.hooks'
 
 interface PlanPanelProps {
@@ -145,6 +145,7 @@ export function PlanPanel({
         below={
           <DaysBar left={daysLeft} total={Math.max(trialLength, daysLeft)} />
         }
+        thanks
       >
         {billing}
         <Button
@@ -219,6 +220,7 @@ export function PlanPanel({
     <PlanRow
       stale={plan.stale}
       lead="You’re on ultrafast"
+      thanks
       rest={
         plan.periodEnd === null
           ? undefined
@@ -239,6 +241,7 @@ function PlanRow({
   lead,
   rest,
   below,
+  thanks = false,
   stale,
   children,
 }: {
@@ -249,6 +252,8 @@ function PlanRow({
   rest?: string
   /** Shown under the line, such as the free trial's days. */
   below?: ReactNode
+  /** Thanks them for backing BrowserOS: only on a plan in good standing. */
+  thanks?: boolean
   stale: boolean
   children: ReactNode
 }) {
@@ -281,6 +286,9 @@ function PlanRow({
         </span>
       </div>
       {below}
+      {thanks ? (
+        <p className="text-[13.5px] text-ink-3">{BACKING_THANKS}</p>
+      ) : null}
       {stale ? (
         <p role="status" className="text-[13.5px] text-ink-3">
           {PLAN_UNCHECKED}

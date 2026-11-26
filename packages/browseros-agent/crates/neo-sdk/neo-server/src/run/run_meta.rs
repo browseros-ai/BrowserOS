@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use browseros_core::{NativeFeature, WithheldFeatures};
 use neo_telemetry::TraceContext;
 use neo_trace::{IdError, RequestId, RunAccess, TaskId};
 use serde::{Deserialize, Deserializer};
@@ -26,6 +27,9 @@ pub(crate) struct RunMeta {
     pub(crate) host_data: Option<HostData>,
     /// The host's restriction on this run's operations, independent of task reach.
     pub(crate) access: Option<RunAccess>,
+    /// Browser features the host withholds from this run though the browser has them (a plan
+    /// limit): scripts meet them refused, raw CDP included, as on a browser without them.
+    pub(crate) withheld: WithheldFeatures,
     /// The caller's W3C trace context, which the run's `neo.run` span joins: the request's
     /// `traceparent` / `tracestate` HTTP headers when their `traceparent` is valid, else this
     /// `_meta`'s pair when its is, else `None`, a trace of the run's own. Never a refusal: a
@@ -51,6 +55,8 @@ struct WireMeta {
     host_data: Option<Value>,
     #[serde(default, deserialize_with = "present_access")]
     access: Option<RunAccess>,
+    #[serde(default)]
+    withheld: Option<Vec<String>>,
     /// W3C trace context for a host that cannot set HTTP headers; the headers win.
     #[serde(default, deserialize_with = "trace_text")]
     traceparent: Option<String>,
@@ -108,6 +114,7 @@ impl RunMeta {
             .map(|text| TaskId::parse(&text).map_err(|error| host_id("taskId", &error)))
             .transpose()?;
         let host_data = wire.host_data.map(HostData::new).transpose()?;
+        let withheld = withheld(wire.withheld.as_deref().unwrap_or_default())?;
         let meta_pair = wire
             .traceparent
             .as_deref()
@@ -117,6 +124,7 @@ impl RunMeta {
             task_id,
             host_data,
             access: wire.access,
+            withheld,
             trace: TraceContext::resolve(header, meta_pair),
         })
     }
@@ -139,6 +147,22 @@ impl HostData {
     pub(crate) fn into_value(self) -> Value {
         self.0
     }
+}
+
+/// Reads `withheld` by feature name; a name Neo does not know is the host's error, so a misspelt
+/// restriction never runs unrestricted.
+fn withheld(names: &[String]) -> Result<WithheldFeatures, OperationError> {
+    names
+        .iter()
+        .try_fold(WithheldFeatures::none(), |withheld, name| {
+            NativeFeature::from_key(name)
+                .map(|feature| withheld.with(feature))
+                .ok_or_else(|| {
+                    invalid(format_args!(
+                        "{RUN_META_KEY}.withheld: unknown feature {name}"
+                    ))
+                })
+        })
 }
 
 fn host_id(field: &str, error: &IdError) -> OperationError {
@@ -176,6 +200,23 @@ mod tests {
                 Ok(error.message().to_owned())
             }
         }
+    }
+
+    #[test]
+    fn withheld_names_browser_features_and_refuses_unknown_ones() -> Result<(), Box<dyn Error>> {
+        use browseros_core::{NativeFeature, WithheldFeatures};
+        assert_eq!(
+            RunMeta::parse(None, None)?.withheld,
+            WithheldFeatures::none()
+        );
+        assert_eq!(
+            RunMeta::parse(Some(&json!({ "withheld": ["profileTargeting"] })), None)?.withheld,
+            WithheldFeatures::none().with(NativeFeature::ProfileTargeting)
+        );
+        assert!(
+            refused(&json!({ "withheld": ["profiles"] }))?.contains("unknown feature profiles")
+        );
+        Ok(())
     }
 
     #[test]

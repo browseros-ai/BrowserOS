@@ -2,6 +2,7 @@ pub mod audit_log;
 pub mod entities;
 pub mod feedback_invite;
 mod migration;
+pub(crate) mod profile_marks;
 pub mod pursue_runs;
 pub mod recording_index;
 pub mod run_error_budget;

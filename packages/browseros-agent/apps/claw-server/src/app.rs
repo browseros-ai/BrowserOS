@@ -401,6 +401,21 @@ impl AppState {
         self.ultrafast.is_on() && !self.config.mode.is_hosted()
     }
 
+    /// Native features the plan keeps from agents on this computer. Choosing a browser profile
+    /// comes with ultrafast for regular users, so without it every task stays in the original
+    /// Default profile; hosted servers keep profile choice whatever the plan. Read per call, so
+    /// a plan change applies from the next call, and connected agents hear about it through the
+    /// same tool-list change that ultrafast sends.
+    #[must_use]
+    pub fn withheld_features(&self) -> browseros_core::WithheldFeatures {
+        if self.config.mode.is_hosted() || self.ultrafast.is_on() {
+            browseros_core::WithheldFeatures::none()
+        } else {
+            browseros_core::WithheldFeatures::none()
+                .with(browseros_core::NativeFeature::ProfileTargeting)
+        }
+    }
+
     /// Follows the plan: ultrafast is on while it includes it. When that changes, SKILL.md files
     /// and the guide installed in connected agents follow, and those agents hear about it through
     /// their tool list. Returns whether it changed.

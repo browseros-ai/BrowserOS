@@ -181,11 +181,19 @@ struct HttpPeer {
 }
 
 impl HttpPeer {
+    /// A desktop computer on ultrafast: choosing a browser profile comes with it.
     async fn start() -> anyhow::Result<Self> {
-        Self::start_configured(|_| {}).await
+        Self::start_with(|_| {}, true).await
     }
 
     async fn start_configured(configure: impl FnOnce(&mut Config)) -> anyhow::Result<Self> {
+        Self::start_with(configure, false).await
+    }
+
+    async fn start_with(
+        configure: impl FnOnce(&mut Config),
+        ultrafast: bool,
+    ) -> anyhow::Result<Self> {
         let dir = tempfile::tempdir()?;
         let config = Arc::new(Config {
             server_port: 9200,
@@ -211,6 +219,7 @@ impl HttpPeer {
         let mut config = config;
         configure(Arc::make_mut(&mut config));
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+        state.ultrafast.set(ultrafast);
         let native = NativeProfiles::new();
         state
             .browser

@@ -26,7 +26,7 @@ import {
 
 type UpgradeSurface = 'skills' | 'skill_page'
 
-const SEEN_PREFIX = 'skillUpgradeSeen:v1'
+export const SEEN_PREFIX = 'skillUpgradeSeen:v1'
 
 /** Keeps the moment to once per app load when browser storage is unavailable. */
 const seenThisLoad = new Set<string>()

@@ -24,9 +24,9 @@ import { trialOfferDays } from '@/modules/plan/trial.helpers'
 import { formatPrice, proPrices } from '@/screens/pro/pro.helpers'
 import { PromoCard } from './PromoCard'
 
-const DISMISS_KEY = 'proBannerDismissed:v1'
+export const DISMISS_KEY = 'proBannerDismissed:v1'
 // Its own key, so people who hid the old bar still see the free trial once.
-const TRIAL_DISMISS_KEY = 'ultrafastTrialBarDismissed:v1'
+export const TRIAL_DISMISS_KEY = 'ultrafastTrialBarDismissed:v1'
 
 function readDismissed(key: string): boolean {
   try {

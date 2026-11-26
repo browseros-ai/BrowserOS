@@ -91,6 +91,12 @@ pub enum CoreError {
         required: BrowserOsVersion,
         reported: Option<BrowserOsVersion>,
     },
+    /// The browser implements the feature, but the host withholds it (the plan lacks it).
+    #[error(
+        "plan_feature_unavailable: {}. The operation was not sent to the browser.",
+        feature.withheld_reason()
+    )]
+    FeatureWithheld { feature: NativeFeature },
     #[error(
         "The person took over this page and is using it. Stop and check with the user before you act on it again."
     )]
@@ -156,6 +162,13 @@ pub enum TargetError {
     NotBound,
     #[error("target_change_in_run: rebind between calls")]
     ChangeInRun,
+    /// The task is bound to a profile, but the host withholds profile choice (the plan lacks
+    /// it). The call stops rather than run in another signed-in account; the binding is kept.
+    #[error(
+        "plan_feature_unavailable: {}. This task was set to the {name} profile, so it stopped instead of switching accounts.",
+        crate::NativeFeature::ProfileTargeting.withheld_reason()
+    )]
+    ProfileWithheld { name: String },
 }
 
 impl CoreError {
