@@ -83,6 +83,12 @@ enum Patch {
     States,
     /// P11: `display: contents` elements get a node.
     DisplayContents,
+    /// P12: every document's `<html>` element has a node, below the fold or inert included.
+    HtmlRetention,
+    /// P13: an SVG element's first direct `<title>` child arrives as `svg_title`.
+    SvgTitle,
+    /// P14: non-inline `::before` and `::after` boxes raise `break_before`.
+    GeneratedBoxBreaks,
 }
 
 impl Patch {
@@ -93,6 +99,7 @@ impl Patch {
             Self::Retention | Self::TreeFacts | Self::BrowserOsUi => 3,
             Self::Names | Self::States => 4,
             Self::DisplayContents => 5,
+            Self::HtmlRetention | Self::SvgTitle | Self::GeneratedBoxBreaks => 6,
         }
     }
 }
@@ -1471,6 +1478,274 @@ async fn p11_display_contents_elements_get_a_node_without_geometry() -> TestResu
             assert!(
                 tab.element_node(capture, "#empty-list").await?.is_none(),
                 "an empty display: contents element has no node"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+// P12: every document's `<html>` element has a node, even below the fold or when inert.
+
+const HTML_BELOW_FOLD_MAIN: &str = r#"<!doctype html><html><head><title>P12 main</title></head>
+<body style="margin:0">
+<div style="height:3000px">Tall spacer</div>
+<iframe id="below-fold" width="200" height="100"></iframe>
+<script>
+const frame = document.getElementById('below-fold');
+frame.addEventListener('load', () => { window.__fixtureReady = true; });
+frame.src = '/html-subframe.html';
+</script></body></html>"#;
+
+const HTML_BELOW_FOLD_SUBFRAME: &str = r"<!doctype html><html><head><title>P12 below-fold iframe</title></head>
+<body><p>Subframe body</p></body></html>";
+
+const HTML_MODAL_PAGE: &str = r#"<!doctype html><html><head><title>P12 modal</title></head>
+<body><p>Behind modal</p><dialog id="dialog"><p>Modal</p></dialog>
+<script>
+document.getElementById('dialog').showModal();
+window.__fixtureReady = true;
+</script></body></html>"#;
+
+/// The single direct `<html>` child of a document root node, paired with its DOM node id.
+struct HtmlChild<'n> {
+    node: &'n ContentNode,
+    dom_node_id: i32,
+}
+
+/// Returns the single direct `<html>` child of a document root node and its DOM node id.
+fn require_single_html_child<'n>(
+    doc_root: &'n ContentNode,
+    label: &str,
+) -> Result<HtmlChild<'n>, Box<dyn Error>> {
+    let html_children: Vec<&ContentNode> = doc_root
+        .children_nodes
+        .iter()
+        .filter(|child| facts_of(child).tag.as_deref() == Some("html"))
+        .collect();
+    assert_eq!(
+        html_children.len(),
+        1,
+        "{label}: document root must have exactly one direct html child, found {}",
+        html_children.len()
+    );
+    let node = html_children.first().copied().ok_or("checked above")?;
+    let dom_node_id =
+        dom_node_id(node).ok_or_else(|| format!("{label}: html node has no dom_node_id"))?;
+    Ok(HtmlChild { node, dom_node_id })
+}
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p12_every_document_has_an_html_node() -> TestResult {
+    let pages = HashMap::from([
+        (
+            "/html-below-fold.html".to_owned(),
+            Page::html(HTML_BELOW_FOLD_MAIN),
+        ),
+        (
+            "/html-subframe.html".to_owned(),
+            Page::html(HTML_BELOW_FOLD_SUBFRAME),
+        ),
+        ("/html-modal.html".to_owned(), Page::html(HTML_MODAL_PAGE)),
+    ]);
+    check_patch(
+        Patch::HtmlRetention,
+        pages,
+        "/html-below-fold.html",
+        async |tab, capture| {
+            let main_root = capture
+                .apc
+                .root_node
+                .as_ref()
+                .ok_or("below-fold capture has no root_node")?;
+            let main_html = require_single_html_child(main_root, "below-fold main")?;
+            assert_eq!(
+                tab.call_on_node(
+                    main_html.dom_node_id,
+                    "function() { return this === document.documentElement && document.title === 'P12 main'; }",
+                )
+                .await?,
+                json!(true),
+                "main html node id {} must resolve to main document.documentElement",
+                main_html.dom_node_id
+            );
+
+            let iframe_roots: Vec<&ContentNode> = capture
+                .nodes()
+                .into_iter()
+                .filter(|node| {
+                    matches!(
+                        node.content_attributes
+                            .as_ref()
+                            .and_then(|attrs| attrs.content_data.as_ref()),
+                        Some(ContentData::Iframe(_))
+                    )
+                })
+                .flat_map(|iframe| iframe.children_nodes.iter())
+                .collect();
+            assert_eq!(
+                iframe_roots.len(),
+                1,
+                "below-fold page must carry one subframe root, found {}",
+                iframe_roots.len()
+            );
+            let sub_root = iframe_roots
+                .first()
+                .copied()
+                .ok_or("checked above")?;
+            let sub_html = require_single_html_child(sub_root, "below-fold subframe")?;
+            assert_eq!(
+                tab.call_on_node(
+                    sub_html.dom_node_id,
+                    "function() { return this === this.ownerDocument.documentElement && this.ownerDocument.title === 'P12 below-fold iframe'; }",
+                )
+                .await?,
+                json!(true),
+                "subframe html node id {} must resolve to the subframe's documentElement",
+                sub_html.dom_node_id
+            );
+
+            let modal_url = tab
+                .eval("new URL('/html-modal.html', location.href).href")
+                .await?;
+            let modal_url = modal_url
+                .as_str()
+                .ok_or("modal URL did not evaluate to a string")?;
+            tab.navigate(modal_url.to_owned()).await?;
+            let modal_capture = tab.capture().await?;
+            let modal_root = modal_capture
+                .apc
+                .root_node
+                .as_ref()
+                .ok_or("modal capture has no root_node")?;
+            let modal_html = require_single_html_child(modal_root, "modal main")?;
+            assert_eq!(
+                facts_of(modal_html.node).inert,
+                Some(true),
+                "modal dialog must make the page's html element inert"
+            );
+            assert_eq!(
+                tab.call_on_node(
+                    modal_html.dom_node_id,
+                    "function() { return this === document.documentElement && document.title === 'P12 modal'; }",
+                )
+                .await?,
+                json!(true),
+                "modal html node id {} must resolve to modal document.documentElement",
+                modal_html.dom_node_id
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+// P13: an inline SVG's first direct `<title>` child arrives as `svg_title` (field 34).
+
+const SVG_TITLE_PAGE: &str = r#"<!doctype html><html><head><title>Contract svg title</title></head><body>
+<button><svg id="s1" width="24" height="24"><title>Close</title><path d="M0 0 L24 24"/></svg></button>
+<svg id="s2" width="24" height="24"><title></title><rect width="24" height="24"/></svg>
+<svg id="s3" width="24" height="24" title="attr"><rect width="24" height="24"/></svg>
+<svg id="s4" width="24" height="24"><title>Outer</title><title>Second</title><g id="g1"><title>Group</title><rect width="24" height="24"/></g><g id="g2"><rect width="24" height="24"/></g></svg>
+<script>window.__fixtureReady = true;</script></body></html>"#;
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p13_svg_titles_arrive_as_a_fact() -> TestResult {
+    let pages = HashMap::from([("/svg-title.html".to_owned(), Page::html(SVG_TITLE_PAGE))]);
+    check_patch(
+        Patch::SvgTitle,
+        pages,
+        "/svg-title.html",
+        async |tab, capture| {
+            assert_eq!(
+                tab.facts_at(capture, "#s1").await?.svg_title.as_deref(),
+                Some("Close"),
+                "svg inside a button carries its direct <title> child as svg_title"
+            );
+            assert_eq!(
+                tab.facts_at(capture, "#s2").await?.svg_title.as_deref(),
+                Some(""),
+                "an empty <title> child keeps explicit presence so Rust does not fall back to title"
+            );
+            let s3 = tab.facts_at(capture, "#s3").await?;
+            assert_eq!(
+                (s3.svg_title.as_deref(), s3.title.as_deref()),
+                (None, Some("attr")),
+                "an svg with only a title attribute leaves svg_title unset"
+            );
+            assert_eq!(
+                tab.facts_at(capture, "#g1").await?.svg_title.as_deref(),
+                Some("Group"),
+                "an inner svg element node carries its own direct <title> child"
+            );
+            assert_eq!(
+                tab.facts_at(capture, "#s4").await?.svg_title.as_deref(),
+                Some("Outer"),
+                "only the first direct <title> child supplies svg_title"
+            );
+            assert_eq!(
+                tab.facts_at(capture, "#g2").await?.svg_title,
+                None,
+                "an inner svg element without its own <title> child does not inherit its parent's"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+// P14: non-inline `::before` and `::after` boxes raise `break_before`.
+
+const GENERATED_BREAKS_PAGE: &str = r#"<!doctype html><html><head><title>Contract generated breaks</title><style>
+#inline-after::after { content: "inline-more"; }
+#block-after::after { content: "block-more"; display: block; }
+#block-before::before { content: "block-pre"; display: block; }
+#inline-before::before { content: "inline-pre"; }
+</style></head><body>
+<button id="inline-after">inline-base</button>
+<button id="block-after">after-base</button>
+<button id="block-before">before-base</button>
+<button id="inline-before">inline-core</button>
+<script>window.__fixtureReady = true;</script></body></html>"#;
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p14_generated_boxes_break_text() -> TestResult {
+    let pages = HashMap::from([(
+        "/generated-breaks.html".to_owned(),
+        Page::html(GENERATED_BREAKS_PAGE),
+    )]);
+    check_patch(
+        Patch::GeneratedBoxBreaks,
+        pages,
+        "/generated-breaks.html",
+        async |_, capture| {
+            assert_eq!(
+                facts_of(capture.text_node("inline-base")?).break_before,
+                None,
+                "first button text has no preceding break"
+            );
+            assert_eq!(
+                facts_of(capture.text_node("inline-more")?).break_before,
+                None,
+                "inline ::after raises no break"
+            );
+            assert_eq!(
+                facts_of(capture.text_node("block-more")?).break_before,
+                Some(true),
+                "display: block ::after raises break_before on its generated text"
+            );
+            assert_eq!(
+                facts_of(capture.text_node("before-base")?).break_before,
+                Some(true),
+                "display: block ::before raises break_before on the following button text"
+            );
+            assert_eq!(
+                facts_of(capture.text_node("inline-core")?).break_before,
+                None,
+                "inline ::before raises no break on the following button text"
             );
             Ok(())
         },

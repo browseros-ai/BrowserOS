@@ -96,6 +96,7 @@ fn every_node_fact_wire() -> Wire {
         .varint(31, 1)
         .varint(32, 1)
         .varint(33, 1)
+        .string(34, "Close")
 }
 
 fn every_node_fact() -> BrowserOsContentAttributes {
@@ -146,6 +147,7 @@ fn every_node_fact() -> BrowserOsContentAttributes {
         closed_root_seed: Some(true),
         ua_shadow: Some(true),
         display_contents: Some(true),
+        svg_title: Some("Close".to_owned()),
     }
 }
 

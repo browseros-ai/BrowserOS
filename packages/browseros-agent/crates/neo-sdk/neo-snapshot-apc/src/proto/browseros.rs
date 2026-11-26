@@ -4,10 +4,10 @@
 //!
 //! Chromium sends facts here (tags, raw attributes, relation targets, states, redaction lengths)
 //! and Rust computes roles, names and hidden-ness from them, so snapshot and `getByRole` read the
-//! same facts. The field numbers are final (`apc-contract-design` draft 2, sections 4.1 to 4.4);
-//! each Chromium PR only starts writing fields that are already declared, and raises
-//! [`BrowserOsPageContentData::contract_version`] by one. A browser at version N leaves later
-//! fields unset, and a stock browser sends none of these messages.
+//! same facts. The field numbers are final (`apc-contract-design` draft 3, sections 4.1 to 4.4
+//! and 11.3); each Chromium PR raises [`BrowserOsPageContentData::contract_version`] by one. A
+//! browser at version N leaves later fields unset, and a stock browser sends none of these
+//! messages.
 //!
 //! The source of truth is BrowserOS-internal's patch to
 //! `components/optimization_guide/proto/features/common_quality_data.proto`. Field declaration
@@ -76,8 +76,9 @@ pub struct BrowserOsContentAttributes {
     /// Version 3.
     #[prost(bool, optional, tag = "8")]
     pub aria_hidden: Option<bool>,
-    /// A block boundary or `<br>` lies between this node and the previous text in document
-    /// order, so names and snapshot text put a space here. Version 3.
+    /// A block boundary, `<br>`, or (from version 6) a non-inline `::before` or `::after` box lies
+    /// between this node and the previous text in document order, so names and snapshot text put a
+    /// space here. Version 3.
     #[prost(bool, optional, tag = "9")]
     pub break_before: Option<bool>,
     /// DOM text of a text node whose rendered (`text-transform`ed) text differs from it.
@@ -160,6 +161,10 @@ pub struct BrowserOsContentAttributes {
     /// A node made for a `display: contents` element; it has no geometry. Version 5.
     #[prost(bool, optional, tag = "33")]
     pub display_contents: Option<bool>,
+    /// Text content of the first direct `<title>` child of `<svg>` or an SVG element inside one,
+    /// empty kept so the name pass does not fall back to the `title` attribute. Version 6.
+    #[prost(string, optional, tag = "34")]
+    pub svg_title: Option<String>,
 }
 
 /// Target of an ARIA relation (proto `BrowserOSRef`).
