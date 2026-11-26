@@ -26,6 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use browseros_core::FrameId;
 use neo_snapshot::{AriaChild, AriaNode, Call, Snapshot};
@@ -36,7 +37,7 @@ use neo_snapshot_apc::tree::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::time::Instant;
+use tokio::time::{self, Instant};
 
 use super::aria_snapshot::{PartialFrame, SnapshotResult, SnapshotTop};
 use crate::action::{self, OnTopNote};
@@ -1020,11 +1021,15 @@ fn wrap_with_layer(children: &mut Vec<AriaChild>, layer: &str, texts: &[String])
 }
 
 /// [`open_closed_roots`](crate::tree::open_closed_roots) for each child document of the page whose
-/// capture marked a seed, in its
-/// frame's world, installed now if this instance has none there yet: the page's snapshot opened
-/// every frame's closed roots it read, and a locator into a frame (`frameLocator(..).getByLabel`)
-/// finds what is inside them only once its world holds them. A seed of a document the frame has
-/// since replaced resolves to nothing there, or to a node of no closed root, and opens nothing.
+/// capture marked a seed, in its frame's world, installed now if this instance has none there yet:
+/// the page's snapshot opened every frame's closed roots it read, and a locator into a frame
+/// (`frameLocator(..).getByLabel`) finds what is inside them only once its world holds them. A
+/// seed of a document the frame has since replaced resolves to nothing there, or to a node of no
+/// closed root, and opens nothing.
+///
+/// Best effort after the tree is captured, so each frame's part is bounded by
+/// [`CHILD_ROOTS_BUDGET`]: a child that stops answering keeps its roots closed to the page's
+/// engines, and the snapshot is returned as captured rather than failing on the op's timeout.
 async fn open_child_closed_roots(scope: &OpScope<'_>, page: &OpPage<'_>, tree: &SnapshotTree) {
     let main_frame = page.main_endpoint().frame;
     for document in tree.documents() {
@@ -1043,19 +1048,33 @@ async fn open_child_closed_roots(scope: &OpScope<'_>, page: &OpPage<'_>, tree: &
         if !seeded || frame == main_frame {
             continue;
         }
-        if let Some(world) = ensure_frame_world(scope, page, &frame).await {
-            open_closed_roots(
-                scope,
-                page,
-                &world,
-                tree,
-                document.id(),
-                Some(MAX_CLOSED_ROOT_SEEDS),
-            )
-            .await;
+        let opened = time::timeout(CHILD_ROOTS_BUDGET, async {
+            if let Some(world) = ensure_frame_world(scope, page, &frame).await {
+                open_closed_roots(
+                    scope,
+                    page,
+                    &world,
+                    tree,
+                    document.id(),
+                    Some(MAX_CLOSED_ROOT_SEEDS),
+                )
+                .await;
+            }
+        })
+        .await;
+        if opened.is_err() {
+            scope.log(
+                "  closed shadow roots: a child frame did not answer in time, left closed"
+                    .to_owned(),
+            );
         }
     }
 }
+
+/// How long one child frame has to install its world and open its closed roots after a snapshot's
+/// capture: the browser's own deadline for a subframe's content (contract P6), as a world's proof
+/// has.
+const CHILD_ROOTS_BUDGET: Duration = Duration::from_secs(2);
 
 /// The most closed-root seeds one document hands its page engines per snapshot, as the clickable
 /// scan sent: each is a `DOM.resolveNode`, so a page built from thousands of closed components does
