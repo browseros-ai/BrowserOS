@@ -23,6 +23,7 @@
 //!           Unknown                   ─▶ InvalidInput (zero captures)
 //! ```
 
+use std::fmt;
 use std::num::NonZeroU32;
 
 use browseros_cdp::CdpError;
@@ -42,7 +43,6 @@ use crate::world::{DocLookup, FrameSeq, IsolatedWorld, Pin, Place};
 use crate::{ErrorCode, PlaywrightError};
 
 /// An APC [`NodeKey`] hydrated into a proven isolated world and pinned element handle.
-#[derive(Debug)]
 pub(crate) struct HydratedNode {
     /// Proven isolated world hosting [`Self::key`]'s document.
     pub(crate) world: IsolatedWorld,
@@ -58,6 +58,21 @@ pub(crate) struct HydratedNode {
     pub(crate) key: NodeKey,
     /// Permanent document sequence number bound in `DocTable`.
     pub(crate) seq: FrameSeq,
+}
+
+/// Structure only: the preview is page text and attributes, so only its length prints.
+impl fmt::Debug for HydratedNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HydratedNode")
+            .field("world", &self.world)
+            .field("path", &self.path)
+            .field("pin", &self.pin)
+            .field("preview_len", &self.preview.len())
+            .field("object_id", &self.object_id)
+            .field("key", &self.key)
+            .field("seq", &self.seq)
+            .finish()
+    }
 }
 
 /// Result of hydrating one [`NodeKey`] against a captured [`SnapshotTree`] (design section 6.2).
@@ -279,36 +294,16 @@ impl<'a> Hydrate<'a> {
             let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
             return Err(detached_ref(self.scope, jump));
         }
-        match pin_in_world(self.scope, self.page, &world, key.node).await? {
-            PinAttempt::Pinned {
-                pin,
-                preview,
-                object_id,
-            } => {
-                let Some(_seq) = self.page.frames().bind_proven_world(&key.doc, &world) else {
-                    let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
-                    return Err(detached_ref(self.scope, jump));
-                };
-                match self.page.frames().lookup_doc(&key.doc) {
-                    DocLookup::Bound { seq, parents, .. } => Ok(HydratedNode {
-                        world,
-                        path: FramePath::from_parents(parents),
-                        pin,
-                        preview,
-                        object_id,
-                        key,
-                        seq,
-                    }),
-                    DocLookup::Reserved { .. } | DocLookup::Retired | DocLookup::Unknown => {
-                        Err(detached_ref(self.scope, jump))
-                    }
-                }
-            }
-            PinAttempt::WorldGone => {
-                self.tab_tree.invalidate_world(self.page.frames(), &world);
+        match self.pin_and_bind(world, &key).await? {
+            HydrateOutcome::Hydrated(node) => Ok(*node),
+            // `DocTable` refused the binding: the document retired while it was proved.
+            HydrateOutcome::StaleDocument => {
+                let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
                 Err(detached_ref(self.scope, jump))
             }
-            PinAttempt::NodeDetached => Err(detached_ref(self.scope, jump)),
+            HydrateOutcome::WorldStale | HydrateOutcome::NodeDetached => {
+                Err(detached_ref(self.scope, jump))
+            }
         }
     }
 
