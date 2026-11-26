@@ -4,12 +4,6 @@
 # throwaway profile, mock keychain). It runs on this machine only: each site's captures and
 # oracle are real pages' text, so they go to a private folder outside every git work tree and
 # never to the remote pool, which uploads packages/browseros-agent. README.md beside it says more.
-#
-#   run.sh [--sites FILE] [--out DIR] [--browser PATH]
-#
-#   --sites FILE    the URL list (default: sites.txt beside this script)
-#   --out DIR       the private folder (default: $HOME/.neo-zero-conflict/<UTC timestamp>)
-#   --browser PATH  the browser binary, as NEO_E2E_BROWSER (default: the launcher's own default)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -17,7 +11,13 @@ agent="$(cd "$here/../../../.." && pwd -P)"
 test_name=site_lines_reach_their_elements
 
 usage() {
-  sed -n '8,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+run.sh [--sites FILE] [--out DIR] [--browser PATH]
+
+  --sites FILE    the URL list (default: sites.txt beside this script)
+  --out DIR       the private folder (default: $HOME/.neo-zero-conflict/<UTC timestamp>)
+  --browser PATH  the browser binary, as NEO_E2E_BROWSER (default: the launcher's own default)
+EOF
 }
 
 die() {
@@ -105,6 +105,6 @@ fi
 
 cd "$agent"
 # --release: every printed line runs its own query over its whole document, so the check grows
-# with lines times nodes. Optimized, Wikipedia's 10,000 lines check in 6 s instead of 22 s.
+# with lines times nodes.
 exec node tools/test-browser.mjs -- cargo test --release -p neo-snapshot-apc \
   --test zero_conflict_live -- --ignored --exact "$test_name" --nocapture

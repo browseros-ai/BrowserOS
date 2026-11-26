@@ -77,20 +77,15 @@ impl fmt::Display for Format {
 /// `false` state never prints, so it has no variant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mixable {
-    /// `[checked]`, `[pressed]`.
     True,
-    /// `[checked=mixed]`, `[pressed=mixed]`.
     Mixed,
 }
 
 /// `[invalid]`, `[invalid=grammar]` or `[invalid=spelling]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InvalidMark {
-    /// `[invalid]`.
     True,
-    /// `[invalid=grammar]`.
     Grammar,
-    /// `[invalid=spelling]`.
     Spelling,
 }
 
@@ -102,21 +97,15 @@ pub(crate) enum InvalidMark {
     reason = "each bool is one independent printed mark, as the printer's own node has them"
 )]
 pub(crate) struct Marks {
-    /// `[checked]` or `[checked=mixed]`.
     pub(crate) checked: Option<Mixable>,
-    /// `[disabled]`.
     pub(crate) disabled: bool,
-    /// `[expanded]`.
     pub(crate) expanded: bool,
     /// `[active]`: focus, which `getByRole` has no option for.
     pub(crate) active: bool,
     /// `[invalid…]`, which `getByRole` has no option for.
     pub(crate) invalid: Option<InvalidMark>,
-    /// `[level=N]`.
     pub(crate) level: Option<u32>,
-    /// `[pressed]` or `[pressed=mixed]`.
     pub(crate) pressed: Option<Mixable>,
-    /// `[selected]`.
     pub(crate) selected: bool,
     /// `[aria-hidden]`: ai mode prints a box-visible element that is hidden for ARIA.
     pub(crate) aria_hidden: bool,
@@ -129,13 +118,10 @@ pub(crate) struct PrintedLine {
     pub(crate) number: usize,
     /// The line as printed, for reports.
     pub(crate) text: String,
-    /// The key's role.
     pub(crate) role: String,
     /// The key's name, decoded from its JSON literal; `None` when the key prints none.
     pub(crate) name: Option<String>,
-    /// The key's state marks.
     pub(crate) marks: Marks,
-    /// The key's `[ref=…]`.
     pub(crate) r#ref: String,
     /// The `iframe` lines the line is indented under, outermost first: each one's ref, or `None`
     /// for an iframe printed without one (it takes no pointer events, so it gets no ref, while
@@ -160,10 +146,7 @@ enum Opens {
     /// An `iframe` line opens its child document, named by the iframe's ref if it printed one.
     Frame(Option<String>),
     /// Any other line: whether it prints `[aria-hidden]`, which hides everything under it.
-    Element {
-        /// The line prints `[aria-hidden]`.
-        aria_hidden: bool,
-    },
+    Element { aria_hidden: bool },
 }
 
 /// Splits `text` into lines and reads back every line whose key carries a ref. Text, `/url`,
@@ -184,7 +167,6 @@ pub(crate) fn parse_lines(text: &str) -> Result<Vec<PrintedLine>, Box<dyn Error>
             }
             continue;
         };
-        // A list item at or left of an open item's indentation closes it.
         while open.last().is_some_and(|parent| parent.indent >= indent) {
             open.pop();
         }
@@ -352,23 +334,15 @@ fn read_key_text(key: &str) -> Result<Key, String> {
 /// out; `checked` and `pressed` take `true`, `false` or `'mixed'`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ByRoleOptions {
-    /// `checked`.
     pub(crate) checked: Option<Tristate>,
-    /// `disabled`.
     pub(crate) disabled: Option<bool>,
-    /// `selected`.
     pub(crate) selected: Option<bool>,
-    /// `expanded`.
     pub(crate) expanded: Option<bool>,
-    /// `includeHidden`.
     pub(crate) include_hidden: Option<bool>,
-    /// `level`.
     pub(crate) level: Option<u32>,
     /// `name`, a string; a regular expression is not what a printed line gives.
     pub(crate) name: Option<String>,
-    /// `exact`.
     pub(crate) exact: Option<bool>,
-    /// `pressed`.
     pub(crate) pressed: Option<Tristate>,
 }
 
@@ -377,7 +351,6 @@ pub(crate) struct ByRoleOptions {
 pub(crate) struct ByRole {
     /// The role, as the line prints it.
     pub(crate) role: String,
-    /// The options.
     pub(crate) options: ByRoleOptions,
 }
 
@@ -418,7 +391,6 @@ impl ByRole {
         let mut selector = format!("internal:role={}", self.role);
         let mut prop = |name: &str, value: Option<String>| {
             if let Some(value) = value {
-                // Writing to a `String` cannot fail.
                 let _ = write!(selector, "[{name}={value}]");
             }
         };
@@ -511,7 +483,7 @@ fn escape_for_attribute_selector(value: &str, exact: bool) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Label {
     /// `generic` for an element with no ARIA role: ai mode prints `getAriaRole(element) ??
-    /// 'generic'` (`ariaSnapshot.ts:249-250`), while the role engine matches `generic` only as
+    /// 'generic'` (`ariaSnapshot.ts:252-253`), while the role engine matches `generic` only as
     /// an element's role (an explicit `role="generic"`), which such a line is checked as.
     Generic,
     /// `iframe` for a frame element, which has no role of that name.
@@ -522,10 +494,7 @@ pub(crate) enum Label {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
     /// The query's matches include the line's element.
-    Reached {
-        /// How many elements the query matched.
-        matches: usize,
-    },
+    Reached { matches: usize },
     /// The line's role is the snapshot's label for an element no role query can name, and the
     /// tree confirms the element is that kind. Neither reached nor a miss.
     Label(Label),
@@ -547,7 +516,6 @@ pub(crate) enum Verdict {
 }
 
 impl Verdict {
-    /// Whether the line's element was reached.
     pub(crate) fn reached(&self) -> bool {
         matches!(self, Self::Reached { .. })
     }
@@ -577,16 +545,13 @@ impl fmt::Display for Verdict {
 /// One printed line, its query, and what the query came to.
 #[derive(Clone, Debug)]
 pub(crate) struct LineCheck {
-    /// The text the line was printed in.
     pub(crate) format: Format,
-    /// The line as read back.
     pub(crate) line: PrintedLine,
     /// The query's selector, `internal:role=…`.
     pub(crate) query: String,
     /// The element the line's ref resolves to, which the live test hydrates; `None` when the
     /// ref did not resolve.
     pub(crate) target: Option<NodeKey>,
-    /// What the query came to.
     pub(crate) verdict: Verdict,
 }
 
@@ -603,7 +568,6 @@ pub(crate) struct PageCheck {
 }
 
 impl PageCheck {
-    /// How many lines were reached.
     pub(crate) fn reached(&self) -> usize {
         self.lines
             .iter()
@@ -611,7 +575,6 @@ impl PageCheck {
             .count()
     }
 
-    /// How many lines were checked.
     pub(crate) fn total(&self) -> usize {
         self.lines.len()
     }
@@ -708,7 +671,6 @@ struct Query<'a> {
     resolver: &'a TableRefs<'a>,
 }
 
-/// What one planned query selected.
 struct Selected {
     /// Every match, a synthesized option without a DOM node included.
     count: usize,

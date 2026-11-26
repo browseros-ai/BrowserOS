@@ -64,7 +64,6 @@ impl SplitMix64 {
         low + self.below(high.saturating_sub(low) + 1)
     }
 
-    /// True `percent` times in a hundred.
     fn chance(&mut self, percent: u64) -> bool {
         self.next() % 100 < percent
     }
@@ -103,7 +102,6 @@ enum Text {
     Duplicate,
 }
 
-/// One entry of the name palette.
 struct Entry {
     label: &'static str,
     text: Text,
@@ -283,19 +281,15 @@ fn long_name(units: usize, emoji: bool) -> String {
 /// Where an element's name comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Source {
-    /// `aria-label`.
     AriaLabel,
     /// Its text: one to three text nodes, some inside inline elements, some after a break.
     Content,
-    /// `title`.
     Title,
-    /// `alt`.
     Alt,
     /// A `<label for>` before it.
     LabelFor,
     /// `aria-labelledby` naming one or two spans elsewhere in the document.
     Labelledby,
-    /// `placeholder`.
     Placeholder,
     /// A button input's `value`.
     Value,
@@ -320,7 +314,6 @@ enum StateKind {
     Disabled,
     /// `aria-disabled="true"`.
     AriaDisabled,
-    /// `aria-invalid`.
     Invalid,
     /// The document's focused element.
     Focus,
@@ -657,19 +650,15 @@ const KINDS: &[Kind] = &[
 /// How an element is shown, each copying a CSS or attribute effect Chromium reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Visibility {
-    /// An ordinary box.
     Shown,
     /// `aria-hidden="true"` on a visible box: ai mode prints it with `[aria-hidden]`.
     AriaHidden,
     /// `visibility: hidden` on the element, its text in a `visibility: visible` span.
     CssHidden,
-    /// A zero-size box.
     ZeroSize,
-    /// `pointer-events: none`.
     PointerEventsNone,
     /// `inert`: no clickability or focus left.
     Inert,
-    /// Far below the viewport.
     BelowFold,
 }
 
@@ -707,12 +696,9 @@ pub(crate) struct PageFacts {
     depths: HashMap<DocToken, usize>,
 }
 
-/// One generated page.
 #[derive(Debug)]
 pub(crate) struct GeneratedPage {
-    /// The page as Chromium would send it.
     pub(crate) apc: AnnotatedPageContent,
-    /// What the generator put into it.
     pub(crate) facts: PageFacts,
 }
 
@@ -724,7 +710,7 @@ pub(crate) fn generate(seed: u64) -> Result<GeneratedPage, String> {
         docs: 0,
         facts: PageFacts::default(),
     };
-    let main = generator.document(0, 0, false)?;
+    let main = generator.document(0, 0, Inherit::default())?;
     let mut builder = ApcBuilder::new(&main.token)
         .contract_version(6)
         .viewport(0, 0, 800, VIEWPORT_HEIGHT)
@@ -773,7 +759,6 @@ struct Named {
 }
 
 impl Doc {
-    /// What every element of the document inherits from outside it.
     /// What every node built at this point inherits: the document's inertness, and the
     /// `aria-hidden` of a wrapper being filled.
     fn inherit(&self) -> Inherit {
@@ -797,13 +782,13 @@ impl Doc {
         id
     }
 
-    /// A box of `height` at the next position, zero-size when `zero`.
-    fn slot(&mut self, height: i32, zero: bool) -> Rect {
+    /// A box of `height` at the next position.
+    fn slot(&mut self, height: i32) -> Rect {
         let rect = Rect {
             x: 8,
             y: self.y,
-            width: if zero { 0 } else { 160 },
-            height: if zero { 0 } else { height },
+            width: 160,
+            height,
         };
         self.y += height + 4;
         rect
@@ -851,19 +836,34 @@ struct Drawn {
     entries: Vec<usize>,
 }
 
+/// A state drawn for one element.
+#[derive(Clone, Copy)]
+struct DrawnState {
+    state: StateKind,
+    /// The number `apply_state` picks the state's value with.
+    pick: usize,
+}
+
+/// An option name drawn for a select or a list box.
+struct DrawnOption {
+    drawn: Drawn,
+    selected: bool,
+}
+
 /// Everything drawn for one element before its nodes are built.
 struct Plan {
     kind: usize,
     source: Source,
     drawn: Drawn,
     visibility: Visibility,
-    /// Each state with the number that picks its value.
-    states: Vec<(StateKind, usize)>,
+    states: Vec<DrawnState>,
 }
 
 impl Generator {
-    /// A document at frame `depth` whose boxes start at `top`, all of it inert when `inert`.
-    fn document(&mut self, depth: usize, top: i32, inert: bool) -> Result<BuiltDoc, String> {
+    /// A document at frame `depth` whose boxes start at `top`. `owner` is what its `<iframe>`
+    /// inherits, nothing for the main document; only inertness reaches into the frame's
+    /// document, as CSS and ARIA inheritance stop at the frame.
+    fn document(&mut self, depth: usize, top: i32, owner: Inherit) -> Result<BuiltDoc, String> {
         let index = self.docs;
         self.docs += 1;
         let token = format!("doc-{:016x}-{index}", self.seed);
@@ -878,7 +878,7 @@ impl Generator {
             named: Vec::new(),
             focus: None,
             referents: Vec::new(),
-            inert,
+            inert: owner.inert,
             hidden_wrapper: false,
         };
         let root_id = doc.id();
@@ -896,8 +896,8 @@ impl Generator {
             made += group;
             body_nodes.extend(self.group(&mut doc, group)?);
         }
-        // One kind in 28 is an iframe, too rare to nest four deep; this gives each document an
-        // even chance of a child.
+        // Drawn as one row of `KINDS`, an iframe is too rare to nest `MAX_FRAME_DEPTH` deep; this
+        // gives each document an even chance of a child.
         if depth < MAX_FRAME_DEPTH && self.rng.chance(50) {
             let iframe = KINDS
                 .iter()
@@ -994,14 +994,14 @@ impl Generator {
             Visibility::BelowFold => doc.y += 1_600,
             Visibility::Shown | Visibility::CssHidden | Visibility::ZeroSize => {}
         }
-        if plan.states.iter().any(|&(state, _)| state == AriaDisabled) {
+        if plan.states.iter().any(|drawn| drawn.state == AriaDisabled) {
             inherit.aria_disabled = true;
         }
         let id = doc.id();
         let mut nodes = Vec::new();
         if plan.source == LabelFor {
             let label_id = doc.id();
-            let rect = doc.slot(16, false);
+            let rect = doc.slot(16);
             let content = self.content(doc, &plan.drawn.name, rect, doc.inherit());
             let label = mark(
                 at(NodeBuilder::element("label").dom_id(label_id), rect),
@@ -1009,11 +1009,18 @@ impl Generator {
             );
             nodes.push(label.label_for(id).children(content));
         }
-        let rect = doc.slot(20, plan.visibility == Visibility::ZeroSize);
+        let mut rect = doc.slot(20);
+        if plan.visibility == Visibility::ZeroSize {
+            rect = Rect {
+                width: 0,
+                height: 0,
+                ..rect
+            };
+        }
         let (mut node, rect) = self.base(doc, kind, &plan, rect, inherit)?;
         node = self.name_source(doc, node, plan.source, &plan.drawn.name);
-        for &(state, pick) in &plan.states {
-            node = apply_state(doc, node, kind, state, pick, id, inherit);
+        for drawn in &plan.states {
+            node = apply_state(doc, node, kind, drawn.state, drawn.pick, id, inherit);
         }
         node = mark(at(node.dom_id(id), rect), inherit);
         if plan.visibility == Visibility::CssHidden {
@@ -1111,18 +1118,24 @@ impl Generator {
 
     /// The states drawn for `kind`: each of its own a third of the time, and now and then one it
     /// does not take, as a page can write any ARIA attribute on any element.
-    fn states(&mut self, kind: &Kind) -> Vec<(StateKind, usize)> {
+    fn states(&mut self, kind: &Kind) -> Vec<DrawnState> {
         let mut states = Vec::new();
         for &state in kind.states {
             if self.rng.chance(35) {
-                states.push((state, self.rng.below(60)));
+                states.push(DrawnState {
+                    state,
+                    pick: self.rng.below(60),
+                });
             }
         }
         if self.rng.chance(10)
             && let Some(&stray) = self.rng.pick(&ALL_STATES)
             && !kind.states.contains(&stray)
         {
-            states.push((stray, self.rng.below(60)));
+            states.push(DrawnState {
+                state: stray,
+                pick: self.rng.below(60),
+            });
         }
         states
     }
@@ -1278,10 +1291,10 @@ impl Generator {
         let node = NodeBuilder::form_control(FormControlType::SelectOne).tag("select");
         let mut node = interactive(node, &[ClickabilityReason::ClickableControl], inherit);
         let mut selected = String::new();
-        for (drawn, is_selected) in &options {
-            node = node.select_option(select_option(&drawn.name, *is_selected));
-            if *is_selected {
-                selected.clone_from(&drawn.name);
+        for option in &options {
+            node = node.select_option(select_option(&option.drawn.name, option.selected));
+            if option.selected {
+                selected.clone_from(&option.drawn.name);
             }
         }
         let shadow_id = doc.id();
@@ -1301,17 +1314,17 @@ impl Generator {
         inherit: Inherit,
     ) -> Result<NodeBuilder, String> {
         let mut node = node;
-        for (drawn, is_selected) in self.options()? {
+        for DrawnOption { drawn, selected } in self.options()? {
             let mut option = match options {
                 Options::Native => {
-                    node = node.select_option(select_option(&drawn.name, is_selected));
+                    node = node.select_option(select_option(&drawn.name, selected));
                     NodeBuilder::element("option")
                 }
                 Options::Aria => NodeBuilder::container()
                     .role("option")
                     .aria_role(AxRole::ListBoxOption),
             };
-            if is_selected {
+            if selected {
                 option = option.selected(true);
             }
             node = node.child(self.option(doc, option, drawn, inherit));
@@ -1326,8 +1339,7 @@ impl Generator {
         rect: Rect,
         inherit: Inherit,
     ) -> Result<NodeBuilder, String> {
-        // Inertness reaches into the frame's document; CSS and ARIA inheritance do not.
-        let child = self.document(doc.depth + 1, rect.y, inherit.inert)?;
+        let child = self.document(doc.depth + 1, rect.y, inherit)?;
         let url = format!("https://frame-{}.zero-conflict.test/", child.token);
         let mut frame = FrameBuilder::new(&child.token)
             .frame_token(&child.frame_token)
@@ -1353,7 +1365,6 @@ impl Generator {
     ) -> NodeBuilder {
         match source {
             AriaLabel => node.aria_label(name),
-            // `title` is written only when it is not blank.
             Title if name.trim_matches(HTML_SPACE).is_empty() => node,
             Title => node.title(name),
             Alt => node.alt(name),
@@ -1383,7 +1394,7 @@ impl Generator {
         let mut refs = Vec::new();
         for piece in pieces {
             let id = doc.id();
-            let rect = doc.slot(16, false);
+            let rect = doc.slot(16);
             let content = self.content(doc, &piece, rect, doc.body_inherit());
             let span = mark(
                 at(NodeBuilder::container().dom_id(id), rect),
@@ -1446,12 +1457,15 @@ impl Generator {
     }
 
     /// Two to four option names, one of them selected.
-    fn options(&mut self) -> Result<Vec<(Drawn, bool)>, String> {
+    fn options(&mut self) -> Result<Vec<DrawnOption>, String> {
         let count = self.rng.between(2, 4);
         let selected = self.rng.below(count);
         let mut options = Vec::new();
         for index in 0..count {
-            options.push((self.draw_fragments()?, index == selected));
+            options.push(DrawnOption {
+                drawn: self.draw_fragments()?,
+                selected: index == selected,
+            });
         }
         Ok(options)
     }
@@ -1465,7 +1479,7 @@ impl Generator {
         inherit: Inherit,
     ) -> NodeBuilder {
         let id = doc.id();
-        let rect = doc.slot(16, false);
+        let rect = doc.slot(16);
         let content = self.content(doc, &drawn.name, rect, inherit);
         self.facts.elements.insert(
             NodeKey::new(doc.token.clone(), DomNodeId::new(id)),
@@ -1580,7 +1594,6 @@ impl Generator {
 /// HTML's ASCII whitespace, the set Blink trims a `title` with.
 const HTML_SPACE: &[char] = &[' ', '\t', '\n', '\u{c}', '\r'];
 
-/// `text` cut before its `at`-th character.
 fn split_at_char(text: &str, at: usize) -> Vec<String> {
     let cut = text
         .char_indices()
@@ -1793,8 +1806,7 @@ impl Default for Coverage {
 
 impl Coverage {
     /// Counts every printed ref line of `check` that the invariant checked against what `facts`
-    /// says the generator put there. A label line (`generic` with no role, `iframe`) is never
-    /// queried, so it proves no shape was exercised.
+    /// says the generator put there.
     pub(crate) fn count(&mut self, facts: &PageFacts, check: &PageCheck) {
         for line_check in &check.lines {
             if matches!(line_check.verdict, Verdict::Label(_)) {
@@ -1872,7 +1884,6 @@ impl Coverage {
         }
     }
 
-    /// Adds `other`'s counts to these.
     pub(crate) fn merge(&mut self, other: &Self) {
         for (count, more) in self.marks.iter_mut().zip(other.marks) {
             *count += more;

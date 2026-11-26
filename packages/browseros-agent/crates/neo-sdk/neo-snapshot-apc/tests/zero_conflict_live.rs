@@ -80,8 +80,8 @@ const SITE_UNBUSY_BOUND: Duration = Duration::from_mins(7);
 /// How long an idle renderer takes at most to answer a trivial script, after an oracle failure.
 const SITE_IDLE_PROBE: Duration = Duration::from_secs(2);
 
-/// How often the ready state is read while waiting.
-const SITE_READY_POLL: Duration = Duration::from_millis(250);
+/// How often a wait reads the page again: its ready state, or whether it answers a script.
+const SITE_POLL: Duration = Duration::from_millis(250);
 
 /// How many missing backendNodeIds a report lists per frame and role.
 const LISTED_MISSING: usize = 20;
@@ -230,12 +230,12 @@ struct Totals {
 }
 
 impl Totals {
-    /// Adds `measured`, its recall only when `recall` says it was measured against an oracle.
-    fn add(&mut self, measured: &Measured, recall: bool) {
+    /// Adds `measured`, its recall when it was measured against an oracle.
+    fn add(&mut self, measured: &Measured) {
         self.lines
             .merge(LineCounts::of(&measured.first.check.lines));
         self.hydration.merge(HydrationCounts::of(measured));
-        if recall && let Some(counts) = RecallCounts::of(measured) {
+        if let Some(counts) = RecallCounts::of(measured) {
             self.recall.merge(counts);
         }
         self.unstable_pages += usize::from(!measured.unstable.is_empty());
@@ -393,7 +393,7 @@ async fn edge_pack_lines_reach_their_elements_and_refs_hydrate() -> Result<(), B
             for gap in recall_gaps(fixture.name, &measured) {
                 report(&gap);
             }
-            totals.add(&measured, true);
+            totals.add(&measured);
         }
         let Totals {
             lines,
@@ -592,7 +592,7 @@ async fn open_site(client: &CdpClient, url: &str) -> Result<OpenedSite, Box<dyn 
             if state == "complete" || Instant::now() >= deadline {
                 break state;
             }
-            time::sleep(SITE_READY_POLL).await;
+            time::sleep(SITE_POLL).await;
         };
         time::sleep(SITE_SETTLE).await;
         Ok::<_, Box<dyn Error>>(OpenedSite {
@@ -711,9 +711,8 @@ fn oracle_note(oracle: &Result<Box<Oracle>, String>, error: &str) -> String {
 
 /// Waits, within [`SITE_UNBUSY_BOUND`], until the page answers a script again, stopping the
 /// oracle's engine first if it still runs. An oracle step that overran its bound stops only its
-/// own wait: the engine still runs in the renderer (minutes on a 120,000-element page in a debug
-/// build), and every later call to that renderer queues behind it, so the captures would fail
-/// for the oracle's sake rather than the page's.
+/// own wait: the engine still runs in the renderer, and every later call to that renderer queues
+/// behind it, so the captures would fail for the oracle's sake rather than the page's.
 async fn await_responsive(client: &CdpClient, session: &SessionId) -> Result<(), String> {
     let answers = |answered: &Result<Option<String>, Box<dyn Error>>| matches!(answered, Ok(Some(text)) if text == "ready");
     if let Ok(answered) =
@@ -742,7 +741,7 @@ async fn await_responsive(client: &CdpClient, session: &SessionId) -> Result<(),
                 answered.map_or_else(|error| error.to_string(), |_| "no answer".to_owned())
             ));
         }
-        time::sleep(SITE_READY_POLL).await;
+        time::sleep(SITE_POLL).await;
     }
 }
 
@@ -877,20 +876,18 @@ fn site_section(site: &Site, outcome: &SiteOutcome) -> String {
 
 /// One measured site's stdout row and the misses it lists: counts, line numbers, roles and
 /// verdict kinds, never a name or other page text.
-fn site_row(site: &Site, ready: &str, oracle_failed: bool, measured: &Measured) -> Vec<String> {
+fn site_row(site: &Site, ready: &str, measured: &Measured) -> Vec<String> {
     let counts = LineCounts::of(&measured.first.check.lines);
     let hydration = HydrationCounts::of(measured);
     let recall = match RecallCounts::of(measured) {
-        Some(recall) if !oracle_failed => {
-            format!(
-                "{} ({}/{}) | {}",
-                recall.recall(),
-                recall.found,
-                recall.page,
-                recall.extra
-            )
-        }
-        _ => "n/a (oracle failed) | n/a".to_owned(),
+        Some(recall) => format!(
+            "{} ({}/{}) | {}",
+            recall.recall(),
+            recall.found,
+            recall.page,
+            recall.extra
+        ),
+        None => "n/a (oracle failed) | n/a".to_owned(),
     };
     let mut rows = vec![format!(
         "{} | {} | {} | {} | {} | {} | {}/{} ({} failed) | {} | {recall}{}",
@@ -1065,14 +1062,12 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
                     not_measured.push(format!("{}: {reason}", site.id));
                 }
                 SiteOutcome::Measured {
-                    ready,
-                    oracle,
-                    measured,
+                    ready, measured, ..
                 } => {
-                    for row in site_row(site, ready, oracle.is_err(), measured) {
+                    for row in site_row(site, ready, measured) {
                         report(&row);
                     }
-                    totals.add(measured, oracle.is_ok());
+                    totals.add(measured);
                 }
             }
             report(&format!(

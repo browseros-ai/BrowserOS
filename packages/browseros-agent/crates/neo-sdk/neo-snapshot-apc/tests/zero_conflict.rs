@@ -35,10 +35,9 @@ use prelude_chunks::Prelude;
 use zero_conflict::{ByRole, ByRoleOptions, Format, LineCheck, PageCheck, Verdict};
 use zero_conflict_gen::{BASE_SEED, Coverage};
 
-/// The fixtures recorded today. A new recording raises the count; a lost one fails the gate.
+/// How many fixtures are recorded. A new recording raises the count; a lost one fails the gate.
 const MIN_FIXTURES: usize = 16;
 
-/// The generated pages of the default run.
 const DEFAULT_TREES: u64 = 10_000;
 
 /// How many misses a failure lists; the total is always given.
@@ -53,8 +52,9 @@ fn report(line: &str) {
     println!("{line}");
 }
 
-/// One miss and the page it was on.
 struct Miss {
+    /// The page's position in its corpus part, which orders the listing.
+    order: usize,
     page: String,
     check: LineCheck,
 }
@@ -96,8 +96,7 @@ struct Tally {
     pages: usize,
     neo: Counts,
     playwright: Counts,
-    /// Each miss with the position of its page in the part, which orders the listing.
-    misses: Vec<(usize, Miss)>,
+    misses: Vec<Miss>,
 }
 
 impl Tally {
@@ -112,12 +111,10 @@ impl Tally {
             counts.reached += usize::from(line.verdict.reached());
             counts.labels += usize::from(matches!(line.verdict, Verdict::Label(_)));
         }
-        self.misses.extend(check.misses().map(|line| {
-            let miss = Miss {
-                page: check.page.clone(),
-                check: line.clone(),
-            };
-            (order, miss)
+        self.misses.extend(check.misses().map(|line| Miss {
+            order,
+            page: check.page.clone(),
+            check: line.clone(),
         }));
     }
 
@@ -244,7 +241,7 @@ fn generated(seeds: &[u64]) -> Result<Outcome, Box<dyn Error>> {
         merged.coverage.merge(&share.coverage);
         merged.tally.merge(share.tally);
     }
-    merged.tally.misses.sort_by_key(|(order, _)| *order);
+    merged.tally.misses.sort_by_key(|miss| miss.order);
     Ok(merged)
 }
 
@@ -315,7 +312,6 @@ fn every_printed_ref_reaches_its_element_by_role() -> Result<(), Box<dyn Error>>
         .misses
         .iter()
         .chain(&outcome.tally.misses)
-        .map(|(_, miss)| miss)
         .collect();
     let mut message = String::new();
     if !gaps.is_empty() {

@@ -54,7 +54,6 @@ const HYDRATION_PROBE: &str = "function () {
 pub(crate) struct Capture {
     /// The protobuf bytes, which `decode_protobuf` reads back.
     pub(crate) pb: Vec<u8>,
-    /// Every printed line with a ref, its query and its verdict.
     pub(crate) check: PageCheck,
 }
 
@@ -146,7 +145,6 @@ pub(crate) enum Instability {
     Text(Format),
     /// The format's texts hold a different number of lines with a ref.
     Lines {
-        /// The text.
         format: Format,
         /// Lines with a ref in capture #1.
         first: usize,
@@ -156,13 +154,10 @@ pub(crate) enum Instability {
     /// A line with a ref came to another verdict; lines pair by their order in the format, so
     /// only when both captures print as many.
     Verdict {
-        /// The text.
         format: Format,
         /// The line's 1-based number in capture #1's text.
         line: usize,
-        /// Capture #1's verdict.
         first: Verdict,
-        /// Capture #2's verdict.
         second: Verdict,
     },
 }
@@ -216,7 +211,6 @@ fn instabilities(first: &PageCheck, second: &PageCheck) -> Vec<Instability> {
 pub(crate) struct RefHydration {
     /// The ref as printed, `e5` or `f2e5`.
     pub(crate) r#ref: String,
-    /// What hydrating it came to.
     pub(crate) outcome: Result<Hydrated, HydrationFailure>,
 }
 
@@ -300,7 +294,6 @@ struct Frames<'a> {
     worlds: HashMap<String, Result<World, HydrationFailure>>,
 }
 
-/// A frame's hydration world.
 #[derive(Clone)]
 struct World {
     session: SessionId,
@@ -498,7 +491,6 @@ impl Frames<'_> {
     }
 }
 
-/// Documents between `doc` and the main document.
 fn depth(tree: &SnapshotTree, doc: &TreeDoc) -> usize {
     let mut depth = 0;
     let mut parent = doc.parent_doc();

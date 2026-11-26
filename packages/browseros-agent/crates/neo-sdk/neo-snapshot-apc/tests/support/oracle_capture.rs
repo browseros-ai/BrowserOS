@@ -154,7 +154,6 @@ pub(crate) async fn browser_product(client: &CdpClient) -> Result<String, Box<dy
 pub(crate) struct FrameSite {
     /// The CDP frame id (the devtools frame token APC reports for the frame's document).
     pub(crate) id: String,
-    /// The parent frame's id; `None` for the main frame.
     pub(crate) parent: Option<String>,
     /// As recorded ([`oracle::recorded_url`]).
     pub(crate) url: String,
