@@ -65,9 +65,22 @@ function readerFor(request: ReadRequest, root: Node | undefined): Reader {
       return (world, element) => located(world, request, element, root)
     case 'checkable':
       return (world, element) => checkable(world, element)
+    case 'validityInvalid':
+      return (_world, element) => validityInvalid(element)
     case 'fileInput':
       return (world, element) => fileInput(world, element, read)
   }
+}
+
+/**
+ * Upstream's `getValidityInvalid` (roleUtils.ts at v1.64.1): whether the element fails its own
+ * constraint validation, which makes its error message apply whatever `aria-invalid` says. The
+ * APC tree carries no validity, so Rust asks the page for this one fact at the matcher.
+ */
+function validityInvalid(element: Element): boolean {
+  if (!('validity' in element)) return false
+  const validity = (element as { validity?: ValidityState }).validity
+  return validity?.valid === false
 }
 
 /**

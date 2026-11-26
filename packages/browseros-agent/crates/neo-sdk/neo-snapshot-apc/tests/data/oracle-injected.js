@@ -11535,7 +11535,7 @@ ${value.stack}`;
   var SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 55;
+  var PROTOCOL = 56;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -11570,9 +11570,17 @@ ${value.stack}`;
         return (world, element) => located(world, request, element, root);
       case "checkable":
         return (world, element) => checkable(world, element);
+      case "validityInvalid":
+        return (_world, element) => validityInvalid(element);
       case "fileInput":
         return (world, element) => fileInput(world, element, read);
     }
+  }
+  function validityInvalid(element) {
+    if (!("validity" in element))
+      return false;
+    const validity = element.validity;
+    return validity?.valid === false;
   }
   function fileInput(world, element, read) {
     const { injected } = world;

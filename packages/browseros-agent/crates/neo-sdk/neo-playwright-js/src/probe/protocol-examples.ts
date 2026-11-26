@@ -298,6 +298,13 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     },
     {
       op: 'read',
+      target: { pin: 3 },
+      strictness: 'strict',
+      frameVisible: true,
+      read: { kind: 'validityInvalid' },
+    },
+    {
+      op: 'read',
       target: 'root',
       strictness: 'strict',
       frameVisible: true,

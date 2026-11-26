@@ -675,6 +675,10 @@ pub(crate) enum Read {
     /// What `check` and `uncheck` read around their click: `{ checked, radio }` of the element,
     /// or of the control its label names.
     Checkable,
+    /// Whether the element fails its own constraint validation (`validity.valid === false`):
+    /// what upstream's error message reads beside `aria-invalid` (`getValidityInvalid`), and a
+    /// fact the tree does not carry.
+    ValidityInvalid,
     /// The `<input>` that `setInputFiles` sets, the element or the control its label names,
     /// after upstream's checks for `multiple` files or a `directory`: `{ pin, target,
     /// takesPaths }`, the input and the element named pinned, and whether the input is

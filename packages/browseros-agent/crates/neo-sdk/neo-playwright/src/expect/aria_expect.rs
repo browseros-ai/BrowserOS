@@ -21,6 +21,7 @@
 //! script passed (a matcher may compare a secret), so nothing here that holds one implements
 //! `Debug` (STYLE P4).
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 
@@ -257,25 +258,53 @@ impl Property {
         tree: &SnapshotTree,
         names: &'a NameCache<'_>,
         target: Option<NodeId>,
-    ) -> &'a str {
+        validity: Validity,
+    ) -> Cow<'a, str> {
         let Some(id) = target else {
-            return "";
+            return Cow::Borrowed("");
         };
         match self {
-            Self::Role => tree
-                .node(id)
-                .and_then(TreeNode::role)
-                .map_or("", |role| role.as_str()),
-            Self::AccessibleName => names.name(id, NameVisibility::VisibleOnly).text(),
-            Self::AccessibleDescription => {
-                names.description(id, NameVisibility::VisibleOnly).text()
+            Self::Role => Cow::Borrowed(
+                tree.node(id)
+                    .and_then(TreeNode::role)
+                    .map_or("", |role| role.as_str()),
+            ),
+            Self::AccessibleName => {
+                Cow::Borrowed(names.name(id, NameVisibility::VisibleOnly).text())
             }
-            Self::AccessibleErrorMessage => names.error_message(id),
+            Self::AccessibleDescription => {
+                Cow::Borrowed(names.description(id, NameVisibility::VisibleOnly).text())
+            }
+            Self::AccessibleErrorMessage => match validity {
+                Validity::Invalid => Cow::Owned(names.error_message_when_invalid(id)),
+                Validity::Valid | Validity::NotRead => Cow::Borrowed(names.error_message(id)),
+            },
         }
     }
 }
 
+/// What the page answered about the element's own constraint validation
+/// (`validity.valid === false`), the one fact a property matcher reads beside the tree: only
+/// `toHaveAccessibleErrorMessage` asks for it ([`PropertyMatcher::reads_validity`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Validity {
+    /// Not asked: the matcher does not read it.
+    NotRead,
+    /// The element passes its constraint validation, or takes none.
+    Valid,
+    /// The element fails its constraint validation: its error message applies whatever
+    /// `aria-invalid` says, as upstream's `getValidityInvalid` makes it.
+    Invalid,
+}
+
 impl PropertyMatcher {
+    /// Whether a poll needs the page's [`Validity`] of the element: the error message's, which
+    /// the capture does not carry.
+    #[must_use]
+    pub(crate) const fn reads_validity(&self) -> bool {
+        matches!(self.property, Property::AccessibleErrorMessage)
+    }
+
     /// One poll: the property of `target` (`None` when the tree has no node for the element)
     /// compared with the expected text. `names` is the attempt's one cache over `tree`, shared
     /// with its locator stages, so a name the locator already computed is not computed again.
@@ -285,11 +314,12 @@ impl PropertyMatcher {
         tree: &SnapshotTree,
         names: &NameCache<'_>,
         target: Option<NodeId>,
+        validity: Validity,
     ) -> AriaVerdict {
-        let received = self.property.read(tree, names, target);
+        let received = self.property.read(tree, names, target, validity);
         AriaVerdict {
-            matches: self.expected.matches(received),
-            received: Value::String(received.to_owned()),
+            matches: self.expected.matches(&received),
+            received: Value::String(received.into_owned()),
         }
     }
 }

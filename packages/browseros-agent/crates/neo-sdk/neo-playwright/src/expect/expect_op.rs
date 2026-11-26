@@ -8,7 +8,7 @@ use ts_rs::TS;
 
 use neo_snapshot_apc::tree::{AriaRoot, DocId, NameCache, NodeId, SnapshotTree, TreeDoc};
 
-use crate::expect::aria_expect::{AriaExpect, AriaExpectError, FailureSnapshot, Visibility};
+use crate::expect::aria_expect::{self, AriaExpect, AriaExpectError, FailureSnapshot, Visibility};
 use crate::expect::expectation::{
     Expectation, FailedOn, FailedPollSnapshot, MatcherArgs, Poll, Subject,
 };
@@ -17,12 +17,14 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
 use crate::page::OpPage;
-use crate::probe::{self, ExpectParams, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
+use crate::probe::{
+    self, ExpectParams, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
+};
 use crate::resolve::{self, Landed, Resolver};
-use crate::target::{PageRef, Target};
+use crate::target::{PageRef, Strictness, Target};
 use crate::tree::{AttemptStart, TreeAsk};
 use crate::wire::{self, Command, Describe, Nothing, OpWire, Route, Run, options};
-use crate::world::{IsolatedWorld, Place};
+use crate::world::{IsolatedWorld, Pin, Place};
 use crate::{ErrorCode, Playwright, PlaywrightError, locator_handler, snapshot};
 
 listed_enum! {
@@ -496,8 +498,13 @@ async fn tree_poll(
     let tree = found.captured.tree();
     let verdict = match aria {
         AriaExpect::Property(matcher) => {
+            let validity = if matcher.reads_validity() {
+                page_validity(scope, page, &world, pin).await?
+            } else {
+                aria_expect::Validity::NotRead
+            };
             let names = NameCache::new(tree);
-            matcher.check(tree, &names, found.node)
+            matcher.check(tree, &names, found.node, validity)
         }
         AriaExpect::Template(matcher) => {
             let Some(roots) = found.roots(scope, page, &world, pin).await? else {
@@ -576,6 +583,33 @@ async fn element_failure_snapshot(
         element.frame_visible,
         depth,
     )
+}
+
+/// Whether the pinned element fails its own constraint validation, read from the page in the
+/// world that pinned it: the one fact `toHaveAccessibleErrorMessage` reads beside the tree. A
+/// world gone since the pin reads as valid; the next poll pins again.
+async fn page_validity(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    pin: Pin,
+) -> Result<aria_expect::Validity, PlaywrightError> {
+    let request = ProbeRequest::Read {
+        target: ProbeTarget::Pin(pin),
+        strictness: Strictness::Strict,
+        frame_visible: true,
+        read: Read::ValidityInvalid,
+    };
+    match probe::call(scope, page, world, &request).await {
+        Ok(ProbeReply::Read { value, .. }) => Ok(if value.into_value() == Value::Bool(true) {
+            aria_expect::Validity::Invalid
+        } else {
+            aria_expect::Validity::Valid
+        }),
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(aria_expect::Validity::Valid),
+        Ok(other) => Err(resolve::refused(scope, other)),
+        Err(failure) => Err(resolve::failed(scope, failure)),
+    }
 }
 
 /// A failed poll's aria snapshot (`aria_expect::FailureSnapshot`): the element in default mode

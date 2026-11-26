@@ -57,6 +57,32 @@ it('tests that the text reads answer with what the element holds', () => {
   })
 })
 
+it('tests that validityInvalid answers whether the element fails its own constraint validation', () => {
+  const probe = booted()
+  // linkedom has no constraint validation, so the field's ValidityState is the page's own here.
+  const field = probe.document.getElementById('name')
+  Object.defineProperty(field, 'validity', {
+    value: { valid: false },
+    configurable: true,
+  })
+  expect(read(probe, '#name', { kind: 'validityInvalid' })).toEqual({
+    kind: 'read',
+    value: true,
+  })
+  Object.defineProperty(field, 'validity', {
+    value: { valid: true },
+    configurable: true,
+  })
+  expect(read(probe, '#name', { kind: 'validityInvalid' })).toEqual({
+    kind: 'read',
+    value: false,
+  })
+  expect(read(probe, 'h1', { kind: 'validityInvalid' })).toEqual({
+    kind: 'read',
+    value: false,
+  })
+})
+
 it("tests that innerText and inputValue throw upstream's messages as script errors", () => {
   const probe = booted()
   expect(read(probe, '#logo', { kind: 'innerText' })).toEqual({

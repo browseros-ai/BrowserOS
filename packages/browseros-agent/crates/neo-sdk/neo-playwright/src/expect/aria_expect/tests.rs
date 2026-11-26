@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use super::{
     AriaExpect, AriaExpectError, ExpectedText, ExpectedTextValue, FailureSnapshot, PropertyMatcher,
-    TemplateMatcher, Visibility,
+    TemplateMatcher, Validity, Visibility,
 };
 use crate::probe::ExpectParams;
 
@@ -113,8 +113,54 @@ fn polled(
     target: Option<NodeId>,
 ) -> TestResult<(bool, Value)> {
     let names = tree.name_cache();
-    let verdict = property(expression, expected)?.check(tree, &names, target);
+    let verdict = property(expression, expected)?.check(tree, &names, target, Validity::NotRead);
     Ok((verdict.matches, verdict.received))
+}
+
+/// Only the error message needs the page's validity; an element that fails its own constraint
+/// validation shows its error message even under `aria-invalid="false"`, as upstream's does.
+#[test]
+fn tests_that_the_error_message_reads_the_pages_validity_beside_aria_invalid() -> TestResult {
+    let tree = build(
+        NodeBuilder::root()
+            .child(
+                NodeBuilder::form_control(FormControlType::InputText)
+                    .tag("input")
+                    .dom_id(INPUT)
+                    .aria_invalid("false")
+                    .errormessage(vec![BrowserOsRef {
+                        dom_node_id: Some(ERROR_SPAN),
+                        unrendered_text: None,
+                    }]),
+            )
+            .child(
+                NodeBuilder::element("div")
+                    .dom_id(ERROR_SPAN)
+                    .child(NodeBuilder::text("Error message")),
+            ),
+    )?;
+    let input = Some(node(&tree, INPUT)?);
+    let names = tree.name_cache();
+    let error = property(
+        "to.have.accessible.error.message",
+        json!({ "string": "Error message" }),
+    )?;
+    assert!(error.reads_validity());
+    for (validity, matches) in [
+        (Validity::NotRead, false),
+        (Validity::Valid, false),
+        (Validity::Invalid, true),
+    ] {
+        let verdict = error.check(&tree, &names, input, validity);
+        assert_eq!(
+            verdict.matches, matches,
+            "{validity:?}: {}",
+            verdict.received
+        );
+    }
+    let name = property("to.have.accessible.name", json!({ "string": "x" }))?;
+    assert!(!name.reads_validity(), "a name needs no page read");
+    Ok(())
 }
 
 #[test]

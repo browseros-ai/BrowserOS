@@ -25,7 +25,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 55;
+pub(crate) const PROBE_PROTOCOL: u32 = 56;
 
 /// One message template for page-side and stitched depth refusals. The numeric reply field,
 /// rather than these words, identifies a child that must become partial.

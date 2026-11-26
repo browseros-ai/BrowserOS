@@ -1,5 +1,5 @@
 {
-  "protocol": 55,
+  "protocol": 56,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === \"pinned\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
   "replyKinds": {
     "describe": [
@@ -804,6 +804,17 @@
     },
     {
       "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "validityInvalid"
+      }
+    },
+    {
+      "op": "read",
       "target": "root",
       "strictness": "strict",
       "frameVisible": true,
@@ -1544,19 +1555,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 55,
+      "protocol": 56,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 55,
+      "protocol": 56,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 55,
+      "protocol": 56,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
