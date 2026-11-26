@@ -1,8 +1,8 @@
 # The BrowserOS neo browser this image installs, pinned by version and per-architecture sha256.
 # Shell assignments, read by the Dockerfile and build.sh. Bump all five lines together from the
 # version's release.json (README, "Bump the browser").
-NEO_BROWSER_VERSION=0.53.0.1
-NEO_BROWSER_URL_AMD64=https://cdn.browseros.com/releases/browserclaw/0.53.0.1/linux/BrowserOS_neo_v0.53.0.1_amd64.deb
-NEO_BROWSER_SHA256_AMD64=a8c9e8478941189e79011465fda11932dcc4fce4270bfd342c2693fee1ea34e5
-NEO_BROWSER_URL_ARM64=https://cdn.browseros.com/releases/browserclaw/0.53.0.1/linux/BrowserOS_neo_v0.53.0.1_arm64.deb
-NEO_BROWSER_SHA256_ARM64=bd94c514d80ca2e4ceeffebaab20af83dc39029e678e724732dfb8b8aee36a31
+NEO_BROWSER_VERSION=0.53.0.2
+NEO_BROWSER_URL_AMD64=https://cdn.browseros.com/releases/browserclaw/0.53.0.2/linux/BrowserOS_neo_v0.53.0.2_amd64.deb
+NEO_BROWSER_SHA256_AMD64=e9c39cb982f36f7a555a057b3fb1ba06d758691f210300b2cbb39ebbe075a935
+NEO_BROWSER_URL_ARM64=https://cdn.browseros.com/releases/browserclaw/0.53.0.2/linux/BrowserOS_neo_v0.53.0.2_arm64.deb
+NEO_BROWSER_SHA256_ARM64=2a878a0be2c55c3279b8bc15667d0b91cc8daf71210fb274c016b5c91eeaad3d
