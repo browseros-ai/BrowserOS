@@ -8,6 +8,7 @@ use crate::proto::{
 };
 
 use super::node_key::{DocId, DomNodeId, NodeId, NodeKey};
+use super::role::Role;
 use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
 use super::{hidden, name, role};
@@ -446,9 +447,11 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
     }
 }
 
-/// A node the page draws that takes input on its own: a box Chromium reports clickable for any
-/// reason, or focusable. A `tabindex` wrapper around one is not a target itself, since the click
-/// or the focus belongs to what it holds.
+/// A node the page draws that holds a line of its own: a box Chromium reports clickable for any
+/// reason (a control, an ARIA role, a pointer cursor, another target), a focusable one, or a
+/// section the text prints with its ref. A `tabindex` wrapper around one is a container and not a
+/// target itself, as the old marking's leaf rule had it (`pointer-targets.ts`'s `isOwnTarget`):
+/// as a target it would fold that line into its own, and marking must never take a line away.
 fn is_drawn_target(node: &TreeNode) -> bool {
     let Some(raw) = node.raw_attributes() else {
         return false;
@@ -456,9 +459,27 @@ fn is_drawn_target(node: &TreeNode) -> bool {
     if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) || !node.hidden().is_box_visible() {
         return false;
     }
-    raw.interaction_info.as_ref().is_some_and(|info| {
-        !info.clickability_reasons.is_empty() || info.is_focusable == Some(true)
-    })
+    node.role().is_some_and(is_section_role)
+        || raw.interaction_info.as_ref().is_some_and(|info| {
+            !info.clickability_reasons.is_empty() || info.is_focusable == Some(true)
+        })
+}
+
+/// The roles the v1 text prints as a section line with its ref (`neo_snapshot`'s section rule,
+/// the old marking's `SECTION_ROLES`).
+const fn is_section_role(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Banner
+            | Role::Navigation
+            | Role::Main
+            | Role::Complementary
+            | Role::Contentinfo
+            | Role::Search
+            | Role::Form
+            | Role::Region
+            | Role::Article
+    )
 }
 
 fn synthesize_select_options(
@@ -1205,7 +1226,38 @@ mod tests {
                         .tabbable(false)
                         .bounding_box(0, 0, 400, 400)
                         .child(NodeBuilder::text("App shell")),
-                )
+                ),
+        )?;
+        let fold = tree.fold();
+        let clickable = |dom: i32| -> Result<bool, Box<dyn Error>> {
+            Ok(fold.is_clickable_container(node_id(&tree, "doc-main", dom)?))
+        };
+        assert!(clickable(20)?, "the editing host");
+        assert!(!clickable(21)?, "not an editable element inside it");
+        assert!(clickable(30)?, "a tabbable wrapper holding only text");
+        assert!(!clickable(40)?, "not one around a drawn button");
+        assert!(clickable(50)?, "one whose only control is not drawn");
+        assert!(
+            !clickable(60)?,
+            "not a tabindex=-1 shell, outside the tab order"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_tabbable_iframe_or_a_wrapper_around_a_section_takes_no_clicks()
+    -> Result<(), Box<dyn Error>> {
+        let wrapper = |dom: i32| {
+            NodeBuilder::container()
+                .dom_id(dom)
+                .clickability_reason(ClickabilityReason::TabIndex)
+                .focusable(true)
+                .tabbable(true)
+                .bounding_box(0, 0, 200, 20)
+        };
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
                 .child(
                     NodeBuilder::iframe(
                         FrameBuilder::new("doc-frame").root(
@@ -1222,24 +1274,29 @@ mod tests {
                     .focusable(true)
                     .tabbable(true)
                     .bounding_box(0, 0, 300, 150),
+                )
+                .child(
+                    wrapper(80).child(NodeBuilder::text("Note")).child(
+                        NodeBuilder::container()
+                            .dom_id(81)
+                            .role("region")
+                            .aria_label("Notes")
+                            .bounding_box(0, 0, 200, 20)
+                            .child(NodeBuilder::text("Region text")),
+                    ),
                 ),
         )?;
         let fold = tree.fold();
         let clickable = |dom: i32| -> Result<bool, Box<dyn Error>> {
             Ok(fold.is_clickable_container(node_id(&tree, "doc-main", dom)?))
         };
-        assert!(clickable(20)?, "the editing host");
-        assert!(!clickable(21)?, "not an editable element inside it");
-        assert!(clickable(30)?, "a tabbable wrapper holding only text");
-        assert!(!clickable(40)?, "not one around a drawn button");
-        assert!(clickable(50)?, "one whose only control is not drawn");
-        assert!(
-            !clickable(60)?,
-            "not a tabindex=-1 shell, outside the tab order"
-        );
         assert!(
             !clickable(70)?,
             "not a tabindex iframe, whose targets are its document's"
+        );
+        assert!(
+            !clickable(80)?,
+            "not one around a drawn section, which keeps its own line"
         );
         Ok(())
     }
