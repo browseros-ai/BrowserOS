@@ -4,7 +4,7 @@
 //! ```text
 //!  attempt ─▶ TabTree ─▶ PageCapture (Page.getAnnotatedPageContent + contract gate + coalescing)
 //!                ├─▶ FrameWorlds / DocTable (DocToken ⇄ FrameSeq + section 6.2 world proof)
-//!                ├─▶ TabRefTable (NodeKey ⇄ Ref across captures; replaced by neo-snapshot-apc at rebase)
+//!                ├─▶ TabRefTable (neo_snapshot_apc::refs: NodeKey ⇄ Ref across captures)
 //!                ├─▶ PrivateNodes (host-typed secret marks by site and DomNodeId)
 //!                └─▶ Hydrate (DOM.resolveNode + probe pin under a proven pre-capture world)
 //! ```
@@ -19,6 +19,4 @@ mod tab_tree;
 pub(crate) use hydrate::{Hydrate, HydrateOutcome, HydratedNode};
 pub(crate) use page_capture::{AttemptStart, CaptureError, CapturedTree, PageCapture};
 pub(crate) use private_nodes::{PrivateNodes, SiteKey, TabOriginState};
-#[cfg_attr(not(test), expect(unused_imports, reason = "wired by the switch-over"))]
-pub(crate) use tab_tree::RefKind;
-pub(crate) use tab_tree::{Ref, RefLookup, TabTree};
+pub(crate) use tab_tree::TabTree;

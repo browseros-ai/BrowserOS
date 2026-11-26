@@ -23,9 +23,12 @@
 //!           Unknown                   ─▶ InvalidInput (zero captures)
 //! ```
 
+use std::num::NonZeroU32;
+
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, FrameId};
-use neo_snapshot_apc::tree::{DocToken, DomNodeId, NodeKey, SnapshotTree};
+use neo_snapshot_apc::refs::{Ref, RefKind, RefLookup, RefTarget};
+use neo_snapshot_apc::tree::{DocSeq, DocToken, DomNodeId, NodeKey, SnapshotTree};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -33,8 +36,8 @@ use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
 use crate::resolve::{self, FramePath, FrameStart, Started};
-use crate::target::{AriaRefJump, Strictness};
-use crate::tree::{AttemptStart, CapturedTree, Ref, RefLookup, TabTree};
+use crate::target::{AriaRefJump, AriaRefKind, Strictness};
+use crate::tree::{AttemptStart, CapturedTree, TabTree};
 use crate::world::{DocLookup, FrameSeq, IsolatedWorld, Pin, Place};
 use crate::{ErrorCode, PlaywrightError};
 
@@ -183,9 +186,13 @@ impl<'a> Hydrate<'a> {
         &self,
         jump: AriaRefJump,
     ) -> Result<HydratedNode, PlaywrightError> {
-        let target_ref = Ref::from_jump(jump);
+        let Some(target_ref) = jump_ref(jump) else {
+            return Err(unknown_ref(self.scope, jump));
+        };
         let key = match self.tab_tree.resolve_ref(&target_ref) {
-            RefLookup::Key(key) => key,
+            // A click proxy (a zero-size control's shown label, design 3.5) changes only how an
+            // action presses the control; the ref still names the control, so hydrate that.
+            RefLookup::Key(RefTarget { key, .. }) => key,
             RefLookup::Retired => return Err(detached_ref(self.scope, jump)),
             RefLookup::Unknown => {
                 return match self.page.frames().lookup_doc_seq(jump.seq) {
@@ -345,6 +352,18 @@ impl<'a> Hydrate<'a> {
     }
 }
 
+/// Converts a parsed `aria-ref` jump into the ref table's [`Ref`]; the two parsers accept the same
+/// canonical forms. `None` only for element 0, which `AriaRefJump::parse` never yields and no
+/// table issues.
+fn jump_ref(jump: AriaRefJump) -> Option<Ref> {
+    let kind = match jump.kind {
+        AriaRefKind::Snapshot => RefKind::Snapshot,
+        AriaRefKind::Minted => RefKind::Minted,
+    };
+    let element = NonZeroU32::new(jump.element)?;
+    Some(Ref::new(DocSeq::new(jump.seq.0), kind, element))
+}
+
 /// Checks whether `doc_token` is the document occupying `expected_frame` inside `tree`.
 ///
 /// Main documents always correspond to `main_frame` even when BrowserOS `devtools_frame_token` is
@@ -487,5 +506,39 @@ fn ref_message(scope: &OpScope<'_>, r#ref: &str, ordinary: &str) -> String {
         )
     } else {
         format!("{ref} {ordinary}; take a new snapshot")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use neo_snapshot_apc::refs::Ref;
+
+    use super::jump_ref;
+    use crate::target::AriaRefJump;
+    use crate::test_support::TestResult;
+
+    #[test]
+    fn jump_ref_names_the_ref_the_table_prints() -> TestResult {
+        for printed in ["e5", "f7e3", "n1", "f2n3"] {
+            let jump = AriaRefJump::parse(printed).ok_or("valid canonical ref")?;
+            let converted = jump_ref(jump).ok_or("canonical refs convert")?;
+            assert_eq!(
+                Some(converted),
+                Ref::parse(printed),
+                "aria-ref={printed} must look up the ref the table parses from {printed}"
+            );
+            assert_eq!(
+                converted.to_string(),
+                printed,
+                "the table must print {printed} back"
+            );
+        }
+        for rejected in ["f0e5", "e0", "e05", "f01e1", "x1", "e"] {
+            assert!(
+                AriaRefJump::parse(rejected).is_none() && Ref::parse(rejected).is_none(),
+                "both parsers must reject {rejected}"
+            );
+        }
+        Ok(())
     }
 }

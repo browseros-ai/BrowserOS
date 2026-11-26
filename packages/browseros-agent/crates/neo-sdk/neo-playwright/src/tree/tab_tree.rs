@@ -8,18 +8,20 @@
 //!   parallel with `probe::describe` so only worlds proven alive across the entire capture bind to
 //!   their documents; stale worlds are invalidated, retiring their documents before seq
 //!   assignment.
-//! - A thin internal `TabRefTable` stand-in (replaced by `neo_snapshot_apc::refs::TabRefTable` at
-//!   rebase onto chunk 5) tracks `Ref ⇄ NodeKey` and drains `DocTable`'s retirement queue, so a
-//!   document's refs retire in lockstep with the document.
+//! - The tab's [`TabRefTable`] (`neo_snapshot_apc::refs`) maps `Ref ⇄ NodeKey` across captures.
+//!   `DocTable` stays the authority on seqs and document lifetime: refs are issued under the seq
+//!   `DocTable` assigned, and the table drains `DocTable`'s retirement queue, so a document's refs
+//!   retire in lockstep with the document.
 //! - [`PrivateNodes`] mirrors host-typed secret marks by `(SiteKey, DomNodeId)` so APC masking
 //!   redacts host-entered values without extra page round trips.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_core::FrameId;
 use futures_util::future;
+use neo_snapshot_apc::refs::{Ref, RefLookup, TabRefTable};
 use neo_snapshot_apc::tree::{
     BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SnapshotTree, TreeDoc,
 };
@@ -28,149 +30,12 @@ use crate::PlaywrightError;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply};
-use crate::target::{AriaRefJump, AriaRefKind};
+use crate::target::AriaRefJump;
 use crate::tree::{
     AttemptStart, CaptureError, CapturedTree, Hydrate, HydrateOutcome, HydratedNode, PageCapture,
     PrivateNodes, SiteKey, TabOriginState, private_nodes,
 };
 use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, Pin, Stamp};
-
-/// Disjoint ref namespaces sharing one document's ref table; replaced by
-/// `neo_snapshot_apc::refs::TabRefTable` types at rebase.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum RefKind {
-    /// Snapshot-printed ref (`e<n>` or `f<seq>e<n>`).
-    Snapshot,
-    /// Explicitly minted ref from `locator.ref()` (`n<n>` or `f<seq>n<n>`).
-    Minted,
-}
-
-/// Compact ref scoped to one document sequence number; replaced by
-/// `neo_snapshot_apc::refs::TabRefTable` types at rebase.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Ref {
-    /// Document sequence number that issued this ref.
-    pub(crate) seq: DocSeq,
-    /// Whether this ref came from a snapshot (`e`) or `locator.ref()` (`n`).
-    pub(crate) kind: RefKind,
-    /// Positive 1-based element number within `(seq, kind)`.
-    pub(crate) n: u32,
-}
-
-impl Ref {
-    /// Converts a validated selector-chunk [`AriaRefJump`] into a ref lookup key.
-    #[must_use]
-    pub(crate) const fn from_jump(jump: AriaRefJump) -> Self {
-        let kind = match jump.kind {
-            AriaRefKind::Snapshot => RefKind::Snapshot,
-            AriaRefKind::Minted => RefKind::Minted,
-        };
-        Self {
-            seq: DocSeq::new(jump.seq.0),
-            kind,
-            n: jump.element,
-        }
-    }
-}
-
-impl fmt::Display for Ref {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let prefix = match self.kind {
-            RefKind::Snapshot => 'e',
-            RefKind::Minted => 'n',
-        };
-        match self.seq.raw() {
-            0 => write!(f, "{prefix}{}", self.n),
-            seq => write!(f, "f{seq}{prefix}{}", self.n),
-        }
-    }
-}
-
-/// Outcome of resolving a [`Ref`] against the tab's ref table; replaced by
-/// `neo_snapshot_apc::refs::TabRefTable` types at rebase.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RefLookup {
-    /// Ref maps to a live document's composite DOM node key.
-    Key(NodeKey),
-    /// Ref belonged to a retired document; callers fail `element_detached`.
-    Retired,
-    /// Ref was never recorded in this table; callers check `DocTable` before failing
-    /// `invalid_input`.
-    Unknown,
-}
-
-/// Minimal internal stand-in for `TabRefTable` (replaced by `neo_snapshot_apc::refs::TabRefTable`
-/// at rebase onto chunk 5).
-///
-/// Holds only the tiny `Ref ⇄ NodeKey` and retired-ref sets needed by [`TabTree`] and [`Hydrate`]
-/// tests, with no Ticket 03 aliasing or per-document counter logic.
-#[derive(Default)]
-struct TabRefTable {
-    by_ref: HashMap<Ref, NodeKey>,
-    by_key: HashMap<NodeKey, Ref>,
-    retired: HashSet<Ref>,
-}
-
-impl TabRefTable {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn resolve(&self, r: &Ref) -> RefLookup {
-        if let Some(key) = self.by_ref.get(r) {
-            RefLookup::Key(key.clone())
-        } else if self.retired.contains(r) {
-            RefLookup::Retired
-        } else {
-            RefLookup::Unknown
-        }
-    }
-
-    fn ref_for(&mut self, seq: DocSeq, key: &NodeKey) -> Ref {
-        if let Some(&existing) = self.by_key.get(key) {
-            return existing;
-        }
-        let n = u32::try_from(self.by_ref.len() + self.retired.len() + 1).unwrap_or(u32::MAX);
-        let minted = Ref {
-            seq,
-            kind: RefKind::Minted,
-            n,
-        };
-        self.by_ref.insert(minted, key.clone());
-        self.by_key.insert(key.clone(), minted);
-        minted
-    }
-
-    fn retire_doc(&mut self, doc: &DocToken) {
-        let mut removed = Vec::new();
-        self.by_ref.retain(|&r, key| {
-            if key.doc == *doc {
-                removed.push(r);
-                false
-            } else {
-                true
-            }
-        });
-        self.by_key.retain(|key, _| key.doc != *doc);
-        self.retired.extend(removed);
-    }
-
-    #[cfg(test)]
-    fn insert_for_test(&mut self, r: Ref, key: NodeKey) {
-        self.by_ref.insert(r, key.clone());
-        self.by_key.insert(key, r);
-    }
-}
-
-impl fmt::Debug for TabRefTable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TabRefTable")
-            .field("active_refs", &self.by_ref.len())
-            .field("active_keys", &self.by_key.len())
-            .field("retired_refs", &self.retired.len())
-            .finish()
-    }
-}
 
 /// Per-tab APC capture, ref table, hydration, and private-node state.
 ///
@@ -336,22 +201,17 @@ impl TabTree {
             .resolve(r)
     }
 
-    /// Returns the existing ref for `key`, or mints and records an `n`-ref under `seq`.
+    /// Returns `key`'s printed ref, else its minted `n`-ref, minting one under `seq` if needed
+    /// (`locator.ref()`).
+    ///
+    /// `seq` is the one `DocTable` assigned to `key.doc` in the capture that found `key`. Passing it
+    /// keeps the table from numbering documents itself, which would print refs no `DocTable` seq
+    /// resolves.
     pub(crate) fn ref_for(&self, seq: DocSeq, key: &NodeKey) -> Ref {
         self.refs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .ref_for(seq, key)
-    }
-
-    /// Inserts a ref binding directly for offline unit tests (replaced by chunk 5's
-    /// `neo_snapshot_apc::refs::TabRefTable` at rebase).
-    #[cfg(test)]
-    pub(crate) fn insert_test_ref(&self, r: Ref, key: NodeKey) {
-        self.refs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert_for_test(r, key);
+            .ref_for(key, Some(seq))
     }
 
     /// Mirrors a single host-private DOM node mark for `site`.
@@ -509,9 +369,11 @@ mod tests {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
     use browseros_core::FrameId;
+    use neo_snapshot::{AriaChild, AriaNode};
+    use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget};
     use neo_snapshot_apc::tree::{
-        ApcBuilder, BuildOptions, DocSeq, DocToken, DomNodeId, MIN_CONTRACT_VERSION, NodeBuilder,
-        NodeKey, SnapshotTree,
+        ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, DomNodeId, MIN_CONTRACT_VERSION,
+        NodeBuilder, NodeKey, SnapshotTree,
     };
     use serde_json::{Value, json};
 
@@ -524,9 +386,7 @@ mod tests {
         ProbeAnswer, SCRIPTED_CHILD, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript,
         TestResult, count_op,
     };
-    use crate::tree::{
-        AttemptStart, HydrateOutcome, Ref, RefKind, RefLookup, SiteKey, TabOriginState, TabTree,
-    };
+    use crate::tree::{AttemptStart, HydrateOutcome, SiteKey, TabOriginState, TabTree};
     use crate::world::{DocLookup, FrameSeq, Pin, Place};
 
     // --- Minimal protobuf wire encoder for hand-crafted offline APC fixtures ---
@@ -581,6 +441,26 @@ mod tests {
         node
     }
 
+    /// A `<button>` named `label` with a box: the ai-mode emitter gives it a ref.
+    fn encode_button_node(dom_id: i32, label: &str) -> Vec<u8> {
+        let mut rect = Vec::new();
+        encode_varint_field(3, 80, &mut rect); // width
+        encode_varint_field(4, 20, &mut rect); // height
+        let mut geometry = Vec::new();
+        encode_len_delimited(1, &rect, &mut geometry); // outer_bounding_box
+        let mut browseros = Vec::new();
+        encode_len_delimited(1, b"button", &mut browseros); // tag
+        encode_len_delimited(11, label.as_bytes(), &mut browseros); // aria_label
+        let mut attrs = Vec::new();
+        encode_varint_field(2, u64::from(dom_id.cast_unsigned()), &mut attrs);
+        encode_varint_field(3, 2, &mut attrs); // Container
+        encode_len_delimited(4, &geometry, &mut attrs);
+        encode_len_delimited(1000, &browseros, &mut attrs);
+        let mut node = Vec::new();
+        encode_len_delimited(2, &attrs, &mut node);
+        node
+    }
+
     struct ChildFrameSpec<'a> {
         iframe_dom_id: i32,
         doc_token: &'a str,
@@ -596,10 +476,29 @@ mod tests {
         child: Option<&ChildFrameSpec<'_>>,
         contract_version: Option<u32>,
     ) -> Value {
+        let main_nodes: Vec<Vec<u8>> = main_dom_ids
+            .iter()
+            .map(|&dom_id| encode_leaf_node(dom_id))
+            .collect();
+        encode_apc_reply_nodes(
+            main_doc_token,
+            main_url,
+            &main_nodes,
+            child,
+            contract_version,
+        )
+    }
+
+    fn encode_apc_reply_nodes(
+        main_doc_token: &str,
+        main_url: Option<&str>,
+        main_nodes: &[Vec<u8>],
+        child: Option<&ChildFrameSpec<'_>>,
+        contract_version: Option<u32>,
+    ) -> Value {
         let mut root_node = Vec::new();
-        for &dom_id in main_dom_ids {
-            let leaf = encode_leaf_node(dom_id);
-            encode_len_delimited(1, &leaf, &mut root_node);
+        for node in main_nodes {
+            encode_len_delimited(1, node, &mut root_node);
         }
         if let Some(child) = child {
             let mut iframe_node = Vec::new();
@@ -653,14 +552,43 @@ mod tests {
     }
 
     fn parsed_ref(raw: &str) -> TestResult<Ref> {
-        Ok(Ref::from_jump(jump(raw)?))
+        Ok(Ref::parse(raw).ok_or("valid canonical ref")?)
     }
 
-    /// Records `raw` for `key` in the tab's ref table, as a snapshot printing it would.
+    /// The ref the snapshot printed on the node named `name`.
+    fn printed_ref(nodes: &[AriaNode], name: &str) -> Option<String> {
+        let mut stack: Vec<&AriaNode> = nodes.iter().collect();
+        while let Some(node) = stack.pop() {
+            if node.name.as_deref() == Some(name) {
+                return node.r#ref.clone();
+            }
+            stack.extend(node.children.iter().filter_map(|child| match child {
+                AriaChild::Node(node) => Some(node.as_ref()),
+                AriaChild::Text(_) => None,
+            }));
+        }
+        None
+    }
+
+    /// What a ref resolves to when it names `key` and no click proxy stands in for it.
+    fn live(key: &NodeKey) -> RefLookup {
+        RefLookup::Key(RefTarget {
+            key: key.clone(),
+            click_proxy: None,
+        })
+    }
+
+    /// Records `key` in the tab's ref table as a snapshot printing it would, and checks the table
+    /// issued exactly `raw`: refs count per document seq, so a test reads which ref is which.
     fn assign_ref(tree: &TabTree, raw: &str, key: &NodeKey) -> TestResult<Ref> {
         let printed = parsed_ref(raw)?;
-        tree.insert_test_ref(printed, key.clone());
-        Ok(printed)
+        let assigned = tree
+            .refs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .assign_snapshot_ref(printed.seq(), key, "button", "", None);
+        assert_eq!(assigned, printed, "the ref table must issue {raw} next");
+        Ok(assigned)
     }
 
     /// Programmable fake CDP script backing `ScriptedTab` for offline `TabTree` + `Hydrate` tests.
@@ -1069,33 +997,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ref_from_jump_and_display_match_canonical_wire_formats() -> TestResult {
-        for (raw, expected_seq, expected_kind, expected_n) in [
-            ("e5", 0, RefKind::Snapshot, 5),
-            ("f7e3", 7, RefKind::Snapshot, 3),
-            ("n1", 0, RefKind::Minted, 1),
-            ("f2n3", 2, RefKind::Minted, 3),
-        ] {
-            let parsed = parsed_ref(raw)?;
-            assert_eq!(
-                parsed,
-                Ref {
-                    seq: DocSeq::new(expected_seq),
-                    kind: expected_kind,
-                    n: expected_n,
-                },
-                "Ref::from_jump must preserve seq, kind, and element number for {raw}"
-            );
-            assert_eq!(
-                parsed.to_string(),
-                raw,
-                "Ref Display must round-trip canonical ref {raw}"
-            );
-        }
-        Ok(())
-    }
-
     #[tokio::test]
     async fn case_1_pre_capture_world_hydrates_without_recapture_and_subsequent_ref_needs_zero_captures()
     -> TestResult {
@@ -1460,7 +1361,7 @@ mod tests {
         );
         assert_eq!(
             tree.resolve_ref(&child_ref),
-            RefLookup::Key(child_key.clone()),
+            live(&child_key),
             "frame mismatch for a document still live in another frame must not retire it"
         );
 
@@ -1482,7 +1383,7 @@ mod tests {
         // retire it, refs included.
         assert_eq!(
             tree.resolve_ref(&child_ref),
-            RefLookup::Key(child_key.clone()),
+            live(&child_key),
             "doc-child stays live until a hydration proves it absent"
         );
         let gone = tree
@@ -1710,6 +1611,69 @@ mod tests {
         assert_eq!(second_hydrated.seq, FrameSeq(1));
         assert_eq!(second_hydrated.key, key("doc-2", 20)?);
         assert!(second_hydrated.world.same_install(&first_hydrated.world));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_ref_printed_right_after_navigation_reaches_the_element_it_names() -> TestResult {
+        let apc_1 = encode_apc_reply_nodes(
+            "doc-1",
+            Some("https://a.test/"),
+            &[encode_button_node(10, "Back")],
+            None,
+            Some(MIN_CONTRACT_VERSION),
+        );
+        let apc_2 = encode_apc_reply_nodes(
+            "doc-2",
+            Some("https://b.test/"),
+            &[encode_button_node(10, "Pay")],
+            None,
+            Some(MIN_CONTRACT_VERSION),
+        );
+        let tab = ScriptedTab::new(TreeScript::new(apc_1));
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
+
+        let w_old = page.world(&page.main_endpoint(), Place::Main).await?;
+        let _before = tree.capture(&scope, &page, AttemptStart::now()).await?;
+        tab.script().set_default_apc(apc_2);
+        tab.script()
+            .mark_global_stale(w_old.global(), "Cannot find context with specified id");
+
+        let after = tree.capture(&scope, &page, AttemptStart::now()).await?;
+        let snapshot = {
+            let mut refs = tree.refs.lock().unwrap_or_else(PoisonError::into_inner);
+            after.tree().aria(AriaAsk::ai(&mut refs))?
+        };
+        let printed = printed_ref(snapshot.nodes(), "Pay").ok_or("Pay must print a ref")?;
+        assert_eq!(
+            printed, "f1e1",
+            "the new document's refs must print under the seq DocTable reserved for it"
+        );
+
+        let captures = tab.script().apc_count();
+        let hydrated = tree.hydrate_ref(&scope, &page, jump(&printed)?).await?;
+        assert_eq!(
+            hydrated.key,
+            key("doc-2", 10)?,
+            "aria-ref={printed} must reach the element the snapshot printed it on"
+        );
+        assert_eq!(
+            hydrated.seq,
+            FrameSeq(1),
+            "the world installed for doc-2 must answer to the seq its refs printed under"
+        );
+        assert!(
+            !hydrated.world.same_install(&w_old),
+            "the dead document's world must never host the new document's element"
+        );
+        assert_eq!(
+            tab.script().apc_count(),
+            captures + 1,
+            "the first use of a reserved document's ref proves it with one capture"
+        );
         Ok(())
     }
 
@@ -1998,10 +1962,7 @@ mod tests {
             minted,
             "repeated ref_for on the same key must reuse its recorded ref"
         );
-        assert_eq!(
-            tree.resolve_ref(&parsed_ref("n1")?),
-            RefLookup::Key(ref_key)
-        );
+        assert_eq!(tree.resolve_ref(&parsed_ref("n1")?), live(&ref_key));
         let debug = format!("{tree:?}");
         for forbidden in [
             "secret-tenant",
