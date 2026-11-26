@@ -1,0 +1,63 @@
+# Spike pages — Large documents
+https://news.ycombinator.com/
+https://news.ycombinator.com/item?id=41002195
+# Spike pages — Forms
+https://github.com/login
+# Spike pages — Checkout
+https://checkout.stripe.dev/checkout
+https://payments.wikimedia.org/index.php?title=Special:AdyenCheckoutGateway&country=US&uselang=en&currency=USD&amount=5&payment_method=cc
+# Spike pages — Frames and shadow DOM
+https://demo.turnstile.workers.dev/
+# Spike pages — Grids
+https://mui.com/x/react-data-grid/virtualization/
+https://www.ag-grid.com/example/
+# Spike pages — Large documents
+https://en.wikipedia.org/wiki/World_War_II
+# Checkouts and storefronts
+https://paymentcheckout.dev/playgrounds/stripe/checkout/
+https://getbootstrap.com/docs/5.3/examples/checkout/
+https://dawn-theme-default.myshopify.com/cart
+https://www.sandbox.paypal.com/altpayfields/examples/p24
+https://checkout.stripe.dev/elements
+# Data grids and tables
+https://handsontable.com/docs/javascript-data-grid/row-virtualization/
+https://datatables.net/examples/core/basic_init/zero_configuration.html
+https://datatables.net/examples/scroller/initialisation/simple.html
+https://primevue.dev/datatable/
+https://react-aria.adobe.com/Table
+https://www.w3.org/WAI/ARIA/apg/patterns/table/examples/sortable-table/
+https://www.carbondesignsystem.com/building-blocks/core/components/data-table/guidelines
+# Docs and editors
+https://svelte.dev/playground/hello-world
+https://microsoft.github.io/monaco-editor/playground.html
+https://www.typescriptlang.org/play/
+https://docs.google.com/document/d/1AyPwilSn8qHnFDwygdM1Lqfv2Xp1NCUgmZxc2sSWAFM/edit
+https://wordpress.org/gutenberg/
+https://playground.lexical.dev/
+https://www.tiny.cloud/docs/tinymce/latest/full-featured-open-source-demo/
+https://mozilla.github.io/pdf.js/web/viewer.html
+https://excalidraw.com/
+# Forms
+https://docs.google.com/forms/d/e/1FAIpQLSfZwM7WV8mH7uCnhfGcfT87SlcJVEXQJ9G5XbaGr1PVYHwFFA/viewform
+https://tools.usps.com/zip-code-lookup.htm?byaddress
+https://validator.w3.org/nu/
+https://www.amtrak.com/home
+https://designsystem.digital.gov/components/form/
+https://www.w3.org/WAI/ARIA/apg/patterns/combobox/examples/combobox-autocomplete-list/
+# Single-page apps and public workflows
+https://github.com/microsoft/playwright/pull/44373
+https://www.openstreetmap.org/#map=13/51.5073/-0.1276
+https://query.wikidata.org/
+https://mermaid.live/
+https://calculator.aws/#/
+https://linear.app/changelog
+# Cookie banners and dialogs
+https://design-system.service.gov.uk/components/cookie-banner/default/
+https://www.gov.uk/
+https://getbootstrap.com/docs/5.3/examples/modals/
+https://www.onetrust.com/cookie-banner-gallery/
+https://www.khanacademy.org/math/algebra
+# Nested frames and shadow DOM
+https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe
+https://developer.mozilla.org/en-US/docs/Web/API/Element/attachShadow
+https://themes.shopify.com/themes/dawn/presets/dawn
