@@ -1,5 +1,5 @@
 //! Offline tests for [`neo_snapshot_apc::tree`]: document identity, iterative frame stitching,
-//! containment semantics, redacting `Debug`, the contract-v4 Chromium 158 fixtures, and
+//! containment semantics, redacting `Debug`, the contract-v6 Chromium 158 fixtures, and
 //! stack-safety stress tests.
 
 use std::cell::{Cell, RefCell};
@@ -29,7 +29,7 @@ fn decode_fixture(name: &str) -> Result<AnnotatedPageContent, Box<dyn Error>> {
     Ok(neo_snapshot_apc::decode_protobuf(&bytes)?)
 }
 
-/// Builds a recorded fixture as captured: every `.pb` carries contract v4 (`tests/fixtures/README.md`).
+/// Builds a recorded fixture as captured: every `.pb` carries contract v6 (`tests/fixtures/README.md`).
 fn load_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
     Ok(SnapshotTree::build(
         decode_fixture(name)?,
@@ -38,7 +38,7 @@ fn load_fixture_tree(name: &str) -> Result<SnapshotTree, Box<dyn Error>> {
 }
 
 /// The CDP frame id of `hung-subframe`'s `[::1]` frame on its recorded load.
-const HUNG_FRAME_TOKEN: &str = "49D1C59064EA7FCE84F9448D273FFE9A";
+const HUNG_FRAME_TOKEN: &str = "A5748446FECE0320E1A027D7563F2CA7";
 
 fn require_doc_token(raw: &str) -> Result<DocToken, Box<dyn Error>> {
     DocToken::new(raw).ok_or_else(|| format!("expected non-empty DocToken for {raw:?}").into())
@@ -580,7 +580,7 @@ fn empty_root_and_error_cases_return_expected_results() -> Result<(), Box<dyn Er
 }
 
 #[test]
-fn contract_gate_admits_v4_fixtures_and_refuses_them_with_the_contract_stripped()
+fn contract_gate_admits_v6_fixtures_and_refuses_them_with_the_contract_stripped()
 -> Result<(), Box<dyn Error>> {
     for name in [
         "nested-cross-site-frames",
@@ -590,8 +590,8 @@ fn contract_gate_admits_v4_fixtures_and_refuses_them_with_the_contract_stripped(
         let tree = load_fixture_tree(name)?;
         assert_eq!(
             tree.contract_version(),
-            4,
-            "{name}.pb was recorded on a contract-v4 build"
+            6,
+            "{name}.pb was recorded on a contract-v6 build"
         );
         let mut stock_apc = decode_fixture(name)?;
         stock_apc.browseros = None;
@@ -1017,7 +1017,7 @@ fn nested_cross_site_frames_fixture_stitches_eight_docs_and_disambiguates_dom_id
     }
     let tree = SnapshotTree::build(apc, BuildOptions::default())?;
     assert_eq!(tree.documents().len(), 8);
-    assert_eq!(tree.nodes().len(), 71);
+    assert_eq!(tree.nodes().len(), 75);
     assert!(tree.partial_frames().is_empty());
     assert_eq!(
         tree.main_document()
@@ -1100,12 +1100,12 @@ fn nested_cross_site_frames_fixture_stitches_eight_docs_and_disambiguates_dom_id
         total_owned += doc.node_count();
     }
     assert_eq!(
-        total_owned, 71,
+        total_owned, 75,
         "sum of per-document node_count across all 8 documents must equal total arena size"
     );
 
-    assert_colliding_dom_ids(&tree, &by_title, 5, &["Top", "B2", "C4"])?;
-    assert_colliding_dom_ids(&tree, &by_title, 11, &["Top", "C2"])?;
+    assert_colliding_dom_ids(&tree, &by_title, 12, &["Top", "B2", "C4"])?;
+    assert_colliding_dom_ids(&tree, &by_title, 11, &["Top", "B2", "C2"])?;
     Ok(())
 }
 

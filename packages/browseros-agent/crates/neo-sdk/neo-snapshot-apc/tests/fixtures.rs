@@ -1,5 +1,5 @@
 //! Offline fixture tests decoding seven of the committed `AnnotatedPageContent` `.pb` captures
-//! (BrowserOS Chromium 158, contract v4) plus synthetic forward-compatibility and large-page
+//! (BrowserOS Chromium 158, contract v6) plus synthetic forward-compatibility and large-page
 //! payloads.
 
 #[path = "support/tree_counts.rs"]
@@ -22,7 +22,7 @@ use prost::Message as _;
 use tree_counts::{TreeCounts, count_frames_and_nodes};
 
 /// The CDP frame id of `hung-subframe`'s `[::1]` frame on its recorded load.
-const HUNG_FRAME_TOKEN: &str = "49D1C59064EA7FCE84F9448D273FFE9A";
+const HUNG_FRAME_TOKEN: &str = "A5748446FECE0320E1A027D7563F2CA7";
 
 /// What the contract writes in place of `FrameData` for `hung-subframe`'s timed-out frame.
 fn hung_frame_timeout_stamp() -> IframeDataContent {
@@ -145,9 +145,9 @@ fn nested_cross_site_frames_fixture_decodes_all_eight_frames() -> Result<(), Box
         count_frames_and_nodes(&apc),
         TreeCounts {
             frames: 8,
-            nodes: 71,
+            nodes: 75,
         },
-        "nested-cross-site-frames.pb must decode 8 frames and 71 nodes"
+        "nested-cross-site-frames.pb must decode 8 frames and 75 nodes"
     );
 
     let texts = collect_all_texts(&apc);

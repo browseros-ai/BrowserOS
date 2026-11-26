@@ -367,10 +367,10 @@ fn patched_recordings_carry_the_contract_on_every_page_and_frame() -> Result<(),
         assert_eq!(
             apc.browseros,
             Some(BrowserOsPageContentData {
-                contract_version: Some(4),
+                contract_version: Some(6),
                 subframe_timeout_ms: Some(2_000),
             }),
-            "{name}: recorded on a contract-v4 build with the default 2000 ms subframe timeout \
+            "{name}: recorded on a contract-v6 build with the default 2000 ms subframe timeout \
              (tests/fixtures/README.md)"
         );
         let coverage = contract_coverage(&apc);
