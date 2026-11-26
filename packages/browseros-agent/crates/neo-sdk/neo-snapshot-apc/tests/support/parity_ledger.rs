@@ -1,13 +1,19 @@
 //! The parity ledger: every oracle element where [`neo_snapshot_apc::tree`] and the recorded
 //! Playwright oracle still disagree on the contract-v4 recordings, with the reason.
 //!
-//! `tree_roles_states_oracle.rs` (join, role, hidden, box visibility, each state) and
-//! `tree_names_oracle.rs` (name,
-//! description, error message) compare every joined element of all 16 fixtures and require the
-//! disagreements to equal this ledger exactly. A change that fixes a rule removes its entries; one
-//! that breaks a rule fails with the new disagreement spelled out. Each entry names its owner:
-//! a Rust rule, a contract fact Chromium does not send, or an accepted gap
-//! (`apc-contract-design` section 10, G1 to G9; `decisions.md` D2).
+//! `tree_roles_states_oracle.rs` (join, role, hidden, box visibility, each state),
+//! `tree_names_oracle.rs` (name, description, error message) and `tree_emit_refs_oracle.rs` (ref)
+//! compare every joined element of all 16 fixtures and require the disagreements to equal this
+//! ledger exactly. A change that fixes a rule removes its entries; one that breaks a rule fails
+//! with the new disagreement spelled out. Each entry names its owner: a Rust rule, a contract fact
+//! Chromium does not send, or an accepted gap (`apc-contract-design` section 10, G1 to G9;
+//! `decisions.md` D2).
+//!
+//! `tree_emit_refs_oracle.rs` also compares the ai-mode nodes both sides print, by role, name and
+//! state. Each of those disagreements must be an entry here. An entry of [`KNOWN_MISMATCHES`] need
+//! not show there, since a node one side does not print cannot disagree, and the tree tests above
+//! hold it to being measured. [`PRINTED_ONLY_MISMATCHES`] holds what only that comparison sees:
+//! printed nodes the oracle lists no element for.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -33,6 +39,9 @@ pub(crate) enum Field {
     Name,
     Description,
     ErrorMessage,
+    /// Ref-worthiness: the ai snapshot gives the element a ref, by Playwright's `interactable`
+    /// rule or a `ClickProxy` pairing.
+    Ref,
 }
 
 /// Who owns a disagreement, so its follow-up goes to the right side of the contract.
@@ -196,6 +205,17 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         ],
     },
     KnownMismatch {
+        field: Field::Ref,
+        tree: "true",
+        cause: Cause::ContractFact,
+        why: "the BoxVisible entry above: the repaired box makes the file input's button \
+              box-visible, so the tree gives it a ref that Playwright's interactable rule does not",
+        nodes: &[
+            main("zero-size-controls", 43),
+            main("zero-size-controls", 44),
+        ],
+    },
+    KnownMismatch {
         field: Field::Disabled,
         tree: "Some(true)",
         cause: Cause::AcceptedGap("G2"),
@@ -231,6 +251,32 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         nodes: &[main("names", 17)],
     },
 ];
+
+/// Disagreements on printed nodes the oracle lists no element for, because Playwright's role for
+/// them is the ai tree's `generic`. Only `tree_emit_refs_oracle.rs` measures these.
+pub(crate) const PRINTED_ONLY_MISMATCHES: &[KnownMismatch] = &[KnownMismatch {
+    field: Field::Active,
+    tree: "false",
+    cause: Cause::ContractFact,
+    why: "with nothing focused, APC sends no focused_node_id, while Playwright's \
+          document.activeElement falls back to the main document's <body>",
+    nodes: &[
+        main(NESTED, 8),
+        main("shadow-dom", 8),
+        main("zero-size-checkbox", 6),
+        main("covered-button", 6),
+        main("sensitive-form", 11),
+        main("hung-subframe", 8),
+        main("deep-nesting", 6),
+        main("shadow-roots", 16),
+        main("zero-size-controls", 6),
+        main("nosize", 26),
+        main("ua-shadow", 14),
+        main("roles", 30),
+        main("names", 23),
+        main("private-forms", 25),
+    ],
+}];
 
 /// One disagreement a test measured: which element, which field, and both values.
 #[derive(Debug)]
@@ -276,15 +322,45 @@ impl Key {
     }
 }
 
+/// Fails unless every printed-node disagreement measured on `fields` is an entry of either list,
+/// tree value included, and every [`PRINTED_ONLY_MISMATCHES`] entry for them was measured. An
+/// entry of [`KNOWN_MISMATCHES`] that nothing measured is not an error here.
+pub(crate) fn assert_printed_matches_ledger(measured: &[Measured], fields: &[Field]) {
+    let mut ledger = ledger_keys(KNOWN_MISMATCHES, fields);
+    let printed_only = ledger_keys(PRINTED_ONLY_MISMATCHES, fields);
+    ledger.extend(printed_only.iter().cloned());
+    let measured_keys: BTreeSet<Key> = measured.iter().map(Key::of_measured).collect();
+
+    let mut report: Vec<String> = measured
+        .iter()
+        .filter(|entry| !ledger.contains(&Key::of_measured(entry)))
+        .map(|entry| format!("new disagreement: {}", entry.detail))
+        .collect();
+    report.extend(
+        printed_only
+            .difference(&measured_keys)
+            .map(|key| format!("closed or changed, update PRINTED_ONLY_MISMATCHES: {key:?}")),
+    );
+    assert!(
+        report.is_empty(),
+        "every disagreement between the printed ai nodes and the Playwright oracles must be in \
+         the parity ledger (tests/support/parity_ledger.rs):\n{}",
+        report.join("\n")
+    );
+}
+
+fn ledger_keys(list: &[KnownMismatch], fields: &[Field]) -> BTreeSet<Key> {
+    list.iter()
+        .filter(|known| fields.contains(&known.field))
+        .flat_map(|known| known.nodes.iter().map(|node| Key::of_ledger(node, known)))
+        .collect()
+}
+
 /// Fails unless the disagreements measured on `fields` equal the ledger's entries for them, tree
 /// values included, naming each new disagreement with its values and each entry no longer
 /// measured with its recorded reason. A known disagreement whose tree value changed shows as both.
 pub(crate) fn assert_measured_equals_ledger(measured: &[Measured], fields: &[Field]) {
-    let ledger: BTreeSet<Key> = KNOWN_MISMATCHES
-        .iter()
-        .filter(|known| fields.contains(&known.field))
-        .flat_map(|known| known.nodes.iter().map(|node| Key::of_ledger(node, known)))
-        .collect();
+    let ledger = ledger_keys(KNOWN_MISMATCHES, fields);
     let measured_keys: BTreeSet<Key> = measured.iter().map(Key::of_measured).collect();
 
     let mut report = Vec::new();
