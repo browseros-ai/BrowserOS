@@ -7657,6 +7657,21 @@ ${value.stack}`;
     return roots;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-hidden.ts
+  function beside(hidden, node) {
+    if (node.role === "iframe")
+      return "no";
+    return hidden === "carried" || node.ariaHidden ? "carried" : hidden;
+  }
+  function under(hidden, node) {
+    if (node.role === "iframe")
+      return "no";
+    return hidden !== "no" || node.ariaHidden ? "enclosed" : "no";
+  }
+  function movable(hidden) {
+    return hidden === "no" ? "no" : "carried";
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-on-top.ts
   function onTopHead(result) {
     return (result.onTop ?? []).flatMap((layer) => layer.line.split(`
@@ -7683,22 +7698,25 @@ ${value.stack}`;
     const front = new Map(layers.map((layer) => [layer.ref, []]));
     const nodes = [];
     const selected = new Set;
-    const pending = [...result.json].reverse();
+    const pending = [...result.json].reverse().map((node) => ({ node, hidden: "no" }));
     while (pending.length) {
-      const node = pending.pop();
-      if (!node)
+      const candidate = pending.pop();
+      if (!candidate)
         continue;
+      const { node, hidden } = candidate;
       nodes.push(node);
       if (node.inert)
         continue;
       const block = node.onTop ? front.get(node.onTop) : undefined;
       if (block) {
         selected.add(node);
-        block.push(node);
-      } else
+        block.push(candidate);
+      } else {
+        const below = beside(hidden, node);
         for (const child of [...node.children ?? []].reverse())
           if (typeof child !== "string")
-            pending.push(child);
+            pending.push({ node: child, hidden: below });
+      }
     }
     const remaining = new Map;
     for (const node of nodes.reverse()) {
@@ -7865,22 +7883,23 @@ ${value.stack}`;
     let segment;
     let boundary;
     let skipped = 0;
-    const printer = new Printer(urls, partials, inert, (node, text, level) => {
+    const printer = new Printer(urls, partials, inert, (node, text, level, hidden) => {
       skipped++;
       const line = printer.lines.at(-1);
       if (!segment || !boundary || boundary.line !== line || boundary.body !== line?.body || boundary.length !== printer.lines.length || boundary.level !== level) {
         segment = new Printer(urls, new Map, true);
         omitted.push(segment);
       }
-      segment.walk([node], level, text);
+      segment.walk([node], level, text, hidden);
       boundary = { line, body: line?.body, length: printer.lines.length, level };
     });
     const front = onTopContent(result);
     if (front.first.length) {
-      printer.walk(front.first, 0, true);
+      for (const held of front.first)
+        printer.walk([held.node], 0, true, held.hidden);
       printer.separateText();
     }
-    printer.walk(front.rest, 0, text);
+    printer.walk(front.rest, 0, text, "no");
     for (const unplaced of partials.values())
       for (const partial of unplaced)
         printer.comment(partialComment(partial), 0);
@@ -7913,15 +7932,15 @@ ${value.stack}`;
       this.inert = inert;
       this.onOmit = onOmit;
     }
-    walk(children, level, text) {
-      this.content({ children: [...children] }, level, text);
+    walk(children, level, text, hidden) {
+      this.content({ children: [...children] }, level, text, hidden);
       for (let step = this.steps.pop();step; step = this.steps.pop()) {
         if (step.kind === "node")
-          this.node(step.child, step.level, step.text);
+          this.node(step.child, step.level, step.text, step.hidden);
         else if (step.kind === "piece")
           this.piece(step.raw, step.level, step.text);
         else if (step.kind === "kept")
-          this.closeKept(step.node, step.header, step.level);
+          this.closeKept(step.node, step.header, step.level, step.hidden);
         else
           this.closeSection(step.node, step.header);
       }
@@ -7962,9 +7981,9 @@ ${value.stack}`;
             pending.push(child);
       }
     }
-    node(child, level, text) {
+    node(child, level, text, hidden) {
       if (typeof child !== "string" && child.inert && !this.inert) {
-        this.onOmit?.(child, text, level);
+        this.onOmit?.(child, text, level, hidden);
         this.omit(child);
         return;
       }
@@ -7973,29 +7992,35 @@ ${value.stack}`;
       else if (child.role === "text")
         this.piece(child.text ?? "", level, text);
       else if (KEPT.has(child.role))
-        this.kept(child, level);
+        this.kept(child, level, hidden);
       else if (SECTION.has(child.role))
-        this.section(child, level, text);
+        this.section(child, level, text, hidden);
       else if (child.role === "heading")
-        this.heading(child, level);
+        this.heading(child, level, hidden);
       else if (actionable(child) || fieldWithoutRef(child))
-        this.control(child, level, text);
+        this.control(child, level, text, hidden);
       else {
         if (child.role === "img") {
           if (child.name && text)
-            this.element(copy(child, { ref: false, urls: false }), level);
+            this.element(copy(child, { ref: false, urls: false, hidden }), level);
         } else {
           const named = nameAsContent(child);
           if (named !== undefined)
             this.piece(named, level, text);
         }
-        this.content(child, level, text);
+        this.content(child, level, text, beside(hidden, child));
       }
     }
-    content(node, level, text) {
+    content(node, level, text, hidden) {
       const children = node.children ?? [];
       for (let index = children.length - 1;index >= 0; index--)
-        this.steps.push({ kind: "node", child: children[index], level, text });
+        this.steps.push({
+          kind: "node",
+          child: children[index],
+          level,
+          text,
+          hidden
+        });
       const own = "role" in node ? shownText(node) : undefined;
       if (own !== undefined)
         this.steps.push({ kind: "piece", raw: own, level, text });
@@ -8015,29 +8040,35 @@ ${value.stack}`;
           ref: false
         });
     }
-    kept(node, level) {
-      const header = this.header(node, level, keptRef(node));
-      this.steps.push({ kind: "kept", node, header, level });
-      this.content(node, level + 1, true);
+    kept(node, level, inherited) {
+      const hidden = movable(inherited);
+      const header = this.header(node, level, keptRef(node), hidden);
+      this.steps.push({ kind: "kept", node, header, level, hidden });
+      this.content(node, level + 1, true, under(hidden, node));
     }
-    closeKept(node, header, level) {
+    closeKept(node, header, level, hidden) {
       const inside = this.lines.slice(header + 1);
       if (inside.length === 1 && inside[0].textLine && !separatorsOnly(inside[0])) {
         this.lines.length = header;
-        this.element(copy(node, { ref: keptRef(node), urls: false, text: inside[0].body }), level);
+        this.element(copy(node, {
+          ref: keptRef(node),
+          urls: false,
+          text: inside[0].body,
+          hidden
+        }), level);
       } else if (!this.close(header, Boolean(node.name)))
         return;
       this.lines[header].keptEnd = this.lines.length;
     }
-    section(node, level, text) {
-      const header = this.header(node, level, true);
+    section(node, level, text, hidden) {
+      const header = this.header(node, level, true, hidden);
       if (node.role === "iframe" && node.ref !== undefined) {
         for (const partial of this.partials.get(node.ref) ?? [])
           this.comment(partialComment(partial), level + 1);
         this.partials.delete(node.ref);
       }
       this.steps.push({ kind: "section", node, header });
-      this.content(node, level + 1, text);
+      this.content(node, level + 1, text, under(hidden, node));
     }
     closeSection(node, header) {
       if (this.close(header, node.role === "iframe") && this.lines[header].body.endsWith(":") && node.ref !== undefined)
@@ -8047,16 +8078,17 @@ ${value.stack}`;
           end: this.lines.length
         };
     }
-    heading(node, level) {
+    heading(node, level, hidden) {
       const own = node.name ? "" : ownText(node, this.inert);
       this.element(copy(node, {
         ref: actionable(node),
         urls: false,
-        text: own === "" ? undefined : own
+        text: own === "" ? undefined : own,
+        hidden
       }), level);
-      this.content(node, level, false);
+      this.content(node, level, false, beside(hidden, node));
     }
-    control(node, level, text) {
+    control(node, level, text, hidden) {
       let value;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
@@ -8069,16 +8101,21 @@ ${value.stack}`;
         if (label !== "")
           value = text ? label : clip(label, OWN_TEXT_CLIP);
       }
-      const line = copy(node, { ref: true, urls: this.urls, text: value });
-      const choices = node.role === "combobox" || node.role === "listbox" ? nativeOptions(node) : [];
+      const line = copy(node, { ref: true, urls: this.urls, text: value, hidden });
+      const choices = node.role === "combobox" || node.role === "listbox" ? nativeOptions(node, under(hidden, node)) : [];
       if (choices.length === 0)
         this.element(line, level);
       else {
-        this.header(node, level, true, line);
+        this.header(node, level, true, hidden, line);
         this.lines[this.lines.length - 1].body += ":";
-        const shown = text || choices.length <= LONG_SELECT ? choices : choices.filter((option) => option.selected === true);
-        for (const option of shown)
-          this.element(copy(option, { ref: false, urls: false, text: option.text }), level + 1);
+        const shown = text || choices.length <= LONG_SELECT ? choices : choices.filter((choice) => choice.option.selected === true);
+        for (const choice of shown)
+          this.element(copy(choice.option, {
+            ref: false,
+            urls: false,
+            text: choice.option.text,
+            hidden: choice.hidden
+          }), level + 1);
         if (shown.length < choices.length)
           this.lines.push({
             level: level + 1,
@@ -8088,7 +8125,7 @@ ${value.stack}`;
             ref: false
           });
       }
-      this.content(node, level, false);
+      this.content(node, level, false, beside(hidden, node));
     }
     element(line, level) {
       const bodies = renderAriaSnapshotAsYaml([line]).split(`
@@ -8102,7 +8139,7 @@ ${value.stack}`;
           ref: index === 0 && line.ref !== undefined
         });
     }
-    header(node, level, ref, line = copy(node, { ref, urls: false })) {
+    header(node, level, ref, hidden, line = copy(node, { ref, urls: false, hidden })) {
       const { text: _text, url: _url, placeholder: _placeholder, ...key } = line;
       this.lines.push({
         level,
@@ -8143,21 +8180,23 @@ ${value.stack}`;
       copied.url = url;
     if (keep.text !== undefined)
       copied.text = keep.text;
+    if (keep.hidden === "carried")
+      copied.ariaHidden = true;
     return copied;
   }
-  function nativeOptions(select) {
+  function nativeOptions(select, hidden) {
     const options = [];
-    const visit = (children) => {
+    const visit = (children, hidden) => {
       for (const child of children ?? []) {
         if (typeof child === "string")
           continue;
         if (child.role === "option" && !child.ref)
-          options.push(child);
+          options.push({ option: child, hidden });
         else if (child.role === "group" && !actionable(child))
-          visit(child.children);
+          visit(child.children, beside(hidden, child));
       }
     };
-    visit(select.children);
+    visit(select.children, hidden);
     return options;
   }
   function separatorsOnly(line) {

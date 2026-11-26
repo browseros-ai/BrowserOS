@@ -12,6 +12,7 @@ export const RENDERER = [
   'src/prelude/snapshot-cap.ts',
   'src/prelude/snapshot-delta.ts',
   'src/prelude/snapshot-on-top.ts',
+  'src/prelude/snapshot-hidden.ts',
   'src/prelude/snapshot-inert.ts',
   'src/prelude/snapshot-late.ts',
   'src/prelude/snapshot-unmarked.ts',

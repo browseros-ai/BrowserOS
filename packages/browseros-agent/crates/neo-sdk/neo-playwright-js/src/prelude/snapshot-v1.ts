@@ -31,6 +31,7 @@ import {
   partialHead,
   type Section,
 } from './snapshot-cap'
+import { beside, type Hidden, movable, under } from './snapshot-hidden'
 import { onTopContent, onTopHead } from './snapshot-on-top'
 import { unmarkedHead } from './snapshot-unmarked'
 import type { AriaNodeJSON } from './vendored'
@@ -277,35 +278,43 @@ function walk(
     | { line?: Line; body?: string; length: number; level: number }
     | undefined
   let skipped = 0
-  const printer = new Printer(urls, partials, inert, (node, text, level) => {
-    skipped++
-    // Kept blocks force text on, even under { text: false }. Count at the omission
-    // point, with that inherited form, rather than rendering roots as new top-level reads.
-    const line = printer.lines.at(-1)
-    if (
-      !segment ||
-      !boundary ||
-      boundary.line !== line ||
-      boundary.body !== line?.body ||
-      boundary.length !== printer.lines.length ||
-      boundary.level !== level
-    ) {
-      // Adjacent text omissions still join, but a retained line or text piece separates
-      // them, just as it did in the original form. Preserve indentation across roots too.
-      segment = new Printer(urls, new Map(), true)
-      omitted.push(segment)
-    }
-    segment.walk([node], level, text)
-    boundary = { line, body: line?.body, length: printer.lines.length, level }
-  })
+  const printer = new Printer(
+    urls,
+    partials,
+    inert,
+    (node, text, level, hidden) => {
+      skipped++
+      // Kept blocks force text on, even under { text: false }. Count at the omission
+      // point, with that inherited form, rather than rendering roots as new top-level reads.
+      const line = printer.lines.at(-1)
+      if (
+        !segment ||
+        !boundary ||
+        boundary.line !== line ||
+        boundary.body !== line?.body ||
+        boundary.length !== printer.lines.length ||
+        boundary.level !== level
+      ) {
+        // Adjacent text omissions still join, but a retained line or text piece separates
+        // them, just as it did in the original form. Preserve indentation across roots too.
+        segment = new Printer(urls, new Map(), true)
+        omitted.push(segment)
+      }
+      segment.walk([node], level, text, hidden)
+      boundary = { line, body: line?.body, length: printer.lines.length, level }
+    },
+  )
   // A virtual root over the json array, so a locator's root node goes through the same rules:
   // a locator on `main` prints `- main [ref=e2]:` and its content.
   const front = onTopContent(result)
   if (front.first.length) {
-    printer.walk(front.first, 0, true)
+    // One walk per held node, each with its own mark: a walk prints all of its children before
+    // it returns, so the lines come out as one walk would print them.
+    for (const held of front.first)
+      printer.walk([held.node], 0, true, held.hidden)
     printer.separateText()
   }
-  printer.walk(front.rest, 0, text)
+  printer.walk(front.rest, 0, text, 'no')
   for (const unplaced of partials.values())
     for (const partial of unplaced) printer.comment(partialComment(partial), 0)
   return {
@@ -345,9 +354,21 @@ type Line = {
  * page overflowed it), and a block's closing step must run after all of its content.
  */
 type Step =
-  | { kind: 'node'; child: AriaNodeJSON | string; level: number; text: boolean }
+  | {
+      kind: 'node'
+      child: AriaNodeJSON | string
+      level: number
+      text: boolean
+      hidden: Hidden
+    }
   | { kind: 'piece'; raw: string; level: number; text: boolean }
-  | { kind: 'kept'; node: AriaNodeJSON; header: number; level: number }
+  | {
+      kind: 'kept'
+      node: AriaNodeJSON
+      header: number
+      level: number
+      hidden: Hidden
+    }
   | { kind: 'section'; node: AriaNodeJSON; header: number }
 
 class Printer {
@@ -365,6 +386,7 @@ class Printer {
       node: AriaNodeJSON,
       text: boolean,
       level: number,
+      hidden: Hidden,
     ) => void,
   ) {}
 
@@ -373,14 +395,16 @@ class Printer {
     children: readonly (AriaNodeJSON | string)[],
     level: number,
     text: boolean,
+    hidden: Hidden,
   ): void {
-    this.content({ children: [...children] }, level, text)
+    this.content({ children: [...children] }, level, text, hidden)
     for (let step = this.steps.pop(); step; step = this.steps.pop()) {
-      if (step.kind === 'node') this.node(step.child, step.level, step.text)
+      if (step.kind === 'node')
+        this.node(step.child, step.level, step.text, step.hidden)
       else if (step.kind === 'piece')
         this.piece(step.raw, step.level, step.text)
       else if (step.kind === 'kept')
-        this.closeKept(step.node, step.header, step.level)
+        this.closeKept(step.node, step.header, step.level, step.hidden)
       else this.closeSection(step.node, step.header)
     }
   }
@@ -427,34 +451,38 @@ class Printer {
     }
   }
 
-  /** One child of the node being walked, by the first rule that matches it. */
+  /**
+   * One child of the node being walked, by the first rule that matches it. `hidden` is what its
+   * line inherits of an `aria-hidden` node above it.
+   */
   private node(
     child: AriaNodeJSON | string,
     level: number,
     text: boolean,
+    hidden: Hidden,
   ): void {
     if (typeof child !== 'string' && child.inert && !this.inert) {
-      this.onOmit?.(child, text, level)
+      this.onOmit?.(child, text, level, hidden)
       this.omit(child)
       return
     }
     if (typeof child === 'string') this.piece(child, level, text)
     else if (child.role === 'text') this.piece(child.text ?? '', level, text)
-    else if (KEPT.has(child.role)) this.kept(child, level)
-    else if (SECTION.has(child.role)) this.section(child, level, text)
-    else if (child.role === 'heading') this.heading(child, level)
+    else if (KEPT.has(child.role)) this.kept(child, level, hidden)
+    else if (SECTION.has(child.role)) this.section(child, level, text, hidden)
+    else if (child.role === 'heading') this.heading(child, level, hidden)
     else if (actionable(child) || fieldWithoutRef(child))
-      this.control(child, level, text)
+      this.control(child, level, text, hidden)
     else {
       if (child.role === 'img') {
         if (child.name && text)
-          this.element(copy(child, { ref: false, urls: false }), level)
+          this.element(copy(child, { ref: false, urls: false, hidden }), level)
       } else {
         const named = nameAsContent(child)
         if (named !== undefined) this.piece(named, level, text)
       }
       // No line of its own: its text and children belong to the level it sits in.
-      this.content(child, level, text)
+      this.content(child, level, text, beside(hidden, child))
     }
   }
 
@@ -467,10 +495,17 @@ class Printer {
     node: AriaNodeJSON | { children: (AriaNodeJSON | string)[] },
     level: number,
     text: boolean,
+    hidden: Hidden,
   ): void {
     const children = node.children ?? []
     for (let index = children.length - 1; index >= 0; index--)
-      this.steps.push({ kind: 'node', child: children[index], level, text })
+      this.steps.push({
+        kind: 'node',
+        child: children[index],
+        level,
+        text,
+        hidden,
+      })
     const own = 'role' in node ? shownText(node) : undefined
     if (own !== undefined)
       this.steps.push({ kind: 'piece', raw: own, level, text })
@@ -499,15 +534,22 @@ class Printer {
       })
   }
 
-  private kept(node: AriaNodeJSON, level: number): void {
-    const header = this.header(node, level, keptRef(node))
-    this.steps.push({ kind: 'kept', node, header, level })
+  private kept(node: AriaNodeJSON, level: number, inherited: Hidden): void {
+    // The cap may print the block outside the sections around it.
+    const hidden = movable(inherited)
+    const header = this.header(node, level, keptRef(node), hidden)
+    this.steps.push({ kind: 'kept', node, header, level, hidden })
     // Its text is what tells the agent what its buttons do, so it prints whatever the form.
-    this.content(node, level + 1, true)
+    this.content(node, level + 1, true, under(hidden, node))
   }
 
   /** After a kept block's content: the leaf form, a colon, or no line at all. */
-  private closeKept(node: AriaNodeJSON, header: number, level: number): void {
+  private closeKept(
+    node: AriaNodeJSON,
+    header: number,
+    level: number,
+    hidden: Hidden,
+  ): void {
     const inside = this.lines.slice(header + 1)
     if (
       inside.length === 1 &&
@@ -517,15 +559,25 @@ class Printer {
       // All of its content is one piece of text: the leaf form, `- alert: Invalid password.`
       this.lines.length = header
       this.element(
-        copy(node, { ref: keptRef(node), urls: false, text: inside[0].body }),
+        copy(node, {
+          ref: keptRef(node),
+          urls: false,
+          text: inside[0].body,
+          hidden,
+        }),
         level,
       )
     } else if (!this.close(header, Boolean(node.name))) return
     this.lines[header].keptEnd = this.lines.length
   }
 
-  private section(node: AriaNodeJSON, level: number, text: boolean): void {
-    const header = this.header(node, level, true)
+  private section(
+    node: AriaNodeJSON,
+    level: number,
+    text: boolean,
+    hidden: Hidden,
+  ): void {
+    const header = this.header(node, level, true, hidden)
     if (node.role === 'iframe' && node.ref !== undefined) {
       // Under its iframe line, as snapshot.ts prints it for Playwright's text.
       for (const partial of this.partials.get(node.ref) ?? [])
@@ -533,7 +585,7 @@ class Printer {
       this.partials.delete(node.ref)
     }
     this.steps.push({ kind: 'section', node, header })
-    this.content(node, level + 1, text)
+    this.content(node, level + 1, text, under(hidden, node))
   }
 
   /** After a section's content: its colon, or no line when nothing printed inside it. */
@@ -551,21 +603,27 @@ class Printer {
       }
   }
 
-  private heading(node: AriaNodeJSON, level: number): void {
+  private heading(node: AriaNodeJSON, level: number, hidden: Hidden): void {
     const own = node.name ? '' : ownText(node, this.inert)
     this.element(
       copy(node, {
         ref: actionable(node),
         urls: false,
         text: own === '' ? undefined : own,
+        hidden,
       }),
       level,
     )
     // A link inside the heading gets its own line; the heading's text is not repeated.
-    this.content(node, level, false)
+    this.content(node, level, false, beside(hidden, node))
   }
 
-  private control(node: AriaNodeJSON, level: number, text: boolean): void {
+  private control(
+    node: AriaNodeJSON,
+    level: number,
+    text: boolean,
+    hidden: Hidden,
+  ): void {
     let value: string | undefined
     // A text field that differs from the name: how a textbox shows its value.
     if (node.text !== undefined && node.text !== node.name) value = node.text
@@ -581,23 +639,28 @@ class Printer {
         (node.role === 'link' && !this.urls ? (node.url ?? '') : '')
       if (label !== '') value = text ? label : clip(label, OWN_TEXT_CLIP)
     }
-    const line = copy(node, { ref: true, urls: this.urls, text: value })
+    const line = copy(node, { ref: true, urls: this.urls, text: value, hidden })
     const choices =
       node.role === 'combobox' || node.role === 'listbox'
-        ? nativeOptions(node)
+        ? nativeOptions(node, under(hidden, node))
         : []
     if (choices.length === 0) this.element(line, level)
     else {
       // A native select: its options carry no refs; they are its value and its choices.
-      this.header(node, level, true, line)
+      this.header(node, level, true, hidden, line)
       this.lines[this.lines.length - 1].body += ':'
       const shown =
         text || choices.length <= LONG_SELECT
           ? choices
-          : choices.filter((option) => option.selected === true)
-      for (const option of shown)
+          : choices.filter((choice) => choice.option.selected === true)
+      for (const choice of shown)
         this.element(
-          copy(option, { ref: false, urls: false, text: option.text }),
+          copy(choice.option, {
+            ref: false,
+            urls: false,
+            text: choice.option.text,
+            hidden: choice.hidden,
+          }),
           level + 1,
         )
       if (shown.length < choices.length)
@@ -610,7 +673,7 @@ class Printer {
         })
     }
     // Nested controls get lines of their own; the control's own text is not printed again.
-    this.content(node, level, false)
+    this.content(node, level, false, beside(hidden, node))
   }
 
   /** The vendored renderer's lines for one childless node copy, at `level`. */
@@ -631,7 +694,8 @@ class Printer {
     node: AriaNodeJSON,
     level: number,
     ref: boolean,
-    line: AriaNodeJSON = copy(node, { ref, urls: false }),
+    hidden: Hidden,
+    line: AriaNodeJSON = copy(node, { ref, urls: false, hidden }),
   ): number {
     // Only the key: a block's text and props are its content, not its line.
     const { text: _text, url: _url, placeholder: _placeholder, ...key } = line
@@ -678,12 +742,13 @@ function fieldWithoutRef(node: AriaNodeJSON): boolean {
 
 /**
  * Playwright's node for one line: no children, the ref only where the agent can act on it or
- * scope to it, `[cursor=pointer]` only where it is what says a non-control is clickable, and
- * `/url` only when the script asked for urls. `/placeholder` stays, as Playwright prints it.
+ * scope to it, `[cursor=pointer]` only where it is what says a non-control is clickable,
+ * `/url` only when the script asked for urls, and `[aria-hidden]` where the node has it or
+ * `keep` carries it. `/placeholder` stays, as Playwright prints it.
  */
 function copy(
   node: AriaNodeJSON,
-  keep: { ref: boolean; urls: boolean; text?: string },
+  keep: { ref: boolean; urls: boolean; text?: string; hidden: Hidden },
 ): AriaNodeJSON {
   const { children: _children, ref, cursor, url, text: _text, ...line } = node
   const copied: AriaNodeJSON = { ...line }
@@ -694,24 +759,30 @@ function copy(
   }
   if (keep.urls && url !== undefined) copied.url = url
   if (keep.text !== undefined) copied.text = keep.text
+  if (keep.hidden === 'carried') copied.ariaHidden = true
   return copied
 }
 
+/** One option of a native select, and what its line inherits of an `aria-hidden` node above it. */
+type Choice = { option: AriaNodeJSON; hidden: Hidden }
+
 /**
  * A native select's options, which carry no refs, in document order: `<optgroup>`s are `group`
- * nodes, which print no line, so their options are collected through them.
+ * nodes, which print no line, so their options are collected through them, each carrying a
+ * hidden group's mark. `hidden` is what the select's own children inherit.
  */
-function nativeOptions(select: AriaNodeJSON): AriaNodeJSON[] {
-  const options: AriaNodeJSON[] = []
-  const visit = (children: AriaNodeJSON['children']): void => {
+function nativeOptions(select: AriaNodeJSON, hidden: Hidden): Choice[] {
+  const options: Choice[] = []
+  const visit = (children: AriaNodeJSON['children'], hidden: Hidden): void => {
     for (const child of children ?? []) {
       if (typeof child === 'string') continue
-      if (child.role === 'option' && !child.ref) options.push(child)
+      if (child.role === 'option' && !child.ref)
+        options.push({ option: child, hidden })
       else if (child.role === 'group' && !actionable(child))
-        visit(child.children)
+        visit(child.children, beside(hidden, child))
     }
   }
-  visit(select.children)
+  visit(select.children, hidden)
   return options
 }
 

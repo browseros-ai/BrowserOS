@@ -511,6 +511,125 @@ export const rules: Gap = {
       },
       { role: 'heading', level: 2, children: ['', 'Step 2'] },
     ]),
+    // A line printed where an aria-hidden node printed no line around it says [aria-hidden]: a
+    // wrapper's content, a heading's and a control's, a named image, a kept block, an option in a
+    // hidden option group. A section's content is nested under its marked line, and the group's
+    // sibling option and the button after the wrapper are not hidden.
+    'rules/hidden-flatten': tree([
+      {
+        role: 'generic',
+        ariaHidden: true,
+        children: [
+          'Slide 2 of 5',
+          button('Next slide', 'e1'),
+          {
+            role: 'heading',
+            name: 'Slide 2',
+            level: 2,
+            children: [link('Read more', 'e2')],
+          },
+          { role: 'img', name: 'Beach' },
+          { role: 'alert', children: ['Sold out'] },
+          {
+            role: 'main',
+            ref: 'e3',
+            children: [button('Inside main', 'e4')],
+          },
+        ],
+      },
+      {
+        ...button('Menu', 'e5'),
+        ariaHidden: true,
+        children: [link('Settings', 'e6')],
+      },
+      {
+        role: 'combobox',
+        name: 'Plan',
+        ref: 'e8',
+        children: [
+          { role: 'option', name: 'Basic' },
+          {
+            role: 'group',
+            name: 'Old',
+            ariaHidden: true,
+            children: [{ role: 'option', name: 'Legacy', selected: true }],
+          },
+        ],
+      },
+      button('After', 'e7'),
+    ]),
+    // A kept block says the [aria-hidden] of a section around it, so a cut that prints it at the
+    // left edge keeps the mark; one in a child document does not inherit its iframe's.
+    'rules/hidden-cut': tree([
+      {
+        role: 'main',
+        ref: 'e1',
+        ariaHidden: true,
+        children: [
+          ...[1, 2, 3, 4, 5, 6].map((index) =>
+            button(`Item ${index}`, `e${index + 9}`),
+          ),
+          {
+            role: 'dialog',
+            name: 'Confirm',
+            ref: 'e2',
+            children: [button('OK', 'e3')],
+          },
+          {
+            role: 'iframe',
+            ref: 'e4',
+            children: [
+              {
+                role: 'dialog',
+                name: 'Pay',
+                ref: 'f1e1',
+                children: [button('Card', 'f1e2')],
+              },
+            ],
+          },
+        ],
+      },
+    ]),
+    // What a whole-view layer holds prints first, and says the [aria-hidden] of a node above it
+    // in its document; one in a child document does not inherit its iframe's.
+    'rules/hidden-on-top': tree(
+      [
+        {
+          role: 'generic',
+          ariaHidden: true,
+          children: [
+            {
+              role: 'generic',
+              children: [
+                {
+                  role: 'dialog',
+                  name: 'Promo',
+                  ref: 'e5',
+                  onTop: 'e5',
+                  children: [button('Close', 'e6')],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          role: 'iframe',
+          ref: 'e8',
+          ariaHidden: true,
+          children: [{ ...button('Framed', 'f1e1'), onTop: 'e5' }],
+        },
+        button('Page', 'e7'),
+      ],
+      {
+        onTop: [
+          {
+            ref: 'e5',
+            line: '# on top: dialog "Promo" [ref=e5] over the whole view',
+            wholeView: true,
+          },
+        ],
+      },
+    ),
     // An empty named kept block is still a kept block: past a cut it prints after the cut line.
     'rules/kept-empty-cut': tree([
       button('Undo', 'e1'),
@@ -592,5 +711,11 @@ export const rules: Gap = {
       'page-notext-urls': page({ text: false, urls: true }),
     }),
     ...calls('rules/own-text-empty', both),
+    ...calls('rules/hidden-flatten', both),
+    ...calls('rules/hidden-cut', {
+      'page-notext': page({ text: false }),
+      'page-notext-max30': page({ text: false, maxTokens: 30 }),
+    }),
+    ...calls('rules/hidden-on-top', both),
   ],
 }
