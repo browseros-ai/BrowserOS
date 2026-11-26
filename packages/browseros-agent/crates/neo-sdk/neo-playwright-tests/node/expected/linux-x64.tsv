@@ -4,7 +4,6 @@
 # id	outcome	file	title
 EH-096	skip	tests/page/elementhandle-scroll-into-view.spec.ts	should scroll display:contents into view
 EX-198	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass undefined
-EX-259	fail	tests/page/expect-to-have-accessible.spec.ts	toHaveAccessibleName
 FR-007	fail	tests/page/frame-evaluate.spec.ts	should allow cross-frame element handles
 FR-004	skip	tests/page/frame-evaluate.spec.ts	should dispose context on cross-origin navigation
 FR-003	skip	tests/page/frame-evaluate.spec.ts	should dispose context on navigation
@@ -108,10 +107,7 @@ SE-016	skip	tests/page/selectors-css.spec.ts	should work with :nth-child(of) not
 SE-090	skip	tests/page/selectors-get-by.spec.ts	getBy escaping
 SE-063	fail	tests/page/selectors-role.spec.ts	hidden with shadow dom slots
 SE-059	fail	tests/page/selectors-role.spec.ts	should filter hidden, unless explicitly asked for
-SE-055	fail	tests/page/selectors-role.spec.ts	should support disabled
 SE-057	skip	tests/page/selectors-role.spec.ts	should support disabled fieldset
-SE-061	fail	tests/page/selectors-role.spec.ts	should support option name with html whitespace
-SE-051	fail	tests/page/selectors-role.spec.ts	should support selected
 WO-001	skip	tests/page/workers.spec.ts	Page.workers @smoke
 WO-014	skip	tests/page/workers.spec.ts	should attribute network activity for worker inside iframe to the iframe
 WO-008	skip	tests/page/workers.spec.ts	should evaluate
