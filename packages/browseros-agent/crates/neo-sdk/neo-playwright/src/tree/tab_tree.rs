@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_core::FrameId;
 use futures_util::future;
-use neo_snapshot_apc::refs::{Ref, RefLookup, TabRefTable};
+use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
+use neo_snapshot_apc::select::RefResolver;
 use neo_snapshot_apc::tree::{
     BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SiteKey, SnapshotTree, TreeDoc,
 };
@@ -306,6 +307,25 @@ impl fmt::Debug for TabTree {
     }
 }
 
+/// A chunk run's `aria-ref` parts read the tab's live table, one short lock per lookup: a run
+/// holding `&TabTree` across awaits never holds the lock across one, and a ref retired between
+/// two of its stages answers `None` in the later one, as the page's live ref map would.
+impl RefResolver for TabTree {
+    fn resolve(&self, body: &str) -> Option<NodeKey> {
+        let lookup = self
+            .refs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .resolve_str(body);
+        match lookup {
+            // A click proxy (a zero-size control's shown label, design 3.5) changes how an
+            // action presses the control, not which node the ref names.
+            RefLookup::Key(RefTarget { key, .. }) => Some(key),
+            RefLookup::Retired | RefLookup::Unknown => None,
+        }
+    }
+}
+
 /// Probes every cached world installed strictly before `requested_at` with `probe::describe` in
 /// parallel after the APC reply arrives (design sections 6.2 and 6.3).
 ///
@@ -381,6 +401,7 @@ mod tests {
     use neo_snapshot::{AriaChild, AriaNode};
     use neo_snapshot_apc::proto::AnnotatedPageContent;
     use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
+    use neo_snapshot_apc::select::RefResolver;
     use neo_snapshot_apc::tree::{
         ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, DomNodeId, MIN_CONTRACT_VERSION,
         NodeBuilder, NodeKey, SiteKey, SnapshotTree,
@@ -1916,6 +1937,70 @@ mod tests {
             table.resolve(&first_ref),
             RefLookup::Retired,
             "the first visit's refs must answer element_detached"
+        );
+        Ok(())
+    }
+
+    /// A chunk run's `aria-ref` parts resolve through the tab's table as it stands at each
+    /// lookup, retirements included.
+    #[test]
+    fn a_runs_ref_parts_resolve_through_the_tabs_live_table() -> TestResult {
+        let frames = FrameWorlds::new(FrameSeq(0));
+        let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
+        let button = key("doc-page", 10)?;
+        let checkbox = key("doc-page", 20)?;
+        let label = key("doc-page", 21)?;
+        let located = key("doc-page", 30)?;
+        let seq = frames.seq_for_doc(
+            DocContext {
+                token: &button.doc,
+                frame: Some(&FrameId("main".to_owned())),
+                place: DocPlace::Main,
+                url: Some("https://a.test/"),
+                requested_at: Stamp::next(),
+            },
+            &HashMap::new(),
+        );
+        let (printed, proxied) = {
+            let mut table = tree.refs.lock().unwrap_or_else(PoisonError::into_inner);
+            let printed = table.assign_snapshot_ref(seq, &button, "button", "Pay", None);
+            let proxied =
+                table.assign_snapshot_ref(seq, &checkbox, "checkbox", "Accept", Some(label));
+            (printed, proxied)
+        };
+        let minted = tree.ref_for(seq, &located);
+        let refs: &(dyn RefResolver + Sync) = &tree;
+
+        assert_eq!(
+            refs.resolve(&printed.to_string()),
+            Some(button.clone()),
+            "a printed ref names the node the snapshot printed it on"
+        );
+        assert_eq!(
+            refs.resolve(&minted.to_string()),
+            Some(located),
+            "a minted ref names the node `locator.ref()` minted it for"
+        );
+        assert_eq!(
+            refs.resolve(&proxied.to_string()),
+            Some(checkbox),
+            "a click proxy changes how an action presses the control, not which node it is"
+        );
+        for body in ["e99", "x1", "e01", ""] {
+            assert_eq!(
+                refs.resolve(body),
+                None,
+                "{body:?} names no live node: never issued, or not a ref at all"
+            );
+        }
+        assert_eq!(
+            tree.retire_doc(&frames, &button.doc),
+            Some(FrameSeq(seq.raw()))
+        );
+        assert_eq!(
+            refs.resolve(&printed.to_string()),
+            None,
+            "a ref retired with its document names no live node at the next lookup"
         );
         Ok(())
     }
