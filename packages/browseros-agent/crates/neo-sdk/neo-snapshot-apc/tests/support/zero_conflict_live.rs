@@ -678,7 +678,6 @@ pub(crate) fn verdict_brief(verdict: &Verdict) -> String {
             format!("{} ({matches} matches)", verdict_kind(verdict))
         }
         Verdict::Label(_)
-        | Verdict::NeoDroppedAriaHidden
         | Verdict::WrongFrame
         | Verdict::RefUnresolved
         | Verdict::FrameUnresolved
@@ -694,7 +693,6 @@ pub(crate) fn verdict_kind(verdict: &Verdict) -> &'static str {
         Verdict::Reached { .. } => "reached",
         Verdict::Label(_) => "label",
         Verdict::Missed { .. } => "missed",
-        Verdict::NeoDroppedAriaHidden => "neo-dropped-aria-hidden",
         Verdict::WrongFrame => "wrong-frame",
         Verdict::RefUnresolved => "ref-unresolved",
         Verdict::FrameUnresolved => "frame-unresolved",

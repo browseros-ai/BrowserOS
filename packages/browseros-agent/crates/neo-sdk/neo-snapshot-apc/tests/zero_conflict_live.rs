@@ -116,8 +116,6 @@ struct LineCounts {
     lines: usize,
     reached: usize,
     labels: usize,
-    /// Lines of the one known miss class, [`Verdict::NeoDroppedAriaHidden`]; counted in `misses`.
-    known: usize,
     misses: usize,
 }
 
@@ -128,7 +126,6 @@ impl LineCounts {
             counts.lines += 1;
             counts.reached += usize::from(line.verdict.reached());
             counts.labels += usize::from(matches!(line.verdict, Verdict::Label(_)));
-            counts.known += usize::from(line.verdict == Verdict::NeoDroppedAriaHidden);
             counts.misses += usize::from(line.verdict.is_miss());
         }
         counts
@@ -148,7 +145,6 @@ impl LineCounts {
         self.lines += other.lines;
         self.reached += other.reached;
         self.labels += other.labels;
-        self.known += other.known;
         self.misses += other.misses;
     }
 }
@@ -800,8 +796,8 @@ fn site_section(site: &Site, outcome: &SiteOutcome) -> String {
                     let _ = writeln!(
                         out,
                         "- capture #{capture} {format}: {} lines, {} reached, {} labels, {} \
-                         misses ({} known class)",
-                        counts.lines, counts.reached, counts.labels, counts.misses, counts.known
+                         misses",
+                        counts.lines, counts.reached, counts.labels, counts.misses
                     );
                 }
             }
@@ -897,13 +893,12 @@ fn site_row(site: &Site, ready: &str, oracle_failed: bool, measured: &Measured) 
         _ => "n/a (oracle failed) | n/a".to_owned(),
     };
     let mut rows = vec![format!(
-        "{} | {} | {} | {} | {} | {} | {} | {}/{} ({} failed) | {} | {recall}{}",
+        "{} | {} | {} | {} | {} | {} | {}/{} ({} failed) | {} | {recall}{}",
         site.id,
         counts.role_lines(),
         counts.reached,
         counts.labels,
         counts.misses,
-        counts.known,
         Percent {
             part: counts.reached,
             whole: counts.role_lines()
@@ -996,8 +991,7 @@ fn save_site(private: &Path, site: &Site, outcome: &SiteOutcome) -> Result<(), B
     Ok(())
 }
 
-/// The site run's total rows: the gate's percentage, the same with the known class set aside
-/// (what the pending printer fix would leave), and each site not measured.
+/// The site run's total rows: the gate's percentage and each site not measured.
 fn report_site_totals(sites: usize, totals: &Totals, not_measured: &[String]) {
     let Totals {
         lines,
@@ -1008,14 +1002,13 @@ fn report_site_totals(sites: usize, totals: &Totals, not_measured: &[String]) {
     } = totals;
     report(&format!(
         "total | {} of {sites} sites measured | {} role lines | {} reached | {} labels | {} \
-         misses ({} known class) | {} | {unstable_pages} unstable sites | {} hydration failures \
-         | recall {} ({}/{}) | {} extra",
+         misses | {} | {unstable_pages} unstable sites | {} hydration failures | recall {} \
+         ({}/{}) | {} extra",
         sites - not_measured.len(),
         lines.role_lines(),
         lines.reached,
         lines.labels,
         lines.misses,
-        lines.known,
         Percent {
             part: lines.reached,
             whole: lines.role_lines()
@@ -1025,14 +1018,6 @@ fn report_site_totals(sites: usize, totals: &Totals, not_measured: &[String]) {
         recall.found,
         recall.page,
         recall.extra,
-    ));
-    let without_known = lines.role_lines() - lines.known;
-    report(&format!(
-        "total without the known class: {} of {without_known} role lines",
-        Percent {
-            part: lines.reached,
-            whole: without_known
-        },
     ));
     for reason in not_measured {
         report(&format!("not measured: {reason}"));
@@ -1058,8 +1043,8 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
             private.display()
         ));
         report(
-            "site | role lines | reached | labels | misses | known class | % | refs hydrated | \
-             stable | recall | extra",
+            "site | role lines | reached | labels | misses | % | refs hydrated | stable | recall \
+             | extra",
         );
         let mut document = format!(
             "# Zero-conflict site run\n\nbrowser {browser}; {} sites from {}\n\n",
@@ -1104,8 +1089,7 @@ async fn site_lines_reach_their_elements() -> Result<(), Box<dyn Error>> {
         );
         assert!(
             lines.reached * 1000 >= lines.role_lines() * SITE_GATE_PER_MILLE,
-            "design 10.3 gates the sites at 99.5% of role lines reached (the known class counts \
-             as missed); {} of {} is {}",
+            "design 10.3 gates the sites at 99.5% of role lines reached; {} of {} is {}",
             lines.reached,
             lines.role_lines(),
             Percent {
@@ -1154,12 +1138,11 @@ fn private_site_captures_replay_offline() -> Result<(), Box<dyn Error>> {
             zero_conflict::check_apc(id, neo_snapshot_apc::decode_protobuf(&fs::read(path)?)?)?;
         let counts = LineCounts::of(&check.lines);
         report(&format!(
-            "{id} | {} role lines | {} reached | {} labels | {} misses ({} known class) | {}",
+            "{id} | {} role lines | {} reached | {} labels | {} misses | {}",
             counts.role_lines(),
             counts.reached,
             counts.labels,
             counts.misses,
-            counts.known,
             Percent {
                 part: counts.reached,
                 whole: counts.role_lines()
@@ -1177,12 +1160,11 @@ fn private_site_captures_replay_offline() -> Result<(), Box<dyn Error>> {
         totals.merge(counts);
     }
     report(&format!(
-        "replay total | {} captures | {} role lines | {} reached | {} misses ({} known class) | {}",
+        "replay total | {} captures | {} role lines | {} reached | {} misses | {}",
         captures.len(),
         totals.role_lines(),
         totals.reached,
         totals.misses,
-        totals.known,
         Percent {
             part: totals.reached,
             whole: totals.role_lines()

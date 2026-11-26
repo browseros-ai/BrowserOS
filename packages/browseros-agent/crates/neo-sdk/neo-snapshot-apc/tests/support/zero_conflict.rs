@@ -534,12 +534,6 @@ pub(crate) enum Verdict {
         /// How many elements the query matched instead.
         matches: usize,
     },
-    /// The one known miss class until Neo's printer carries `[aria-hidden]` onto the lines it
-    /// flattens (the captain's decision of 2026-11-25, its own pull request): Neo's flat format
-    /// printed the line outside the `[aria-hidden]` line that hides it, so the agent's query
-    /// lacks `includeHidden`. The tree confirms an ancestor's `aria-hidden` hides the element,
-    /// and the same query with `includeHidden: true` reaches it. Still a miss.
-    NeoDroppedAriaHidden,
     /// The line's element is not in the document its indentation puts it in.
     WrongFrame,
     /// The line's ref names no live element in the table that printed it.
@@ -571,9 +565,6 @@ impl fmt::Display for Verdict {
             Self::Label(Label::Generic) => f.write_str("label: generic, no ARIA role"),
             Self::Label(Label::Iframe) => f.write_str("label: iframe"),
             Self::Missed { matches } => write!(f, "missed ({matches} other matches)"),
-            Self::NeoDroppedAriaHidden => {
-                f.write_str("missed: Neo's format dropped the [aria-hidden] line that hides it")
-            }
             Self::WrongFrame => f.write_str("wrong frame"),
             Self::RefUnresolved => f.write_str("ref unresolved"),
             Self::FrameUnresolved => f.write_str("frame unresolved"),
@@ -683,7 +674,7 @@ pub(crate) fn check_tree(
             };
             let verdict = match &target {
                 None => Verdict::RefUnresolved,
-                Some(target) => query.verdict(format, &line, &by_role, target),
+                Some(target) => query.verdict(&line, &by_role, target),
             };
             lines.push(LineCheck {
                 format,
@@ -728,13 +719,7 @@ struct Selected {
 impl Query<'_> {
     /// Runs `by_role` in `target`'s own document, the element's frame, once the line's printed
     /// nesting is checked against it, and compares its matches with `target`.
-    fn verdict(
-        &self,
-        format: Format,
-        line: &PrintedLine,
-        by_role: &ByRole,
-        target: &NodeKey,
-    ) -> Verdict {
+    fn verdict(&self, line: &PrintedLine, by_role: &ByRole, target: &NodeKey) -> Verdict {
         let doc = match frame_of(self.tree, self.resolver.0, line, target) {
             Ok(doc) => doc,
             Err(verdict) => return verdict,
@@ -750,30 +735,13 @@ impl Query<'_> {
             Err(verdict) => return verdict,
         };
         if selected.keys.contains(target) {
-            return Verdict::Reached {
+            Verdict::Reached {
                 matches: selected.count,
-            };
-        }
-        if format == Format::Neo
-            && by_role.options.include_hidden.is_none()
-            && hidden_by_ancestor(self.tree, target)
-        {
-            let with_hidden = ByRole {
-                options: ByRoleOptions {
-                    include_hidden: Some(true),
-                    ..by_role.options.clone()
-                },
-                ..by_role.clone()
-            };
-            if self
-                .select(&with_hidden, scope)
-                .is_ok_and(|selected| selected.keys.contains(target))
-            {
-                return Verdict::NeoDroppedAriaHidden;
             }
-        }
-        Verdict::Missed {
-            matches: selected.count,
+        } else {
+            Verdict::Missed {
+                matches: selected.count,
+            }
         }
     }
 
@@ -799,15 +767,6 @@ impl Query<'_> {
             keys: matches.keys(self.tree).flatten().collect(),
         })
     }
-}
-
-/// Whether an ancestor's `aria-hidden` hides `target`: it inherits the attribute within its
-/// document and does not carry it itself.
-fn hidden_by_ancestor(tree: &SnapshotTree, target: &NodeKey) -> bool {
-    tree.node_by_key(target).is_some_and(|node| {
-        let hidden = node.hidden();
-        hidden.is_aria_hidden() && !hidden.has_own_aria_hidden()
-    })
 }
 
 /// `target`'s document, once `line`'s iframe nesting is checked against that document's chain

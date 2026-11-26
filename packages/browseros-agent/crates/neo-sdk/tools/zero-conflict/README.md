@@ -20,9 +20,8 @@ carries the APC contract. For each site the live test
 5. It compares the tree's role sets with the oracle's (recall).
 
 The gate is 99.5% of role lines over the measured sites. A role line is a line with a ref that
-is not one of the snapshot's own labels (`generic`, `iframe`). The one known miss class counts
-as missed: Neo's format drops the `[aria-hidden]` line that hides a subtree. Stability,
-hydration and recall are reported and not gated.
+is not one of the snapshot's own labels (`generic`, `iframe`). Stability, hydration and recall
+are reported and not gated.
 
 ## Running it
 
@@ -39,9 +38,7 @@ crates/neo-sdk/tools/zero-conflict/run.sh \
 | `--out DIR` | `$HOME/.neo-zero-conflict/<UTC timestamp>` |
 | `--browser PATH` | the launcher's own default (`NEO_E2E_BROWSER`) |
 
-Cargo and the toolchain come from your environment. On the shared Mac, put `~/.cargo/bin` first
-on `PATH`, set `RUSTUP_TOOLCHAIN=1.98.0`, and take a heavy slot first (`WORKERS.md`, "Machine").
-A run needs the network.
+Cargo and the toolchain come from your environment. A run needs the network.
 
 The test runs optimized (`cargo test --release`). Each printed line runs its own query over its
 whole document, so the check grows with lines times nodes. On 2026-11-25, against a debug
