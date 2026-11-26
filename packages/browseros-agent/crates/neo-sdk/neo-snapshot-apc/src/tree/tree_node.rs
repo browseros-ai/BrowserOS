@@ -9,10 +9,28 @@ use super::node_key::{DocId, DomNodeId, NodeId, NodeRange};
 use super::role::Role;
 use super::state::State;
 
+/// Where an arena node comes from, and so how the page reaches it.
+///
+/// A node APC sent carries its own DOM id. An option of a collapsed `<select>` has none: APC sends
+/// it as data on its select (`FormControlData.select_options`), and the page reaches it as
+/// `select.options[index]` ([`OptionSlot`](super::OptionSlot)). The enum keeps a DOM id off such a
+/// node, so nothing can resolve it as if APC had sent it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NodeOrigin {
+    /// A node APC sent; `None` for one with no DOM node, such as CSS-generated text.
+    Apc(Option<DomNodeId>),
+    /// The `index`th entry of the parent `<select>`'s `select_options`, appended by frame
+    /// stitching as one of the select's last children.
+    SelectOption { index: u32 },
+    /// A select option whose entry the mask removed with its select's whole list. It stands for
+    /// nothing, so no pass, matcher, emitter or join may reveal that it exists.
+    WithheldOption,
+}
+
 pub(crate) struct TreeNodeInit {
     pub(crate) id: NodeId,
     pub(crate) doc: DocId,
-    pub(crate) dom_node_id: Option<DomNodeId>,
+    pub(crate) origin: NodeOrigin,
     pub(crate) parent: Option<NodeId>,
     pub(crate) child_doc: Option<DocId>,
     pub(crate) partial_frame: Option<usize>,
@@ -29,7 +47,7 @@ pub(crate) struct TreeNodeInit {
 pub struct TreeNode {
     id: NodeId,
     doc: DocId,
-    dom_node_id: Option<DomNodeId>,
+    origin: NodeOrigin,
     parent: Option<NodeId>,
     first_child: Option<NodeId>,
     last_child: Option<NodeId>,
@@ -49,7 +67,7 @@ impl TreeNode {
         Self {
             id: init.id,
             doc: init.doc,
-            dom_node_id: init.dom_node_id,
+            origin: init.origin,
             parent: init.parent,
             first_child: None,
             last_child: None,
@@ -77,10 +95,33 @@ impl TreeNode {
         self.doc
     }
 
-    /// Renderer-assigned DOM node ID within [`Self::doc`], or `None` for synthetic layout nodes.
+    /// Renderer-assigned DOM node ID within [`Self::doc`], or `None` for a node APC sent with no
+    /// DOM node (CSS-generated text) and for an option of a collapsed `<select>`, which the page
+    /// reaches through its select ([`SnapshotTree::option_slot`](super::SnapshotTree::option_slot)).
     #[must_use]
     pub const fn dom_node_id(&self) -> Option<DomNodeId> {
-        self.dom_node_id
+        match self.origin {
+            NodeOrigin::Apc(dom) => dom,
+            NodeOrigin::SelectOption { .. } | NodeOrigin::WithheldOption => None,
+        }
+    }
+
+    /// The entry of its select's `select_options` this node stands for, when it is a live option
+    /// slot.
+    pub(crate) const fn option_index(&self) -> Option<u32> {
+        match self.origin {
+            NodeOrigin::SelectOption { index } => Some(index),
+            NodeOrigin::Apc(_) | NodeOrigin::WithheldOption => None,
+        }
+    }
+
+    /// Whether this node is an option slot, live or withheld: a withheld slot keeps its arena
+    /// place, so it still counts toward its select's list length.
+    pub(crate) const fn is_option_slot(&self) -> bool {
+        matches!(
+            self.origin,
+            NodeOrigin::SelectOption { .. } | NodeOrigin::WithheldOption
+        )
     }
 
     /// Parent node in the stitched flat tree, or `None` for the top-level root node.
@@ -182,6 +223,18 @@ impl TreeNode {
         self.raw.as_mut()
     }
 
+    /// Turns an option slot whose entry the mask removed into a node that stands for nothing: no
+    /// facts, no role, default state, hidden for ARIA. It keeps its arena place, since every
+    /// range and link around it is already final.
+    pub(crate) fn withhold(&mut self) {
+        self.origin = NodeOrigin::WithheldOption;
+        self.raw = None;
+        self.role = None;
+        self.state = State::default();
+        self.hidden = Hidden::WITHHELD;
+        self.mask = NodeMask::Clear;
+    }
+
     pub(crate) fn set_hidden(&mut self, hidden: Hidden) {
         self.hidden = hidden;
     }
@@ -226,7 +279,7 @@ impl fmt::Debug for TreeNode {
         f.debug_struct("TreeNode")
             .field("id", &self.id)
             .field("doc", &self.doc)
-            .field("dom_node_id", &self.dom_node_id)
+            .field("origin", &self.origin)
             .field("parent", &self.parent)
             .field("first_child", &self.first_child)
             .field("last_child", &self.last_child)

@@ -8,9 +8,10 @@ use crate::proto::{
 
 use super::build_error::BuildError;
 use super::node_key::{DocId, DocToken, DomNodeId, FrameToken, NodeId, NodeKey, NodeRange};
+use super::option_slot;
 use super::snapshot_tree::{BuildOptions, Viewport};
 use super::tree_doc::{PartialFrame, PartialFrameReason, TreeDoc, TreeDocInit};
-use super::tree_node::{TreeNode, TreeNodeInit};
+use super::tree_node::{NodeOrigin, TreeNode, TreeNodeInit};
 
 pub(crate) struct StitchedTree {
     pub(crate) nodes: Vec<TreeNode>,
@@ -30,6 +31,12 @@ struct WalkFrame {
     child_doc: Option<DocId>,
     descend_doc: Option<DocId>,
     remaining_children: Vec<ContentNode>,
+    /// This node is a page `<option>` element APC sent as a node.
+    is_option: bool,
+    /// A same-document descendant is one. A select that holds a real `<option>` node gets no
+    /// slots, so an option is never listed twice; an `<option>` in a nested iframe's document
+    /// does not count, as it belongs to another select.
+    holds_option: bool,
 }
 
 enum IframeResolution {
@@ -103,7 +110,17 @@ pub(crate) fn frame_stitch(
                 stack.push(frame);
             }
         } else if let Some(finished) = stack.pop() {
+            // The slots go in before the select's range closes, so its `subtree_end`, every
+            // ancestor's and the document's cover them with no renumbering.
+            if !finished.holds_option {
+                state.push_option_slots(finished.node_id)?;
+            }
             state.exit_node(finished.node_id, finished.child_doc);
+            if let Some(parent) = stack.last_mut()
+                && parent.child_doc.is_none()
+            {
+                parent.holds_option |= finished.is_option || finished.holds_option;
+            }
         }
     }
 
@@ -164,10 +181,11 @@ impl StitchState {
             link_child(&mut self.nodes, parent_id, slot.id);
         }
 
+        let is_option = attrs.as_ref().is_some_and(option_slot::is_option_element);
         self.nodes.push(TreeNode::new(TreeNodeInit {
             id: slot.id,
             doc,
-            dom_node_id,
+            origin: NodeOrigin::Apc(dom_node_id),
             parent,
             child_doc,
             partial_frame,
@@ -194,7 +212,48 @@ impl StitchState {
             child_doc,
             descend_doc,
             remaining_children,
+            is_option,
+            holds_option: false,
         })
+    }
+
+    /// Appends one option slot per entry of `select`'s `select_options` as its last children, in
+    /// its document, when it is a collapsed select ([`option_slot::listed_options`]). The caller
+    /// has already ruled out a select holding real `<option>` nodes. A slot has no DOM id, so it
+    /// never enters `by_key`.
+    fn push_option_slots(&mut self, select: NodeId) -> Result<(), BuildError> {
+        let Some(select_node) = self.nodes.get(select.index()) else {
+            return Ok(());
+        };
+        let doc = select_node.doc();
+        let Some(raw) = select_node.raw_attributes() else {
+            return Ok(());
+        };
+        let Some(entries) = option_slot::listed_options(raw) else {
+            return Ok(());
+        };
+        let facts: Vec<ContentAttributes> = entries
+            .iter()
+            .map(|entry| option_slot::option_attributes(raw, entry))
+            .collect();
+        // A list longer than `u32` fails `allocate_node_slot` before the zip runs dry.
+        for (index, raw) in (0_u32..).zip(facts) {
+            let slot = allocate_node_slot(self.nodes.len())?;
+            link_child(&mut self.nodes, select, slot.id);
+            self.nodes.push(TreeNode::new(TreeNodeInit {
+                id: slot.id,
+                doc,
+                origin: NodeOrigin::SelectOption { index },
+                parent: Some(select),
+                child_doc: None,
+                partial_frame: None,
+                raw: Some(raw),
+            }));
+            if let Some(doc_entry) = self.docs.get_mut(doc.index()) {
+                doc_entry.record_node(slot.id);
+            }
+        }
+        Ok(())
     }
 
     fn exit_node(&mut self, node_id: NodeId, child_doc: Option<DocId>) {

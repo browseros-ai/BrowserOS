@@ -26,6 +26,10 @@ const POINTER_EVENTS_NONE: u16 = 1 << 10;
 pub struct Hidden(u16);
 
 impl Hidden {
+    /// A withheld option slot's: hidden for ARIA and nothing else, so every pass and matcher that
+    /// skips hidden nodes skips it, and no box, pointer or inert fact describes it.
+    pub(crate) const WITHHELD: Self = Self(HIDDEN_FOR_ARIA);
+
     /// Whether this node is excluded from the ARIA tree (`isElementHiddenForAria` parity).
     #[must_use]
     pub const fn is_hidden_for_aria(self) -> bool {

@@ -7,7 +7,8 @@
 //!    functionDeclaration: CALL_FUNCTION,
 //!    arguments: [{ value: <ProbeCall> }, root?, ...nodes?], returnByValue: true }
 //!        └─▶ globalThis.__neoProbe.call(call, root, nodes) ─▶ JSON text of <ProbeReply>
-//!            (including errors and uninstalled); pinned nodes still leave by handle
+//!            (including errors and uninstalled); pinned nodes still leave by handle, or by
+//!            deep serialization as backend ids (`pinned_nodes`, `pinned_place_in_document`)
 //! ```
 //!
 //! Rust's request/reply types generate `neo-playwright-js/src/probe/generated.ts` via
@@ -24,9 +25,9 @@ pub(crate) mod protocol;
 pub(crate) use probe_call::call_for_tests;
 
 pub(crate) use probe_call::{
-    Control, NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture,
+    Control, NAVIGATED_OR_CLOSED, PinnedPlace, ProbeFailure, Ran, call, call_on, call_with_gesture,
     call_with_nodes, cleanup, describe, pinned_nodes, pinned_nodes_in_document, pinned_object,
-    reply_of,
+    pinned_place_in_document, reply_of,
 };
 pub(crate) use probe_reply::{
     CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, OwnCase, OwnPress, PROBE_PROTOCOL, PageText,

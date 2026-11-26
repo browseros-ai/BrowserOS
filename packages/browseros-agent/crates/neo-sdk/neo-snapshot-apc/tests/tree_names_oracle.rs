@@ -24,6 +24,8 @@ mod fixture_server;
     reason = "oracle::recorded_url serves tests/oracles.rs; only Oracle types are read here"
 )]
 mod oracle;
+#[path = "support/oracle_join.rs"]
+mod oracle_join;
 #[path = "support/parity_ledger.rs"]
 #[expect(
     dead_code,
@@ -218,11 +220,7 @@ fn compare_fixture(name: &'static str) -> Result<FixtureNameComparison, Box<dyn 
             .document(doc_id)
             .ok_or("mapped doc id missing from SnapshotTree")?;
         for element in &frame.elements {
-            let key = NodeKey::new(
-                doc.token().clone(),
-                DomNodeId::new(i32::try_from(element.backend_node_id)?),
-            );
-            if let Some(node) = tree.node_by_key(&key) {
+            if let Some(node) = oracle_join::joined_node(&tree, doc, element)? {
                 compare_joined_element(name, frame, element, node, &cache, &mut stats);
             }
         }
@@ -1047,9 +1045,7 @@ fn contract_v4_names_page_matches_recorded_playwright_oracle() -> Result<(), Box
     let mut gap_g6_elements: usize = 0;
 
     for element in &main_frame.elements {
-        let dom_id = DomNodeId::new(i32::try_from(element.backend_node_id)?);
-        let key = NodeKey::new(main_doc.token().clone(), dom_id);
-        let node = tree.node_by_key(&key).ok_or_else(|| {
+        let node = oracle_join::joined_node(&tree, main_doc, element)?.ok_or_else(|| {
             format!(
                 "names.html contract-v4 mirror missing oracle backendNodeId {} (role={:?}, name={:?})",
                 element.backend_node_id, element.role, element.name

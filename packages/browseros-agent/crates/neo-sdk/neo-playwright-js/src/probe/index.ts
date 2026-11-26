@@ -22,10 +22,13 @@ import { edit } from './edit'
 import { expect } from './expect'
 import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
+import { pinnedAt } from './option-slot'
 import { privateMarks, privateStep } from './private-entry'
 import { look } from './private-look'
 import {
   type BootOptions,
+  BY_HANDLE_OPS,
+  type ByHandleOp,
   type Described,
   type ErrorClass,
   type ErrorReply,
@@ -130,6 +133,7 @@ function createProbe() {
     try {
       const { request, policy } = call
       if (request.op === 'pinned') return pinned(booted, request)
+      if (request.op === 'pinnedAt') return pinnedAt(booted, request)
       const output = new FailureOutput(booted, policy)
       // Only synchronous engine work owns these hooks. Async handlers retain output for
       // later diagnostics, through its formatter or tree scope; no mutable mode survives here.
@@ -185,8 +189,8 @@ function createProbe() {
     call(call: unknown, root?: unknown, nodes?: unknown) {
       try {
         const booted = world
-        // A pinned reply is an actual node (or its old marker), never JSON text.
-        if (isProbeCall(call) && call.request.op === 'pinned')
+        // A by-handle reply holds live nodes (or UNINSTALLED as an object), never JSON text.
+        if (isProbeCall(call) && isByHandle(call.request.op))
           return booted ? answer(booted, call, undefined, []) : UNINSTALLED
         if (!booted) return replyText(UNINSTALLED)
         if (!isProbeCall(call))
@@ -240,8 +244,12 @@ function hasKnownOp(request: unknown): request is ProbeRequest {
   if (typeof request !== 'object' || request === null) return false
   const op: unknown = Reflect.get(request, 'op')
   return (
-    typeof op === 'string' && (op === 'pinned' || Object.hasOwn(HANDLERS, op))
+    typeof op === 'string' && (isByHandle(op) || Object.hasOwn(HANDLERS, op))
   )
+}
+
+function isByHandle(op: string): op is ByHandleOp {
+  return BY_HANDLE_OPS.some((byHandle) => byHandle === op)
 }
 
 function parseBootOptions(options: unknown): BootOptions {

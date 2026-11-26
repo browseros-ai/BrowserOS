@@ -29,6 +29,8 @@ mod fixture_server;
     reason = "oracle::recorded_url serves tests/oracles.rs; only Oracle types are read here"
 )]
 mod oracle;
+#[path = "support/oracle_join.rs"]
+mod oracle_join;
 #[path = "support/parity_ledger.rs"]
 #[expect(
     dead_code,
@@ -50,7 +52,7 @@ use neo_snapshot_apc::tree::{
     AriaAsk, AriaTree, BuildOptions, DocId, DomNodeId, MAX_JSON_DEPTH, NodeKey, Role, SnapshotTree,
     TreeNode,
 };
-use oracle::{Oracle, OracleFrame};
+use oracle::{Oracle, OracleElement, OracleFrame};
 use parity_ledger::{Field, Measured};
 use serde::Deserialize;
 use serde_json::{Deserializer, Number, Value};
@@ -228,6 +230,22 @@ impl RecordedPage {
             }
         }
         Ok(())
+    }
+
+    /// The tree node `element` stands for, in the document behind `frame`, when it has one.
+    fn joined_node(
+        &self,
+        frame: &OracleFrame,
+        element: &OracleElement,
+    ) -> Result<Option<&TreeNode>, Box<dyn Error>> {
+        let Some(&doc_id) = self.frame_to_doc.get(&frame.frame) else {
+            return Ok(None);
+        };
+        let doc = self
+            .tree
+            .document(doc_id)
+            .ok_or("mapped doc id missing from SnapshotTree")?;
+        oracle_join::joined_node(&self.tree, doc, element)
     }
 
     /// The tree key of `backend_node_id` in the document behind `frame`, when it has one.
@@ -510,10 +528,7 @@ fn measure_refs(
     for frame in &page.oracle.frames {
         let oracle_refs: HashSet<u64> = frame.refs.values().copied().collect();
         for element in &frame.elements {
-            let Some(key) = page.key(frame, element.backend_node_id)? else {
-                continue;
-            };
-            let Some(node) = page.tree.node_by_key(&key) else {
+            let Some(node) = page.joined_node(frame, element)? else {
                 continue;
             };
             counts.joined += 1;
@@ -616,7 +631,7 @@ fn measure_printed_nodes(
                     printed_options(tree_node),
                     printed_options(oracle_node),
                     "{} node {bid}: a collapsed select's options are synthesized from \
-                     select_options (fold.rs SyntheticOption) as Playwright lists them",
+                     select_options (tree/option_slot.rs) as Playwright lists them",
                     page.name
                 );
             }

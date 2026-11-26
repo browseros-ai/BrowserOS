@@ -7,7 +7,10 @@
 //! probe's answers to error and stale-ref sets.
 //! `describePins`, `hydrate` and `keys` answer as the probe (`stage.ts`) and engine chunk 10's
 //! hydration do. A page stage that carries a tree part fails the test: the tree's parts are
-//! Rust's.
+//! Rust's. An `<option>` of a collapsed select is a page element the capture has no node for:
+//! the tree holds it as its select's `select_options` entry, and the page holds it as
+//! `select.options[index]` while the list keeps the length the member names
+//! (`probe/option-slot.ts`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -42,6 +45,7 @@ pub(super) struct El {
     preview: String,
     aka: String,
     kids: Vec<El>,
+    is_option: bool,
 }
 
 /// An element the capture has a node for. `node` carries the facts the tree reads (tag, role,
@@ -54,6 +58,7 @@ pub(super) fn tracked(node: NodeBuilder, dom: i32) -> El {
         preview: String::new(),
         aka: String::new(),
         kids: Vec::new(),
+        is_option: false,
     }
 }
 
@@ -66,6 +71,16 @@ pub(super) fn plain(dom: i32) -> El {
         preview: String::new(),
         aka: String::new(),
         kids: Vec::new(),
+        is_option: false,
+    }
+}
+
+/// An `<option>` of a collapsed select: in the page's `select.options`, with no node in the
+/// capture, which lists it as an entry of its select's APC node instead.
+pub(super) fn option(dom: i32) -> El {
+    El {
+        is_option: true,
+        ..plain(dom)
     }
 }
 
@@ -108,6 +123,16 @@ struct Element {
     connected: bool,
     /// The node is gone for good: `DOM.resolveNode` fails for it, so the seam cannot hand it over.
     destroyed: bool,
+    is_option: bool,
+}
+
+/// A member as the probe's `held` reads it.
+enum Holding {
+    Live(Node),
+    /// Evicted, disconnected, or never handed over.
+    Gone,
+    /// An option member whose select lists another number of options than the capture did.
+    Changed,
 }
 
 /// What the run asked the page, in order.
@@ -216,6 +241,7 @@ fn flatten(els: Vec<El>, parent: Option<usize>, elements: &mut Vec<Element>) -> 
             preview,
             aka,
             kids,
+            is_option,
         } = el;
         let index = elements.len();
         elements.push(Element {
@@ -227,6 +253,7 @@ fn flatten(els: Vec<El>, parent: Option<usize>, elements: &mut Vec<Element>) -> 
             aka,
             connected: true,
             destroyed: false,
+            is_option,
         });
         let kids = flatten(kids, Some(index), elements);
         let end = elements.len();
@@ -322,22 +349,56 @@ impl FakePage {
         Pin(u32::try_from(self.pins.len()).unwrap_or(u32::MAX))
     }
 
-    /// A member while it is live, as the probe's `held` reads it: a pin's element or a handed
-    /// node while it is connected, or the Document. `handed` holds the call's nodes, as element
-    /// indexes.
-    fn held(&self, member: SetMember, handed: &[usize]) -> Option<Node> {
+    /// A member as the probe's `held` reads it: a pin's element or a handed node while it is
+    /// connected, the Document, or `select.options[index]` of a connected handed select while
+    /// the select lists `count` options. `handed` holds the call's nodes, as element indexes.
+    fn held(&self, member: SetMember, handed: &[usize]) -> Holding {
         let index = match member {
-            SetMember::Document => return Some(Node::Document),
-            SetMember::Pin(pin) => *self
-                .pins
-                .get(usize::try_from(pin.0).ok()?.checked_sub(1)?)?,
-            SetMember::Node(node) => *handed
-                .get(usize::try_from(node).ok()?)
-                .unwrap_or_else(|| panic!("call node {node} was not handed over")),
+            SetMember::Document => return Holding::Live(Node::Document),
+            SetMember::Pin(pin) => {
+                let entry = usize::try_from(pin.0)
+                    .ok()
+                    .and_then(|pin| pin.checked_sub(1));
+                match entry.and_then(|entry| self.pins.get(entry)) {
+                    Some(&index) => index,
+                    None => return Holding::Gone,
+                }
+            }
+            SetMember::Node(node) => Self::handed(handed, node),
+            SetMember::Option {
+                select,
+                index,
+                count,
+            } => {
+                let select = Self::handed(handed, select);
+                if !self.elements[select].connected {
+                    return Holding::Gone;
+                }
+                let options = self.options_of(select);
+                if u32::try_from(options.len()).ok() != Some(count) {
+                    return Holding::Changed;
+                }
+                options[usize::try_from(index).unwrap_or(usize::MAX)]
+            }
         };
-        self.elements[index]
-            .connected
-            .then_some(Node::Element(index))
+        if self.elements[index].connected {
+            Holding::Live(Node::Element(index))
+        } else {
+            Holding::Gone
+        }
+    }
+
+    fn handed(handed: &[usize], node: u32) -> usize {
+        *handed
+            .get(usize::try_from(node).unwrap_or(usize::MAX))
+            .unwrap_or_else(|| panic!("call node {node} was not handed over"))
+    }
+
+    /// `select.options`: the connected `<option>`s in the select's subtree, in document order.
+    fn options_of(&self, select: usize) -> Vec<usize> {
+        (select + 1..self.elements[select].end)
+            .filter(|&index| self.elements[index].is_option && self.elements[index].connected)
+            .collect()
     }
 
     /// The elements of the nodes a call hands over: `None` when one no longer resolves.
@@ -371,7 +432,21 @@ impl FakePage {
         handed: &[usize],
     ) -> ProbeReply {
         let json = serde_json::to_value(selector).unwrap_or(Value::Null);
-        let mut parsed: ParsedSelector = match serde_json::from_value(json) {
+        // The pin stage has no parts of its own (`ParsedSelector::no_parts`), which the typed
+        // parser refuses, as agent input never has none; the probe runs it as `from` alone.
+        let no_parts = json
+            .get("parts")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty);
+        let parsed = if no_parts {
+            Ok(ParsedSelector {
+                parts: Vec::new(),
+                capture: None,
+            })
+        } else {
+            serde_json::from_value(json)
+        };
+        let mut parsed: ParsedSelector = match parsed {
             Ok(parsed) => parsed,
             Err(error) => return internal(&format!("not a parsed selector: {error}")),
         };
@@ -379,8 +454,8 @@ impl FakePage {
         if let Some(from) = from {
             for member in from {
                 match self.held(*member, handed) {
-                    Some(node) => starts.push(node),
-                    None => return ProbeReply::Detached,
+                    Holding::Live(node) => starts.push(node),
+                    Holding::Gone | Holding::Changed => return ProbeReply::Detached,
                 }
             }
             // As the probe does: one prepended part answers `from`, whatever root reaches it.
@@ -394,24 +469,32 @@ impl FakePage {
             );
             parsed.capture = parsed.capture.map(|capture| capture + 1);
         }
+        let mut candidate_sets = Vec::with_capacity(sets.len());
+        for set in sets {
+            candidate_sets.push(match set {
+                StageSet::Members(members) => {
+                    let mut live = Vec::new();
+                    for member in members {
+                        match self.held(*member, handed) {
+                            Holding::Live(node) => live.push(node),
+                            // A candidate that left matches nothing; one whose list changed
+                            // may now be another option, so the whole stage is stale.
+                            Holding::Gone => {}
+                            Holding::Changed => return ProbeReply::Detached,
+                        }
+                    }
+                    Candidates::Members(live)
+                }
+                StageSet::Error { message, class } => Candidates::Error {
+                    message: message.clone(),
+                    class: *class,
+                },
+                StageSet::StaleRef(body) => Candidates::StaleRef(body.clone()),
+            });
+        }
         let scoped = Scoped {
             from: starts,
-            sets: sets
-                .iter()
-                .map(|set| match set {
-                    StageSet::Members(members) => Candidates::Members(
-                        members
-                            .iter()
-                            .filter_map(|member| self.held(*member, handed))
-                            .collect(),
-                    ),
-                    StageSet::Error { message, class } => Candidates::Error {
-                        message: message.clone(),
-                        class: *class,
-                    },
-                    StageSet::StaleRef(body) => Candidates::StaleRef(body.clone()),
-                })
-                .collect(),
+            sets: candidate_sets,
             reached: RefCell::new(Vec::new()),
         };
         let matches = match self.query_all(&parsed, self.root, &scoped) {
@@ -497,17 +580,17 @@ impl FakePage {
         let mut items = Vec::new();
         for member in members {
             match self.held(*member, handed) {
-                Some(Node::Element(index)) => {
+                Holding::Live(Node::Element(index)) => {
                     let element = &self.elements[index];
                     items.push(PinPreview {
                         preview: element.preview.clone(),
                         aka: element.aka.clone(),
                     });
                 }
-                Some(Node::Document) => {
+                Holding::Live(Node::Document) => {
                     return internal("describePins describes elements, never the document");
                 }
-                None => return ProbeReply::Detached,
+                Holding::Gone | Holding::Changed => return ProbeReply::Detached,
             }
         }
         ProbeReply::PinsDescribed {
@@ -858,8 +941,8 @@ impl ChunkPage for FakePage {
         let keys: Option<Vec<NodeKey>> = pins
             .iter()
             .map(|pin| match self.held(SetMember::Pin(*pin), &[]) {
-                Some(Node::Element(index)) => key(self.elements[index].dom).ok(),
-                Some(Node::Document) | None => None,
+                Holding::Live(Node::Element(index)) => key(self.elements[index].dom).ok(),
+                Holding::Live(Node::Document) | Holding::Gone | Holding::Changed => None,
             })
             .collect();
         self.record(Sent::Keys(pins.to_vec()));

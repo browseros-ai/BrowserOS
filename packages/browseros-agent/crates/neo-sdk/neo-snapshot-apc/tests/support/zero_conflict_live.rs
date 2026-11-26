@@ -22,14 +22,16 @@ use std::future::Future;
 use browseros_cdp::{CdpClient, SessionId};
 use neo_snapshot_apc::refs::TabRefTable;
 use neo_snapshot_apc::select::{AccessibleText, ChunkPlan, PlannedStage, RefResolver, Scope};
-use neo_snapshot_apc::tree::{BuildOptions, FrameToken, NodeKey, SnapshotTree, TreeDoc};
+use neo_snapshot_apc::tree::{
+    BuildOptions, FrameToken, NodeId, NodeKey, SnapshotTree, TreeDoc, TreeNode,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::fixture_pages;
-use crate::oracle::Oracle;
+use crate::oracle::{Oracle, OracleElement};
 use crate::oracle_capture::{self, FrameSite};
 use crate::zero_conflict::{self, ByRole, ByRoleOptions, Format, LineCheck, PageCheck, Verdict};
+use crate::{fixture_pages, oracle_join};
 
 /// The world each frame's refs are hydrated in: a world of its own, as the engine's resolver
 /// enters one per frame, so neither the page's scripts nor the oracle's patches reach the probe.
@@ -555,8 +557,8 @@ pub(crate) struct RoleRecall {
     pub(crate) page: usize,
     /// Elements of the page's set Rust's set holds too.
     pub(crate) found: usize,
-    /// Elements Rust's set holds that the page's does not: another element of the document,
-    /// one of another document, or a synthesized node with no DOM node.
+    /// Nodes Rust's set holds that no element of the page's set joins: another node of the
+    /// document, or one of another document.
     pub(crate) extra: usize,
     /// The page's elements Rust's set lacks, by backendNodeId.
     pub(crate) missing: Vec<u64>,
@@ -602,7 +604,9 @@ impl RefResolver for NoRefs {
 }
 
 /// Compares `oracle`'s role sets with Rust's `internal:role=<role>` over `tree`, frame by frame.
-/// An oracle frame is matched with the tree document whose `frame_token()` is its frame id.
+/// An oracle frame is matched with the tree document whose `frame_token()` is its frame id, and
+/// each of its elements with the tree node it stands for (`oracle_join`), so an option of a
+/// collapsed select meets its option slot, which has no DOM node of its own.
 fn recall(tree: &SnapshotTree, oracle: &Oracle) -> Recall {
     let names = tree.name_cache();
     let mut recall = Recall::default();
@@ -612,26 +616,43 @@ fn recall(tree: &SnapshotTree, oracle: &Oracle) -> Recall {
             .iter()
             .find(|doc| doc.frame_token().map(FrameToken::as_str) == Some(frame.frame.as_str()));
         recall.frames_without_document += usize::from(doc.is_none());
-        let mut roles: BTreeMap<&str, BTreeSet<u64>> = BTreeMap::new();
+        let mut roles: BTreeMap<&str, Vec<&OracleElement>> = BTreeMap::new();
         for element in &frame.elements {
             let set = roles.entry(element.role.as_str()).or_default();
             if !element.hidden {
-                set.insert(element.backend_node_id);
+                set.push(element);
             }
         }
         for (role, page) in roles {
             let selected = match doc {
                 None => Err("the frame has no document in the tree".to_owned()),
-                Some(doc) => select_role(tree, doc, &names, role),
+                Some(doc) => select_role(tree, doc, &names, role).map(|rust| (doc, rust)),
             };
             let (found, extra, missing, unread) = match selected {
-                Ok(rust) => {
-                    let in_doc: BTreeSet<u64> = rust.in_doc.iter().copied().collect();
-                    let missing: Vec<u64> = page.difference(&in_doc).copied().collect();
-                    let extra = in_doc.difference(&page).count() + rust.elsewhere;
+                Ok((doc, rust)) => {
+                    let mut joined: HashSet<NodeId> = HashSet::new();
+                    let mut missing = Vec::new();
+                    for element in &page {
+                        let node = oracle_join::joined_node(tree, doc, element)
+                            .ok()
+                            .flatten()
+                            .map(TreeNode::id);
+                        match node {
+                            Some(node) if rust.in_doc.contains(&node) => {
+                                joined.insert(node);
+                            }
+                            Some(_) | None => missing.push(element.backend_node_id),
+                        }
+                    }
+                    let extra = rust.in_doc.difference(&joined).count() + rust.elsewhere;
                     (page.len() - missing.len(), extra, missing, None)
                 }
-                Err(error) => (0, 0, page.iter().copied().collect(), Some(error)),
+                Err(error) => (
+                    0,
+                    0,
+                    page.iter().map(|element| element.backend_node_id).collect(),
+                    Some(error),
+                ),
             };
             recall.roles.push(RoleRecall {
                 frame: index,
@@ -649,9 +670,9 @@ fn recall(tree: &SnapshotTree, oracle: &Oracle) -> Recall {
 
 /// What Rust's `internal:role=<role>` selects in one document.
 struct RoleSet {
-    /// backendNodeIds of the matches in the document.
-    in_doc: Vec<u64>,
-    /// Matches in another document, or with no DOM node.
+    /// The matches in the document, option slots included.
+    in_doc: HashSet<NodeId>,
+    /// Matches in another document.
     elsewhere: usize,
 }
 
@@ -678,16 +699,14 @@ fn select_role(
         .select(tree, scope, names, &NoRefs)
         .map_err(|error| error.to_string())?;
     let mut set = RoleSet {
-        in_doc: Vec::new(),
+        in_doc: HashSet::new(),
         elsewhere: 0,
     };
-    for key in matches.keys(tree) {
-        match key {
-            Some(key) if &key.doc == doc.token() => {
-                set.in_doc
-                    .push(u64::try_from(key.node.raw()).map_err(|error| error.to_string())?);
-            }
-            Some(_) | None => set.elsewhere += 1,
+    for &node in matches.nodes() {
+        if tree.node(node).is_some_and(|found| found.doc() == doc.id()) {
+            set.in_doc.insert(node);
+        } else {
+            set.elsewhere += 1;
         }
     }
     Ok(set)

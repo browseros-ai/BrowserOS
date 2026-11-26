@@ -16,6 +16,10 @@
  * A tree part's error, or an `aria-ref` that names no live node, is also known before any root
  * reaches it; the engines act on such a set only once one does, as upstream's would, so Rust gets
  * upstream's answer from one call.
+ *
+ * Rust hands a tree node over as a call node (`node`). An option of a collapsed select has no node
+ * in the capture: it comes as its handed select, the option's index and the list's length in the
+ * capture (`option`), and the page holds it only while that length still holds (option-slot.ts).
  */
 import { asLocator } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/locatorGenerators'
 import {
@@ -24,6 +28,7 @@ import {
   visitAllSelectorParts,
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import type { FailureOutput } from './failure-output'
+import { CHANGED, optionInSlot } from './option-slot'
 import type {
   DescribePinsRequest,
   PinPreview,
@@ -54,19 +59,33 @@ type Held = Element | Document
 type Candidates = { members: Held[] } | Exclude<StageSet, { members: unknown }>
 
 /**
- * A member while it is live: a pin's element or a handed node that is connected and still in
- * this world's document (design 6.2: a node the page moved into another document is not the one
- * the capture saw), or the document.
+ * A member as this world holds it now: a pin's element or a handed node while it is live, the
+ * document, or an option of a live handed select (option-slot.ts). `undefined` when it is gone;
+ * CHANGED when an option's list changed length since the capture, so its index may name another
+ * option.
  */
 function held(
   world: World,
   member: SetMember,
   nodes: readonly unknown[],
-): Held | undefined {
+): Held | typeof CHANGED | undefined {
   const { document } = world.injected
   if (member === 'document') return document
-  const node =
-    'pin' in member ? world.pins.live(member.pin) : nodes[member.node]
+  if ('option' in member) {
+    const select = live(nodes[member.option.select], document)
+    return select && optionInSlot(select, member.option)
+  }
+  return live(
+    'pin' in member ? world.pins.live(member.pin) : nodes[member.node],
+    document,
+  )
+}
+
+/**
+ * `node` while it is an element connected in this world's document (design 6.2: a node the page
+ * moved into another document is not the one the capture saw).
+ */
+function live(node: unknown, document: Document): Element | undefined {
   return node instanceof Element &&
     node.isConnected &&
     node.ownerDocument === document
@@ -74,7 +93,7 @@ function held(
     : undefined
 }
 
-/** Every member live, in order; null when any one is not. */
+/** Every member live, in order; null when any one is gone or changed. */
 function allHeld(
   world: World,
   members: readonly SetMember[],
@@ -83,7 +102,7 @@ function allHeld(
   const live: Held[] = []
   for (const member of members) {
     const element = held(world, member, nodes)
-    if (!element) return null
+    if (!element || element === CHANGED) return null
     live.push(element)
   }
   return live
@@ -163,15 +182,22 @@ export function stage(
   const from = request.from && allHeld(world, request.from, nodes)
   if (from === null) return { kind: 'detached' }
   // A candidate set only ever filters by containment, so a member that is gone matches nothing.
-  const sets: Candidates[] = (request.sets ?? []).map((set) =>
-    'members' in set
-      ? {
-          members: set.members.flatMap(
-            (member) => held(world, member, nodes) ?? [],
-          ),
-        }
-      : set,
-  )
+  // An option whose list changed may now be another option, which no containment test can tell
+  // apart, so the whole stage answers as for a `from` member that left.
+  const sets: Candidates[] = []
+  for (const set of request.sets ?? []) {
+    if (!('members' in set)) {
+      sets.push(set)
+      continue
+    }
+    const members: Held[] = []
+    for (const member of set.members) {
+      const element = held(world, member, nodes)
+      if (element === CHANGED) return { kind: 'detached' }
+      if (element) members.push(element)
+    }
+    sets.push({ members })
+  }
   visitAllSelectorParts(request.selector, (part) => {
     if (part.name === FROM)
       throw new ProbeError(

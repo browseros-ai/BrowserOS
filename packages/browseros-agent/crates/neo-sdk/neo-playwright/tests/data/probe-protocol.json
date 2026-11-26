@@ -1,6 +1,6 @@
 {
-  "protocol": 56,
-  "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === \"pinned\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
+  "protocol": 57,
+  "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; const op = call?.request?.op; return probe ? probe.call(call, root ?? this, nodes) : op === \"pinned\" || op === \"pinnedAt\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
   "replyKinds": {
     "describe": [
       "described"
@@ -128,7 +128,8 @@
     ]
   },
   "byHandle": [
-    "pinned"
+    "pinned",
+    "pinnedAt"
   ],
   "anyRequest": [
     "error",
@@ -1311,6 +1312,10 @@
       "pin": 4
     },
     {
+      "op": "pinnedAt",
+      "pin": 4
+    },
+    {
       "op": "document",
       "part": "title"
     },
@@ -1359,6 +1364,13 @@
             },
             {
               "node": 0
+            },
+            {
+              "option": {
+                "select": 1,
+                "index": 0,
+                "count": 2
+              }
             }
           ]
         }
@@ -1555,19 +1567,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 56,
+      "protocol": 57,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 56,
+      "protocol": 57,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 56,
+      "protocol": 57,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0

@@ -1,16 +1,18 @@
 //! `ChunkRun` over a hand-built tree and a fake page that runs upstream's loop: every transfer,
 //! the three joins from the page to the tree, nested mixed selectors, candidate errors and stale
-//! refs reached or not, stale members, strict mode against the probe's recording, and the one
-//! pin a frame hop takes.
+//! refs reached or not, stale members, strict mode against the probe's recording, the one
+//! pin a frame hop takes, and the options of a collapsed select, which reach the page through
+//! their select.
 
 use std::collections::HashMap;
 use std::error::Error;
 
+use neo_snapshot_apc::proto::{FormControlType, SelectOption};
 use neo_snapshot_apc::select::{ChunkPlan, ParsedSelector, RefResolver, RoleQuery};
-use neo_snapshot_apc::tree::{DocId, NodeBuilder, NodeKey, SnapshotTree};
+use neo_snapshot_apc::tree::{DocId, NodeBuilder, NodeId, NodeKey, OptionSlot, SnapshotTree};
 use serde_json::{Value, json};
 
-use super::fake_page::{El, FakePage, Sent, build, key, plain, tracked};
+use super::fake_page::{El, FakePage, Sent, build, key, option, plain, tracked};
 use super::{ChunkOutcome, ChunkRun, ChunkSet, First, Matched, QueryRoot};
 use crate::probe::{ErrorClass, PinPreview, SetMember, StageSet};
 use crate::target::Strictness;
@@ -70,6 +72,68 @@ fn list_page() -> TestResult<(SnapshotTree, FakePage)> {
             .attr("data-panel", "")
             .kids(vec![button(31, "Save").attr("data-action", "save")]),
     ])
+}
+
+/// A collapsed select, whose two options the capture lists as entries of the select and the page
+/// holds as `<option>` elements, then an ARIA option:
+///
+/// ```text
+///  div 40 [data-form] (plain) > select 50 > option 51 "Hi" (page only), option 52 "Hello" (selected)
+///  div 60 role=option aria-selected=true "Other"
+/// ```
+fn option_page() -> TestResult<(SnapshotTree, FakePage)> {
+    let entry = |text: &str, selected: bool| SelectOption {
+        value: Some(text.to_lowercase()),
+        text: Some(text.to_owned()),
+        is_selected: Some(selected),
+        is_disabled: Some(false),
+    };
+    let select = NodeBuilder::form_control(FormControlType::SelectOne)
+        .tag("select")
+        .select_option(entry("Hi", false))
+        .select_option(entry("Hello", true));
+    build(vec![
+        plain(40)
+            .attr("data-form", "")
+            .kids(vec![tracked(select, 50).kids(vec![
+                option(51).words("<option>Hi</option>", "locator('option').first()"),
+                option(52).words("<option>Hello</option>", "locator('option').nth(1)"),
+            ])]),
+        tracked(
+            NodeBuilder::container()
+                .role("option")
+                .selected(true)
+                .child(NodeBuilder::text("Other")),
+            60,
+        )
+        .words(
+            "<div role=\"option\" aria-selected=\"true\">Other</div>",
+            "locator('div')",
+        ),
+    ])
+}
+
+/// What each node of a tree set is: an option slot's select and index, or another node's DOM id.
+fn members(tree: &SnapshotTree, set: &ChunkSet) -> TestResult<Vec<String>> {
+    let ChunkSet::Keys(matches) = set else {
+        return Err("a tree stage ended the run".into());
+    };
+    matches
+        .nodes()
+        .iter()
+        .map(|&node: &NodeId| match tree.option_slot(node) {
+            Some(OptionSlot { select, index, .. }) => {
+                let select = tree.node_key(select).ok_or("a select has a key")?;
+                Ok(format!("option {index} of {}", select.node.raw()))
+            }
+            None => Ok(tree
+                .node_key(node)
+                .ok_or("an element with a DOM id")?
+                .node
+                .raw()
+                .to_string()),
+        })
+        .collect()
 }
 
 /// The probe recording's page: two buttons, Go and Stop, in a plain container.
@@ -1178,4 +1242,192 @@ fn page_text_in_an_outcome_or_a_preview_never_prints_through_debug() {
             "a strict message, a thrown message and a preview print their lengths only: {line}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_tree_set_hands_an_option_over_as_its_select_and_index() -> TestResult {
+    let (tree, mut page) = option_page()?;
+    let names = tree.name_cache();
+    let refs = Refs::default();
+    let chunk_run = ChunkRun::new(&tree, &names, &refs, DocId::MAIN, QueryRoot::Document)
+        .ok_or("the capture holds the main document")?;
+    let found = matched(
+        chunk_run
+            .run(
+                &plan(&chunk(&[role("option[selected=true]")]))?,
+                Strictness::FirstMatch,
+                &mut page,
+            )
+            .await?,
+    )?;
+    assert_eq!(
+        members(&tree, &found.set)?,
+        ["option 1 of 50", "60"],
+        "the selected option and the aria-selected div, in tree order (SE-051)"
+    );
+    assert!(page.sent.is_empty(), "matched over the tree alone");
+
+    let super::Pinned::Members(pins) = chunk_run.pinned(found.set, &mut page).await? else {
+        return Err("both members are live".into());
+    };
+    assert_eq!(
+        page.doms_of(&pins),
+        [52, 60],
+        "the page's own <option> and the div"
+    );
+    assert_eq!(
+        page.sent,
+        [Sent::Stage {
+            selector: json!({ "parts": [] }),
+            from: Some(vec![
+                SetMember::Option {
+                    select: 0,
+                    index: 1,
+                    count: 2
+                },
+                SetMember::Node(1),
+            ]),
+            sets: Vec::new(),
+            strict: false,
+            handed: vec![50, 60],
+        }],
+        "one stage: the option goes over as its select, its index and the list's length"
+    );
+    assert!(
+        hydrated(&page).is_empty(),
+        "an option has no key to hydrate"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_first_option_is_pinned_through_one_stage() -> TestResult {
+    let (tree, mut page) = option_page()?;
+    let names = tree.name_cache();
+    let refs = Refs::default();
+    let chunk_run = ChunkRun::new(&tree, &names, &refs, DocId::MAIN, QueryRoot::Document)
+        .ok_or("the capture holds the main document")?;
+    let options = matched(
+        chunk_run
+            .run(
+                &plan(&chunk(&[role("option")]))?,
+                Strictness::FirstMatch,
+                &mut page,
+            )
+            .await?,
+    )?;
+    let First::Pin(pin) = chunk_run.first(&options.set, &mut page).await? else {
+        return Err("the first option, pinned".into());
+    };
+    assert_eq!(page.dom_of(pin), 51, "select.options[0]");
+    assert!(
+        hydrated(&page).is_empty(),
+        "pinned by a stage, not hydrated"
+    );
+    assert_eq!(handed(&page), [vec![50]], "its select, handed over once");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_option_list_that_changed_since_the_capture_makes_the_run_stale() -> TestResult {
+    let (tree, mut page) = option_page()?;
+    let names = tree.name_cache();
+    let refs = Refs::default();
+    let chunk_run = ChunkRun::new(&tree, &names, &refs, DocId::MAIN, QueryRoot::Document)
+        .ok_or("the capture holds the main document")?;
+    let hello = chunk(&[role("option[name=\"Hello\"i]")]);
+    let in_form = chunk(&[
+        attr("[data-form]"),
+        nested("internal:has", &[role("option[name=\"Hello\"i]")]),
+    ]);
+    let found = matched(
+        chunk_run
+            .run(&plan(&in_form)?, Strictness::FirstMatch, &mut page)
+            .await?,
+    )?;
+    let ChunkSet::Pins(pins) = &found.set else {
+        return Err("a page stage ended the run".into());
+    };
+    assert_eq!(page.doms_of(pins), [40], "the form holds the Hello option");
+
+    let options = matched(
+        chunk_run
+            .run(&plan(&hello)?, Strictness::FirstMatch, &mut page)
+            .await?,
+    )?;
+    // The page drops "Hi": select.options[1] no longer names the option the capture saw.
+    page.remove(51);
+    assert!(
+        matches!(
+            chunk_run.first(&options.set, &mut page).await?,
+            First::Stale
+        ),
+        "the first option of a list that changed is stale"
+    );
+    assert!(
+        matches!(
+            chunk_run.pinned(options.set, &mut page).await?,
+            super::Pinned::Stale
+        ),
+        "so is a whole set"
+    );
+    assert!(
+        matches!(
+            chunk_run
+                .run(&plan(&in_form)?, Strictness::FirstMatch, &mut page)
+                .await?,
+            ChunkOutcome::Stale
+        ),
+        "and a candidate set naming it: the option may now be another, which no containment \
+         test can tell"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn strict_mode_previews_options_through_their_select() -> TestResult {
+    let (tree, mut page) = option_page()?;
+    let sent = chunk(&[role("option")]);
+    page.expect_chunk(sent.clone(), "getByRole('option')");
+    let outcome = run_from(
+        &tree,
+        &mut page,
+        &Refs::default(),
+        QueryRoot::Document,
+        &sent,
+        Strictness::Strict,
+    )
+    .await?;
+    let ChunkOutcome::Strict(message) = outcome else {
+        return Err(format!("three options violate strict mode: {outcome:?}").into());
+    };
+    assert_eq!(
+        page.sent,
+        [Sent::Describe {
+            members: vec![
+                SetMember::Option {
+                    select: 0,
+                    index: 0,
+                    count: 2
+                },
+                SetMember::Option {
+                    select: 0,
+                    index: 1,
+                    count: 2
+                },
+                SetMember::Node(1),
+            ],
+            handed: vec![50, 60],
+        }],
+        "one call describes the previews; the select goes over once for both options"
+    );
+    assert_eq!(
+        message,
+        "strict mode violation: getByRole('option') resolved to 3 elements:\n    \
+         1) <option>Hi</option> aka getByRole('option', { name: 'Hi' })\n    \
+         2) <option>Hello</option> aka getByRole('option', { name: 'Hello' })\n    \
+         3) <div role=\"option\" aria-selected=\"true\">Other</div> aka getByRole('option', { name: 'Other' })\n",
+        "the page's previews, with the role locator upstream's generator prefers"
+    );
+    Ok(())
 }

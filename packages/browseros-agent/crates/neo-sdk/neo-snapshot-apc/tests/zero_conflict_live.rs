@@ -27,6 +27,8 @@ mod fixture_server;
 mod oracle;
 #[path = "support/oracle_capture.rs"]
 mod oracle_capture;
+#[path = "support/oracle_join.rs"]
+mod oracle_join;
 #[path = "support/zero_conflict.rs"]
 #[expect(
     dead_code,

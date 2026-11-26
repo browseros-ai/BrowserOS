@@ -32,7 +32,11 @@
 //!
 //! A call hands its tree nodes to the page as call nodes (`SetMember::Node`), resolved for that
 //! call alone, never as pins: the probe keeps its last 512 pin entries, and a stage with more
-//! candidates than that, pinned one by one, would evict its own members.
+//! candidates than that, pinned one by one, would evict its own members. An option of a collapsed
+//! `<select>` is a tree node with no DOM node of its own ([`SnapshotTree::option_slot`]): its
+//! select goes over as the call node, and the member names the option's index and the list's
+//! length in the capture (`SetMember::Option`). [`Handover::member`] is the one place a tree node
+//! becomes a member, so no other code learns that address.
 //!
 //! **Strict mode** is decided on the final set. When the last stage is a page call, that call
 //! carries the chunk and the page writes upstream's message. When the final set is Keys, the
@@ -62,7 +66,9 @@ use neo_snapshot_apc::select::{
     self, AccessibleText, ChunkPlan, PageForm, PlannedStage, RefResolver, RoleQueryError, Scope,
     StrictPreview, StrictViolation, TreeMatches, TreeStage, TreeStageError,
 };
-use neo_snapshot_apc::tree::{DocId, DocToken, NodeId, NodeKey, SnapshotTree, TreeNode};
+use neo_snapshot_apc::tree::{
+    DocId, DocToken, NodeId, NodeKey, OptionSlot, SnapshotTree, TreeNode,
+};
 
 use crate::probe::{
     self, ErrorClass, PinPreview, ProbeReply, ProbeRequest, SetMember, StageMatch, StageSet,
@@ -91,9 +97,10 @@ pub(crate) trait ChunkPage {
 
     /// Sends a `stage` or a `describePins` in the frame's world through
     /// `probe::call_with_nodes`, whose root is the query root's node when that is an element
-    /// handle (`resolver::ask`) and empty otherwise. The request's `SetMember::Node(i)` is
-    /// `nodes[i]`, a node of the run's tree, which the seam resolves for this call alone and
-    /// hands over after the root in that order. `None` when one of `nodes` no longer resolves.
+    /// handle (`resolver::ask`) and empty otherwise. The request's `SetMember::Node(i)`, and the
+    /// select of its `SetMember::Option { select: i, .. }`, is `nodes[i]`, a node of the run's
+    /// tree with a DOM node, which the seam resolves for this call alone and hands over after
+    /// the root in that order. `None` when one of `nodes` no longer resolves.
     async fn call(
         &mut self,
         request: &ProbeRequest,
@@ -101,7 +108,8 @@ pub(crate) trait ChunkPage {
     ) -> Result<Option<ProbeReply>, Self::Error>;
 
     /// Pins `node`'s element in the world's pin table: what outlives a call, such as the iframe
-    /// a frame hop enters. `None` when it is gone.
+    /// a frame hop enters. `None` when it is gone. `node` has a DOM node: an option slot has
+    /// none, and is pinned through a `stage` instead ([`ChunkRun::first`]).
     async fn hydrate(&mut self, node: NodeId) -> Result<Option<Pin>, Self::Error>;
 
     /// The key of each pinned element, in order (`probe::pinned_nodes_in_document` and the
@@ -196,7 +204,7 @@ pub(crate) enum ChunkSet {
 
 /// The first element of a set as a pin: the iframe a frame hop enters, or the element an action
 /// takes (design 5.7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum First {
     /// Nothing matched.
     Missing,
@@ -206,6 +214,8 @@ pub(crate) enum First {
     Document,
     /// The first match left the page since the capture.
     Stale,
+    /// What pinning never answers, worded for an `internal` failure, as [`Pinned::Broken`].
+    Broken(String),
 }
 
 /// A final set as the op's request names it ([`ChunkRun::pinned`]).
@@ -278,7 +288,7 @@ struct Call<'c> {
 }
 
 /// The tree nodes one call hands over, in first-use order, each once: call node `i` is
-/// `nodes[i]`.
+/// `nodes[i]`. Every one has a DOM node for the seam to resolve.
 #[derive(Default)]
 struct Handover {
     nodes: Vec<NodeId>,
@@ -286,20 +296,37 @@ struct Handover {
 }
 
 impl Handover {
+    /// `node` as a member of the call: the only place a tree node becomes a [`SetMember`].
+    fn member(&mut self, tree: &SnapshotTree, node: NodeId, doc_root: NodeId) -> SetMember {
+        if node == doc_root {
+            return SetMember::Document;
+        }
+        match tree.option_slot(node) {
+            // The option has no DOM node to resolve: its select goes over in its place, once
+            // however many of its options the call names.
+            Some(OptionSlot {
+                select,
+                index,
+                count,
+            }) => SetMember::Option {
+                select: self.call_node(select),
+                index,
+                count,
+            },
+            None => SetMember::Node(self.call_node(node)),
+        }
+    }
+
     #[expect(
         clippy::cast_possible_truncation,
         reason = "the nodes are distinct nodes of one tree, whose arena counts them in u32"
     )]
-    fn member(&mut self, node: NodeId, doc_root: NodeId) -> SetMember {
-        if node == doc_root {
-            return SetMember::Document;
-        }
+    fn call_node(&mut self, node: NodeId) -> u32 {
         let next = self.nodes.len() as u32;
-        let index = *self.index.entry(node).or_insert_with(|| {
+        *self.index.entry(node).or_insert_with(|| {
             self.nodes.push(node);
             next
-        });
-        SetMember::Node(index)
+        })
     }
 }
 
@@ -382,7 +409,8 @@ impl<'a> ChunkRun<'a> {
         Ok(ChunkOutcome::Matched(Matched { set, stale_ref }))
     }
 
-    /// The first element of `set` as a pin. A tree set hydrates that one key and no other.
+    /// The first element of `set` as a pin. A tree set hydrates that one key and no other; an
+    /// option slot, which has no key, is pinned through one `stage` ([`Self::pin_nodes`]).
     pub(crate) async fn first<P: ChunkPage>(
         &self,
         set: &ChunkSet,
@@ -404,29 +432,49 @@ impl<'a> ChunkRun<'a> {
         if node == self.doc_root {
             return Ok(First::Document);
         }
-        Ok(page.hydrate(node).await?.map_or(First::Stale, First::Pin))
+        if self.tree.option_slot(node).is_none() {
+            return Ok(page.hydrate(node).await?.map_or(First::Stale, First::Pin));
+        }
+        Ok(match self.pin_nodes(&[node], page).await? {
+            Pinned::Members(matches) => match matches.as_slice() {
+                [StageMatch::Pin(pin)] => First::Pin(*pin),
+                _ => First::Broken(format!(
+                    "pinning one option answered {} members, not its element",
+                    matches.len()
+                )),
+            },
+            Pinned::Stale => First::Stale,
+            Pinned::Broken(why) => First::Broken(why),
+        })
     }
 
     /// Every element of `set` pinned in the frame's world, in the set's order, for the op's own
     /// request to name (`ProbeTarget::Set`). A page stage's matches are pinned already; a tree
-    /// set is handed over and pinned in one `stage` call that starts from it and has no parts of
-    /// its own, so its members come back exactly as they went.
+    /// set is pinned by [`Self::pin_nodes`].
     pub(crate) async fn pinned<P: ChunkPage>(
         &self,
         set: ChunkSet,
         page: &mut P,
     ) -> Result<Pinned, P::Error> {
-        let nodes = match set {
-            ChunkSet::Pins(matches) => return Ok(Pinned::Members(matches)),
-            ChunkSet::Keys(matches) if matches.is_empty() => {
-                return Ok(Pinned::Members(Vec::new()));
-            }
-            ChunkSet::Keys(matches) => matches.nodes().to_vec(),
-        };
+        match set {
+            ChunkSet::Pins(matches) => Ok(Pinned::Members(matches)),
+            ChunkSet::Keys(matches) if matches.is_empty() => Ok(Pinned::Members(Vec::new())),
+            ChunkSet::Keys(matches) => self.pin_nodes(matches.nodes(), page).await,
+        }
+    }
+
+    /// `nodes` pinned in the frame's world, in order: handed over in one `stage` call that
+    /// starts from them and has no parts of its own, so they come back exactly as they went.
+    /// The only way to pin an option slot, which has no DOM node to hydrate.
+    async fn pin_nodes<P: ChunkPage>(
+        &self,
+        nodes: &[NodeId],
+        page: &mut P,
+    ) -> Result<Pinned, P::Error> {
         let mut handover = Handover::default();
         let from: Vec<SetMember> = nodes
-            .into_iter()
-            .map(|node| handover.member(node, self.doc_root))
+            .iter()
+            .map(|&node| handover.member(self.tree, node, self.doc_root))
             .collect();
         let selector = match probe::ParsedSelector::no_parts() {
             Ok(selector) => selector,
@@ -632,7 +680,7 @@ impl<'a> ChunkRun<'a> {
             Start::Nodes(nodes) => Some(
                 nodes
                     .into_iter()
-                    .map(|node| handover.member(node, self.doc_root))
+                    .map(|node| handover.member(self.tree, node, self.doc_root))
                     .collect(),
             ),
             Start::Pins(matches) => Some(
@@ -652,7 +700,7 @@ impl<'a> ChunkRun<'a> {
                 Candidates::Nodes(nodes) => StageSet::Members(
                     nodes
                         .iter()
-                        .map(|&node| handover.member(node, self.doc_root))
+                        .map(|&node| handover.member(self.tree, node, self.doc_root))
                         .collect(),
                 ),
                 Candidates::Thrown(error) => StageSet::Error {
@@ -701,7 +749,7 @@ impl<'a> ChunkRun<'a> {
         let mut handover = Handover::default();
         let members: Vec<SetMember> = previews
             .iter()
-            .map(|&node| handover.member(node, self.doc_root))
+            .map(|&node| handover.member(self.tree, node, self.doc_root))
             .collect();
         let request = match probe_selector(chunk) {
             Ok(chunk) => ProbeRequest::DescribePins {

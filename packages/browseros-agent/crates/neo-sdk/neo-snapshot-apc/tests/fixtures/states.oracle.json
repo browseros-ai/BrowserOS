@@ -337,6 +337,11 @@
             "disabled": false,
             "selected": true,
             "active": false
+          },
+          "option": {
+            "select": 5,
+            "index": 0,
+            "count": 3
           }
         },
         {
@@ -352,6 +357,11 @@
             "disabled": false,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 5,
+            "index": 1,
+            "count": 3
           }
         },
         {
@@ -367,6 +377,11 @@
             "disabled": true,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 5,
+            "index": 2,
+            "count": 3
           }
         },
         {
@@ -396,6 +411,11 @@
             "disabled": false,
             "selected": true,
             "active": false
+          },
+          "option": {
+            "select": 6,
+            "index": 0,
+            "count": 1
           }
         },
         {
@@ -1368,6 +1388,11 @@
             "disabled": false,
             "selected": true,
             "active": false
+          },
+          "option": {
+            "select": 16,
+            "index": 0,
+            "count": 3
           }
         },
         {
@@ -1383,6 +1408,11 @@
             "disabled": false,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 16,
+            "index": 1,
+            "count": 3
           }
         },
         {
@@ -1398,6 +1428,11 @@
             "disabled": true,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 16,
+            "index": 2,
+            "count": 3
           }
         },
         {
@@ -1427,6 +1462,11 @@
             "disabled": false,
             "selected": true,
             "active": false
+          },
+          "option": {
+            "select": 17,
+            "index": 0,
+            "count": 1
           }
         },
         {
