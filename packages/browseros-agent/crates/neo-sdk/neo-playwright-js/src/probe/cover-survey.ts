@@ -177,17 +177,23 @@ export function coverSurvey(
   output: FailureOutput,
 ): ReplyTo<'coverSurvey'> {
   const aria = snapshotAriaFor(world)
+  // One budget for the whole survey: finding the population spends from it first, and the list
+  // is built once, since the page guard reads the population again.
+  const started = performance.now()
+  const population = pageControls(world, started + BUDGET_MS)
   const { layers, tested, phases } = surveyLayers(
     world,
     output,
-    { [Symbol.iterator]: () => pageControls(world) },
+    population.controls,
     aria,
     {
       controls: (root) => listedControls(world, root, undefined, aria),
       same: (control) => control,
       named: (element) => ({ named: element }),
     },
+    started,
   )
+  phases.stopped ||= population.stopped
   const holdersOf = ({ held, note }: (typeof layers)[number]) =>
     note.wholeView && !note.blank ? held : []
   // One entry for everything the answer names, each element once, so none is evicted before
@@ -232,18 +238,34 @@ export function coverSurvey(
  * The page's own controls in composed-tree order, filtered as a snapshot's ref is (apc-engine-
  * design 3.6, upstream's `computeAriaRef`): box-visible and taking the pointer, a test an iframe
  * always passes there. The refs the engine's snapshot would have held, without its aria walk.
+ *
+ * The walk and its style reads are the survey's own work now, so they count against its budget:
+ * past `deadline` the list ends where the walk stopped, and the survey reports it stopped, as it
+ * does for a budget spent testing. The deadline is read before each control's style reads, and
+ * every 64 elements in between, which keeps a page of a hundred thousand plain elements cheap.
  */
-function* pageControls(world: World): Generator<Element> {
+function pageControls(
+  world: World,
+  deadline: number,
+): { controls: Element[]; stopped: boolean } {
   const { injected } = world
+  const controls: Element[] = []
   const root = injected.document.documentElement
-  if (!root) return
-  for (const element of composedElements(root))
+  if (!root) return { controls, stopped: false }
+  let walked = 0
+  for (const element of composedElements(root)) {
+    walked++
+    const candidate = coverControl(element)
+    if ((candidate || walked % 64 === 0) && performance.now() >= deadline)
+      return { controls, stopped: true }
     if (
-      coverControl(element) &&
+      candidate &&
       (isFrame(element) || takesPointer(element)) &&
       injected.utils.isElementVisible(element)
     )
-      yield element
+      controls.push(element)
+  }
+  return { controls, stopped: false }
 }
 
 function isFrame(element: Element): boolean {
@@ -274,6 +296,7 @@ function surveyLayers<N, C>(
   elements: Iterable<Element>,
   aria: SnapshotAria,
   wording: Wording<N, C>,
+  started: number = performance.now(),
 ): { layers: Layer<N, C>[]; tested: number; phases: Phases } {
   const { injected } = world
   const document = injected.document
@@ -287,7 +310,6 @@ function surveyLayers<N, C>(
   }
   // Five document-only hits always precede the budgeted prefix of controls. A shadow host
   // remains a host here: only the click's own root list can take a hit into that root.
-  const started = performance.now()
   const samples: Sample[] = viewPoints().map((point) => ({
     point,
     hit: hitAtRoots([document], point),

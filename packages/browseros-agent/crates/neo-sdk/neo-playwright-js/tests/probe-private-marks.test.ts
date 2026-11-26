@@ -1,5 +1,6 @@
 // `privateMarks` on the built asset: every element of the document that carries the private
-// entry's mark, in composed-tree order and pinned, for Rust's mirror of the marks (design 8.1).
+// entry's mark, pinned, for Rust's mirror of the marks (design 8.1). The walk is the DOM's: the
+// document's elements in order, then each shadow root's, rendered or not.
 import { afterEach, expect, it } from 'bun:test'
 import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { openProbePage, type ProbePage } from './support/probe-page'
@@ -50,7 +51,7 @@ it('tests that a document nothing marked answers no pins', () => {
   })
 })
 
-it("tests that the entry's own mark, an earlier probe's and one in an open shadow root are listed in composed-tree order", async () => {
+it("tests that the entry's own mark, an earlier probe's and one in an open shadow root are listed, the document's first", async () => {
   const probe = booted()
   const { document } = probe
   const byId = (id: string) => {
@@ -80,8 +81,8 @@ it("tests that the entry's own mark, an earlier probe's and one in an open shado
   const listed = marked(probe)
   expect(listed).toHaveLength(3)
   expect(listed[0]).toBe(byId('first'))
-  expect(listed[1]).toBe(inner)
-  expect(listed[2]).toBe(byId('last'))
+  expect(listed[1]).toBe(byId('last'))
+  expect(listed[2]).toBe(inner)
 })
 
 it('tests that every mark is pinned as one entry, so the batch is evicted together', () => {
@@ -103,4 +104,22 @@ it('tests that every mark is pinned as one entry, so the batch is evicted togeth
   expect(live()).toBe(3)
   pinOnce()
   expect(live()).toBe(0)
+})
+
+it("tests that a marked box in a slot's fallback content is listed while the slot shows assigned nodes", () => {
+  const probe = booted()
+  const { document } = probe
+  const host = document.getElementById('host')
+  if (!host) throw new Error('no #host')
+  const assigned = document.createElement('span')
+  host.append(assigned)
+  const slot = document.createElement('slot')
+  const fallback = document.createElement('input')
+  slot.append(fallback)
+  host.attachShadow({ mode: 'open' }).append(slot)
+  // linkedom assigns no slots: give this one the host's child, as a browser would, so the
+  // fallback is unrendered and a walk of the rendered tree would pass it by.
+  Reflect.set(slot, 'assignedNodes', () => [assigned])
+  markDirectly(fallback)
+  expect(marked(probe)).toEqual([fallback])
 })

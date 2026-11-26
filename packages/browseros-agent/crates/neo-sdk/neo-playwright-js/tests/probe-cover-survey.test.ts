@@ -393,3 +393,47 @@ it('tests that a page nothing covers surveys its controls and answers no layer',
   expect(layers).toEqual([])
   expect(tested).toBe(2)
 })
+
+it("tests that finding the population spends the survey's 20 ms budget and stops it", () => {
+  // Two thousand buttons that take no pointer: each is a control the walk must read the style
+  // of before it can drop it, and every style read here costs 2 ms of the survey's clock.
+  const ids = Array.from({ length: 2000 }, (_, index) => `b${index}`)
+  const probe = laidOut(
+    `<html><body>${ids.map((id) => `<button id="${id}">${id}</button>`).join('')}</body></html>`,
+    {
+      boxes: {},
+      styles: Object.fromEntries(
+        ids.map((id) => [id, { pointerEvents: 'none' }]),
+      ),
+      hits: () => [],
+    },
+  )
+  let clock = 0
+  let reads = 0
+  const styleOf = Reflect.get(globalThis, 'getComputedStyle') as (
+    element: Element,
+  ) => unknown
+  const timedStyle = (element: Element) => {
+    reads++
+    clock += 2
+    return styleOf(element)
+  }
+  Reflect.set(globalThis, 'getComputedStyle', timedStyle)
+  Reflect.set(
+    probe.document.defaultView ?? globalThis,
+    'getComputedStyle',
+    timedStyle,
+  )
+  Reflect.set(performance, 'now', () => clock)
+  try {
+    const { layers, tested, phases } = survey(probe)
+    expect(phases.stopped).toBe(true)
+    expect(tested).toBe(0)
+    expect(layers).toEqual([])
+    // A deadline read before each control's style reads stops the walk within the budget, not
+    // after 2,000 controls' worth of reads.
+    expect(reads).toBeLessThan(30)
+  } finally {
+    Reflect.deleteProperty(performance, 'now')
+  }
+})

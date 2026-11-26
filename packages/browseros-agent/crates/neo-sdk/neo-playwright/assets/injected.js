@@ -10062,11 +10062,14 @@ ${value.stack}`;
   }
   function coverSurvey(world, _request, _root, _nodes, output) {
     const aria = snapshotAriaFor(world);
-    const { layers, tested, phases } = surveyLayers(world, output, { [Symbol.iterator]: () => pageControls(world) }, aria, {
+    const started = performance.now();
+    const population = pageControls(world, started + BUDGET_MS);
+    const { layers, tested, phases } = surveyLayers(world, output, population.controls, aria, {
       controls: (root) => listedControls(world, root, undefined, aria),
       same: (control) => control,
       named: (element) => ({ named: element })
-    });
+    }, started);
+    phases.stopped ||= population.stopped;
     const holdersOf = ({ held, note }) => note.wholeView && !note.blank ? held : [];
     const named = [
       ...new Set(layers.flatMap((layer) => [
@@ -10094,14 +10097,22 @@ ${value.stack}`;
       phases
     };
   }
-  function* pageControls(world) {
+  function pageControls(world, deadline) {
     const { injected } = world;
+    const controls = [];
     const root = injected.document.documentElement;
     if (!root)
-      return;
-    for (const element of composedElements(root))
-      if (coverControl(element) && (isFrame2(element) || takesPointer(element)) && injected.utils.isElementVisible(element))
-        yield element;
+      return { controls, stopped: false };
+    let walked = 0;
+    for (const element of composedElements(root)) {
+      walked++;
+      const candidate = coverControl(element);
+      if ((candidate || walked % 64 === 0) && performance.now() >= deadline)
+        return { controls, stopped: true };
+      if (candidate && (isFrame2(element) || takesPointer(element)) && injected.utils.isElementVisible(element))
+        controls.push(element);
+    }
+    return { controls, stopped: false };
   }
   function isFrame2(element) {
     return element.nodeName === "IFRAME" || element.nodeName === "FRAME";
@@ -10112,7 +10123,7 @@ ${value.stack}`;
         return true;
     return false;
   }
-  function surveyLayers(world, output, elements, aria, wording) {
+  function surveyLayers(world, output, elements, aria, wording, started = performance.now()) {
     const { injected } = world;
     const document2 = injected.document;
     const phases = {
@@ -10123,7 +10134,6 @@ ${value.stack}`;
       marks: 0,
       stopped: false
     };
-    const started = performance.now();
     const samples = viewPoints().map((point) => ({
       point,
       hit: hitAtRoots([document2], point)
@@ -10693,8 +10703,20 @@ ${value.stack}`;
     return anyMarked;
   }
   function privateMarks(world) {
-    const root = world.injected.document.documentElement;
-    const marked = root ? [...composedElements(root)].filter(privatelyTyped) : [];
+    const marked = [];
+    const scopes = [world.injected.document];
+    for (let index = 0;index < scopes.length; index++) {
+      const scope = scopes[index];
+      if (!scope)
+        continue;
+      for (const element of scope.querySelectorAll("*")) {
+        if (privatelyTyped(element))
+          marked.push(element);
+        const shadow = element.shadowRoot;
+        if (shadow)
+          scopes.push(shadow);
+      }
+    }
     return { kind: "marks", pins: world.pins.addAll(marked) };
   }
   function mark(element) {

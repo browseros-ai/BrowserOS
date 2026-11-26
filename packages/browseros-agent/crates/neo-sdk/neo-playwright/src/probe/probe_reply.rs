@@ -583,12 +583,22 @@ pub(crate) enum StageMatch {
 
 /// The page's words for one element: upstream's `previewNode`, and the locator its
 /// `generateSelectorSimple` writes, as `asLocator` prints it. The page masks both as it masks
-/// any failure output.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, TS)]
+/// any failure output; they are still page text, so `Debug` prints their lengths, as the engine's
+/// `StrictPreview` of the same two strings does.
+#[derive(Clone, PartialEq, Eq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PinPreview {
     pub(crate) preview: String,
     pub(crate) aka: String,
+}
+
+impl fmt::Debug for PinPreview {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PinPreview")
+            .field("preview_len", &self.preview.len())
+            .field("aka_len", &self.aka.len())
+            .finish()
+    }
 }
 
 /// One control of a cover that takes the pointer.

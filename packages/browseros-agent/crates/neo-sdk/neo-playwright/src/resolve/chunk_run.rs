@@ -57,6 +57,7 @@
 #![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 
 use std::collections::HashMap;
+use std::fmt;
 use std::ops::ControlFlow;
 
 use neo_snapshot_apc::select::{
@@ -140,8 +141,8 @@ pub(crate) struct ChunkRun<'a> {
     root: Option<NodeId>,
 }
 
-/// How a run ended.
-#[derive(Debug)]
+/// How a run ended. The two messages carry page text (a strict violation lists previews), so
+/// `Debug` prints their lengths.
 pub(crate) enum ChunkOutcome {
     /// The chunk's matches, at most one under [`Strictness::Strict`].
     Matched(Matched),
@@ -153,6 +154,24 @@ pub(crate) enum ChunkOutcome {
     Thrown { message: String, class: ErrorClass },
     /// A member left the page since the capture: the attempt starts over with a new one.
     Stale,
+}
+
+impl fmt::Debug for ChunkOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Matched(matched) => f.debug_tuple("Matched").field(matched).finish(),
+            Self::Strict(message) => f
+                .debug_struct("Strict")
+                .field("message_len", &message.len())
+                .finish(),
+            Self::Thrown { message, class } => f
+                .debug_struct("Thrown")
+                .field("message_len", &message.len())
+                .field("class", class)
+                .finish(),
+            Self::Stale => f.write_str("Stale"),
+        }
+    }
 }
 
 /// What a chunk matched, and the first stale ref any of its stages reported. Nothing matched

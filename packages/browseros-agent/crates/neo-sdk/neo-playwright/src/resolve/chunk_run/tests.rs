@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::fake_page::{El, FakePage, Sent, build, key, plain, tracked};
 use super::{ChunkOutcome, ChunkRun, ChunkSet, First, Matched, QueryRoot};
-use crate::probe::{ErrorClass, SetMember, StageSet};
+use crate::probe::{ErrorClass, PinPreview, SetMember, StageSet};
 use crate::target::Strictness;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -1151,4 +1151,35 @@ async fn nth_with_a_capture_throws_as_the_run_starts() -> TestResult {
     );
     assert!(page.sent.is_empty(), "nothing reached the page");
     Ok(())
+}
+
+#[test]
+fn page_text_in_an_outcome_or_a_preview_never_prints_through_debug() {
+    let secret = "hunter2";
+    let printed = [
+        format!(
+            "{:?}",
+            ChunkOutcome::Strict(format!("strict mode violation: <input value=\"{secret}\">"))
+        ),
+        format!(
+            "{:?}",
+            ChunkOutcome::Thrown {
+                message: format!("Unknown attribute \"{secret}\""),
+                class: ErrorClass::Script,
+            }
+        ),
+        format!(
+            "{:?}",
+            PinPreview {
+                preview: format!("<input value=\"{secret}\">"),
+                aka: format!("getByRole('textbox', {{ name: '{secret}' }})"),
+            }
+        ),
+    ];
+    for line in printed {
+        assert!(
+            !line.contains(secret),
+            "a strict message, a thrown message and a preview print their lengths only: {line}"
+        );
+    }
 }

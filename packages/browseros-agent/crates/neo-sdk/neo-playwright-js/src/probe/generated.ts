@@ -477,7 +477,8 @@ export type Pin = number;
 /**
  * The page's words for one element: upstream's `previewNode`, and the locator its
  * `generateSelectorSimple` writes, as `asLocator` prints it. The page masks both as it masks
- * any failure output.
+ * any failure output; they are still page text, so `Debug` prints their lengths, as the engine's
+ * `StrictPreview` of the same two strings does.
  */
 export type PinPreview = { preview: string, aka: string, };
 
