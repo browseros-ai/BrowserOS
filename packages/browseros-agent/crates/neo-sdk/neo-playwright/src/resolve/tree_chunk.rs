@@ -338,6 +338,7 @@ async fn run_over(
                 stale_ref,
             })),
             First::Stale => return Ok(Ran::Stale),
+            First::Broken(why) => Aim::Answered(error_reply(ErrorClass::Internal, why)),
         }));
     }
     if let (Reads::Count, ChunkSet::Keys(matches)) = (reads, &matched.set) {

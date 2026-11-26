@@ -70,13 +70,13 @@ export function queryAll(
 /**
  * A member of a set Rust resolved (`ProbeTarget::Set`): a pinned element while it is connected
  * and still of this world's document, or the document's own root for the Document a chunk's
- * `nth` or `internal:or` kept. A handed node (`node`) never reaches a target: Rust pins a tree
- * set before an op names it.
+ * `nth` or `internal:or` kept. A handed node (`node`, or an `option` of a handed select) never
+ * reaches a target: Rust pins a tree set before an op names it.
  */
 function setMember(world: World, member: SetMember): Element | undefined {
   const { document } = world.injected
   if (member === 'document') return document.documentElement
-  if ('node' in member)
+  if ('node' in member || 'option' in member)
     throw new ProbeError(
       'internal',
       'a resolved set names a handed node, which only a stage takes',

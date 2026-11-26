@@ -734,7 +734,7 @@ export type Selected = Array<string> | SelectRetry;
 /**
  * An element, or the document, that a request names and this world already holds.
  */
-export type SetMember = { "pin": Pin } | { "node": number } | "document";
+export type SetMember = { "pin": Pin } | { "node": number } | { "option": { select: number, index: number, count: number, } } | "document";
 
 /**
  * A rendered `<iframe>` in one frame's snapshot, for Rust to hop into.

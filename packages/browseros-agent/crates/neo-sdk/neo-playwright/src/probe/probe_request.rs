@@ -361,6 +361,13 @@ pub(crate) enum SetMember {
     /// just hydrated in this world (`DOM.resolveNode`, design 6.2). The probe takes it only while
     /// it is connected and its `ownerDocument` is this world's document.
     Node(u32),
+    /// `select.options[index]` of the call's node `select`, held as `Node` is: an `<option>` of a
+    /// collapsed select, which the capture holds as data on its select with no node of its own
+    /// (`SnapshotTree::option_slot`). `count` is how many options the select listed in the
+    /// capture, the witness the page checks: a list of another length may have moved another
+    /// option to `index`, so the member counts as changed, never as that option
+    /// (probe/option-slot.ts).
+    Option { select: u32, index: u32, count: u32 },
     /// The frame's Document, which a set holds only when `nth` or `internal:or` kept the chunk's
     /// query root.
     Document,

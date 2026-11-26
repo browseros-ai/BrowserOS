@@ -9023,7 +9023,7 @@ ${value.stack}`;
     const { document: document2 } = world.injected;
     if (member === "document")
       return document2.documentElement;
-    if ("node" in member)
+    if ("node" in member || "option" in member)
       throw new ProbeError("internal", "a resolved set names a handed node, which only a stage takes");
     const element = world.pins.live(member.pin);
     return element?.ownerDocument === document2 ? element : undefined;
@@ -11535,7 +11535,7 @@ ${value.stack}`;
   var SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 56;
+  var PROTOCOL = 57;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -12026,6 +12026,23 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/option-slot.ts
+  var CHANGED = Symbol("option list changed");
+  function optionInSlot(select, slot) {
+    if (!isSelect(select))
+      throw new ProbeError("internal", `an option member names a <${select.localName}> as its select`);
+    const { options } = select;
+    if (options.length !== slot.count)
+      return CHANGED;
+    const option = options.item(slot.index);
+    if (!option)
+      throw new ProbeError("internal", `an option member names option ${slot.index} of a list of ${slot.count}`);
+    return option;
+  }
+  function isSelect(element) {
+    return element.localName === "select" && "options" in element;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/stage.ts
   var FROM = "internal:neo-from";
   var BELOW = "internal:neo-below";
@@ -12035,14 +12052,20 @@ ${value.stack}`;
     const { document: document2 } = world.injected;
     if (member === "document")
       return document2;
-    const node = "pin" in member ? world.pins.live(member.pin) : nodes[member.node];
+    if ("option" in member) {
+      const select = live(nodes[member.option.select], document2);
+      return select && optionInSlot(select, member.option);
+    }
+    return live("pin" in member ? world.pins.live(member.pin) : nodes[member.node], document2);
+  }
+  function live(node, document2) {
     return node instanceof Element && node.isConnected && node.ownerDocument === document2 ? node : undefined;
   }
   function allHeld(world, members, nodes) {
     const live = [];
     for (const member of members) {
       const element = held(world, member, nodes);
-      if (!element)
+      if (!element || element === CHANGED)
         return null;
       live.push(element);
     }
@@ -12081,9 +12104,22 @@ ${value.stack}`;
     const from = request.from && allHeld(world, request.from, nodes);
     if (from === null)
       return { kind: "detached" };
-    const sets = (request.sets ?? []).map((set) => ("members" in set) ? {
-      members: set.members.flatMap((member) => held(world, member, nodes) ?? [])
-    } : set);
+    const sets = [];
+    for (const set of request.sets ?? []) {
+      if (!("members" in set)) {
+        sets.push(set);
+        continue;
+      }
+      const members = [];
+      for (const member of set.members) {
+        const element = held(world, member, nodes);
+        if (element === CHANGED)
+          return { kind: "detached" };
+        if (element)
+          members.push(element);
+      }
+      sets.push({ members });
+    }
     visitAllSelectorParts(request.selector, (part) => {
       if (part.name === FROM)
         throw new ProbeError("internal", `a stage selector names ${FROM}, which only the probe prepends`);

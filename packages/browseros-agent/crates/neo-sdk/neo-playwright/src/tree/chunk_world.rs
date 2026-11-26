@@ -145,7 +145,8 @@ impl<'a> ChunkWorld<'a> {
     }
 
     /// `node`'s DOM node id. The run hands over only nodes of its own document's tree, each an
-    /// element APC names by id, so any other node is a bug in the run, not a page that changed:
+    /// element APC names by id (an option slot goes over as its select, `Handover::member`), so
+    /// any other node is a bug in the run, not a page that changed:
     /// answering `None` for it would make the run go stale, and the op retry until its deadline
     /// and then time out with the wrong cause.
     fn dom_node(&self, node: NodeId) -> Result<DomNodeId, ProbeFailure> {
@@ -166,7 +167,7 @@ impl<'a> ChunkWorld<'a> {
     }
 
     /// Each of `nodes` as a remote object in the world, in `nodes` order: call node `i` is
-    /// `nodes[i]` (`SetMember::Node`). `None` at the first node that no longer resolves, which
+    /// `nodes[i]` (`SetMember::Node`, and the select of a `SetMember::Option`). `None` at the first node that no longer resolves, which
     /// drops the resolves still in flight.
     async fn resolve_all(&self, nodes: &[NodeId]) -> Result<Option<Vec<String>>, ProbeFailure> {
         let doms: Vec<DomNodeId> = nodes

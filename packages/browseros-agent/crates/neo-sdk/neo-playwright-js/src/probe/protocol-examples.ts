@@ -464,7 +464,15 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
           ...parseSelector('internal:has-text="Go"i').parts,
         ],
       },
-      sets: [{ members: [{ pin: 3 }, { node: 0 }] }],
+      sets: [
+        {
+          members: [
+            { pin: 3 },
+            { node: 0 },
+            { option: { select: 1, index: 0, count: 2 } },
+          ],
+        },
+      ],
     },
     {
       op: 'stage',
