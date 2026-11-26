@@ -40,7 +40,7 @@ Claude Code, Codex and Cursor work in it <strong>signed in as you, in their own 
 
 2. (optional) **Import from Chrome.** One click brings your logins, bookmarks and extensions.
 3. **Automatically connects to your agents.** neo finds Claude Code, Codex, Cursor, VS Code and more on your machine and connects to them automatically.
-4. **Start getting things.** Give a task to your agent and see it to use BrowserOS neo!
+4. **Start getting things done!** Give a task to your agent and you just watch.
    > Book me the cheapest flight to London.
 
 
