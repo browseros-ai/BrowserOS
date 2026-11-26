@@ -5,7 +5,8 @@
 //!  attempt ─▶ TabTree ─▶ PageCapture (Page.getAnnotatedPageContent + contract gate + coalescing)
 //!                ├─▶ FrameWorlds / DocTable (DocToken ⇄ FrameSeq + section 6.2 world proof)
 //!                ├─▶ TabRefTable (neo_snapshot_apc::refs: NodeKey ⇄ Ref across captures)
-//!                ├─▶ PrivateNodes (host-typed secret marks by site and DomNodeId)
+//!                ├─▶ PrivateMirror (host-typed secret marks by DomNodeId and site, copied into
+//!                │   every build as neo_snapshot_apc's PrivateNodes)
 //!                └─▶ Hydrate (DOM.resolveNode + probe pin under a proven pre-capture world)
 //! ```
 
@@ -13,10 +14,10 @@
 
 mod hydrate;
 mod page_capture;
-mod private_nodes;
+mod private_mirror;
 mod tab_tree;
 
 pub(crate) use hydrate::{Hydrate, HydrateOutcome, HydratedNode};
 pub(crate) use page_capture::{AttemptStart, CaptureError, CapturedTree, PageCapture};
-pub(crate) use private_nodes::{PrivateNodes, SiteKey, TabOriginState};
+pub(crate) use private_mirror::{PrivateMirror, TabOriginState};
 pub(crate) use tab_tree::TabTree;

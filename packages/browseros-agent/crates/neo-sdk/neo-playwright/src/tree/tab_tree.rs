@@ -12,8 +12,9 @@
 //!   `DocTable` stays the authority on seqs and document lifetime: refs are issued under the seq
 //!   `DocTable` assigned, and the table drains `DocTable`'s retirement queue, so a document's refs
 //!   retire in lockstep with the document.
-//! - [`PrivateNodes`] mirrors host-typed secret marks by `(SiteKey, DomNodeId)` so APC masking
-//!   redacts host-entered values without extra page round trips.
+//! - [`PrivateMirror`] mirrors the private entry's marks by `DomNodeId` and [`SiteKey`]; every
+//!   capture builds with a copy of them, so APC masking redacts host-entered values without a page
+//!   round trip.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -23,7 +24,7 @@ use browseros_core::FrameId;
 use futures_util::future;
 use neo_snapshot_apc::refs::{Ref, RefLookup, TabRefTable};
 use neo_snapshot_apc::tree::{
-    BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SnapshotTree, TreeDoc,
+    BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SiteKey, SnapshotTree, TreeDoc,
 };
 
 use crate::PlaywrightError;
@@ -33,7 +34,7 @@ use crate::probe::{self, ProbeFailure, ProbeReply};
 use crate::target::AriaRefJump;
 use crate::tree::{
     AttemptStart, CaptureError, CapturedTree, Hydrate, HydrateOutcome, HydratedNode, PageCapture,
-    PrivateNodes, SiteKey, TabOriginState, private_nodes,
+    PrivateMirror, TabOriginState, private_mirror,
 };
 use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, Pin, Stamp};
 
@@ -44,7 +45,7 @@ use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, P
 pub(crate) struct TabTree {
     capture: PageCapture,
     refs: Arc<Mutex<TabRefTable>>,
-    private: Arc<Mutex<PrivateNodes>>,
+    private: Arc<Mutex<PrivateMirror>>,
 }
 
 impl TabTree {
@@ -55,7 +56,7 @@ impl TabTree {
         Self {
             capture: PageCapture::default(),
             refs: Arc::new(Mutex::new(TabRefTable::new())),
-            private: Arc::new(Mutex::new(PrivateNodes::new(origin_state))),
+            private: Arc::new(Mutex::new(PrivateMirror::new(origin_state))),
         }
     }
 
@@ -69,7 +70,7 @@ impl TabTree {
         Self {
             capture: PageCapture::new(min_contract_version),
             refs: Arc::new(Mutex::new(TabRefTable::new())),
-            private: Arc::new(Mutex::new(PrivateNodes::new(origin_state))),
+            private: Arc::new(Mutex::new(PrivateMirror::new(origin_state))),
         }
     }
 
@@ -83,6 +84,9 @@ impl TabTree {
     /// - Worlds failing `Gone` are invalidated immediately and their retired documents' refs are
     ///   retired before new seqs are assigned (design section 6.3).
     /// - Worlds failing for any other reason are omitted from the proven map (fail closed).
+    ///
+    /// The tree is built with a copy of the private mirror's marks taken after the reply, so it
+    /// masks every box marked before the reply arrived.
     pub(crate) async fn capture(
         &self,
         scope: &OpScope<'_>,
@@ -94,6 +98,7 @@ impl TabTree {
         let page_state = Arc::clone(page.state());
         let main_frame = page.main_endpoint().frame;
         let refs = Arc::clone(&self.refs);
+        let private = Arc::clone(&self.private);
         let min_contract_version = self.capture.min_contract_version();
 
         let outcome = self
@@ -132,9 +137,22 @@ impl TabTree {
                     page_state.frames().seq_for_doc(ctx, &proven)
                 };
 
+                // Privacy layer 2's feed (design 8.1). The copy is taken after the reply: the
+                // private entry mirrors a mark before the first host-typed character reaches the
+                // page, so any APC reply that can hold that character arrived after the mark,
+                // and a copy taken now has it (one taken before dispatch would miss a mark made
+                // during the round trip). It is a copy, not the guard: a large page builds for
+                // over a second (design 7.4), and this std mutex must not block `mark_private`
+                // on the typing path that long. Marks are a handful of entries.
+                let marks = private
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .marks()
+                    .clone();
                 let options = BuildOptions::new()
                     .with_min_contract_version(min_contract_version)
-                    .with_seq_of(&seq_of);
+                    .with_seq_of(&seq_of)
+                    .with_private_nodes(&marks);
                 let built = SnapshotTree::build(apc, options).map_err(CaptureError::Build);
                 // Worlds the probe proved gone, and documents `seq_of` displaced from their frames,
                 // retired in `DocTable` above; drop their refs even when the build failed.
@@ -215,42 +233,38 @@ impl TabTree {
             .ref_for(key, Some(seq))
     }
 
-    /// Mirrors a single host-private DOM node mark for `site`.
-    pub(crate) fn mark_private(&self, site: SiteKey, node: DomNodeId) {
+    /// Mirrors one host-private DOM node mark made on `site` (`None`: site unknown, so `node`
+    /// masks in every document).
+    ///
+    /// The caller mirrors the mark before the first character is typed into the box: a capture
+    /// copies the marks after its APC reply arrives, which masks only what was mirrored by then.
+    pub(crate) fn mark_private(&self, site: Option<SiteKey>, node: DomNodeId) {
         self.private
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .mark(site, node);
     }
 
-    /// Resolves probe `pins` in `world` into [`DomNodeId`]s and mirrors all surviving pins as
-    /// host-private under `site`, returning how many nodes were mirrored.
+    /// Resolves probe `pins` in `world` into [`DomNodeId`]s and mirrors every surviving pin as
+    /// host-private on `site`, returning how many nodes were mirrored.
+    ///
+    /// As with [`Self::mark_private`], the caller mirrors the marks before the first character is
+    /// typed into any of the boxes.
     pub(crate) async fn mark_private_pins(
         &self,
         scope: &OpScope<'_>,
         page: &OpPage<'_>,
         world: &IsolatedWorld,
-        site: SiteKey,
+        site: Option<SiteKey>,
         pins: Vec<Pin>,
     ) -> Result<usize, ProbeFailure> {
-        let dom_ids = private_nodes::describe_pins_node_ids(scope, page, world, pins).await?;
+        let dom_ids = private_mirror::describe_pins_node_ids(scope, page, world, pins).await?;
         let count = dom_ids.len();
-        if count > 0 {
-            self.private
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .mark_many(site, dom_ids);
+        let mut mirror = self.private.lock().unwrap_or_else(PoisonError::into_inner);
+        for node in dom_ids {
+            mirror.mark(site.clone(), node);
         }
         Ok(count)
-    }
-
-    /// Returns whether `node` must be masked inside `doc` (failing closed on absent metadata).
-    #[must_use]
-    pub(crate) fn is_private_in_doc(&self, doc: &TreeDoc, node: DomNodeId) -> bool {
-        self.private
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_private_in_doc(doc, node)
     }
 
     /// Returns whether `doc` still needs a one-time page-side seed read for pre-existing tabs.
@@ -262,26 +276,17 @@ impl TabTree {
             .needs_seed(doc)
     }
 
-    /// Imports pre-existing private marks seeded from `doc`'s isolated world and marks `doc`
-    /// seeded.
+    /// Imports the pre-existing private marks `doc`'s isolated world reported, on `doc`'s own
+    /// site, and records `doc` seeded; zero `nodes` records an empty seed.
     pub(crate) fn record_private_seed(
         &self,
-        doc: DocToken,
-        site: SiteKey,
+        doc: &TreeDoc,
         nodes: impl IntoIterator<Item = DomNodeId>,
     ) {
         self.private
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .record_seeded(doc, site, nodes);
-    }
-
-    /// Marks `doc` seeded when its isolated world reported zero host-private marks.
-    pub(crate) fn mark_private_seeded_empty(&self, doc: DocToken) {
-        self.private
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .mark_seeded_empty(doc);
+            .record_seeded(doc, nodes);
     }
 }
 
@@ -374,11 +379,13 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use browseros_core::FrameId;
     use neo_snapshot::{AriaChild, AriaNode};
+    use neo_snapshot_apc::proto::AnnotatedPageContent;
     use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
     use neo_snapshot_apc::tree::{
         ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, DomNodeId, MIN_CONTRACT_VERSION,
-        NodeBuilder, NodeKey, SnapshotTree,
+        NodeBuilder, NodeKey, SiteKey, SnapshotTree,
     };
+    use prost::Message as _;
     use serde_json::{Value, json};
 
     use crate::ErrorCode;
@@ -390,7 +397,8 @@ mod tests {
         ProbeAnswer, SCRIPTED_CHILD, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript,
         TestResult, count_op,
     };
-    use crate::tree::{AttemptStart, HydrateOutcome, SiteKey, TabOriginState, TabTree};
+    use crate::tree::private_mirror::tests::{Shown, page, shown};
+    use crate::tree::{AttemptStart, HydrateOutcome, TabOriginState, TabTree};
     use crate::world::{DocContext, DocLookup, DocPlace, FrameSeq, FrameWorlds, Pin, Place, Stamp};
 
     // --- Minimal protobuf wire encoder for hand-crafted offline APC fixtures ---
@@ -546,6 +554,11 @@ mod tests {
         json!({ "content": STANDARD.encode(apc) })
     }
 
+    /// `apc` as the browser answers `Page.getAnnotatedPageContent`: its protobuf bytes, base64.
+    fn apc_reply(apc: &AnnotatedPageContent) -> Value {
+        json!({ "content": STANDARD.encode(apc.encode_to_vec()) })
+    }
+
     fn key(doc: &str, dom_id: i32) -> TestResult<NodeKey> {
         let token = DocToken::new(doc).ok_or("non-empty doc token")?;
         Ok(NodeKey::new(token, DomNodeId::new(dom_id)))
@@ -607,6 +620,9 @@ mod tests {
         /// Hook run right after an isolated world finishes booting, letting tests simulate a
         /// navigation occurring between Case 3's world install and its subsequent recapture.
         after_world_install: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+        /// Hook run once while a `Page.getAnnotatedPageContent` request is in flight (sent, not yet
+        /// answered), letting tests act during the capture's round trip.
+        during_apc: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
         next_context: AtomicI64,
         context_to_global: Mutex<HashMap<i64, String>>,
         global_info: Mutex<HashMap<String, WorldStub>>,
@@ -636,6 +652,7 @@ mod tests {
                 apc_replies: Mutex::default(),
                 default_apc: Mutex::new(Some(default_apc)),
                 after_world_install: Mutex::default(),
+                during_apc: Mutex::default(),
                 next_context: AtomicI64::new(100),
                 context_to_global: Mutex::default(),
                 global_info: Mutex::default(),
@@ -715,6 +732,13 @@ mod tests {
         fn set_after_world_install(&self, hook: impl Fn() + Send + Sync + 'static) {
             *self
                 .after_world_install
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
+        }
+
+        fn set_during_apc(&self, hook: impl Fn() + Send + Sync + 'static) {
+            *self
+                .during_apc
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
         }
@@ -915,6 +939,14 @@ mod tests {
                 "Target.getTargets" => Some(json!({ "targetInfos": [] })),
                 "Page.getAnnotatedPageContent" => {
                     self.apc_calls.fetch_add(1, Ordering::SeqCst);
+                    let hook = self
+                        .during_apc
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
                     let queued = self
                         .apc_replies
                         .lock()
@@ -1914,18 +1946,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_nodes_mirror_and_seed_through_tab_tree() -> TestResult {
-        let apc = encode_apc_reply(
-            "doc-private",
-            Some("https://a.test/"),
-            &[42],
-            None,
-            Some(MIN_CONTRACT_VERSION),
-        );
-        let tab = ScriptedTab::new(TreeScript::new(apc));
+    async fn private_marks_mirror_and_seed_into_captured_trees() -> TestResult {
+        let ids = [42, 84, 99, 123, 7];
+        let on_a = Some(("https://a.test", false));
+        let tab = ScriptedTab::new(TreeScript::new(apc_reply(&page("doc-private", on_a, &ids))));
         let run = ScriptedRun::over(&tab).await?;
         let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
-        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         let tree = TabTree::new(TabOriginState::ExistedAtStart);
 
         tab.script().set_pinned_nodes_reply(json!({
@@ -1940,12 +1967,13 @@ mod tests {
                 }
             }
         }));
-        let main_world = page.world(&page.main_endpoint(), Place::Main).await?;
-        let site_a = SiteKey::from_origin("https://A.TEST:443/login").ok_or("site a")?;
+        let main_world = op_page.world(&op_page.main_endpoint(), Place::Main).await?;
+        // The private entry's world reads its origin in another spelling than APC's.
+        let site_a = SiteKey::from_origin("https://A.TEST:443");
         let mirrored = tree
             .mark_private_pins(
                 &scope,
-                &page,
+                &op_page,
                 &main_world,
                 site_a.clone(),
                 vec![Pin(1), Pin(2)],
@@ -1955,60 +1983,110 @@ mod tests {
             mirrored, 2,
             "mark_private_pins must mirror every surviving pinned DomNodeId"
         );
-        tree.mark_private(site_a.clone(), DomNodeId::new(99));
+        tree.mark_private(site_a, DomNodeId::new(99));
 
-        let same_origin_moved = SnapshotTree::build(
-            ApcBuilder::new("doc-moved")
-                .main_url("https://a.test/iframe")
-                .root(NodeBuilder::root().dom_id(1))
-                .build(),
-            BuildOptions::new(),
-        )?;
-        let other_site = SnapshotTree::build(
-            ApcBuilder::new("doc-other")
-                .main_url("https://b.test/form")
-                .main_origin("https://b.test", false)
-                .root(NodeBuilder::root().dom_id(1))
-                .build(),
-            BuildOptions::new(),
-        )?;
-        let moved_doc = same_origin_moved.main_document().ok_or("moved doc")?;
-        let other_doc = other_site.main_document().ok_or("other doc")?;
-
+        let first = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
         for id in [42, 84, 99] {
-            assert!(
-                tree.is_private_in_doc(moved_doc, DomNodeId::new(id)),
-                "host-private node {id} must stay masked after a same-origin document move"
+            assert_eq!(
+                shown(first.tree(), id)?,
+                Shown::Bullets,
+                "box {id}, mirrored before the capture, must print bullets"
             );
-            assert!(
-                !tree.is_private_in_doc(other_doc, DomNodeId::new(id)),
-                "host-private node {id} must not bleed onto a cross-site document"
+        }
+        for id in [123, 7] {
+            assert_eq!(
+                shown(first.tree(), id)?,
+                Shown::Value,
+                "box {id} carries no mirrored mark yet"
             );
         }
 
-        // ExistedAtStart one-time seeding through TabTree.
-        let doc_a = DocToken::new("doc-preexisting-a").ok_or("doc a")?;
-        let doc_b = DocToken::new("doc-preexisting-b").ok_or("doc b")?;
-        assert!(tree.needs_private_seed(&doc_a));
-        assert!(tree.needs_private_seed(&doc_b));
+        // The tab predates this instance: the first snapshot seeds its document's earlier marks.
+        let doc = first.tree().main_document().ok_or("main doc")?;
+        assert!(tree.needs_private_seed(doc.token()));
+        tree.record_private_seed(doc, [DomNodeId::new(123)]);
+        assert!(
+            !tree.needs_private_seed(doc.token()),
+            "a document is seeded once"
+        );
 
-        tree.record_private_seed(doc_a.clone(), site_a, [DomNodeId::new(123)]);
-        assert!(!tree.needs_private_seed(&doc_a));
-        assert!(tree.is_private_in_doc(moved_doc, DomNodeId::new(123)));
-        assert!(tree.needs_private_seed(&doc_b));
+        tab.script()
+            .push_apc(apc_reply(&page("doc-moved", on_a, &ids)));
+        tab.script().push_apc(apc_reply(&page(
+            "doc-other",
+            Some(("https://b.test", false)),
+            &ids,
+        )));
+        let moved = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        for id in [42, 84, 99, 123] {
+            assert_eq!(
+                shown(moved.tree(), id)?,
+                Shown::Bullets,
+                "box {id} must stay masked after the page moves it into another same-origin \
+                 document"
+            );
+        }
+        assert_eq!(
+            shown(moved.tree(), 7)?,
+            Shown::Value,
+            "box 7 was never marked"
+        );
+        let other = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        for id in ids {
+            assert_eq!(
+                shown(other.tree(), id)?,
+                Shown::Value,
+                "box {id} on another site is another node, so it must print its value"
+            );
+        }
+        Ok(())
+    }
 
-        tree.mark_private_seeded_empty(doc_b.clone());
-        assert!(!tree.needs_private_seed(&doc_b));
+    #[tokio::test]
+    async fn a_mark_mirrored_while_the_apc_request_is_in_flight_is_masked_in_that_capture()
+    -> TestResult {
+        let apc = page("doc-typing", Some(("https://a.test", false)), &[7, 8]);
+        let tab = ScriptedTab::new(TreeScript::new(apc_reply(&apc)));
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = Arc::new(TabTree::new(TabOriginState::OpenedUnderInstance));
+
+        // The private entry marks a box on the typing path while the capture's APC request is
+        // between the browser and its reply.
+        let typing = Arc::clone(&tree);
+        let site = SiteKey::from_origin("https://a.test");
+        tab.script()
+            .set_during_apc(move || typing.mark_private(site.clone(), DomNodeId::new(7)));
+
+        let captured = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        assert_eq!(tab.script().apc_count(), 1, "one capture, one APC request");
+        assert_eq!(
+            shown(captured.tree(), 7)?,
+            Shown::Bullets,
+            "the marks are copied after the reply, so a mark made during the round trip masks"
+        );
+        assert_eq!(
+            shown(captured.tree(), 8)?,
+            Shown::Value,
+            "box 8 was never marked"
+        );
         Ok(())
     }
 
     #[test]
     fn ref_for_and_debug_redaction_through_tab_tree() -> TestResult {
         let tree = TabTree::new(TabOriginState::ExistedAtStart);
-        let site = SiteKey::from_origin("https://secret-tenant.example:8443/account")
-            .ok_or("valid site")?;
-        tree.mark_private(site, DomNodeId::new(7));
-        tree.mark_private_seeded_empty(DocToken::new("doc-preexisting-secret").ok_or("doc")?);
+        let site =
+            SiteKey::from_origin("https://secret-tenant.example:8443").ok_or("valid site")?;
+        tree.mark_private(Some(site), DomNodeId::new(7));
+        let preexisting = SnapshotTree::build(
+            ApcBuilder::new("doc-preexisting-secret")
+                .root(NodeBuilder::root().dom_id(1))
+                .build(),
+            BuildOptions::new(),
+        )?;
+        tree.record_private_seed(preexisting.main_document().ok_or("doc")?, []);
 
         let ref_key = key("doc-debug-secret", 5)?;
         let minted = tree.ref_for(DocSeq::new(0), &ref_key);
@@ -2035,7 +2113,7 @@ mod tests {
             debug.contains("TabTree")
                 && debug.contains("PageCapture")
                 && debug.contains("TabRefTable")
-                && debug.contains("PrivateNodes"),
+                && debug.contains("PrivateMirror"),
             "TabTree Debug must summarize all subcomponents: {debug}"
         );
         Ok(())

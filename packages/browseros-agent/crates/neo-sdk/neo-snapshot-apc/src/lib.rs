@@ -22,7 +22,7 @@
 //! ```
 //!
 //! Normal dependencies are strictly pure (`base64`, `neo-snapshot`, `prost`, `serde`,
-//! `serde_json`, `thiserror`): no async runtime, no CDP transport, and no browser handles. Both
+//! `serde_json`, `thiserror`, `url`): no async runtime, no CDP transport, and no browser handles. Both
 //! live browser sessions and recorded fixtures feed the same entry points and build into the same
 //! [`tree::SnapshotTree`].
 

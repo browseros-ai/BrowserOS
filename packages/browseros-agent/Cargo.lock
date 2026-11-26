@@ -2033,6 +2033,7 @@ dependencies = [
  "neo-snapshot-apc",
  "neo-trace",
  "png",
+ "prost",
  "rquickjs",
  "serde",
  "serde_json",
@@ -2138,6 +2139,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "url",
 ]
 
 [[package]]
