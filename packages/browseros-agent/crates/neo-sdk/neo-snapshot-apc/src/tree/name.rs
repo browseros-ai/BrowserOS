@@ -855,8 +855,10 @@ fn push_children_reversed(
 /// `DisplayLabel()` in an `aria-hidden` span of the option's UA shadow root, and the option's own
 /// children are `display: none` (`html_option_element.cc` `DidAddUserAgentShadowRoot`, `html.css`
 /// `::-internal-option-label-container`). That text is the only copy of the option's content APC
-/// sends. It differs from Playwright's content name only when a non-empty `label` attribute
-/// replaces the content, and the contract carries nothing to tell the two apart.
+/// sends. It differs only when a non-empty `label` attribute replaces the content. Playwright then
+/// reads the content, or the title when the content is empty, and this reads the label. Neither
+/// the text nor `SelectOption.text` says which one `DisplayLabel()` chose, so closing that needs a
+/// contract fact.
 struct LogicalChildren<'a> {
     tree: &'a SnapshotTree,
     doc: DocId,
