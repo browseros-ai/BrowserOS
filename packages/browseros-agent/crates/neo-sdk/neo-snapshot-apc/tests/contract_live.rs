@@ -1768,8 +1768,14 @@ const INLINE_WHITESPACE_PAGE: &str = r##"<!doctype html><html><head><title>Contr
 <p id="p1"><span>one</span><span> <b>two</b></span></p>
 <script>window.__fixtureReady = true;</script></body></html>"##;
 
-/// Every text descendant of `node`, in document order, paired with its raw `text_content`.
-fn text_descendants(node: &ContentNode) -> Vec<(&ContentNode, &str)> {
+/// One text node under an element, paired with its raw `text_content`.
+struct TextDescendant<'n> {
+    node: &'n ContentNode,
+    text: &'n str,
+}
+
+/// Every text descendant of `node`, in document order.
+fn text_descendants(node: &ContentNode) -> Vec<TextDescendant<'_>> {
     let mut out = Vec::new();
     let mut stack: Vec<&ContentNode> = node.children_nodes.iter().rev().collect();
     while let Some(current) = stack.pop() {
@@ -1779,7 +1785,10 @@ fn text_descendants(node: &ContentNode) -> Vec<(&ContentNode, &str)> {
             .and_then(|attrs| attrs.content_data.as_ref())
             && let Some(text) = info.text_content.as_deref()
         {
-            out.push((current, text));
+            out.push(TextDescendant {
+                node: current,
+                text,
+            });
         }
         stack.extend(current.children_nodes.iter().rev());
     }
@@ -1802,13 +1811,13 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             // break_before.
             let b2 = text_descendants(tab.require_node(capture, "#b2").await?);
             assert_eq!(b2.len(), 2, "#b2 has two text nodes");
-            let &(b2_first, b2_first_text) = b2.first().ok_or("checked above")?;
-            let &(b2_second, b2_second_text) = b2.get(1).ok_or("checked above")?;
-            assert_eq!((b2_first_text, b2_second_text), ("Add", "to cart"));
+            let b2_first = b2.first().ok_or("checked above")?;
+            let b2_second = b2.get(1).ok_or("checked above")?;
+            assert_eq!((b2_first.text, b2_second.text), ("Add", "to cart"));
             assert_eq!(
                 (
-                    facts_of(b2_first).break_before,
-                    facts_of(b2_second).break_before
+                    facts_of(b2_first.node).break_before,
+                    facts_of(b2_second.node).break_before
                 ),
                 (None, None),
                 "#b2: no whitespace between spans raises no break"
@@ -1817,10 +1826,10 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             // b1 has a space between two spans: "to cart" carries break_before.
             let b1 = text_descendants(tab.require_node(capture, "#b1").await?);
             assert_eq!(b1.len(), 2, "#b1 has two text nodes");
-            let &(b1_second, b1_second_text) = b1.get(1).ok_or("checked above")?;
-            assert_eq!(b1_second_text, "to cart");
+            let b1_second = b1.get(1).ok_or("checked above")?;
+            assert_eq!(b1_second.text, "to cart");
             assert_eq!(
-                facts_of(b1_second).break_before,
+                facts_of(b1_second.node).break_before,
                 Some(true),
                 "#b1: whitespace between two spans raises break_before on the second text"
             );
@@ -1829,15 +1838,15 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             // whitespace box sits between the spans, so "to cart" carries no break_before.
             let b3 = text_descendants(tab.require_node(capture, "#b3").await?);
             assert_eq!(b3.len(), 2, "#b3 has two text nodes");
-            let &(_, b3_first_text) = b3.first().ok_or("checked above")?;
-            let &(b3_second, b3_second_text) = b3.get(1).ok_or("checked above")?;
+            let b3_first = b3.first().ok_or("checked above")?;
+            let b3_second = b3.get(1).ok_or("checked above")?;
             assert_eq!(
-                b3_first_text, "Add ",
+                b3_first.text, "Add ",
                 "#b3 keeps the trailing space in text_content"
             );
-            assert_eq!(b3_second_text, "to cart");
+            assert_eq!(b3_second.text, "to cart");
             assert_eq!(
-                facts_of(b3_second).break_before,
+                facts_of(b3_second.node).break_before,
                 None,
                 "#b3: trailing space inside the first span raises no extra break"
             );
@@ -1845,10 +1854,10 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             // b4 separates two spans with `<wbr>` (an empty LayoutText): no space, no break.
             let b4 = text_descendants(tab.require_node(capture, "#b4").await?);
             assert_eq!(b4.len(), 2, "#b4 has two text nodes");
-            let &(b4_second, b4_second_text) = b4.get(1).ok_or("checked above")?;
-            assert_eq!(b4_second_text, "to cart");
+            let b4_second = b4.get(1).ok_or("checked above")?;
+            assert_eq!(b4_second.text, "to cart");
             assert_eq!(
-                facts_of(b4_second).break_before,
+                facts_of(b4_second.node).break_before,
                 None,
                 "#b4: <wbr> (empty text) raises no break"
             );
@@ -1856,10 +1865,10 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             // a1 has a newline and indent between <b> and <i>: "message" carries break_before.
             let a1 = text_descendants(tab.require_node(capture, "#a1").await?);
             assert_eq!(a1.len(), 2, "#a1 has two text nodes");
-            let &(a1_second, a1_second_text) = a1.get(1).ok_or("checked above")?;
-            assert_eq!(a1_second_text, "message");
+            let a1_second = a1.get(1).ok_or("checked above")?;
+            assert_eq!(a1_second.text, "message");
             assert_eq!(
-                facts_of(a1_second).break_before,
+                facts_of(a1_second.node).break_before,
                 Some(true),
                 "#a1: newline and indent between inline elements raises break_before"
             );
@@ -1867,10 +1876,10 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             // p1 puts the whitespace as the first child of the second inline box.
             let p1 = text_descendants(tab.require_node(capture, "#p1").await?);
             assert_eq!(p1.len(), 2, "#p1 has two text nodes");
-            let &(p1_second, p1_second_text) = p1.get(1).ok_or("checked above")?;
-            assert_eq!(p1_second_text, "two");
+            let p1_second = p1.get(1).ok_or("checked above")?;
+            assert_eq!(p1_second.text, "two");
             assert_eq!(
-                facts_of(p1_second).break_before,
+                facts_of(p1_second.node).break_before,
                 Some(true),
                 "#p1: leading whitespace inside an inline box raises break_before"
             );
