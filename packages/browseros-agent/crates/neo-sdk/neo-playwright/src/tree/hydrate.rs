@@ -219,7 +219,7 @@ impl<'a> Hydrate<'a> {
                         seq,
                     }),
                     PinAttempt::WorldGone => {
-                        let _ = self.tab_tree.invalidate_world(self.page.frames(), &world);
+                        self.tab_tree.invalidate_world(self.page.frames(), &world);
                         Err(detached_ref(self.scope, jump))
                     }
                     PinAttempt::NodeDetached => Err(detached_ref(self.scope, jump)),
@@ -298,7 +298,7 @@ impl<'a> Hydrate<'a> {
                 }
             }
             PinAttempt::WorldGone => {
-                let _ = self.tab_tree.invalidate_world(self.page.frames(), &world);
+                self.tab_tree.invalidate_world(self.page.frames(), &world);
                 Err(detached_ref(self.scope, jump))
             }
             PinAttempt::NodeDetached => Err(detached_ref(self.scope, jump)),
@@ -337,7 +337,7 @@ impl<'a> Hydrate<'a> {
                 }
             }
             PinAttempt::WorldGone => {
-                let _ = self.tab_tree.invalidate_world(self.page.frames(), &world);
+                self.tab_tree.invalidate_world(self.page.frames(), &world);
                 Ok(HydrateOutcome::WorldStale)
             }
             PinAttempt::NodeDetached => Ok(HydrateOutcome::NodeDetached),
@@ -449,7 +449,7 @@ async fn ensure_world(
         Started::Ready { world, .. } => EnsuredWorld::Ready(*world),
         Started::Gone(stale) => {
             if let Some(world) = stale {
-                let _ = tab_tree.invalidate_world(page.frames(), &world);
+                tab_tree.invalidate_world(page.frames(), &world);
             }
             EnsuredWorld::Gone
         }

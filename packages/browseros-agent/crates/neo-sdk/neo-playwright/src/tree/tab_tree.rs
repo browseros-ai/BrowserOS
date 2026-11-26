@@ -6,9 +6,11 @@
 //!   `contract_version`, and coalesces overlapping attempts without caching completed trees.
 //! - After each APC reply arrives, [`TabTree::capture`] probes every pre-capture cached world in
 //!   parallel with `probe::describe` so only worlds proven alive across the entire capture bind to
-//!   their documents; stale worlds are invalidated and their refs retired before seq assignment.
+//!   their documents; stale worlds are invalidated, retiring their documents before seq
+//!   assignment.
 //! - A thin internal `TabRefTable` stand-in (replaced by `neo_snapshot_apc::refs::TabRefTable` at
-//!   rebase onto chunk 5) tracks `Ref ⇄ NodeKey` and retires in lockstep with `DocTable`.
+//!   rebase onto chunk 5) tracks `Ref ⇄ NodeKey` and drains `DocTable`'s retirement queue, so a
+//!   document's refs retire in lockstep with the document.
 //! - [`PrivateNodes`] mirrors host-typed secret marks by `(SiteKey, DomNodeId)` so APC masking
 //!   redacts host-entered values without extra page round trips.
 
@@ -31,9 +33,7 @@ use crate::tree::{
     AttemptStart, CaptureError, CapturedTree, Hydrate, HydrateOutcome, HydratedNode, PageCapture,
     PrivateNodes, SiteKey, TabOriginState, private_nodes,
 };
-use crate::world::{
-    DocContext, DocLookup, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, Pin, Stamp,
-};
+use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, Pin, Stamp};
 
 /// Disjoint ref namespaces sharing one document's ref table; replaced by
 /// `neo_snapshot_apc::refs::TabRefTable` types at rebase.
@@ -155,11 +155,6 @@ impl TabRefTable {
         self.retired.extend(removed);
     }
 
-    fn active_docs(&self) -> Vec<DocToken> {
-        let docs: HashSet<DocToken> = self.by_ref.values().map(|key| key.doc.clone()).collect();
-        docs.into_iter().collect()
-    }
-
     #[cfg(test)]
     fn insert_for_test(&mut self, r: Ref, key: NodeKey) {
         self.by_ref.insert(r, key.clone());
@@ -239,8 +234,7 @@ impl TabTree {
         let outcome = self
             .capture
             .capture(root_session, started, move |apc, requested_at| async move {
-                let proven =
-                    prove_pre_capture_worlds(page_state.frames(), &refs, requested_at).await;
+                let proven = prove_pre_capture_worlds(page_state.frames(), requested_at).await;
 
                 let main_doc_token = apc
                     .main_frame_data
@@ -275,9 +269,11 @@ impl TabTree {
                 let options = BuildOptions::new()
                     .with_min_contract_version(min_contract_version)
                     .with_seq_of(&seq_of);
-                let tree = SnapshotTree::build(apc, options).map_err(CaptureError::Build)?;
-                reconcile_retired_refs(page_state.frames(), &refs);
-                Ok(tree)
+                let built = SnapshotTree::build(apc, options).map_err(CaptureError::Build);
+                // Worlds the probe proved gone, and documents `seq_of` displaced from their frames,
+                // retired in `DocTable` above; drop their refs even when the build failed.
+                retire_refs_of_retired_docs(page_state.frames(), &refs);
+                built
             })
             .await;
 
@@ -316,31 +312,18 @@ impl TabTree {
         Hydrate::new(page, scope, self).hydrate_ref(jump).await
     }
 
-    /// Invalidates `world` in `frames`, retires every document bound to that install in both
-    /// `DocTable` and the ref table, and returns the retired tokens.
-    pub(crate) fn invalidate_world(
-        &self,
-        frames: &FrameWorlds,
-        world: &IsolatedWorld,
-    ) -> Vec<DocToken> {
-        let retired = frames.invalidate_and_retired_docs(world);
-        if !retired.is_empty() {
-            let mut table = self.refs.lock().unwrap_or_else(PoisonError::into_inner);
-            for doc in &retired {
-                table.retire_doc(doc);
-            }
-        }
-        retired
+    /// Invalidates `world` in `frames` and retires every document bound to that install in both
+    /// `DocTable` and the ref table.
+    pub(crate) fn invalidate_world(&self, frames: &FrameWorlds, world: &IsolatedWorld) {
+        frames.invalidate(world);
+        retire_refs_of_retired_docs(frames, &self.refs);
     }
 
     /// Retires `doc` in both `frames` (`DocTable`) and the ref table, returning its seq if it was
     /// previously active in `DocTable`.
     pub(crate) fn retire_doc(&self, frames: &FrameWorlds, doc: &DocToken) -> Option<FrameSeq> {
         let seq = frames.retire_doc(doc);
-        self.refs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retire_doc(doc);
+        retire_refs_of_retired_docs(frames, &self.refs);
         seq
     }
 
@@ -460,11 +443,11 @@ impl fmt::Debug for TabTree {
 /// Probes every cached world installed strictly before `requested_at` with `probe::describe` in
 /// parallel after the APC reply arrives (design sections 6.2 and 6.3).
 ///
-/// Worlds answering `Described` proved they stayed alive across the capture interval; worlds
-/// answering `Gone` are invalidated and their retired documents' refs are retired immediately.
+/// Worlds answering `Described` proved they stayed alive across the capture interval. Worlds
+/// answering `Gone` are invalidated, which retires their documents in `DocTable` before `seq_of`
+/// runs, so a navigated frame's new document takes a fresh seq instead of the dead one's.
 async fn prove_pre_capture_worlds(
     frames: &FrameWorlds,
-    refs: &Mutex<TabRefTable>,
     requested_at: Stamp,
 ) -> HashMap<FrameId, IsolatedWorld> {
     let eligible: Vec<IsolatedWorld> = frames
@@ -491,15 +474,7 @@ async fn prove_pre_capture_worlds(
                     proven.insert(frame, world);
                 }
             }
-            Err(ProbeFailure::Gone(_)) => {
-                let retired = frames.invalidate_and_retired_docs(&world);
-                if !retired.is_empty() {
-                    let mut table = refs.lock().unwrap_or_else(PoisonError::into_inner);
-                    for doc in &retired {
-                        table.retire_doc(doc);
-                    }
-                }
-            }
+            Err(ProbeFailure::Gone(_)) => frames.invalidate(&world),
             // Fail closed on unproven worlds: leave them out of `proven` so the document reserves
             // a seq rather than binding an unverified install.
             Ok(_) | Err(_) => {}
@@ -508,23 +483,20 @@ async fn prove_pre_capture_worlds(
     proven
 }
 
-/// Retires any document in `refs` that `DocTable` retired during `seq_for_doc` (for instance, a
-/// reserved document displaced by a navigation before any world was installed), without nesting
-/// `refs` and `FrameWorlds` locks.
-fn reconcile_retired_refs(frames: &FrameWorlds, refs: &Mutex<TabRefTable>) {
-    let active_docs = refs
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .active_docs();
-    let displaced: Vec<DocToken> = active_docs
-        .into_iter()
-        .filter(|doc| matches!(frames.lookup_doc(doc), DocLookup::Retired))
-        .collect();
-    if !displaced.is_empty() {
-        let mut table = refs.lock().unwrap_or_else(PoisonError::into_inner);
-        for doc in &displaced {
-            table.retire_doc(doc);
-        }
+/// Drops the refs of every document `DocTable` retired since the last drain, so the ref table
+/// retires in lockstep with `DocTable`, its authority on document lifetime (design 2.3).
+///
+/// The queue also carries retirements made outside `TabTree`, such as the resolver invalidating a
+/// world that failed `Gone`; draining after every capture catches those before refs are printed.
+/// The `FrameWorlds` lock is released before the ref table's is taken, so the two never nest.
+fn retire_refs_of_retired_docs(frames: &FrameWorlds, refs: &Mutex<TabRefTable>) {
+    let retired = frames.take_retired_docs();
+    if retired.is_empty() {
+        return;
+    }
+    let mut table = refs.lock().unwrap_or_else(PoisonError::into_inner);
+    for doc in &retired {
+        table.retire_doc(doc);
     }
 }
 
@@ -682,6 +654,13 @@ mod tests {
 
     fn parsed_ref(raw: &str) -> TestResult<Ref> {
         Ok(Ref::from_jump(jump(raw)?))
+    }
+
+    /// Records `raw` for `key` in the tab's ref table, as a snapshot printing it would.
+    fn assign_ref(tree: &TabTree, raw: &str, key: &NodeKey) -> TestResult<Ref> {
+        let printed = parsed_ref(raw)?;
+        tree.insert_test_ref(printed, key.clone());
+        Ok(printed)
     }
 
     /// Programmable fake CDP script backing `ScriptedTab` for offline `TabTree` + `Hydrate` tests.
@@ -1180,7 +1159,7 @@ mod tests {
         );
 
         // Record a ref and hydrate via hydrate_ref: must succeed with ZERO captures.
-        tree.insert_test_ref(parsed_ref("e1")?, node_key.clone());
+        assign_ref(&tree, "e1", &node_key)?;
         let by_ref = tree.hydrate_ref(&scope, &page, jump("e1")?).await?;
         assert_eq!(by_ref.key, node_key);
         assert_eq!(by_ref.seq, FrameSeq(0));
@@ -1213,8 +1192,7 @@ mod tests {
         let main_world = page.world(&main_endpoint, Place::Main).await?;
         let captured = tree.capture(&scope, &page, AttemptStart::now()).await?;
         let node_key = key("doc-1", 10)?;
-        let e1 = parsed_ref("e1")?;
-        tree.insert_test_ref(e1, node_key.clone());
+        let e1 = assign_ref(&tree, "e1", &node_key)?;
 
         tab.script()
             .mark_global_stale(main_world.global(), "Cannot find context with specified id");
@@ -1255,7 +1233,7 @@ mod tests {
             .capture(&scope_b, &page_b, AttemptStart::now())
             .await?;
         let key_b = key("doc-1", 10)?;
-        tree_b.insert_test_ref(e1, key_b.clone());
+        assign_ref(&tree_b, "e1", &key_b)?;
 
         tab_b.script().set_resolve_probe_error(Some(
             "Argument should belong to the same JavaScript world as target object",
@@ -1437,9 +1415,9 @@ mod tests {
     #[tokio::test]
     async fn case_4_stale_document_and_cross_frame_mismatch_refuse_without_resolve_node()
     -> TestResult {
-        let apc_doc2 = encode_apc_reply(
-            "doc-2",
-            Some("https://b.test/"),
+        let with_child = encode_apc_reply(
+            "doc-1",
+            Some("https://a.test/"),
             &[10],
             Some(&ChildFrameSpec {
                 iframe_dom_id: 500,
@@ -1450,42 +1428,31 @@ mod tests {
             }),
             Some(MIN_CONTRACT_VERSION),
         );
-        let tab = ScriptedTab::new(TreeScript::new(apc_doc2));
+        // The page then navigates: a new main document, and the iframe is gone.
+        let navigated = encode_apc_reply(
+            "doc-2",
+            Some("https://b.test/"),
+            &[10],
+            None,
+            Some(MIN_CONTRACT_VERSION),
+        );
+        let tab = ScriptedTab::new(TreeScript::new(navigated));
+        tab.script().push_apc(with_child);
         let run = ScriptedRun::over(&tab).await?;
         let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
         let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
-
         let main_frame = page.main_endpoint().frame;
-        let captured = tree.capture(&scope, &page, AttemptStart::now()).await?;
-        let stale_key = key("doc-1", 10)?;
-        let stale_ref = parsed_ref("e1")?;
-        tree.insert_test_ref(stale_ref, stale_key.clone());
+        let child_frame = FrameId(SCRIPTED_CHILD.to_owned());
 
-        let outcome = tree
-            .hydrate_key(&scope, &page, &captured, &stale_key, &main_frame)
-            .await?;
-        assert!(
-            matches!(outcome, HydrateOutcome::StaleDocument),
-            "key whose doc is absent from capture must return StaleDocument: {outcome:?}"
-        );
-        assert!(
-            tab.script().resolve_node_calls().is_empty(),
-            "case 4 must never send DOM.resolveNode for a stale document key"
-        );
-        assert_eq!(
-            tree.resolve_ref(&stale_ref),
-            RefLookup::Retired,
-            "absent document detected in case 4 must retire its refs"
-        );
-
-        // Cross-frame mismatch: doc-child IS in the capture (in SCRIPTED_CHILD), but caller asks
-        // for it in main_frame -> StaleDocument WITHOUT retiring live doc-child.
+        let before = tree.capture(&scope, &page, AttemptStart::now()).await?;
+        let main_key = key("doc-1", 10)?;
+        let main_ref = assign_ref(&tree, "e1", &main_key)?;
         let child_key = key("doc-child", 20)?;
-        let child_ref = parsed_ref("f1e1")?;
-        tree.insert_test_ref(child_ref, child_key.clone());
+        let child_ref = assign_ref(&tree, "f1e1", &child_key)?;
+
         let mismatch = tree
-            .hydrate_key(&scope, &page, &captured, &child_key, &main_frame)
+            .hydrate_key(&scope, &page, &before, &child_key, &main_frame)
             .await?;
         assert!(
             matches!(mismatch, HydrateOutcome::StaleDocument),
@@ -1493,12 +1460,50 @@ mod tests {
         );
         assert_eq!(
             tree.resolve_ref(&child_ref),
-            RefLookup::Key(child_key),
+            RefLookup::Key(child_key.clone()),
             "frame mismatch for a document still live in another frame must not retire it"
+        );
+
+        let after = tree.capture(&scope, &page, AttemptStart::now()).await?;
+        let outcome = tree
+            .hydrate_key(&scope, &page, &after, &main_key, &main_frame)
+            .await?;
+        assert!(
+            matches!(outcome, HydrateOutcome::StaleDocument),
+            "key whose doc is absent from capture must return StaleDocument: {outcome:?}"
+        );
+        assert_eq!(
+            tree.resolve_ref(&main_ref),
+            RefLookup::Retired,
+            "a main document displaced by navigation must retire its refs"
+        );
+
+        // Nothing displaced doc-child: its frame simply left. Case 4 must find it absent and
+        // retire it, refs included.
+        assert_eq!(
+            tree.resolve_ref(&child_ref),
+            RefLookup::Key(child_key.clone()),
+            "doc-child stays live until a hydration proves it absent"
+        );
+        let gone = tree
+            .hydrate_key(&scope, &page, &after, &child_key, &child_frame)
+            .await?;
+        assert!(
+            matches!(gone, HydrateOutcome::StaleDocument),
+            "key whose frame left the capture must return StaleDocument: {gone:?}"
+        );
+        assert!(
+            matches!(page.frames().lookup_doc(&child_key.doc), DocLookup::Retired),
+            "case 4 must retire the absent document in DocTable"
+        );
+        assert_eq!(
+            tree.resolve_ref(&child_ref),
+            RefLookup::Retired,
+            "absent document detected in case 4 must retire its refs"
         );
         assert!(
             tab.script().resolve_node_calls().is_empty(),
-            "cross-frame mismatch must send zero DOM.resolveNode calls"
+            "case 4 must never send DOM.resolveNode for a stale or mismatched key"
         );
         Ok(())
     }
@@ -1534,8 +1539,7 @@ mod tests {
         let main_frame = page.main_endpoint().frame;
         let cap_before = tree.capture(&scope, &page, AttemptStart::now()).await?;
         let before_key = key("doc-before", 10)?;
-        let before_ref = parsed_ref("e1")?;
-        tree.insert_test_ref(before_ref, before_key.clone());
+        let before_ref = assign_ref(&tree, "e1", &before_key)?;
 
         let outcome = tree
             .hydrate_key(&scope, &page, &cap_before, &before_key, &main_frame)
@@ -1578,7 +1582,7 @@ mod tests {
 
         let _cap_r1 = tree.capture(&scope, &page, AttemptStart::now()).await?;
         let r1_key = key("doc-r1", 10)?;
-        tree.insert_test_ref(parsed_ref("e1")?, r1_key.clone());
+        assign_ref(&tree, "e1", &r1_key)?;
 
         let err = tree
             .hydrate_ref(&scope, &page, jump("e1")?)
@@ -1634,8 +1638,7 @@ mod tests {
         let doc_1 = cap_1.tree().main_document().ok_or("doc 1")?;
         assert_eq!(doc_1.token().as_str(), "doc-1");
         assert_eq!(doc_1.seq(), Some(DocSeq::new(0)));
-        let e1 = parsed_ref("e1")?;
-        tree.insert_test_ref(e1, key("doc-1", 10)?);
+        let e1 = assign_ref(&tree, "e1", &key("doc-1", 10)?)?;
 
         // 2. Simulate navigation to doc-2 (https://b.test/): APC returns doc-2, and Describe on
         //    W_old fails Gone.
@@ -1664,8 +1667,8 @@ mod tests {
             "Capture 2 must retire old doc-1's ref e1"
         );
 
-        tree.insert_test_ref(parsed_ref("f1e1")?, key("doc-2", 10)?);
-        tree.insert_test_ref(parsed_ref("f1e2")?, key("doc-2", 20)?);
+        assign_ref(&tree, "f1e1", &key("doc-2", 10)?)?;
+        assign_ref(&tree, "f1e2", &key("doc-2", 20)?)?;
 
         // 4. Old ref e1 fails ElementDetached with ZERO extra captures.
         let captures_before_old = tab.script().apc_count();
@@ -1732,8 +1735,8 @@ mod tests {
         let _captured = tree.capture(&scope, &page, AttemptStart::now()).await?;
         let key_10 = key("doc-1", 10)?;
         let key_20 = key("doc-1", 20)?;
-        tree.insert_test_ref(parsed_ref("e1")?, key_10.clone());
-        tree.insert_test_ref(parsed_ref("e2")?, key_20.clone());
+        assign_ref(&tree, "e1", &key_10)?;
+        assign_ref(&tree, "e2", &key_20)?;
         let baseline_captures = tab.script().apc_count();
 
         // Bound ref hydrates with 0 captures.
@@ -1815,6 +1818,53 @@ mod tests {
             .ok_or("retired ref must fail")?;
         assert_eq!(retired_err.error_code(), Some(ErrorCode::ElementDetached));
         assert_eq!(tab.script().apc_count(), baseline_captures);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refs_follow_a_retirement_made_outside_tab_tree_at_the_next_capture() -> TestResult {
+        let apc_1 = encode_apc_reply(
+            "doc-1",
+            Some("https://a.test/"),
+            &[10],
+            None,
+            Some(MIN_CONTRACT_VERSION),
+        );
+        let apc_2 = encode_apc_reply(
+            "doc-2",
+            Some("https://b.test/"),
+            &[10],
+            None,
+            Some(MIN_CONTRACT_VERSION),
+        );
+        let tab = ScriptedTab::new(TreeScript::new(apc_1));
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
+
+        let world = page.world(&page.main_endpoint(), Place::Main).await?;
+        let _bound = tree.capture(&scope, &page, AttemptStart::now()).await?;
+        let doc_1_key = key("doc-1", 10)?;
+        assert!(
+            matches!(
+                page.frames().lookup_doc(&doc_1_key.doc),
+                DocLookup::Bound { .. }
+            ),
+            "the pre-capture world must bind doc-1"
+        );
+        let e1 = assign_ref(&tree, "e1", &doc_1_key)?;
+
+        // The resolver invalidates a world that failed `Gone` through `FrameWorlds` directly,
+        // never through `TabTree`; the page has navigated to doc-2.
+        page.frames().invalidate(&world);
+        tab.script().set_default_apc(apc_2);
+        let _next = tree.capture(&scope, &page, AttemptStart::now()).await?;
+        assert_eq!(
+            tree.resolve_ref(&e1),
+            RefLookup::Retired,
+            "a document retired outside TabTree must lose its refs by the next capture"
+        );
         Ok(())
     }
 

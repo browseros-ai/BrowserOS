@@ -303,21 +303,11 @@ impl FrameWorlds {
 
     /// A call on `world` failed `Gone`: its document is gone. Drops its cell, only if the cell
     /// still holds this very install (a newer one by another op is kept), retires its seq only if
-    /// the seq still belongs to this key, and retires any APC [`DocToken`] bound to this install.
+    /// the seq still belongs to this key, and retires any APC [`DocToken`] bound to this install
+    /// (reported through [`Self::take_retired_docs`]).
     pub(crate) fn invalidate(&self, world: &IsolatedWorld) {
-        let _ = self.invalidate_inner(world);
-    }
-
-    /// Invalidates `world` like [`Self::invalidate`] and returns every APC [`DocToken`] whose
-    /// binding retired because it pointed to this install, so `TabTree` can retire its refs.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
-    pub(crate) fn invalidate_and_retired_docs(&self, world: &IsolatedWorld) -> Vec<DocToken> {
-        self.invalidate_inner(world)
-    }
-
-    fn invalidate_inner(&self, world: &IsolatedWorld) -> Vec<DocToken> {
         let Some(session) = world.session_id() else {
-            return Vec::new();
+            return;
         };
         let key = WorldKey {
             session: session.clone(),
@@ -335,7 +325,16 @@ impl FrameWorlds {
         if inner.live.get(&world.seq()) == Some(&key) {
             inner.live.remove(&world.seq());
         }
-        inner.docs.retire_by_world(world)
+        inner.docs.retire_by_world(world);
+    }
+
+    /// Takes every APC [`DocToken`] that `DocTable` retired since the last call, whichever path
+    /// retired it: an invalidated world, a capture that displaced a frame's document, or an
+    /// explicit [`Self::retire_doc`]. `TabTree` drops their refs.
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    #[must_use = "a dropped token keeps its document's refs live"]
+    pub(crate) fn take_retired_docs(&self) -> Vec<DocToken> {
+        self.lock().docs.take_retired()
     }
 
     /// Returns all currently live cached worlds so a capture can check `installed_at <
@@ -1791,9 +1790,11 @@ mod tests {
             } if world.same_install(&main_s2)
         ));
 
-        // Invalidating the child world retires its DocToken and reports it to the caller.
-        let retired = worlds.invalidate_and_retired_docs(&child);
-        assert_eq!(retired, vec![tok_child.clone()]);
+        // Invalidating the child world retires its DocToken and reports it exactly once.
+        let _ = worlds.take_retired_docs();
+        worlds.invalidate(&child);
+        assert_eq!(worlds.take_retired_docs(), vec![tok_child.clone()]);
+        assert!(worlds.take_retired_docs().is_empty());
         assert!(matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired));
         assert!(matches!(
             worlds.lookup_doc_seq(FrameSeq(1)),

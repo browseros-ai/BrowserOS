@@ -19,6 +19,10 @@
 //!   candidate seq.
 //! - **Retirement is terminal:** a `Retired` [`DocToken`] never transitions back to `Reserved` or
 //!   `Bound`.
+//! - **Every retirement is reported once:** [`DocTable::retire_token`] is the only transition into
+//!   `Retired`, and it queues the token for [`DocTable::take_retired`]. `TabTree` drains that queue
+//!   into its ref table, so a document's refs go when its seq retires (design 2.3), including
+//!   retirements made by `FrameWorlds` paths that never pass through `TabTree`.
 //! - **No page URLs in diagnostics:** [`DocTable`] never stores raw URLs (only whether a document
 //!   was explicitly `"about:blank"` for Playwright AR-053 reuse), and neither [`DocTable`] nor
 //!   [`DocContext`] prints URLs in [`fmt::Debug`].
@@ -26,7 +30,7 @@
 #![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 
 use std::collections::HashMap;
-use std::fmt;
+use std::{fmt, mem};
 
 use browseros_core::FrameId;
 use neo_snapshot_apc::tree::DocToken;
@@ -176,6 +180,10 @@ pub(crate) struct DocTable {
     by_seq: HashMap<FrameSeq, DocToken>,
     /// Currently active (`Reserved` or `Bound`) document for each known [`FrameId`].
     active_by_frame: HashMap<FrameId, DocToken>,
+    /// Tokens retired since the last [`Self::take_retired`], in retirement order. Only documents
+    /// a `TabTree` capture or hydration numbered can retire, so on a page `TabTree` never reads
+    /// the queue stays empty.
+    retired_since_take: Vec<DocToken>,
 }
 
 impl fmt::Debug for DocTable {
@@ -197,6 +205,7 @@ impl fmt::Debug for DocTable {
             .field("retired", &retired)
             .field("seqs", &self.by_seq.len())
             .field("active_frames", &self.active_by_frame.len())
+            .field("retired_since_take", &self.retired_since_take.len())
             .finish()
     }
 }
@@ -208,6 +217,7 @@ impl DocTable {
             by_token: HashMap::new(),
             by_seq: HashMap::new(),
             active_by_frame: HashMap::new(),
+            retired_since_take: Vec::new(),
         }
     }
 
@@ -223,9 +233,9 @@ impl DocTable {
             && entry.url_kind == PageUrlKind::RealOrUnknown
     }
 
-    /// Retires every active document bound to `world` (`same_install`) and returns their tokens
-    /// in deterministic order.
-    pub(crate) fn retire_by_world(&mut self, world: &IsolatedWorld) -> Vec<DocToken> {
+    /// Retires every active document bound to `world` (`same_install`), in token order so the
+    /// retirement queue stays deterministic.
+    pub(crate) fn retire_by_world(&mut self, world: &IsolatedWorld) {
         let mut matched: Vec<DocToken> = self
             .by_token
             .iter()
@@ -240,16 +250,8 @@ impl DocTable {
             .collect();
         matched.sort();
         for token in &matched {
-            if let Some(entry) = self.by_token.get_mut(token)
-                && let DocBinding::Bound { seq, world: bound } = &entry.binding
-            {
-                let seq = *seq;
-                let frame = bound.frame().clone();
-                entry.binding = DocBinding::Retired { seq };
-                self.clear_active_frame(&frame, token);
-            }
+            let _ = self.retire_token(token);
         }
-        matched
     }
 
     /// Returns the current binding for `token`, if seen.
@@ -418,7 +420,14 @@ impl DocTable {
         if let Some(frame) = frame {
             self.clear_active_frame(&frame, token);
         }
+        self.retired_since_take.push(token.clone());
         Some(RetiredDoc { seq, url_kind })
+    }
+
+    /// Takes every token retired since the last call, in retirement order.
+    #[must_use = "a dropped token keeps its document's refs live"]
+    pub(crate) fn take_retired(&mut self) -> Vec<DocToken> {
+        mem::take(&mut self.retired_since_take)
     }
 
     fn retire_other_active_on_frame(&mut self, frame: &FrameId, incoming: &DocToken) {
@@ -481,6 +490,44 @@ mod tests {
         assert!(
             table_debug.contains("docs: 1") && table_debug.contains("reserved: 1"),
             "DocTable Debug should report structural counts: {table_debug}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn retirements_queue_each_token_once_until_taken() -> TestResult {
+        let frame = FrameId("frame-main".to_owned());
+        let first = DocToken::new("doc-first").ok_or("non-empty doc token")?;
+        let second = DocToken::new("doc-second").ok_or("non-empty doc token")?;
+        let mut table = DocTable::new();
+        table.insert_reserved(first.clone(), FrameSeq(0), Some(frame.clone()), None);
+        table.insert_reserved(second.clone(), FrameSeq(1), Some(frame), None);
+        assert_eq!(
+            table.take_retired(),
+            vec![first.clone()],
+            "a document displaced from its frame must be queued"
+        );
+        assert!(
+            table.take_retired().is_empty(),
+            "taking must empty the queue"
+        );
+
+        assert!(
+            table.retire_token(&second).is_some(),
+            "an active document retires"
+        );
+        assert!(
+            table.retire_token(&second).is_none(),
+            "retirement is terminal, so a second retire changes nothing"
+        );
+        assert!(
+            table.retire_token(&first).is_none(),
+            "a document displaced earlier is already retired"
+        );
+        assert_eq!(
+            table.take_retired(),
+            vec![second],
+            "each retirement must be queued exactly once"
         );
         Ok(())
     }
