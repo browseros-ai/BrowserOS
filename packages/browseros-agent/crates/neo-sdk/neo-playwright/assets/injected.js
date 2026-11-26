@@ -11710,13 +11710,17 @@ ${value.stack}`;
       throw new ProbeError("internal", `a call-scoped engine body ${JSON.stringify(body)} names none of the stage's ${sets.length} candidate sets`);
     return set;
   }
-  function scoped(world, sets, inclusive) {
+  function scoped(world, sets, inclusive, reached) {
     const { utils } = world.injected;
     return {
       queryAll(root, body) {
         const set = setAt(sets, body);
         if ("error" in set)
-          throw new Error(set.error);
+          throw new ProbeError(set.error.class, set.error.message);
+        if ("staleRef" in set) {
+          reached.push(set.staleRef);
+          return [];
+        }
         const inside = set.members.filter((member) => member === root ? inclusive : member instanceof Element && utils.isInsideScope(root, member));
         return inside;
       }
@@ -11733,9 +11737,9 @@ ${value.stack}`;
     const from = request.from && allHeld(world, request.from, nodes);
     if (from === null)
       return { kind: "detached" };
-    const sets = (request.sets ?? []).map((set) => ("error" in set) ? set : {
+    const sets = (request.sets ?? []).map((set) => ("members" in set) ? {
       members: set.members.flatMap((member) => held(world, member, nodes) ?? [])
-    });
+    } : set);
     visitAllSelectorParts(request.selector, (part) => {
       if (part.name === FROM)
         throw new ProbeError("internal", `a stage selector names ${FROM}, which only the probe prepends`);
@@ -11743,9 +11747,10 @@ ${value.stack}`;
         setAt(sets, part.body);
     });
     const selector = from ? startingFrom(request.selector) : request.selector;
+    const reached = [];
     const scopedEngines = new Map([
-      [BELOW, scoped(world, sets, false)],
-      [INSIDE, scoped(world, sets, true)]
+      [BELOW, scoped(world, sets, false, reached)],
+      [INSIDE, scoped(world, sets, true, reached)]
     ]);
     if (from)
       scopedEngines.set(FROM, { queryAll: () => from });
@@ -11765,7 +11770,12 @@ ${value.stack}`;
         kind: "strict",
         message: injected.strictModeViolationError(request.strict, elements).message
       };
-    return { kind: "staged", matches: pinMatches(world, elements) };
+    const [staleRef] = reached;
+    return {
+      kind: "staged",
+      matches: pinMatches(world, elements),
+      ...staleRef === undefined ? {} : { staleRef }
+    };
   }
   function pinMatches(world, matches) {
     const { document: document2 } = world.injected;

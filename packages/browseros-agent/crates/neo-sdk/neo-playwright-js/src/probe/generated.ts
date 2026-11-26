@@ -281,7 +281,8 @@ export type Edit = { "kind": "fill", value: FillValue, } | { "kind": "selectOpti
 export type ElementState = "visible" | "enabled" | "editable";
 
 /**
- * How the probe classified an error thrown in the page.
+ * How the probe classified an error thrown in the page. A `stage`'s error set also sends one,
+ * for the page to throw its candidate's error with.
  */
 export type ErrorClass = "script" | "selector" | "unsupported" | "internal";
 
@@ -581,7 +582,7 @@ inertMarkingMs?: number, json: import('../prelude/vendored').AriaSnapshotJSON, i
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.
  */
-marksSkipped?: boolean, } | { "kind": "expect", matches: boolean, resolved: string, received?: PageText, ariaSnapshot?: string, } | { "kind": "urlMatch", matches: boolean, url: string, } | { "kind": "documentText", text: string, } | { "kind": "replaced" } | { "kind": "staged", matches: Array<StageMatch>, } | { "kind": "pinsDescribed", locator?: string, items: Array<PinPreview>, } | { "kind": "surveyed", layers: Array<PinnedLayer>, tested: number, surveyMs: number, phases: SurveyPhases, } | { "kind": "marks", pins: Array<Pin>, } | { "kind": "error", message: string, class: ErrorClass, 
+marksSkipped?: boolean, } | { "kind": "expect", matches: boolean, resolved: string, received?: PageText, ariaSnapshot?: string, } | { "kind": "urlMatch", matches: boolean, url: string, } | { "kind": "documentText", text: string, } | { "kind": "replaced" } | { "kind": "staged", matches: Array<StageMatch>, staleRef?: string, } | { "kind": "pinsDescribed", locator?: string, items: Array<PinPreview>, } | { "kind": "surveyed", layers: Array<PinnedLayer>, tested: number, surveyMs: number, phases: SurveyPhases, } | { "kind": "marks", pins: Array<Pin>, } | { "kind": "error", message: string, class: ErrorClass, 
 /**
  * Approximate tree levels for a depth refusal. Presence identifies the failure without
  * coupling a child frame's partial handling to the message's wording.
@@ -733,9 +734,11 @@ export type StageMatch = { "pin": Pin } | "document";
 
 /**
  * One candidate set of a `stage`: what one tree part matched over the frame's whole document,
- * in tree order, or the error that part raised.
+ * in tree order, the error that part raised, or the stale ref it named. The last two are facts
+ * Rust knows before any root reaches the part; the page acts on them only once one does, as
+ * upstream's engines do, so the reply is upstream's answer in one call.
  */
-export type StageSet = { "members": Array<SetMember> } | { "error": string };
+export type StageSet = { "members": Array<SetMember> } | { "error": { message: string, class: ErrorClass, } } | { "staleRef": string };
 
 /**
  * Upstream's `WebStorage` methods, the call a `webStorage` request makes.

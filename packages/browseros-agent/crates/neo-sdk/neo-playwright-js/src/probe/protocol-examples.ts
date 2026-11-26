@@ -469,13 +469,31 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
             },
             source: '"aria-ref=e7"',
           },
+          candidate('internal:neo-below', 1, 'button[pressd]'),
         ],
       },
       from: [{ node: 0 }],
       sets: [
+        { staleRef: 'e7' },
         {
-          error:
-            'Unknown attribute "pressd", must be one of "checked", "description", "disabled", "expanded", "include-hidden", "level", "name", "pressed", "selected".',
+          error: {
+            message:
+              'Unknown attribute "pressd", must be one of "checked", "description", "disabled", "expanded", "include-hidden", "level", "name", "pressed", "selected".',
+            class: 'script',
+          },
+        },
+      ],
+    },
+    {
+      op: 'stage',
+      selector: { parts: [candidate('internal:neo-below', 0, 'button[')] },
+      sets: [
+        {
+          error: {
+            message:
+              'Unexpected end of selector while parsing selector `button[`',
+            class: 'selector',
+          },
         },
       ],
     },
@@ -919,6 +937,7 @@ const REPLY_EXAMPLES: {
     { kind: 'staged', matches: [{ pin: 5 }, { pin: 6 }] },
     { kind: 'staged', matches: ['document', { pin: 7 }] },
     { kind: 'staged', matches: [] },
+    { kind: 'staged', matches: [{ pin: 8 }], staleRef: 'e7' },
   ],
   pinsDescribed: [
     {

@@ -201,6 +201,14 @@ fn stage_calls(page: &FakePage) -> Vec<&Sent> {
         .collect()
 }
 
+/// The candidate sets of the run's last `stage` call.
+fn last_sets(page: &FakePage) -> TestResult<Vec<StageSet>> {
+    match stage_calls(page).last() {
+        Some(Sent::Stage { sets, .. }) => Ok(sets.clone()),
+        _ => Err("the run made a stage call".into()),
+    }
+}
+
 #[tokio::test]
 async fn a_pure_tree_chain_runs_over_the_tree_and_makes_no_page_call() -> TestResult {
     let (tree, mut page) = list_page()?;
@@ -623,11 +631,14 @@ async fn nested_mixed_selectors_keep_upstreams_roots() -> TestResult {
 #[tokio::test]
 async fn a_candidate_error_surfaces_only_once_a_root_reaches_it() -> TestResult {
     let (tree, mut page) = list_page()?;
+    let error_of = |body: &str| {
+        RoleQuery::parse(body)
+            .err()
+            .map(|error| error.to_string())
+            .ok_or(format!("{body} is not a role query"))
+    };
     let invalid = "button[pressed=maybe]";
-    let expected = RoleQuery::parse(invalid)
-        .err()
-        .ok_or("pressed=maybe is not a role query")?
-        .to_string();
+    let validation = error_of(invalid)?;
     let cell_with = |body: &str| nested("internal:has", &[attr("[data-cell]"), role(body)]);
 
     let unreached = matched(
@@ -644,38 +655,51 @@ async fn a_candidate_error_surfaces_only_once_a_root_reaches_it() -> TestResult 
         "no root reaches the part, so nothing throws"
     );
 
-    let reached = run(
-        &tree,
-        &mut page,
-        &chunk(&[attr("[data-row=\"a\"]"), cell_with(invalid)]),
-    )
-    .await?;
-    let ChunkOutcome::Thrown { message, class } = reached else {
-        return Err(format!("row a reaches the part: {reached:?}").into());
-    };
-    assert_eq!(message, expected, "upstream's validation text");
-    assert_eq!(
-        class,
-        ErrorClass::Script,
-        "a plain Error, as the role engine throws it"
-    );
-
-    let syntax = run(
-        &tree,
-        &mut page,
-        &chunk(&[attr("[data-row=\"a\"]"), cell_with("button[")]),
-    )
-    .await?;
-    assert!(
-        matches!(
-            syntax,
-            ChunkOutcome::Thrown {
-                class: ErrorClass::Selector,
-                ..
-            }
+    // The page throws a candidate's error with the class Rust sent, and the run relays the
+    // page's error reply as it stands: each class below reaches the outcome only through the page.
+    for (body, message, class, why) in [
+        (
+            invalid,
+            validation,
+            ErrorClass::Script,
+            "a plain Error, as the role engine's validation throws it",
         ),
-        "a syntax error is upstream's InvalidSelectorError, though the page threw it plain: {syntax:?}"
-    );
+        (
+            "button[",
+            error_of("button[")?,
+            ErrorClass::Selector,
+            "upstream's InvalidSelectorError, from parseAttributeSelector",
+        ),
+    ] {
+        page.sent.clear();
+        let reached = run(
+            &tree,
+            &mut page,
+            &chunk(&[attr("[data-row=\"a\"]"), cell_with(body)]),
+        )
+        .await?;
+        assert_eq!(
+            last_sets(&page)?,
+            [StageSet::Error {
+                message: message.clone(),
+                class
+            }],
+            "the set carries the error and its class: {why}"
+        );
+        let ChunkOutcome::Thrown {
+            message: thrown,
+            class: thrown_class,
+        } = reached
+        else {
+            return Err(format!("row a reaches the part: {reached:?}").into());
+        };
+        assert_eq!(
+            (thrown, thrown_class),
+            (message, class),
+            "upstream's text and class: {why}"
+        );
+        assert_eq!(page.stages(), 1, "one call, and the page threw in it");
+    }
 
     let over_the_tree = run(
         &tree,
@@ -803,7 +827,12 @@ async fn a_stale_ref_counts_only_once_a_root_reaches_it() -> TestResult {
         .await?,
     )?;
     assert_eq!(unreached.stale_ref, None, "no root reached the ref");
-    assert_eq!(page.stages(), 1, "one call: the marker was never thrown");
+    assert_eq!(page.stages(), 1, "one call, which reached nothing");
+    assert_eq!(
+        last_sets(&page)?,
+        [StageSet::StaleRef("e99".to_owned())],
+        "the ref goes to the page as a stale-ref set"
+    );
 
     page.sent.clear();
     let reached = matched(
@@ -818,26 +847,14 @@ async fn a_stale_ref_counts_only_once_a_root_reaches_it() -> TestResult {
     assert_eq!(
         reached.stale_ref.as_deref(),
         Some("e99"),
-        "the rows reached it"
+        "the rows reached it, and the page's reply says so"
     );
     assert_eq!(
         doms(&tree, &page, &reached.set)?,
         Vec::<i32>::new(),
         "nothing matched"
     );
-    let stages = stage_calls(&page);
-    let [
-        Sent::Stage { sets: first, .. },
-        Sent::Stage { sets: again, .. },
-    ] = stages[..]
-    else {
-        return Err("the call ran again once the marker was thrown".into());
-    };
-    assert!(
-        matches!(first[..], [StageSet::Error(_)]),
-        "sent as its marker"
-    );
-    assert_eq!(*again, [StageSet::Members(Vec::new())], "then empty");
+    assert_eq!(page.stages(), 1, "one call, never sent again");
 
     let kept = matched(
         run_with(
@@ -870,6 +887,37 @@ async fn a_stale_ref_counts_only_once_a_root_reaches_it() -> TestResult {
         "e1 is row a's Edit button"
     );
     assert_eq!(live.stale_ref, None, "a live ref is not stale");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_run_keeps_the_first_stale_ref_of_all_its_stages() -> TestResult {
+    let (tree, mut page) = list_page()?;
+    // The tree stage reaches e98 first. The cells are plain, so the last stage runs in the page,
+    // which reaches e99 and says so.
+    let found = matched(
+        run(
+            &tree,
+            &mut page,
+            &chunk(&[
+                role("listitem"),
+                nested("internal:has-not", &[aria_ref("e98")]),
+                attr("[data-cell]"),
+                nested("internal:has", &[aria_ref("e99")]),
+            ]),
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        last_sets(&page)?,
+        [StageSet::StaleRef("e99".to_owned())],
+        "the last stage took e99 to the page"
+    );
+    assert_eq!(
+        found.stale_ref.as_deref(),
+        Some("e98"),
+        "the page's later stale ref does not replace the tree stage's"
+    );
     Ok(())
 }
 

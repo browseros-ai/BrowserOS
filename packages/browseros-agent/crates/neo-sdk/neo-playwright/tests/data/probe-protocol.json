@@ -1432,6 +1432,11 @@
               }
             },
             "source": "\"aria-ref=e7\""
+          },
+          {
+            "name": "internal:neo-below",
+            "body": "1",
+            "source": "button[pressd]"
           }
         ]
       },
@@ -1442,7 +1447,33 @@
       ],
       "sets": [
         {
-          "error": "Unknown attribute \"pressd\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\"."
+          "staleRef": "e7"
+        },
+        {
+          "error": {
+            "message": "Unknown attribute \"pressd\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\".",
+            "class": "script"
+          }
+        }
+      ]
+    },
+    {
+      "op": "stage",
+      "selector": {
+        "parts": [
+          {
+            "name": "internal:neo-below",
+            "body": "0",
+            "source": "button["
+          }
+        ]
+      },
+      "sets": [
+        {
+          "error": {
+            "message": "Unexpected end of selector while parsing selector `button[`",
+            "class": "selector"
+          }
         }
       ]
     },
@@ -2232,6 +2263,15 @@
     {
       "kind": "staged",
       "matches": []
+    },
+    {
+      "kind": "staged",
+      "matches": [
+        {
+          "pin": 8
+        }
+      ],
+      "staleRef": "e7"
     },
     {
       "kind": "pinsDescribed",

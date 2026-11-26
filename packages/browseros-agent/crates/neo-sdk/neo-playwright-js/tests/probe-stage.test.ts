@@ -360,29 +360,72 @@ it('tests that a capture counts the prepended part, so the captured element is w
   expect(ids(staged(probe, reply))).toEqual(['pro'])
 })
 
-it('tests that an error set throws only once a root reaches it', () => {
+it('tests that an error set throws with the class Rust sent, only once a root reaches it', () => {
   const probe = booted()
-  const message =
-    'Unknown attribute "pressd", must be one of "checked", "description", "disabled", "expanded", "include-hidden", "level", "name", "pressed", "selected".'
-  const sets = [{ error: message }]
-  for (const unreached of [
-    selector('css=#missing', below(0)),
-    selector('css=#missing', nested('internal:has', selector(below(0)))),
-    selector('css=section'),
-  ])
+  const errors: Extract<StageSet, { error: unknown }>['error'][] = [
+    {
+      message:
+        'Unknown attribute "pressd", must be one of "checked", "description", "disabled", "expanded", "include-hidden", "level", "name", "pressed", "selected".',
+      class: 'script',
+    },
+    {
+      message: 'Unexpected end of selector while parsing selector `button[`',
+      class: 'selector',
+    },
+  ]
+  for (const error of errors) {
+    const sets: StageSet[] = [{ error }]
+    for (const unreached of [
+      selector('css=#missing', below(0)),
+      selector('css=#missing', nested('internal:has', selector(below(0)))),
+      selector('css=section'),
+    ])
+      expect(
+        field(probe.call({ op: 'stage', selector: unreached, sets }), 'kind'),
+      ).toBe('staged')
     expect(
-      field(probe.call({ op: 'stage', selector: unreached, sets }), 'kind'),
-    ).toBe('staged')
-  expect(
-    probe.call({
-      op: 'stage',
-      selector: selector(
-        'css=section',
-        nested('internal:has', selector(below(0))),
-      ),
-      sets,
-    }),
-  ).toEqual({ kind: 'error', class: 'script', message })
+      probe.call({
+        op: 'stage',
+        selector: selector(
+          'css=section',
+          nested('internal:has', selector(below(0))),
+        ),
+        sets,
+      }),
+    ).toEqual({ kind: 'error', class: error.class, message: error.message })
+  }
+})
+
+it('tests that a stale-ref set matches nothing and the reply names the first one a root reached', () => {
+  const probe = booted()
+  const stale: StageSet[] = [{ staleRef: 'e8' }, { staleRef: 'e9' }]
+  const stage = (...parts: (ParsedSelectorPart | string)[]) =>
+    probe.call({ op: 'stage', selector: selector(...parts), sets: stale })
+
+  for (const unreached of [
+    stage('css=#missing', inside(0)),
+    stage('css=#missing', nested('internal:has', selector(inside(0)))),
+  ])
+    expect(unreached).toEqual({ kind: 'staged', matches: [] })
+  const unnamed = stage('css=#outside')
+  expect(field(unnamed, 'staleRef')).toBeUndefined()
+  expect(ids(staged(probe, unnamed))).toEqual(['outside'])
+
+  // The has-not keeps every section, so a reached stale ref rides along with matches.
+  const kept = stage(
+    'css=section',
+    nested('internal:has-not', selector(inside(0))),
+  )
+  expect(field(kept, 'staleRef')).toBe('e8')
+  expect(ids(staged(probe, kept))).toEqual(['free', 'pro', 'framed'])
+
+  // Set 1 is reached before set 0, so its ref is the one named: reach order, not set order.
+  const first = stage(
+    'css=section',
+    nested('internal:has-not', selector(inside(1))),
+    inside(0),
+  )
+  expect(first).toEqual({ kind: 'staged', matches: [], staleRef: 'e9' })
 })
 
 it('tests that a from member that is gone, removed or in another document is detached, and a gone candidate is dropped', () => {
@@ -472,8 +515,12 @@ it('tests that the call-scoped engines are gone after the call, even one that th
   })
   expect(resolveNeo()).toMatchObject(unknown)
   expect(
-    probe.call({ op: 'stage', selector: neoChunk, sets: [{ error: 'bad' }] }),
-  ).toMatchObject({ kind: 'error', class: 'script' })
+    probe.call({
+      op: 'stage',
+      selector: neoChunk,
+      sets: [{ error: { message: 'bad', class: 'script' } }],
+    }),
+  ).toMatchObject({ kind: 'error', class: 'script', message: 'bad' })
   expect(resolveNeo()).toMatchObject(unknown)
   expect(
     probe.call({

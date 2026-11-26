@@ -3,11 +3,13 @@
 //! `stage` with upstream's `querySelectorAll` loop (`injectedScript.ts:376-427`) for the parts
 //! the tests send (the three call-scoped engines, `internal:attr`, an `xpath` of `..`, `nth`,
 //! `internal:has`, `internal:has-not`, `internal:and`, `internal:or`, `internal:chain` and
-//! `internal:describe`), with `sortInDOMOrder` and `isInsideScope` as upstream has them.
+//! `internal:describe`), with `sortInDOMOrder` and `isInsideScope` as upstream has them, and the
+//! probe's answers to error and stale-ref sets.
 //! `describePins`, `hydrate` and `keys` answer as the probe (`stage.ts`) and engine chunk 10's
 //! hydration do. A page stage that carries a tree part fails the test: the tree's parts are
 //! Rust's.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::error::Error;
@@ -132,13 +134,16 @@ pub(super) enum Sent {
 /// One candidate set as the page holds it during a call.
 enum Candidates {
     Members(Vec<Node>),
-    Error(String),
+    Error { message: String, class: ErrorClass },
+    StaleRef(String),
 }
 
-/// What one `stage` call registers: `internal:neo-from`'s elements and the candidate sets.
+/// What one `stage` call registers: `internal:neo-from`'s elements and the candidate sets, and
+/// the stale-ref bodies the call's roots reached, in the order the engines were called.
 struct Scoped {
     from: Vec<Node>,
     sets: Vec<Candidates>,
+    reached: RefCell<Vec<String>>,
 }
 
 /// An error thrown in the page, classified as the probe classifies it.
@@ -400,9 +405,14 @@ impl FakePage {
                             .filter_map(|member| self.held(*member, handed))
                             .collect(),
                     ),
-                    StageSet::Error(message) => Candidates::Error(message.clone()),
+                    StageSet::Error { message, class } => Candidates::Error {
+                        message: message.clone(),
+                        class: *class,
+                    },
+                    StageSet::StaleRef(body) => Candidates::StaleRef(body.clone()),
                 })
                 .collect(),
+            reached: RefCell::new(Vec::new()),
         };
         let matches = match self.query_all(&parsed, self.root, &scoped) {
             Ok(matches) => matches,
@@ -430,7 +440,10 @@ impl FakePage {
                 Node::Element(index) => StageMatch::Pin(self.pin(index)),
             })
             .collect();
-        ProbeReply::Staged { matches }
+        ProbeReply::Staged {
+            matches,
+            stale_ref: scoped.reached.into_inner().into_iter().next(),
+        }
     }
 
     /// The locator text for the chunk the test expects strict mode to name; any other chunk fails
@@ -622,7 +635,9 @@ impl FakePage {
     }
 
     /// `internal:neo-below` and `internal:neo-inside` (the probe's `scoped`): a set's members
-    /// inside `root` by shadow-free containment, the root itself only when `inclusive`.
+    /// inside `root` by shadow-free containment, the root itself only when `inclusive`. An error
+    /// set throws with its class, and a stale-ref set matches nothing and records its body, each
+    /// only once a root reaches it.
     fn candidates(
         &self,
         scoped: &Scoped,
@@ -639,7 +654,14 @@ impl FakePage {
                 class: ErrorClass::Internal,
             })?;
         match set {
-            Candidates::Error(message) => Err(script(message)),
+            Candidates::Error { message, class } => Err(Thrown {
+                message: message.clone(),
+                class: *class,
+            }),
+            Candidates::StaleRef(body) => {
+                scoped.reached.borrow_mut().push(body.clone());
+                Ok(Vec::new())
+            }
             Candidates::Members(members) => Ok(members
                 .iter()
                 .copied()

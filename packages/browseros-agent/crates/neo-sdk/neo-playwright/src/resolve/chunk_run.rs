@@ -46,9 +46,13 @@
 //! **Stale refs.** Upstream reports an `aria-ref` that names no live node only once a root reaches
 //! its part, and fails the op at once on it when nothing matched (`ProbeReply::None`'s
 //! `stale_ref`). A tree stage does the same. A candidate is evaluated before any root reaches it,
-//! so its set is sent as a marker the page throws once a root does; the run then knows the ref
-//! was reached, records it, and sends the call again with that set empty, as upstream would have
-//! answered. That second call happens only when a stale ref is both the run's first and reached.
+//! so its set goes to the page as `StageSet::StaleRef`: the part matches nothing there, and the
+//! `staged` reply names the first such ref a root reached. The run keeps the first stale ref of
+//! all its stages, tree and page alike.
+//!
+//! **Candidate errors** cross the same way: Rust gives a candidate's error upstream's class
+//! ([`class_of`]) and the page throws it with that class once a root reaches the part, so the
+//! page's `error` reply is the run's outcome as it stands.
 
 #![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 
@@ -240,9 +244,6 @@ struct Call<'c> {
     start: Start,
     candidates: &'c [Candidates],
     strict: Option<&'c select::ParsedSelector>,
-    /// Whether a stale ref's set is sent as its marker (the run has met no stale ref yet) or
-    /// empty.
-    marked: bool,
 }
 
 /// The tree nodes one call hands over, in first-use order, each once: call node `i` is
@@ -485,8 +486,7 @@ impl<'a> ChunkRun<'a> {
         Ok(Join::Nodes(nodes))
     }
 
-    /// One `stage` call: `form`'s candidates over the whole document, then the call, sent again
-    /// once when a root reached the marker of the run's first stale ref.
+    /// One `stage` call: `form`'s candidates over the whole document, then the call.
     async fn page_stage<P: ChunkPage>(
         &self,
         form: &PageForm,
@@ -500,39 +500,20 @@ impl<'a> ChunkRun<'a> {
             .iter()
             .map(|candidate| self.candidates(candidate))
             .collect();
-        // A stale ref matters only as the run's first; a later one is sent as an empty set.
-        let marked = stale_ref.is_none();
         let call = Call {
             form,
             start,
             candidates: &candidates,
             strict,
-            marked,
         };
-        let (mut request, nodes) = match self.request(call) {
+        let (request, nodes) = match self.request(call) {
             Ok(prepared) => prepared,
             Err(error) => return Ok(ControlFlow::Break(unencodable(&error))),
         };
-        let Some(mut reply) = page.call(&request, &nodes).await? else {
+        let Some(reply) = page.call(&request, &nodes).await? else {
             return Ok(ControlFlow::Break(ChunkOutcome::Stale));
         };
-        if let Some(reached) = reached_stale_ref(&reply, &candidates) {
-            // Upstream records the ref and goes on with that part answering nothing, so the same
-            // call with every marked set empty gives the answer of upstream's one query.
-            *stale_ref = Some(reached.to_owned());
-            if let ProbeRequest::Stage { sets, .. } = &mut request {
-                for (set, candidate) in sets.iter_mut().zip(&candidates) {
-                    if matches!(candidate, Candidates::StaleRef(_)) {
-                        *set = StageSet::Members(Vec::new());
-                    }
-                }
-            }
-            reply = match page.call(&request, &nodes).await? {
-                Some(reply) => reply,
-                None => return Ok(ControlFlow::Break(ChunkOutcome::Stale)),
-            };
-        }
-        Ok(staged(reply, &candidates))
+        Ok(staged(reply, stale_ref))
     }
 
     /// The `stage` request for `call`, and the tree nodes it hands over: its start's and its
@@ -560,17 +541,18 @@ impl<'a> ChunkRun<'a> {
         let sets: Vec<StageSet> = call
             .candidates
             .iter()
-            .enumerate()
-            .map(|(index, candidate)| match candidate {
+            .map(|candidate| match candidate {
                 Candidates::Nodes(nodes) => StageSet::Members(
                     nodes
                         .iter()
                         .map(|&node| handover.member(node, self.doc_root))
                         .collect(),
                 ),
-                Candidates::Thrown(error) => StageSet::Error(error.to_string()),
-                Candidates::StaleRef(_) if call.marked => StageSet::Error(stale_marker(index)),
-                Candidates::StaleRef(_) => StageSet::Members(Vec::new()),
+                Candidates::Thrown(error) => StageSet::Error {
+                    message: error.to_string(),
+                    class: class_of(error),
+                },
+                Candidates::StaleRef(body) => StageSet::StaleRef(body.clone()),
             })
             .collect();
         let request = ProbeRequest::Stage {
@@ -645,18 +627,25 @@ impl<'a> ChunkRun<'a> {
     }
 }
 
-/// A `stage` reply as the run's next set, or how the run ends.
-fn staged(reply: ProbeReply, candidates: &[Candidates]) -> ControlFlow<ChunkOutcome, ChunkSet> {
+/// A `stage` reply as the run's next set, or how the run ends. A stale ref the page reached
+/// counts only when no earlier stage of the run reported one.
+fn staged(
+    reply: ProbeReply,
+    stale_ref: &mut Option<String>,
+) -> ControlFlow<ChunkOutcome, ChunkSet> {
     ControlFlow::Break(match reply {
-        ProbeReply::Staged { matches } => return ControlFlow::Continue(ChunkSet::Pins(matches)),
+        ProbeReply::Staged {
+            matches,
+            stale_ref: reached,
+        } => {
+            if stale_ref.is_none() {
+                *stale_ref = reached;
+            }
+            return ControlFlow::Continue(ChunkSet::Pins(matches));
+        }
         ProbeReply::Strict { message } => ChunkOutcome::Strict(message),
         ProbeReply::Detached => ChunkOutcome::Stale,
-        ProbeReply::Error { message, class, .. } => {
-            match thrown_candidate(candidates, &message, class) {
-                Some(error) => thrown(error),
-                None => ChunkOutcome::Thrown { message, class },
-            }
-        }
+        ProbeReply::Error { message, class, .. } => ChunkOutcome::Thrown { message, class },
         other => internal(format!(
             "the probe answered `{}`, which a stage does not take",
             other.kind()
@@ -664,60 +653,24 @@ fn staged(reply: ProbeReply, candidates: &[Candidates]) -> ControlFlow<ChunkOutc
     })
 }
 
-/// What candidate `index`'s set throws when it stands for a stale ref. No engine throws text of
-/// this shape, so a `script` error carrying it is the run's own.
-fn stale_marker(index: usize) -> String {
-    format!("neo: a root reached the stale aria-ref of candidate set {index}")
-}
-
-/// The stale ref whose marker the page threw: a root reached its part.
-fn reached_stale_ref<'c>(reply: &ProbeReply, candidates: &'c [Candidates]) -> Option<&'c str> {
-    let ProbeReply::Error {
-        message,
-        class: ErrorClass::Script,
-        ..
-    } = reply
-    else {
-        return None;
-    };
-    candidates
-        .iter()
-        .enumerate()
-        .find_map(|(index, candidate)| match candidate {
-            Candidates::StaleRef(stale) if *message == stale_marker(index) => Some(stale.as_str()),
-            _ => None,
-        })
-}
-
-/// The candidate whose error the page threw. The page throws every candidate error as a plain
-/// `Error`, which the probe classifies `script`; [`thrown`] gives it upstream's own class.
-fn thrown_candidate<'c>(
-    candidates: &'c [Candidates],
-    message: &str,
-    class: ErrorClass,
-) -> Option<&'c TreeStageError> {
-    if class != ErrorClass::Script {
-        return None;
-    }
-    candidates.iter().find_map(|candidate| match candidate {
-        Candidates::Thrown(error) if error.to_string() == message => Some(error),
-        _ => None,
-    })
-}
-
-/// A tree part's error, classified as the probe classifies the same error thrown in the page.
+/// A tree part's error as the probe would answer the same error thrown in the page.
 fn thrown(error: &TreeStageError) -> ChunkOutcome {
-    let class = match error {
+    ChunkOutcome::Thrown {
+        message: error.to_string(),
+        class: class_of(error),
+    }
+}
+
+/// The class the probe gives a tree part's error thrown in the page: the one decision both a
+/// tree stage's error and a candidate's error set take their class from.
+fn class_of(error: &TreeStageError) -> ErrorClass {
+    match error {
         // `parseAttributeSelector` throws `InvalidSelectorError`, which the probe classifies
         // `selector` (its message stands alone).
         TreeStageError::Role(RoleQueryError::AttributeSelector(_)) => ErrorClass::Selector,
         // `createStacklessError` and the role engine's validation throw a plain `Error`, which
         // the probe classifies `script` (`Error: ` before its message).
         TreeStageError::Role(_) | TreeStageError::NthWithCapture => ErrorClass::Script,
-    };
-    ChunkOutcome::Thrown {
-        message: error.to_string(),
-        class,
     }
 }
 

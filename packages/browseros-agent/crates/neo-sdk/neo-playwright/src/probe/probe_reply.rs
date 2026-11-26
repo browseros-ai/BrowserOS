@@ -251,9 +251,13 @@ pub(crate) enum ProbeReply {
     /// `setContent` replaced the document's content; the world stays booted under its seq.
     Replaced,
     /// A `stage`'s matches in upstream's order, every element pinned in one entry so Rust can
-    /// transfer them before any is evicted.
+    /// transfer them before any is evicted. `stale_ref` is the first `StageSet::StaleRef` body
+    /// a root reached during the call, absent when none was.
     Staged {
         matches: Vec<StageMatch>,
+        #[serde(default)]
+        #[ts(optional)]
+        stale_ref: Option<String>,
     },
     /// `describePins`: the chunk's locator text when the request sent one, and the page's words
     /// for each member, in order.
@@ -368,8 +372,9 @@ impl ProbeReply {
     }
 }
 
-/// How the probe classified an error thrown in the page.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
+/// How the probe classified an error thrown in the page. A `stage`'s error set also sends one,
+/// for the page to throw its candidate's error with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ErrorClass {
     /// One of Playwright's own errors about the element the script chose, such as "Not a

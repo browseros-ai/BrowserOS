@@ -13,6 +13,9 @@
  *
  * A role or ref match is a fact of the element alone, so "the matches inside root R" equals the
  * document-wide matches filtered by containment in R; that is what the call-scoped engines answer.
+ * A tree part's error, or an `aria-ref` that names no live node, is also known before any root
+ * reaches it; the engines act on such a set only once one does, as upstream's would, so Rust gets
+ * upstream's answer from one call.
  */
 import { asLocator } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/locatorGenerators'
 import {
@@ -28,6 +31,7 @@ import type {
   SetMember,
   StageMatch,
   StageRequest,
+  StageSet,
 } from './protocol'
 import { checkEngines } from './resolve'
 import { engineTable, ProbeError, type QueryEngine, type World } from './world'
@@ -46,8 +50,8 @@ const SDK_LANGUAGE = 'javascript'
 /** A member as this world holds it: an element of its document, or the document itself. */
 type Held = Element | Document
 
-/** A candidate set once its members are resolved, or the error its tree part raised. */
-type Candidates = { members: Held[] } | { error: string }
+/** A candidate set once its members are resolved; an error or stale-ref set as Rust sent it. */
+type Candidates = { members: Held[] } | Exclude<StageSet, { members: unknown }>
 
 /**
  * A member while it is live: a pin's element or a handed node that is connected and still in
@@ -103,20 +107,27 @@ function setAt(sets: readonly Candidates[], body: unknown): Candidates {
  * The members of a set inside `root`: shadow-including containment, as Neo's `aria-ref` engine
  * scopes (`isInsideScope`, where a Document root holds everything in it). `inclusive` keeps the
  * root itself, which is an `aria-ref` part's semantics; a role part's leaves it out, as
- * upstream's role engine queries only below its root.
+ * upstream's role engine queries only below its root. A stale-ref set's body goes to `reached`
+ * each time a root reaches it, as `RefMap`'s engine records the refs it cannot resolve.
  */
 function scoped(
   world: World,
   sets: readonly Candidates[],
   inclusive: boolean,
+  reached: string[],
 ): QueryEngine {
   const { utils } = world.injected
   return {
     queryAll(root, body) {
       const set = setAt(sets, body)
-      // A plain Error, which index.ts classifies `script`, as it classifies upstream's role
-      // engine's validation errors; thrown only once a root reaches the part, as upstream's is.
-      if ('error' in set) throw new Error(set.error)
+      // Thrown with the class Rust gave it (index.ts's `classify` reads a ProbeError's own),
+      // and only once a root reaches the part, as upstream's role engine throws.
+      if ('error' in set)
+        throw new ProbeError(set.error.class, set.error.message)
+      if ('staleRef' in set) {
+        reached.push(set.staleRef)
+        return []
+      }
       const inside = set.members.filter((member) =>
         member === root
           ? inclusive
@@ -153,13 +164,13 @@ export function stage(
   if (from === null) return { kind: 'detached' }
   // A candidate set only ever filters by containment, so a member that is gone matches nothing.
   const sets: Candidates[] = (request.sets ?? []).map((set) =>
-    'error' in set
-      ? set
-      : {
+    'members' in set
+      ? {
           members: set.members.flatMap(
             (member) => held(world, member, nodes) ?? [],
           ),
-        },
+        }
+      : set,
   )
   visitAllSelectorParts(request.selector, (part) => {
     if (part.name === FROM)
@@ -170,9 +181,12 @@ export function stage(
     if (part.name === BELOW || part.name === INSIDE) setAt(sets, part.body)
   })
   const selector = from ? startingFrom(request.selector) : request.selector
+  // The query is synchronous, so every engine call of this stage, nested parts included, records
+  // into this one list; its first body is the reply's `staleRef`.
+  const reached: string[] = []
   const scopedEngines = new Map<string, QueryEngine>([
-    [BELOW, scoped(world, sets, false)],
-    [INSIDE, scoped(world, sets, true)],
+    [BELOW, scoped(world, sets, false, reached)],
+    [INSIDE, scoped(world, sets, true, reached)],
   ])
   // Upstream's loop calls it once, with the call's root, as the selector's first part.
   if (from) scopedEngines.set(FROM, { queryAll: () => from as Element[] })
@@ -192,7 +206,12 @@ export function stage(
       message: injected.strictModeViolationError(request.strict, elements)
         .message,
     }
-  return { kind: 'staged', matches: pinMatches(world, elements) }
+  const [staleRef] = reached
+  return {
+    kind: 'staged',
+    matches: pinMatches(world, elements),
+    ...(staleRef === undefined ? {} : { staleRef }),
+  }
 }
 
 /**

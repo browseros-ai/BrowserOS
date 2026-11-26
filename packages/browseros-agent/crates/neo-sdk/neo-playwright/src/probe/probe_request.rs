@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use ts_rs::TS;
 
 use crate::private_entry::{BoxAsk, PrivateStep};
-use crate::probe::probe_reply::{Point, Rect};
+use crate::probe::probe_reply::{ErrorClass, Point, Rect};
 use crate::target::{Chunk, Strictness};
 use crate::world::{FrameSeq, Pin};
 
@@ -337,16 +337,26 @@ pub(crate) enum SetMember {
 }
 
 /// One candidate set of a `stage`: what one tree part matched over the frame's whole document,
-/// in tree order, or the error that part raised.
+/// in tree order, the error that part raised, or the stale ref it named. The last two are facts
+/// Rust knows before any root reaches the part; the page acts on them only once one does, as
+/// upstream's engines do, so the reply is upstream's answer in one call.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub(crate) enum StageSet {
     /// The matches. A member that is gone, or no longer in this document, matches nothing: the
     /// stage filters a candidate set by containment and never starts from one.
     Members(Vec<SetMember>),
-    /// The part's error, such as an invalid role body, thrown as upstream's engine throws it:
-    /// only once a root reaches the part.
-    Error(String),
+    /// The part's error, such as an invalid role body, thrown with the class Rust gave it (a
+    /// role syntax error is `selector`, as upstream's `InvalidSelectorError`), so the page's
+    /// `error` reply is the one upstream's engine would have produced.
+    Error { message: String, class: ErrorClass },
+    /// An `aria-ref` body that names no live node. The part matches nothing, and the reply's
+    /// `staleRef` names the first such body a root reached, as Neo's `RefMap.query` records it.
+    StaleRef(String),
 }
 
 /// Which Storage a `webStorage` request uses.
