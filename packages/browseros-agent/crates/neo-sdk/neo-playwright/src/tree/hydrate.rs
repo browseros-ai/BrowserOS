@@ -110,6 +110,16 @@ enum PinAttempt {
     NodeDetached,
 }
 
+/// What the probe answered to pinning a node by its handle ([`pin_object`]).
+pub(super) enum ObjectPin {
+    /// The node's element, pinned in the world, and the probe's preview of it (page text).
+    Pinned { pin: Pin, preview: String },
+    /// The node is detached, or not of the world's document.
+    Detached,
+    /// A reply pinning never gives, for the caller to word.
+    Refused(ProbeReply),
+}
+
 enum EnsuredWorld {
     Ready(IsolatedWorld),
     Gone,
@@ -363,7 +373,7 @@ fn jump_ref(jump: AriaRefJump) -> Option<Ref> {
 ///
 /// Main documents always correspond to `main_frame` even when BrowserOS `devtools_frame_token` is
 /// omitted on `main_frame_data`; child documents match strictly on their reported `frame_token`.
-fn doc_matches_frame(
+pub(super) fn doc_matches_frame(
     tree: &SnapshotTree,
     main_frame: &FrameId,
     doc_token: &DocToken,
@@ -380,15 +390,46 @@ fn doc_matches_frame(
     }
 }
 
-/// Resolves `node` into `world` via `DOM.resolveNode` and pins it with the probe's
-/// `Resolve { target: Root, want: Element }`, which verifies both world-identity matching (via V8
-/// cross-world argument rejection) and DOM attachment.
+/// Resolves `node` into `world` via [`resolve_node`] and pins it with [`pin_object`], which
+/// verifies both world-identity matching (via V8 cross-world argument rejection) and DOM
+/// attachment.
 async fn pin_in_world(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     world: &IsolatedWorld,
     node: DomNodeId,
 ) -> Result<PinAttempt, PlaywrightError> {
+    let object_id = match resolve_node(scope, world, node).await {
+        Ok(Some(object_id)) => object_id,
+        Ok(None) => return Ok(PinAttempt::NodeDetached),
+        Err(ProbeFailure::Gone(_)) => return Ok(PinAttempt::WorldGone),
+        Err(failure) => return Err(resolve::failed(scope, failure)),
+    };
+    match pin_object(scope, page, world, &object_id).await {
+        Ok(ObjectPin::Pinned { pin, preview }) => Ok(PinAttempt::Pinned {
+            pin,
+            preview,
+            object_id,
+        }),
+        Ok(ObjectPin::Detached) => Ok(PinAttempt::NodeDetached),
+        Ok(ObjectPin::Refused(reply)) => Err(resolve::refused(scope, reply)),
+        Err(ProbeFailure::Gone(_)) => Ok(PinAttempt::WorldGone),
+        Err(failure) => Err(resolve::failed(scope, failure)),
+    }
+}
+
+/// `node`'s remote object in `world` (`DOM.resolveNode` with the world's context id, in the op's
+/// object group), or `None` when the world lives and only the node is gone: any other CDP
+/// protocol error, such as "No node with given id found". `Gone` when the world itself is gone.
+///
+/// A target crash or close stays `Cdp`, and is read first: CDP reports it as a protocol error,
+/// which would read as a detached node, or as a lost session, which would read as a world gone,
+/// and either would retry the attempt on a page that no longer exists.
+pub(super) async fn resolve_node(
+    scope: &OpScope<'_>,
+    world: &IsolatedWorld,
+    node: DomNodeId,
+) -> Result<Option<String>, ProbeFailure> {
     let params = json!({
         "backendNodeId": node.as_backend_node_id(),
         "executionContextId": world.context(),
@@ -400,44 +441,44 @@ async fn pin_in_world(
         .send::<_, ResolvedNode>("DOM.resolveNode", params)
         .await
         .inspect_err(|error| crash.record(error));
-    let object_id = match resolved {
-        Ok(resolved) => resolved.object.object_id,
-        Err(error) => {
-            // Preserve target crash / closure errors instead of misclassifying them as a missing
-            // DOM node under the generic CDP protocol-error arm below.
+    match resolved {
+        Ok(resolved) => Ok(Some(resolved.object.object_id)),
+        Err(error)
             if matches!(
                 ErrorCode::from_core(&error),
                 ErrorCode::TargetCrashed | ErrorCode::TargetClosed
-            ) {
-                return Err(scope.core_error(&error));
-            }
-            return match ProbeFailure::from_core(error) {
-                ProbeFailure::Gone(_) => Ok(PinAttempt::WorldGone),
-                // "No node with given id found" (or sibling node-lookup protocol errors): the
-                // document's world is still alive, only this backend node is gone.
-                ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { .. })) => {
-                    Ok(PinAttempt::NodeDetached)
-                }
-                failure => Err(resolve::failed(scope, failure)),
-            };
+            ) =>
+        {
+            Err(ProbeFailure::Cdp(error))
         }
-    };
+        Err(error) => match ProbeFailure::from_core(error) {
+            ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { .. })) => Ok(None),
+            failure => Err(failure),
+        },
+    }
+}
+
+/// Pins the element `object` names (a node [`resolve_node`] resolved in `world`) with the probe's
+/// `Resolve { target: Root, strictness: Strict, want: Element }`, which takes the node only while
+/// it is connected and of the world's document (design 6.2).
+pub(super) async fn pin_object(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    object: &str,
+) -> Result<ObjectPin, ProbeFailure> {
     let request = ProbeRequest::Resolve {
         target: ProbeTarget::Root,
         strictness: Strictness::Strict,
         want: Want::Element,
     };
-    match probe::call_on(scope, page, world, &request, &object_id).await {
-        Ok(ProbeReply::Element { pin, preview, .. }) => Ok(PinAttempt::Pinned {
-            pin,
-            preview,
-            object_id,
-        }),
-        Ok(ProbeReply::Detached | ProbeReply::None { .. }) => Ok(PinAttempt::NodeDetached),
-        Ok(other) => Err(resolve::refused(scope, other)),
-        Err(ProbeFailure::Gone(_)) => Ok(PinAttempt::WorldGone),
-        Err(failure) => Err(resolve::failed(scope, failure)),
-    }
+    Ok(
+        match probe::call_on(scope, page, world, &request, object).await? {
+            ProbeReply::Element { pin, preview, .. } => ObjectPin::Pinned { pin, preview },
+            ProbeReply::Detached | ProbeReply::None { .. } => ObjectPin::Detached,
+            other => ObjectPin::Refused(other),
+        },
+    )
 }
 
 /// Ensures an isolated world is installed for `frame`, walking down through [`FrameStart`] for

@@ -7,16 +7,23 @@
 //!                ├─▶ TabRefTable (neo_snapshot_apc::refs: NodeKey ⇄ Ref across captures)
 //!                ├─▶ PrivateMirror (host-typed secret marks by DomNodeId and site, copied into
 //!                │   every build as neo_snapshot_apc's PrivateNodes)
-//!                └─▶ Hydrate (DOM.resolveNode + probe pin under a proven pre-capture world)
+//!                ├─▶ Hydrate (DOM.resolveNode + probe pin under a proven pre-capture world)
+//!                └─▶ ChunkWorld (a chunk run's page side: its tree nodes handed to the frame's
+//!                    world under the same proof, and the tab's refs as its RefResolver)
 //! ```
 
 #![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 
+mod chunk_world;
 mod hydrate;
 mod page_capture;
 mod private_mirror;
 mod tab_tree;
+#[cfg(test)]
+mod tree_script;
 
+#[cfg_attr(not(test), expect(unused_imports, reason = "wired by the switch-over"))]
+pub(crate) use chunk_world::{ChunkWorld, RunAttempt, RunRoot, Unproven};
 pub(crate) use hydrate::{Hydrate, HydrateOutcome, HydratedNode};
 pub(crate) use page_capture::{AttemptStart, CaptureError, CapturedTree, PageCapture};
 pub(crate) use private_mirror::{PrivateMirror, TabOriginState};
