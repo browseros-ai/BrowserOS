@@ -1,24 +1,22 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::sync::OnceLock;
+use std::{fmt, mem};
 
 use crate::proto::{
     BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
-    RedactionDecision,
 };
 
 use super::hidden;
+use super::mask::{self, MaskSource, NodeMask};
 use super::node_key::{DocId, DomNodeId, NodeId};
 use super::role::{self, Role};
 use super::snapshot_tree::SnapshotTree;
 use super::state::InvalidState;
 
-/// Upper bound on emitted redaction bullets so corrupt payloads cannot trigger OOM.
-const MAX_REDACTED_BULLETS: usize = 65_536;
-
 static EMPTY_NAME: Name = Name {
     text: String::new(),
     derived_from_content: false,
+    contributors: Vec::new(),
 };
 
 static EMPTY_DESCRIPTION: Description = Description {
@@ -29,13 +27,27 @@ static EMPTY_DESCRIPTION: Description = Description {
 /// Computed WAI-ARIA accessible name for a [`TreeNode`](super::TreeNode).
 ///
 /// Resolved in ACCNAME order from BrowserOS APC wire facts and finalized with
-/// [`normalize_whitespace`]. Its manual `Debug` implementation prints only byte length and
-/// provenance, never page text.
-#[derive(Clone, Default, PartialEq, Eq)]
+/// [`normalize_whitespace`]. Its manual `Debug` implementation prints only byte length,
+/// provenance and how many elements contributed, never page text.
+#[derive(Clone, Default)]
 pub struct Name {
     text: String,
     derived_from_content: bool,
+    /// Every element whose text the name holds, sorted and deduplicated: Playwright's
+    /// `AccessibleName.elements` (`roleUtils.ts` `CompositeString`). Only the ai-mode distiller
+    /// reads it ([`super::aria_emit`]), to drop a name that its printed contributors already show.
+    contributors: Vec<NodeId>,
 }
+
+/// Equality stays text and provenance, as before `contributors` existed: they record where the
+/// text came from, not what the name is.
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.derived_from_content == other.derived_from_content
+    }
+}
+
+impl Eq for Name {}
 
 impl Name {
     /// Normalized accessible name text, or `""` when the node has no accessible name.
@@ -62,6 +74,11 @@ impl Name {
     pub fn into_text(self) -> String {
         self.text
     }
+
+    /// The elements whose text this name holds, in [`NodeId`] order.
+    pub(crate) fn contributors(&self) -> &[NodeId] {
+        &self.contributors
+    }
 }
 
 impl fmt::Debug for Name {
@@ -69,6 +86,7 @@ impl fmt::Debug for Name {
         f.debug_struct("Name")
             .field("text_len", &self.text.len())
             .field("derived_from_content", &self.derived_from_content)
+            .field("contributors", &self.contributors.len())
             .finish()
     }
 }
@@ -454,6 +472,7 @@ struct NodeFacts<'a> {
     doc: DocId,
     dom_id: Option<DomNodeId>,
     role: Option<Role>,
+    mask: NodeMask,
     tag: Option<&'a str>,
     raw: &'a ContentAttributes,
 }
@@ -467,6 +486,7 @@ impl<'a> NodeFacts<'a> {
             doc: node.doc(),
             dom_id: node.dom_node_id(),
             role: node.role(),
+            mask: node.mask(),
             tag: hidden::raw_tag(raw),
             raw,
         })
@@ -717,76 +737,8 @@ fn raw_placeholder(raw: &ContentAttributes) -> &str {
         .unwrap_or("")
 }
 
-fn decode_redaction(code: Option<i32>) -> Option<RedactionDecision> {
-    code.and_then(|raw_code| RedactionDecision::try_from(raw_code).ok())
-}
-
-fn is_redacted_decision(decision: RedactionDecision) -> bool {
-    matches!(
-        decision,
-        RedactionDecision::RedactedHasBeenPassword
-            | RedactionDecision::RedactedIsSensitivePaymentField
-            | RedactionDecision::RedactedCustomPasswordCss
-            | RedactionDecision::RedactedCustomPasswordJs
-            | RedactionDecision::RedactedIsOtp
-    )
-}
-
-fn is_unredacted_empty_decision(decision: RedactionDecision) -> bool {
-    matches!(
-        decision,
-        RedactionDecision::UnredactedEmptyPassword
-            | RedactionDecision::UnredactedEmptyPaymentField
-            | RedactionDecision::UnredactedEmptyCustomPassword
-            | RedactionDecision::UnredactedEmptyOtpField
-    )
-}
-
-fn is_redacted(raw: &ContentAttributes) -> bool {
-    let attr_redacted = decode_redaction(raw.redaction_decision).is_some_and(is_redacted_decision);
-    let control_redacted = form_control_data(raw)
-        .and_then(|control| decode_redaction(control.redaction_decision))
-        .is_some_and(is_redacted_decision);
-    attr_redacted || control_redacted
-}
-
-fn is_unredacted_empty(raw: &ContentAttributes) -> bool {
-    let attr_empty =
-        decode_redaction(raw.redaction_decision).is_some_and(is_unredacted_empty_decision);
-    let control_empty = form_control_data(raw)
-        .and_then(|control| decode_redaction(control.redaction_decision))
-        .is_some_and(is_unredacted_empty_decision);
-    attr_empty || control_empty
-}
-
-fn redacted_bullets(raw: &ContentAttributes) -> String {
-    let len = raw
-        .browseros
-        .as_deref()
-        .and_then(|browseros| browseros.redacted_value_length)
-        .unwrap_or(0);
-    let count = usize::try_from(len)
-        .unwrap_or(MAX_REDACTED_BULLETS)
-        .min(MAX_REDACTED_BULLETS);
-    if count == 0 {
-        String::new()
-    } else {
-        "•".repeat(count)
-    }
-}
-
-fn masked_or_raw_field_value(raw: &ContentAttributes) -> String {
-    // Privacy gate: redacted controls must never read `field_value`, even if a payload populates it.
-    if is_redacted(raw) {
-        return redacted_bullets(raw);
-    }
-    if is_unredacted_empty(raw) {
-        return String::new();
-    }
-    form_control_data(raw)
-        .and_then(|control| control.field_value.as_deref())
-        .unwrap_or("")
-        .to_owned()
+fn masked_or_raw_field_value(raw: &ContentAttributes, node_mask: NodeMask) -> String {
+    mask::effective_field_value(raw, node_mask).unwrap_or_default()
 }
 
 fn contains_in_same_doc(tree: &SnapshotTree, ancestor_id: NodeId, target_id: NodeId) -> bool {
@@ -1067,6 +1019,35 @@ fn find_selected_options_in_listbox(tree: &SnapshotTree, listbox_id: NodeId) -> 
     selected
 }
 
+/// Accumulated text together with the element [`NodeId`]s that produced it.
+#[derive(Default)]
+struct CompositeText {
+    text: String,
+    contributors: Vec<NodeId>,
+}
+
+/// Moves `part` into `into`, the shorter list into the longer. Order does not matter, since the
+/// finished name sorts its contributors. Down a deep chain every level holds all the contributors
+/// below it, so extending the parent's list each time would cost O(depth²) moves; this keeps a
+/// whole name O(n log n).
+fn absorb_contributors(into: &mut Vec<NodeId>, mut part: Vec<NodeId>) {
+    if into.len() < part.len() {
+        mem::swap(into, &mut part);
+    }
+    into.extend(part);
+}
+
+impl CompositeText {
+    fn from_leaf(node_id: NodeId, text: String) -> Self {
+        let contributors = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![node_id]
+        };
+        Self { text, contributors }
+    }
+}
+
 /// Heap-allocated continuation frames driving [`eval_text_alternative`] iteratively without call
 /// stack recursion.
 enum Frame<'a> {
@@ -1076,6 +1057,7 @@ enum Frame<'a> {
         refs: Vec<ResolvedRef<'a>>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
         part_count: usize,
         self_contained: bool,
     },
@@ -1084,6 +1066,7 @@ enum Frame<'a> {
         nodes: Vec<NodeId>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
         part_count: usize,
     },
     JoinNonEmptyLabels {
@@ -1091,6 +1074,7 @@ enum Frame<'a> {
         labels: Vec<NodeId>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
     },
     ContentChildren {
         node_id: NodeId,
@@ -1098,14 +1082,19 @@ enum Frame<'a> {
         children: Vec<NodeId>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
     },
 }
 
 enum StepOutcome<'a> {
+    /// A finished result the evaluated element owns: an attribute, its value or a default word.
     Done(String),
-    /// A finished result that is also content inside the target, so the [`Name`] reports
-    /// `derived_from_content` as Playwright's content step would have.
-    DoneFromContent(String),
+    /// An SVG element's `<title>` text. `from_content` marks it content inside the target, so the
+    /// [`Name`] reports `derived_from_content` as Playwright's content step would have.
+    SvgTitle {
+        text: String,
+        from_content: bool,
+    },
     TailCall {
         node_id: NodeId,
         opts: EvalOptions,
@@ -1117,7 +1106,7 @@ enum StepOutcome<'a> {
 struct EvalState<'a> {
     stack: Vec<Frame<'a>>,
     active: Option<(NodeId, EvalOptions)>,
-    returned: Option<String>,
+    returned: Option<CompositeText>,
     visited: HashSet<NodeId>,
     derived_from_content: bool,
 }
@@ -1133,12 +1122,19 @@ impl<'a> EvalState<'a> {
         }
     }
 
-    fn apply_outcome(&mut self, outcome: StepOutcome<'a>) {
+    fn apply_outcome(&mut self, current_id: NodeId, outcome: StepOutcome<'a>) {
         match outcome {
-            StepOutcome::Done(text) => self.returned = Some(text),
-            StepOutcome::DoneFromContent(text) => {
-                self.derived_from_content = true;
-                self.returned = Some(text);
+            StepOutcome::Done(text) => {
+                self.returned = Some(CompositeText::from_leaf(current_id, text));
+            }
+            // The text is the `<title>` child's, which has no node, so no element the tree can
+            // print contributed it: upstream's composite holds only the unrendered title.
+            StepOutcome::SvgTitle { text, from_content } => {
+                self.derived_from_content |= from_content;
+                self.returned = Some(CompositeText {
+                    text,
+                    contributors: Vec::new(),
+                });
             }
             StepOutcome::TailCall { node_id, opts } => self.active = Some((node_id, opts)),
             StepOutcome::Push(frame) => self.stack.push(frame),
@@ -1153,13 +1149,13 @@ fn eval_text_alternative(
     root_id: NodeId,
     root_opts: EvalOptions,
     derived_from_content: &mut bool,
-) -> String {
+) -> CompositeText {
     let mut state = EvalState::new(root_id, root_opts);
 
     loop {
         if let Some((node_id, opts)) = state.active.take() {
             let outcome = start_node_eval(index, node_id, opts, &mut state.visited);
-            state.apply_outcome(outcome);
+            state.apply_outcome(node_id, outcome);
             continue;
         }
 
@@ -1188,15 +1184,17 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
         refs,
         next_index,
         acc,
+        contributors,
         part_count,
         ..
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take() {
+        if let Some(part) = state.returned.take() {
             if *part_count > 0 {
                 acc.push(' ');
             }
-            acc.push_str(&text);
+            acc.push_str(&part.text);
+            absorb_contributors(contributors, part.contributors);
             *part_count += 1;
         }
         while let Some(&item) = refs.get(*next_index) {
@@ -1229,6 +1227,7 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
         opts,
         refs,
         acc,
+        contributors,
         self_contained,
         ..
     }) = state.stack.pop()
@@ -1240,7 +1239,10 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
         if opts.inside_target() && self_contained {
             state.derived_from_content = true;
         }
-        state.returned = Some(acc);
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
         return;
     }
 
@@ -1251,7 +1253,7 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
             .any(|item| matches!(item, ResolvedRef::Node(target_id) if *target_id == node_id)),
     };
     let outcome = eval_from_step_2c(index, node_id, opts, presence, &mut state.visited);
-    state.apply_outcome(outcome);
+    state.apply_outcome(node_id, outcome);
 }
 
 fn advance_join_all_frame(state: &mut EvalState<'_>) {
@@ -1260,14 +1262,16 @@ fn advance_join_all_frame(state: &mut EvalState<'_>) {
         nodes,
         next_index,
         acc,
+        contributors,
         part_count,
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take() {
+        if let Some(part) = state.returned.take() {
             if *part_count > 0 {
                 acc.push(' ');
             }
-            acc.push_str(&text);
+            acc.push_str(&part.text);
+            absorb_contributors(contributors, part.contributors);
             *part_count += 1;
         }
         if let Some(&target_id) = nodes.get(*next_index) {
@@ -1277,8 +1281,14 @@ fn advance_join_all_frame(state: &mut EvalState<'_>) {
         }
     }
 
-    if let Some(Frame::JoinAll { acc, .. }) = state.stack.pop() {
-        state.returned = Some(acc);
+    if let Some(Frame::JoinAll {
+        acc, contributors, ..
+    }) = state.stack.pop()
+    {
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
     }
 }
 
@@ -1288,15 +1298,17 @@ fn advance_labels_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         labels,
         next_index,
         acc,
+        contributors,
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take()
-            && !text.is_empty()
+        if let Some(part) = state.returned.take()
+            && !part.text.is_empty()
         {
             if !acc.is_empty() {
                 acc.push(' ');
             }
-            acc.push_str(&text);
+            acc.push_str(&part.text);
+            absorb_contributors(contributors, part.contributors);
         }
         if let Some(&label_id) = labels.get(*next_index) {
             *next_index += 1;
@@ -1309,8 +1321,14 @@ fn advance_labels_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         }
     }
 
-    if let Some(Frame::JoinNonEmptyLabels { acc, .. }) = state.stack.pop() {
-        state.returned = Some(acc);
+    if let Some(Frame::JoinNonEmptyLabels {
+        acc, contributors, ..
+    }) = state.stack.pop()
+    {
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
     }
 }
 
@@ -1320,11 +1338,13 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         children,
         next_index,
         acc,
+        contributors,
         ..
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take() {
-            acc.push_str(&text);
+        if let Some(part) = state.returned.take() {
+            acc.push_str(&part.text);
+            absorb_contributors(contributors, part.contributors);
         }
         while let Some(&child_id) = children.get(*next_index) {
             *next_index += 1;
@@ -1362,7 +1382,11 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
     }
 
     let Some(Frame::ContentChildren {
-        node_id, opts, acc, ..
+        node_id,
+        opts,
+        acc,
+        mut contributors,
+        ..
     }) = state.stack.pop()
     else {
         return;
@@ -1379,11 +1403,16 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         if opts.inside_target() && has_trimmed {
             state.derived_from_content = true;
         }
-        state.returned = Some(acc);
+        contributors.push(node_id);
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
         return;
     }
 
-    state.returned = Some(eval_step_2i(index.tree, node_id, &mut state.visited));
+    let title = eval_step_2i(index.tree, node_id, &mut state.visited);
+    state.returned = Some(CompositeText::from_leaf(node_id, title));
 }
 
 #[derive(Clone, Copy)]
@@ -1442,6 +1471,7 @@ fn start_node_eval<'a>(
             refs: resolved_labelledby,
             next_index: 0,
             acc: String::new(),
+            contributors: Vec::new(),
             part_count: 0,
             self_contained,
         });
@@ -1542,19 +1572,18 @@ fn eval_step_2c<'a>(
     match control_role {
         Role::Textbox | Role::Searchbox => {
             visited.insert(facts.id);
-            if is_redacted(facts.raw) {
-                return Some(StepOutcome::Done(redacted_bullets(facts.raw)));
-            }
-            if is_unredacted_empty(facts.raw) {
-                return Some(StepOutcome::Done(String::new()));
+            if let Some(masked) = facts.mask.bullets_string() {
+                return Some(StepOutcome::Done(masked));
             }
             if facts.tag.is_some_and(|t| {
                 t.eq_ignore_ascii_case("input") || t.eq_ignore_ascii_case("textarea")
             }) {
-                return Some(StepOutcome::Done(masked_or_raw_field_value(facts.raw)));
+                return Some(StepOutcome::Done(masked_or_raw_field_value(
+                    facts.raw, facts.mask,
+                )));
             }
             let text = collect_dom_text_in_subtree(index.tree, facts.id)
-                .unwrap_or_else(|| masked_or_raw_field_value(facts.raw));
+                .unwrap_or_else(|| masked_or_raw_field_value(facts.raw, facts.mask));
             Some(StepOutcome::Done(text))
         }
         Role::Combobox | Role::Listbox => {
@@ -1568,7 +1597,9 @@ fn eval_step_2c<'a>(
         }
         Role::Progressbar | Role::Scrollbar | Role::Slider | Role::Spinbutton | Role::Meter => {
             visited.insert(facts.id);
-            Some(StepOutcome::Done(masked_or_raw_field_value(facts.raw)))
+            Some(StepOutcome::Done(masked_or_raw_field_value(
+                facts.raw, facts.mask,
+            )))
         }
         Role::Menu => {
             visited.insert(facts.id);
@@ -1591,6 +1622,7 @@ fn eval_step_2c_select_or_listbox<'a>(
                 nodes: option_nodes,
                 next_index: 0,
                 acc: String::new(),
+                contributors: Vec::new(),
                 part_count: 0,
             });
         }
@@ -1607,7 +1639,7 @@ fn eval_step_2c_select_or_listbox<'a>(
         .unwrap_or_default();
 
     if selected.is_empty() && facts.tag.is_some_and(|t| t.eq_ignore_ascii_case("input")) {
-        return StepOutcome::Done(masked_or_raw_field_value(facts.raw));
+        return StepOutcome::Done(masked_or_raw_field_value(facts.raw, facts.mask));
     }
 
     StepOutcome::Push(Frame::JoinAll {
@@ -1615,6 +1647,7 @@ fn eval_step_2c_select_or_listbox<'a>(
         nodes: selected,
         next_index: 0,
         acc: String::new(),
+        contributors: Vec::new(),
         part_count: 0,
     })
 }
@@ -1625,6 +1658,7 @@ fn labels_outcome<'a>(labels: &[NodeId], visibility: NameVisibility) -> StepOutc
         labels: labels.to_vec(),
         next_index: 0,
         acc: String::new(),
+        contributors: Vec::new(),
     })
 }
 
@@ -1730,7 +1764,7 @@ fn eval_step_2e_special_input<'a>(
         | FormControlType::InputSubmit
         | FormControlType::InputReset => {
             visited.insert(facts.id);
-            let value = masked_or_raw_field_value(facts.raw);
+            let value = masked_or_raw_field_value(facts.raw, facts.mask);
             if !role::trim_js_whitespace(&value).is_empty() {
                 return Some(StepOutcome::Done(value));
             }
@@ -1834,13 +1868,8 @@ fn eval_step_2e_containers_and_media<'a>(
     if let Some(svg_title) = raw_svg_title(facts.raw) {
         visited.insert(facts.id);
         let text = svg_title.to_owned();
-        return Some(
-            if opts.inside_target() && !role::trim_js_whitespace(&text).is_empty() {
-                StepOutcome::DoneFromContent(text)
-            } else {
-                StepOutcome::Done(text)
-            },
-        );
+        let from_content = opts.inside_target() && !role::trim_js_whitespace(&text).is_empty();
+        return Some(StepOutcome::SvgTitle { text, from_content });
     }
 
     None
@@ -1867,9 +1896,9 @@ fn eval_step_2f<'a>(
     }
 
     visited.insert(facts.id);
-    // Privacy guard: never walk child nodes of a redacted control, which could echo sensitive
-    // characters even when referenced through `aria-labelledby`.
-    if is_redacted(facts.raw) {
+    // Privacy guard: never walk child nodes of a Chromium-redacted control, which could echo
+    // sensitive characters even when referenced through `aria-labelledby`.
+    if facts.mask.source() == Some(MaskSource::Chromium) {
         return None;
     }
 
@@ -1880,6 +1909,7 @@ fn eval_step_2f<'a>(
         children,
         next_index: 0,
         acc: String::new(),
+        contributors: Vec::new(),
     }))
 }
 
@@ -1924,15 +1954,18 @@ fn compute_accessible_name(
     }
 
     let mut derived_from_content = false;
-    let raw_text = eval_text_alternative(
+    let mut composite = eval_text_alternative(
         index,
         id,
         EvalOptions::for_root(visibility),
         &mut derived_from_content,
     );
+    composite.contributors.sort_unstable();
+    composite.contributors.dedup();
     Name {
-        text: normalize_whitespace(&raw_text),
+        text: normalize_whitespace(&composite.text),
         derived_from_content,
+        contributors: composite.contributors,
     }
 }
 
@@ -1974,13 +2007,13 @@ fn compute_accessible_description(
                         .node(target_id)
                         .is_some_and(|target| target.hidden().is_hidden_for_aria());
                     let mut ignored_derived = false;
-                    let text = eval_text_alternative(
+                    let part = eval_text_alternative(
                         index,
                         target_id,
                         EvalOptions::for_describedby(visibility, target_hidden),
                         &mut ignored_derived,
                     );
-                    joined.push_str(&text);
+                    joined.push_str(&part.text);
                 }
                 ResolvedRef::Unrendered(text) => {
                     joined.push_str(text);
@@ -2048,7 +2081,7 @@ fn compute_accessible_error_message(index: &LookupIndex<'_>, id: NodeId) -> Stri
                     EvalOptions::for_describedby(NameVisibility::VisibleOnly, target_hidden),
                     &mut ignored_derived,
                 );
-                as_flat_string(&raw_part)
+                as_flat_string(&raw_part.text)
             }
             ResolvedRef::Unrendered(text) => as_flat_string(text),
         };

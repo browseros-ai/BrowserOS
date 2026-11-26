@@ -5,7 +5,9 @@ use std::iter::FusedIterator;
 use crate::proto::AnnotatedPageContent;
 
 use super::build_error::BuildError;
+use super::fold::{self, ClickProxy, FoldInfo, SyntheticOption};
 use super::frame_stitch::{self, StitchedTree};
+use super::mask::{self, PrivateNodes};
 use super::node_key::{DocId, DocSeq, DocToken, FrameToken, NodeId, NodeKey, NodeRange};
 use super::tree_doc::{PartialFrame, TreeDoc};
 use super::tree_node::TreeNode;
@@ -29,13 +31,14 @@ pub struct Viewport {
 
 type SeqAssigner<'a> = &'a dyn Fn(&DocToken, Option<&FrameToken>) -> DocSeq;
 
-/// Configuration controlling how [`SnapshotTree::build`] validates contract metadata and assigns
-/// session-scoped [`DocSeq`] identifiers.
+/// Configuration controlling how [`SnapshotTree::build`] validates contract metadata, assigns
+/// session-scoped [`DocSeq`] identifiers, and masks host-private form values.
 #[must_use]
 #[derive(Clone, Copy)]
 pub struct BuildOptions<'a> {
     min_contract_version: u32,
     seq_of: Option<SeqAssigner<'a>>,
+    private_nodes: Option<&'a PrivateNodes>,
 }
 
 impl Default for BuildOptions<'_> {
@@ -43,12 +46,14 @@ impl Default for BuildOptions<'_> {
         Self {
             min_contract_version: MIN_CONTRACT_VERSION,
             seq_of: None,
+            private_nodes: None,
         }
     }
 }
 
 impl<'a> BuildOptions<'a> {
-    /// Creates default build options enforcing [`MIN_CONTRACT_VERSION`] with no `seq_of` callback.
+    /// Creates default build options enforcing [`MIN_CONTRACT_VERSION`] with no `seq_of` callback
+    /// or host-private node marks.
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,10 +74,21 @@ impl<'a> BuildOptions<'a> {
         self
     }
 
+    /// Supplies host-private DOM node marks whose values and editable text are masked in place
+    /// during [`SnapshotTree::build`].
+    pub const fn with_private_nodes(mut self, private: &'a PrivateNodes) -> Self {
+        self.private_nodes = Some(private);
+        self
+    }
+
     /// Returns the effective minimum contract version floor.
     #[must_use]
     pub const fn min_contract_version(&self) -> u32 {
         self.min_contract_version
+    }
+
+    pub(crate) const fn private_nodes(&self) -> Option<&'a PrivateNodes> {
+        self.private_nodes
     }
 
     pub(crate) fn assign_seq(
@@ -89,6 +105,7 @@ impl fmt::Debug for BuildOptions<'_> {
         f.debug_struct("BuildOptions")
             .field("min_contract_version", &self.min_contract_version)
             .field("has_seq_of", &self.seq_of.is_some())
+            .field("has_private_nodes", &self.private_nodes.is_some())
             .finish()
     }
 }
@@ -104,6 +121,7 @@ pub struct SnapshotTree {
     partial_frames: Vec<PartialFrame>,
     by_key: HashMap<NodeKey, NodeId>,
     doc_by_token: HashMap<DocToken, DocId>,
+    fold: FoldInfo,
     viewport: Option<Viewport>,
     contract_version: u32,
     subframe_timeout_ms: Option<u32>,
@@ -135,12 +153,20 @@ impl SnapshotTree {
             node.set_state(state);
         }
 
+        let masks = mask::apply_masks(&mut nodes, &docs, options.private_nodes());
+        for (node, node_mask) in nodes.iter_mut().zip(masks) {
+            node.set_mask(node_mask);
+        }
+
+        let fold = fold::compute_fold(&nodes, &docs);
+
         Ok(Self {
             nodes,
             docs,
             partial_frames,
             by_key,
             doc_by_token,
+            fold,
             viewport,
             contract_version,
             subframe_timeout_ms: meta.subframe_timeout_ms,
@@ -273,6 +299,52 @@ impl SnapshotTree {
         anc.doc() == target.doc() && anc.id() < target.id() && target.id() < anc.subtree_end()
     }
 
+    /// Precomputed logical folding, option synthesis, container pruning, and click-proxy overlay.
+    #[must_use]
+    pub const fn fold(&self) -> &FoldInfo {
+        &self.fold
+    }
+
+    /// Returns the [`ClickProxy`] pairing for zero-size control `id`, if one was found.
+    #[must_use]
+    pub fn click_proxy(&self, id: NodeId) -> Option<&ClickProxy> {
+        self.fold.click_proxy(id)
+    }
+
+    /// Returns synthesized `<option>` entries for menu-list `<select>` node `id`, or an empty slice.
+    #[must_use]
+    pub fn synthetic_options(&self, id: NodeId) -> &[SyntheticOption] {
+        self.fold.synthetic_options(id)
+    }
+
+    /// Whether `id` qualifies to receive a snapshot reference in `ai` mode.
+    ///
+    /// Qualifies non-text, non-`ua_shadow` DOM elements that are not folded click-proxy labels and
+    /// either are box-visible and receive pointer events or hold a [`ClickProxy`] pairing.
+    #[must_use]
+    pub fn is_ref_worthy(&self, id: NodeId) -> bool {
+        self.fold.folded_label_target(id).is_none() && self.is_ref_worthy_unfolded(id)
+    }
+
+    /// [`Self::is_ref_worthy`] for a capture that keeps `id` on its own line: a subtree capture
+    /// that holds a paired label but not its control prints the label, not the control's line.
+    pub(crate) fn is_ref_worthy_unfolded(&self, id: NodeId) -> bool {
+        let Some(node) = self.node(id) else {
+            return false;
+        };
+        let Some(raw) = node.raw_attributes() else {
+            return false;
+        };
+        if node.dom_node_id().is_none() || hidden::is_text_node(raw) || node.hidden().is_ua_shadow()
+        {
+            return false;
+        }
+        if self.fold.click_proxy(id).is_some() {
+            return true;
+        }
+        node.hidden().is_box_visible() && node.hidden().receives_pointer_events()
+    }
+
     /// Captured viewport rectangle, if reported on the top-level APC message.
     #[must_use]
     pub const fn viewport(&self) -> Option<Viewport> {
@@ -300,6 +372,7 @@ impl fmt::Debug for SnapshotTree {
             .field("partial_frame_count", &self.partial_frames.len())
             .field("indexed_key_count", &self.by_key.len())
             .field("indexed_doc_count", &self.doc_by_token.len())
+            .field("fold", &self.fold)
             .field("viewport", &self.viewport)
             .field("contract_version", &self.contract_version)
             .field("subframe_timeout_ms", &self.subframe_timeout_ms)

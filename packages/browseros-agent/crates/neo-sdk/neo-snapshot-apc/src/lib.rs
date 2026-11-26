@@ -12,10 +12,13 @@
 //!                                                 ▼                      ▼
 //!                                           proto::*             tree::SnapshotTree
 //!                                    (Edition 2023 wire schema)  (flat-tree arena + docs)
-//!                                                                     │
-//!                                                                     ▼
-//!  prelude chunk ─▶ select::ParsedSelector ─▶ select::TreeStage ─▶ select() ─▶ TreeMatches
-//!                   (role bodies through select::RoleQuery)             (count, nth, strict mode)
+//!                                                                     │          │
+//!                                                                     ▼          ▼
+//!  prelude chunk ─▶ select::ParsedSelector ─▶ select::TreeStage ─▶ select()  refs::TabRefTable
+//!                   (role bodies through select::RoleQuery)             │     + tree::AriaTree
+//!                                                                       ▼
+//!                                                                 TreeMatches
+//!                                                            (count, nth, strict mode)
 //! ```
 //!
 //! Normal dependencies are strictly pure (`base64`, `neo-snapshot`, `prost`, `serde`,
@@ -26,6 +29,7 @@
 mod decode;
 mod decode_error;
 pub mod proto;
+pub mod refs;
 pub mod select;
 pub mod tree;
 

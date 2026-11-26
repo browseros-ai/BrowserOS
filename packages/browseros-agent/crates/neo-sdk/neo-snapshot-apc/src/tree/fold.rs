@@ -1,0 +1,1404 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::iter::FusedIterator;
+
+use crate::proto::{
+    ClickabilityReason, ContentAttributeType, ContentAttributes, ContentData, FormControlData,
+    FormControlType,
+};
+
+use super::node_key::{DocId, DomNodeId, NodeId, NodeKey};
+use super::tree_doc::TreeDoc;
+use super::tree_node::TreeNode;
+use super::{hidden, name, role};
+
+const FLAG_CLICKABLE: u8 = 1 << 0;
+const FLAG_PRUNABLE: u8 = 1 << 1;
+
+/// Pairing between an ARIA-visible zero-size `<input>` control and the visible `<label>` that
+/// receives pointer clicks on its behalf.
+///
+/// Used for visually collapsed checkbox, radio, and file inputs (`0x0` outer bounding box) so
+/// snapshot emission folds the `<label>` into the control's line and click actuation can target
+/// the pointer-receiving `<label>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClickProxy {
+    /// Arena index of the zero-size `<input>` control.
+    pub control: NodeId,
+    /// Arena index of the visible pointer-receiving `<label>` paired with [`Self::control`].
+    pub label_node: NodeId,
+    /// Composite cross-frame key of [`Self::label_node`].
+    pub label_key: NodeKey,
+}
+
+/// Option synthesized from [`FormControlData::select_options`] for a native menu-list `<select>`
+/// whose same-document subtree contains no real `<option>` elements.
+///
+/// Its manual `Debug` implementation prints structural indices, boolean states, and byte length
+/// only, never option label text.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SyntheticOption {
+    select_node: NodeId,
+    index: usize,
+    name: String,
+    selected: bool,
+    disabled: bool,
+}
+
+impl SyntheticOption {
+    /// Arena index of the owning `<select>` node.
+    #[must_use]
+    pub const fn select_node(&self) -> NodeId {
+        self.select_node
+    }
+
+    /// Zero-based position of this option inside the `<select>`'s option list.
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Normalized accessible option label text.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether this synthesized option is currently selected.
+    #[must_use]
+    pub const fn selected(&self) -> bool {
+        self.selected
+    }
+
+    /// Whether this synthesized option is disabled.
+    #[must_use]
+    pub const fn disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
+impl fmt::Debug for SyntheticOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SyntheticOption")
+            .field("select_node", &self.select_node)
+            .field("index", &self.index)
+            .field("name_len", &self.name.len())
+            .field("selected", &self.selected)
+            .field("disabled", &self.disabled)
+            .finish()
+    }
+}
+
+/// Iterative walker over direct logical children of a [`TreeNode`] in flat-tree preorder within
+/// the same document.
+///
+/// Skips `ua_shadow` text nodes and transparently descends through `ua_shadow` containers using an
+/// explicit heap stack so page-authored descendants hoist to the nearest non-`ua_shadow` ancestor
+/// in document order without crossing document boundaries.
+#[must_use]
+#[derive(Clone)]
+pub struct LogicalChildrenIter<'a> {
+    nodes: &'a [TreeNode],
+    doc: DocId,
+    stack: Vec<NodeId>,
+}
+
+impl<'a> LogicalChildrenIter<'a> {
+    fn new(nodes: &'a [TreeNode], parent: NodeId) -> Self {
+        let Some(parent_node) = nodes.get(parent.index()) else {
+            return Self::empty(nodes);
+        };
+        let doc = parent_node.doc();
+        let mut stack = Vec::new();
+        push_children_reversed(nodes, parent, doc, &mut stack);
+        Self { nodes, doc, stack }
+    }
+
+    const fn empty(nodes: &'a [TreeNode]) -> Self {
+        Self {
+            nodes,
+            doc: DocId::MAIN,
+            stack: Vec::new(),
+        }
+    }
+}
+
+impl Iterator for LogicalChildrenIter<'_> {
+    type Item = NodeId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(child_id) = self.stack.pop() {
+            let Some(child) = self.nodes.get(child_id.index()) else {
+                continue;
+            };
+            if child.doc() != self.doc {
+                continue;
+            }
+            if let Some(raw) = child.raw_attributes()
+                && hidden::is_ua_shadow(raw)
+            {
+                if !hidden::is_text_node(raw) {
+                    push_children_reversed(self.nodes, child_id, self.doc, &mut self.stack);
+                }
+                continue;
+            }
+            return Some(child_id);
+        }
+        None
+    }
+}
+
+impl FusedIterator for LogicalChildrenIter<'_> {}
+
+impl fmt::Debug for LogicalChildrenIter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LogicalChildrenIter")
+            .field("remaining_stack", &self.stack.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Precomputed logical folding and pruning overlay over a `SnapshotTree`'s flat-tree arena.
+///
+/// Keeps raw arena indices intact while exposing synthesized `<select>` options, zero-size control
+/// [`ClickProxy`] pairings, folded-label targets, clickable-container flags, plain-container
+/// pruning decisions, and `ua_shadow`-transparent logical child iteration. Its manual `Debug`
+/// implementation prints counts only, never page text or option names.
+pub struct FoldInfo {
+    click_proxies: Vec<ClickProxy>,
+    click_proxy_index: HashMap<NodeId, usize>,
+    folded_label_for: HashMap<NodeId, NodeId>,
+    synthetic_options: HashMap<NodeId, Vec<SyntheticOption>>,
+    synthetic_option_count: usize,
+    node_flags: Vec<u8>,
+    clickable_count: usize,
+    prunable_count: usize,
+}
+
+impl FoldInfo {
+    /// Returns the [`ClickProxy`] pairing for zero-size control `control`, if one was found.
+    #[must_use]
+    pub fn click_proxy(&self, control: NodeId) -> Option<&ClickProxy> {
+        self.click_proxy_index
+            .get(&control)
+            .and_then(|&index| self.click_proxies.get(index))
+    }
+
+    /// All zero-size control [`ClickProxy`] pairings in flat-tree document order.
+    #[must_use]
+    pub fn click_proxies(&self) -> &[ClickProxy] {
+        &self.click_proxies
+    }
+
+    /// Returns the paired zero-size control [`NodeId`] when `label` is folded into that control's
+    /// snapshot line.
+    #[must_use]
+    pub fn folded_label_target(&self, label: NodeId) -> Option<NodeId> {
+        self.folded_label_for.get(&label).copied()
+    }
+
+    /// Returns synthesized [`SyntheticOption`] entries for `select_node`, or an empty slice if the
+    /// node is not a menu-list `<select>` requiring option synthesis.
+    #[must_use]
+    pub fn synthetic_options(&self, select_node: NodeId) -> &[SyntheticOption] {
+        self.synthetic_options
+            .get(&select_node)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether `node` is a non-text, non-`ua_shadow` element whose `clickability_reasons` carry
+    /// [`ClickabilityReason::CursorPointer`] or [`ClickabilityReason::ClickHandler`].
+    #[must_use]
+    pub fn is_clickable_container(&self, node: NodeId) -> bool {
+        self.node_flags
+            .get(node.index())
+            .is_some_and(|&flags| (flags & FLAG_CLICKABLE) != 0)
+    }
+
+    /// Whether `node` is a plain `div`/`span` container carrying no ARIA role, clickability,
+    /// focusability, active focus, own `aria-hidden` or `inert` boundary, or accessible label
+    /// attributes, and can therefore be pruned during snapshot emission.
+    #[must_use]
+    pub fn is_plain_prunable_container(&self, node: NodeId) -> bool {
+        self.node_flags
+            .get(node.index())
+            .is_some_and(|&flags| (flags & FLAG_PRUNABLE) != 0)
+    }
+
+    /// Iterates direct logical children of `parent` within its document, transparently folding
+    /// `ua_shadow` containers while skipping `ua_shadow` text nodes.
+    pub fn logical_children<'a>(
+        &self,
+        nodes: &'a [TreeNode],
+        parent: NodeId,
+    ) -> LogicalChildrenIter<'a> {
+        if parent.index() >= self.node_flags.len() {
+            return LogicalChildrenIter::empty(nodes);
+        }
+        logical_children_iter(nodes, parent)
+    }
+}
+
+impl fmt::Debug for FoldInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FoldInfo")
+            .field("click_proxy_count", &self.click_proxies.len())
+            .field("folded_label_count", &self.folded_label_for.len())
+            .field("synthetic_select_count", &self.synthetic_options.len())
+            .field("synthetic_option_count", &self.synthetic_option_count)
+            .field("clickable_count", &self.clickable_count)
+            .field("prunable_count", &self.prunable_count)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Returns a [`LogicalChildrenIter`] over direct logical children of `parent` within its document.
+pub(crate) fn logical_children_iter(nodes: &[TreeNode], parent: NodeId) -> LogicalChildrenIter<'_> {
+    LogicalChildrenIter::new(nodes, parent)
+}
+
+/// Computes the immutable logical folding and pruning overlay for `nodes` and `docs` in O(N)
+/// iterative time.
+pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
+    let bottom_up = compute_bottom_up(nodes);
+    let top_down = compute_top_down(nodes, &bottom_up);
+    let proxies = resolve_click_proxies(
+        nodes,
+        docs,
+        &top_down.labels_for,
+        &top_down.nearest_ancestor_unlinked_label,
+        &bottom_up.first_labelable,
+    );
+
+    FoldInfo {
+        click_proxies: proxies.click_proxies,
+        click_proxy_index: proxies.click_proxy_index,
+        folded_label_for: proxies.folded_label_for,
+        synthetic_options: top_down.synthetic_options,
+        synthetic_option_count: top_down.synthetic_option_count,
+        node_flags: top_down.node_flags,
+        clickable_count: top_down.clickable_count,
+        prunable_count: top_down.prunable_count,
+    }
+}
+
+struct DescendantSummary {
+    has_real_option: Vec<bool>,
+    first_labelable: Vec<Option<NodeId>>,
+    has_live: Vec<bool>,
+}
+
+struct TopDownSummary {
+    labels_for: HashMap<(DocId, DomNodeId), Vec<NodeId>>,
+    nearest_ancestor_unlinked_label: Vec<Option<NodeId>>,
+    synthetic_options: HashMap<NodeId, Vec<SyntheticOption>>,
+    synthetic_option_count: usize,
+    node_flags: Vec<u8>,
+    clickable_count: usize,
+    prunable_count: usize,
+}
+
+struct ClickProxyTables {
+    click_proxies: Vec<ClickProxy>,
+    click_proxy_index: HashMap<NodeId, usize>,
+    folded_label_for: HashMap<NodeId, NodeId>,
+}
+
+fn push_children_reversed(
+    nodes: &[TreeNode],
+    parent_id: NodeId,
+    doc: DocId,
+    stack: &mut Vec<NodeId>,
+) {
+    let start = stack.len();
+    let mut cursor = nodes.get(parent_id.index()).and_then(TreeNode::first_child);
+    while let Some(child_id) = cursor {
+        let Some(child) = nodes.get(child_id.index()) else {
+            break;
+        };
+        if child.doc() == doc {
+            stack.push(child_id);
+        }
+        cursor = child.next_sibling();
+    }
+    if let Some(added) = stack.get_mut(start..) {
+        added.reverse();
+    }
+}
+
+fn same_doc_parent(nodes: &[TreeNode], node: &TreeNode) -> Option<NodeId> {
+    node.parent().filter(|&parent_id| {
+        nodes
+            .get(parent_id.index())
+            .is_some_and(|parent| parent.doc() == node.doc())
+    })
+}
+
+fn form_control_data(raw: &ContentAttributes) -> Option<&FormControlData> {
+    match raw.content_data.as_ref()? {
+        ContentData::FormControl(control) => Some(control),
+        _ => None,
+    }
+}
+
+fn form_control_type(raw: &ContentAttributes) -> Option<FormControlType> {
+    let control = form_control_data(raw)?;
+    FormControlType::try_from(control.form_control_type?).ok()
+}
+
+fn is_labelable_element(node: &TreeNode) -> bool {
+    let Some(raw) = node.raw_attributes() else {
+        return false;
+    };
+    if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) {
+        return false;
+    }
+    let Some(tag) = hidden::raw_tag(raw) else {
+        return false;
+    };
+    if tag.eq_ignore_ascii_case("input") {
+        return form_control_type(raw) != Some(FormControlType::InputHidden);
+    }
+    tag.eq_ignore_ascii_case("button")
+        || tag.eq_ignore_ascii_case("meter")
+        || tag.eq_ignore_ascii_case("output")
+        || tag.eq_ignore_ascii_case("progress")
+        || tag.eq_ignore_ascii_case("select")
+        || tag.eq_ignore_ascii_case("textarea")
+}
+
+fn is_unlinked_label(node: &TreeNode) -> bool {
+    let Some(raw) = node.raw_attributes() else {
+        return false;
+    };
+    if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) {
+        return false;
+    }
+    raw.label_for_dom_node_id.is_none()
+        && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("label"))
+}
+
+fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
+    let mut has_real_option = vec![false; nodes.len()];
+    let mut first_labelable: Vec<Option<NodeId>> = vec![None; nodes.len()];
+    let mut has_live = vec![false; nodes.len()];
+
+    for index in (0..nodes.len()).rev() {
+        let Some(node) = nodes.get(index) else {
+            continue;
+        };
+        let Some(parent_id) = same_doc_parent(nodes, node) else {
+            continue;
+        };
+
+        let is_real_option = node.raw_attributes().is_some_and(|raw| {
+            !hidden::is_text_node(raw)
+                && !hidden::is_ua_shadow(raw)
+                && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
+        });
+        let child_has_option = has_real_option.get(index).copied().unwrap_or(false);
+        if (is_real_option || child_has_option)
+            && let Some(parent_slot) = has_real_option.get_mut(parent_id.index())
+        {
+            *parent_slot = true;
+        }
+
+        let is_live_element = node.raw_attributes().is_some_and(|raw| {
+            !hidden::is_text_node(raw) && !hidden::is_ua_shadow(raw) && !node.state().inert()
+        });
+        let child_has_live = has_live.get(index).copied().unwrap_or(false);
+        if (is_live_element || child_has_live)
+            && let Some(parent_slot) = has_live.get_mut(parent_id.index())
+        {
+            *parent_slot = true;
+        }
+
+        let labelable_candidate = if is_labelable_element(node) {
+            Some(node.id())
+        } else {
+            first_labelable.get(index).copied().flatten()
+        };
+        if let Some(labelable_id) = labelable_candidate
+            && let Some(parent_slot) = first_labelable.get_mut(parent_id.index())
+            && parent_slot.is_none_or(|existing| labelable_id < existing)
+        {
+            *parent_slot = Some(labelable_id);
+        }
+    }
+
+    DescendantSummary {
+        has_real_option,
+        first_labelable,
+        has_live,
+    }
+}
+
+fn synthesize_select_options(
+    select_node: NodeId,
+    raw: &ContentAttributes,
+    has_real_option: bool,
+) -> Option<Vec<SyntheticOption>> {
+    if has_real_option {
+        return None;
+    }
+    let tag = hidden::raw_tag(raw)?;
+    if !tag.eq_ignore_ascii_case("select") {
+        return None;
+    }
+    let is_list_box = raw
+        .browseros
+        .as_deref()
+        .is_some_and(|browseros| browseros.list_box == Some(true));
+    if is_list_box {
+        return None;
+    }
+    let control = form_control_data(raw)?;
+    if control.select_options.is_empty() {
+        return None;
+    }
+
+    let options = control
+        .select_options
+        .iter()
+        .enumerate()
+        .map(|(index, opt)| {
+            let raw_label = match opt.text.as_deref() {
+                Some(text) => text,
+                None => opt.value.as_deref().unwrap_or(""),
+            };
+            SyntheticOption {
+                select_node,
+                index,
+                name: name::normalize_whitespace(raw_label),
+                selected: opt.is_selected == Some(true),
+                disabled: opt.is_disabled == Some(true),
+            }
+        })
+        .collect();
+    Some(options)
+}
+
+fn is_clickable_element(raw: &ContentAttributes) -> bool {
+    let Some(info) = raw.interaction_info.as_ref() else {
+        return false;
+    };
+    let cursor_pointer = i32::from(ClickabilityReason::CursorPointer);
+    let click_handler = i32::from(ClickabilityReason::ClickHandler);
+    info.clickability_reasons
+        .iter()
+        .any(|&code| code == cursor_pointer || code == click_handler)
+}
+
+fn is_focusable_element(raw: &ContentAttributes) -> bool {
+    let Some(info) = raw.interaction_info.as_ref() else {
+        return false;
+    };
+    if info.is_focusable == Some(true) {
+        return true;
+    }
+    let tab_index = i32::from(ClickabilityReason::TabIndex);
+    info.clickability_reasons.contains(&tab_index)
+}
+
+fn has_accessible_label_attr(raw: &ContentAttributes) -> bool {
+    let Some(browseros) = raw.browseros.as_deref() else {
+        return false;
+    };
+    let has_aria_label = browseros
+        .aria_label
+        .as_deref()
+        .is_some_and(|value| !role::trim_js_whitespace(value).is_empty());
+    let has_labelledby = !browseros.labelledby.is_empty();
+    let has_title = browseros
+        .title
+        .as_deref()
+        .is_some_and(|value| !role::trim_js_whitespace(value).is_empty());
+    has_aria_label || has_labelledby || has_title
+}
+
+fn is_plain_prunable_element(
+    node: &TreeNode,
+    raw: &ContentAttributes,
+    parent_logical_inert: bool,
+) -> bool {
+    if raw.attribute_type == Some(i32::from(ContentAttributeType::Root))
+        || node.is_iframe_boundary()
+    {
+        return false;
+    }
+    let is_div_or_span = hidden::raw_tag(raw)
+        .is_none_or(|tag| tag.eq_ignore_ascii_case("div") || tag.eq_ignore_ascii_case("span"));
+    if !is_div_or_span || node.role().is_some() {
+        return false;
+    }
+    if is_focusable_element(raw) || node.state().active() || node.hidden().has_own_aria_hidden() {
+        return false;
+    }
+    if node.state().inert() && !parent_logical_inert {
+        return false;
+    }
+    !has_accessible_label_attr(raw)
+}
+
+fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDownSummary {
+    let mut labels_for: HashMap<(DocId, DomNodeId), Vec<NodeId>> = HashMap::new();
+    let mut nearest_ancestor_unlinked_label: Vec<Option<NodeId>> = Vec::with_capacity(nodes.len());
+    let mut unlinked_label_for_descendants: Vec<Option<NodeId>> = Vec::with_capacity(nodes.len());
+    let mut logical_inert_for_descendants: Vec<bool> = Vec::with_capacity(nodes.len());
+    let mut synthetic_options: HashMap<NodeId, Vec<SyntheticOption>> = HashMap::new();
+    let mut synthetic_option_count: usize = 0;
+    let mut node_flags: Vec<u8> = Vec::with_capacity(nodes.len());
+    let mut clickable_count: usize = 0;
+    let mut prunable_count: usize = 0;
+
+    for (index, node) in nodes.iter().enumerate() {
+        let parent_id = same_doc_parent(nodes, node);
+        let parent_unlinked_label = parent_id
+            .and_then(|pid| unlinked_label_for_descendants.get(pid.index()).copied())
+            .flatten();
+        let parent_logical_inert = parent_id
+            .and_then(|pid| logical_inert_for_descendants.get(pid.index()).copied())
+            .unwrap_or(false);
+        let has_live = bottom_up.has_live.get(index).copied().unwrap_or(false);
+        // Only an inert ancestor with zero live descendants can itself be coalesced as `inert`;
+        // an inert ancestor protecting a live modal stays unmarked so its inert children must not
+        // prune into it.
+        let self_marks_inert = node.state().inert() && !has_live;
+
+        nearest_ancestor_unlinked_label.push(parent_unlinked_label);
+        unlinked_label_for_descendants.push(if is_unlinked_label(node) {
+            Some(node.id())
+        } else {
+            parent_unlinked_label
+        });
+
+        let Some(raw) = node.raw_attributes() else {
+            logical_inert_for_descendants.push(self_marks_inert);
+            node_flags.push(0);
+            continue;
+        };
+
+        let is_ua_shadow = hidden::is_ua_shadow(raw);
+        logical_inert_for_descendants.push(if is_ua_shadow {
+            parent_logical_inert
+        } else {
+            self_marks_inert
+        });
+
+        if is_ua_shadow || hidden::is_text_node(raw) {
+            node_flags.push(0);
+            continue;
+        }
+
+        if let Some(target_dom) = raw.label_for_dom_node_id
+            && hidden::raw_tag(raw).is_none_or(|tag| tag.eq_ignore_ascii_case("label"))
+        {
+            labels_for
+                .entry((node.doc(), DomNodeId::new(target_dom)))
+                .or_default()
+                .push(node.id());
+        }
+
+        let has_real_option = bottom_up
+            .has_real_option
+            .get(index)
+            .copied()
+            .unwrap_or(false);
+        if let Some(options) = synthesize_select_options(node.id(), raw, has_real_option) {
+            synthetic_option_count += options.len();
+            synthetic_options.insert(node.id(), options);
+        }
+
+        let is_clickable = is_clickable_element(raw);
+        let is_prunable =
+            !is_clickable && is_plain_prunable_element(node, raw, parent_logical_inert);
+        let mut flags: u8 = 0;
+        if is_clickable {
+            flags |= FLAG_CLICKABLE;
+            clickable_count += 1;
+        }
+        if is_prunable {
+            flags |= FLAG_PRUNABLE;
+            prunable_count += 1;
+        }
+        node_flags.push(flags);
+    }
+
+    TopDownSummary {
+        labels_for,
+        nearest_ancestor_unlinked_label,
+        synthetic_options,
+        synthetic_option_count,
+        node_flags,
+        clickable_count,
+        prunable_count,
+    }
+}
+
+fn zero_size_control_dom_id(node: &TreeNode) -> Option<DomNodeId> {
+    let raw = node.raw_attributes()?;
+    if hidden::is_text_node(raw) || hidden::is_ua_shadow(raw) {
+        return None;
+    }
+    let tag = hidden::raw_tag(raw)?;
+    if !tag.eq_ignore_ascii_case("input") {
+        return None;
+    }
+    if !matches!(
+        form_control_type(raw),
+        Some(
+            FormControlType::InputCheckbox
+                | FormControlType::InputRadio
+                | FormControlType::InputFile
+        )
+    ) {
+        return None;
+    }
+    let dom_id = node.dom_node_id()?;
+    let hidden = node.hidden();
+    if hidden.is_hidden_for_aria() || hidden.is_display_contents() || hidden.is_box_visible() {
+        return None;
+    }
+    Some(dom_id)
+}
+
+fn qualifies_as_click_proxy_label(nodes: &[TreeNode], docs: &[TreeDoc], id: NodeId) -> bool {
+    let Some(label) = nodes.get(id.index()) else {
+        return false;
+    };
+    if label.dom_node_id().is_none() || docs.get(label.doc().index()).is_none() {
+        return false;
+    }
+    let hidden = label.hidden();
+    !hidden.is_ua_shadow()
+        && !hidden.is_hidden_for_aria()
+        && hidden.is_box_visible()
+        && hidden.receives_pointer_events()
+}
+
+fn node_key_for(nodes: &[TreeNode], docs: &[TreeDoc], id: NodeId) -> Option<NodeKey> {
+    let node = nodes.get(id.index())?;
+    let dom_id = node.dom_node_id()?;
+    let doc = docs.get(node.doc().index())?;
+    Some(NodeKey::new(doc.token().clone(), dom_id))
+}
+
+fn resolve_click_proxies(
+    nodes: &[TreeNode],
+    docs: &[TreeDoc],
+    labels_for: &HashMap<(DocId, DomNodeId), Vec<NodeId>>,
+    nearest_ancestor_unlinked_label: &[Option<NodeId>],
+    first_labelable_descendant: &[Option<NodeId>],
+) -> ClickProxyTables {
+    let mut click_proxies = Vec::new();
+    let mut click_proxy_index = HashMap::new();
+    let mut folded_label_for = HashMap::new();
+
+    for node in nodes {
+        let Some(control_dom_id) = zero_size_control_dom_id(node) else {
+            continue;
+        };
+
+        let explicit_label = labels_for
+            .get(&(node.doc(), control_dom_id))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|&label_id| qualifies_as_click_proxy_label(nodes, docs, label_id))
+            });
+
+        let wrapping_label = nearest_ancestor_unlinked_label
+            .get(node.id().index())
+            .copied()
+            .flatten()
+            .filter(|&label_id| {
+                first_labelable_descendant
+                    .get(label_id.index())
+                    .copied()
+                    .flatten()
+                    == Some(node.id())
+            })
+            .filter(|&label_id| qualifies_as_click_proxy_label(nodes, docs, label_id));
+
+        let chosen_label = match (explicit_label, wrapping_label) {
+            (Some(explicit), Some(wrapping)) => Some(explicit.min(wrapping)),
+            (Some(explicit), None) => Some(explicit),
+            (None, Some(wrapping)) => Some(wrapping),
+            (None, None) => None,
+        };
+
+        if let Some(label_node) = chosen_label
+            && let Some(label_key) = node_key_for(nodes, docs, label_node)
+        {
+            let proxy_index = click_proxies.len();
+            click_proxies.push(ClickProxy {
+                control: node.id(),
+                label_node,
+                label_key,
+            });
+            click_proxy_index.insert(node.id(), proxy_index);
+            folded_label_for.entry(label_node).or_insert(node.id());
+        }
+    }
+
+    ClickProxyTables {
+        click_proxies,
+        click_proxy_index,
+        folded_label_for,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::thread;
+
+    use crate::proto::{
+        AnnotatedRole, BrowserOsContentAttributes, BrowserOsRef, ClickabilityReason,
+        FormControlType, SelectOption,
+    };
+    use crate::tree::{
+        ApcBuilder, BuildOptions, DocToken, DomNodeId, FrameBuilder, NodeBuilder, NodeId, NodeKey,
+        PartialIframeSpec, SnapshotTree, TreeNode,
+    };
+
+    use super::{ClickProxy, compute_fold, logical_children_iter};
+
+    fn build_tree(root: NodeBuilder) -> Result<SnapshotTree, Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-main").root(root).build();
+        Ok(SnapshotTree::build(apc, BuildOptions::default())?)
+    }
+
+    fn node_id(
+        tree: &SnapshotTree,
+        doc_token: &str,
+        dom_id: i32,
+    ) -> Result<NodeId, Box<dyn Error>> {
+        let token = DocToken::new(doc_token).ok_or("empty doc token")?;
+        let key = NodeKey::new(token, DomNodeId::new(dom_id));
+        tree.node_by_key(&key)
+            .map(TreeNode::id)
+            .ok_or_else(|| format!("missing node ({doc_token}, {dom_id})").into())
+    }
+
+    #[test]
+    fn ua_shadow_fold_hoists_descendants_and_stops_at_doc_boundaries() -> Result<(), Box<dyn Error>>
+    {
+        let iframe = FrameBuilder::new("doc-iframe").root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(NodeBuilder::element("p").dom_id(2)),
+        );
+
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(NodeBuilder::element("header").dom_id(10))
+                .child(
+                    NodeBuilder::element("details")
+                        .dom_id(20)
+                        .child(
+                            NodeBuilder::container()
+                                .ua_shadow(true)
+                                .child(NodeBuilder::text("MARKER").ua_shadow(true))
+                                .child(NodeBuilder::element("summary").dom_id(21))
+                                .child(
+                                    NodeBuilder::container()
+                                        .ua_shadow(true)
+                                        .annotated_role(AnnotatedRole::ContentHidden)
+                                        .child(NodeBuilder::element("p").dom_id(22)),
+                                ),
+                        )
+                        .child(NodeBuilder::element("footer").dom_id(23)),
+                )
+                .child(NodeBuilder::iframe(iframe).dom_id(30)),
+        )?;
+
+        let fold = compute_fold(tree.nodes(), tree.documents());
+        let details = node_id(&tree, "doc-main", 20)?;
+        let summary = node_id(&tree, "doc-main", 21)?;
+        let hidden_body = node_id(&tree, "doc-main", 22)?;
+        let footer = node_id(&tree, "doc-main", 23)?;
+        let iframe_node = node_id(&tree, "doc-main", 30)?;
+
+        let mut iter = fold.logical_children(tree.nodes(), details);
+        let iter_dbg = format!("{iter:?}");
+        assert!(
+            iter_dbg.contains("remaining_stack"),
+            "LogicalChildrenIter Debug must report remaining_stack"
+        );
+        let hoisted: Vec<NodeId> = iter.by_ref().collect();
+        assert_eq!(
+            hoisted,
+            [summary, hidden_body, footer],
+            "ua_shadow text must be skipped while slotted descendants hoist in document order"
+        );
+        assert_eq!(
+            iter.next(),
+            None,
+            "LogicalChildrenIter must remain fused after exhaustion"
+        );
+        assert!(
+            tree.node(hidden_body)
+                .is_some_and(|node| node.hidden().is_content_hidden()),
+            "hoisted child under ContentHidden ua_shadow slot must retain is_content_hidden"
+        );
+
+        let iframe_logical: Vec<NodeId> =
+            logical_children_iter(tree.nodes(), iframe_node).collect();
+        assert!(
+            iframe_logical.is_empty(),
+            "logical children must stop at document boundaries"
+        );
+
+        let oob: Vec<NodeId> = fold
+            .logical_children(tree.nodes(), NodeId::new(9_999))
+            .collect();
+        assert!(oob.is_empty(), "out-of-bounds NodeId must yield empty");
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_select_options_normalize_text_and_redact_debug() -> Result<(), Box<dyn Error>> {
+        let secret_opt = "SECRET_OPTION_TEXT_42";
+        let tree = build_tree(
+            NodeBuilder::root().dom_id(1).child(
+                NodeBuilder::form_control(FormControlType::SelectOne)
+                    .tag("select")
+                    .dom_id(10)
+                    .select_option(SelectOption {
+                        value: Some("v1".to_owned()),
+                        text: Some(format!("  {secret_opt}\u{00A0}A  ")),
+                        is_selected: Some(true),
+                        is_disabled: Some(false),
+                    })
+                    .select_option(SelectOption {
+                        value: Some("  Fallback\tValue  ".to_owned()),
+                        text: None,
+                        is_selected: None,
+                        is_disabled: Some(true),
+                    })
+                    .select_option(SelectOption {
+                        value: Some("unused-value".to_owned()),
+                        text: Some(String::new()),
+                        is_selected: Some(false),
+                        is_disabled: None,
+                    }),
+            ),
+        )?;
+
+        let fold = compute_fold(tree.nodes(), tree.documents());
+        let menu_select = node_id(&tree, "doc-main", 10)?;
+        let synth = fold.synthetic_options(menu_select);
+        assert_eq!(synth.len(), 3, "menu-list select must synthesize 3 options");
+
+        let first = synth.first().ok_or("missing first synthetic option")?;
+        assert_eq!(first.select_node(), menu_select);
+        assert_eq!(first.index(), 0);
+        assert_eq!(first.name(), format!("{secret_opt} A"));
+        assert!(first.selected());
+        assert!(!first.disabled());
+
+        let second = synth.get(1).ok_or("missing second synthetic option")?;
+        assert_eq!(second.index(), 1);
+        assert_eq!(second.name(), "Fallback Value");
+        assert!(!second.selected());
+        assert!(second.disabled());
+
+        let third = synth.get(2).ok_or("missing third synthetic option")?;
+        assert_eq!(third.index(), 2);
+        assert_eq!(
+            third.name(),
+            "",
+            "explicit empty text must not fall back to value"
+        );
+
+        let opt_dbg = format!("{first:?}");
+        let fold_dbg = format!("{fold:?}");
+        assert!(
+            !opt_dbg.contains(secret_opt),
+            "SyntheticOption Debug must never expose option name text"
+        );
+        assert!(
+            !fold_dbg.contains(secret_opt),
+            "FoldInfo Debug must never expose option name text"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_select_options_skip_listbox_and_real_options_within_same_doc()
+    -> Result<(), Box<dyn Error>> {
+        let iframe_with_option = FrameBuilder::new("doc-iframe").root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(NodeBuilder::element("option").dom_id(2)),
+        );
+
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::form_control(FormControlType::SelectMultiple)
+                        .tag("select")
+                        .dom_id(20)
+                        .list_box(true)
+                        .select_option(SelectOption {
+                            value: Some("lb".to_owned()),
+                            text: Some("ShouldNotSynthesize".to_owned()),
+                            is_selected: Some(true),
+                            is_disabled: None,
+                        }),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::SelectOne)
+                        .tag("select")
+                        .dom_id(30)
+                        .select_option(SelectOption {
+                            value: Some("dup".to_owned()),
+                            text: Some("Duplicate".to_owned()),
+                            is_selected: Some(true),
+                            is_disabled: None,
+                        })
+                        .child(
+                            NodeBuilder::element("optgroup")
+                                .dom_id(31)
+                                .child(NodeBuilder::element("option").dom_id(32)),
+                        ),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::SelectOne)
+                        .tag("select")
+                        .dom_id(40)
+                        .select_option(SelectOption {
+                            value: Some("x".to_owned()),
+                            text: Some("CrossDocAllowed".to_owned()),
+                            is_selected: Some(false),
+                            is_disabled: None,
+                        })
+                        .child(NodeBuilder::iframe(iframe_with_option).dom_id(41)),
+                ),
+        )?;
+
+        let fold = compute_fold(tree.nodes(), tree.documents());
+        let listbox_select = node_id(&tree, "doc-main", 20)?;
+        let real_opt_select = node_id(&tree, "doc-main", 30)?;
+        let iframe_select = node_id(&tree, "doc-main", 40)?;
+
+        assert!(
+            fold.synthetic_options(listbox_select).is_empty(),
+            "list_box == Some(true) must never synthesize options"
+        );
+        assert!(
+            fold.synthetic_options(real_opt_select).is_empty(),
+            "select with real descendant <option> must not synthesize options"
+        );
+        assert_eq!(
+            fold.synthetic_options(iframe_select).len(),
+            1,
+            "<option> inside nested child_doc iframe must not suppress synthesis"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn click_proxy_pairs_explicit_labels_and_isolates_iframes() -> Result<(), Box<dyn Error>> {
+        let iframe = FrameBuilder::new("doc-iframe").root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputFile)
+                        .tag("input")
+                        .dom_id(10)
+                        .bounding_box(0, 0, 0, 0),
+                )
+                .child(
+                    NodeBuilder::container()
+                        .dom_id(11)
+                        .label_for(10)
+                        .bounding_box(0, 0, 80, 24),
+                ),
+        );
+
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::element("label")
+                        .dom_id(100)
+                        .label_for(10)
+                        .aria_hidden(true)
+                        .bounding_box(0, 0, 80, 24),
+                )
+                .child(
+                    NodeBuilder::element("label")
+                        .dom_id(101)
+                        .label_for(10)
+                        .pointer_events_none(true)
+                        .bounding_box(0, 0, 80, 24),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputCheckbox)
+                        .tag("input")
+                        .dom_id(10)
+                        .bounding_box(0, 0, 0, 0),
+                )
+                .child(
+                    NodeBuilder::element("label")
+                        .dom_id(102)
+                        .label_for(10)
+                        .bounding_box(0, 0, 80, 24),
+                )
+                .child(NodeBuilder::iframe(iframe).dom_id(400)),
+        )?;
+
+        let fold = compute_fold(tree.nodes(), tree.documents());
+        let checkbox = node_id(&tree, "doc-main", 10)?;
+        let good_label = node_id(&tree, "doc-main", 102)?;
+        let iframe_file = node_id(&tree, "doc-iframe", 10)?;
+        let iframe_label = node_id(&tree, "doc-iframe", 11)?;
+
+        let main_token = DocToken::new("doc-main").ok_or("empty main token")?;
+        let iframe_token = DocToken::new("doc-iframe").ok_or("empty iframe token")?;
+        let expected = [
+            ClickProxy {
+                control: checkbox,
+                label_node: good_label,
+                label_key: NodeKey::new(main_token, DomNodeId::new(102)),
+            },
+            ClickProxy {
+                control: iframe_file,
+                label_node: iframe_label,
+                label_key: NodeKey::new(iframe_token, DomNodeId::new(11)),
+            },
+        ];
+
+        assert_eq!(
+            fold.click_proxies(),
+            expected,
+            "click proxies must appear in document order with doc-scoped keys"
+        );
+        assert_eq!(fold.click_proxy(checkbox), expected.first());
+        assert_eq!(fold.folded_label_target(good_label), Some(checkbox));
+        assert_eq!(fold.folded_label_target(iframe_label), Some(iframe_file));
+        Ok(())
+    }
+
+    #[test]
+    fn click_proxy_pairs_wrapping_label_for_first_labelable_only() -> Result<(), Box<dyn Error>> {
+        let tree = build_tree(
+            NodeBuilder::root().dom_id(1).child(
+                NodeBuilder::element("label")
+                    .dom_id(200)
+                    .bounding_box(0, 0, 100, 24)
+                    .child(
+                        NodeBuilder::form_control(FormControlType::InputHidden)
+                            .tag("input")
+                            .dom_id(201),
+                    )
+                    .child(
+                        NodeBuilder::form_control(FormControlType::InputRadio)
+                            .tag("input")
+                            .dom_id(202)
+                            .bounding_box(0, 0, 0, 0),
+                    )
+                    .child(
+                        NodeBuilder::form_control(FormControlType::InputCheckbox)
+                            .tag("input")
+                            .dom_id(203)
+                            .bounding_box(0, 0, 0, 0),
+                    ),
+            ),
+        )?;
+
+        let fold = compute_fold(tree.nodes(), tree.documents());
+        let wrap_label = node_id(&tree, "doc-main", 200)?;
+        let wrapped_radio = node_id(&tree, "doc-main", 202)?;
+        let second_wrapped = node_id(&tree, "doc-main", 203)?;
+        let main_token = DocToken::new("doc-main").ok_or("empty main token")?;
+
+        assert_eq!(
+            fold.click_proxy(wrapped_radio),
+            Some(&ClickProxy {
+                control: wrapped_radio,
+                label_node: wrap_label,
+                label_key: NodeKey::new(main_token, DomNodeId::new(200)),
+            }),
+            "unlinked wrapping <label> must skip InputHidden and pair with first labelable control"
+        );
+        assert_eq!(fold.folded_label_target(wrap_label), Some(wrapped_radio));
+        assert_eq!(
+            fold.click_proxy(second_wrapped),
+            None,
+            "second labelable descendant under wrapping <label> must not pair"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn click_proxy_rejects_display_contents_visible_and_non_target_inputs()
+    -> Result<(), Box<dyn Error>> {
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputCheckbox)
+                        .tag("input")
+                        .dom_id(300)
+                        .display_contents(true)
+                        .bounding_box(0, 0, 0, 0)
+                        .child(NodeBuilder::element("span").bounding_box(0, 0, 0, 0)),
+                )
+                .child(
+                    NodeBuilder::element("label")
+                        .dom_id(301)
+                        .label_for(300)
+                        .bounding_box(0, 0, 80, 24),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputCheckbox)
+                        .tag("input")
+                        .dom_id(310)
+                        .bounding_box(0, 0, 16, 16),
+                )
+                .child(
+                    NodeBuilder::element("label")
+                        .dom_id(311)
+                        .label_for(310)
+                        .bounding_box(0, 0, 80, 24),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputText)
+                        .tag("input")
+                        .dom_id(320)
+                        .bounding_box(0, 0, 0, 0),
+                )
+                .child(
+                    NodeBuilder::element("label")
+                        .dom_id(321)
+                        .label_for(320)
+                        .bounding_box(0, 0, 80, 24),
+                ),
+        )?;
+
+        let fold = compute_fold(tree.nodes(), tree.documents());
+        let display_contents_cb = node_id(&tree, "doc-main", 300)?;
+        let visible_cb = node_id(&tree, "doc-main", 310)?;
+        let text_input = node_id(&tree, "doc-main", 320)?;
+
+        assert!(
+            tree.node(display_contents_cb)
+                .is_some_and(|node| !node.hidden().is_hidden_for_aria()),
+            "display: contents fixture must remain ARIA-visible so display: contents is the exclusion"
+        );
+        assert_eq!(
+            fold.click_proxy(display_contents_cb),
+            None,
+            "display: contents input must never be taken as a zero-size control"
+        );
+        assert_eq!(
+            fold.click_proxy(visible_cb),
+            None,
+            "box-visible checkbox must not get a click proxy"
+        );
+        assert_eq!(
+            fold.click_proxy(text_input),
+            None,
+            "non-checkbox/radio/file input must not get a click proxy"
+        );
+        assert!(fold.click_proxies().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn clickable_and_basic_prunable_container_rules() -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-main")
+            .main_focused_node_id(40)
+            .root(
+                NodeBuilder::root()
+                    .dom_id(1)
+                    .child(NodeBuilder::container().dom_id(10))
+                    .child(NodeBuilder::element("div").dom_id(11))
+                    .child(NodeBuilder::element("SPAN").dom_id(12))
+                    .child(
+                        NodeBuilder::element("div")
+                            .dom_id(20)
+                            .clickability_reason(ClickabilityReason::CursorPointer),
+                    )
+                    .child(
+                        NodeBuilder::element("span")
+                            .dom_id(21)
+                            .clickability_reason(ClickabilityReason::ClickHandler),
+                    )
+                    .child(
+                        NodeBuilder::element("div")
+                            .dom_id(22)
+                            .clickability_reason(ClickabilityReason::HoverPseudoClass),
+                    )
+                    .child(NodeBuilder::element("div").dom_id(30).focusable(true))
+                    .child(
+                        NodeBuilder::element("div")
+                            .dom_id(31)
+                            .clickability_reason(ClickabilityReason::TabIndex),
+                    )
+                    .child(NodeBuilder::element("div").dom_id(40))
+                    .child(NodeBuilder::element("div").dom_id(73).role("generic"))
+                    .child(NodeBuilder::element("section").dom_id(74))
+                    .child(NodeBuilder::partial_iframe(PartialIframeSpec::CrossSite).dom_id(75)),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::default())?;
+        let fold = compute_fold(tree.nodes(), tree.documents());
+
+        for dom in [10, 11, 12, 22] {
+            let id = node_id(&tree, "doc-main", dom)?;
+            assert!(
+                fold.is_plain_prunable_container(id),
+                "dom_id {dom} must be a plain prunable container"
+            );
+        }
+        for dom in [1, 20, 21, 30, 31, 40, 73, 74, 75] {
+            let id = node_id(&tree, "doc-main", dom)?;
+            assert!(
+                !fold.is_plain_prunable_container(id),
+                "dom_id {dom} must NOT be pruned"
+            );
+        }
+
+        assert!(fold.is_clickable_container(node_id(&tree, "doc-main", 20)?));
+        assert!(fold.is_clickable_container(node_id(&tree, "doc-main", 21)?));
+        assert!(!fold.is_clickable_container(node_id(&tree, "doc-main", 22)?));
+        Ok(())
+    }
+
+    #[test]
+    fn prunable_container_respects_aria_hidden_inert_and_label_boundaries()
+    -> Result<(), Box<dyn Error>> {
+        let tree = build_tree(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(13)
+                        .aria_label(" \t\u{00A0}\u{FEFF} ")
+                        .title("  "),
+                )
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(50)
+                        .aria_hidden(true)
+                        .child(NodeBuilder::element("div").dom_id(51)),
+                )
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(60)
+                        .inert(true)
+                        .child(
+                            NodeBuilder::container()
+                                .ua_shadow(true)
+                                .child(NodeBuilder::element("div").dom_id(61).inert(true)),
+                        )
+                        .child(
+                            NodeBuilder::element("dialog")
+                                .dom_id(62)
+                                .child(NodeBuilder::element("div").dom_id(63).inert(true)),
+                        ),
+                )
+                .child(
+                    NodeBuilder::element("div").dom_id(64).inert(true).child(
+                        NodeBuilder::container()
+                            .ua_shadow(true)
+                            .child(NodeBuilder::element("div").dom_id(65).inert(true)),
+                    ),
+                )
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(70)
+                        .aria_label("\u{0085}"),
+                )
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(71)
+                        .labelledby(vec![BrowserOsRef {
+                            dom_node_id: None,
+                            unrendered_text: Some("Label".to_owned()),
+                        }]),
+                )
+                .child(NodeBuilder::element("div").dom_id(72).title("Hint")),
+        )?;
+        let fold = compute_fold(tree.nodes(), tree.documents());
+
+        for dom in [13, 51, 65] {
+            let id = node_id(&tree, "doc-main", dom)?;
+            assert!(
+                fold.is_plain_prunable_container(id),
+                "dom_id {dom} must be prunable (blank attrs or pure inherited boundary)"
+            );
+        }
+        for dom in [50, 60, 61, 62, 63, 64, 70, 71, 72] {
+            let id = node_id(&tree, "doc-main", dom)?;
+            assert!(
+                !fold.is_plain_prunable_container(id),
+                "dom_id {dom} must NOT be pruned (own boundary, live-protecting inert parent, or non-blank label)"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn deep_ua_shadow_and_container_chain_folds_iteratively_without_stack_overflow()
+    -> Result<(), Box<dyn Error>> {
+        let handle = thread::Builder::new()
+            .name("fold-deep-stack-test".to_owned())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| -> Result<(usize, usize), String> {
+                let mut apc = ApcBuilder::deep_chain(25_000);
+                if let Some(root) = apc.root_node.as_mut() {
+                    let mut cursor = root;
+                    let mut depth: usize = 0;
+                    while let Some(child) = cursor.children_nodes.first_mut() {
+                        depth += 1;
+                        if depth < 24_999
+                            && let Some(attrs) = child.content_attributes.as_mut()
+                        {
+                            attrs.browseros = Some(Box::new(BrowserOsContentAttributes {
+                                ua_shadow: Some(true),
+                                ..BrowserOsContentAttributes::default()
+                            }));
+                        }
+                        cursor = child;
+                    }
+                }
+
+                let tree = SnapshotTree::build(apc, BuildOptions::default())
+                    .map_err(|err| err.to_string())?;
+                let fold = compute_fold(tree.nodes(), tree.documents());
+                let hoisted: Vec<NodeId> = fold
+                    .logical_children(tree.nodes(), NodeId::new(0))
+                    .collect();
+                let last_id =
+                    NodeId::new(u32::try_from(tree.nodes().len().saturating_sub(1)).unwrap_or(0));
+                if hoisted.as_slice() != [last_id] {
+                    return Err(format!(
+                        "expected hoisted leaf {last_id:?}, got {hoisted:?}"
+                    ));
+                }
+                let prunable_leaf = usize::from(fold.is_plain_prunable_container(last_id));
+                Ok((hoisted.len(), prunable_leaf))
+            })?;
+
+        let (hoisted_count, prunable_leaf) = handle.join().map_err(|panic_payload| {
+            format!("deep stack test thread panicked: {panic_payload:?}")
+        })??;
+        assert_eq!(
+            hoisted_count, 1,
+            "25,000-deep ua_shadow chain must hoist the single page leaf iteratively"
+        );
+        assert_eq!(
+            prunable_leaf, 1,
+            "page leaf at bottom of 25,000-deep ua_shadow chain must be prunable"
+        );
+        Ok(())
+    }
+}
