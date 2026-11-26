@@ -2200,9 +2200,19 @@ fn assert_frameset_nesting(main: &[&ContentNode]) -> TestResult {
     Ok(())
 }
 
+/// The CDP frame id of the document a frame node holds; `None` when it holds no document.
+fn node_frame_token(node: &ContentNode) -> Option<&str> {
+    frame_data(node)?
+        .browseros
+        .as_ref()?
+        .devtools_frame_token
+        .as_deref()
+}
+
 /// Under the third frame: its document's frameset, a frame, the leaf document, and in it a
-/// button and an iframe with a document of its own.
-fn assert_nested_frameset_document(nested: &ContentNode) -> TestResult {
+/// button and an iframe with a document of its own. Both nested frame nodes must carry their
+/// documents' frame data, as the top-level frames do, not just text.
+fn assert_nested_frameset_document(nested: &ContentNode, cdp: &CdpFrames) -> TestResult {
     let nested_frameset = descendants(nested)
         .into_iter()
         .find(|node| tag_of(node) == Some("frameset"))
@@ -2224,6 +2234,14 @@ fn assert_nested_frameset_document(nested: &ContentNode) -> TestResult {
         holds_text(srcdoc, "Srcdoc button"),
         "the leaf's iframe holds a document of its own"
     );
+    for (name, node) in [("the leaf frame", leaf), ("the leaf's iframe", srcdoc)] {
+        let token = node_frame_token(node)
+            .ok_or_else(|| format!("{name} holds no document with a frame token"))?;
+        assert!(
+            cdp.knows(token),
+            "{name}'s document token {token} is a CDP frame id, known {cdp:?}"
+        );
+    }
     Ok(())
 }
 
@@ -2273,9 +2291,7 @@ async fn p19_frameset_frames_arrive_as_iframe_nodes() -> TestResult {
                     json!("FRAME"),
                     "frame {index}'s node id resolves to its <frame>"
                 );
-                let token = frame_data(frame)
-                    .and_then(|data| data.browseros.as_ref())
-                    .and_then(|facts| facts.devtools_frame_token.as_deref())
+                let token = node_frame_token(frame)
                     .ok_or_else(|| format!("frame {index} holds no document with a frame token"))?;
                 assert!(
                     cdp.knows(token),
@@ -2295,7 +2311,7 @@ async fn p19_frameset_frames_arrive_as_iframe_nodes() -> TestResult {
             );
 
             assert_frameset_nesting(&main)?;
-            assert_nested_frameset_document(nested)
+            assert_nested_frameset_document(nested, &cdp)
         },
     )
     .await
