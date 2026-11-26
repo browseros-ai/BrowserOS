@@ -278,6 +278,75 @@ pub(crate) enum ProbeRequest {
         #[ts(optional)]
         value: Option<String>,
     },
+    /// One page stage of a chunk that mixes tree and page parts (apc-engine-design 5.4, Rust's
+    /// `ChunkRun`). `selector` runs as upstream's `querySelectorAll` from the call's root (the
+    /// document, or an element handle's node), starting from `from`'s elements when an earlier
+    /// stage handed a set over. While it runs, a part `internal:neo-below=<i>` stands for the
+    /// members of `sets[i]` strictly inside its root, and `internal:neo-inside=<i>` for the same
+    /// with the root itself: the role and `aria-ref` parts Rust evaluated over the whole document,
+    /// so the page's own loop applies `nth`, `has`, `and`, `or`, `chain` and layout to them with
+    /// upstream's roots. Answers `staged`; `strict` when `strict` is set and more than one element
+    /// matched; `detached` when a member of `from` is gone.
+    Stage {
+        selector: ParsedSelector,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        from: Option<Vec<SetMember>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(optional, as = "Option<Vec<StageSet>>")]
+        sets: Vec<StageSet>,
+        /// The whole chunk as the prelude sent it, when this stage ends a strict locator: the
+        /// violation's message is upstream's `strictModeViolationError` for it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        strict: Option<ParsedSelector>,
+    },
+    /// The page's words for elements Rust selected (design 5.5): each member's `previewNode` and
+    /// the locator upstream's `generateSelectorSimple` writes for it, and `chunk`'s own locator
+    /// text, which are the lines of a strict-mode violation. Answers `pinsDescribed`, or
+    /// `detached` when a member is gone.
+    DescribePins {
+        members: Vec<SetMember>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        chunk: Option<ParsedSelector>,
+    },
+    /// The main frame's cover survey (design 8.2) with no aria snapshot under it: the survey
+    /// tests the page's own controls, and every element its answer names comes back pinned, for
+    /// Rust to name from the tree. Answers `surveyed`.
+    CoverSurvey,
+    /// Every element of this document that carries the private entry's mark (design 8.1),
+    /// pinned: how Rust's private-node mirror learns the marks of a document that an earlier
+    /// `Playwright` filled. Answers `marks`.
+    PrivateMarks,
+}
+
+/// An element, or the document, that a request names and this world already holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum SetMember {
+    /// An element this world pinned: an earlier stage's match, or a hydrated key.
+    Pin(Pin),
+    /// The call's `n`-th node after its root ([`super::call_with_nodes`]): an element Rust has
+    /// just hydrated in this world (`DOM.resolveNode`, design 6.2). The probe takes it only while
+    /// it is connected and its `ownerDocument` is this world's document.
+    Node(u32),
+    /// The frame's Document, which a set holds only when `nth` or `internal:or` kept the chunk's
+    /// query root.
+    Document,
+}
+
+/// One candidate set of a `stage`: what one tree part matched over the frame's whole document,
+/// in tree order, or the error that part raised.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum StageSet {
+    /// The matches. A member that is gone, or no longer in this document, matches nothing: the
+    /// stage filters a candidate set by containment and never starts from one.
+    Members(Vec<SetMember>),
+    /// The part's error, such as an invalid role body, thrown as upstream's engine throws it:
+    /// only once a root reaches the part.
+    Error(String),
 }
 
 /// Which Storage a `webStorage` request uses.

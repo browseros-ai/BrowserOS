@@ -25,7 +25,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 53;
+pub(crate) const PROBE_PROTOCOL: u32 = 54;
 
 /// One message template for page-side and stitched depth refusals. The numeric reply field,
 /// rather than these words, identifies a child that must become partial.
@@ -250,6 +250,30 @@ pub(crate) enum ProbeReply {
     },
     /// `setContent` replaced the document's content; the world stays booted under its seq.
     Replaced,
+    /// A `stage`'s matches in upstream's order, every element pinned in one entry so Rust can
+    /// transfer them before any is evicted.
+    Staged {
+        matches: Vec<StageMatch>,
+    },
+    /// `describePins`: the chunk's locator text when the request sent one, and the page's words
+    /// for each member, in order.
+    PinsDescribed {
+        #[serde(default)]
+        #[ts(optional)]
+        locator: Option<String>,
+        items: Vec<PinPreview>,
+    },
+    /// `coverSurvey`'s layers, with every element they name pinned in one entry.
+    Surveyed {
+        layers: Vec<PinnedLayer>,
+        tested: u32,
+        survey_ms: f64,
+        phases: SurveyPhases,
+    },
+    /// `privateMarks`: every marked element of the document, pinned in one entry.
+    Marks {
+        pins: Vec<Pin>,
+    },
     /// An error thrown in the page, classified by the probe.
     Error {
         message: String,
@@ -334,6 +358,10 @@ impl ProbeReply {
             Self::UrlMatch { .. } => "urlMatch",
             Self::DocumentText { .. } => "documentText",
             Self::Replaced => "replaced",
+            Self::Staged { .. } => "staged",
+            Self::PinsDescribed { .. } => "pinsDescribed",
+            Self::Surveyed { .. } => "surveyed",
+            Self::Marks { .. } => "marks",
             Self::Error { .. } => "error",
             Self::Uninstalled => "uninstalled",
         }
@@ -516,6 +544,46 @@ pub(crate) struct SurveyLayer {
     #[serde(default)]
     #[ts(optional, type = "string")]
     pub(crate) first_words: Option<PageText>,
+}
+
+/// A layer `coverSurvey` found, with the elements its answer names pinned (design 8.2). Rust
+/// reads their role, name and ref from the tree and words the layer as a [`SurveyLayer`] is
+/// worded.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PinnedLayer {
+    /// The element the layer is named by.
+    pub(crate) pin: Pin,
+    pub(crate) blank: bool,
+    pub(crate) loading: bool,
+    pub(crate) whole_view: bool,
+    /// The layer's controls that take the pointer, in the survey's order.
+    pub(crate) controls: Vec<Pin>,
+    #[serde(default)]
+    #[ts(optional, type = "string")]
+    pub(crate) first_words: Option<PageText>,
+    /// For a whole-view layer with words, the elements that hold it: the top-most tree nodes
+    /// under them take the `onTop` mark. Empty for every other layer.
+    pub(crate) holders: Vec<Pin>,
+}
+
+/// One match of a `stage`: a pinned element, or the Document when `nth` or `internal:or` kept
+/// the chunk's query root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum StageMatch {
+    Pin(Pin),
+    Document,
+}
+
+/// The page's words for one element: upstream's `previewNode`, and the locator its
+/// `generateSelectorSimple` writes, as `asLocator` prints it. The page masks both as it masks
+/// any failure output.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PinPreview {
+    pub(crate) preview: String,
+    pub(crate) aka: String,
 }
 
 /// One control of a cover that takes the pointer.

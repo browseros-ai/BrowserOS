@@ -14,6 +14,8 @@ browseros-core = { workspace = true, features = ["ts-rs"] }
 neo-trace.workspace = true
 # The aria snapshot tree's type (`AriaNode`): each frame's reply is read into it, stitched, served.
 neo-snapshot.workspace = true
+# Pure-Rust APC decoder and normalized SnapshotTree engine backing TabTree captures.
+neo-snapshot-apc.workspace = true
 # Tall native-tab screenshots are joined one PNG row at a time, without a full RGBA bitmap.
 png.workspace = true
 base64.workspace = true
@@ -42,6 +44,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Hand-built APC fixtures (`ApcBuilder`) for offline TabTree, hydration, and capture tests.
+neo-snapshot-apc = { workspace = true, features = ["test-support"] }
 # Runner N (tests/support/js_runner.rs) runs the real prelude in the engine claw-sdk ships it
 # in, at the workspace pin claw-sdk's runtime uses. Dev-only: the crate itself never runs JS.
 rquickjs.workspace = true
