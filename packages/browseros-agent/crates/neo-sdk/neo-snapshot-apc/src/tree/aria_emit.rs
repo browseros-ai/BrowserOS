@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::{fmt, mem};
 
 use neo_snapshot::{
@@ -488,6 +489,7 @@ struct DraftNode {
     url: Option<String>,
     placeholder: Option<String>,
     source_node: Option<NodeId>,
+    name_from_content_drafts: Vec<usize>,
     flags: DraftFlags,
     iframe: DraftIframe,
     children: Vec<DraftChild>,
@@ -515,6 +517,7 @@ impl DraftNode {
             url: None,
             placeholder: None,
             source_node: None,
+            name_from_content_drafts: Vec::new(),
             flags,
             iframe: DraftIframe::None,
             children: Vec::new(),
@@ -710,7 +713,10 @@ fn emit_single_doc(
         refs.finish_doc_capture(doc.token());
     }
 
-    distill_draft(&mut arena, distill_mode);
+    if distill_mode.is_ai() {
+        resolve_name_from_content_drafts(&mut arena, name_cache);
+    }
+    distill_draft(&mut arena, distill_mode, job.remaining_depth);
     if distill_mode.is_ai() {
         mark_inert_draft(&mut arena);
     }
@@ -1279,23 +1285,97 @@ fn push_logical_children_reversed(
     }
 }
 
+/// Records, on every ref'd draft, the other ref'd drafts whose text its accessible name holds:
+/// the half of Playwright's `removeRedundantNames` that runs while the tree is built
+/// (`ariaSnapshot.ts` `visit`, `nameFromContentRefs`). [`distill_draft`] then drops a name whose
+/// every contributor is printed anyway.
+///
+/// A draft index stands in for Playwright's ref string: within one document's arena each names
+/// exactly one element. Playwright turns contributors into refs as soon as the node's own subtree
+/// is visited, so a contributor visited after that, such as an `aria-labelledby` target further
+/// down the page, has no ref yet and never counts. Drafts are allocated in the same preorder, so
+/// the contributors that count are the ones allocated before the node's subtree ends.
+fn resolve_name_from_content_drafts(arena: &mut DraftArena, name_cache: &NameCache<'_>) {
+    let subtree_ends = draft_subtree_ends(&arena.nodes);
+    let ref_draft_of: HashMap<NodeId, usize> = arena
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, draft)| draft.r#ref.is_some())
+        .filter_map(|(draft_idx, draft)| Some((draft.source_node?, draft_idx)))
+        .collect();
+
+    for (draft_idx, draft) in arena.nodes.iter_mut().enumerate() {
+        if draft.r#ref.is_none() {
+            continue;
+        }
+        let Some(source) = draft.source_node else {
+            continue;
+        };
+        let visited_by = subtree_ends
+            .get(draft_idx)
+            .copied()
+            .unwrap_or(draft_idx.saturating_add(1));
+        draft.name_from_content_drafts = name_cache
+            .name(source, NameVisibility::VisibleOnly)
+            .contributors()
+            .iter()
+            .filter_map(|contributor| ref_draft_of.get(contributor).copied())
+            .filter(|&contrib_draft| contrib_draft != draft_idx && contrib_draft < visited_by)
+            .collect();
+    }
+}
+
+/// One past the last draft allocated while each draft's subtree was built. The builder allocates
+/// drafts in preorder, so a child's index always exceeds its parent's and one reverse sweep is
+/// enough.
+fn draft_subtree_ends(nodes: &[DraftNode]) -> Vec<usize> {
+    let mut ends: Vec<usize> = (1..=nodes.len()).collect();
+    for (draft_idx, draft) in nodes.iter().enumerate().rev() {
+        let end = draft
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                DraftChild::Node(child_idx) => ends.get(*child_idx).copied(),
+                DraftChild::Text(_) => None,
+            })
+            .fold(draft_idx.saturating_add(1), usize::max);
+        if let Some(slot) = ends.get_mut(draft_idx) {
+            *slot = end;
+        }
+    }
+    ends
+}
+
 struct DistillFrame {
     node_idx: usize,
+    depth: usize,
     pending_children: Vec<DraftChild>,
     kept_children: Vec<DraftChild>,
     ancestor_has_pointer: bool,
     self_sets_pointer: bool,
 }
 
-fn distill_draft(arena: &mut DraftArena, mode: DistillMode) {
+/// Ports Playwright's distiller (`ariaSnapshotDistiller.ts`) as one iterative traversal.
+///
+/// Default mode runs the normalize plugins (merge text, unwrap single-child generics). Ai mode runs
+/// `aiPlugins` in upstream order: the enter hook of `removeRedundantNames` as a child is entered,
+/// then on exit `mergeStringChildren`, `removeNamelessImages`, `removeRedundantNames`,
+/// `inlineTextIntoGeneric`, `removeNameRepeatingChild` and `unwrapSingleChildGenerics`. The first
+/// hook that removes or unwraps a node ends its chain. `pending_content` is upstream's
+/// `pendingContentRefs` keyed by draft index. Depth counts the root's children as 0, as upstream
+/// does, and `max_depth` is the cut [`materialize_draft`] prints at.
+fn distill_draft(arena: &mut DraftArena, mode: DistillMode, max_depth: Option<usize>) {
     let mut root_pending = arena
         .nodes
         .first_mut()
         .map_or_else(Vec::new, |root| mem::take(&mut root.children));
     root_pending.reverse();
 
+    let mut pending_content: HashSet<usize> = HashSet::new();
     let mut stack = vec![DistillFrame {
         node_idx: 0,
+        depth: 0,
         pending_children: root_pending,
         kept_children: Vec::new(),
         ancestor_has_pointer: false,
@@ -1308,16 +1388,31 @@ fn distill_draft(arena: &mut DraftArena, mode: DistillMode) {
                 DraftChild::Text(text) => top.kept_children.push(DraftChild::Text(text)),
                 DraftChild::Node(child_idx) => {
                     let child_ancestor_pointer = top.ancestor_has_pointer || top.self_sets_pointer;
+                    let child_depth = if top.node_idx == 0 {
+                        0
+                    } else {
+                        top.depth.saturating_add(1)
+                    };
                     let (child_sets_pointer, mut child_pending) = arena
                         .nodes
                         .get_mut(child_idx)
                         .map_or((false, Vec::new()), |node| {
+                            if mode.is_ai() {
+                                enter_redundant_name_tracking(
+                                    child_idx,
+                                    node,
+                                    child_depth,
+                                    max_depth,
+                                    &mut pending_content,
+                                );
+                            }
                             let sets = node.r#ref.is_some() && node.flags.pointer_cursor();
                             (sets, mem::take(&mut node.children))
                         });
                     child_pending.reverse();
                     stack.push(DistillFrame {
                         node_idx: child_idx,
+                        depth: child_depth,
                         pending_children: child_pending,
                         kept_children: Vec::new(),
                         ancestor_has_pointer: child_ancestor_pointer,
@@ -1346,7 +1441,55 @@ fn distill_draft(arena: &mut DraftArena, mode: DistillMode) {
             parent_frame,
             mode,
             is_click_target_root,
+            &mut pending_content,
         );
+    }
+}
+
+/// `removeRedundantNames.enter`: queue the node's name contributors as not yet printed, then mark
+/// the node itself printed. A leaf generic only supplies text that a kept name may absorb, and a
+/// node beyond the depth cut is never printed, so neither counts as printed.
+fn enter_redundant_name_tracking(
+    draft_idx: usize,
+    node: &DraftNode,
+    depth: usize,
+    max_depth: Option<usize>,
+    pending_content: &mut HashSet<usize>,
+) {
+    if node.r#ref.is_none() {
+        return;
+    }
+    for &contrib_idx in &node.name_from_content_drafts {
+        pending_content.insert(contrib_idx);
+    }
+    let beyond_depth = max_depth.is_some_and(|max| depth > max);
+    let is_leaf_generic = node.role == "generic"
+        && node
+            .children
+            .iter()
+            .all(|child| matches!(child, DraftChild::Text(_)));
+    if !beyond_depth && !is_leaf_generic {
+        pending_content.remove(&draft_idx);
+    }
+}
+
+/// `removeRedundantNames.exit`: when every contributor is already shown, printed itself or carried
+/// by a name kept below, the node's name only repeats them and is cleared. Otherwise the kept name
+/// now carries their text, so they stop counting as unshown for the ancestors' names.
+fn exit_redundant_name_tracking(node: &mut DraftNode, pending_content: &mut HashSet<usize>) {
+    if node.r#ref.is_none() || node.name_from_content_drafts.is_empty() {
+        return;
+    }
+    if node
+        .name_from_content_drafts
+        .iter()
+        .all(|contrib_idx| !pending_content.contains(contrib_idx))
+    {
+        node.name.clear();
+    } else {
+        for &contrib_idx in &node.name_from_content_drafts {
+            pending_content.remove(&contrib_idx);
+        }
     }
 }
 
@@ -1356,6 +1499,7 @@ fn apply_distill_exit(
     parent_frame: &mut DistillFrame,
     mode: DistillMode,
     is_click_target_root: bool,
+    pending_content: &mut HashSet<usize>,
 ) {
     if mode.is_ai() {
         let remove_img = nodes.get(node_idx).is_some_and(|node| {
@@ -1367,6 +1511,9 @@ fn apply_distill_exit(
         if remove_img {
             return;
         }
+        if let Some(node) = nodes.get_mut(node_idx) {
+            exit_redundant_name_tracking(node, pending_content);
+        }
         inline_text_into_generic(nodes, node_idx);
         let (parent_name, parent_is_inert) = nodes
             .get(parent_frame.node_idx)
@@ -1377,6 +1524,11 @@ fn apply_distill_exit(
             should_remove_name_repeating_child(node, parent_name, parent_is_inert)
         });
         if remove_repeating {
+            // The removed text now survives only in the names derived from it, so those names
+            // must stay: the node counts as unprinted again, as upstream re-adds its ref.
+            if nodes.get(node_idx).is_some_and(|node| node.r#ref.is_some()) {
+                pending_content.insert(node_idx);
+            }
             return;
         }
     }
@@ -2093,7 +2245,7 @@ mod tests {
 
     use crate::proto::{
         AnnotatedPageContent, AnnotatedPageContentMode, AnnotatedPageContentVersion, BoundingRect,
-        BrowserOsContentAttributes, BrowserOsPageContentData, BrowserOsTriState,
+        BrowserOsContentAttributes, BrowserOsPageContentData, BrowserOsRef, BrowserOsTriState,
         ClickabilityReason, ContentAttributeType, ContentAttributes, ContentNode,
         DocumentIdentifier, FormControlType, FrameData, Geometry, RedactionDecision, SelectOption,
     };
@@ -2499,6 +2651,105 @@ mod tests {
             Some(chrome_ref.as_str()),
             "ref assignment before D20 must preserve ref stability across snapshots"
         );
+        Ok(())
+    }
+
+    fn labelled_by(dom_id: i32) -> Vec<BrowserOsRef> {
+        vec![BrowserOsRef {
+            dom_node_id: Some(dom_id),
+            unrendered_text: None,
+        }]
+    }
+
+    #[test]
+    fn ai_mode_drops_names_that_printed_contributors_repeat() -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-redundant")
+            .root(
+                NodeBuilder::root().child(
+                    NodeBuilder::element("dialog")
+                        .dom_id(10)
+                        .labelledby(labelled_by(11))
+                        .bounding_box(0, 0, 300, 200)
+                        .child(
+                            NodeBuilder::element("h2")
+                                .dom_id(11)
+                                .bounding_box(0, 0, 300, 30)
+                                .child(NodeBuilder::text("Confirm delete")),
+                        )
+                        .child(
+                            NodeBuilder::element("a")
+                                .dom_id(12)
+                                .href("/docs")
+                                .bounding_box(0, 40, 300, 30)
+                                .child(
+                                    NodeBuilder::element("h3")
+                                        .dom_id(13)
+                                        .bounding_box(0, 40, 300, 30)
+                                        .child(NodeBuilder::text("Read the docs")),
+                                ),
+                        ),
+                ),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let dialog = find_by_role_name(ai.nodes(), "dialog", None)
+            .ok_or("ai mode prints the dialog without the name its heading repeats")?;
+        assert!(dialog.r#ref.is_some(), "the nameless dialog keeps its ref");
+        assert!(find_by_role_name(ai.nodes(), "heading", Some("Confirm delete")).is_some());
+        let link = find_by_role_name(ai.nodes(), "link", None)
+            .ok_or("ai mode prints the link without the name its heading repeats")?;
+        assert_eq!(link.url.as_deref(), Some("/docs"));
+        assert!(find_by_role_name(ai.nodes(), "heading", Some("Read the docs")).is_some());
+
+        let default = tree.aria(AriaAsk::default_mode());
+        assert!(
+            find_by_role_name(default.nodes(), "dialog", Some("Confirm delete")).is_some(),
+            "default mode does not run removeRedundantNames"
+        );
+        assert!(find_by_role_name(default.nodes(), "link", Some("Read the docs")).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn ai_mode_keeps_a_name_whose_contributor_comes_later() -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-later")
+            .root(
+                NodeBuilder::root()
+                    .child(
+                        NodeBuilder::form_control(FormControlType::ButtonButton)
+                            .dom_id(10)
+                            .tag("button")
+                            .bounding_box(0, 0, 120, 30)
+                            .child(
+                                NodeBuilder::element("span")
+                                    .dom_id(11)
+                                    .role("img")
+                                    .labelledby(labelled_by(12))
+                                    .bounding_box(0, 0, 20, 20),
+                            ),
+                    )
+                    .child(
+                        NodeBuilder::element("h2")
+                            .dom_id(12)
+                            .bounding_box(0, 40, 120, 30)
+                            .child(NodeBuilder::text("Save draft")),
+                    ),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let button = find_by_role_name(ai.nodes(), "button", Some("Save draft")).ok_or(
+            "the button keeps its name: the later element had no ref when the button's subtree \
+             ended, so upstream never counts it",
+        )?;
+        assert!(button.r#ref.is_some());
+        assert!(find_by_role_name(ai.nodes(), "img", Some("Save draft")).is_some());
+        assert!(find_by_role_name(ai.nodes(), "heading", Some("Save draft")).is_some());
         Ok(())
     }
 

@@ -1885,11 +1885,16 @@ fn inert_modal_dialog_escape_rendered_through_neo_page() -> Result<(), Box<dyn E
         .ok_or("missing Modal confirm")?;
     assert_eq!(confirm.active, Some(true));
     assert_eq!(confirm.inert, None);
+    assert!(
+        find_by_role_name(ai.nodes(), "dialog", None).is_some(),
+        "the dialog's name only repeats its printed heading, so ai mode drops it"
+    );
 
     let snap = ai.into_snapshot();
     let page = neo_snapshot::render(&snap, Call::Page(&Passed::default())).into_text();
     assert!(page.starts_with("# not listed:"));
-    assert!(page.contains("dialog \"Confirm delete\""));
+    assert!(page.contains("- dialog [ref="), "{page}");
+    assert!(page.contains("heading \"Confirm delete\""), "{page}");
     assert!(page.contains("Modal confirm"));
     assert!(page.contains("Modal cancel"));
     assert!(page.contains("Delete this project?"));

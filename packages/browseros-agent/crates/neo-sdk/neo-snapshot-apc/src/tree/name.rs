@@ -16,6 +16,7 @@ use super::state::InvalidState;
 static EMPTY_NAME: Name = Name {
     text: String::new(),
     derived_from_content: false,
+    contributors: Vec::new(),
 };
 
 static EMPTY_DESCRIPTION: Description = Description {
@@ -26,13 +27,27 @@ static EMPTY_DESCRIPTION: Description = Description {
 /// Computed WAI-ARIA accessible name for a [`TreeNode`](super::TreeNode).
 ///
 /// Resolved in ACCNAME order from BrowserOS APC wire facts and finalized with
-/// [`normalize_whitespace`]. Its manual `Debug` implementation prints only byte length and
-/// provenance, never page text.
-#[derive(Clone, Default, PartialEq, Eq)]
+/// [`normalize_whitespace`]. Its manual `Debug` implementation prints only byte length,
+/// provenance and how many elements contributed, never page text.
+#[derive(Clone, Default)]
 pub struct Name {
     text: String,
     derived_from_content: bool,
+    /// Every element whose text the name holds, sorted and deduplicated: Playwright's
+    /// `AccessibleName.elements` (`roleUtils.ts` `CompositeString`). Only the ai-mode distiller
+    /// reads it ([`super::aria_emit`]), to drop a name that its printed contributors already show.
+    contributors: Vec<NodeId>,
 }
+
+/// Equality stays text and provenance, as before `contributors` existed: they record where the
+/// text came from, not what the name is.
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.derived_from_content == other.derived_from_content
+    }
+}
+
+impl Eq for Name {}
 
 impl Name {
     /// Normalized accessible name text, or `""` when the node has no accessible name.
@@ -59,6 +74,11 @@ impl Name {
     pub fn into_text(self) -> String {
         self.text
     }
+
+    /// The elements whose text this name holds, in [`NodeId`] order.
+    pub(crate) fn contributors(&self) -> &[NodeId] {
+        &self.contributors
+    }
 }
 
 impl fmt::Debug for Name {
@@ -66,6 +86,7 @@ impl fmt::Debug for Name {
         f.debug_struct("Name")
             .field("text_len", &self.text.len())
             .field("derived_from_content", &self.derived_from_content)
+            .field("contributors", &self.contributors.len())
             .finish()
     }
 }
@@ -1032,6 +1053,24 @@ fn find_selected_options_in_listbox(tree: &SnapshotTree, listbox_id: NodeId) -> 
     selected
 }
 
+/// Accumulated text together with the element [`NodeId`]s that produced it.
+#[derive(Default)]
+struct CompositeText {
+    text: String,
+    contributors: Vec<NodeId>,
+}
+
+impl CompositeText {
+    fn from_leaf(node_id: NodeId, text: String) -> Self {
+        let contributors = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![node_id]
+        };
+        Self { text, contributors }
+    }
+}
+
 /// Heap-allocated continuation frames driving [`eval_text_alternative`] iteratively without call
 /// stack recursion.
 enum Frame<'a> {
@@ -1041,6 +1080,7 @@ enum Frame<'a> {
         refs: Vec<ResolvedRef<'a>>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
         part_count: usize,
         self_contained: bool,
     },
@@ -1049,6 +1089,7 @@ enum Frame<'a> {
         nodes: Vec<NodeId>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
         part_count: usize,
     },
     JoinNonEmptyLabels {
@@ -1056,6 +1097,7 @@ enum Frame<'a> {
         labels: Vec<NodeId>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
     },
     ContentChildren {
         node_id: NodeId,
@@ -1063,6 +1105,7 @@ enum Frame<'a> {
         children: Vec<NodeId>,
         next_index: usize,
         acc: String,
+        contributors: Vec<NodeId>,
     },
 }
 
@@ -1076,7 +1119,7 @@ enum StepOutcome<'a> {
 struct EvalState<'a> {
     stack: Vec<Frame<'a>>,
     active: Option<(NodeId, EvalOptions)>,
-    returned: Option<String>,
+    returned: Option<CompositeText>,
     visited: HashSet<NodeId>,
     derived_from_content: bool,
 }
@@ -1092,9 +1135,11 @@ impl<'a> EvalState<'a> {
         }
     }
 
-    fn apply_outcome(&mut self, outcome: StepOutcome<'a>) {
+    fn apply_outcome(&mut self, current_id: NodeId, outcome: StepOutcome<'a>) {
         match outcome {
-            StepOutcome::Done(text) => self.returned = Some(text),
+            StepOutcome::Done(text) => {
+                self.returned = Some(CompositeText::from_leaf(current_id, text));
+            }
             StepOutcome::TailCall { node_id, opts } => self.active = Some((node_id, opts)),
             StepOutcome::Push(frame) => self.stack.push(frame),
         }
@@ -1108,13 +1153,13 @@ fn eval_text_alternative(
     root_id: NodeId,
     root_opts: EvalOptions,
     derived_from_content: &mut bool,
-) -> String {
+) -> CompositeText {
     let mut state = EvalState::new(root_id, root_opts);
 
     loop {
         if let Some((node_id, opts)) = state.active.take() {
             let outcome = start_node_eval(index, node_id, opts, &mut state.visited);
-            state.apply_outcome(outcome);
+            state.apply_outcome(node_id, outcome);
             continue;
         }
 
@@ -1143,15 +1188,17 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
         refs,
         next_index,
         acc,
+        contributors,
         part_count,
         ..
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take() {
+        if let Some(part) = state.returned.take() {
             if *part_count > 0 {
                 acc.push(' ');
             }
-            acc.push_str(&text);
+            acc.push_str(&part.text);
+            contributors.extend(part.contributors);
             *part_count += 1;
         }
         while let Some(&item) = refs.get(*next_index) {
@@ -1184,6 +1231,7 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
         opts,
         refs,
         acc,
+        contributors,
         self_contained,
         ..
     }) = state.stack.pop()
@@ -1195,7 +1243,10 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
         if opts.inside_target() && self_contained {
             state.derived_from_content = true;
         }
-        state.returned = Some(acc);
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
         return;
     }
 
@@ -1206,7 +1257,7 @@ fn advance_labelledby_frame<'a>(index: &LookupIndex<'a>, state: &mut EvalState<'
             .any(|item| matches!(item, ResolvedRef::Node(target_id) if *target_id == node_id)),
     };
     let outcome = eval_from_step_2c(index, node_id, opts, presence, &mut state.visited);
-    state.apply_outcome(outcome);
+    state.apply_outcome(node_id, outcome);
 }
 
 fn advance_join_all_frame(state: &mut EvalState<'_>) {
@@ -1215,14 +1266,16 @@ fn advance_join_all_frame(state: &mut EvalState<'_>) {
         nodes,
         next_index,
         acc,
+        contributors,
         part_count,
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take() {
+        if let Some(part) = state.returned.take() {
             if *part_count > 0 {
                 acc.push(' ');
             }
-            acc.push_str(&text);
+            acc.push_str(&part.text);
+            contributors.extend(part.contributors);
             *part_count += 1;
         }
         if let Some(&target_id) = nodes.get(*next_index) {
@@ -1232,8 +1285,14 @@ fn advance_join_all_frame(state: &mut EvalState<'_>) {
         }
     }
 
-    if let Some(Frame::JoinAll { acc, .. }) = state.stack.pop() {
-        state.returned = Some(acc);
+    if let Some(Frame::JoinAll {
+        acc, contributors, ..
+    }) = state.stack.pop()
+    {
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
     }
 }
 
@@ -1243,15 +1302,17 @@ fn advance_labels_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         labels,
         next_index,
         acc,
+        contributors,
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take()
-            && !text.is_empty()
+        if let Some(part) = state.returned.take()
+            && !part.text.is_empty()
         {
             if !acc.is_empty() {
                 acc.push(' ');
             }
-            acc.push_str(&text);
+            acc.push_str(&part.text);
+            contributors.extend(part.contributors);
         }
         if let Some(&label_id) = labels.get(*next_index) {
             *next_index += 1;
@@ -1264,8 +1325,14 @@ fn advance_labels_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         }
     }
 
-    if let Some(Frame::JoinNonEmptyLabels { acc, .. }) = state.stack.pop() {
-        state.returned = Some(acc);
+    if let Some(Frame::JoinNonEmptyLabels {
+        acc, contributors, ..
+    }) = state.stack.pop()
+    {
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
     }
 }
 
@@ -1275,11 +1342,13 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         children,
         next_index,
         acc,
+        contributors,
         ..
     }) = state.stack.last_mut()
     {
-        if let Some(text) = state.returned.take() {
-            acc.push_str(&text);
+        if let Some(part) = state.returned.take() {
+            acc.push_str(&part.text);
+            contributors.extend(part.contributors);
         }
         while let Some(&child_id) = children.get(*next_index) {
             *next_index += 1;
@@ -1317,7 +1386,11 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
     }
 
     let Some(Frame::ContentChildren {
-        node_id, opts, acc, ..
+        node_id,
+        opts,
+        acc,
+        mut contributors,
+        ..
     }) = state.stack.pop()
     else {
         return;
@@ -1334,11 +1407,16 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
         if opts.inside_target() && has_trimmed {
             state.derived_from_content = true;
         }
-        state.returned = Some(acc);
+        contributors.push(node_id);
+        state.returned = Some(CompositeText {
+            text: acc,
+            contributors,
+        });
         return;
     }
 
-    state.returned = Some(eval_step_2i(index.tree, node_id, &mut state.visited));
+    let title = eval_step_2i(index.tree, node_id, &mut state.visited);
+    state.returned = Some(CompositeText::from_leaf(node_id, title));
 }
 
 #[derive(Clone, Copy)]
@@ -1397,6 +1475,7 @@ fn start_node_eval<'a>(
             refs: resolved_labelledby,
             next_index: 0,
             acc: String::new(),
+            contributors: Vec::new(),
             part_count: 0,
             self_contained,
         });
@@ -1547,6 +1626,7 @@ fn eval_step_2c_select_or_listbox<'a>(
                 nodes: option_nodes,
                 next_index: 0,
                 acc: String::new(),
+                contributors: Vec::new(),
                 part_count: 0,
             });
         }
@@ -1571,6 +1651,7 @@ fn eval_step_2c_select_or_listbox<'a>(
         nodes: selected,
         next_index: 0,
         acc: String::new(),
+        contributors: Vec::new(),
         part_count: 0,
     })
 }
@@ -1581,6 +1662,7 @@ fn labels_outcome<'a>(labels: &[NodeId], visibility: NameVisibility) -> StepOutc
         labels: labels.to_vec(),
         next_index: 0,
         acc: String::new(),
+        contributors: Vec::new(),
     })
 }
 
@@ -1835,6 +1917,7 @@ fn eval_step_2f<'a>(
         children,
         next_index: 0,
         acc: String::new(),
+        contributors: Vec::new(),
     }))
 }
 
@@ -1879,15 +1962,18 @@ fn compute_accessible_name(
     }
 
     let mut derived_from_content = false;
-    let raw_text = eval_text_alternative(
+    let mut composite = eval_text_alternative(
         index,
         id,
         EvalOptions::for_root(visibility),
         &mut derived_from_content,
     );
+    composite.contributors.sort_unstable();
+    composite.contributors.dedup();
     Name {
-        text: normalize_whitespace(&raw_text),
+        text: normalize_whitespace(&composite.text),
         derived_from_content,
+        contributors: composite.contributors,
     }
 }
 
@@ -1929,13 +2015,13 @@ fn compute_accessible_description(
                         .node(target_id)
                         .is_some_and(|target| target.hidden().is_hidden_for_aria());
                     let mut ignored_derived = false;
-                    let text = eval_text_alternative(
+                    let part = eval_text_alternative(
                         index,
                         target_id,
                         EvalOptions::for_describedby(visibility, target_hidden),
                         &mut ignored_derived,
                     );
-                    joined.push_str(&text);
+                    joined.push_str(&part.text);
                 }
                 ResolvedRef::Unrendered(text) => {
                     joined.push_str(text);
@@ -2003,7 +2089,7 @@ fn compute_accessible_error_message(index: &LookupIndex<'_>, id: NodeId) -> Stri
                     EvalOptions::for_describedby(NameVisibility::VisibleOnly, target_hidden),
                     &mut ignored_derived,
                 );
-                as_flat_string(&raw_part)
+                as_flat_string(&raw_part.text)
             }
             ResolvedRef::Unrendered(text) => as_flat_string(text),
         };
