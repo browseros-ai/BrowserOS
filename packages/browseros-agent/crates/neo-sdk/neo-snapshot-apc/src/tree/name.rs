@@ -6,12 +6,12 @@ use crate::proto::{
     BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
 };
 
-use super::hidden;
 use super::mask::{self, MaskSource, NodeMask};
 use super::node_key::{DocId, DomNodeId, NodeId};
 use super::role::{self, Role};
 use super::snapshot_tree::SnapshotTree;
 use super::state::InvalidState;
+use super::{hidden, option_slot};
 
 static EMPTY_NAME: Name = Name {
     text: String::new(),
@@ -1915,12 +1915,17 @@ fn eval_step_2f<'a>(
     }
 
     let children = collect_logical_children(tree, facts.id);
+    // An option slot has no children: its content is its entry's text, which stands in for the
+    // text node a real `<option>` would hold.
+    let acc = option_slot::label(tree, facts.id)
+        .unwrap_or_default()
+        .to_owned();
     Some(StepOutcome::Push(Frame::ContentChildren {
         node_id: facts.id,
         opts,
         children,
         next_index: 0,
-        acc: String::new(),
+        acc,
         contributors: Vec::new(),
     }))
 }

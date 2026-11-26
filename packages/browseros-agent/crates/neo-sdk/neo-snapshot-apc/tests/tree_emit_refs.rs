@@ -700,16 +700,21 @@ fn assert_ua_shadow_inputs_and_selects(
     let multi = find_by_role_name(nodes, "listbox", Some("Multi Fruit")).ok_or("missing Multi")?;
     assert_eq!(multi.children.len(), 1);
     assert!(
-        tree.synthetic_options(node_id_of(tree, "doc-ua", 41)?)
-            .is_empty()
+        holds_no_option_slot(tree, node_id_of(tree, "doc-ua", 41)?),
+        "a list box sends its options as nodes, so it gets no slots"
     );
     let real = find_by_role_name(nodes, "combobox", Some("Real Select")).ok_or("missing Real")?;
     assert_eq!(real.children.len(), 1);
     assert!(
-        tree.synthetic_options(node_id_of(tree, "doc-ua", 42)?)
-            .is_empty()
+        holds_no_option_slot(tree, node_id_of(tree, "doc-ua", 42)?),
+        "a select holding a real <option> node gets no slots, so no option is listed twice"
     );
     Ok(())
+}
+
+fn holds_no_option_slot(tree: &SnapshotTree, select: NodeId) -> bool {
+    tree.children(select)
+        .all(|child| tree.option_slot(child.id()).is_none())
 }
 
 #[test]

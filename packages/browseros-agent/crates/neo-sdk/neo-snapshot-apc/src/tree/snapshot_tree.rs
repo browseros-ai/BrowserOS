@@ -5,13 +5,13 @@ use std::iter::FusedIterator;
 use crate::proto::{AnnotatedPageContent, ContentData};
 
 use super::build_error::BuildError;
-use super::fold::{self, ClickProxy, FoldInfo, SyntheticOption};
+use super::fold::{self, ClickProxy, FoldInfo};
 use super::frame_stitch::{self, StitchedTree};
 use super::node_key::{DocId, DocSeq, DocToken, FrameToken, NodeId, NodeKey, NodeRange};
 use super::private_nodes::PrivateNodes;
 use super::tree_doc::{PartialFrame, TreeDoc};
 use super::tree_node::TreeNode;
-use super::{hidden, mask, role, state};
+use super::{hidden, mask, option_slot, role, state};
 
 /// Minimum BrowserOS APC contract version required to construct a [`SnapshotTree`].
 pub const MIN_CONTRACT_VERSION: u32 = 1;
@@ -163,6 +163,9 @@ impl SnapshotTree {
         for (node, node_mask) in nodes.iter_mut().zip(masks) {
             node.set_mask(node_mask);
         }
+        // After the mask, before fold and names: a slot whose list the mask cleared must stand
+        // for nothing from here on.
+        option_slot::withhold_cleared(&mut nodes);
 
         let fold = fold::compute_fold(&nodes, &docs);
 
@@ -332,7 +335,7 @@ impl SnapshotTree {
         anc.doc() == target.doc() && anc.id() < target.id() && target.id() < anc.subtree_end()
     }
 
-    /// Precomputed logical folding, option synthesis, container pruning, and click-proxy overlay.
+    /// Precomputed logical folding, container pruning, and click-proxy overlay.
     #[must_use]
     pub const fn fold(&self) -> &FoldInfo {
         &self.fold
@@ -342,12 +345,6 @@ impl SnapshotTree {
     #[must_use]
     pub fn click_proxy(&self, id: NodeId) -> Option<&ClickProxy> {
         self.fold.click_proxy(id)
-    }
-
-    /// Returns synthesized `<option>` entries for menu-list `<select>` node `id`, or an empty slice.
-    #[must_use]
-    pub fn synthetic_options(&self, id: NodeId) -> &[SyntheticOption] {
-        self.fold.synthetic_options(id)
     }
 
     /// Whether `id` qualifies to receive a snapshot reference in `ai` mode.

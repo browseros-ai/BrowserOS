@@ -1,11 +1,15 @@
 //! The recorded oracle: what Playwright's own ARIA engine said about a fixture page, read on the
-//! same page load as that fixture's `.pb`.
+//! same page load as that fixture's `.pb`. An oracle whose option places were merged in later
+//! (`record_fixtures --option-places`) took them from a re-read proved equal to that load in
+//! every id, owner and ref.
 //!
 //! ```text
 //!  record_fixtures ─▶ oracle_capture (JS engine, per frame) ─▶ Oracle ─▶ <name>.oracle.json
 //!                  └▶ Page.getAnnotatedPageContent ──────────────────▶ <name>.pb
 //!  tests/oracles.rs reads both; the Rust normalizer is later compared with the oracle node by
-//!  node, joined on backendNodeId (an element) and on `owner` (a child frame's <iframe>).
+//!  node, joined on backendNodeId (an element), on `owner` (a child frame's <iframe>), and, for
+//!  an <option> of a collapsed <select>, which APC sends as data on its select, on the select's
+//!  backendNodeId and the option's index (`option`, support/oracle_join.rs).
 //! ```
 //!
 //! The recorder serializes these types and the offline tests deserialize them, so the file's
@@ -112,6 +116,23 @@ pub(crate) struct OracleElement {
     pub(crate) visible: bool,
     /// The states Playwright offers this role.
     pub(crate) states: OracleStates,
+    /// Where the element sits in its select's option list, for an `<option>` a select lists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) option: Option<OracleOption>,
+}
+
+/// An `<option>`'s place in `select.options` on the recorded load: the address of the option's
+/// slot in the tree when APC sent the select collapsed, its options as data on the select
+/// (`SnapshotTree::node_at`).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OracleOption {
+    /// The select's backendNodeId, in the same frame's document as the option.
+    pub(crate) select: u64,
+    /// The option's index in `select.options`.
+    pub(crate) index: u32,
+    /// `select.options.length`.
+    pub(crate) count: u32,
 }
 
 /// The states `toAriaNode` writes, each present only when Playwright offers it to the element's

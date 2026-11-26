@@ -72,9 +72,11 @@ it('tests that the protocol examples type-check against protocol.ts', () => {
   expect(result.status).toBe(0)
 })
 
-/** A by-handle `pinned` reply is its element or null. */
+/** A by-handle reply is null, `pinned`'s element, or `pinnedAt`'s place, its element first. */
 const handedOver = (reply: unknown): boolean =>
-  reply === null || reply instanceof Element
+  reply === null ||
+  reply instanceof Element ||
+  (Array.isArray(reply) && reply[0] instanceof Element)
 
 it('tests that every example request gets a reply its op allows from the built probe', async () => {
   page = openProbePage(PAGE)
@@ -89,7 +91,7 @@ it('tests that every example request gets a reply its op allows from the built p
           wrong.push({
             op,
             reply,
-            why: 'by-handle replies are an element or null',
+            why: 'by-handle replies are null, an element or a place',
           })
         continue
       }

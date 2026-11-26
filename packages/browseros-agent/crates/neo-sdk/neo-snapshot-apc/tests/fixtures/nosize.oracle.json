@@ -266,6 +266,11 @@
             "disabled": false,
             "selected": true,
             "active": false
+          },
+          "option": {
+            "select": 13,
+            "index": 0,
+            "count": 2
           }
         },
         {
@@ -281,6 +286,11 @@
             "disabled": false,
             "selected": false,
             "active": false
+          },
+          "option": {
+            "select": 13,
+            "index": 1,
+            "count": 2
           }
         },
         {

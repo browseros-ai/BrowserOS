@@ -19,6 +19,7 @@ use base64::engine::general_purpose::STANDARD;
 use browseros_core::{TabId, TargetId};
 use neo_snapshot::{AriaNode, Call, Form, MaxTokens, Passed, Snapshot, TextForm};
 use neo_snapshot_apc::AnnotatedPageContent;
+use neo_snapshot_apc::proto::{FormControlType, SelectOption};
 use neo_snapshot_apc::refs::TabRefTable;
 use neo_snapshot_apc::tree::{
     ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, FrameToken, NodeBuilder, SnapshotTree,
@@ -137,11 +138,17 @@ impl TabScript for OneMain {
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 Some(json!({ "content": STANDARD.encode(apc().encode_to_vec()) }))
             }
-            // The pinned main section's node, for a locator's snapshot.
-            "Runtime.callFunctionOn" if params["arguments"][0]["value"].is_array() => Some(json!({
-                "result": { "type": "object", "deepSerializedValue": { "type": "array",
-                    "value": [{ "type": "node", "value": { "backendNodeId": 2 } }] } }
-            })),
+            // The pinned main section's node, for a locator's snapshot: its place (`pinnedAt`),
+            // or a batch of pins.
+            "Runtime.callFunctionOn"
+                if params["arguments"][0]["value"].is_array()
+                    || params["arguments"][0]["value"]["request"]["op"] == "pinnedAt" =>
+            {
+                Some(json!({
+                    "result": { "type": "object", "deepSerializedValue": { "type": "array",
+                        "value": [{ "type": "node", "value": { "backendNodeId": 2 } }] } }
+                }))
+            }
             _ => None,
         }
     }
@@ -1262,6 +1269,108 @@ async fn tests_that_a_delta_never_compares_with_a_text_pending_in_its_own_run() 
     assert!(
         text.starts_with("# whole page: no earlier snapshot of this page\n"),
         "the run's own whole page is pending, not stored: {text}"
+    );
+    Ok(())
+}
+
+/// A tab whose page holds a collapsed `<select>` of two options, the second of them pinned; the
+/// page's first `pinnedAt` says the select lists three, as when an option was added between the
+/// capture and the call, and every later one says two.
+#[derive(Default)]
+struct GrowingSelect {
+    /// `pinnedAt` calls the page answered.
+    places: AtomicUsize,
+}
+
+impl GrowingSelect {
+    fn apc() -> AnnotatedPageContent {
+        let select = ["Apple", "Banana"]
+            .into_iter()
+            .fold(
+                NodeBuilder::form_control(FormControlType::SelectOne)
+                    .tag("select")
+                    .dom_id(10)
+                    .bounding_box(0, 0, 160, 24),
+                |select, text| {
+                    select.select_option(SelectOption {
+                        value: Some(text.to_lowercase()),
+                        text: Some(text.to_owned()),
+                        is_selected: Some(false),
+                        is_disabled: Some(false),
+                    })
+                },
+            )
+            .child(NodeBuilder::text("Apple").ua_shadow(true));
+        ApcBuilder::new("doc-main")
+            .main_url("https://a.test/")
+            .root(NodeBuilder::root().child(select))
+            .build()
+    }
+}
+
+impl TabScript for GrowingSelect {
+    fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
+        let node = |id: u64| json!({ "type": "node", "value": { "backendNodeId": id } });
+        let op = &params["arguments"][0]["value"]["request"]["op"];
+        match method {
+            "Target.getTargets" => Some(json!({ "targetInfos": [] })),
+            "Page.getAnnotatedPageContent" => {
+                Some(json!({ "content": STANDARD.encode(Self::apc().encode_to_vec()) }))
+            }
+            // The pinned <option> (900, no capture node), its select, its index and the list's
+            // length now.
+            "Runtime.callFunctionOn" if op == "pinnedAt" => {
+                let count = if self.places.fetch_add(1, Ordering::SeqCst) == 0 {
+                    3
+                } else {
+                    2
+                };
+                let number = |value: u32| json!({ "type": "number", "value": value });
+                let place = [node(900), node(10), number(1), number(count)];
+                Some(json!({ "result": { "type": "object",
+                    "deepSerializedValue": { "type": "array", "value": place } } }))
+            }
+            // A read of the option as a DOM node: a leaf no capture node stands under.
+            "Runtime.callFunctionOn" if op == "pinned" => Some(json!({
+                "result": { "type": "object", "subtype": "node", "objectId": "option" }
+            })),
+            "DOM.describeNode" => Some(json!({ "node": { "backendNodeId": 900,
+                "nodeName": "OPTION", "childNodeCount": 0, "children": [] } })),
+            _ => None,
+        }
+    }
+
+    fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
+        match request["op"].as_str() {
+            Some("describe") => ProbeAnswer::reply(json!({ "kind": "described",
+                "protocol": PROBE_PROTOCOL, "seq": 0, "url": "https://a.test/" })),
+            Some("resolve") => ProbeAnswer::reply(
+                json!({ "kind": "element", "pin": 1, "preview": "<option>Banana</option>" }),
+            ),
+            _ => ProbeAnswer::unexpected(),
+        }
+    }
+}
+
+/// An `<option>` whose select's list changed length between the capture and the page's answer
+/// may sit at another index now, so the read captures again rather than print an empty subtree.
+#[tokio::test(start_paused = true)]
+async fn tests_that_an_option_whose_list_changed_since_the_capture_is_read_again() -> TestResult {
+    let tab = ScriptedTab::new(GrowingSelect::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let input = json!({ "target": { "$neo": "locator", "page": run.page,
+        "chunks": [{ "parts": [{ "name": "css", "body": "option", "source": "option" }] }],
+        "display": "locator('option')" },
+        "strict": "strict", "mode": "default", "format": "playwright" });
+    let answer = run
+        .playwright
+        .invoke(&run.env, op("locator.ariaSnapshot")?, input)
+        .await?;
+    assert_eq!(answer, json!({ "snapshot": "- option \"Banana\"" }));
+    assert_eq!(
+        tab.script().places.load(Ordering::SeqCst),
+        2,
+        "the changed list's answer is set aside and the option asked again"
     );
     Ok(())
 }

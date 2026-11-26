@@ -128,9 +128,24 @@
       }).json
 
       const elements = []
+      // Each option a select lists, by the select's own list: the list Chromium copies into APC's
+      // select_options, whose entries are a collapsed select's option slots in the tree. Read from
+      // the select's side, not the option's (Neo's probe goes from the option, option-slot.ts
+      // slotOf), so the join the tests make is checked against separate evidence. A select comes
+      // before its options in tree order, so the map is full by the time they are read.
+      const listed = new Map()
       beginAriaCaches()
       try {
         for (const element of elementsInTreeOrder(document.documentElement)) {
+          if (element instanceof HTMLSelectElement) {
+            const { options } = element
+            for (let index = 0; index < options.length; index++)
+              listed.set(options[index], {
+                select: nodeOf(element),
+                index,
+                count: options.length,
+              })
+          }
           const role = getAriaRole(element)
           if (role === null) continue
           elements.push({
@@ -146,6 +161,7 @@
             hidden: isElementHiddenForAria(element),
             visible: isElementVisible(element),
             states: statesOf(element, role),
+            option: listed.get(element),
           })
         }
       } finally {

@@ -696,3 +696,128 @@ it('tests that the page form of mixed chunks matches what the engine itself matc
     expectSame(staged(probe, reply), expected, text)
   }
 })
+
+/**
+ * A form with a collapsed select, whose options Rust's tree holds as data on the select and names
+ * by the select and an index (`SetMember::Option`), and an option outside it.
+ */
+const OPTIONS_PAGE = `<html><body>
+  <form id="order">
+    <select id="size">
+      <optgroup label="Small"><option id="s">S</option></optgroup>
+      <option id="m" selected>M</option>
+      <option id="l">L</option>
+    </select>
+  </form>
+  <div id="other"><div id="free" role="option">Free</div></div>
+</body></html>`
+
+function optionsBooted(): ProbePage {
+  page = openProbePage(OPTIONS_PAGE, undefined, ORACLE)
+  page.boot({ frameSeq: 0, epoch: 'stage-options' })
+  return page
+}
+
+/** `select.options[index]` of call node `select`, for a list of `count` in the capture. */
+const optionMember = (index: number, count = 3, select = 0): SetMember => ({
+  option: { select, index, count },
+})
+
+it('tests that an option member is select.options[index] of its handed select, through optgroups', () => {
+  const probe = optionsBooted()
+  const size = element(probe, 'size')
+  const reply = probe.call(
+    {
+      op: 'stage',
+      selector: selector(),
+      from: [optionMember(2), optionMember(0), { node: 1 }],
+    },
+    null,
+    size,
+    element(probe, 'free'),
+  )
+  expect(ids(staged(probe, reply))).toEqual(['l', 's', 'free'])
+})
+
+it('tests that a list of another length makes an option member changed, for from and candidates alike', () => {
+  const probe = optionsBooted()
+  const size = element(probe, 'size')
+  const fromOption = (member: SetMember) =>
+    probe.call(
+      { op: 'stage', selector: selector(), from: [member] },
+      null,
+      size,
+    )
+  const inOrder = (member: SetMember) =>
+    probe.call(
+      {
+        op: 'stage',
+        selector: selector('css=form', below(0)),
+        sets: [{ members: [member, { node: 1 }] }],
+      },
+      null,
+      size,
+      element(probe, 'free'),
+    )
+  expect(ids(staged(probe, fromOption(optionMember(1))))).toEqual(['m'])
+  expect(ids(staged(probe, inOrder(optionMember(1))))).toEqual(['m'])
+
+  // The page added an option since the capture: index 1 may now name another one.
+  const extra = probe.document.createElement('option')
+  extra.textContent = 'XL'
+  size.appendChild(extra)
+  expect(fromOption(optionMember(1))).toEqual({ kind: 'detached' })
+  // A candidate whose list changed cannot be told apart by containment, unlike one that left.
+  expect(inOrder(optionMember(1))).toEqual({ kind: 'detached' })
+  expect(ids(staged(probe, fromOption(optionMember(1, 4))))).toEqual(['m'])
+})
+
+it('tests that an option candidate is scoped by containment, and one whose select left is dropped', () => {
+  const probe = optionsBooted()
+  const size = element(probe, 'size')
+  const options = { members: [optionMember(0), optionMember(1), { node: 1 }] }
+  const from = (id: string) =>
+    ids(
+      staged(
+        probe,
+        probe.call(
+          {
+            op: 'stage',
+            selector: selector(below(0)),
+            from: [pinMember(probe, id)],
+            sets: [options],
+          },
+          null,
+          size,
+          element(probe, 'free'),
+        ),
+      ),
+    )
+  expect(from('order')).toEqual(['s', 'm'])
+  expect(from('other')).toEqual(['free'])
+
+  size.remove()
+  expect(from('other')).toEqual(['free'])
+  expect(
+    probe.call(
+      { op: 'stage', selector: selector(), from: [optionMember(0)] },
+      null,
+      size,
+    ),
+  ).toEqual({ kind: 'detached' })
+})
+
+it('tests that describePins words an option member and answers detached once its list changed', () => {
+  const probe = optionsBooted()
+  const size = element(probe, 'size')
+  const describe = () =>
+    probe.call({ op: 'describePins', members: [optionMember(1)] }, null, size)
+  const items = field(describe(), 'items')
+  expect(Array.isArray(items) && items.length).toBe(1)
+  // The words are the page's own for the element it resolved: option M, with its id.
+  expect(
+    String(field(Array.isArray(items) ? items[0] : null, 'preview')),
+  ).toContain('id="m"')
+  element(probe, 'l').remove()
+  expect(describe()).toEqual({ kind: 'detached' })
+})

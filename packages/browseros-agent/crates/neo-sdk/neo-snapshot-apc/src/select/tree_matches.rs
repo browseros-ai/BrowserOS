@@ -39,8 +39,8 @@ impl TreeMatches {
     }
 
     /// Each match's cross-capture key, in order, for hydration. A node with no DOM node id has
-    /// none: such a node is never an element today, but the option nodes that engine chunk 5
-    /// synthesizes for a collapsed `<select>` will be, and they hydrate through their select.
+    /// none. The one such element is a collapsed `<select>`'s option slot, which hydrates
+    /// through its select and index instead ([`SnapshotTree::option_slot`]).
     pub fn keys<'t>(
         &'t self,
         tree: &'t SnapshotTree,
