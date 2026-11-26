@@ -46,6 +46,8 @@ uuid.workspace = true
 [dev-dependencies]
 # Hand-built APC fixtures (`ApcBuilder`) for offline TabTree, hydration, and capture tests.
 neo-snapshot-apc = { workspace = true, features = ["test-support"] }
+# Encodes an `ApcBuilder` tree into the bytes a scripted `Page.getAnnotatedPageContent` answers.
+prost.workspace = true
 # Runner N (tests/support/js_runner.rs) runs the real prelude in the engine claw-sdk ships it
 # in, at the workspace pin claw-sdk's runtime uses. Dev-only: the crate itself never runs JS.
 rquickjs.workspace = true

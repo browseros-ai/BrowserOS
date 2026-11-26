@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::collections::HashSet;
 
 use crate::proto::{
     BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
@@ -7,8 +6,9 @@ use crate::proto::{
 };
 
 use super::hidden;
-use super::node_key::{DocId, DomNodeId, NodeId, NodeKey};
-use super::tree_doc::{DocOrigin, TreeDoc};
+use super::node_key::{DocId, DomNodeId, NodeId};
+use super::private_nodes::PrivateNodes;
+use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
 
 /// Upper bound on emitted redaction bullets so corrupt payloads cannot trigger excessive
@@ -85,110 +85,6 @@ impl NodeMask {
     }
 }
 
-/// Host-supplied set of DOM nodes whose text and form values must be masked during tree build.
-///
-/// Supports matching either by exact [`NodeKey`] (`(DocToken, DomNodeId)`) or by
-/// `(DocOrigin, DomNodeId)` across captures sharing a non-empty security origin. Its manual
-/// `Debug` implementation prints counts only so origins and node keys never leak into logs.
-#[derive(Clone, Default)]
-pub struct PrivateNodes {
-    keys: HashSet<NodeKey>,
-    by_origin: HashMap<String, HashSet<(bool, DomNodeId)>>,
-    origin_entry_count: usize,
-}
-
-impl PrivateNodes {
-    /// Creates an empty [`PrivateNodes`] set.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Marks an exact [`NodeKey`] as host-private.
-    pub fn mark_key(&mut self, key: NodeKey) {
-        self.keys.insert(key);
-    }
-
-    /// Marks `node` within `origin` as host-private.
-    ///
-    /// Ignores origins whose `value` is empty so origin-less documents never falsely collide.
-    pub fn mark_in_origin(&mut self, origin: DocOrigin, node: DomNodeId) {
-        if origin.value.is_empty() {
-            return;
-        }
-        if self
-            .by_origin
-            .entry(origin.value)
-            .or_default()
-            .insert((origin.opaque, node))
-        {
-            self.origin_entry_count += 1;
-        }
-    }
-
-    /// Marks `key` as host-private and, when `origin` has a non-empty `value`, also marks
-    /// `(origin, key.node)`.
-    pub fn mark_with_origin(&mut self, key: NodeKey, origin: Option<DocOrigin>) {
-        let node = key.node;
-        self.mark_key(key);
-        if let Some(doc_origin) = origin {
-            self.mark_in_origin(doc_origin, node);
-        }
-    }
-
-    /// Whether neither key entries nor origin entries are present.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.origin_entry_count == 0
-    }
-
-    /// Number of distinct [`NodeKey`] entries marked host-private.
-    #[must_use]
-    pub fn key_count(&self) -> usize {
-        self.keys.len()
-    }
-
-    /// Number of distinct `(DocOrigin, DomNodeId)` entries marked host-private.
-    #[must_use]
-    pub const fn origin_count(&self) -> usize {
-        self.origin_entry_count
-    }
-
-    /// Whether `key` was explicitly marked via [`Self::mark_key`] or [`Self::mark_with_origin`].
-    #[must_use]
-    pub fn contains_key(&self, key: &NodeKey) -> bool {
-        self.keys.contains(key)
-    }
-
-    /// Whether `node` in `doc` matches either by exact [`NodeKey`] or by non-empty [`DocOrigin`].
-    #[must_use]
-    pub fn matches_doc_node(&self, doc: &TreeDoc, node: DomNodeId) -> bool {
-        if self.is_empty() {
-            return false;
-        }
-        if !self.keys.is_empty() && self.keys.contains(&NodeKey::new(doc.token().clone(), node)) {
-            return true;
-        }
-        if let Some(origin) = doc.origin()
-            && !origin.value.is_empty()
-            && let Some(entries) = self.by_origin.get(origin.value.as_str())
-            && entries.contains(&(origin.opaque, node))
-        {
-            return true;
-        }
-        false
-    }
-}
-
-impl fmt::Debug for PrivateNodes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PrivateNodes")
-            .field("key_count", &self.keys.len())
-            .field("origin_count", &self.origin_entry_count)
-            .finish_non_exhaustive()
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ChromiumRedaction {
     None,
@@ -233,14 +129,10 @@ pub(crate) fn apply_masks(
         if !header.eligible_for_host_private {
             continue;
         }
-        let is_host_private = private.is_some_and(|set| {
-            !set.is_empty()
-                && header.dom_id.is_some_and(|dom_id| {
-                    docs.get(header.doc_id.index())
-                        .is_some_and(|doc| set.matches_doc_node(doc, dom_id))
-                })
+        let marked = header.dom_id.is_some_and(|dom_id| {
+            is_host_private(private, docs.get(header.doc_id.index()), dom_id)
         });
-        if !is_host_private {
+        if !marked {
             continue;
         }
 
@@ -261,6 +153,21 @@ pub(crate) fn apply_masks(
     }
 
     masks
+}
+
+/// Whether `dom_id`, read in `doc`, must be masked as host-private ([`PrivateNodes::is_private`]).
+///
+/// A node whose document is missing has no known site, so a marked id masks rather than prints:
+/// an absent lookup never turns into a clear value.
+fn is_host_private(
+    private: Option<&PrivateNodes>,
+    doc: Option<&TreeDoc>,
+    dom_id: DomNodeId,
+) -> bool {
+    private.is_some_and(|set| match doc {
+        Some(doc) => set.is_private_in(doc, dom_id),
+        None => set.is_private(None, dom_id),
+    })
 }
 
 fn apply_chromium_redaction(
@@ -539,10 +446,9 @@ fn sanitize_ref_list(
             item.unrendered_text = None;
             continue;
         }
-        let is_private = private.is_some_and(|set| {
-            !set.is_empty() && doc.is_some_and(|tree_doc| set.matches_doc_node(tree_doc, dom_id))
-        });
-        if is_private && let Some(text) = item.unrendered_text.as_mut() {
+        if is_host_private(private, doc, dom_id)
+            && let Some(text) = item.unrendered_text.as_mut()
+        {
             let bullets = text.encode_utf16().count().min(MAX_REDACTED_BULLETS);
             *text = bullets_for(bullets);
         }
@@ -709,19 +615,18 @@ mod tests {
     use std::error::Error;
 
     use crate::proto::{
-        ContentAttributes, ContentData, FormControlData, FormControlType, RedactionDecision,
+        BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
+        RedactionDecision,
     };
 
     use super::super::apc_builder::{ApcBuilder, FrameBuilder, NodeBuilder};
     use super::super::frame_stitch::{StitchedTree, frame_stitch};
-    use super::super::node_key::{DocToken, DomNodeId, NodeKey};
+    use super::super::node_key::DomNodeId;
+    use super::super::private_nodes::PrivateNodes;
+    use super::super::site_key::SiteKey;
     use super::super::snapshot_tree::BuildOptions;
-    use super::super::tree_doc::DocOrigin;
     use super::super::tree_node::TreeNode;
-    use super::{
-        MAX_REDACTED_BULLETS, MaskSource, NodeMask, PrivateNodes, apply_masks,
-        effective_field_value,
-    };
+    use super::{MAX_REDACTED_BULLETS, MaskSource, NodeMask, apply_masks, effective_field_value};
 
     fn stitch(builder: ApcBuilder) -> Result<StitchedTree, Box<dyn Error>> {
         Ok(frame_stitch(
@@ -788,9 +693,10 @@ mod tests {
             ),
         )?;
 
+        // doc-main has no origin, so the host mark is an unknown-site mark: it would mask 10
+        // anywhere, and Chromium's redaction must still win.
         let mut private = PrivateNodes::new();
-        let main_tok = DocToken::new("doc-main").ok_or("token")?;
-        private.mark_key(NodeKey::new(main_tok, DomNodeId::new(10)));
+        private.mark(None, DomNodeId::new(10));
 
         let masks = apply_masks(&mut stitched.nodes, &stitched.docs, Some(&private));
 
@@ -964,26 +870,12 @@ mod tests {
             ),
         )?;
 
+        // doc-main has no origin, so both marks are unknown-site marks: 10 by intent, and 30
+        // because an empty origin string reads as no site and fails closed into masking.
         let mut private = PrivateNodes::new();
-        let main_tok = DocToken::new("doc-main").ok_or("token")?;
-        let k10 = NodeKey::new(main_tok.clone(), DomNodeId::new(10));
-        private.mark_key(k10.clone());
-        private.mark_with_origin(
-            NodeKey::new(main_tok, DomNodeId::new(30)),
-            Some(DocOrigin {
-                opaque: false,
-                value: String::new(),
-            }),
-        );
-
+        private.mark(None, DomNodeId::new(10));
+        private.mark(SiteKey::from_origin(""), DomNodeId::new(30));
         assert!(!private.is_empty());
-        assert!(private.contains_key(&k10));
-        assert_eq!(private.key_count(), 2);
-        assert_eq!(
-            private.origin_count(),
-            0,
-            "empty origin value must be ignored"
-        );
 
         let masks = apply_masks(&mut stitched.nodes, &stitched.docs, Some(&private));
 
@@ -1056,14 +948,10 @@ mod tests {
         )?;
 
         let mut private = PrivateNodes::new();
-        private.mark_in_origin(
-            DocOrigin {
-                opaque: false,
-                value: "https://bank.example".to_owned(),
-            },
+        private.mark(
+            SiteKey::from_origin("https://bank.example"),
             DomNodeId::new(20),
         );
-        assert_eq!(private.origin_count(), 1);
 
         let masks = apply_masks(&mut stitched.nodes, &stitched.docs, Some(&private));
 
@@ -1134,6 +1022,64 @@ mod tests {
     }
 
     #[test]
+    fn a_node_whose_document_is_missing_masks_a_marked_id_and_its_relation_fallback()
+    -> Result<(), Box<dyn Error>> {
+        let mut stitched = stitch(
+            ApcBuilder::new("doc-main")
+                .main_origin("https://bank.example", false)
+                .root(
+                    NodeBuilder::root()
+                        .child(
+                            NodeBuilder::form_control(FormControlType::InputText)
+                                .dom_id(10)
+                                .tag("input")
+                                .field_value("CANARY_IN"),
+                        )
+                        .child(
+                            NodeBuilder::form_control(FormControlType::ButtonButton)
+                                .dom_id(11)
+                                .tag("button")
+                                .labelledby(vec![BrowserOsRef {
+                                    dom_node_id: Some(12),
+                                    unrendered_text: Some("CANARY_LBL".to_owned()),
+                                }]),
+                        ),
+                ),
+        )?;
+        let bank = SiteKey::from_origin("https://bank.example");
+        let mut private = PrivateNodes::new();
+        private.mark(bank.clone(), DomNodeId::new(10));
+        private.mark(bank, DomNodeId::new(12));
+
+        // No document table: every node's site is unknown, which must mask, not reveal.
+        let masks = apply_masks(&mut stitched.nodes, &[], Some(&private));
+
+        let input_idx = find_dom_idx(&stitched, 10)?;
+        assert_eq!(
+            masks.get(input_idx).copied(),
+            Some(NodeMask::Redacted {
+                source: MaskSource::HostPrivate,
+                bullets: 9,
+            }),
+            "a marked id whose document is missing masks"
+        );
+        let button_idx = find_dom_idx(&stitched, 11)?;
+        let fallback = stitched
+            .nodes
+            .get(button_idx)
+            .and_then(TreeNode::raw_attributes)
+            .and_then(|raw| raw.browseros.as_deref())
+            .and_then(|browseros| browseros.labelledby.first())
+            .and_then(|item| item.unrendered_text.as_deref());
+        assert_eq!(
+            fallback,
+            Some("••••••••••"),
+            "a relation fallback into a marked id whose document is missing prints bullets"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn effective_field_value_never_reads_raw_value_when_masked() {
         let raw = ContentAttributes {
             content_data: Some(ContentData::FormControl(Box::new(FormControlData {
@@ -1176,26 +1122,5 @@ mod tests {
             ),
             Some("•••".to_owned())
         );
-    }
-
-    #[test]
-    fn private_nodes_debug_redacts_keys_and_origins() -> Result<(), Box<dyn Error>> {
-        let mut private = PrivateNodes::new();
-        let tok = DocToken::new("SECRET_DOC_TOKEN").ok_or("token")?;
-        private.mark_with_origin(
-            NodeKey::new(tok, DomNodeId::new(42)),
-            Some(DocOrigin {
-                opaque: false,
-                value: "https://secret-origin.example".to_owned(),
-            }),
-        );
-
-        let debug = format!("{private:?}");
-        assert!(!debug.contains("SECRET_DOC_TOKEN"));
-        assert!(!debug.contains("secret-origin.example"));
-        assert!(!debug.contains("42"));
-        assert!(debug.contains("key_count: 1"));
-        assert!(debug.contains("origin_count: 1"));
-        Ok(())
     }
 }

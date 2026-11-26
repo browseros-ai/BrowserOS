@@ -19,6 +19,8 @@ prost.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 thiserror.workspace = true
+# Normalizes security origins into `tree::SiteKey`, half of the host-private mask's key.
+url.workspace = true
 
 [dev-dependencies]
 browseros-cdp.workspace = true

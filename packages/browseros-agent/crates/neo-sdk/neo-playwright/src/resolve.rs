@@ -28,6 +28,9 @@ mod frame_start;
 mod handle_site;
 mod resolver;
 
+#[cfg(test)]
+pub(crate) use chunk_run::{ChunkOutcome, ChunkSet, First};
+pub(crate) use chunk_run::{ChunkPage, ChunkRun, QueryRoot};
 pub(crate) use frame_path::{FramePath, Hop, HopIframe};
 pub(crate) use frame_start::{FrameStart, Started};
 pub(crate) use handle_site::{HandleSite, handle_detached};

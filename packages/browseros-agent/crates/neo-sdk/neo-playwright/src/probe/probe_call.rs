@@ -352,18 +352,21 @@ pub(crate) async fn call_on(
 }
 
 /// One request with several nodes (remote objects in this world, from `DOM.resolveNode` with
-/// its context id), which the probe reads in their order after an empty root: a snapshot's
-/// clickable targets. With no nodes it is [`call`]. As with [`call_on`], an id a later document
-/// took over fails the call as `Gone`, and never reaches a page's own world.
+/// its context id), which the probe reads in their order after the call's root: a snapshot's
+/// clickable targets (no root), or a chunk run's tree nodes, from an element handle's node when
+/// the run's query starts there. With no root and no nodes it is [`call`]. As with [`call_on`],
+/// an id a later document took over fails the call as `Gone`, and never reaches a page's own
+/// world.
 pub(crate) async fn call_with_nodes(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
+    root: Option<&str>,
     nodes: &[String],
 ) -> Result<ProbeReply, ProbeFailure> {
     let crash = scope.begin_protocol(world.session());
-    let handed = Handed { root: None, nodes };
+    let handed = Handed { root, nodes };
     send(world, request, policy(scope, page), handed, Gesture::None)
         .await
         .inspect_err(|failure| crash.probe_failure(failure))
@@ -549,11 +552,61 @@ pub(crate) async fn pinned_object(
 /// carries backend ids directly, avoiding a `pinned` call and `DOM.describeNode` per match.
 /// The result's remote array lives in the op's object group, keeping every node alive until
 /// the main-world gateway has adopted it; no selector or Neo callback runs in the page world.
+/// It answers every element the probe still holds, in the page or not.
 pub(crate) async fn pinned_nodes(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     world: &IsolatedWorld,
     pins: Vec<Pin>,
+) -> Result<Option<Vec<BackendNodeId>>, ProbeFailure> {
+    pinned_batch(scope, page, world, pins, PinnedFilter::Held).await
+}
+
+/// [`pinned_nodes`] for the world's own document only: `None` also when a pin's element left
+/// the page or the page moved it into another document. It is design 6.2's ownership check
+/// for pins (`isConnected` and `ownerDocument === document`), which `pinned_nodes` cannot make
+/// because the probe answers a held element wherever it went.
+pub(crate) async fn pinned_nodes_in_document(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    pins: Vec<Pin>,
+) -> Result<Option<Vec<BackendNodeId>>, ProbeFailure> {
+    pinned_batch(scope, page, world, pins, PinnedFilter::InDocument).await
+}
+
+/// Which of the probe's pinned elements a batch read answers; any other pin reads as null.
+#[derive(Clone, Copy)]
+enum PinnedFilter {
+    /// Every element the probe holds.
+    Held,
+    /// An element connected to the world's own document. `isConnected` alone is not enough:
+    /// an element the page moved into a same-origin iframe is connected there, still resolves
+    /// in this world (`DOM.resolveNode`), and the probe still holds it.
+    InDocument,
+}
+
+impl PinnedFilter {
+    /// The step the batch's function applies to the probe's answers. It runs after the
+    /// `uninstalled` check: run first, it would null the marker, and a world without a probe
+    /// would read as a pin gone instead of the world gone.
+    const fn step(self) -> &'static str {
+        match self {
+            Self::Held => "",
+            Self::InDocument => {
+                ".map(node => node instanceof Node && node.isConnected && \
+                 node.ownerDocument === document ? node : null)"
+            }
+        }
+    }
+}
+
+async fn pinned_batch(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    pins: Vec<Pin>,
+    filter: PinnedFilter,
 ) -> Result<Option<Vec<BackendNodeId>>, ProbeFailure> {
     let crash = scope.begin_protocol(world.session());
     let count = pins.len();
@@ -563,11 +616,12 @@ pub(crate) async fn pinned_nodes(
         .collect();
     // Use the same request gateway as single pins, including its uninstalled marker. A
     // batch runs synchronously so a re-key cannot mix pins from two probe lifetimes.
+    let step = filter.step();
     let function = format!(
         "function (calls) {{ const call = ({CALL_FUNCTION}); \
          const nodes = calls.map(envelope => call.call(this, envelope)); \
          return nodes.some(node => node && !(node instanceof Node) && \
-                           node.kind === 'uninstalled') ? null : nodes; }}"
+                           node.kind === 'uninstalled') ? null : nodes{step}; }}"
     );
     let policy = policy(scope, page);
     let calls: Vec<ProbeCall<'_>> = requests

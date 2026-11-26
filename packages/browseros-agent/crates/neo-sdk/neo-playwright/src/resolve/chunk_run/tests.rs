@@ -173,11 +173,11 @@ fn doms(tree: &SnapshotTree, page: &FakePage, set: &ChunkSet) -> TestResult<Vec<
 }
 
 /// The DOM ids the run pinned through `hydrate`, call by call.
-fn hydrated(page: &FakePage) -> Vec<Vec<i32>> {
+fn hydrated(page: &FakePage) -> Vec<i32> {
     page.sent
         .iter()
         .filter_map(|sent| match sent {
-            Sent::Hydrate(doms) => Some(doms.clone()),
+            Sent::Hydrate(dom) => Some(*dom),
             _ => None,
         })
         .collect()
@@ -1072,11 +1072,7 @@ async fn a_frame_hop_takes_one_pin() -> TestResult {
         return Err("the first button, pinned".into());
     };
     assert_eq!(page.dom_of(pin), 13, "the first in tree order");
-    assert_eq!(
-        hydrated(&page),
-        [vec![13]],
-        "a tree set hydrates that one key"
-    );
+    assert_eq!(hydrated(&page), [13], "a tree set hydrates that one key");
 
     let pins = matched(
         chunk_run

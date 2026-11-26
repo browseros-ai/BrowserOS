@@ -7,11 +7,11 @@ use crate::proto::AnnotatedPageContent;
 use super::build_error::BuildError;
 use super::fold::{self, ClickProxy, FoldInfo, SyntheticOption};
 use super::frame_stitch::{self, StitchedTree};
-use super::mask::{self, PrivateNodes};
 use super::node_key::{DocId, DocSeq, DocToken, FrameToken, NodeId, NodeKey, NodeRange};
+use super::private_nodes::PrivateNodes;
 use super::tree_doc::{PartialFrame, TreeDoc};
 use super::tree_node::TreeNode;
-use super::{hidden, role, state};
+use super::{hidden, mask, role, state};
 
 /// Minimum BrowserOS APC contract version required to construct a [`SnapshotTree`].
 pub const MIN_CONTRACT_VERSION: u32 = 1;

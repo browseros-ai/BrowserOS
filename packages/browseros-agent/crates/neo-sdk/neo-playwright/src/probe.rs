@@ -25,7 +25,8 @@ pub(crate) use probe_call::call_for_tests;
 
 pub(crate) use probe_call::{
     Control, NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture,
-    call_with_nodes, cleanup, describe, pinned_nodes, pinned_object, reply_of,
+    call_with_nodes, cleanup, describe, pinned_nodes, pinned_nodes_in_document, pinned_object,
+    reply_of,
 };
 pub(crate) use probe_reply::{
     CoverFacts, CoverKind, CoverMark, ErrorClass, Hit, OwnCase, OwnPress, PROBE_PROTOCOL, PageText,

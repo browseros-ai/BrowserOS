@@ -13,9 +13,9 @@ use neo_snapshot_apc::proto::{
 };
 use neo_snapshot_apc::refs::{Ref, RefKind, RefLookup, RefTarget, TabRefTable};
 use neo_snapshot_apc::tree::{
-    ApcBuilder, AriaAsk, AriaRoot, AriaTree, BuildOptions, DocId, DocOrigin, DocSeq, DocToken,
-    DomNodeId, FrameBuilder, MAX_JSON_DEPTH, MIN_CONTRACT_VERSION, NameCache, NameVisibility,
-    NodeBuilder, NodeId, NodeKey, PartialIframeSpec, PrivateNodes, SnapshotTree, TreeNode,
+    ApcBuilder, AriaAsk, AriaRoot, AriaTree, BuildOptions, DocId, DocSeq, DocToken, DomNodeId,
+    FrameBuilder, MAX_JSON_DEPTH, MIN_CONTRACT_VERSION, NameCache, NameVisibility, NodeBuilder,
+    NodeId, NodeKey, PartialIframeSpec, PrivateNodes, SiteKey, SnapshotTree, TreeNode,
 };
 use serde_json::Number;
 
@@ -1523,11 +1523,69 @@ fn build_host_private_iframes() -> Vec<NodeBuilder> {
                     &format!("{CANARY}-opaque"),
                 )),
         );
+    let other_nonce = FrameBuilder::new("doc-other-nonce")
+        .origin("opaque-nonce-other", true)
+        .root(NodeBuilder::root().dom_id(1).child(text_input_node(
+            88,
+            0,
+            "OtherNonce Public",
+            "public-other-nonce",
+        )));
+    // No security origin, and a URL on another site than the marks: the document's site is
+    // unknown, and a URL fallback would wrongly read it as public.example.
+    let no_origin = FrameBuilder::new("doc-no-origin")
+        .url("https://public.example/embed")
+        .root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(text_input_node(
+                    77,
+                    0,
+                    "NoOrigin Secret",
+                    &format!("{CANARY}-no-origin"),
+                ))
+                .child(text_input_node(
+                    89,
+                    30,
+                    "NoOrigin Public",
+                    "public-no-origin",
+                ))
+                .child(
+                    NodeBuilder::form_control(FormControlType::ButtonButton)
+                        .dom_id(90)
+                        .tag("button")
+                        .bounding_box(0, 60, 140, 24)
+                        .labelledby(vec![BrowserOsRef {
+                            dom_node_id: Some(96),
+                            unrendered_text: Some(format!("{CANARY}-fallback")),
+                        }]),
+                ),
+        );
     vec![
         NodeBuilder::iframe(same_origin).bounding_box(0, 220, 300, 80),
         NodeBuilder::iframe(cross_origin).bounding_box(0, 310, 300, 80),
         NodeBuilder::iframe(opaque_origin).bounding_box(0, 400, 300, 80),
+        NodeBuilder::iframe(other_nonce).bounding_box(0, 490, 300, 80),
+        NodeBuilder::iframe(no_origin).bounding_box(0, 580, 300, 100),
     ]
+}
+
+fn site(origin: &str) -> Result<SiteKey, Box<dyn Error>> {
+    SiteKey::from_origin(origin).ok_or_else(|| format!("{origin:?} must read as an origin").into())
+}
+
+/// The site of a document whose security origin is the opaque `nonce`: the only way to name an
+/// opaque site is through a document APC reported, as the tab's mirror does when it seeds one.
+fn opaque_site(nonce: &str) -> Result<SiteKey, Box<dyn Error>> {
+    let tree = build_tree(
+        ApcBuilder::new("doc-nonce-probe")
+            .main_origin(nonce, true)
+            .root(NodeBuilder::root().dom_id(1))
+            .build(),
+        BuildOptions::new(),
+    )?;
+    let doc = tree.main_document().ok_or("main doc")?;
+    SiteKey::of_doc(doc).ok_or_else(|| format!("nonce {nonce:?} must be a site").into())
 }
 
 fn build_host_private_multiframe_apc() -> AnnotatedPageContent {
@@ -1595,22 +1653,15 @@ fn assert_textbox_text(
 #[test]
 fn privacy_host_private_origin_isolation_contenteditable_and_labelledby()
 -> Result<(), Box<dyn Error>> {
+    let app = site("https://app.example")?;
     let mut private = PrivateNodes::new();
-    for dom_id in [10, 11, 12, 20, 30] {
-        private.mark_key(node_key("doc-main", dom_id)?);
+    // doc-main is on https://app.example, so its boxes are marked on that site; so is 77, the box
+    // the page later moves into the same-origin iframe, and 96, a node of the origin-less frame.
+    for dom_id in [10, 11, 12, 20, 30, 77, 96] {
+        private.mark(Some(app.clone()), DomNodeId::new(dom_id));
     }
-    private.mark_with_origin(
-        node_key("doc-main", 77)?,
-        Some(DocOrigin {
-            opaque: false,
-            value: "https://app.example".to_owned(),
-        }),
-    );
-    private.mark_in_origin(
-        DocOrigin {
-            opaque: true,
-            value: "https://app.example".to_owned(),
-        },
+    private.mark(
+        Some(opaque_site("https://app.example")?),
         DomNodeId::new(88),
     );
 
@@ -1634,14 +1685,26 @@ fn privacy_host_private_origin_isolation_contenteditable_and_labelledby()
         "Moved Secret",
         &"•".repeat(format!("{CANARY}-moved").encode_utf16().count()),
     )?;
+    // 77 is marked on app.example: masked in the same-origin iframe (another document token),
+    // clear on public.example, and clear in the opaque document whose nonce spells app.example.
     assert_textbox_text(ai.nodes(), "CrossOrigin Public", "public-cross-origin")?;
     assert_textbox_text(ai.nodes(), "Opaque Public", "public-opaque-origin")?;
+    // 88 is marked on the opaque nonce only: clear in the tuple app.example document and under
+    // another nonce.
     assert_textbox_text(ai.nodes(), "NonOpaque Public", "public-non-opaque")?;
+    assert_textbox_text(ai.nodes(), "OtherNonce Public", "public-other-nonce")?;
     assert_textbox_text(
         ai.nodes(),
         "Opaque Secret",
         &"•".repeat(format!("{CANARY}-opaque").encode_utf16().count()),
     )?;
+    // The origin-less iframe's site is unknown: a marked id masks, an unmarked one stays clear.
+    assert_textbox_text(
+        ai.nodes(),
+        "NoOrigin Secret",
+        &"•".repeat(format!("{CANARY}-no-origin").encode_utf16().count()),
+    )?;
+    assert_textbox_text(ai.nodes(), "NoOrigin Public", "public-no-origin")?;
 
     let expected_btn_bullets = "•".repeat(format!("{CANARY}-lbl").encode_utf16().count());
     let labelled_btn = find_by_role_name(ai.nodes(), "button", Some(&expected_btn_bullets))
@@ -1654,7 +1717,39 @@ fn privacy_host_private_origin_isolation_contenteditable_and_labelledby()
         cache.name(btn_id, NameVisibility::VisibleOnly).text(),
         expected_btn_bullets
     );
+    let fallback_btn = node_id_of(&tree, "doc-no-origin", 90)?;
+    assert_eq!(
+        cache.name(fallback_btn, NameVisibility::VisibleOnly).text(),
+        "•".repeat(format!("{CANARY}-fallback").encode_utf16().count()),
+        "a labelledby fallback into a marked node of an origin-less document prints bullets"
+    );
     assert_zero_canary_surface(&tree, &ai, &default, &refs, &private, &cache)?;
+    Ok(())
+}
+
+#[test]
+fn privacy_an_unknown_site_mark_masks_its_id_in_every_document() -> Result<(), Box<dyn Error>> {
+    let mut private = PrivateNodes::new();
+    private.mark(None, DomNodeId::new(77));
+
+    let tree = build_tree(
+        build_host_private_multiframe_apc(),
+        BuildOptions::new().with_private_nodes(&private),
+    )?;
+    let mut refs = TabRefTable::new();
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+
+    let bullets = |value: &str| "•".repeat(value.encode_utf16().count());
+    for (name, value) in [
+        ("Moved Secret", format!("{CANARY}-moved")),
+        ("CrossOrigin Public", "public-cross-origin".to_owned()),
+        ("Opaque Public", "public-opaque-origin".to_owned()),
+        ("NoOrigin Secret", format!("{CANARY}-no-origin")),
+    ] {
+        assert_textbox_text(ai.nodes(), name, &bullets(&value))?;
+    }
+    assert_textbox_text(ai.nodes(), "NonOpaque Public", "public-non-opaque")?;
+    assert_textbox_text(ai.nodes(), "NoOrigin Public", "public-no-origin")?;
     Ok(())
 }
 
@@ -2132,14 +2227,13 @@ fn privacy_unrendered_relation_fallbacks_are_masked_without_canary_leaks()
     let err_secret = format!("{CANARY}-ERR");
     let apc = build_unrendered_relation_apc(&lbl_secret, &desc_secret, &err_secret);
 
+    // doc-rel-mask is on https://vault.example: the relation targets are marked on that site,
+    // whichever document the mark was first made in.
+    let vault = site("https://vault.example")?;
     let mut private = PrivateNodes::new();
-    private.mark_key(node_key("doc-rel-mask", 100)?);
-    let vault_origin = DocOrigin {
-        opaque: false,
-        value: "https://vault.example".to_owned(),
-    };
-    private.mark_with_origin(node_key("doc-other", 101)?, Some(vault_origin.clone()));
-    private.mark_with_origin(node_key("doc-other", 102)?, Some(vault_origin));
+    for dom_id in [100, 101, 102] {
+        private.mark(Some(vault.clone()), DomNodeId::new(dom_id));
+    }
 
     let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
     let cache = NameCache::new(&tree);
@@ -2250,9 +2344,10 @@ fn privacy_masked_select_sanitizes_synthetic_and_embedded_option_names()
     let nested_opt = format!("{CANARY}-NESTED");
     let apc = build_masked_select_apc(&host_opt, &host_val_only, &nested_opt);
 
+    // doc-select-mask has no origin, so these are unknown-site marks.
     let mut private = PrivateNodes::new();
-    private.mark_key(node_key("doc-select-mask", 20)?);
-    private.mark_key(node_key("doc-select-mask", 30)?);
+    private.mark(None, DomNodeId::new(20));
+    private.mark(None, DomNodeId::new(30));
     let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
     let cache = NameCache::new(&tree);
     let mut refs = TabRefTable::new();

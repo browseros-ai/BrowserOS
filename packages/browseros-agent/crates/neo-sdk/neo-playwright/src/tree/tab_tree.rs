@@ -12,8 +12,9 @@
 //!   `DocTable` stays the authority on seqs and document lifetime: refs are issued under the seq
 //!   `DocTable` assigned, and the table drains `DocTable`'s retirement queue, so a document's refs
 //!   retire in lockstep with the document.
-//! - [`PrivateNodes`] mirrors host-typed secret marks by `(SiteKey, DomNodeId)` so APC masking
-//!   redacts host-entered values without extra page round trips.
+//! - [`PrivateMirror`] mirrors the private entry's marks by `DomNodeId` and [`SiteKey`]; every
+//!   capture builds with a copy of them, so APC masking redacts host-entered values without a page
+//!   round trip.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,9 +22,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_core::FrameId;
 use futures_util::future;
-use neo_snapshot_apc::refs::{Ref, RefLookup, TabRefTable};
+use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
+use neo_snapshot_apc::select::RefResolver;
 use neo_snapshot_apc::tree::{
-    BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SnapshotTree, TreeDoc,
+    BuildOptions, DocSeq, DocToken, DomNodeId, FrameToken, NodeKey, SiteKey, SnapshotTree, TreeDoc,
 };
 
 use crate::PlaywrightError;
@@ -33,7 +35,7 @@ use crate::probe::{self, ProbeFailure, ProbeReply};
 use crate::target::AriaRefJump;
 use crate::tree::{
     AttemptStart, CaptureError, CapturedTree, Hydrate, HydrateOutcome, HydratedNode, PageCapture,
-    PrivateNodes, SiteKey, TabOriginState, private_nodes,
+    PrivateMirror, TabOriginState, private_mirror,
 };
 use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, Pin, Stamp};
 
@@ -44,7 +46,7 @@ use crate::world::{DocContext, DocPlace, FrameSeq, FrameWorlds, IsolatedWorld, P
 pub(crate) struct TabTree {
     capture: PageCapture,
     refs: Arc<Mutex<TabRefTable>>,
-    private: Arc<Mutex<PrivateNodes>>,
+    private: Arc<Mutex<PrivateMirror>>,
 }
 
 impl TabTree {
@@ -55,7 +57,7 @@ impl TabTree {
         Self {
             capture: PageCapture::default(),
             refs: Arc::new(Mutex::new(TabRefTable::new())),
-            private: Arc::new(Mutex::new(PrivateNodes::new(origin_state))),
+            private: Arc::new(Mutex::new(PrivateMirror::new(origin_state))),
         }
     }
 
@@ -69,7 +71,7 @@ impl TabTree {
         Self {
             capture: PageCapture::new(min_contract_version),
             refs: Arc::new(Mutex::new(TabRefTable::new())),
-            private: Arc::new(Mutex::new(PrivateNodes::new(origin_state))),
+            private: Arc::new(Mutex::new(PrivateMirror::new(origin_state))),
         }
     }
 
@@ -83,6 +85,9 @@ impl TabTree {
     /// - Worlds failing `Gone` are invalidated immediately and their retired documents' refs are
     ///   retired before new seqs are assigned (design section 6.3).
     /// - Worlds failing for any other reason are omitted from the proven map (fail closed).
+    ///
+    /// The tree is built with a copy of the private mirror's marks taken after the reply, so it
+    /// masks every box marked before the reply arrived.
     pub(crate) async fn capture(
         &self,
         scope: &OpScope<'_>,
@@ -94,6 +99,7 @@ impl TabTree {
         let page_state = Arc::clone(page.state());
         let main_frame = page.main_endpoint().frame;
         let refs = Arc::clone(&self.refs);
+        let private = Arc::clone(&self.private);
         let min_contract_version = self.capture.min_contract_version();
 
         let outcome = self
@@ -132,9 +138,22 @@ impl TabTree {
                     page_state.frames().seq_for_doc(ctx, &proven)
                 };
 
+                // Privacy layer 2's feed (design 8.1). The copy is taken after the reply: a
+                // caller of `mark_private` mirrors a mark before the first host-typed character
+                // reaches the page, so any APC reply that can hold that character arrived after
+                // the mark, and a copy taken now has it (one taken before dispatch would miss a
+                // mark made during the round trip). It is a copy, not the guard, so `mark_private`
+                // on the typing path never blocks a thread on this std mutex for a whole build.
+                // The copy costs one entry per box the host typed into on this tab.
+                let marks = private
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .marks()
+                    .clone();
                 let options = BuildOptions::new()
                     .with_min_contract_version(min_contract_version)
-                    .with_seq_of(&seq_of);
+                    .with_seq_of(&seq_of)
+                    .with_private_nodes(&marks);
                 let built = SnapshotTree::build(apc, options).map_err(CaptureError::Build);
                 // Worlds the probe proved gone, and documents `seq_of` displaced from their frames,
                 // retired in `DocTable` above; drop their refs even when the build failed.
@@ -215,42 +234,38 @@ impl TabTree {
             .ref_for(key, Some(seq))
     }
 
-    /// Mirrors a single host-private DOM node mark for `site`.
-    pub(crate) fn mark_private(&self, site: SiteKey, node: DomNodeId) {
+    /// Mirrors one host-private DOM node mark made on `site` (`None`: site unknown, so `node`
+    /// masks in every document).
+    ///
+    /// The caller mirrors the mark before the first character is typed into the box: a capture
+    /// copies the marks after its APC reply arrives, which masks only what was mirrored by then.
+    pub(crate) fn mark_private(&self, site: Option<SiteKey>, node: DomNodeId) {
         self.private
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .mark(site, node);
     }
 
-    /// Resolves probe `pins` in `world` into [`DomNodeId`]s and mirrors all surviving pins as
-    /// host-private under `site`, returning how many nodes were mirrored.
+    /// Resolves probe `pins` in `world` into [`DomNodeId`]s and mirrors every surviving pin as
+    /// host-private on `site`, returning how many nodes were mirrored.
+    ///
+    /// As with [`Self::mark_private`], the caller mirrors the marks before the first character is
+    /// typed into any of the boxes.
     pub(crate) async fn mark_private_pins(
         &self,
         scope: &OpScope<'_>,
         page: &OpPage<'_>,
         world: &IsolatedWorld,
-        site: SiteKey,
+        site: Option<SiteKey>,
         pins: Vec<Pin>,
     ) -> Result<usize, ProbeFailure> {
-        let dom_ids = private_nodes::describe_pins_node_ids(scope, page, world, pins).await?;
+        let dom_ids = private_mirror::describe_pins_node_ids(scope, page, world, pins).await?;
         let count = dom_ids.len();
-        if count > 0 {
-            self.private
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .mark_many(site, dom_ids);
+        let mut mirror = self.private.lock().unwrap_or_else(PoisonError::into_inner);
+        for node in dom_ids {
+            mirror.mark(site.clone(), node);
         }
         Ok(count)
-    }
-
-    /// Returns whether `node` must be masked inside `doc` (failing closed on absent metadata).
-    #[must_use]
-    pub(crate) fn is_private_in_doc(&self, doc: &TreeDoc, node: DomNodeId) -> bool {
-        self.private
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_private_in_doc(doc, node)
     }
 
     /// Returns whether `doc` still needs a one-time page-side seed read for pre-existing tabs.
@@ -262,26 +277,17 @@ impl TabTree {
             .needs_seed(doc)
     }
 
-    /// Imports pre-existing private marks seeded from `doc`'s isolated world and marks `doc`
-    /// seeded.
+    /// Imports the pre-existing private marks `doc`'s isolated world reported, on `doc`'s own
+    /// site, and records `doc` seeded; zero `nodes` records an empty seed.
     pub(crate) fn record_private_seed(
         &self,
-        doc: DocToken,
-        site: SiteKey,
+        doc: &TreeDoc,
         nodes: impl IntoIterator<Item = DomNodeId>,
     ) {
         self.private
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .record_seeded(doc, site, nodes);
-    }
-
-    /// Marks `doc` seeded when its isolated world reported zero host-private marks.
-    pub(crate) fn mark_private_seeded_empty(&self, doc: DocToken) {
-        self.private
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .mark_seeded_empty(doc);
+            .record_seeded(doc, nodes);
     }
 }
 
@@ -298,6 +304,25 @@ impl fmt::Debug for TabTree {
             debug.field("private", &*private);
         }
         debug.finish()
+    }
+}
+
+/// A chunk run's `aria-ref` parts read the tab's live table, one short lock per lookup: a run
+/// holding `&TabTree` across awaits never holds the lock across one, and a ref retired between
+/// two of its stages answers `None` in the later one, as the page's live ref map would.
+impl RefResolver for TabTree {
+    fn resolve(&self, body: &str) -> Option<NodeKey> {
+        let lookup = self
+            .refs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .resolve_str(body);
+        match lookup {
+            // A click proxy (a zero-size control's shown label, design 3.5) changes how an
+            // action presses the control, not which node the ref names.
+            RefLookup::Key(RefTarget { key, .. }) => Some(key),
+            RefLookup::Retired | RefLookup::Unknown => None,
+        }
     }
 }
 
@@ -366,190 +391,31 @@ fn retire_refs_of_retired_docs(frames: &FrameWorlds, refs: &Mutex<TabRefTable>) 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, VecDeque};
-    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use browseros_core::FrameId;
     use neo_snapshot::{AriaChild, AriaNode};
     use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
+    use neo_snapshot_apc::select::RefResolver;
     use neo_snapshot_apc::tree::{
         ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, DomNodeId, MIN_CONTRACT_VERSION,
-        NodeBuilder, NodeKey, SnapshotTree,
+        NodeBuilder, NodeKey, SiteKey, SnapshotTree,
     };
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use crate::ErrorCode;
     use crate::op_scope::OpScope;
     use crate::page::OpPage;
-    use crate::probe::PROBE_PROTOCOL;
     use crate::target::{AriaRefJump, CallHeader};
-    use crate::test_support::{
-        ProbeAnswer, SCRIPTED_CHILD, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript,
-        TestResult, count_op,
+    use crate::test_support::{SCRIPTED_CHILD, ScriptedRun, ScriptedTab, TestResult, count_op};
+    use crate::tree::private_mirror::tests::{Shown, page, shown};
+    use crate::tree::tree_script::{
+        ChildFrameSpec, TreeScript, apc_reply, encode_apc_reply, encode_apc_reply_nodes,
+        encode_button_node, key,
     };
-    use crate::tree::{AttemptStart, HydrateOutcome, SiteKey, TabOriginState, TabTree};
+    use crate::tree::{AttemptStart, HydrateOutcome, TabOriginState, TabTree};
     use crate::world::{DocContext, DocLookup, DocPlace, FrameSeq, FrameWorlds, Pin, Place, Stamp};
-
-    // --- Minimal protobuf wire encoder for hand-crafted offline APC fixtures ---
-
-    fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
-        loop {
-            let mut byte = (value & 0x7f) as u8;
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80;
-            }
-            out.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
-    }
-
-    fn encode_varint_field(tag: u32, value: u64, out: &mut Vec<u8>) {
-        encode_varint(u64::from(tag) << 3, out);
-        encode_varint(value, out);
-    }
-
-    fn encode_len_delimited(tag: u32, payload: &[u8], out: &mut Vec<u8>) {
-        encode_varint((u64::from(tag) << 3) | 2, out);
-        encode_varint(payload.len() as u64, out);
-        out.extend_from_slice(payload);
-    }
-
-    fn encode_frame_data(doc_token: &str, url: Option<&str>, frame_token: Option<&str>) -> Vec<u8> {
-        let mut frame = Vec::new();
-        let mut doc_id = Vec::new();
-        encode_len_delimited(1, doc_token.as_bytes(), &mut doc_id);
-        encode_len_delimited(3, &doc_id, &mut frame);
-        if let Some(url) = url {
-            encode_len_delimited(4, url.as_bytes(), &mut frame);
-        }
-        if let Some(token) = frame_token {
-            let mut browseros = Vec::new();
-            encode_len_delimited(1, token.as_bytes(), &mut browseros);
-            encode_len_delimited(1000, &browseros, &mut frame);
-        }
-        frame
-    }
-
-    fn encode_leaf_node(dom_id: i32) -> Vec<u8> {
-        let mut attrs = Vec::new();
-        encode_varint_field(2, u64::from(dom_id.cast_unsigned()), &mut attrs);
-        encode_varint_field(3, 24, &mut attrs); // FormControl
-        let mut node = Vec::new();
-        encode_len_delimited(2, &attrs, &mut node);
-        node
-    }
-
-    /// A `<button>` named `label` with a box: the ai-mode emitter gives it a ref.
-    fn encode_button_node(dom_id: i32, label: &str) -> Vec<u8> {
-        let mut rect = Vec::new();
-        encode_varint_field(3, 80, &mut rect); // width
-        encode_varint_field(4, 20, &mut rect); // height
-        let mut geometry = Vec::new();
-        encode_len_delimited(1, &rect, &mut geometry); // outer_bounding_box
-        let mut browseros = Vec::new();
-        encode_len_delimited(1, b"button", &mut browseros); // tag
-        encode_len_delimited(11, label.as_bytes(), &mut browseros); // aria_label
-        let mut attrs = Vec::new();
-        encode_varint_field(2, u64::from(dom_id.cast_unsigned()), &mut attrs);
-        encode_varint_field(3, 2, &mut attrs); // Container
-        encode_len_delimited(4, &geometry, &mut attrs);
-        encode_len_delimited(1000, &browseros, &mut attrs);
-        let mut node = Vec::new();
-        encode_len_delimited(2, &attrs, &mut node);
-        node
-    }
-
-    struct ChildFrameSpec<'a> {
-        iframe_dom_id: i32,
-        doc_token: &'a str,
-        frame_token: &'a str,
-        url: Option<&'a str>,
-        child_dom_ids: &'a [i32],
-    }
-
-    fn encode_apc_reply(
-        main_doc_token: &str,
-        main_url: Option<&str>,
-        main_dom_ids: &[i32],
-        child: Option<&ChildFrameSpec<'_>>,
-        contract_version: Option<u32>,
-    ) -> Value {
-        let main_nodes: Vec<Vec<u8>> = main_dom_ids
-            .iter()
-            .map(|&dom_id| encode_leaf_node(dom_id))
-            .collect();
-        encode_apc_reply_nodes(
-            main_doc_token,
-            main_url,
-            &main_nodes,
-            child,
-            contract_version,
-        )
-    }
-
-    fn encode_apc_reply_nodes(
-        main_doc_token: &str,
-        main_url: Option<&str>,
-        main_nodes: &[Vec<u8>],
-        child: Option<&ChildFrameSpec<'_>>,
-        contract_version: Option<u32>,
-    ) -> Value {
-        let mut root_node = Vec::new();
-        for node in main_nodes {
-            encode_len_delimited(1, node, &mut root_node);
-        }
-        if let Some(child) = child {
-            let mut iframe_node = Vec::new();
-            for &dom_id in child.child_dom_ids {
-                let leaf = encode_leaf_node(dom_id);
-                encode_len_delimited(1, &leaf, &mut iframe_node);
-            }
-            let child_frame_data =
-                encode_frame_data(child.doc_token, child.url, Some(child.frame_token));
-            let mut iframe_data = Vec::new();
-            encode_len_delimited(3, &child_frame_data, &mut iframe_data);
-
-            let mut iframe_attrs = Vec::new();
-            encode_varint_field(
-                2,
-                u64::from(child.iframe_dom_id.cast_unsigned()),
-                &mut iframe_attrs,
-            );
-            encode_varint_field(3, 3, &mut iframe_attrs); // Iframe
-            encode_len_delimited(9, &iframe_data, &mut iframe_attrs);
-            encode_len_delimited(2, &iframe_attrs, &mut iframe_node);
-            encode_len_delimited(1, &iframe_node, &mut root_node);
-        }
-
-        let mut root_attrs = Vec::new();
-        encode_varint_field(2, 1, &mut root_attrs);
-        encode_varint_field(3, 1, &mut root_attrs); // Root
-        encode_len_delimited(2, &root_attrs, &mut root_node);
-
-        let main_frame_data = encode_frame_data(main_doc_token, main_url, None);
-
-        let mut apc = Vec::new();
-        encode_varint_field(1, 1, &mut apc); // Version10
-        encode_len_delimited(2, &root_node, &mut apc);
-        encode_len_delimited(3, &main_frame_data, &mut apc);
-        if let Some(version) = contract_version {
-            let mut browseros = Vec::new();
-            encode_varint_field(1, u64::from(version), &mut browseros);
-            encode_len_delimited(1000, &browseros, &mut apc);
-        }
-        json!({ "content": STANDARD.encode(apc) })
-    }
-
-    fn key(doc: &str, dom_id: i32) -> TestResult<NodeKey> {
-        let token = DocToken::new(doc).ok_or("non-empty doc token")?;
-        Ok(NodeKey::new(token, DomNodeId::new(dom_id)))
-    }
 
     fn jump(raw: &str) -> TestResult<AriaRefJump> {
         Ok(AriaRefJump::parse(raw).ok_or("valid canonical ref")?)
@@ -593,412 +459,6 @@ mod tests {
             .assign_snapshot_ref(printed.seq(), key, "button", "", None);
         assert_eq!(assigned, printed, "the ref table must issue {raw} next");
         Ok(assigned)
-    }
-
-    /// Programmable fake CDP script backing `ScriptedTab` for offline `TabTree` + `Hydrate` tests.
-    ///
-    /// Tracks distinct per-install execution context IDs and global object IDs, per-global stale
-    /// status (so `W_old` can go `Gone` after navigation while `W_new` succeeds), queued APC
-    /// replies, `DOM.resolveNode` behaviors, and probe replies.
-    struct TreeScript {
-        has_child: bool,
-        apc_replies: Mutex<VecDeque<Value>>,
-        default_apc: Mutex<Option<Value>>,
-        /// Hook run right after an isolated world finishes booting, letting tests simulate a
-        /// navigation occurring between Case 3's world install and its subsequent recapture.
-        after_world_install: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
-        next_context: AtomicI64,
-        context_to_global: Mutex<HashMap<i64, String>>,
-        global_info: Mutex<HashMap<String, WorldStub>>,
-        stale_globals: Mutex<HashMap<String, &'static str>>,
-        resolve_node_error: Mutex<Option<&'static str>>,
-        resolve_probe_error: Mutex<Option<&'static str>>,
-        resolve_probe_reply: Mutex<Option<Value>>,
-        pinned_nodes_reply: Mutex<Option<Value>>,
-        next_pin: AtomicU32,
-        rekey_first_main: AtomicBool,
-        rekey_retired_seq: u32,
-        resolve_node_calls: Mutex<Vec<Value>>,
-        apc_calls: AtomicUsize,
-    }
-
-    #[derive(Clone)]
-    struct WorldStub {
-        frame: String,
-        seq: u32,
-        url: String,
-    }
-
-    impl TreeScript {
-        fn new(default_apc: Value) -> Self {
-            Self {
-                has_child: false,
-                apc_replies: Mutex::default(),
-                default_apc: Mutex::new(Some(default_apc)),
-                after_world_install: Mutex::default(),
-                next_context: AtomicI64::new(100),
-                context_to_global: Mutex::default(),
-                global_info: Mutex::default(),
-                stale_globals: Mutex::default(),
-                resolve_node_error: Mutex::default(),
-                resolve_probe_error: Mutex::default(),
-                resolve_probe_reply: Mutex::default(),
-                pinned_nodes_reply: Mutex::default(),
-                next_pin: AtomicU32::new(1),
-                rekey_first_main: AtomicBool::new(false),
-                rekey_retired_seq: 0,
-                resolve_node_calls: Mutex::default(),
-                apc_calls: AtomicUsize::new(0),
-            }
-        }
-
-        fn with_child(mut self) -> Self {
-            self.has_child = true;
-            self
-        }
-
-        fn with_rekey_retired_seq(mut self, retired: u32) -> Self {
-            self.rekey_first_main = AtomicBool::new(true);
-            self.rekey_retired_seq = retired;
-            self
-        }
-
-        fn push_apc(&self, reply: Value) {
-            self.apc_replies
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push_back(reply);
-        }
-
-        fn set_default_apc(&self, reply: Value) {
-            *self
-                .default_apc
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(reply);
-        }
-
-        fn mark_global_stale(&self, global: &str, message: &'static str) {
-            self.stale_globals
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(global.to_owned(), message);
-        }
-
-        fn set_resolve_node_error(&self, message: Option<&'static str>) {
-            *self
-                .resolve_node_error
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = message;
-        }
-
-        fn set_resolve_probe_error(&self, message: Option<&'static str>) {
-            *self
-                .resolve_probe_error
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = message;
-        }
-
-        fn set_resolve_probe_reply(&self, reply: Option<Value>) {
-            *self
-                .resolve_probe_reply
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = reply;
-        }
-
-        fn set_pinned_nodes_reply(&self, reply: Value) {
-            *self
-                .pinned_nodes_reply
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(reply);
-        }
-
-        fn set_after_world_install(&self, hook: impl Fn() + Send + Sync + 'static) {
-            *self
-                .after_world_install
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
-        }
-
-        fn apc_count(&self) -> usize {
-            self.apc_calls.load(Ordering::SeqCst)
-        }
-
-        fn resolve_node_calls(&self) -> Vec<Value> {
-            self.resolve_node_calls
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone()
-        }
-
-        fn call_function_on_reply(&self, params: &Value) -> Option<Value> {
-            let object_id = params["objectId"].as_str().unwrap_or_default();
-            let first = &params["arguments"][0]["value"];
-
-            // Batch pinned_nodes call (array of envelopes) used by mark_private_pins.
-            if first.is_array() {
-                return self
-                    .pinned_nodes_reply
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
-            }
-
-            // Boot install call carrying `{ frameSeq, epoch }`.
-            if let Some(seq) = first["frameSeq"].as_u64() {
-                return Some(self.boot_reply(object_id, u32::try_from(seq).unwrap_or(0)));
-            }
-
-            // Normal probe request envelope `{ request, policy }`.
-            let request = first.get("request")?;
-            let op = request["op"].as_str()?;
-            let reply = match op {
-                "describe" => {
-                    let stub = self
-                        .global_info
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .get(object_id)
-                        .cloned();
-                    let (seq, url) = stub.map_or_else(
-                        || (0, "https://a.test/".to_owned()),
-                        |stub| (stub.seq, stub.url),
-                    );
-                    json!({
-                        "kind": "described",
-                        "protocol": PROBE_PROTOCOL,
-                        "seq": seq,
-                        "url": url,
-                    })
-                }
-                "resolve" if request["want"] == "frame" => {
-                    let pin = self.next_pin.fetch_add(1, Ordering::SeqCst);
-                    json!({
-                        "kind": "frame",
-                        "pin": pin,
-                        "key": format!("#{pin}"),
-                        "visible": true,
-                        "src": "https://a.test/child",
-                    })
-                }
-                "resolve" => self
-                    .resolve_probe_reply
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone()
-                    .unwrap_or_else(|| {
-                        let pin = self.next_pin.fetch_add(1, Ordering::SeqCst);
-                        let root_obj = params["arguments"][1]["objectId"]
-                            .as_str()
-                            .unwrap_or("node");
-                        json!({
-                            "kind": "element",
-                            "pin": pin,
-                            "preview": format!("<button data-obj=\"{root_obj}\">Go</button>"),
-                        })
-                    }),
-                _ => return None,
-            };
-            Some(json!({
-                "result": { "type": "string", "value": reply.to_string() }
-            }))
-        }
-
-        fn boot_reply(&self, object_id: &str, seq: u32) -> Value {
-            let mut retired = None;
-            let url = {
-                let mut info = self
-                    .global_info
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                if let Some(stub) = info.get_mut(object_id) {
-                    stub.seq = seq;
-                    if stub.frame == SCRIPTED_MAIN
-                        && self.rekey_first_main.swap(false, Ordering::SeqCst)
-                    {
-                        retired = Some(self.rekey_retired_seq);
-                    }
-                    stub.url.clone()
-                } else {
-                    "https://a.test/".to_owned()
-                }
-            };
-            let hook = self
-                .after_world_install
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            if let Some(hook) = hook {
-                hook();
-            }
-            let mut reply = json!({
-                "kind": "described",
-                "protocol": PROBE_PROTOCOL,
-                "seq": seq,
-                "url": url,
-            });
-            if let Some(retired_seq) = retired {
-                reply["retired"] = json!(retired_seq);
-            }
-            json!({ "result": { "type": "string", "value": reply.to_string() } })
-        }
-    }
-
-    impl TabScript for TreeScript {
-        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-            // `Runtime.callFunctionOn` is handled directly in `cdp_reply` / `cdp_error` below so
-            // we can inspect `params["objectId"]` per world install.
-            ProbeAnswer::unexpected()
-        }
-
-        fn child(&self) -> bool {
-            self.has_child
-        }
-
-        fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
-            match method {
-                "DOM.resolveNode" => {
-                    if let Some(error) = *self
-                        .resolve_node_error
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                    {
-                        return Some(error);
-                    }
-                    if let Some(ctx) = params["executionContextId"].as_i64() {
-                        let global = self
-                            .context_to_global
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .get(&ctx)
-                            .cloned();
-                        if let Some(global) = global
-                            && let Some(msg) = self
-                                .stale_globals
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .get(&global)
-                                .copied()
-                        {
-                            return Some(msg);
-                        }
-                    }
-                    None
-                }
-                "Runtime.callFunctionOn" => {
-                    if let Some(object_id) = params["objectId"].as_str()
-                        && let Some(msg) = self
-                            .stale_globals
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .get(object_id)
-                            .copied()
-                    {
-                        return Some(msg);
-                    }
-                    let op = params["arguments"][0]["value"]["request"]["op"].as_str();
-                    if op == Some("resolve") {
-                        return *self
-                            .resolve_probe_error
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner);
-                    }
-                    None
-                }
-                _ => None,
-            }
-        }
-
-        fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
-            match method {
-                // Report no pre-existing targets at Playwright start so the scripted tab models a
-                // newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`).
-                "Target.getTargets" => Some(json!({ "targetInfos": [] })),
-                "Page.getAnnotatedPageContent" => {
-                    self.apc_calls.fetch_add(1, Ordering::SeqCst);
-                    let queued = self
-                        .apc_replies
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .pop_front();
-                    queued.or_else(|| {
-                        self.default_apc
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .clone()
-                    })
-                }
-                "Page.createIsolatedWorld" => {
-                    let frame = params["frameId"]
-                        .as_str()
-                        .unwrap_or(SCRIPTED_MAIN)
-                        .to_owned();
-                    let ctx = self.next_context.fetch_add(1, Ordering::SeqCst);
-                    let global = format!("g-{frame}-{ctx}");
-                    self.context_to_global
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .insert(ctx, global.clone());
-                    let url = if frame == SCRIPTED_CHILD {
-                        "https://a.test/child".to_owned()
-                    } else {
-                        "https://a.test/".to_owned()
-                    };
-                    self.global_info
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .insert(global, WorldStub { frame, seq: 0, url });
-                    Some(json!({ "executionContextId": ctx }))
-                }
-                "Runtime.evaluate" => {
-                    let ctx = params["contextId"].as_i64()?;
-                    let global = self
-                        .context_to_global
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .get(&ctx)
-                        .cloned()?;
-                    Some(json!({ "result": { "type": "object", "objectId": global } }))
-                }
-                "DOM.getFrameOwner" => {
-                    if params["frameId"].as_str() == Some(SCRIPTED_CHILD) {
-                        Some(json!({ "backendNodeId": 500 }))
-                    } else {
-                        None
-                    }
-                }
-                "DOM.resolveNode" => {
-                    let backend_id = params["backendNodeId"].as_i64().unwrap_or_default();
-                    let ctx = params["executionContextId"].as_i64().unwrap_or_default();
-                    self.resolve_node_calls
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .push(params.clone());
-                    Some(json!({
-                        "object": {
-                            "type": "object",
-                            "subtype": "node",
-                            "objectId": format!("node-{ctx}-{backend_id}"),
-                        }
-                    }))
-                }
-                "DOM.describeNode" => {
-                    let object_id = params["objectId"].as_str().unwrap_or_default();
-                    if object_id.ends_with("-500") {
-                        return Some(json!({
-                            "node": {
-                                "backendNodeId": 500,
-                                "nodeName": "IFRAME",
-                                "frameId": SCRIPTED_CHILD,
-                                "contentDocument": { "nodeId": 2, "backendNodeId": 2, "nodeName": "#document" },
-                            }
-                        }));
-                    }
-                    None
-                }
-                "Runtime.callFunctionOn" => self.call_function_on_reply(params),
-                _ => None,
-            }
-        }
     }
 
     #[tokio::test]
@@ -1888,6 +1348,70 @@ mod tests {
         Ok(())
     }
 
+    /// A chunk run's `aria-ref` parts resolve through the tab's table as it stands at each
+    /// lookup, retirements included.
+    #[test]
+    fn a_runs_ref_parts_resolve_through_the_tabs_live_table() -> TestResult {
+        let frames = FrameWorlds::new(FrameSeq(0));
+        let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
+        let button = key("doc-page", 10)?;
+        let checkbox = key("doc-page", 20)?;
+        let label = key("doc-page", 21)?;
+        let located = key("doc-page", 30)?;
+        let seq = frames.seq_for_doc(
+            DocContext {
+                token: &button.doc,
+                frame: Some(&FrameId("main".to_owned())),
+                place: DocPlace::Main,
+                url: Some("https://a.test/"),
+                requested_at: Stamp::next(),
+            },
+            &HashMap::new(),
+        );
+        let (printed, proxied) = {
+            let mut table = tree.refs.lock().unwrap_or_else(PoisonError::into_inner);
+            let printed = table.assign_snapshot_ref(seq, &button, "button", "Pay", None);
+            let proxied =
+                table.assign_snapshot_ref(seq, &checkbox, "checkbox", "Accept", Some(label));
+            (printed, proxied)
+        };
+        let minted = tree.ref_for(seq, &located);
+        let refs: &(dyn RefResolver + Sync) = &tree;
+
+        assert_eq!(
+            refs.resolve(&printed.to_string()),
+            Some(button.clone()),
+            "a printed ref names the node the snapshot printed it on"
+        );
+        assert_eq!(
+            refs.resolve(&minted.to_string()),
+            Some(located),
+            "a minted ref names the node `locator.ref()` minted it for"
+        );
+        assert_eq!(
+            refs.resolve(&proxied.to_string()),
+            Some(checkbox),
+            "a click proxy changes how an action presses the control, not which node it is"
+        );
+        for body in ["e99", "x1", "e01", ""] {
+            assert_eq!(
+                refs.resolve(body),
+                None,
+                "{body:?} names no live node: never issued, or not a ref at all"
+            );
+        }
+        assert_eq!(
+            tree.retire_doc(&frames, &button.doc),
+            Some(FrameSeq(seq.raw()))
+        );
+        assert_eq!(
+            refs.resolve(&printed.to_string()),
+            None,
+            "a ref retired with its document names no live node at the next lookup"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn contract_gate_refuses_stock_browser_apc_payload_as_unsupported() -> TestResult {
         let stock_apc = encode_apc_reply("doc-stock", Some("https://a.test/"), &[10], None, None);
@@ -1914,38 +1438,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn private_nodes_mirror_and_seed_through_tab_tree() -> TestResult {
-        let apc = encode_apc_reply(
-            "doc-private",
-            Some("https://a.test/"),
-            &[42],
-            None,
-            Some(MIN_CONTRACT_VERSION),
-        );
-        let tab = ScriptedTab::new(TreeScript::new(apc));
+    async fn private_marks_mirror_and_seed_into_captured_trees() -> TestResult {
+        let ids = [42, 84, 99, 123, 7];
+        let on_a = Some(("https://a.test", false));
+        let tab = ScriptedTab::new(TreeScript::new(apc_reply(&page("doc-private", on_a, &ids))));
         let run = ScriptedRun::over(&tab).await?;
         let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
-        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         let tree = TabTree::new(TabOriginState::ExistedAtStart);
 
-        tab.script().set_pinned_nodes_reply(json!({
-            "result": {
-                "type": "object",
-                "deepSerializedValue": {
-                    "type": "array",
-                    "value": [
-                        { "type": "node", "value": { "backendNodeId": 42 } },
-                        { "type": "node", "value": { "backendNodeId": 84 } }
-                    ]
-                }
-            }
-        }));
-        let main_world = page.world(&page.main_endpoint(), Place::Main).await?;
-        let site_a = SiteKey::from_origin("https://A.TEST:443/login").ok_or("site a")?;
+        tab.script().hold_pin(Pin(1), 42);
+        tab.script().hold_pin(Pin(2), 84);
+        let main_world = op_page.world(&op_page.main_endpoint(), Place::Main).await?;
+        // The private entry's world reads its origin in another spelling than APC's.
+        let site_a = SiteKey::from_origin("https://A.TEST:443");
         let mirrored = tree
             .mark_private_pins(
                 &scope,
-                &page,
+                &op_page,
                 &main_world,
                 site_a.clone(),
                 vec![Pin(1), Pin(2)],
@@ -1955,60 +1465,110 @@ mod tests {
             mirrored, 2,
             "mark_private_pins must mirror every surviving pinned DomNodeId"
         );
-        tree.mark_private(site_a.clone(), DomNodeId::new(99));
+        tree.mark_private(site_a, DomNodeId::new(99));
 
-        let same_origin_moved = SnapshotTree::build(
-            ApcBuilder::new("doc-moved")
-                .main_url("https://a.test/iframe")
-                .root(NodeBuilder::root().dom_id(1))
-                .build(),
-            BuildOptions::new(),
-        )?;
-        let other_site = SnapshotTree::build(
-            ApcBuilder::new("doc-other")
-                .main_url("https://b.test/form")
-                .main_origin("https://b.test", false)
-                .root(NodeBuilder::root().dom_id(1))
-                .build(),
-            BuildOptions::new(),
-        )?;
-        let moved_doc = same_origin_moved.main_document().ok_or("moved doc")?;
-        let other_doc = other_site.main_document().ok_or("other doc")?;
-
+        let first = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
         for id in [42, 84, 99] {
-            assert!(
-                tree.is_private_in_doc(moved_doc, DomNodeId::new(id)),
-                "host-private node {id} must stay masked after a same-origin document move"
+            assert_eq!(
+                shown(first.tree(), id)?,
+                Shown::Bullets,
+                "box {id}, mirrored before the capture, must print bullets"
             );
-            assert!(
-                !tree.is_private_in_doc(other_doc, DomNodeId::new(id)),
-                "host-private node {id} must not bleed onto a cross-site document"
+        }
+        for id in [123, 7] {
+            assert_eq!(
+                shown(first.tree(), id)?,
+                Shown::Value,
+                "box {id} carries no mirrored mark yet"
             );
         }
 
-        // ExistedAtStart one-time seeding through TabTree.
-        let doc_a = DocToken::new("doc-preexisting-a").ok_or("doc a")?;
-        let doc_b = DocToken::new("doc-preexisting-b").ok_or("doc b")?;
-        assert!(tree.needs_private_seed(&doc_a));
-        assert!(tree.needs_private_seed(&doc_b));
+        // The tab predates this instance: the first snapshot seeds its document's earlier marks.
+        let doc = first.tree().main_document().ok_or("main doc")?;
+        assert!(tree.needs_private_seed(doc.token()));
+        tree.record_private_seed(doc, [DomNodeId::new(123)]);
+        assert!(
+            !tree.needs_private_seed(doc.token()),
+            "a document is seeded once"
+        );
 
-        tree.record_private_seed(doc_a.clone(), site_a, [DomNodeId::new(123)]);
-        assert!(!tree.needs_private_seed(&doc_a));
-        assert!(tree.is_private_in_doc(moved_doc, DomNodeId::new(123)));
-        assert!(tree.needs_private_seed(&doc_b));
+        tab.script()
+            .push_apc(apc_reply(&page("doc-moved", on_a, &ids)));
+        tab.script().push_apc(apc_reply(&page(
+            "doc-other",
+            Some(("https://b.test", false)),
+            &ids,
+        )));
+        let moved = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        for id in [42, 84, 99, 123] {
+            assert_eq!(
+                shown(moved.tree(), id)?,
+                Shown::Bullets,
+                "box {id} must stay masked after the page moves it into another same-origin \
+                 document"
+            );
+        }
+        assert_eq!(
+            shown(moved.tree(), 7)?,
+            Shown::Value,
+            "box 7 was never marked"
+        );
+        let other = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        for id in ids {
+            assert_eq!(
+                shown(other.tree(), id)?,
+                Shown::Value,
+                "box {id} on another site is another node, so it must print its value"
+            );
+        }
+        Ok(())
+    }
 
-        tree.mark_private_seeded_empty(doc_b.clone());
-        assert!(!tree.needs_private_seed(&doc_b));
+    #[tokio::test]
+    async fn a_mark_mirrored_while_the_apc_request_is_in_flight_is_masked_in_that_capture()
+    -> TestResult {
+        let apc = page("doc-typing", Some(("https://a.test", false)), &[7, 8]);
+        let tab = ScriptedTab::new(TreeScript::new(apc_reply(&apc)));
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let op_page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = Arc::new(TabTree::new(TabOriginState::OpenedUnderInstance));
+
+        // The private entry marks a box on the typing path while the capture's APC request is
+        // between the browser and its reply.
+        let typing = Arc::clone(&tree);
+        let site = SiteKey::from_origin("https://a.test");
+        tab.script()
+            .set_during_apc(move || typing.mark_private(site.clone(), DomNodeId::new(7)));
+
+        let captured = tree.capture(&scope, &op_page, AttemptStart::now()).await?;
+        assert_eq!(tab.script().apc_count(), 1, "one capture, one APC request");
+        assert_eq!(
+            shown(captured.tree(), 7)?,
+            Shown::Bullets,
+            "the marks are copied after the reply, so a mark made during the round trip masks"
+        );
+        assert_eq!(
+            shown(captured.tree(), 8)?,
+            Shown::Value,
+            "box 8 was never marked"
+        );
         Ok(())
     }
 
     #[test]
     fn ref_for_and_debug_redaction_through_tab_tree() -> TestResult {
         let tree = TabTree::new(TabOriginState::ExistedAtStart);
-        let site = SiteKey::from_origin("https://secret-tenant.example:8443/account")
-            .ok_or("valid site")?;
-        tree.mark_private(site, DomNodeId::new(7));
-        tree.mark_private_seeded_empty(DocToken::new("doc-preexisting-secret").ok_or("doc")?);
+        let site =
+            SiteKey::from_origin("https://secret-tenant.example:8443").ok_or("valid site")?;
+        tree.mark_private(Some(site), DomNodeId::new(7));
+        let preexisting = SnapshotTree::build(
+            ApcBuilder::new("doc-preexisting-secret")
+                .root(NodeBuilder::root().dom_id(1))
+                .build(),
+            BuildOptions::new(),
+        )?;
+        tree.record_private_seed(preexisting.main_document().ok_or("doc")?, []);
 
         let ref_key = key("doc-debug-secret", 5)?;
         let minted = tree.ref_for(DocSeq::new(0), &ref_key);
@@ -2035,7 +1595,7 @@ mod tests {
             debug.contains("TabTree")
                 && debug.contains("PageCapture")
                 && debug.contains("TabRefTable")
-                && debug.contains("PrivateNodes"),
+                && debug.contains("PrivateMirror"),
             "TabTree Debug must summarize all subcomponents: {debug}"
         );
         Ok(())
