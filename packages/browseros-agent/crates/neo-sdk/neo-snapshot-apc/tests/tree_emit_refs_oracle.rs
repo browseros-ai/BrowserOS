@@ -100,11 +100,6 @@ const DEFAULT_TREE_DIFFERS: &[(&str, &str)] = &[
          holds a partial frame where the oracle holds the frame's content",
     ),
     (
-        "names",
-        "APC's collapsible-whitespace skip: no text node carries the space between two inline \
-         elements, so their texts join",
-    ),
-    (
         "states",
         "a nested aria-disabled=\"false\" does not stop inheritance (ledger Disabled, G2)",
     ),

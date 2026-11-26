@@ -4,7 +4,7 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "149681F118748130D3B66F0FFCDC5E9F",
+      "frame": "57BBC7AA5B937ADE7A66EE4C1E6794FD",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/edge/names.html",
@@ -34,7 +34,7 @@
           }
         },
         {
-          "backendNodeId": 265,
+          "backendNodeId": 274,
           "role": "code",
           "name": "",
           "description": "",
@@ -46,7 +46,7 @@
           }
         },
         {
-          "backendNodeId": 267,
+          "backendNodeId": 276,
           "role": "strong",
           "name": "",
           "description": "",
@@ -58,7 +58,7 @@
           }
         },
         {
-          "backendNodeId": 269,
+          "backendNodeId": 278,
           "role": "emphasis",
           "name": "",
           "description": "",
@@ -70,7 +70,7 @@
           }
         },
         {
-          "backendNodeId": 76,
+          "backendNodeId": 77,
           "role": "button",
           "name": "labelledby: first id second id",
           "description": "",
@@ -84,7 +84,7 @@
           }
         },
         {
-          "backendNodeId": 78,
+          "backendNodeId": 79,
           "role": "button",
           "name": "labelledby: self reference plus a second id",
           "description": "",
@@ -98,7 +98,7 @@
           }
         },
         {
-          "backendNodeId": 82,
+          "backendNodeId": 83,
           "role": "button",
           "name": "labelledby: display-none referent still counts",
           "description": "",
@@ -112,7 +112,7 @@
           }
         },
         {
-          "backendNodeId": 86,
+          "backendNodeId": 87,
           "role": "button",
           "name": "labelledby: referent's own aria-label wins",
           "description": "",
@@ -126,7 +126,7 @@
           }
         },
         {
-          "backendNodeId": 92,
+          "backendNodeId": 93,
           "role": "button",
           "name": "labelledby: referent content, its own labelledby not followed",
           "description": "",
@@ -140,7 +140,7 @@
           }
         },
         {
-          "backendNodeId": 94,
+          "backendNodeId": 95,
           "role": "button",
           "name": "labelledby: every id missing, falls to content",
           "description": "",
@@ -168,7 +168,7 @@
           }
         },
         {
-          "backendNodeId": 101,
+          "backendNodeId": 102,
           "role": "button",
           "name": "labelledby: private box •••••••••••••••••••••••••",
           "description": "",
@@ -225,7 +225,7 @@
           }
         },
         {
-          "backendNodeId": 307,
+          "backendNodeId": 316,
           "role": "option",
           "name": "red",
           "description": "",
@@ -240,7 +240,7 @@
           }
         },
         {
-          "backendNodeId": 309,
+          "backendNodeId": 318,
           "role": "option",
           "name": "blue",
           "description": "",
@@ -255,7 +255,7 @@
           }
         },
         {
-          "backendNodeId": 111,
+          "backendNodeId": 112,
           "role": "button",
           "name": "aria-label blank: falls to content",
           "description": "",
@@ -325,7 +325,7 @@
           }
         },
         {
-          "backendNodeId": 126,
+          "backendNodeId": 127,
           "role": "button",
           "name": "native: input type=button by value",
           "description": "",
@@ -339,7 +339,7 @@
           }
         },
         {
-          "backendNodeId": 129,
+          "backendNodeId": 130,
           "role": "button",
           "name": "native: input type=button without value falls to title",
           "description": "native: input type=button without value falls to title",
@@ -353,7 +353,7 @@
           }
         },
         {
-          "backendNodeId": 131,
+          "backendNodeId": 132,
           "role": "button",
           "name": "native: input type=submit by value",
           "description": "",
@@ -367,7 +367,7 @@
           }
         },
         {
-          "backendNodeId": 133,
+          "backendNodeId": 134,
           "role": "button",
           "name": "Submit",
           "description": "",
@@ -381,7 +381,7 @@
           }
         },
         {
-          "backendNodeId": 136,
+          "backendNodeId": 137,
           "role": "button",
           "name": "native: input type=reset by value",
           "description": "",
@@ -395,7 +395,7 @@
           }
         },
         {
-          "backendNodeId": 139,
+          "backendNodeId": 140,
           "role": "button",
           "name": "Reset",
           "description": "",
@@ -423,7 +423,7 @@
           }
         },
         {
-          "backendNodeId": 146,
+          "backendNodeId": 147,
           "role": "button",
           "name": "Choose File",
           "description": "",
@@ -451,7 +451,7 @@
           }
         },
         {
-          "backendNodeId": 153,
+          "backendNodeId": 154,
           "role": "button",
           "name": "native: image input by alt",
           "description": "image input title becomes the description, alt wins the name",
@@ -465,7 +465,7 @@
           }
         },
         {
-          "backendNodeId": 155,
+          "backendNodeId": 156,
           "role": "button",
           "name": "native: image input by title",
           "description": "native: image input by title",
@@ -479,7 +479,7 @@
           }
         },
         {
-          "backendNodeId": 157,
+          "backendNodeId": 158,
           "role": "button",
           "name": "Submit",
           "description": "",
@@ -549,7 +549,7 @@
           }
         },
         {
-          "backendNodeId": 340,
+          "backendNodeId": 349,
           "role": "option",
           "name": "option: in a select named by title",
           "description": "",
@@ -564,7 +564,7 @@
           }
         },
         {
-          "backendNodeId": 172,
+          "backendNodeId": 173,
           "role": "checkbox",
           "name": "native: checkbox by title",
           "description": "native: checkbox by title",
@@ -579,7 +579,7 @@
           }
         },
         {
-          "backendNodeId": 173,
+          "backendNodeId": 174,
           "role": "img",
           "name": "native: img by alt",
           "description": "img title becomes the description, alt wins the name",
@@ -591,7 +591,7 @@
           }
         },
         {
-          "backendNodeId": 175,
+          "backendNodeId": 176,
           "role": "img",
           "name": "native: img by title",
           "description": "native: img by title",
@@ -603,7 +603,7 @@
           }
         },
         {
-          "backendNodeId": 177,
+          "backendNodeId": 178,
           "role": "img",
           "name": "native: img carrying an image map",
           "description": "",
@@ -615,7 +615,7 @@
           }
         },
         {
-          "backendNodeId": 348,
+          "backendNodeId": 357,
           "role": "link",
           "name": "",
           "description": "area title becomes the description, alt wins the name",
@@ -628,7 +628,7 @@
           }
         },
         {
-          "backendNodeId": 350,
+          "backendNodeId": 359,
           "role": "link",
           "name": "",
           "description": "native: area by title",
@@ -714,7 +714,7 @@
           }
         },
         {
-          "backendNodeId": 356,
+          "backendNodeId": 365,
           "role": "rowgroup",
           "name": "",
           "description": "",
@@ -726,7 +726,7 @@
           }
         },
         {
-          "backendNodeId": 357,
+          "backendNodeId": 366,
           "role": "row",
           "name": "cell: in a table named by caption",
           "description": "",
@@ -753,7 +753,7 @@
           }
         },
         {
-          "backendNodeId": 184,
+          "backendNodeId": 185,
           "role": "button",
           "name": "content: block div boundary",
           "description": "",
@@ -767,7 +767,7 @@
           }
         },
         {
-          "backendNodeId": 190,
+          "backendNodeId": 191,
           "role": "button",
           "name": "content: inlinespanjoin",
           "description": "",
@@ -781,7 +781,7 @@
           }
         },
         {
-          "backendNodeId": 194,
+          "backendNodeId": 195,
           "role": "button",
           "name": "[before] content: css pseudo [after attr]",
           "description": "",
@@ -795,7 +795,7 @@
           }
         },
         {
-          "backendNodeId": 197,
+          "backendNodeId": 198,
           "role": "button",
           "name": "content: block pseudo block-after",
           "description": "",
@@ -809,7 +809,7 @@
           }
         },
         {
-          "backendNodeId": 200,
+          "backendNodeId": 201,
           "role": "button",
           "name": "content: icon nested img alt",
           "description": "",
@@ -823,7 +823,7 @@
           }
         },
         {
-          "backendNodeId": 202,
+          "backendNodeId": 203,
           "role": "img",
           "name": "nested img alt",
           "description": "",
@@ -835,7 +835,7 @@
           }
         },
         {
-          "backendNodeId": 204,
+          "backendNodeId": 205,
           "role": "button",
           "name": "content: visible end",
           "description": "",
@@ -849,7 +849,7 @@
           }
         },
         {
-          "backendNodeId": 208,
+          "backendNodeId": 209,
           "role": "button",
           "name": "content: text-transform uppercase source",
           "description": "",
@@ -863,7 +863,7 @@
           }
         },
         {
-          "backendNodeId": 210,
+          "backendNodeId": 211,
           "role": "button",
           "name": "content: whitespace nbsp zerowidth softhyphen newline tab",
           "description": "",
@@ -877,7 +877,7 @@
           }
         },
         {
-          "backendNodeId": 374,
+          "backendNodeId": 383,
           "role": "link",
           "name": "content: heading inside link",
           "description": "",
@@ -916,7 +916,7 @@
           }
         },
         {
-          "backendNodeId": 214,
+          "backendNodeId": 215,
           "role": "button",
           "name": "title: empty button with only a title",
           "description": "title: empty button with only a title",
@@ -930,7 +930,7 @@
           }
         },
         {
-          "backendNodeId": 216,
+          "backendNodeId": 217,
           "role": "button",
           "name": "title: div role=button with only a title",
           "description": "title: div role=button with only a title",
@@ -944,7 +944,7 @@
           }
         },
         {
-          "backendNodeId": 217,
+          "backendNodeId": 218,
           "role": "button",
           "name": "description: describedby two ids",
           "description": "first description part second description part",
@@ -958,7 +958,7 @@
           }
         },
         {
-          "backendNodeId": 223,
+          "backendNodeId": 224,
           "role": "button",
           "name": "description: describedby a hidden referent",
           "description": "hidden description text still counts",
@@ -972,7 +972,7 @@
           }
         },
         {
-          "backendNodeId": 225,
+          "backendNodeId": 226,
           "role": "button",
           "name": "description: aria-description",
           "description": "aria-description text",
@@ -986,7 +986,7 @@
           }
         },
         {
-          "backendNodeId": 228,
+          "backendNodeId": 229,
           "role": "button",
           "name": "description: describedby beats aria-description",
           "description": "first description part",
@@ -1000,7 +1000,7 @@
           }
         },
         {
-          "backendNodeId": 230,
+          "backendNodeId": 231,
           "role": "button",
           "name": "description: title on a button named by content",
           "description": "title text becomes the description",
@@ -1054,116 +1054,146 @@
             "invalid": false,
             "active": false
           }
+        },
+        {
+          "backendNodeId": 247,
+          "role": "button",
+          "name": "Add to cart",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "pressed": false,
+            "active": false
+          }
+        },
+        {
+          "backendNodeId": 425,
+          "role": "link",
+          "name": "New message",
+          "description": "",
+          "errorMessage": "",
+          "hidden": false,
+          "visible": true,
+          "states": {
+            "disabled": false,
+            "active": false
+          }
         }
       ],
       "refs": {
         "e1": 23,
         "e10": 29,
-        "e100": 228,
-        "e101": 230,
+        "e100": 229,
+        "e101": 231,
         "e102": 63,
         "e103": 15,
         "e104": 64,
         "e105": 16,
         "e106": 65,
         "e107": 17,
+        "e108": 66,
+        "e109": 247,
         "e11": 30,
-        "e12": 76,
+        "e110": 425,
+        "e12": 77,
         "e13": 31,
-        "e14": 78,
+        "e14": 79,
         "e15": 32,
-        "e16": 82,
+        "e16": 83,
         "e17": 33,
-        "e18": 86,
+        "e18": 87,
         "e19": 34,
         "e2": 24,
-        "e20": 92,
+        "e20": 93,
         "e21": 35,
-        "e22": 94,
+        "e22": 95,
         "e23": 36,
         "e24": 4,
-        "e25": 101,
+        "e25": 102,
         "e26": 37,
         "e27": 18,
-        "e28": 306,
+        "e28": 315,
         "e29": 5,
         "e3": 25,
         "e30": 6,
         "e31": 38,
-        "e32": 111,
+        "e32": 112,
         "e33": 7,
         "e34": 39,
         "e35": 8,
         "e36": 40,
-        "e37": 320,
+        "e37": 329,
         "e38": 9,
         "e39": 41,
         "e4": 26,
         "e40": 10,
         "e41": 42,
-        "e42": 126,
-        "e43": 129,
-        "e44": 131,
-        "e45": 133,
-        "e46": 136,
-        "e47": 139,
+        "e42": 127,
+        "e43": 130,
+        "e44": 132,
+        "e45": 134,
+        "e46": 137,
+        "e47": 140,
         "e48": 43,
         "e49": 19,
-        "e5": 265,
-        "e50": 146,
+        "e5": 274,
+        "e50": 147,
         "e51": 44,
         "e52": 20,
-        "e53": 153,
-        "e54": 155,
-        "e55": 157,
+        "e53": 154,
+        "e54": 156,
+        "e55": 158,
         "e56": 45,
         "e57": 11,
         "e58": 12,
         "e59": 13,
         "e6": 27,
         "e60": 14,
-        "e61": 172,
+        "e61": 173,
         "e62": 46,
-        "e63": 173,
-        "e64": 175,
-        "e65": 177,
+        "e63": 174,
+        "e64": 176,
+        "e65": 178,
         "e66": 47,
         "e67": 48,
         "e68": 49,
         "e69": 50,
-        "e7": 267,
+        "e7": 276,
         "e70": 51,
         "e71": 52,
         "e72": 53,
         "e73": 54,
-        "e74": 356,
-        "e75": 357,
+        "e74": 365,
+        "e75": 366,
         "e76": 55,
         "e77": 56,
-        "e78": 184,
-        "e79": 185,
+        "e78": 185,
+        "e79": 186,
         "e8": 28,
-        "e80": 190,
-        "e81": 194,
-        "e82": 197,
-        "e83": 200,
-        "e84": 202,
-        "e85": 204,
-        "e86": 208,
-        "e87": 210,
-        "e88": 374,
+        "e80": 191,
+        "e81": 195,
+        "e82": 198,
+        "e83": 201,
+        "e84": 203,
+        "e85": 205,
+        "e86": 209,
+        "e87": 211,
+        "e88": 383,
         "e89": 57,
-        "e9": 269,
+        "e9": 278,
         "e90": 58,
         "e91": 59,
-        "e92": 214,
-        "e93": 216,
+        "e92": 215,
+        "e93": 217,
         "e94": 60,
-        "e95": 217,
+        "e95": 218,
         "e96": 61,
-        "e97": 223,
+        "e97": 224,
         "e98": 62,
-        "e99": 225
+        "e99": 226
       },
       "aria": {
         "ai": [
@@ -1750,6 +1780,24 @@
                 ],
                 "ref": "e106",
                 "role": "generic"
+              },
+              {
+                "children": [
+                  {
+                    "name": "Add to cart",
+                    "ref": "e109",
+                    "role": "button"
+                  },
+                  {
+                    "cursor": "pointer",
+                    "name": "New message",
+                    "ref": "e110",
+                    "role": "link",
+                    "url": "#inline-whitespace"
+                  }
+                ],
+                "ref": "e108",
+                "role": "generic"
               }
             ],
             "ref": "e1",
@@ -2170,6 +2218,15 @@
           {
             "role": "text",
             "text": "error message: shown because validity fails"
+          },
+          {
+            "name": "Add to cart",
+            "role": "button"
+          },
+          {
+            "name": "New message",
+            "role": "link",
+            "url": "#inline-whitespace"
           }
         ]
       }
