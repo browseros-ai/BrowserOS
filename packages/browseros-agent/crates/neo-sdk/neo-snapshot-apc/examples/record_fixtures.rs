@@ -141,8 +141,15 @@ impl Recorder<'_> {
             fixture_pages::load_fixture(client, self.server, fixture, self.contract).await?;
         let typed = loaded.typed.clone();
         let read = async {
-            let oracle =
-                oracle_capture::read_oracle(client, &loaded, self.engine, &self.browser).await?;
+            let oracle = oracle_capture::read_oracle(
+                client,
+                fixture.name,
+                &loaded.session,
+                &loaded.target_id,
+                self.engine,
+                &self.browser,
+            )
+            .await?;
             loaded.before_capture(client).await?;
             let (pb, apc) = loaded.capture_apc(client).await?;
             Ok::<_, Box<dyn Error>>((oracle, pb, apc))

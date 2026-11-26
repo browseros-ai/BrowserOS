@@ -1,4 +1,4 @@
-//! Reads a loaded fixture's oracle: Playwright's ARIA engine (neo-playwright's injected.js,
+//! Reads a loaded page's oracle: Playwright's ARIA engine (neo-playwright's injected.js,
 //! unchanged) run over every frame of the page, in a world of its own per frame.
 //!
 //! ```text
@@ -12,7 +12,9 @@
 //!           and DOM.getFrameOwner on the parent's session ─▶ owner
 //! ```
 //!
-//! Only the recorder uses this; the offline tests read the [`Oracle`] it produced.
+//! The recorder reads each fixture with it, and the live zero-conflict test each fixture and site
+//! (whose frame sessions it also finds with [`frame_sites`]); the offline tests read the
+//! [`Oracle`] the recorder produced.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -25,7 +27,6 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::fixture_pages::LoadedFixture;
 use crate::oracle::{self, Oracle, OracleAria, OracleElement, OracleFrame, OracleStates};
 
 /// neo-playwright's probe bundle: Playwright's injected engine plus Neo's probe, as Neo ships it.
@@ -90,19 +91,22 @@ impl OracleEngine {
     }
 }
 
-/// Reads `loaded`'s oracle on the page load it is on. Child-frame sessions attached here are detached again, also on
-/// failure.
+/// Reads the oracle of the page in the tab `target_id`, attached as `session`, on the load it is
+/// on; `page` names it in the oracle and in errors (a fixture's registry name, a site's id).
+/// Child-frame sessions attached here are detached again, also on failure.
 pub(crate) async fn read_oracle(
     client: &CdpClient,
-    loaded: &LoadedFixture,
+    page: &str,
+    session: &SessionId,
+    target_id: &str,
     engine: &OracleEngine,
     browser: &str,
 ) -> Result<Oracle, Box<dyn Error>> {
     let mut attached = Vec::new();
     let read = async {
-        let sites = frame_sites(client, loaded, &mut attached)
+        let sites = frame_sites(client, session, target_id, &mut attached)
             .await
-            .map_err(|error| format!("{}: frame discovery: {error}", loaded.fixture.name))?;
+            .map_err(|error| format!("{page}: frame discovery: {error}"))?;
         let mut snapshots = HashMap::new();
         let mut frames = Vec::with_capacity(sites.len());
         for (seq, site) in sites.iter().enumerate() {
@@ -115,8 +119,8 @@ pub(crate) async fn read_oracle(
                 .await
                 .map_err(|error| {
                     format!(
-                        "{}: oracle of frame {} ({}) failed: {error}",
-                        loaded.fixture.name, site.url, site.id
+                        "{page}: oracle of frame {} ({}) failed: {error}",
+                        site.url, site.id
                     )
                 })?;
             frames.push(frame);
@@ -124,17 +128,9 @@ pub(crate) async fn read_oracle(
         Ok::<_, Box<dyn Error>>(frames)
     }
     .await;
-    for session in attached {
-        let _detached = client
-            .send(
-                "Target.detachFromTarget",
-                json!({ "sessionId": session.as_str() }),
-                None,
-            )
-            .await;
-    }
+    detach_all(client, attached).await;
     Ok(Oracle {
-        fixture: loaded.fixture.name.to_owned(),
+        fixture: page.to_owned(),
         engine: engine.banner().to_owned(),
         browser: browser.to_owned(),
         frames: read?,
@@ -153,14 +149,18 @@ pub(crate) async fn browser_product(client: &CdpClient) -> Result<String, Box<dy
 }
 
 /// One frame of the page and the CDP session that owns it: the only session on which its
-/// isolated world can be made and its document read.
+/// isolated world can be made, its document read and its nodes resolved.
 #[derive(Debug)]
-struct FrameSite {
-    id: String,
-    parent: Option<String>,
+pub(crate) struct FrameSite {
+    /// The CDP frame id (the devtools frame token APC reports for the frame's document).
+    pub(crate) id: String,
+    /// The parent frame's id; `None` for the main frame.
+    pub(crate) parent: Option<String>,
     /// As recorded ([`oracle::recorded_url`]).
-    url: String,
-    session: SessionId,
+    pub(crate) url: String,
+    /// The tab's session for a frame in the tab's renderer, else the session attached to the
+    /// out-of-process frame's `iframe` target that owns it.
+    pub(crate) session: SessionId,
 }
 
 /// `Page.getFrameTree`'s reply.
@@ -203,22 +203,25 @@ struct TargetInfo {
     parent_frame_id: Option<String>,
 }
 
-/// Every frame of the loaded page, main first, then depth first with each frame's children
-/// sorted by url then id; a frame's index in this order is its engine seq.
+/// Every frame of the page in the tab `target_id`, attached as `session`: main first, then depth
+/// first with each frame's children sorted by url then id; a frame's index in this order is its
+/// engine seq. Each session attached on the way is pushed onto `attached`, and the caller
+/// detaches them ([`detach_all`]), on failure too.
 ///
 /// The tab's session sees only frames in its own renderer. A cross-site child is a target of
 /// its own, found by its `parentFrameId` once that parent is known; attaching to it shows its
 /// same-process subtree, which may hold further cross-site children, hence the fixpoint.
-async fn frame_sites(
+pub(crate) async fn frame_sites(
     client: &CdpClient,
-    loaded: &LoadedFixture,
+    session: &SessionId,
+    target_id: &str,
     attached: &mut Vec<SessionId>,
 ) -> Result<Vec<FrameSite>, Box<dyn Error>> {
     let mut found = Vec::new();
-    let main = frame_tree(client, &loaded.session)
+    let main = frame_tree(client, session)
         .await
-        .map_err(|error| format!("main frame {}: {error}", loaded.target_id))?;
-    add_frame_tree(&mut found, main, None, &loaded.session);
+        .map_err(|error| format!("main frame {target_id}: {error}"))?;
+    add_frame_tree(&mut found, main, None, session);
     loop {
         let targets: TargetsReply =
             decode(client.send("Target.getTargets", json!({}), None).await?)?;
@@ -259,7 +262,7 @@ struct Attached {
 }
 
 /// Attaches a flattened session to the cross-site child frame `target_id`, recording it in
-/// `attached` so [`read_oracle`] detaches it again.
+/// `attached` so the caller of [`frame_sites`] detaches it again.
 async fn attach_frame(
     client: &CdpClient,
     target_id: &str,
@@ -279,6 +282,20 @@ async fn attach_frame(
     let session = SessionId::from(reply.session_id);
     attached.push(session.clone());
     Ok(session)
+}
+
+/// Detaches every session in `attached`, ignoring errors: a frame that went away took its
+/// session with it, and cleanup must not mask the read's own result.
+pub(crate) async fn detach_all(client: &CdpClient, attached: Vec<SessionId>) {
+    for session in attached {
+        let _detached = client
+            .send(
+                "Target.detachFromTarget",
+                json!({ "sessionId": session.as_str() }),
+                None,
+            )
+            .await;
+    }
 }
 
 async fn frame_tree(

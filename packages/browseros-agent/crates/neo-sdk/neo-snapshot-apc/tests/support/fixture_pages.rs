@@ -10,6 +10,9 @@
 //!  load_fixture: new tab ─▶ focus emulation ─▶ navigate ─▶ ready ─▶ type secrets
 //!  recorder:     ─▶ oracle (oracle_capture.rs) ─▶ before_capture ─▶ APC capture ─▶ close
 //! ```
+//!
+//! The live zero-conflict test loads every fixture the same way and captures twice
+//! ([`capture_apc`] also reads the sites it loads itself).
 
 use std::collections::HashMap;
 use std::env;
@@ -415,23 +418,33 @@ impl LoadedFixture {
         &self,
         client: &CdpClient,
     ) -> Result<(Vec<u8>, AnnotatedPageContent), Box<dyn Error>> {
-        let reply = page::get_annotated_page_content(
-            client,
-            GetAnnotatedPageContentParams {
-                include_actionable_information: Some(true),
-            },
-            Some(&self.session),
-        )
-        .await?;
-        let raw_bytes = STANDARD.decode(&reply.content)?;
-        let apc = decode(&reply.content)?;
-        Ok((raw_bytes, apc))
+        capture_apc(client, &self.session).await
     }
 
     /// Closes the tab, ignoring errors so cleanup never masks the read's own result.
     pub(crate) async fn close(self, client: &CdpClient) {
         close_target_best_effort(client, &self.target_id).await;
     }
+}
+
+/// Reads the page of the tab attached as `session` with `Page.getAnnotatedPageContent`, returning
+/// the protobuf wire bytes and their decoded tree. A loaded fixture and a loaded site are read
+/// alike.
+pub(crate) async fn capture_apc(
+    client: &CdpClient,
+    session: &SessionId,
+) -> Result<(Vec<u8>, AnnotatedPageContent), Box<dyn Error>> {
+    let reply = page::get_annotated_page_content(
+        client,
+        GetAnnotatedPageContentParams {
+            include_actionable_information: Some(true),
+        },
+        Some(session),
+    )
+    .await?;
+    let raw_bytes = STANDARD.decode(&reply.content)?;
+    let apc = decode(&reply.content)?;
+    Ok((raw_bytes, apc))
 }
 
 /// A `data-typed` field's mode: whether stock APC already withholds what is typed into it.
