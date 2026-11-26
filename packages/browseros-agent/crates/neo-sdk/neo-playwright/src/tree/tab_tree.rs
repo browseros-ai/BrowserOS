@@ -142,9 +142,9 @@ impl TabTree {
                 // private entry mirrors a mark before the first host-typed character reaches the
                 // page, so any APC reply that can hold that character arrived after the mark,
                 // and a copy taken now has it (one taken before dispatch would miss a mark made
-                // during the round trip). It is a copy, not the guard: a large page builds for
-                // over a second (design 7.4), and this std mutex must not block `mark_private`
-                // on the typing path that long. Marks are a handful of entries.
+                // during the round trip). It is a copy, not the guard, so `mark_private` on the
+                // typing path never blocks a thread on this std mutex for a whole build. Marks
+                // are a handful of entries.
                 let marks = private
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
