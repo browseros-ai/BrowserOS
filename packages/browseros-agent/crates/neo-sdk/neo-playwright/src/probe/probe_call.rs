@@ -352,18 +352,21 @@ pub(crate) async fn call_on(
 }
 
 /// One request with several nodes (remote objects in this world, from `DOM.resolveNode` with
-/// its context id), which the probe reads in their order after an empty root: a snapshot's
-/// clickable targets. With no nodes it is [`call`]. As with [`call_on`], an id a later document
-/// took over fails the call as `Gone`, and never reaches a page's own world.
+/// its context id), which the probe reads in their order after the call's root: a snapshot's
+/// clickable targets (no root), or a chunk run's tree nodes, from an element handle's node when
+/// the run's query starts there. With no root and no nodes it is [`call`]. As with [`call_on`],
+/// an id a later document took over fails the call as `Gone`, and never reaches a page's own
+/// world.
 pub(crate) async fn call_with_nodes(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
+    root: Option<&str>,
     nodes: &[String],
 ) -> Result<ProbeReply, ProbeFailure> {
     let crash = scope.begin_protocol(world.session());
-    let handed = Handed { root: None, nodes };
+    let handed = Handed { root, nodes };
     send(world, request, policy(scope, page), handed, Gesture::None)
         .await
         .inspect_err(|failure| crash.probe_failure(failure))

@@ -126,8 +126,8 @@ pub(super) enum Sent {
         members: Vec<SetMember>,
         handed: Vec<i32>,
     },
-    /// The nodes pinned, by their DOM ids.
-    Hydrate(Vec<i32>),
+    /// The node pinned, by its DOM id.
+    Hydrate(i32),
     Keys(Vec<Pin>),
 }
 
@@ -837,29 +837,17 @@ impl ChunkPage for FakePage {
         future::ready(Ok(reply))
     }
 
-    fn hydrate(
-        &mut self,
-        nodes: &[NodeId],
-    ) -> impl Future<Output = Result<Option<Vec<Pin>>, Infallible>> {
-        let mut doms = Vec::with_capacity(nodes.len());
-        let mut pins = Some(Vec::with_capacity(nodes.len()));
-        for node in nodes {
-            let index = *self
-                .by_node
-                .get(node)
-                .unwrap_or_else(|| panic!("{node:?} is not an element of the page"));
-            doms.push(self.elements[index].dom);
-            if self.elements[index].connected && !self.elements[index].destroyed {
-                let pin = self.pin(index);
-                if let Some(pins) = pins.as_mut() {
-                    pins.push(pin);
-                }
-            } else {
-                pins = None;
-            }
-        }
-        self.record(Sent::Hydrate(doms));
-        future::ready(Ok(pins))
+    fn hydrate(&mut self, node: NodeId) -> impl Future<Output = Result<Option<Pin>, Infallible>> {
+        let index = *self
+            .by_node
+            .get(&node)
+            .unwrap_or_else(|| panic!("{node:?} is not an element of the page"));
+        let element = &self.elements[index];
+        let live = element.connected && !element.destroyed;
+        let dom = element.dom;
+        let pin = live.then(|| self.pin(index));
+        self.record(Sent::Hydrate(dom));
+        future::ready(Ok(pin))
     }
 
     fn keys(

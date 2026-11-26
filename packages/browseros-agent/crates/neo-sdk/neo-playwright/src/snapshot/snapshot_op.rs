@@ -966,7 +966,8 @@ impl Snapshotter<'_> {
         if main {
             *self.reading() = Some(started);
         }
-        let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
+        let reply =
+            probe::call_with_nodes(self.scope, self.page, world, &request, None, &nodes).await;
         if main {
             self.log_main_read(&reply, started);
         }

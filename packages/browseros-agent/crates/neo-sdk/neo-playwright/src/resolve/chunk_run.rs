@@ -79,7 +79,7 @@ mod tests;
 
 /// The page side of a run: the frame's isolated world, reached from the chunk's query root.
 ///
-/// The switch-over implements it over `OpPage` and engine chunk 10's hydration, for the one
+/// `tree::ChunkWorld` implements it over `OpPage` and engine chunk 10's hydration, for the one
 /// attempt whose tree the run reads. A tree node reaches the page by design 6.2: its key is
 /// resolved (`DOM.resolveNode`) only in a world installed before this attempt's capture, and the
 /// call that uses it proves the world still alive, since V8 refuses a node of another world. A
@@ -89,22 +89,20 @@ pub(crate) trait ChunkPage {
     /// untouched, for the op's liveness rule.
     type Error;
 
-    /// Sends a `stage` or a `describePins` in the frame's world, with the query root's node as
-    /// the call's root when it is an element handle (`resolver::ask`). The request's
-    /// `SetMember::Node(i)` is `nodes[i]`, a node of the run's tree, which the seam resolves for
-    /// this call and hands over after the root (`probe::call_with_nodes`). `None` when one of
-    /// `nodes` no longer resolves.
+    /// Sends a `stage` or a `describePins` in the frame's world through
+    /// `probe::call_with_nodes`, whose root is the query root's node when that is an element
+    /// handle (`resolver::ask`) and empty otherwise. The request's `SetMember::Node(i)` is
+    /// `nodes[i]`, a node of the run's tree, which the seam resolves for this call alone and
+    /// hands over after the root in that order. `None` when one of `nodes` no longer resolves.
     async fn call(
         &mut self,
         request: &ProbeRequest,
         nodes: &[NodeId],
     ) -> Result<Option<ProbeReply>, Self::Error>;
 
-    /// Pins the elements of `nodes`, in order, in one entry of the world's pin table: what
-    /// outlives a call, such as the iframe a frame hop enters. `None` when one is gone. The seam
-    /// maps a node to its element by its key today, and through its `<select>` for the option
-    /// nodes engine chunk 5 synthesizes, which have none.
-    async fn hydrate(&mut self, nodes: &[NodeId]) -> Result<Option<Vec<Pin>>, Self::Error>;
+    /// Pins `node`'s element in the world's pin table: what outlives a call, such as the iframe
+    /// a frame hop enters. `None` when it is gone.
+    async fn hydrate(&mut self, node: NodeId) -> Result<Option<Pin>, Self::Error>;
 
     /// The key of each pinned element, in order (`probe::pinned_nodes` and the document token
     /// the world is proven to hold): `None` when one is gone.
@@ -127,10 +125,12 @@ pub(crate) enum QueryRoot {
 /// document, and where the chunk's query starts.
 pub(crate) struct ChunkRun<'a> {
     tree: &'a SnapshotTree,
-    /// One name pass per attempt, shared by every stage and candidate (design 3.3).
-    text: &'a dyn AccessibleText,
+    /// One name pass per attempt, shared by every stage and candidate (design 3.3). It and
+    /// `refs` are `Sync` because a run is borrowed across its page's awaits, and an op's future
+    /// must be `Send` (`wire/route.rs`).
+    text: &'a (dyn AccessibleText + Sync),
     /// The tab's ref table (engine chunk 5).
-    refs: &'a dyn RefResolver,
+    refs: &'a (dyn RefResolver + Sync),
     /// The token every key of a pinned element of this frame must carry: a pin of another
     /// document means the world no longer holds the document this attempt captured.
     token: &'a DocToken,
@@ -297,8 +297,8 @@ impl<'a> ChunkRun<'a> {
     /// starts over.
     pub(crate) fn new(
         tree: &'a SnapshotTree,
-        text: &'a dyn AccessibleText,
-        refs: &'a dyn RefResolver,
+        text: &'a (dyn AccessibleText + Sync),
+        refs: &'a (dyn RefResolver + Sync),
         doc: DocId,
         root: QueryRoot,
     ) -> Option<Self> {
@@ -392,10 +392,7 @@ impl<'a> ChunkRun<'a> {
         if node == self.doc_root {
             return Ok(First::Document);
         }
-        let pins = page.hydrate(&[node]).await?;
-        Ok(pins
-            .and_then(|pins| pins.first().copied())
-            .map_or(First::Stale, First::Pin))
+        Ok(page.hydrate(node).await?.map_or(First::Stale, First::Pin))
     }
 
     /// One stage from `current`, by the transfer table.
