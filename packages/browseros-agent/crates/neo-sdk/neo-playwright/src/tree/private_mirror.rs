@@ -7,6 +7,8 @@
 //! element and survives an SDK restart, as worlds do. [`PrivateMirror`] copies those marks into
 //! the [`PrivateNodes`] every capture builds with, so masking costs no page round trip:
 //!
+//! Nothing calls into it yet; the switch-over makes the calls on the left:
+//!
 //! ```text
 //! private entry ─▶ TabTree::mark_private_pins ───────────┐
 //! first snapshot's seed ─▶ TabTree::record_private_seed ─┴─▶ PrivateMirror::marks
@@ -59,7 +61,6 @@ pub(crate) struct PrivateMirror {
 }
 
 impl PrivateMirror {
-    /// Creates an empty mirror for a tab with the given [`TabOriginState`].
     #[must_use]
     pub(crate) fn new(origin_state: TabOriginState) -> Self {
         Self {

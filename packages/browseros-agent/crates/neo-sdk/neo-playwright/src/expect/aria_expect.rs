@@ -320,7 +320,6 @@ impl TemplateMatcher {
         };
         let matches = template::matches_template(&snapshot.tree, &self.template)
             .map_err(AriaExpectError::Template)?;
-        // `renderAriaSnapshotAsYaml` of the default-mode JSON.
         let raw = neo_snapshot::render(&snapshot, Call::Playwright).into_text();
         let mut received = Map::new();
         received.insert("raw".to_owned(), Value::String(raw));

@@ -158,19 +158,15 @@ pub(crate) fn apply_masks(
 /// Whether `dom_id`, read in `doc`, must be masked as host-private ([`PrivateNodes::is_private`]).
 ///
 /// A node whose document is missing has no known site, so a marked id masks rather than prints:
-/// an absent lookup never turns into a clear value. The `is_empty` check keeps the common
-/// no-marks build from resolving any site.
+/// an absent lookup never turns into a clear value.
 fn is_host_private(
     private: Option<&PrivateNodes>,
     doc: Option<&TreeDoc>,
     dom_id: DomNodeId,
 ) -> bool {
-    private.is_some_and(|set| {
-        !set.is_empty()
-            && match doc {
-                Some(doc) => set.is_private_in(doc, dom_id),
-                None => set.is_private(None, dom_id),
-            }
+    private.is_some_and(|set| match doc {
+        Some(doc) => set.is_private_in(doc, dom_id),
+        None => set.is_private(None, dom_id),
     })
 }
 

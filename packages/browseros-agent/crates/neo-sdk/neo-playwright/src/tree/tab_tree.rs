@@ -138,13 +138,13 @@ impl TabTree {
                     page_state.frames().seq_for_doc(ctx, &proven)
                 };
 
-                // Privacy layer 2's feed (design 8.1). The copy is taken after the reply: the
-                // private entry mirrors a mark before the first host-typed character reaches the
-                // page, so any APC reply that can hold that character arrived after the mark,
-                // and a copy taken now has it (one taken before dispatch would miss a mark made
-                // during the round trip). It is a copy, not the guard, so `mark_private` on the
-                // typing path never blocks a thread on this std mutex for a whole build. Marks
-                // are a handful of entries.
+                // Privacy layer 2's feed (design 8.1). The copy is taken after the reply: a
+                // caller of `mark_private` mirrors a mark before the first host-typed character
+                // reaches the page, so any APC reply that can hold that character arrived after
+                // the mark, and a copy taken now has it (one taken before dispatch would miss a
+                // mark made during the round trip). It is a copy, not the guard, so `mark_private`
+                // on the typing path never blocks a thread on this std mutex for a whole build.
+                // The copy costs one entry per box the host typed into on this tab.
                 let marks = private
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)

@@ -382,7 +382,6 @@ fn tests_that_other_expressions_stay_in_the_page() -> TestResult {
 
 const MAIN: i32 = 60;
 
-/// A `main` landmark holding a level-1 heading, a link, a text and a list of two items.
 fn landmark_page() -> TestResult<SnapshotTree> {
     let list = NodeBuilder::element("ul")
         .child(NodeBuilder::element("li").child(NodeBuilder::text("One")))
@@ -522,7 +521,6 @@ fn states_page() -> TestResult<SnapshotTree> {
     build(root)
 }
 
-/// Whether `template` matches the element `dom` of `tree`.
 fn matches_at(tree: &SnapshotTree, dom: i32, template: Value) -> TestResult<bool> {
     Ok(self::template(template)?
         .check(tree, node(tree, dom)?)?

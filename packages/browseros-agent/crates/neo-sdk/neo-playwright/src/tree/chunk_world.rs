@@ -1,5 +1,5 @@
 //! The page side of one [`ChunkRun`] over one attempt's capture: the frame's isolated world,
-//! reached through `OpPage` and engine chunk 10's hydration.
+//! reached through `OpPage` and `tree::hydrate`'s `resolve_node` and `pin_object`.
 //!
 //! Design 6.2's proof rule holds here for every node the run hands over: a key is hydrated only
 //! through a world installed before the capture was requested and still alive when the
@@ -11,7 +11,7 @@
 //!  start      world.installed_at < capture.requested_at ─ else WorldAfterCapture
 //!             doc is the world's frame's document in the capture ─ else DocumentNotInFrame
 //!
-//!  call       each node ─ DOM.resolveNode in the world, 8 in flight, order kept
+//!  call       each node ─ DOM.resolveNode in the world, RESOLVES_IN_FLIGHT at once, order kept
 //!               a node gone ─▶ None, nothing sent
 //!             probe::call_with_nodes(root, objects) ─▶ the reply
 //!  hydrate    DOM.resolveNode ─ probe resolve(Root) ─ pin ─ bind_proven_world ─▶ the pin
@@ -34,8 +34,9 @@ use crate::resolve::{ChunkPage, ChunkRun, QueryRoot};
 use crate::tree::{CapturedTree, TabTree};
 use crate::world::{IsolatedWorld, Pin};
 
-/// `DOM.resolveNode` calls in flight for one call's nodes: design 5.4 measured about 50 µs a
-/// node at eight in flight, for the same call in clickable marking (`snapshot/clickable_targets`).
+/// `DOM.resolveNode` calls in flight for one call's nodes, as clickable marking resolves its
+/// closed-root seeds (`snapshot/clickable_targets.rs`, where 999 such resolves added 52 ms). Kept in
+/// order here, because call node `i` is `nodes[i]`, so one slow node holds back those after it.
 const RESOLVES_IN_FLIGHT: usize = 8;
 
 /// What every frame's run in one locator attempt shares.
@@ -51,7 +52,6 @@ pub(crate) struct RunAttempt<'a> {
 
 /// Where a chunk's query starts, for both sides of a run.
 pub(crate) enum RunRoot {
-    /// The frame's Document.
     Document,
     /// An element handle: its node resolved in the run's world, and its tree node when the
     /// capture has one (`None` is `QueryRoot::Untracked`).
@@ -136,7 +136,8 @@ impl<'a> ChunkWorld<'a> {
 
     /// `node`'s DOM node id. The run hands over only nodes of its own document's tree, each an
     /// element APC names by id, so any other node is a bug in the run, not a page that changed:
-    /// answering `None` for it would make the run go stale and retry forever.
+    /// answering `None` for it would make the run go stale, and the op retry until its deadline
+    /// and then time out with the wrong cause.
     fn dom_node(&self, node: NodeId) -> Result<DomNodeId, ProbeFailure> {
         let node = self
             .tree

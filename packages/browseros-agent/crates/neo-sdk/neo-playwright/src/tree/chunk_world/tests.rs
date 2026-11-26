@@ -26,7 +26,6 @@ use crate::world::{DocLookup, Pin, Place};
 
 const DOC: &str = "doc-main";
 const CHILD_DOC: &str = "doc-child";
-/// The card page: a card holding the Pay button, and a Back button outside it.
 const CARD: i32 = 30;
 const PAY: i32 = 31;
 const BACK: i32 = 40;

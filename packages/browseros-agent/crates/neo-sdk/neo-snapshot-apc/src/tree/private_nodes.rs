@@ -130,6 +130,12 @@ mod tests {
     #[test]
     fn is_private_follows_the_one_rule_over_every_mark_and_document_site()
     -> Result<(), Box<dyn Error>> {
+        struct Row<'s> {
+            node: DomNodeId,
+            doc_site: Option<&'s SiteKey>,
+            masks: bool,
+            why: &'static str,
+        }
         let x = site("https://x.test")?;
         let y = site("https://y.test")?;
         let unmarked = DomNodeId::new(1);
@@ -139,60 +145,69 @@ mod tests {
         set.mark(Some(x.clone()), on_x);
         set.mark(None, anywhere);
 
-        // (node, document site, masks, why)
         let table = [
-            (
-                unmarked,
-                Some(&x),
-                false,
-                "an unmarked id is clear on its site",
-            ),
-            (
-                unmarked,
-                Some(&y),
-                false,
-                "an unmarked id is clear on another site",
-            ),
-            (
-                unmarked,
-                None,
-                false,
-                "an unmarked id is clear in an origin-less document",
-            ),
-            (on_x, Some(&x), true, "a mark masks its id on its own site"),
-            (
-                on_x,
-                Some(&y),
-                false,
-                "another site's renderer may reuse the id",
-            ),
-            (
-                on_x,
-                None,
-                true,
-                "an origin-less document fails closed for a marked id",
-            ),
-            (
-                anywhere,
-                Some(&x),
-                true,
-                "an unknown-site mark masks on every site",
-            ),
-            (
-                anywhere,
-                Some(&y),
-                true,
-                "an unknown-site mark masks on every site",
-            ),
-            (
-                anywhere,
-                None,
-                true,
-                "an unknown-site mark masks in an origin-less document",
-            ),
+            Row {
+                node: unmarked,
+                doc_site: Some(&x),
+                masks: false,
+                why: "an unmarked id is clear on its site",
+            },
+            Row {
+                node: unmarked,
+                doc_site: Some(&y),
+                masks: false,
+                why: "an unmarked id is clear on another site",
+            },
+            Row {
+                node: unmarked,
+                doc_site: None,
+                masks: false,
+                why: "an unmarked id is clear in an origin-less document",
+            },
+            Row {
+                node: on_x,
+                doc_site: Some(&x),
+                masks: true,
+                why: "a mark masks its id on its own site",
+            },
+            Row {
+                node: on_x,
+                doc_site: Some(&y),
+                masks: false,
+                why: "another site's renderer may reuse the id",
+            },
+            Row {
+                node: on_x,
+                doc_site: None,
+                masks: true,
+                why: "an origin-less document fails closed for a marked id",
+            },
+            Row {
+                node: anywhere,
+                doc_site: Some(&x),
+                masks: true,
+                why: "an unknown-site mark masks on every site",
+            },
+            Row {
+                node: anywhere,
+                doc_site: Some(&y),
+                masks: true,
+                why: "an unknown-site mark masks on every site",
+            },
+            Row {
+                node: anywhere,
+                doc_site: None,
+                masks: true,
+                why: "an unknown-site mark masks in an origin-less document",
+            },
         ];
-        for (node, doc_site, masks, why) in table {
-            assert_eq!(set.is_private(doc_site, node), masks, "{why}");
+        for row in table {
+            assert_eq!(
+                set.is_private(row.doc_site, row.node),
+                row.masks,
+                "{}",
+                row.why
+            );
         }
         Ok(())
     }

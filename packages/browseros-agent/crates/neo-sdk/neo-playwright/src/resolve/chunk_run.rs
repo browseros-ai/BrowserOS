@@ -79,7 +79,7 @@ mod tests;
 
 /// The page side of a run: the frame's isolated world, reached from the chunk's query root.
 ///
-/// `tree::ChunkWorld` implements it over `OpPage` and engine chunk 10's hydration, for the one
+/// `tree::ChunkWorld` implements it over `OpPage` and `tree::hydrate`, for the one
 /// attempt whose tree the run reads. A tree node reaches the page by design 6.2: its key is
 /// resolved (`DOM.resolveNode`) only in a world installed before this attempt's capture, and the
 /// call that uses it proves the world still alive, since V8 refuses a node of another world. A

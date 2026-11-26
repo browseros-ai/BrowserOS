@@ -20,8 +20,6 @@ use serde_json::{Value, json};
 use crate::probe::PROBE_PROTOCOL;
 use crate::test_support::{ProbeAnswer, SCRIPTED_CHILD, SCRIPTED_MAIN, TabScript, TestResult};
 
-// --- Minimal protobuf wire encoder for hand-crafted offline APC fixtures ---
-
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
         let mut byte = (value & 0x7f) as u8;
@@ -194,7 +192,7 @@ pub(super) struct TreeScript {
     apc_replies: Mutex<VecDeque<Value>>,
     default_apc: Mutex<Option<Value>>,
     /// Hook run right after an isolated world finishes booting, letting tests simulate a
-    /// navigation occurring between Case 3's world install and its subsequent recapture.
+    /// navigation occurring between design 6.2 case 3's world install and its recapture.
     after_world_install: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// Hook run once while a `Page.getAnnotatedPageContent` request is in flight (sent, not yet
     /// answered), letting tests act during the capture's round trip.
@@ -377,7 +375,6 @@ impl TreeScript {
             .insert(i64::from(backend_node_id), delay);
     }
 
-    /// The most `DOM.resolveNode` calls that were in flight at once.
     pub(super) fn most_resolves_in_flight(&self) -> usize {
         self.most_resolves_in_flight.load(Ordering::SeqCst)
     }
@@ -463,12 +460,10 @@ impl TreeScript {
                 .clone();
         }
 
-        // Boot install call carrying `{ frameSeq, epoch }`.
         if let Some(seq) = first["frameSeq"].as_u64() {
             return Some(self.boot_reply(object_id, u32::try_from(seq).unwrap_or(0)));
         }
 
-        // Normal probe request envelope `{ request, policy }`.
         let request = first.get("request")?;
         let op = request["op"].as_str()?;
         self.record_probe(op, params);
