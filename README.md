@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-Claude Code, Codex and Cursor work in it <strong>signed in as you, in their own tabs, while you watch.</strong><br>Free, open source, and it runs on your machine.
+Put Claude Code, Codex, Cursor, and OpenCode to work on your real tasks. <strong>BrowserOS neo</strong> connects to the agents you already use, lets them use your logged-in sessions and helps you get things done!
 </p>
 
 <p align="center">
