@@ -4,9 +4,9 @@
 //!
 //! An element APC sent joins by its backendNodeId in its frame's document. An `<option>` of a
 //! collapsed `<select>` has no node APC sent, only an entry of its select's `select_options`, so
-//! it joins the select's option slot at its recorded index, while the select still has as many
-//! slots as the page listed options (`OracleElement::option`). An oracle recorded before that
-//! field joins such an option nowhere.
+//! it joins the select's option slot at its recorded index (`OracleElement::option`). A select
+//! with a different number of slots than the page listed options is a broken recording, not a
+//! miss. An oracle recorded before that field joins such an option nowhere.
 
 use std::error::Error;
 
@@ -17,13 +17,26 @@ use neo_snapshot_apc::tree::{
 use crate::oracle::OracleElement;
 
 /// The tree node `element` stands for in `doc`, the tree document behind its oracle frame:
-/// `None` when the tree has none for it.
+/// `None` when the tree has none for it, an error when the select's option count disagrees.
 pub(crate) fn joined_node<'tree>(
     tree: &'tree SnapshotTree,
     doc: &TreeDoc,
     element: &OracleElement,
 ) -> Result<Option<&'tree TreeNode>, Box<dyn Error>> {
-    Ok(tree.node_at(&element_place(doc.token(), element)?))
+    // One page load records both the capture and the oracle, so a select's option count can
+    // only disagree when the recording is broken.
+    tree.node_at(&element_place(doc.token(), element)?)
+        .map_err(|changed| {
+            format!(
+                "oracle element backendNodeId {} (role={:?}, name={:?}) in document {:?}: {changed}; \
+                 re-record the fixture",
+                element.backend_node_id,
+                element.role,
+                element.name,
+                doc.token(),
+            )
+            .into()
+        })
 }
 
 /// Where `element` sits in the document `token`, as the tree names places.

@@ -65,7 +65,7 @@ pub use name::{
     Description, Name, NameCache, NameVisibility, as_flat_string, normalize_whitespace,
 };
 pub use node_key::{DocId, DocSeq, DocToken, DomNodeId, FrameToken, NodeId, NodeKey, NodeRange};
-pub use option_slot::{ElementPlace, OptionPlace, OptionSlot};
+pub use option_slot::{ElementPlace, OptionListChanged, OptionPlace, OptionSlot};
 pub use private_nodes::PrivateNodes;
 pub use role::Role;
 pub use site_key::SiteKey;

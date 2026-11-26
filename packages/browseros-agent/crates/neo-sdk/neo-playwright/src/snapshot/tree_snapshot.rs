@@ -349,7 +349,14 @@ pub(crate) async fn element_in_tree(
     };
     let place = element_place(document.token(), pinned)
         .map_err(|failure| resolve::failed(scope, failure))?;
-    let node = tree.node_at(&place).map(TreeNode::id);
+    // A select whose option list changed length between the capture and `pinnedAt` reads as the
+    // element having moved: every caller then resolves and captures again (a property poll
+    // counts it as missing, a snapshot or ref attempts again, the name hint goes without),
+    // where `node: None` would read as an element the tree holds with no role or name.
+    let Ok(node) = tree.node_at(&place) else {
+        return Ok(None);
+    };
+    let node = node.map(TreeNode::id);
     Ok(Some(InTree {
         captured,
         doc,

@@ -115,6 +115,15 @@ impl TreeNode {
         }
     }
 
+    /// Whether this node is an option slot, live or withheld: a withheld slot keeps its arena
+    /// place, so it still counts toward its select's list length.
+    pub(crate) const fn is_option_slot(&self) -> bool {
+        matches!(
+            self.origin,
+            NodeOrigin::SelectOption { .. } | NodeOrigin::WithheldOption
+        )
+    }
+
     /// Parent node in the stitched flat tree, or `None` for the top-level root node.
     #[must_use]
     pub const fn parent(&self) -> Option<NodeId> {

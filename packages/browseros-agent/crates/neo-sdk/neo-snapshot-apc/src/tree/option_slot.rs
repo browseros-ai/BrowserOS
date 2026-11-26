@@ -55,6 +55,24 @@ pub struct ElementPlace {
     pub option: Option<OptionPlace>,
 }
 
+/// [`SnapshotTree::node_at`]'s answer for an option of a select whose option list is not the one
+/// the capture holds: the page lists `now` options, or places the option at or past the end,
+/// where the capture holds `captured` slots. The index may name another option now, so the
+/// caller captures again rather than read the slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the select's option list changed since the capture: {captured} options then, {now} now \
+     (option at index {index})"
+)]
+pub struct OptionListChanged {
+    /// How many option slots the capture holds for the select, withheld ones included.
+    pub captured: u32,
+    /// How many options the page lists now.
+    pub now: u32,
+    /// The option's index in the page's list now.
+    pub index: u32,
+}
+
 /// An `<option>`'s place in its select's option list, as the page reads it now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OptionPlace {
@@ -187,21 +205,57 @@ impl SnapshotTree {
     }
 
     /// The node at `place`, the reverse of [`Self::option_slot`]: the node APC sent under
-    /// `place.key`, else, for an `<option>` its select lists, that select's slot at `index`. A
-    /// select whose slot count differs from `count` answers `None`: the list changed since the
-    /// capture, so `index` may name another option, and the caller captures again.
-    #[must_use]
-    pub fn node_at(&self, place: &ElementPlace) -> Option<&TreeNode> {
+    /// `place.key`, else, for an `<option>` its select lists, that select's slot at `index`.
+    ///
+    /// `Ok(None)` when the place names nothing in the capture: no option place, a select the
+    /// tree lacks, or one with no slots (a list box, whose options are real nodes; a list empty
+    /// at capture), or a slot the mask withheld, so a redacted list reads as nothing. A select
+    /// whose slot count is not the page's `count` is [`OptionListChanged`]: `index` may name
+    /// another option now, and the caller captures again.
+    pub fn node_at(&self, place: &ElementPlace) -> Result<Option<&TreeNode>, OptionListChanged> {
         if let Some(node) = self.node_by_key(&place.key) {
-            return Some(node);
+            return Ok(Some(node));
         }
-        let option = place.option.as_ref()?;
-        let last = self.node(self.node_by_key(&option.select)?.last_child()?)?;
-        let count = last.option_index()?.checked_add(1)?;
-        if count != option.count || option.index >= count {
+        let Some(option) = place.option.as_ref() else {
+            return Ok(None);
+        };
+        let Some((first, captured)) = self
+            .node_by_key(&option.select)
+            .and_then(|select| self.slot_run(select))
+        else {
+            return Ok(None);
+        };
+        if captured != option.count || option.index >= captured {
+            return Err(OptionListChanged {
+                captured,
+                now: option.count,
+                index: option.index,
+            });
+        }
+        Ok(first
+            .checked_add(option.index)
+            .and_then(|slot| self.node(NodeId::new(slot)))
+            .filter(|slot| slot.option_index().is_some()))
+    }
+
+    /// `select`'s option slots as the arena id of the first and how many there are, live and
+    /// withheld alike, or `None` when it has none. The slots are its contiguous last children
+    /// and leaves, so they hold consecutive ids ending at its last child; the walk is one step
+    /// per slot, once per join.
+    fn slot_run(&self, select: &TreeNode) -> Option<(u32, u32)> {
+        let last = self.node(select.last_child()?)?;
+        if !last.is_option_slot() {
             return None;
         }
-        let first = last.id().raw().checked_sub(count - 1)?;
-        self.node(NodeId::new(first.checked_add(option.index)?))
+        let mut first = last.id().raw();
+        while let Some(previous) = first
+            .checked_sub(1)
+            .and_then(|raw| self.node(NodeId::new(raw)))
+            && previous.is_option_slot()
+            && previous.parent() == Some(select.id())
+        {
+            first = previous.id().raw();
+        }
+        Some((first, last.id().raw() - first + 1))
     }
 }

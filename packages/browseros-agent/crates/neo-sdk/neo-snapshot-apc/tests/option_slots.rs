@@ -55,6 +55,14 @@ fn option_facts(tree: &SnapshotTree, select: NodeId) -> Result<OptionFacts, Box<
     Ok(facts)
 }
 
+/// What a pinned place joins in a capture: a node or nothing, or a select whose option list
+/// changed since the capture.
+#[derive(Debug, PartialEq, Eq)]
+enum Joined {
+    Node(Option<NodeId>),
+    Changed,
+}
+
 /// A collapsed `<select>` as Chromium sends it: the options as entries, the shown value as
 /// browser-made text.
 fn collapsed_select(dom: i32, entries: Vec<SelectOption>) -> NodeBuilder {
@@ -423,7 +431,22 @@ fn a_select_whose_list_the_mask_cleared_has_no_options() -> Result<(), Box<dyn E
             count: 3,
         }),
     };
-    assert!(tree.node_at(&place).is_none(), "nor does a join find one");
+    assert!(
+        matches!(tree.node_at(&place), Ok(None)),
+        "nor does a join find one, so the option reads as nothing rather than looping"
+    );
+    let grown = ElementPlace {
+        key: key(MAIN, 900)?,
+        option: Some(OptionPlace {
+            select: key(MAIN, 10)?,
+            index: 0,
+            count: 4,
+        }),
+    };
+    assert!(
+        tree.node_at(&grown).is_err(),
+        "a cleared list still counts its withheld slots, so one that grew since the capture changed"
+    );
     Ok(())
 }
 
@@ -440,29 +463,50 @@ fn a_pinned_option_finds_its_slot_by_its_select_and_index() -> Result<(), Box<dy
     let select = node_in(&tree, MAIN, 10)?;
     let options = slots(&tree, select);
     // The page's <option> has a backendNodeId of its own that no capture node carries.
-    let at = |index: u32, count: u32| -> Result<Option<NodeId>, Box<dyn Error>> {
-        Ok(tree
-            .node_at(&ElementPlace {
-                key: key(MAIN, 900)?,
-                option: Some(OptionPlace {
-                    select: key(MAIN, 10)?,
-                    index,
-                    count,
-                }),
-            })
-            .map(TreeNode::id))
+    let at = |select: i32, index: u32, count: u32| -> Result<Joined, Box<dyn Error>> {
+        let place = ElementPlace {
+            key: key(MAIN, 900)?,
+            option: Some(OptionPlace {
+                select: key(MAIN, select)?,
+                index,
+                count,
+            }),
+        };
+        Ok(match tree.node_at(&place) {
+            Ok(node) => Joined::Node(node.map(TreeNode::id)),
+            Err(_) => Joined::Changed,
+        })
     };
     assert_eq!(
-        at(1, 3)?,
-        options.get(1).copied(),
+        at(10, 1, 3)?,
+        Joined::Node(options.get(1).copied()),
         "select.options[1] is slot 1"
     );
     assert_eq!(
-        at(1, 4)?,
-        None,
+        at(10, 1, 4)?,
+        Joined::Changed,
         "a list that grew since the capture may have moved another option to index 1"
     );
-    assert_eq!(at(3, 3)?, None, "an index past the list names no option");
+    assert_eq!(
+        at(10, 1, 2)?,
+        Joined::Changed,
+        "nor may one that shrank be trusted"
+    );
+    assert_eq!(
+        at(10, 3, 3)?,
+        Joined::Changed,
+        "an index past the list names no option the capture holds"
+    );
+    assert_eq!(
+        at(20, 0, 1)?,
+        Joined::Node(None),
+        "a list box has no slots, so an option it lists by place joins nothing"
+    );
+    assert_eq!(
+        at(30, 0, 1)?,
+        Joined::Node(None),
+        "nor does a select the capture lacks"
+    );
 
     let real_option = ElementPlace {
         key: key(MAIN, 21)?,
@@ -473,8 +517,9 @@ fn a_pinned_option_finds_its_slot_by_its_select_and_index() -> Result<(), Box<dy
         }),
     };
     assert_eq!(
-        tree.node_at(&real_option).map(TreeNode::id),
-        Some(node_in(&tree, MAIN, 21)?),
+        tree.node_at(&real_option)
+            .map(|node| node.map(TreeNode::id)),
+        Ok(Some(node_in(&tree, MAIN, 21)?)),
         "a list box's real option joins by its own key"
     );
     let not_an_option = ElementPlace {
@@ -482,8 +527,9 @@ fn a_pinned_option_finds_its_slot_by_its_select_and_index() -> Result<(), Box<dy
         option: None,
     };
     assert_eq!(
-        tree.node_at(&not_an_option).map(TreeNode::id),
-        Some(select),
+        tree.node_at(&not_an_option)
+            .map(|node| node.map(TreeNode::id)),
+        Ok(Some(select)),
         "any element APC sent joins by its key"
     );
     Ok(())
