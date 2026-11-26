@@ -3687,3 +3687,97 @@ fn a_legacy_transport_hands_its_targeted_subscriber_what_the_browser_emits() -> 
     assert_eq!(targeted.try_recv()?.params["name"], "probe");
     Ok(())
 }
+
+fn withheld_profiles() -> crate::WithheldFeatures {
+    crate::WithheldFeatures::none().with(NativeFeature::ProfileTargeting)
+}
+
+async fn withheld_view(native: Arc<Native>, binding: Option<TargetBinding>) -> BrowserView {
+    BrowserView::capture_withholding(
+        BrowserSession::new_with_native(
+            native,
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
+        binding,
+        None,
+        false,
+        withheld_profiles(),
+    )
+    .await
+}
+
+/// A plan without profile choice still works in the original Default profile, the same as a
+/// task that never chose one, but nothing can list, load or pick another profile.
+#[tokio::test]
+async fn withheld_profile_choice_keeps_default_routing_and_refuses_profile_calls() -> TestResult {
+    let native = default_native(true, true);
+    let view = withheld_view(native.clone(), None).await;
+    assert_eq!(view.admission_error(), None);
+    assert_eq!(view.target_source(), Some(TargetSource::Default));
+    let opened = view
+        .new_page("https://new.test/", NewPageOptions::default())
+        .await?;
+    assert_eq!(opened.window_id, Some(WindowId(30)));
+
+    assert!(!view.supports(NativeFeature::ProfileTargeting));
+    assert!(view.native().implements(NativeFeature::ProfileTargeting));
+    let profiles_sent = native.calls("Browser.getProfiles").len();
+    code(
+        view.list_profiles()
+            .await
+            .err()
+            .ok_or("profile listing ran while withheld")?,
+        "plan_feature_unavailable: choosing a browser profile is part of ultrafast",
+    );
+    code(
+        view.cdp("Browser.getProfiles", json!({}), None)
+            .await
+            .err()
+            .ok_or("raw profile discovery ran while withheld")?,
+        "plan_feature_unavailable",
+    );
+    assert_eq!(native.calls("Browser.getProfiles").len(), profiles_sent);
+    Ok(())
+}
+
+/// A task bound to another profile stops instead of running in Default, sends nothing, and
+/// keeps its binding so turning the plan back on resumes it there.
+#[tokio::test]
+async fn withheld_profile_choice_stops_a_task_bound_to_another_profile() -> TestResult {
+    let native = Native::new();
+    let view = withheld_view(native.clone(), Some(binding(None))).await;
+    let error = view
+        .admission_error()
+        .ok_or("bound task was admitted while withheld")?
+        .to_string();
+    assert!(
+        error.starts_with("plan_feature_unavailable: choosing a browser profile is part of ultrafast, which is off on this computer. This task was set to the eng profile, so it stopped instead of switching accounts."),
+        "{error}"
+    );
+    assert_eq!(
+        view.binding().map(|kept| kept.intent.name.as_str()),
+        Some("eng")
+    );
+    assert!(native.calls("Browser.getProfiles").is_empty());
+    assert!(native.calls("Browser.loadProfile").is_empty());
+    Ok(())
+}
+
+/// Withholding only narrows choice: a task bound to the original Default profile runs.
+#[tokio::test]
+async fn withheld_profile_choice_admits_a_task_bound_to_default() -> TestResult {
+    let native = default_native(true, true);
+    let default_binding = TargetBinding {
+        intent: TargetIntent {
+            browser_profile_id: BrowserProfileId("original".into()),
+            directory: crate::DEFAULT_PROFILE_DIRECTORY.into(),
+            name: "Work".into(),
+            window: None,
+        },
+        revision: 1,
+    };
+    let view = withheld_view(native, Some(default_binding)).await;
+    assert_eq!(view.admission_error(), None);
+    Ok(())
+}

@@ -527,6 +527,26 @@ export class ClawApiClient {
     return this.unwrap(await this.client.POST('/api/v1/plan/refresh'))
   }
 
+  /** Debug builds only. False where the server has no developer tools: every release build. */
+  async hasPlanDevTools(): Promise<boolean> {
+    try {
+      this.expectSuccess(await this.client.GET('/api/v1/plan/dev'))
+      return true
+    } catch (error) {
+      if (error instanceof ApiResponseError && error.response.status === 404) {
+        return false
+      }
+      throw error
+    }
+  }
+
+  /** Debug builds only: takes this computer off its plan, the way a new computer starts. */
+  async forgetThisComputer(): Promise<Plan> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/plan/dev/forget-this-computer'),
+    )
+  }
+
   private unwrap<T>(result: ApiResult<T | undefined>): T {
     const errorResponse = this.responseClones.get(result.response)
     this.responseClones.delete(result.response)

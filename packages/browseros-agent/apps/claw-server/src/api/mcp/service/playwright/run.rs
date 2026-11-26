@@ -53,6 +53,7 @@ pub(in crate::api::mcp::service) async fn call(
             "session": started.session.id().as_str(),
             "client": started.session.client_name(),
         }),
+        withheld: state.withheld_features(),
     };
     let mut window_note = None;
     let outcome = tokio::select! {

@@ -394,6 +394,10 @@ function ProQuestions({
           : 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
     },
     {
+      q: 'What does my plan pay for?',
+      a: 'ultrafast on up to 5 computers, and long-term development of BrowserOS core features.',
+    },
+    {
       q: 'Does neo change sites without asking?',
       a: 'No. For skills that change a site, like adding to a cart, you choose how they run. Your agent asks you first.',
     },

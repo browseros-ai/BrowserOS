@@ -322,6 +322,9 @@ pub struct InnerCallRecord<'a> {
     pub from_helper: bool,
     /// Whether the primitive failed.
     pub is_error: bool,
+    /// Whether it failed because the host withholds a feature the call needed (a plan limit,
+    /// `plan_feature_unavailable`), so the host can explain it rather than read a plain error.
+    pub plan_withheld: bool,
     /// Safe presentation state only; never pass native handles or file paths to the audit.
     pub file_chooser_open: bool,
     /// Wall-clock duration of the primitive in milliseconds.

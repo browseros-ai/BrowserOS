@@ -175,6 +175,20 @@ export interface ResolveHelpResponse {
 /**
  *
  * @export
+ * @interface SessionBrowserProfile
+ */
+export interface SessionBrowserProfile {
+    /**
+     * The profile's display name, such as Work.
+     * @type {string}
+     * @memberof SessionBrowserProfile
+     */
+    name: string;
+}
+
+/**
+ *
+ * @export
  * @interface SessionBrowserTab
  */
 export interface SessionBrowserTab {
@@ -397,6 +411,15 @@ export const SessionStatus = {
 export type SessionStatus = typeof SessionStatus[keyof typeof SessionStatus];
 
 /**
+ * Why the task stopped on its own. profileNeedsUltrafast: the task was set to work in a browser profile, and choosing a profile comes with ultrafast, which is off on this computer.
+ * @export
+ */
+export const SessionStopReason = {
+    ProfileNeedsUltrafast: 'profileNeedsUltrafast'
+} as const;
+export type SessionStopReason = typeof SessionStopReason[keyof typeof SessionStopReason];
+
+/**
  *
  * @export
  * @interface SessionSummary
@@ -534,6 +557,24 @@ export interface SessionSummary {
      * @memberof SessionSummary
      */
     skillName?: string;
+    /**
+     * The browser profile this task was set to work in, when it is not the original Default profile. Present on task detail only.
+     * @type {SessionBrowserProfile}
+     * @memberof SessionSummary
+     */
+    browserProfile?: SessionBrowserProfile;
+    /**
+     * True when an agent asked to choose a browser profile on a plan without ultrafast, so the task stayed in the Default profile. Present on task detail only.
+     * @type {boolean}
+     * @memberof SessionSummary
+     */
+    profileLocked?: boolean;
+    /**
+     *
+     * @type {SessionStopReason}
+     * @memberof SessionSummary
+     */
+    stopReason?: SessionStopReason;
 }
 
 /**

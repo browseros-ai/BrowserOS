@@ -1,5 +1,5 @@
 import type { SessionSummary } from '@browseros/claw-api'
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, UserRound } from 'lucide-react'
 import { useLocation } from 'react-router'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
 import { AgentMark } from '@/components/harness/AgentMark'
@@ -52,6 +52,15 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
               <span>{taskDayAndTime(session.startedAt, Date.now())}</span>
               <span aria-hidden>·</span>
               <span>{tookLabel(session.durationMs)}</span>
+              {session.browserProfile ? (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-border-2 bg-card px-2.5 py-0.5 font-semibold text-[12.5px] text-ink-2">
+                    <UserRound aria-hidden className="size-3.5" />
+                    In your {session.browserProfile.name} profile
+                  </span>
+                </>
+              ) : null}
             </span>
           </>
         }

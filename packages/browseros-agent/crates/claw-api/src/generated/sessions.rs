@@ -180,6 +180,19 @@ impl ResolveHelpResponse {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionBrowserProfile {
+    /// The profile's display name, such as Work.
+    #[serde(rename = "name")]
+    pub name: String,
+}
+
+impl SessionBrowserProfile {
+    pub fn new(name: String) -> SessionBrowserProfile {
+        SessionBrowserProfile { name }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionBrowserTab {
     #[serde(rename = "browserTabId")]
     pub browser_tab_id: i64,
@@ -423,6 +436,28 @@ impl Default for SessionStatus {
     }
 }
 
+/// SessionStopReason : Why the task stopped on its own. profileNeedsUltrafast: the task was set to work in a browser profile, and choosing a profile comes with ultrafast, which is off on this computer.
+/// Why the task stopped on its own. profileNeedsUltrafast: the task was set to work in a browser profile, and choosing a profile comes with ultrafast, which is off on this computer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SessionStopReason {
+    #[serde(rename = "profileNeedsUltrafast")]
+    ProfileNeedsUltrafast,
+}
+
+impl std::fmt::Display for SessionStopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::ProfileNeedsUltrafast => write!(f, "profileNeedsUltrafast"),
+        }
+    }
+}
+
+impl Default for SessionStopReason {
+    fn default() -> SessionStopReason {
+        Self::ProfileNeedsUltrafast
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummary {
     #[serde(rename = "sessionId")]
@@ -475,6 +510,14 @@ pub struct SessionSummary {
     /// The skill saved from this task, when there is one.
     #[serde(rename = "skillName", skip_serializing_if = "Option::is_none")]
     pub skill_name: Option<String>,
+    /// The browser profile this task was set to work in, when it is not the original Default profile. Present on task detail only.
+    #[serde(rename = "browserProfile", skip_serializing_if = "Option::is_none")]
+    pub browser_profile: Option<Box<models::SessionBrowserProfile>>,
+    /// True when an agent asked to choose a browser profile on a plan without ultrafast, so the task stayed in the Default profile. Present on task detail only.
+    #[serde(rename = "profileLocked", skip_serializing_if = "Option::is_none")]
+    pub profile_locked: Option<bool>,
+    #[serde(rename = "stopReason", skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<models::SessionStopReason>,
 }
 
 impl SessionSummary {
@@ -513,6 +556,9 @@ impl SessionSummary {
             pursue: None,
             live: None,
             skill_name: None,
+            browser_profile: None,
+            profile_locked: None,
+            stop_reason: None,
         }
     }
 }

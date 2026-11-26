@@ -911,6 +911,10 @@ async fn execute_quickjs(
     result
 }
 
+/// The code a host-withheld feature is refused with (`CoreError::FeatureWithheld`, and a bound
+/// task's `TargetError::ProfileWithheld`), whichever primitive met it.
+const PLAN_WITHHELD: &str = "plan_feature_unavailable:";
+
 fn install_globals<'js>(
     ctx: &Ctx<'js>,
     tool_ctx: ToolCtx,
@@ -1118,6 +1122,7 @@ impl BrowserBridge {
                 args: &recorded_args,
                 from_helper,
                 is_error: outcome.is_err(),
+                plan_withheld: matches!(&outcome, Err(error) if error.contains(PLAN_WITHHELD)),
                 file_chooser_open: matches!(&outcome, Ok(BrowserCallValue::Json(value)) if value["fileChooserOpen"] == true),
                 duration_ms: started.elapsed().as_millis() as i64,
                 output_token_estimate,

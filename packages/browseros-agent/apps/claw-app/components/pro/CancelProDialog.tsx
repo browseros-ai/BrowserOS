@@ -20,7 +20,7 @@ import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useCancelPlan, usePlan } from '@/modules/api/plan.hooks'
 import { isCardTrial } from '@/modules/plan/trial.helpers'
 import { toastApiError, toastSuccess } from '@/modules/toast/toast'
-import { formatDate } from '@/screens/pro/pro.helpers'
+import { BACKING_THANKS, formatDate } from '@/screens/pro/pro.helpers'
 
 const FEEDBACK_ID = 'pro-cancel-feedback'
 const FEEDBACK_MAX = 1000
@@ -94,6 +94,7 @@ export function CancelProDialog({
                 ? ', and you won’t be charged. After that, neo goes back to Free.'
                 : '. After that, neo goes back to Free and you aren’t charged again.'}
             </p>
+            <p className="text-[14px] text-ink-2">{BACKING_THANKS}</p>
             <div className="flex flex-col gap-3 rounded-xl border border-border-2 bg-bg-sunken p-4">
               <p className="flex gap-2.5 text-[14px] text-ink-2">
                 <MessageCircleHeart

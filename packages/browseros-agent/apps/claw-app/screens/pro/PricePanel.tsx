@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { trialEndFrom } from '@/modules/plan/trial.helpers'
 import {
   apiErrorMessage,
+  BACKING_LINE,
   type BillingPeriod,
   billingPeriods,
   formatDate,
@@ -158,6 +159,7 @@ export function PricePanel({
           {useKey}
         </p>
       )}
+      <p className="max-w-[46ch] text-[13.5px] text-ink-3">{BACKING_LINE}</p>
     </>
   )
 }

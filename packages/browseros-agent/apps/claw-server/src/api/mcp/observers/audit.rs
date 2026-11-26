@@ -3,7 +3,10 @@ use crate::{
     api::mcp::dispatch::{
         ToolCall, ToolObserver, ToolObserverContext, extract_page_id, result_page_id,
     },
-    db::audit_log::{RecordToolDispatchInput, redacted_args_json, result_meta},
+    db::{
+        audit_log::{RecordToolDispatchInput, redacted_args_json, result_meta},
+        profile_marks::{self, ProfileMark},
+    },
     ids::DispatchId,
     services::{
         audit::{AuditEvent, AuditPreview},
@@ -174,7 +177,10 @@ async fn build_event(
                 .as_ref()
                 .map(|page| bounded_text(&page.title, AUDIT_TITLE_MAX)),
             args_json: redacted_args_json(&call.raw_args, audit_hints),
-            result_meta: tool_result_meta(result, cancelled),
+            result_meta: with_profile_mark(
+                tool_result_meta(result, cancelled),
+                profile_mark(call, result),
+            ),
             duration_ms,
             // Stamp the tool's start so a script dispatch sorts before the child
             // primitives it records while executing; top-level rows have no parent.
@@ -240,6 +246,51 @@ pub(crate) async fn persist_screenshot(
     }
     if let Err(error) = state.audit_log.mark_screenshot(row_id).await {
         warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
+    }
+}
+
+/// Why the plan turned this call away, if it did: a task bound to a profile that stopped, or a
+/// profile tool refused because the plan withholds profile choice. Read from the admitted view,
+/// which is what made the call fail.
+fn profile_mark(call: &ToolCall, result: &ToolResult) -> Option<ProfileMark> {
+    // A script whose own call was refused: whether or not the script caught it, the task
+    // stayed in Default, and the page should say so.
+    if call
+        .profile_refused
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return Some(ProfileMark::Refused);
+    }
+    if !result.is_error {
+        return None;
+    }
+    let view = call.view.as_ref()?;
+    if matches!(
+        view.admission_error(),
+        Some(browseros_core::error::TargetError::ProfileWithheld { .. })
+    ) {
+        return Some(ProfileMark::Stopped);
+    }
+    let profile_tool =
+        call.tool().metadata.requires == Some(browseros_core::NativeFeature::ProfileTargeting);
+    (profile_tool
+        && view
+            .native()
+            .withheld()
+            .contains(browseros_core::NativeFeature::ProfileTargeting))
+    .then_some(ProfileMark::Refused)
+}
+
+pub(crate) fn with_profile_mark(meta: String, mark: Option<ProfileMark>) -> String {
+    let Some(mark) = mark else {
+        return meta;
+    };
+    match serde_json::from_str::<Value>(&meta) {
+        Ok(Value::Object(mut fields)) => {
+            fields.insert(profile_marks::KEY.to_string(), Value::from(mark.as_str()));
+            Value::Object(fields).to_string()
+        }
+        _ => meta,
     }
 }
 
@@ -353,6 +404,68 @@ mod tests {
                 .as_deref()
                 .is_some_and(|meta| meta.contains("\"isError\":true"))
         }));
+        Ok(())
+    }
+
+    /// Calls the plan turned away carry a mark the task page reads: a bound task that stopped,
+    /// and a profile tool refused on Free. Other failures carry none.
+    #[tokio::test]
+    async fn plan_refusals_are_marked_for_the_task_page() -> anyhow::Result<()> {
+        use crate::api::mcp::{
+            service::capture_view,
+            test_support::{ProfileConnection, current_session},
+        };
+        let browser = current_session(ProfileConnection::new());
+        browser.pages.list().await?;
+        let mut stopped =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        stopped.view = Some(
+            capture_view(
+                &stopped.state,
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                false,
+            )
+            .await,
+        );
+        let mut refused = crate::api::mcp::test_support::tool_call(
+            "browser_profiles",
+            json!({ "action": "list" }),
+        )
+        .await?;
+        refused.view = Some(capture_view(&refused.state, browser.clone(), None, true).await);
+        let failed = ToolResult::error("failed");
+        let mut metas = Vec::new();
+        for call in [&stopped, &refused] {
+            apply(ToolObserverContext {
+                call,
+                result: &failed,
+                cancelled: false,
+                duration_ms: 1,
+            })
+            .await?;
+            call.state
+                .audit_worker
+                .flush_session(call.session_id.as_str())
+                .await?;
+            let rows = call
+                .state
+                .audit_log
+                .list_dispatches(ListDispatchesQuery::default())
+                .await?
+                .rows;
+            metas.push(rows[0].result_meta.clone().unwrap_or_default());
+        }
+        assert!(
+            metas[0].contains("\"planWithheld\":\"profileStop\""),
+            "{}",
+            metas[0]
+        );
+        assert!(
+            metas[1].contains("\"planWithheld\":\"profileLocked\""),
+            "{}",
+            metas[1]
+        );
         Ok(())
     }
 

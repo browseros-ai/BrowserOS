@@ -48,7 +48,7 @@ pub(super) async fn call_solve_captcha(
         };
         let held_browser = browser.clone();
         let view = super::hosted::with_viewports(
-            browseros_core::BrowserView::capture(browser, binding, None).await,
+            super::service::capture_view(state, browser, binding, false).await,
             state.viewports.as_ref(),
         );
         let cancel = linked_cancel_token(session.child_token(), client_cancel, dispatch_cancel);
