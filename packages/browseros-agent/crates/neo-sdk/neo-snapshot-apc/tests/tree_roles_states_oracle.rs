@@ -184,6 +184,11 @@ fn check(
         frame: frame.parent.as_ref().map(|_| frame.url.clone()),
         backend_node_id: element.backend_node_id,
         field: fact.field,
+        tree: if fact.field == Field::Join {
+            String::new()
+        } else {
+            format!("{:?}", fact.tree)
+        },
         detail: format!(
             "{fixture} [{}] node {} ({:?}): {:?} tree={:?} oracle={:?}",
             frame.url, element.backend_node_id, element.role, fact.field, fact.tree, fact.oracle

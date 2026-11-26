@@ -168,6 +168,7 @@ fn compare_joined_element(
                 frame: frame.parent.as_ref().map(|_| frame.url.clone()),
                 backend_node_id: element.backend_node_id,
                 field,
+                tree: actual.to_owned(),
                 detail: format!(
                     "{fixture} [{}] node {}: {field:?} tree={actual:?} oracle={expected:?}",
                     frame.url, element.backend_node_id

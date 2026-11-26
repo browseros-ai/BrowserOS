@@ -84,9 +84,14 @@ const fn child(fixture: &'static str, frame: &'static str, backend_node_id: u64)
     }
 }
 
-/// A group of elements that disagree on one field for one reason.
+/// A group of elements that disagree on one field for one reason, with the same tree value.
 pub(crate) struct KnownMismatch {
     pub(crate) field: Field,
+    /// The tree's side on every node of the group, as the test prints it: a name, description
+    /// or error message verbatim, any other fact in `Debug` form, empty for [`Field::Join`]. The
+    /// oracle's side is recorded data, so pinning the tree's side means a known disagreement
+    /// cannot change into a different wrong value unnoticed.
+    pub(crate) tree: &'static str,
     pub(crate) cause: Cause,
     pub(crate) why: &'static str,
     pub(crate) nodes: &'static [OracleNode],
@@ -106,6 +111,7 @@ const IMAGE_INPUTS: &[OracleNode] = &[
 pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     KnownMismatch {
         field: Field::Join,
+        tree: "",
         cause: Cause::FixtureDesign,
         why: "the hung frame spins past APC's subframe timeout, so the .pb has no document for \
               it; the oracle read it before the spin",
@@ -117,6 +123,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Join,
+        tree: "",
         cause: Cause::ContractFact,
         why: "APC emits no node for these documents' <html> element, which holds Playwright's \
               `document` role",
@@ -131,6 +138,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Join,
+        tree: "",
         cause: Cause::RustRule,
         why: "a collapsed <select>'s options have no box and no APC node; Rust's option synthesis \
               from select_options (apc-engine-design 3.5) is not built, and a synthesized option \
@@ -152,6 +160,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Join,
+        tree: "",
         cause: Cause::ContractFact,
         why: "a `display: contents` element has no layout object, so no APC node until contract \
               P11 (field 33) lands",
@@ -165,6 +174,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Join,
+        tree: "",
         cause: Cause::AcceptedGap("D2"),
         why: "hidden for ARIA with no box (display: none or the hidden attribute), so no APC node",
         nodes: &[
@@ -182,6 +192,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::BoxVisible,
+        tree: "true",
         cause: Cause::ContractFact,
         why: "APC repairs a zero-size <input type=file>'s outer box from its browser-made button, \
               so the tree sees a box Playwright does not; apc-engine-design 5.2 keeps the \
@@ -193,6 +204,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Role,
+        tree: "Some(Textbox)",
         cause: Cause::RustRule,
         why: "APC sends <input type=image> as an Image node with no FormControlData; the role \
               rule reads only form_control_type and falls back to textbox, though tag `input` \
@@ -201,18 +213,21 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Pressed,
+        tree: "None",
         cause: Cause::RustRule,
         why: "follows the image input's textbox role, which is not offered pressed",
         nodes: IMAGE_INPUTS,
     },
     KnownMismatch {
         field: Field::Invalid,
+        tree: "Some(False)",
         cause: Cause::RustRule,
         why: "follows the image input's textbox role, which is offered invalid",
         nodes: IMAGE_INPUTS,
     },
     KnownMismatch {
         field: Field::Disabled,
+        tree: "Some(true)",
         cause: Cause::AcceptedGap("G2"),
         why: "a nested aria-disabled=\"false\" does not stop aria-disabled inheritance",
         nodes: &[
@@ -224,12 +239,21 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Name,
+        tree: "",
         cause: Cause::RustRule,
         why: "follows the image input's textbox role: alt and the `Submit` default are skipped",
-        nodes: &[main("roles", 262), main("names", 153), main("names", 157)],
+        nodes: &[main("roles", 262), main("names", 157)],
     },
     KnownMismatch {
         field: Field::Name,
+        tree: "image input title becomes the description, alt wins the name",
+        cause: Cause::RustRule,
+        why: "follows the image input's textbox role, which takes title where Playwright takes alt",
+        nodes: &[main("names", 153)],
+    },
+    KnownMismatch {
+        field: Field::Name,
+        tree: "",
         cause: Cause::RustRule,
         why: "a list box's native <option> text arrives stamped ua_shadow, which the name rule \
               skips; the select's select_options carries every label",
@@ -249,6 +273,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Name,
+        tree: "",
         cause: Cause::ContractFact,
         why: "an inline <svg>'s <title> child reaches APC only through stock `label`, which Rust \
               never reads (contract assumption 3)",
@@ -256,6 +281,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::Name,
+        tree: "content: block pseudoblock-after",
         cause: Cause::ContractFact,
         why: "the generated text of a `display: block` ::after has no break_before, so it joins \
               the previous word without a space",
@@ -263,6 +289,7 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     },
     KnownMismatch {
         field: Field::ErrorMessage,
+        tree: "",
         cause: Cause::AcceptedGap("G6"),
         why: "validity.valid gates the error message when aria-invalid is absent",
         nodes: &[main("names", 17)],
@@ -276,6 +303,8 @@ pub(crate) struct Measured {
     pub(crate) frame: Option<String>,
     pub(crate) backend_node_id: u64,
     pub(crate) field: Field,
+    /// The tree's side, printed as [`KnownMismatch::tree`] documents.
+    pub(crate) tree: String,
     pub(crate) detail: String,
 }
 
@@ -286,15 +315,17 @@ struct Key {
     frame: Option<String>,
     backend_node_id: u64,
     field: Field,
+    tree: String,
 }
 
 impl Key {
-    fn of_ledger(node: &OracleNode, field: Field) -> Self {
+    fn of_ledger(node: &OracleNode, known: &KnownMismatch) -> Self {
         Self {
             fixture: node.fixture,
             frame: node.frame.map(str::to_owned),
             backend_node_id: node.backend_node_id,
-            field,
+            field: known.field,
+            tree: known.tree.to_owned(),
         }
     }
 
@@ -304,22 +335,19 @@ impl Key {
             frame: entry.frame.clone(),
             backend_node_id: entry.backend_node_id,
             field: entry.field,
+            tree: entry.tree.clone(),
         }
     }
 }
 
-/// Fails unless the disagreements measured on `fields` equal the ledger's entries for them,
-/// naming each new disagreement with its values and each closed one with its recorded reason.
+/// Fails unless the disagreements measured on `fields` equal the ledger's entries for them, tree
+/// values included, naming each new disagreement with its values and each entry no longer
+/// measured with its recorded reason. A known disagreement whose tree value changed shows as both.
 pub(crate) fn assert_measured_equals_ledger(measured: &[Measured], fields: &[Field]) {
     let ledger: BTreeSet<Key> = KNOWN_MISMATCHES
         .iter()
         .filter(|known| fields.contains(&known.field))
-        .flat_map(|known| {
-            known
-                .nodes
-                .iter()
-                .map(|node| Key::of_ledger(node, known.field))
-        })
+        .flat_map(|known| known.nodes.iter().map(|node| Key::of_ledger(node, known)))
         .collect();
     let measured_keys: BTreeSet<Key> = measured.iter().map(Key::of_measured).collect();
 
@@ -334,10 +362,10 @@ pub(crate) fn assert_measured_equals_ledger(measured: &[Measured], fields: &[Fie
         .filter(|known| fields.contains(&known.field))
     {
         for node in known.nodes {
-            if !measured_keys.contains(&Key::of_ledger(node, known.field)) {
+            if !measured_keys.contains(&Key::of_ledger(node, known)) {
                 report.push(format!(
-                    "closed, remove from the ledger: {node:?} {:?} ({}: {})",
-                    known.field, known.cause, known.why
+                    "closed or changed, update the ledger: {node:?} {:?} tree={:?} ({}: {})",
+                    known.field, known.tree, known.cause, known.why
                 ));
             }
         }
