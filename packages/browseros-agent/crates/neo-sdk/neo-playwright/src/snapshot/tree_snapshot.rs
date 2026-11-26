@@ -682,6 +682,7 @@ async fn survey(
     }
     if !held.is_empty() {
         mark_on_top(page, tree, json, &held);
+        carry_holder_text(tree, json, &held);
     }
     Ok(tops)
 }
@@ -863,6 +864,111 @@ fn mark_on_top(
     }
 }
 
+/// Moves each held layer's ref-less holder text with the layer. The layer's holders often share a
+/// parent that holds nothing else but text (a `display: contents` wrapper around a backdrop and
+/// its dialog), which the tree emits no node for (apc-engine-design 3.5): its own text then sits
+/// beside the nodes [`mark_on_top`] marked, where upstream's holder `generic` carried it along.
+/// Where that text and the marked nodes sit side by side in one children list, they are wrapped
+/// in one `generic` that carries the mark in their place, so the text prints in the layer's
+/// block. Text the tree masks is never matched (`SnapshotTree::node_text`), so such a parent is
+/// left as it is.
+fn carry_holder_text(tree: &SnapshotTree, json: &mut [AriaNode], held: &[(String, Vec<NodeKey>)]) {
+    for (layer, holders) in held {
+        let Some(texts) = shared_holder_texts(tree, holders) else {
+            continue;
+        };
+        let mut pending: Vec<&mut AriaNode> = json.iter_mut().collect();
+        while let Some(node) = pending.pop() {
+            if wrap_with_layer(&mut node.children, layer, &texts) {
+                break;
+            }
+            pending.extend(node.children.iter_mut().filter_map(|child| match child {
+                AriaChild::Node(node) => Some(node.as_mut()),
+                AriaChild::Text(_) => None,
+            }));
+        }
+    }
+}
+
+/// The direct text of the parent `holders` share, as the emitted tree writes strings, when that
+/// parent holds nothing but them and text; `None` otherwise, or when it holds no text.
+fn shared_holder_texts(tree: &SnapshotTree, holders: &[NodeKey]) -> Option<Vec<String>> {
+    let nodes: Vec<&TreeNode> = holders
+        .iter()
+        .filter_map(|holder| tree.node_by_key(holder))
+        .collect();
+    let parent = nodes.first()?.parent()?;
+    if nodes.iter().any(|node| node.parent() != Some(parent)) {
+        return None;
+    }
+    let mut texts = Vec::new();
+    for child in tree.children(parent) {
+        if nodes.iter().any(|node| node.id() == child.id()) {
+            continue;
+        }
+        let text = tree.node_text(child.id())?;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            texts.push(text);
+        }
+    }
+    (!texts.is_empty()).then_some(texts)
+}
+
+/// Wraps, in `children`, the one run of the nodes marked `layer` and the strings in `texts`
+/// that holds both, side by side and nothing else, into one `generic` marked `layer`. Whether it
+/// did.
+fn wrap_with_layer(children: &mut Vec<AriaChild>, layer: &str, texts: &[String]) -> bool {
+    let belongs = |child: &AriaChild| match child {
+        AriaChild::Node(node) => node.on_top.as_deref() == Some(layer),
+        AriaChild::Text(text) => texts.iter().any(|own| own == text),
+    };
+    let Some(first) = children.iter().position(belongs) else {
+        return false;
+    };
+    let end = children
+        .iter()
+        .skip(first)
+        .position(|child| !belongs(child))
+        .map_or(children.len(), |run| first + run);
+    let run = children.get(first..end).unwrap_or_default();
+    let marked = run.iter().any(|child| matches!(child, AriaChild::Node(_)));
+    let text = run.iter().any(|child| matches!(child, AriaChild::Text(_)));
+    if !marked || !text {
+        return false;
+    }
+    let mut wrapped: Vec<AriaChild> = children.drain(first..end).collect();
+    for child in &mut wrapped {
+        if let AriaChild::Node(node) = child {
+            node.on_top = None;
+        }
+    }
+    let holder = AriaNode {
+        role: "generic".to_owned(),
+        name: None,
+        checked: None,
+        disabled: None,
+        expanded: None,
+        active: None,
+        inert: None,
+        on_top: Some(layer.to_owned()),
+        invalid: None,
+        level: None,
+        pressed: None,
+        selected: None,
+        aria_hidden: None,
+        r#ref: None,
+        cursor: None,
+        r#box: None,
+        url: None,
+        placeholder: None,
+        text: None,
+        children: wrapped,
+    };
+    children.insert(first, AriaChild::Node(Box::new(holder)));
+    true
+}
+
 /// [`open_closed_roots`](crate::tree::open_closed_roots) for each child document of the page whose
 /// capture marked a seed, in its
 /// frame's world, installed now if this instance has none there yet: the page's snapshot opened
@@ -913,7 +1019,61 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{backend_ids_below, depth_of};
+    use std::error::Error;
+
+    use neo_snapshot::{AriaChild, AriaNode};
+
+    use super::{backend_ids_below, depth_of, wrap_with_layer};
+
+    fn node(role: &str, on_top: Option<&str>) -> Result<AriaChild, serde_json::Error> {
+        let mut node: AriaNode = serde_json::from_value(json!({ "role": role }))?;
+        node.on_top = on_top.map(str::to_owned);
+        Ok(AriaChild::Node(Box::new(node)))
+    }
+
+    #[test]
+    fn tests_that_a_layers_holder_text_is_wrapped_with_its_marked_nodes()
+    -> Result<(), Box<dyn Error>> {
+        let text = || AriaChild::Text("Please read this whole message".to_owned());
+        let mut children = vec![node("main", None)?, text(), node("dialog", Some("e5"))?];
+        let texts = vec!["Please read this whole message".to_owned()];
+        assert!(wrap_with_layer(&mut children, "e5", &texts));
+        assert_eq!(children.len(), 2, "main, then the layer's one block");
+        let Some(AriaChild::Node(block)) = children.get(1) else {
+            return Err("the layer's block".into());
+        };
+        assert_eq!(block.role, "generic");
+        assert_eq!(block.on_top.as_deref(), Some("e5"));
+        assert_eq!(block.children.first(), Some(&text()));
+        assert!(
+            block.children.iter().all(|child| match child {
+                AriaChild::Node(inner) => inner.on_top.is_none(),
+                AriaChild::Text(_) => true,
+            }),
+            "the block carries the mark, not its nodes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_text_apart_from_the_layer_or_a_layer_alone_is_left_in_place()
+    -> Result<(), Box<dyn Error>> {
+        let text = || AriaChild::Text("Elsewhere".to_owned());
+        let texts = vec!["Elsewhere".to_owned()];
+        let mut apart = vec![text(), node("main", None)?, node("dialog", Some("e5"))?];
+        assert!(
+            !wrap_with_layer(&mut apart, "e5", &texts),
+            "not side by side"
+        );
+        assert_eq!(apart.len(), 3);
+        let mut alone = vec![node("main", None)?, node("dialog", Some("e5"))?];
+        assert!(
+            !wrap_with_layer(&mut alone, "e5", &texts),
+            "no text to carry"
+        );
+        assert_eq!(alone.len(), 2);
+        Ok(())
+    }
 
     #[test]
     fn tests_that_the_depth_option_keeps_upstreams_falsy_zero_and_cuts_nothing_below_it() {

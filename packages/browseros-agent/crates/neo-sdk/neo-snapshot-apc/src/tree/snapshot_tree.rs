@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter::FusedIterator;
 
-use crate::proto::AnnotatedPageContent;
+use crate::proto::{AnnotatedPageContent, ContentData};
 
 use super::build_error::BuildError;
 use super::fold::{self, ClickProxy, FoldInfo, SyntheticOption};
@@ -288,6 +288,33 @@ impl SnapshotTree {
             return false;
         };
         anc.doc() == target.doc() && anc.subtree_range().contains(target.id())
+    }
+
+    /// The page's own text of `id` when it is a text node whose text the tree prints as it is: what
+    /// a caller matches against the strings of an emitted tree (the emitter normalizes whitespace,
+    /// this does not). `None` for any other node, and for a masked one, whose text an emitted tree
+    /// never holds.
+    #[must_use]
+    pub fn node_text(&self, id: NodeId) -> Option<&str> {
+        let node = self.node(id)?;
+        if node.mask() != mask::NodeMask::Clear {
+            return None;
+        }
+        let raw = node.raw_attributes()?;
+        if !hidden::is_text_node(raw) {
+            return None;
+        }
+        if let Some(dom_text) = raw
+            .browseros
+            .as_deref()
+            .and_then(|browseros| browseros.dom_text.as_deref())
+        {
+            return Some(dom_text);
+        }
+        match raw.content_data.as_ref() {
+            Some(ContentData::Text(info)) => info.text_content.as_deref(),
+            _ => None,
+        }
     }
 
     /// Whether `node` is a strict descendant of `ancestor` within the same document.
