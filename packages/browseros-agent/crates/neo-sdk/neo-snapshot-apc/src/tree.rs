@@ -8,7 +8,7 @@
 //!
 //! ```text
 //!  AnnotatedPageContent ─▶ contract check ─▶ frame_stitch ─▶ hidden ─▶ roles ─▶ states ─▶ mask ─▶ fold ─▶ SnapshotTree ─▶ name (NameCache)
-//!                                                │                                                            ├─ nodes: Vec<TreeNode>
+//!                                                │                                                            ├─ nodes: Vec<TreeNode>  ─▶ aria_emit (AriaTree)
 //!                                                ├─ populated frame ──▶ TreeDoc                               ├─ docs: Vec<TreeDoc>
 //!                                                └─ omitted/redacted ─▶ PartialFrame                          └─ by_key / doc_by_token
 //! ```
@@ -16,18 +16,19 @@
 //! Key invariants enforced here:
 //!
 //! - **Zero recursion:** [`frame_stitch`], [`hidden`], [`role`], [`state`], [`mask`], [`fold`],
-//!   and [`name`] run iteratively so arbitrarily deep DOM and iframe trees cannot overflow the
-//!   call stack.
+//!   [`name`], and [`aria_emit`] run iteratively so arbitrarily deep DOM and iframe trees cannot
+//!   overflow the call stack.
 //! - **Document-scoped identity:** raw `DomNodeId` values collide across iframes, so external
 //!   lookups, inheritance walks, relation resolution, and containment checks always stay scoped to
 //!   one document.
 //! - **Privacy-safe diagnostics:** [`SnapshotTree`], [`TreeDoc`], [`TreeNode`], [`Hidden`],
 //!   [`Role`], [`State`], [`NodeMask`], [`PrivateNodes`], [`FoldInfo`], [`SyntheticOption`],
-//!   [`Name`], [`Description`], and [`NameCache`] print only structural IDs, tokens, closed enums,
-//!   booleans, and counts or lengths.
+//!   [`Name`], [`Description`], [`NameCache`], [`AriaTree`], and [`AriaPartialFrame`] print only
+//!   structural IDs, tokens, closed enums, booleans, and counts or lengths.
 
 #[cfg(any(test, feature = "test-support"))]
 mod apc_builder;
+mod aria_emit;
 mod build_error;
 mod fold;
 mod frame_stitch;
@@ -43,6 +44,7 @@ mod tree_node;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use apc_builder::{ApcBuilder, FrameBuilder, NodeBuilder, PartialIframeSpec};
+pub use aria_emit::{AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, AriaTree, MAX_JSON_DEPTH};
 pub use build_error::BuildError;
 pub use fold::{ClickProxy, FoldInfo, LogicalChildrenIter, SyntheticOption};
 pub use hidden::Hidden;
