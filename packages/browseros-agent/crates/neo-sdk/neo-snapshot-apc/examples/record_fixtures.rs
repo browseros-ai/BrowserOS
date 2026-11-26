@@ -2,14 +2,14 @@
 //! oracle (`tests/fixtures/<name>.oracle.json`: what Playwright's own ARIA engine says about the
 //! same page load) from a live Chromium 158.
 //!
-//! Run from `packages/browseros-agent`:
+//! Run from `packages/browseros-agent` against a contract-v4 BrowserOS build
+//! (`tests/fixtures/README.md`, "Recording environment"):
 //! ```sh
-//! NEO_E2E_BROWSER="/Users/shadowfax/code/chromium-3/src/out/Default_browseros_arm64/BrowserOS Dev.app/Contents/MacOS/BrowserOS Dev" \
-//!   bun run test:browser -- cargo run -p neo-snapshot-apc --example record_fixtures
+//! NEO_E2E_BROWSER="/Users/shadowfax/code/chromium-1/src/out/Default_browseros_arm64/BrowserOS Dev.app/Contents/MacOS/BrowserOS Dev" \
+//!   bun run test:browser -- cargo run -p neo-snapshot-apc --example record_fixtures -- --contract
 //! ```
-//! Optionally pass fixture names to re-record a subset. Pass `--contract` when the browser
-//! carries the BrowserOS APC contract (Chromium PR C1 on): fields marked
-//! `data-typed="contract"` are then typed into as well.
+//! Optionally pass fixture names to re-record a subset. `--contract` types into the fields marked
+//! `data-typed="contract"` as well; the oracle tests refuse recordings below contract v4.
 
 #[path = "../tests/support/fixture_pages.rs"]
 #[expect(

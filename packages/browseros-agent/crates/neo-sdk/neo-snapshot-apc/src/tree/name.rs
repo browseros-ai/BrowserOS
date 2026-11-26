@@ -730,11 +730,6 @@ fn form_control_data(raw: &ContentAttributes) -> Option<&FormControlData> {
     }
 }
 
-fn form_control_type(raw: &ContentAttributes) -> Option<FormControlType> {
-    let control = form_control_data(raw)?;
-    FormControlType::try_from(control.form_control_type?).ok()
-}
-
 fn raw_title(raw: &ContentAttributes) -> &str {
     raw.browseros
         .as_deref()
@@ -786,9 +781,19 @@ fn push_children_reversed(
 /// Iterative walker over direct logical children of a node in flat-tree preorder within the same
 /// document, skipping `ua_shadow` text nodes and transparently descending through `ua_shadow`
 /// containers.
+///
+/// Under an `<option>` it keeps the `ua_shadow` text. Chromium renders a list box option's
+/// `DisplayLabel()` in an `aria-hidden` span of the option's UA shadow root, and the option's own
+/// children are `display: none` (`html_option_element.cc` `DidAddUserAgentShadowRoot`, `html.css`
+/// `::-internal-option-label-container`). That text is the only copy of the option's content APC
+/// sends. It differs only when a non-empty `label` attribute replaces the content. Playwright then
+/// reads the content, or the title when the content is empty, and this reads the label. Neither
+/// the text nor `SelectOption.text` says which one `DisplayLabel()` chose, so closing that needs a
+/// contract fact.
 struct LogicalChildren<'a> {
     tree: &'a SnapshotTree,
     doc: DocId,
+    keep_ua_shadow_text: bool,
     stack: Vec<NodeId>,
 }
 
@@ -798,13 +803,23 @@ impl<'a> LogicalChildren<'a> {
             return Self {
                 tree,
                 doc: DocId::MAIN,
+                keep_ua_shadow_text: false,
                 stack: Vec::new(),
             };
         };
         let doc = parent.doc();
+        let keep_ua_shadow_text = parent.raw_attributes().is_some_and(|raw| {
+            !hidden::is_ua_shadow(raw)
+                && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
+        });
         let mut stack = Vec::new();
         push_children_reversed(tree, parent_id, doc, &mut stack);
-        Self { tree, doc, stack }
+        Self {
+            tree,
+            doc,
+            keep_ua_shadow_text,
+            stack,
+        }
     }
 }
 
@@ -825,6 +840,8 @@ impl Iterator for LogicalChildren<'_> {
             if hidden::is_ua_shadow(raw) {
                 if !hidden::is_text_node(raw) {
                     push_children_reversed(self.tree, child_id, self.doc, &mut self.stack);
+                } else if self.keep_ua_shadow_text {
+                    return Some(child_id);
                 }
                 continue;
             }
@@ -1282,7 +1299,11 @@ fn advance_content_frame(index: &LookupIndex<'_>, state: &mut EvalState<'_>) {
                 acc.push(' ');
             }
             if hidden::is_text_node(child_raw) {
-                if opts.visibility.include_hidden()
+                // `LogicalChildren` yields `ua_shadow` text only as an option's label, which
+                // `hidden` marks hidden like every `ua_shadow` node. It stands in for the option's
+                // own text, which Playwright reads unchecked once the option passed step 2a.
+                if hidden::is_ua_shadow(child_raw)
+                    || opts.visibility.include_hidden()
                     || opts.is_embedded_in_hidden_ref()
                     || !child.hidden().is_hidden_for_aria()
                 {
@@ -1588,7 +1609,7 @@ fn eval_step_2e<'a>(
     visited: &mut HashSet<NodeId>,
 ) -> Option<StepOutcome<'a>> {
     let tag_name = facts.tag?;
-    let control_type = form_control_type(facts.raw);
+    let control_type = role::form_control_type(facts.raw);
 
     if tag_name.eq_ignore_ascii_case("input")
         && let Some(outcome) = eval_step_2e_special_input(index, facts, control_type, opts, visited)

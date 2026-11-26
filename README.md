@@ -38,10 +38,9 @@ Claude Code, Codex and Cursor work in it <strong>signed in as you, in their own 
    brew install --cask browseros-neo
    ```
 
-2. **Import from Chrome.** One click brings your logins, bookmarks and extensions.
-3. **Connect your agent.** neo finds Claude Code, Codex, Cursor, VS Code and more on your machine. One click each.
-4. **Give it a task.** From your agent, not from the browser:
-
+2. (optional) **Import from Chrome.** One click brings your logins, bookmarks and extensions.
+3. **Automatically connects to your agents.** neo finds Claude Code, Codex, Cursor, VS Code and more on your machine and connects to them automatically.
+4. **Start getting things done!** Give a task to your agent and you just watch.
    > Book me the cheapest flight to London.
 
 
