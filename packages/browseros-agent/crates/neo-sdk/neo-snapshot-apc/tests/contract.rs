@@ -6,6 +6,7 @@
 //! Re-encoding the decoded tree must give the same bytes back.
 
 use std::error::Error;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 
@@ -364,14 +365,19 @@ fn patched_recordings_carry_the_contract_on_every_page_and_frame() -> Result<(),
         }
         let apc = decode_protobuf(&fs::read(&path)?)?;
         let name = path.display();
+        let expected_version = if path.file_stem().and_then(OsStr::to_str) == Some("names") {
+            7
+        } else {
+            6
+        };
         assert_eq!(
             apc.browseros,
             Some(BrowserOsPageContentData {
-                contract_version: Some(6),
+                contract_version: Some(expected_version),
                 subframe_timeout_ms: Some(2_000),
             }),
-            "{name}: recorded on a contract-v6 build with the default 2000 ms subframe timeout \
-             (tests/fixtures/README.md)"
+            "{name}: recorded on a contract-v{expected_version} build with the default 2000 ms \
+             subframe timeout (tests/fixtures/README.md)"
         );
         let coverage = contract_coverage(&apc);
         assert_eq!(
