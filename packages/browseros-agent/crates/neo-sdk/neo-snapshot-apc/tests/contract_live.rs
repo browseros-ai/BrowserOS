@@ -30,10 +30,10 @@
 mod fixture_server;
 
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::error::Error;
 use std::fmt::Write as _;
 use std::time::Duration;
+use std::{env, ptr};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -42,9 +42,9 @@ use browseros_cdp::target::{self, AttachToTargetParams};
 use browseros_cdp::{CdpClient, ConnectOptions, SessionId};
 use fixture_server::{FixtureServer, Page};
 use neo_snapshot_apc::proto::{
-    BrowserOsContentAttributes, BrowserOsRef, BrowserOsTriState, ContentAttributeType,
-    ContentAttributes, ContentData, ContentNode, FormControlData, IframeDataContent,
-    REASON_BROWSEROS_TIMEOUT, RedactedFrameMetadata, RedactionDecision,
+    BoundingRect, BrowserOsContentAttributes, BrowserOsRef, BrowserOsTriState, ClickabilityReason,
+    ContentAttributeType, ContentAttributes, ContentData, ContentNode, FormControlData, FrameData,
+    IframeDataContent, REASON_BROWSEROS_TIMEOUT, RedactedFrameMetadata, RedactionDecision,
 };
 use neo_snapshot_apc::{AnnotatedPageContent, decode};
 use serde_json::{Value, json};
@@ -91,6 +91,19 @@ enum Patch {
     GeneratedBoxBreaks,
     /// P15: skipped collapsible-whitespace text boxes between inline boxes raise `break_before`.
     InlineWhitespace,
+    /// P18: the CDP capture runs on the critical path, so it reads the page as it is when the
+    /// request arrives, not after the next rendered frame.
+    CriticalPath,
+    /// P19: a frameset's `<frame>` arrives as an iframe node holding its document, and every
+    /// `<frameset>` is a node.
+    FramesetFrames,
+    /// P20: the top element of each `visibility: hidden` region with visible content is a node.
+    HiddenRegionRetention,
+    /// P21: nodes of a cross-site frame out of view keep their interaction info.
+    CrossSiteInteraction,
+    /// P22: an element whose boxes were borrowed from its content around an empty own box
+    /// carries `own_box_empty`.
+    OwnBoxEmpty,
 }
 
 impl Patch {
@@ -103,6 +116,11 @@ impl Patch {
             Self::DisplayContents => 5,
             Self::HtmlRetention | Self::SvgTitle | Self::GeneratedBoxBreaks => 6,
             Self::InlineWhitespace => 7,
+            Self::CriticalPath
+            | Self::FramesetFrames
+            | Self::HiddenRegionRetention
+            | Self::CrossSiteInteraction
+            | Self::OwnBoxEmpty => 8,
         }
     }
 }
@@ -195,6 +213,17 @@ impl Capture {
     }
 }
 
+/// Where a test's tab opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    /// A tab in the shared window. Tests run concurrently, so a newer tab may hide it.
+    SharedWindow,
+    /// A window of its own, so the tab stays visible while other tests open tabs. A test that
+    /// waits on `requestAnimationFrame` needs it: a hidden tab stops producing frames, and stock
+    /// code captures a hidden tab on the critical path at every version.
+    OwnWindow,
+}
+
 /// An open tab on one fixture page, with a flattened CDP session attached.
 struct Tab<'a> {
     client: &'a CdpClient,
@@ -203,9 +232,20 @@ struct Tab<'a> {
 }
 
 impl<'a> Tab<'a> {
-    async fn open(client: &'a CdpClient, url: String) -> Result<Self, Box<dyn Error>> {
+    async fn open(
+        client: &'a CdpClient,
+        url: String,
+        placement: Placement,
+    ) -> Result<Self, Box<dyn Error>> {
         let created = client
-            .send("Target.createTarget", json!({ "url": "about:blank" }), None)
+            .send(
+                "Target.createTarget",
+                json!({
+                    "url": "about:blank",
+                    "newWindow": placement == Placement::OwnWindow,
+                }),
+                None,
+            )
             .await?;
         let target_id = created
             .get("targetId")
@@ -462,10 +502,30 @@ async fn check_patch(
     path: &str,
     check: impl AsyncFnOnce(&Tab<'_>, &Capture) -> TestResult,
 ) -> TestResult {
+    check_patch_in(patch, pages, path, Placement::SharedWindow, check).await
+}
+
+/// [`check_patch`] with the tab in a window of its own, for checks that wait on the page's frames.
+async fn check_patch_visible(
+    patch: Patch,
+    pages: HashMap<String, Page>,
+    path: &str,
+    check: impl AsyncFnOnce(&Tab<'_>, &Capture) -> TestResult,
+) -> TestResult {
+    check_patch_in(patch, pages, path, Placement::OwnWindow, check).await
+}
+
+async fn check_patch_in(
+    patch: Patch,
+    pages: HashMap<String, Page>,
+    path: &str,
+    placement: Placement,
+    check: impl AsyncFnOnce(&Tab<'_>, &Capture) -> TestResult,
+) -> TestResult {
     let server = FixtureServer::start(pages).await?;
     let client = connect_cdp().await?;
     let result = async {
-        let tab = Tab::open(&client, server.url("127.0.0.1", path)).await?;
+        let tab = Tab::open(&client, server.url("127.0.0.1", path), placement).await?;
         let checked = async {
             let capture = tab.capture().await?;
             // Printed at every version, so a run before and after a patch compares page size
@@ -1899,6 +1959,738 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
             assert!(
                 whitespace_only.is_empty(),
                 "no text node on the page may be whitespace-only: {whitespace_only:?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+// Helpers for the version 8 tests (P18 to P22).
+
+/// Waits for two of the page's frames, so a change made before it has been painted, then reads
+/// the page's visibility.
+const TWO_FRAMES_THEN_VISIBILITY: &str = "new Promise((done) => requestAnimationFrame(() => \
+    requestAnimationFrame(done))).then(() => document.visibilityState)";
+
+impl Tab<'_> {
+    /// Lets two of the page's frames pass. Fails unless the tab is still visible afterwards: the
+    /// frame-clock checks of P18 and P21 mean nothing in a hidden tab.
+    async fn settle_two_frames(&self) -> TestResult {
+        let reply = self
+            .send(
+                "Runtime.evaluate",
+                json!({
+                    "expression": TWO_FRAMES_THEN_VISIBILITY,
+                    "awaitPromise": true,
+                    "returnByValue": true,
+                }),
+            )
+            .await?;
+        let state = reply
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if state == json!("visible") {
+            Ok(())
+        } else {
+            Err(format!("the tab must stay visible for a frame-clock check, it is {state}").into())
+        }
+    }
+}
+
+/// Whether `node` embeds a child document: an `<iframe>`, or since P19 a frameset's `<frame>`.
+fn is_frame_node(node: &ContentNode) -> bool {
+    matches!(
+        node.content_attributes
+            .as_ref()
+            .and_then(|attrs| attrs.content_data.as_ref()),
+        Some(ContentData::Iframe(_))
+    )
+}
+
+/// The frame data of the document a frame node holds; `None` for no document or a redaction.
+fn frame_data(node: &ContentNode) -> Option<&FrameData> {
+    match node.content_attributes.as_ref()?.content_data.as_ref()? {
+        ContentData::Iframe(iframe) => match iframe.data.as_ref()? {
+            IframeDataContent::FrameData(frame) => Some(frame.as_ref()),
+            IframeDataContent::RedactedFrameMetadata(_) => None,
+        },
+        _ => None,
+    }
+}
+
+/// The nodes of the document under `root` in document order, without entering the documents
+/// its frame nodes hold. The frame nodes themselves are included.
+fn document_nodes(root: &ContentNode) -> Vec<&ContentNode> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        out.push(node);
+        if !is_frame_node(node) {
+            stack.extend(node.children_nodes.iter().rev());
+        }
+    }
+    out
+}
+
+fn tag_of(node: &ContentNode) -> Option<&str> {
+    facts(node)?.tag.as_deref()
+}
+
+fn outer_box(node: &ContentNode) -> Option<&BoundingRect> {
+    node.content_attributes
+        .as_ref()?
+        .geometry
+        .as_ref()?
+        .outer_bounding_box
+        .as_ref()
+}
+
+fn visible_box(node: &ContentNode) -> Option<&BoundingRect> {
+    node.content_attributes
+        .as_ref()?
+        .geometry
+        .as_ref()?
+        .visible_bounding_box
+        .as_ref()
+}
+
+/// Whether a box is absent or has no area.
+fn has_no_area(rect: Option<&BoundingRect>) -> bool {
+    rect.is_none_or(|rect| rect.width.unwrap_or(0) <= 0 || rect.height.unwrap_or(0) <= 0)
+}
+
+/// Whether some text node under `node`, in any document, reads `text` once trimmed.
+fn holds_text(node: &ContentNode, text: &str) -> bool {
+    descendants(node).into_iter().any(|child| {
+        matches!(
+            child.content_attributes.as_ref().and_then(|attrs| attrs.content_data.as_ref()),
+            Some(ContentData::Text(info))
+                if info.text_content.as_deref().map(str::trim) == Some(text)
+        )
+    })
+}
+
+/// Whether `inner` is `outer` or one of its descendants, by identity.
+fn is_under(inner: &ContentNode, outer: &ContentNode) -> bool {
+    ptr::eq(inner, outer)
+        || descendants(outer)
+            .into_iter()
+            .any(|node| ptr::eq(node, inner))
+}
+
+// P18: the CDP capture runs on the critical path (design 14.2).
+
+const CRITICAL_PATH_PAGE: &str = r"<!doctype html><html><head><title>Contract critical path</title></head>
+<body><button id='target'>idle</button><script>
+// Sets the button's text now, and again in the next frame's requestAnimationFrame callbacks. A
+// capture queued until that frame reads the second text; one run on arrival reads the first.
+window.__flip = (round) => {
+  const button = document.getElementById('target');
+  button.textContent = `before ${round}`;
+  requestAnimationFrame(() => { button.textContent = `after ${round}`; });
+  return round;
+};
+window.__fixtureReady = true;
+</script></body></html>";
+
+/// Rounds of change, then capture.
+const CRITICAL_PATH_ROUNDS: usize = 20;
+
+/// Rounds that must read the page before its next frame. A round may still read the second text
+/// when a frame happens to begin between the change and the capture's arrival.
+const CRITICAL_PATH_MIN_BEFORE: usize = 15;
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p18_capture_reads_the_page_as_it_is_now() -> TestResult {
+    let pages = HashMap::from([(
+        "/critical-path.html".to_owned(),
+        Page::html(CRITICAL_PATH_PAGE),
+    )]);
+    check_patch_visible(
+        Patch::CriticalPath,
+        pages,
+        "/critical-path.html",
+        async |tab, _| {
+            let mut before = 0;
+            for round in 0..CRITICAL_PATH_ROUNDS {
+                // Two frames first, so the previous round's callback cannot land in this one.
+                tab.settle_two_frames().await?;
+                tab.eval(&format!("window.__flip({round})")).await?;
+                let capture = tab.capture().await?;
+                if capture.text_node(&format!("before {round}")).is_ok() {
+                    before += 1;
+                } else {
+                    capture.text_node(&format!("after {round}"))?;
+                }
+            }
+            report(&format!(
+                "CriticalPath: {before} of {CRITICAL_PATH_ROUNDS} captures read the page before its next frame"
+            ));
+            assert!(
+                before >= CRITICAL_PATH_MIN_BEFORE,
+                "a capture runs when it arrives, not after the next frame's callbacks: {before} of \
+                 {CRITICAL_PATH_ROUNDS} rounds read the page before its next frame"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+// P19: the frames of a frameset arrive as iframe nodes (design 15.2).
+
+const FRAMESET_TOP: &str = r#"<!doctype html><html><head><title>Contract frameset</title><script>
+// Frame two moves to a second site (localhost) once the frameset is parsed, so its document comes
+// from another renderer. The page is ready when every frame has loaded.
+let loaded = false;
+let twoReady = false;
+const check = () => { window.__fixtureReady = loaded && twoReady; };
+addEventListener('message', (event) => {
+  if (event.data === 'two-ready') { twoReady = true; check(); }
+});
+addEventListener('load', () => { loaded = true; check(); });
+addEventListener('DOMContentLoaded', () => {
+  document.getElementById('two').src = `http://localhost:${location.port}/frameset/two.html`;
+});
+</script></head><frameset rows="50%,50%"><frameset cols="50%,50%"><frame src="/frameset/one.html"><frame id="two"></frameset><frame src="/frameset/nested.html"></frameset></html>"#;
+
+const FRAMESET_ONE: &str = r"<!doctype html><html><body><button>Button one</button></body></html>";
+
+const FRAMESET_TWO: &str = r"<!doctype html><html><body><button>Button two</button><script>
+addEventListener('load', () => top.postMessage('two-ready', '*'));
+</script></body></html>";
+
+const FRAMESET_NESTED: &str = r#"<!doctype html><html><head><title>Nested frameset</title></head><frameset><frame src="/frameset/leaf.html"></frameset></html>"#;
+
+const FRAMESET_LEAF: &str = r#"<!doctype html><html><body><button>Leaf button</button>
+<iframe srcdoc="<button>Srcdoc button</button>"></iframe></body></html>"#;
+
+/// The main document's two framesets are nodes, the inner a child of the outer, with two frame
+/// nodes under the inner and one under the outer.
+fn assert_frameset_nesting(main: &[&ContentNode]) -> TestResult {
+    let framesets: Vec<&ContentNode> = main
+        .iter()
+        .copied()
+        .filter(|node| tag_of(node) == Some("frameset"))
+        .collect();
+    let [outer, inner] = framesets.as_slice() else {
+        return Err(format!("both framesets are nodes, found {}", framesets.len()).into());
+    };
+    assert!(
+        outer
+            .children_nodes
+            .iter()
+            .any(|child| ptr::eq(child, *inner)),
+        "the inner frameset is a child of the outer"
+    );
+    let child_frames = |node: &ContentNode| {
+        node.children_nodes
+            .iter()
+            .filter(|child| tag_of(child) == Some("frame"))
+            .count()
+    };
+    assert_eq!(
+        (child_frames(inner), child_frames(outer)),
+        (2, 1),
+        "two frames under the inner frameset, one under the outer"
+    );
+    Ok(())
+}
+
+/// The CDP frame id of the document a frame node holds; `None` when it holds no document.
+fn node_frame_token(node: &ContentNode) -> Option<&str> {
+    frame_data(node)?
+        .browseros
+        .as_ref()?
+        .devtools_frame_token
+        .as_deref()
+}
+
+/// Under the third frame: its document's frameset, a frame, the leaf document, and in it a
+/// button and an iframe with a document of its own. Both nested frame nodes must carry their
+/// documents' frame data, as the top-level frames do, not just text.
+fn assert_nested_frameset_document(nested: &ContentNode, cdp: &CdpFrames) -> TestResult {
+    let nested_frameset = descendants(nested)
+        .into_iter()
+        .find(|node| tag_of(node) == Some("frameset"))
+        .ok_or("the nested document has a frameset node")?;
+    let leaf = nested_frameset
+        .children_nodes
+        .iter()
+        .find(|node| tag_of(node) == Some("frame"))
+        .ok_or("the nested frameset has a frame node")?;
+    assert!(
+        holds_text(leaf, "Leaf button"),
+        "the leaf frame holds its document"
+    );
+    let srcdoc = descendants(leaf)
+        .into_iter()
+        .find(|node| tag_of(node) == Some("iframe"))
+        .ok_or("the leaf document has an iframe node")?;
+    assert!(
+        holds_text(srcdoc, "Srcdoc button"),
+        "the leaf's iframe holds a document of its own"
+    );
+    for (name, node) in [("the leaf frame", leaf), ("the leaf's iframe", srcdoc)] {
+        let token = node_frame_token(node)
+            .ok_or_else(|| format!("{name} holds no document with a frame token"))?;
+        assert!(
+            cdp.knows(token),
+            "{name}'s document token {token} is a CDP frame id, known {cdp:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p19_frameset_frames_arrive_as_iframe_nodes() -> TestResult {
+    let pages = HashMap::from([
+        ("/frameset/top.html".to_owned(), Page::html(FRAMESET_TOP)),
+        ("/frameset/one.html".to_owned(), Page::html(FRAMESET_ONE)),
+        ("/frameset/two.html".to_owned(), Page::html(FRAMESET_TWO)),
+        (
+            "/frameset/nested.html".to_owned(),
+            Page::html(FRAMESET_NESTED),
+        ),
+        ("/frameset/leaf.html".to_owned(), Page::html(FRAMESET_LEAF)),
+    ]);
+    check_patch(
+        Patch::FramesetFrames,
+        pages,
+        "/frameset/top.html",
+        async |tab, capture| {
+            let root = capture
+                .apc
+                .root_node
+                .as_ref()
+                .ok_or("capture has no root_node")?;
+            let main = document_nodes(root);
+
+            let frames: Vec<&ContentNode> = main
+                .iter()
+                .copied()
+                .filter(|node| tag_of(node) == Some("frame"))
+                .collect();
+            assert_eq!(
+                frames.len(),
+                3,
+                "the main document has a node for each of its frames"
+            );
+            let cdp = CdpFrames::read(tab).await?;
+            for (index, frame) in frames.iter().enumerate() {
+                assert!(is_frame_node(frame), "frame {index} is an iframe node");
+                let id =
+                    dom_node_id(frame).ok_or_else(|| format!("frame {index} has no node id"))?;
+                assert_eq!(
+                    tab.call_on_node(id, "function() { return this.tagName; }")
+                        .await?,
+                    json!("FRAME"),
+                    "frame {index}'s node id resolves to its <frame>"
+                );
+                let token = node_frame_token(frame)
+                    .ok_or_else(|| format!("frame {index} holds no document with a frame token"))?;
+                assert!(
+                    cdp.knows(token),
+                    "frame {index}'s document token {token} is a CDP frame id, known {cdp:?}"
+                );
+            }
+            let [one, two, nested] = frames.as_slice() else {
+                return Err("three frames, checked above".into());
+            };
+            assert!(
+                holds_text(one, "Button one"),
+                "the first frame holds its document"
+            );
+            assert!(
+                holds_text(two, "Button two"),
+                "the frame on a second site holds its document, sent by another renderer"
+            );
+
+            assert_frameset_nesting(&main)?;
+            assert_nested_frameset_document(nested, &cdp)
+        },
+    )
+    .await
+}
+
+// P20: the top of each `visibility: hidden` region is a node (design 15.3). No wrapper has an
+// id, a role or a retained tag; `data-t` is read by no retention rule.
+
+const HIDDEN_REGIONS_PAGE: &str = r#"<!doctype html><html><head><title>Contract hidden regions</title></head><body>
+<div data-t="a" style="visibility:hidden"><div style="visibility:visible"><button data-t="a-button">AR033 button</button></div></div>
+<div data-t="b" style="visibility:hidden"><p>never shown</p></div>
+<div><div data-t="c1" style="visibility:hidden"><div style="visibility:visible"><div data-t="c2" style="visibility:hidden"><button data-t="c-button" style="visibility:visible">Nested button</button></div></div></div></div>
+<button data-t="e"><span data-t="e-span" style="visibility:hidden"><span style="visibility:visible">Save</span></span></button>
+<div style="height:4000px">Tall spacer</div>
+<div data-t="d" style="visibility:hidden"><div style="visibility:visible"><button data-t="d-button">Below the fold button</button></div></div>
+<script>window.__fixtureReady = true;</script></body></html>"#;
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p20_the_top_of_a_hidden_region_is_a_node() -> TestResult {
+    let pages = HashMap::from([(
+        "/hidden-regions.html".to_owned(),
+        Page::html(HIDDEN_REGIONS_PAGE),
+    )]);
+    check_patch(
+        Patch::HiddenRegionRetention,
+        pages,
+        "/hidden-regions.html",
+        async |tab, capture| {
+            // (a) AR-033, and (d) the same shape 4,000 px down, with no scrolling.
+            for (region, button) in [("a", "a-button"), ("d", "d-button")] {
+                let top = tab
+                    .require_node(capture, &format!("[data-t={region}]"))
+                    .await?;
+                let top_facts = facts_of(top);
+                assert_eq!(
+                    (top_facts.visibility_hidden, top_facts.aria_hidden),
+                    (Some(true), None),
+                    "{region}: the top of the hidden region is visibility_hidden, not aria_hidden"
+                );
+                let inside = tab
+                    .require_node(capture, &format!("[data-t={button}]"))
+                    .await?;
+                assert!(
+                    is_under(inside, top),
+                    "{region}: the visible button sits under it"
+                );
+            }
+
+            // (b) Nothing visible inside: no node.
+            assert!(
+                tab.element_node(capture, "[data-t=b]").await?.is_none(),
+                "a hidden region with nothing visible inside has no node"
+            );
+
+            // (c) Two regions, one inside the other.
+            let c1 = tab.require_node(capture, "[data-t=c1]").await?;
+            let c2 = tab.require_node(capture, "[data-t=c2]").await?;
+            for (name, node) in [("c1", c1), ("c2", c2)] {
+                assert_eq!(
+                    facts_of(node).visibility_hidden,
+                    Some(true),
+                    "{name} is visibility_hidden"
+                );
+            }
+            assert!(
+                is_under(c2, c1),
+                "the inner region's top sits under the outer's"
+            );
+            let c_button = tab.require_node(capture, "[data-t=c-button]").await?;
+            assert!(
+                is_under(c_button, c2),
+                "the button sits under the inner region"
+            );
+
+            // (e) A name: the hidden span is a node between the button and the text.
+            let button = tab.require_node(capture, "[data-t=e]").await?;
+            let span = tab.require_node(capture, "[data-t=e-span]").await?;
+            assert_eq!(
+                facts_of(span).visibility_hidden,
+                Some(true),
+                "the hidden span is visibility_hidden"
+            );
+            assert!(
+                is_under(span, button) && !ptr::eq(span, button),
+                "the hidden span sits under the button"
+            );
+            assert!(
+                holds_text(span, "Save"),
+                "the text sits under the hidden span"
+            );
+            Ok(())
+        },
+    )
+    .await
+}
+
+// P21: a cross-site frame out of view keeps its interaction info (design 16.2).
+
+const CROSS_SITE_TOP: &str = r#"<!doctype html><html><head><title>Contract cross-site frames</title></head>
+<body style="margin:0">
+<iframe id="in-view" title="in view" width="600" height="150"></iframe>
+<div style="height:3000px">Tall spacer</div>
+<iframe id="cross" title="cross" width="600" height="150"></iframe>
+<iframe id="same" title="same" width="600" height="150"></iframe>
+<script>
+// Two frames on a second site (localhost), one on screen and one 3,000 px down, and a same-site
+// twin of the lower one. The page is ready when all three documents have loaded.
+let ready = 0;
+addEventListener('message', (event) => {
+  if (event.data === 'ready') ready += 1;
+  window.__fixtureReady = ready >= 3;
+});
+const child = (id, host) => {
+  document.getElementById(id).src = `http://${host}:${location.port}/cross-site/child.html?name=${id}`;
+};
+child('in-view', 'localhost');
+child('cross', 'localhost');
+child('same', '127.0.0.1');
+</script></body></html>"#;
+
+const CROSS_SITE_CHILD: &str = r##"<!doctype html><html><body>
+<button>Child button</button>
+<div role="group" aria-label="Child cursor" style="cursor:pointer">Child cursor</div>
+<div tabindex="0" aria-label="Tab stop">Tab stop</div>
+<a href="#x" aria-label="Parked" style="position:absolute;left:-9999px">Parked</a>
+<script>addEventListener('load', () => top.postMessage('ready', '*'));</script>
+</body></html>"##;
+
+/// The viewport of the desktop fixtures that found the gap.
+const DESKTOP_VIEWPORT: (u32, u32) = (800, 600);
+
+/// The probe nodes of a P21 child document: the button by its tag, the rest by `aria-label`.
+const CROSS_SITE_PROBES: [&str; 4] = ["button", "Child cursor", "Tab stop", "Parked"];
+
+/// A node's interaction info as P21 compares it.
+#[derive(Debug, PartialEq, Eq)]
+struct Interaction {
+    /// Clickability reasons, sorted.
+    reasons: Vec<i32>,
+    is_focusable: Option<bool>,
+    is_tabbable: Option<bool>,
+}
+
+impl Interaction {
+    fn has(&self, reason: ClickabilityReason) -> bool {
+        self.reasons.contains(&i32::from(reason))
+    }
+
+    /// Focusable and in the tab order.
+    fn is_tab_stop(&self) -> bool {
+        self.is_focusable == Some(true) && self.is_tabbable == Some(true)
+    }
+}
+
+/// `None` when the node carries no interaction info at all.
+fn interaction_of(node: &ContentNode) -> Option<Interaction> {
+    let info = node
+        .content_attributes
+        .as_ref()?
+        .interaction_info
+        .as_ref()?;
+    let mut reasons = info.clickability_reasons.clone();
+    reasons.sort_unstable();
+    Some(Interaction {
+        reasons,
+        is_focusable: info.is_focusable,
+        is_tabbable: info.is_tabbable,
+    })
+}
+
+/// The frame node holding the child document named `name`, and that document's probe nodes in
+/// [`CROSS_SITE_PROBES`] order.
+fn cross_site_frame<'c>(
+    capture: &'c Capture,
+    name: &str,
+) -> Result<(&'c ContentNode, Vec<&'c ContentNode>), Box<dyn Error>> {
+    let suffix = format!("name={name}");
+    let frame = capture
+        .nodes()
+        .into_iter()
+        .find(|node| {
+            frame_data(node)
+                .and_then(|data| data.url.as_deref())
+                .is_some_and(|url| url.ends_with(&suffix))
+        })
+        .ok_or_else(|| format!("no frame node holds the {name} document"))?;
+    let inside = descendants(frame);
+    let mut probes = Vec::new();
+    for probe in CROSS_SITE_PROBES {
+        let node = inside
+            .iter()
+            .copied()
+            .find(|node| {
+                let node_facts = facts_of(node);
+                if probe == "button" {
+                    node_facts.tag.as_deref() == Some("button")
+                } else {
+                    node_facts.aria_label.as_deref() == Some(probe)
+                }
+            })
+            .ok_or_else(|| format!("{name}: no {probe} node"))?;
+        probes.push(node);
+    }
+    Ok((frame, probes))
+}
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p21_cross_site_frame_out_of_view_keeps_interaction_info() -> TestResult {
+    let pages = HashMap::from([
+        (
+            "/cross-site/top.html".to_owned(),
+            Page::html(CROSS_SITE_TOP),
+        ),
+        (
+            "/cross-site/child.html".to_owned(),
+            Page::html(CROSS_SITE_CHILD),
+        ),
+    ]);
+    check_patch_visible(
+        Patch::CrossSiteInteraction,
+        pages,
+        "/cross-site/top.html",
+        async |tab, _| {
+            let (width, height) = DESKTOP_VIEWPORT;
+            tab.send(
+                "Emulation.setDeviceMetricsOverride",
+                json!({ "width": width, "height": height, "deviceScaleFactor": 1, "mobile": false }),
+            )
+            .await?;
+            // Let the new viewport reach every renderer before the capture; the page never scrolls.
+            tab.settle_two_frames().await?;
+            time::sleep(Duration::from_millis(300)).await;
+            let capture = tab.capture().await?;
+
+            let (twin_frame, twin) = cross_site_frame(&capture, "same")?;
+            let (cross_frame, cross) = cross_site_frame(&capture, "cross")?;
+            let (in_view_frame, in_view) = cross_site_frame(&capture, "in-view")?;
+            assert!(
+                has_no_area(visible_box(twin_frame)) && has_no_area(visible_box(cross_frame)),
+                "both lower frames are out of view"
+            );
+            assert!(!has_no_area(visible_box(in_view_frame)), "the upper frame is on screen");
+
+            // The same-site twin, which v7 already gets right.
+            let [button, cursor, tab_stop, parked] = twin.as_slice() else {
+                return Err("four probes, checked by cross_site_frame".into());
+            };
+            let button = interaction_of(button).ok_or("twin button: no interaction info")?;
+            assert!(
+                button.has(ClickabilityReason::ClickableControl) && button.is_tab_stop(),
+                "twin button: ClickableControl, focusable and tabbable: {button:?}"
+            );
+            let cursor = interaction_of(cursor).ok_or("twin group: no interaction info")?;
+            assert!(
+                cursor.has(ClickabilityReason::CursorPointer),
+                "twin group: CursorPointer: {cursor:?}"
+            );
+            let tab_stop = interaction_of(tab_stop).ok_or("twin tab stop: no interaction info")?;
+            assert!(
+                tab_stop.has(ClickabilityReason::TabIndex) && tab_stop.is_tab_stop(),
+                "twin tab stop: TabIndex, focusable and tabbable: {tab_stop:?}"
+            );
+            assert_eq!(
+                interaction_of(parked),
+                None,
+                "twin parked link: the offscreen filter drops its info"
+            );
+
+            // The cross-site frame out of view carries exactly what its twin carries, and the one
+            // on screen is unchanged. On v7 the out-of-view frame's nodes carry none.
+            for (index, probe) in CROSS_SITE_PROBES.iter().enumerate() {
+                let expected = twin.get(index).copied().map(interaction_of);
+                assert_eq!(
+                    cross.get(index).copied().map(interaction_of),
+                    expected,
+                    "{probe}: the cross-site frame out of view matches its same-site twin"
+                );
+                assert_eq!(
+                    in_view.get(index).copied().map(interaction_of),
+                    expected,
+                    "{probe}: the cross-site frame on screen matches too"
+                );
+            }
+            Ok(())
+        },
+    )
+    .await
+}
+
+// P22: an element whose boxes were borrowed around an empty own box carries `own_box_empty`
+// (design 16.3). Each row of the design's table is one shape, by its id.
+
+fn own_box_page() -> String {
+    format!(
+        r##"<!doctype html><html><head><title>Contract own box</title><style>
+.zero {{ display: inline-block; width: 0; height: 0; overflow: visible; cursor: pointer; }}
+.sr {{ position: absolute; width: 1px; height: 1px; overflow: hidden; white-space: nowrap; }}
+</style></head><body style="margin:0">
+<div><span id="r1" class="zero">Zero-sized excluded target</span></div>
+<div id="r2" style="height:0"><div style="float:left;width:80px;height:30px">Float</div></div>
+<div style="clear:both;height:40px"></div>
+<div style="position:relative;height:30px"><div id="r3" style="position:absolute;left:0;top:0;width:0;height:0"><div style="position:absolute;left:0;top:0;width:50px;height:20px">Abs child</div></div></div>
+<div id="r4" style="height:0">Overflowing text</div>
+<div style="height:30px"></div>
+<div><span id="r5"><span style="float:left;width:60px;height:20px">Float in span</span></span></div>
+<div style="clear:both"></div>
+<button id="r6" style="width:0;height:0;padding:0;border:0">Zero button</button>
+<div style="height:50px"></div>
+<a id="r7" class="sr" style="clip-path:inset(50%)" href="#r7">Skip to content</a>
+<a id="r8" class="sr" style="clip:rect(0,0,0,0)" href="#r8">Clip only</a>
+<a id="r9" href="#r9"><div style="height:40px">Block link</div></a>
+<a id="r10" href="#r10"><img width="40" height="18" alt="Image link" src="{GIF}"></a>
+<span id="r11">Plain span</span>
+<div id="r12"></div>
+<script>window.__fixtureReady = true;</script></body></html>"##
+    )
+}
+
+/// Rows whose own client rect is empty while the walk borrowed their boxes from their content.
+const BORROWED_AROUND_EMPTY: &[&str] = &["#r1", "#r2", "#r3", "#r4", "#r5", "#r6"];
+
+/// Rows that must not carry the field: a borrowed box around a 1×1 client rect, then boxes of
+/// their own, then a box that stays empty.
+const NOT_FLAGGED: &[&str] = &["#r7", "#r8", "#r9", "#r10", "#r11", "#r12"];
+
+#[tokio::test]
+#[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT; run under bun run test:browser"]
+async fn p22_own_box_empty_marks_a_borrowed_box() -> TestResult {
+    let pages = HashMap::from([("/own-box.html".to_owned(), Page::html(&own_box_page()))]);
+    check_patch(
+        Patch::OwnBoxEmpty,
+        pages,
+        "/own-box.html",
+        async |tab, capture| {
+            // The page is what the table says: rows 1 to 6 and 12 have no client area, 7 to 11 do.
+            let areas = tab
+                .eval(
+                    "Array.from({ length: 12 }, (_, i) => { \
+                   const r = document.getElementById('r' + (i + 1)).getBoundingClientRect(); \
+                   return r.width > 0 && r.height > 0; })",
+                )
+                .await?;
+            assert_eq!(
+                areas,
+                json!([
+                    false, false, false, false, false, false, true, true, true, true, true, false
+                ]),
+                "each row's own client rect has the area the table gives it"
+            );
+
+            for selector in BORROWED_AROUND_EMPTY {
+                let node = tab.require_node(capture, selector).await?;
+                assert_eq!(
+                    facts_of(node).own_box_empty,
+                    Some(true),
+                    "{selector}: own_box_empty"
+                );
+                assert!(
+                    !has_no_area(outer_box(node)),
+                    "{selector}: its outer box is still the one borrowed from its content"
+                );
+            }
+            for selector in NOT_FLAGGED {
+                let node = tab.require_node(capture, selector).await?;
+                assert_eq!(
+                    facts_of(node).own_box_empty,
+                    None,
+                    "{selector}: no own_box_empty"
+                );
+            }
+            assert!(
+                !has_no_area(outer_box(tab.require_node(capture, "#r7").await?)),
+                "the clip-path link keeps its borrowed outer box, and so its ref"
+            );
+            assert!(
+                has_no_area(outer_box(tab.require_node(capture, "#r12").await?)),
+                "the empty div's outer box stays empty"
             );
             Ok(())
         },

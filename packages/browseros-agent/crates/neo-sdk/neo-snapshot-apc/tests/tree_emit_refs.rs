@@ -912,6 +912,75 @@ fn clickable_div_cursor_pointer_and_nested_suppression() -> Result<(), Box<dyn E
     Ok(())
 }
 
+/// Contract field 38 (P22): stock APC fills an element's empty boxes from its content, so a
+/// zero-sized `cursor: pointer` element arrives with a drawn-looking outer box. Playwright tests
+/// the element's own `getBoundingClientRect()` and gives it no ref; the flag makes Rust agree.
+/// The same shape without the flag, which is all a version 7 browser sends, keeps its ref.
+#[test]
+fn own_box_empty_takes_a_borrowed_box_out_of_the_pointer_targets() -> Result<(), Box<dyn Error>> {
+    let pointer_card = |dom_id: i32, y: i32, text: &str| {
+        NodeBuilder::container()
+            .dom_id(dom_id)
+            .bounding_box(0, y, 59, 73)
+            .clickability_reason(ClickabilityReason::CursorPointer)
+            .child(NodeBuilder::text(text))
+    };
+    let tree = build_tree(
+        ApcBuilder::new("doc-own-box")
+            .root(
+                NodeBuilder::root()
+                    .child(pointer_card(10, 0, "Zero-sized target").own_box_empty(true))
+                    .child(pointer_card(20, 100, "Borrowed-box target")),
+            )
+            .build(),
+        BuildOptions::new(),
+    )?;
+    let zero_sized = tree
+        .node(node_id_of(&tree, "doc-own-box", 10)?)
+        .ok_or("missing zero-sized node")?;
+    assert!(
+        !zero_sized.hidden().is_box_visible(),
+        "a borrowed box around an empty own box is not drawn"
+    );
+    assert!(
+        tree.node(node_id_of(&tree, "doc-own-box", 20)?)
+            .ok_or("missing borrowed-box node")?
+            .hidden()
+            .is_box_visible(),
+        "without the flag the borrowed outer box still reads as drawn"
+    );
+
+    let mut refs = TabRefTable::new();
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+    let pointer_nodes: Vec<&AriaNode> = all_nodes(ai.nodes())
+        .into_iter()
+        .filter(|node| node.cursor.as_deref() == Some("pointer"))
+        .collect();
+    assert_eq!(
+        pointer_nodes.len(),
+        1,
+        "only the unflagged card is a pointer target"
+    );
+    let pw = neo_snapshot::render(&ai.into_snapshot(), Call::Playwright).into_text();
+    let line_of = |text: &str| {
+        pw.lines()
+            .find(|line| line.contains(text))
+            .map(str::to_owned)
+            .ok_or_else(|| format!("no line prints {text:?} in:\n{pw}"))
+    };
+    let zero_line = line_of("Zero-sized target")?;
+    assert!(
+        !zero_line.contains("[ref=") && !zero_line.contains("[cursor=pointer]"),
+        "the zero-sized card gets no ref and no pointer mark: {zero_line:?}"
+    );
+    let borrowed_line = line_of("Borrowed-box target")?;
+    assert!(
+        borrowed_line.contains("[ref=") && borrowed_line.contains("[cursor=pointer]"),
+        "the unflagged card keeps its ref and pointer mark: {borrowed_line:?}"
+    );
+    Ok(())
+}
+
 fn zero_size_input(control_type: FormControlType, dom_id: i32, y: i32) -> NodeBuilder {
     NodeBuilder::form_control(control_type)
         .dom_id(dom_id)

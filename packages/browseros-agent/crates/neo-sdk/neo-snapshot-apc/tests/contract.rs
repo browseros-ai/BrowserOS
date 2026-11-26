@@ -98,6 +98,7 @@ fn every_node_fact_wire() -> Wire {
         .varint(32, 1)
         .varint(33, 1)
         .string(34, "Close")
+        .varint(38, 1)
 }
 
 fn every_node_fact() -> BrowserOsContentAttributes {
@@ -149,6 +150,7 @@ fn every_node_fact() -> BrowserOsContentAttributes {
         ua_shadow: Some(true),
         display_contents: Some(true),
         svg_title: Some("Close".to_owned()),
+        own_box_empty: Some(true),
     }
 }
 
@@ -270,6 +272,7 @@ const FLAGS: &[(u32, FlagField)] = &[
     (31, |facts| &mut facts.closed_root_seed),
     (32, |facts| &mut facts.ua_shadow),
     (33, |facts| &mut facts.display_contents),
+    (38, |facts| &mut facts.own_box_empty),
 ];
 
 #[test]

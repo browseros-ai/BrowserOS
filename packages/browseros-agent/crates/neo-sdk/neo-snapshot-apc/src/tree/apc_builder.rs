@@ -944,6 +944,12 @@ impl NodeBuilder {
         self
     }
 
+    /// Sets `browseros.own_box_empty` (contract field 38).
+    pub fn own_box_empty(mut self, own_box_empty: bool) -> Self {
+        self.browseros_mut().own_box_empty = Some(own_box_empty);
+        self
+    }
+
     /// Appends a child node.
     pub fn child(mut self, child: Self) -> Self {
         self.children.push(child);
