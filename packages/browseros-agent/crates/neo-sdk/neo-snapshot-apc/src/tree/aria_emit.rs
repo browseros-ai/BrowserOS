@@ -1903,11 +1903,15 @@ fn inline_text_into_generic(nodes: &mut [DraftNode], idx: usize) {
     };
 
     let inlined_text = nodes.get(sole_child_idx).and_then(|child| {
+        // A click target keeps its own line, as the old marking's leaf rule had it: inlined into
+        // its parent, its ref and pointer mark would go, and the v1 text would print its text
+        // with nothing to click. Upstream's plugin has no such case, since it reads no cursor.
         if child.role != "generic"
             || !child.name.is_empty()
             || child.active == Some(true)
             || child.has_props()
             || child.flags.is_inert() != node_is_inert
+            || (child.r#ref.is_some() && child.flags.pointer_cursor())
         {
             return None;
         }
@@ -2868,6 +2872,49 @@ mod tests {
     /// Upstream's default `aria` visibility stops at an element hidden for aria, so a
     /// `visibility: visible` child of a `visibility: hidden` parent never prints; ai mode shows it.
     /// The cut needs the capture to carry the hidden parent, which v7 keeps for some markup only.
+    /// A custom element's shadow card: the host prints as a generic holding one `tabindex` card,
+    /// a click target whose only content is text, which stays on its own line with its ref.
+    #[test]
+    fn tests_that_a_click_target_is_not_inlined_into_its_parent_generic()
+    -> Result<(), Box<dyn Error>> {
+        let body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 400, 200)
+            .child(
+                NodeBuilder::element("text-card")
+                    .dom_id(10)
+                    .bounding_box(0, 0, 400, 20)
+                    .child(
+                        NodeBuilder::container()
+                            .dom_id(11)
+                            .clickability_reason(ClickabilityReason::TabIndex)
+                            .focusable(true)
+                            .tabbable(true)
+                            .bounding_box(0, 0, 400, 20)
+                            .child(NodeBuilder::text("Card text")),
+                    ),
+            )
+            .child(
+                NodeBuilder::form_control(FormControlType::ButtonButton)
+                    .dom_id(20)
+                    .tag("button")
+                    .bounding_box(0, 40, 80, 24)
+                    .child(NodeBuilder::text("Other")),
+            );
+        let apc = ApcBuilder::new("doc-card")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let card = all_nodes(ai.nodes())
+            .into_iter()
+            .find(|node| node.cursor.is_some() && node.text.as_deref() == Some("Card text"))
+            .ok_or("the card keeps its own pointer line")?;
+        assert!(card.r#ref.is_some(), "and its ref");
+        Ok(())
+    }
+
     #[test]
     fn tests_that_default_mode_skips_the_visible_children_of_a_hidden_parent()
     -> Result<(), Box<dyn Error>> {
