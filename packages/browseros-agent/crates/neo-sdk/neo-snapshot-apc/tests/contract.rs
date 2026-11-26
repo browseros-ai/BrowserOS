@@ -290,34 +290,71 @@ fn fixtures_dir() -> PathBuf {
         .join("fixtures")
 }
 
-/// Every place a stock reply could carry a BrowserOS message, for one decoded tree.
-fn browseros_message_count(apc: &AnnotatedPageContent) -> usize {
-    let frame_has = |frame: &FrameData| usize::from(frame.browseros.is_some());
-    let mut count =
-        usize::from(apc.browseros.is_some()) + apc.main_frame_data.as_ref().map_or(0, frame_has);
+/// What one recorded reply carries of the contract's frame and node messages (section 4.2 to 4.4).
+#[derive(Debug, Default)]
+struct ContractCoverage {
+    documents: usize,
+    documents_with_token: usize,
+    timed_out_frames: usize,
+    timed_out_frames_stamped: usize,
+    nodes_with_facts: usize,
+}
+
+fn has_token(token: Option<&String>) -> bool {
+    token.is_some_and(|token| !token.is_empty())
+}
+
+fn contract_coverage(apc: &AnnotatedPageContent) -> ContractCoverage {
+    let frame_token = |frame: &FrameData| {
+        has_token(
+            frame
+                .browseros
+                .as_ref()
+                .and_then(|page| page.devtools_frame_token.as_ref()),
+        )
+    };
+    let mut coverage = ContractCoverage::default();
+    if let Some(main) = apc.main_frame_data.as_ref() {
+        coverage.documents += 1;
+        coverage.documents_with_token += usize::from(frame_token(main));
+    }
     let mut stack: Vec<&ContentNode> = apc.root_node.iter().collect();
     while let Some(node) = stack.pop() {
         stack.extend(&node.children_nodes);
         let Some(attrs) = node.content_attributes.as_ref() else {
             continue;
         };
-        count += usize::from(attrs.browseros.is_some());
-        if let Some(ContentData::Iframe(iframe)) = attrs.content_data.as_ref() {
-            count += match iframe.data.as_ref() {
-                Some(IframeDataContent::FrameData(frame)) => frame_has(frame),
-                Some(IframeDataContent::RedactedFrameMetadata(redacted)) => {
-                    usize::from(redacted.browseros.is_some())
-                }
-                None => 0,
-            };
+        coverage.nodes_with_facts += usize::from(attrs.browseros.is_some());
+        let Some(ContentData::Iframe(iframe)) = attrs.content_data.as_ref() else {
+            continue;
+        };
+        match iframe.data.as_ref() {
+            Some(IframeDataContent::FrameData(frame)) => {
+                coverage.documents += 1;
+                coverage.documents_with_token += usize::from(frame_token(frame));
+            }
+            Some(IframeDataContent::RedactedFrameMetadata(redacted)) => {
+                coverage.timed_out_frames += 1;
+                let stamped = redacted.reason
+                    == Some(i32::from(RedactedFrameReason::BrowserOsTimeout))
+                    && has_token(
+                        redacted
+                            .browseros
+                            .as_ref()
+                            .and_then(|frame| frame.devtools_frame_token.as_ref()),
+                    );
+                coverage.timed_out_frames_stamped += usize::from(stamped);
+            }
+            None => {}
         }
     }
-    count
+    coverage
 }
 
 #[test]
-fn stock_chromium_replies_decode_with_no_contract() -> Result<(), Box<dyn Error>> {
+fn patched_recordings_carry_the_contract_on_every_page_and_frame() -> Result<(), Box<dyn Error>> {
     let mut checked = 0;
+    let mut timed_out = 0;
     for entry in fs::read_dir(fixtures_dir())? {
         let path = entry?.path();
         if path.extension().is_none_or(|ext| ext != "pb") {
@@ -326,22 +363,37 @@ fn stock_chromium_replies_decode_with_no_contract() -> Result<(), Box<dyn Error>
         let apc = decode_protobuf(&fs::read(&path)?)?;
         let name = path.display();
         assert_eq!(
-            apc.browseros
-                .as_ref()
-                .and_then(|page| page.contract_version),
-            None,
-            "{name}: stock Chromium 158 reports no contract_version"
+            apc.browseros,
+            Some(BrowserOsPageContentData {
+                contract_version: Some(4),
+                subframe_timeout_ms: Some(2_000),
+            }),
+            "{name}: recorded on a contract-v4 build with the default 2000 ms subframe timeout \
+             (tests/fixtures/README.md)"
+        );
+        let coverage = contract_coverage(&apc);
+        assert_eq!(
+            coverage.documents_with_token, coverage.documents,
+            "{name}: every document names its CDP frame through devtools_frame_token: {coverage:?}"
         );
         assert_eq!(
-            browseros_message_count(&apc),
-            0,
-            "{name}: stock Chromium 158 sends no BrowserOS message anywhere"
+            coverage.timed_out_frames_stamped, coverage.timed_out_frames,
+            "{name}: a timed-out frame carries BrowserOsTimeout and its frame token: {coverage:?}"
         );
+        assert!(
+            coverage.nodes_with_facts > 0,
+            "{name}: the page's elements carry BrowserOS node facts: {coverage:?}"
+        );
+        timed_out += coverage.timed_out_frames;
         checked += 1;
     }
     assert_eq!(
         checked, 16,
-        "all sixteen recorded stock replies are checked (tests/fixtures/README.md lists them)"
+        "all sixteen recorded replies are checked (tests/fixtures/README.md lists them)"
+    );
+    assert_eq!(
+        timed_out, 1,
+        "only hung-subframe's [::1] frame times out, so the redacted-frame check is not vacuous"
     );
     Ok(())
 }

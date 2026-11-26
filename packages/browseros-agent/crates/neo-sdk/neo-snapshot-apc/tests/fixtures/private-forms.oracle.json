@@ -4,7 +4,7 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "CA92EE9463BAA052E8941F70E72A3C27",
+      "frame": "70948ED7588C1EFBC2604C8CF9AE1AA6",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/edge/private-forms.html",
@@ -420,7 +420,8 @@
                           {
                             "name": "textbox: input autocomplete=current-password",
                             "ref": "e17",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e15",
@@ -436,7 +437,8 @@
                           {
                             "name": "textbox: input autocomplete=new-password",
                             "ref": "e20",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e18",
@@ -452,7 +454,8 @@
                           {
                             "name": "textbox: input autocomplete=one-time-code",
                             "ref": "e23",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e21",
@@ -468,7 +471,8 @@
                           {
                             "name": "textbox: input autocomplete=cc-number",
                             "ref": "e26",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e24",
@@ -484,7 +488,8 @@
                           {
                             "name": "textbox: input autocomplete=cc-csc",
                             "ref": "e29",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e27",
@@ -507,7 +512,8 @@
                           {
                             "name": "textbox: textarea autocomplete=current-password",
                             "ref": "e34",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e32",
@@ -523,7 +529,8 @@
                           {
                             "name": "textbox: textarea autocomplete=new-password",
                             "ref": "e37",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e35",
@@ -539,7 +546,8 @@
                           {
                             "name": "textbox: textarea autocomplete=one-time-code",
                             "ref": "e40",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "•••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e38",
@@ -555,7 +563,8 @@
                           {
                             "name": "textbox: textarea autocomplete=cc-number",
                             "ref": "e43",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "••••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e41",
@@ -571,7 +580,8 @@
                           {
                             "name": "textbox: textarea autocomplete=cc-csc",
                             "ref": "e46",
-                            "role": "textbox"
+                            "role": "textbox",
+                            "text": "••••••••••••••••••••••••••••••••••"
                           }
                         ],
                         "ref": "e44",
@@ -650,27 +660,32 @@
                   "group: autocomplete tokens on input type=text textbox: input autocomplete=current-password",
                   {
                     "name": "textbox: input autocomplete=current-password",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: input autocomplete=new-password",
                   {
                     "name": "textbox: input autocomplete=new-password",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: input autocomplete=one-time-code",
                   {
                     "name": "textbox: input autocomplete=one-time-code",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: input autocomplete=cc-number",
                   {
                     "name": "textbox: input autocomplete=cc-number",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: input autocomplete=cc-csc",
                   {
                     "name": "textbox: input autocomplete=cc-csc",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   }
                 ],
                 "name": "group: autocomplete tokens on input type=text",
@@ -681,27 +696,32 @@
                   "group: autocomplete tokens on textarea textbox: textarea autocomplete=current-password",
                   {
                     "name": "textbox: textarea autocomplete=current-password",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: textarea autocomplete=new-password",
                   {
                     "name": "textbox: textarea autocomplete=new-password",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: textarea autocomplete=one-time-code",
                   {
                     "name": "textbox: textarea autocomplete=one-time-code",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "•••••••••••••••••••••••••••••••••"
                   },
                   "textbox: textarea autocomplete=cc-number",
                   {
                     "name": "textbox: textarea autocomplete=cc-number",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "••••••••••••••••••••••••••••••••••"
                   },
                   "textbox: textarea autocomplete=cc-csc",
                   {
                     "name": "textbox: textarea autocomplete=cc-csc",
-                    "role": "textbox"
+                    "role": "textbox",
+                    "text": "••••••••••••••••••••••••••••••••••"
                   }
                 ],
                 "name": "group: autocomplete tokens on textarea",

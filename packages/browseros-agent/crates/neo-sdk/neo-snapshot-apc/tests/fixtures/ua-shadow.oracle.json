@@ -4,7 +4,7 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "0CDC5D174E6F881CB16D3C43ADD3D57F",
+      "frame": "C7B11517C3FC5B5EFB035A9898D6D12F",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/edge/ua-shadow.html",
@@ -35,7 +35,7 @@
           }
         },
         {
-          "backendNodeId": 6,
+          "backendNodeId": 4,
           "role": "textbox",
           "name": "textbox: text input with value",
           "description": "",
@@ -49,7 +49,7 @@
           }
         },
         {
-          "backendNodeId": 7,
+          "backendNodeId": 5,
           "role": "textbox",
           "name": "textbox: date input with value",
           "description": "",
@@ -63,7 +63,7 @@
           }
         },
         {
-          "backendNodeId": 11,
+          "backendNodeId": 9,
           "role": "button",
           "name": "button: file input",
           "description": "",
@@ -77,7 +77,7 @@
           }
         },
         {
-          "backendNodeId": 8,
+          "backendNodeId": 6,
           "role": "combobox",
           "name": "combobox: collapsed select",
           "description": "",
@@ -136,7 +136,7 @@
           }
         },
         {
-          "backendNodeId": 9,
+          "backendNodeId": 7,
           "role": "textbox",
           "name": "textbox: textarea with value",
           "description": "",
@@ -150,7 +150,7 @@
           }
         },
         {
-          "backendNodeId": 10,
+          "backendNodeId": 8,
           "role": "textbox",
           "name": "textbox: input with only a placeholder",
           "description": "",
@@ -256,11 +256,11 @@
       ],
       "refs": {
         "e1": 14,
-        "e10": 8,
+        "e10": 6,
         "e11": 20,
-        "e12": 9,
+        "e12": 7,
         "e13": 21,
-        "e14": 10,
+        "e14": 8,
         "e15": 22,
         "e16": 73,
         "e17": 23,
@@ -272,11 +272,11 @@
         "e22": 29,
         "e23": 71,
         "e3": 16,
-        "e4": 6,
+        "e4": 4,
         "e5": 17,
-        "e6": 7,
+        "e6": 5,
         "e7": 18,
-        "e8": 11,
+        "e8": 9,
         "e9": 19
       },
       "aria": {
