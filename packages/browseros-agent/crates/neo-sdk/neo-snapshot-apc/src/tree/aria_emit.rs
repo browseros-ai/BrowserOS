@@ -2,7 +2,7 @@ use std::{fmt, mem};
 
 use neo_snapshot::{
     AriaChild, AriaNode, Invalid, MAX_TREE_DEPTH, NodeBox, PartialFrame as SnapshotPartialFrame,
-    Snapshot, Tristate, json_depth,
+    Snapshot, Tristate,
 };
 use serde_json::Number;
 
@@ -721,7 +721,7 @@ fn emit_single_doc(
     let frame_origin = if boxes {
         doc_frame_origin(tree, doc)
     } else {
-        (0, 0)
+        FrameOrigin::default()
     };
     let mat_cfg = MaterializeConfig {
         tree,
@@ -1368,12 +1368,14 @@ fn apply_distill_exit(
             return;
         }
         inline_text_into_generic(nodes, node_idx);
-        let parent_name = nodes
+        let (parent_name, parent_is_inert) = nodes
             .get(parent_frame.node_idx)
-            .map_or("", |parent| parent.name.as_str());
-        let remove_repeating = nodes
-            .get(node_idx)
-            .is_some_and(|node| should_remove_name_repeating_child(node, parent_name));
+            .map_or(("", false), |parent| {
+                (parent.name.as_str(), parent.flags.is_inert())
+            });
+        let remove_repeating = nodes.get(node_idx).is_some_and(|node| {
+            should_remove_name_repeating_child(node, parent_name, parent_is_inert)
+        });
         if remove_repeating {
             return;
         }
@@ -1431,12 +1433,12 @@ fn flush_text_buffer(buf: &mut String, out: &mut Vec<DraftChild>) {
 }
 
 fn inline_text_into_generic(nodes: &mut [DraftNode], idx: usize) {
-    let Some(sole_child_idx) = nodes.get(idx).and_then(|node| {
+    let Some((sole_child_idx, node_is_inert)) = nodes.get(idx).and_then(|node| {
         if node.role != "generic" || node.has_props() || node.children.len() != 1 {
             return None;
         }
         match node.children.first() {
-            Some(DraftChild::Node(child_idx)) => Some(*child_idx),
+            Some(DraftChild::Node(child_idx)) => Some((*child_idx, node.flags.is_inert())),
             _ => None,
         }
     }) else {
@@ -1448,6 +1450,7 @@ fn inline_text_into_generic(nodes: &mut [DraftNode], idx: usize) {
             || !child.name.is_empty()
             || child.active == Some(true)
             || child.has_props()
+            || child.flags.is_inert() != node_is_inert
         {
             return None;
         }
@@ -1464,11 +1467,16 @@ fn inline_text_into_generic(nodes: &mut [DraftNode], idx: usize) {
     }
 }
 
-fn should_remove_name_repeating_child(node: &DraftNode, parent_name: &str) -> bool {
+fn should_remove_name_repeating_child(
+    node: &DraftNode,
+    parent_name: &str,
+    parent_is_inert: bool,
+) -> bool {
     if parent_name.is_empty()
         || node.role != "generic"
         || node.active == Some(true)
         || node.has_props()
+        || node.flags.is_inert() != parent_is_inert
     {
         return false;
     }
@@ -1556,11 +1564,17 @@ fn mark_inert_draft(arena: &mut DraftArena) {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct FrameOrigin {
+    x: i32,
+    y: i32,
+}
+
 struct MaterializeConfig<'a> {
     tree: &'a SnapshotTree,
     mode: DistillMode,
     boxes: bool,
-    frame_origin: (i32, i32),
+    frame_origin: FrameOrigin,
     scale: f64,
     effective_max_depth: usize,
 }
@@ -1836,7 +1850,7 @@ fn attach_iframe_slot(
             if let Some(child) = stitched.get_mut(job_idx).and_then(Option::take)
                 && !child.nodes.is_empty()
             {
-                let deepest = json_depth(&child.nodes);
+                let deepest = neo_snapshot::json_depth(&child.nodes);
                 let total_depth = obj_depth.saturating_add(deepest);
                 if total_depth > MAX_JSON_DEPTH {
                     doc_partial.push(AriaPartialFrame {
@@ -1900,9 +1914,9 @@ fn compute_box_scale(tree: &SnapshotTree) -> f64 {
     }
 }
 
-fn doc_frame_origin(tree: &SnapshotTree, doc: &TreeDoc) -> (i32, i32) {
+fn doc_frame_origin(tree: &SnapshotTree, doc: &TreeDoc) -> FrameOrigin {
     if doc.id() == DocId::MAIN {
-        return (0, 0);
+        return FrameOrigin::default();
     }
     if let Some(root_node) = doc.root_node().and_then(|id| tree.node(id))
         && root_node.raw_attributes().is_some_and(is_root_attr)
@@ -1915,30 +1929,33 @@ fn doc_frame_origin(tree: &SnapshotTree, doc: &TreeDoc) -> (i32, i32) {
     {
         return origin;
     }
-    (0, 0)
+    FrameOrigin::default()
 }
 
-fn node_box_origin(node: &TreeNode) -> Option<(i32, i32)> {
+fn node_box_origin(node: &TreeNode) -> Option<FrameOrigin> {
     let geo = node.raw_attributes()?.geometry.as_ref()?;
     let rect = geo.outer_bounding_box.or(geo.visible_bounding_box)?;
-    Some((rect.x.unwrap_or(0), rect.y.unwrap_or(0)))
+    Some(FrameOrigin {
+        x: rect.x.unwrap_or(0),
+        y: rect.y.unwrap_or(0),
+    })
 }
 
 fn compute_node_box(
     tree: &SnapshotTree,
     node_id: NodeId,
-    frame_origin: (i32, i32),
+    frame_origin: FrameOrigin,
     scale: f64,
 ) -> Option<NodeBox> {
     let geo = tree.node(node_id)?.raw_attributes()?.geometry.as_ref()?;
     let rect: BoundingRect = geo.outer_bounding_box.or(geo.visible_bounding_box)?;
     Some(NodeBox {
         x: scaled_round(
-            f64::from(rect.x.unwrap_or(0)) - f64::from(frame_origin.0),
+            f64::from(rect.x.unwrap_or(0)) - f64::from(frame_origin.x),
             scale,
         ),
         y: scaled_round(
-            f64::from(rect.y.unwrap_or(0)) - f64::from(frame_origin.1),
+            f64::from(rect.y.unwrap_or(0)) - f64::from(frame_origin.y),
             scale,
         ),
         width: scaled_round(f64::from(rect.width.unwrap_or(0)), scale),
@@ -2071,9 +2088,7 @@ mod tests {
     use std::error::Error;
     use std::thread::Builder as ThreadBuilder;
 
-    use neo_snapshot::{
-        AriaChild, AriaNode, Call, Invalid, NodeBox, Passed, Tristate, json_depth, render,
-    };
+    use neo_snapshot::{AriaChild, AriaNode, Call, Invalid, NodeBox, Passed, Tristate};
     use serde_json::Number;
 
     use crate::proto::{
@@ -2718,7 +2733,7 @@ mod tests {
 
         let mut deep_refs = TabRefTable::new();
         let deep_out = deep_tree.aria(AriaAsk::ai(&mut deep_refs));
-        assert!(json_depth(deep_out.nodes()) < MAX_JSON_DEPTH);
+        assert!(neo_snapshot::json_depth(deep_out.nodes()) < MAX_JSON_DEPTH);
         assert!(find_by_role_name(deep_out.nodes(), "button", Some("Deep")).is_none());
         let iframe_node = find_by_role_name(deep_out.nodes(), "iframe", None)
             .ok_or("parent frame must stay readable with iframe leaf")?;
@@ -2832,9 +2847,11 @@ mod tests {
         let owned_snap = aria_tree.into_snapshot();
         assert_eq!(cloned_snap.tree, owned_snap.tree);
 
-        let pw_text = render(&owned_snap, Call::Playwright).into_text();
-        let full_text = render(&owned_snap, Call::Full { max_tokens: None }).into_text();
-        let page_text = render(&owned_snap, Call::Page(&Passed::default())).into_text();
+        let pw_text = neo_snapshot::render(&owned_snap, Call::Playwright).into_text();
+        let full_text =
+            neo_snapshot::render(&owned_snap, Call::Full { max_tokens: None }).into_text();
+        let page_text =
+            neo_snapshot::render(&owned_snap, Call::Page(&Passed::default())).into_text();
         assert!(pw_text.contains("button \"TOP_SECRET_TEXT\""));
         assert!(pw_text.contains("# partial:"));
         assert!(full_text.contains("TOP_SECRET_TEXT"));
@@ -2917,7 +2934,7 @@ mod tests {
                 if ai.nodes().len() != 1 {
                     return Err(format!("expected 1 top-level node, got {}", ai.nodes().len()));
                 }
-                let ai_depth = 1 + json_depth(ai.nodes());
+                let ai_depth = 1 + neo_snapshot::json_depth(ai.nodes());
                 if ai_depth > MAX_JSON_DEPTH {
                     return Err(format!(
                         "ai json depth {ai_depth} exceeded MAX_JSON_DEPTH ({MAX_JSON_DEPTH})"
@@ -2925,7 +2942,7 @@ mod tests {
                 }
 
                 let default = tree.aria(AriaAsk::default_mode());
-                let default_depth = 1 + json_depth(default.nodes());
+                let default_depth = 1 + neo_snapshot::json_depth(default.nodes());
                 if default_depth > MAX_JSON_DEPTH {
                     return Err(format!(
                         "default json depth {default_depth} exceeded MAX_JSON_DEPTH ({MAX_JSON_DEPTH})"

@@ -4,9 +4,7 @@
 use std::error::Error;
 use std::thread::Builder as ThreadBuilder;
 
-use neo_snapshot::{
-    AriaChild, AriaNode, Baseline, Call, Earlier, NodeBox, Passed, Snapshot, json_depth, render,
-};
+use neo_snapshot::{AriaChild, AriaNode, Baseline, Call, Earlier, NodeBox, Passed, Snapshot};
 use neo_snapshot_apc::proto::{
     AnnotatedPageContent, AnnotatedPageContentMode, AnnotatedPageContentVersion, AnnotatedRole,
     BoundingRect, BrowserOsContentAttributes, BrowserOsPageContentData, BrowserOsRef,
@@ -109,7 +107,7 @@ fn render_page_baseline(
     snapshot: &Snapshot,
     passed: &Passed,
 ) -> Result<(String, Baseline), Box<dyn Error>> {
-    let answer = render(snapshot, Call::Page(passed));
+    let answer = neo_snapshot::render(snapshot, Call::Page(passed));
     let pending = answer
         .pending()
         .ok_or("Call::Page must yield a pending baseline")?;
@@ -125,7 +123,7 @@ fn render_delta_with_baseline(
     passed: &Passed,
     earlier: &Baseline,
 ) -> Result<(String, Baseline), Box<dyn Error>> {
-    let answer = render(
+    let answer = neo_snapshot::render(
         snapshot,
         Call::Delta {
             passed,
@@ -699,7 +697,7 @@ fn ua_shadow_all_seven_shapes_and_select_no_duplicate_synthesis() -> Result<(), 
 
     let mut refs = TabRefTable::new();
     let ai = tree.aria(AriaAsk::ai(&mut refs));
-    let pw = render(&ai.to_snapshot(), Call::Playwright).into_text();
+    let pw = neo_snapshot::render(&ai.to_snapshot(), Call::Playwright).into_text();
     assert_ua_shadow_inputs_and_selects(&tree, ai.nodes(), &pw)?;
 
     assert!(find_by_role_text(ai.nodes(), "generic", "Closed summary").is_some());
@@ -802,16 +800,16 @@ fn plain_container_scroll_independence() -> Result<(), Box<dyn Error>> {
     let flat_snap = flat_ai.into_snapshot();
     let wrapped_snap = wrapped_ai.into_snapshot();
     assert_eq!(
-        render(&flat_snap, Call::Playwright).into_text(),
-        render(&wrapped_snap, Call::Playwright).into_text()
+        neo_snapshot::render(&flat_snap, Call::Playwright).into_text(),
+        neo_snapshot::render(&wrapped_snap, Call::Playwright).into_text()
     );
     assert_eq!(
-        render(&flat_snap, Call::Full { max_tokens: None }).into_text(),
-        render(&wrapped_snap, Call::Full { max_tokens: None }).into_text()
+        neo_snapshot::render(&flat_snap, Call::Full { max_tokens: None }).into_text(),
+        neo_snapshot::render(&wrapped_snap, Call::Full { max_tokens: None }).into_text()
     );
     assert_eq!(
-        render(&flat_snap, Call::Page(&Passed::default())).into_text(),
-        render(&wrapped_snap, Call::Page(&Passed::default())).into_text()
+        neo_snapshot::render(&flat_snap, Call::Page(&Passed::default())).into_text(),
+        neo_snapshot::render(&wrapped_snap, Call::Page(&Passed::default())).into_text()
     );
     Ok(())
 }
@@ -874,7 +872,7 @@ fn clickable_div_cursor_pointer_and_nested_suppression() -> Result<(), Box<dyn E
         .count();
     assert_eq!(pointer_count, 2);
 
-    let pw = render(&ai.into_snapshot(), Call::Playwright).into_text();
+    let pw = neo_snapshot::render(&ai.into_snapshot(), Call::Playwright).into_text();
     assert!(pw.contains("generic [ref=e1] [cursor=pointer]"));
     Ok(())
 }
@@ -1117,7 +1115,8 @@ fn click_proxy_nosize_negative_cases() -> Result<(), Box<dyn Error>> {
     }
     assert!(find_by_role_name(ai.nodes(), "checkbox", Some("Contents Check")).is_none());
 
-    let page_text = render(&ai.into_snapshot(), Call::Page(&Passed::default())).into_text();
+    let page_text =
+        neo_snapshot::render(&ai.into_snapshot(), Call::Page(&Passed::default())).into_text();
     for expected in [
         "textbox \"Hidden Text\"",
         "spinbutton \"Hidden Qty\"",
@@ -1199,15 +1198,15 @@ fn assert_zero_canary_surface(
     for (label, snap) in [("ai", ai.to_snapshot()), ("default", default.to_snapshot())] {
         assert_no_canary(
             &format!("{label} Playwright"),
-            &render(&snap, Call::Playwright).into_text(),
+            &neo_snapshot::render(&snap, Call::Playwright).into_text(),
         );
         assert_no_canary(
             &format!("{label} Full"),
-            &render(&snap, Call::Full { max_tokens: None }).into_text(),
+            &neo_snapshot::render(&snap, Call::Full { max_tokens: None }).into_text(),
         );
         assert_no_canary(
             &format!("{label} Page"),
-            &render(&snap, Call::Page(&Passed::default())).into_text(),
+            &neo_snapshot::render(&snap, Call::Page(&Passed::default())).into_text(),
         );
     }
 
@@ -1704,7 +1703,7 @@ fn aria_root_document_and_subtree_and_boxes_dpr_iframe_scroll() -> Result<(), Bo
             height: Number::from(20),
         })
     );
-    let pw_boxes = render(&full.to_snapshot(), Call::Playwright).into_text();
+    let pw_boxes = neo_snapshot::render(&full.to_snapshot(), Call::Playwright).into_text();
     assert!(pw_boxes.contains("[box=25,-15,80,20]"));
     assert!(pw_boxes.contains("[box=20,-15,60,20]"));
 
@@ -1778,7 +1777,7 @@ fn depth_cap_refusal_prunes_grandchild_partial_and_renders_comment() -> Result<(
 
     let mut refs = TabRefTable::new();
     let out = tree.aria(AriaAsk::ai(&mut refs));
-    assert!(json_depth(out.nodes()) <= MAX_JSON_DEPTH);
+    assert!(neo_snapshot::json_depth(out.nodes()) <= MAX_JSON_DEPTH);
     assert!(find_by_role_name(out.nodes(), "button", Some("Mid Leaf")).is_none());
 
     let iframe = find_by_role_name(out.nodes(), "iframe", None)
@@ -1797,9 +1796,9 @@ fn depth_cap_refusal_prunes_grandchild_partial_and_renders_comment() -> Result<(
 
     let snap = out.into_snapshot();
     for text in [
-        render(&snap, Call::Playwright).into_text(),
-        render(&snap, Call::Full { max_tokens: None }).into_text(),
-        render(&snap, Call::Page(&Passed::default())).into_text(),
+        neo_snapshot::render(&snap, Call::Playwright).into_text(),
+        neo_snapshot::render(&snap, Call::Full { max_tokens: None }).into_text(),
+        neo_snapshot::render(&snap, Call::Page(&Passed::default())).into_text(),
     ] {
         assert!(text.contains("# partial: https://mid.example/deep not read ("));
         assert!(!text.contains("grandchild.example"));
@@ -1888,7 +1887,7 @@ fn inert_modal_dialog_escape_rendered_through_neo_page() -> Result<(), Box<dyn E
     assert_eq!(confirm.inert, None);
 
     let snap = ai.into_snapshot();
-    let page = render(&snap, Call::Page(&Passed::default())).into_text();
+    let page = neo_snapshot::render(&snap, Call::Page(&Passed::default())).into_text();
     assert!(page.starts_with("# not listed:"));
     assert!(page.contains("dialog \"Confirm delete\""));
     assert!(page.contains("Modal confirm"));
@@ -1904,7 +1903,7 @@ fn inert_modal_dialog_escape_rendered_through_neo_page() -> Result<(), Box<dyn E
         assert!(!page.contains(omitted), "inert content leaked: {omitted:?}");
     }
 
-    let with_inert = render(
+    let with_inert = neo_snapshot::render(
         &snap,
         Call::Page(&Passed {
             inert: Some(true),
@@ -1916,7 +1915,7 @@ fn inert_modal_dialog_escape_rendered_through_neo_page() -> Result<(), Box<dyn E
     assert!(with_inert.contains("Behind modal"));
     assert!(with_inert.contains("Inert btn inside modal"));
 
-    let full = render(&snap, Call::Full { max_tokens: None }).into_text();
+    let full = neo_snapshot::render(&snap, Call::Full { max_tokens: None }).into_text();
     assert!(full.contains("# inert:"));
     Ok(())
 }
@@ -1995,14 +1994,14 @@ fn deep_25k_chain_renders_on_2mib_stack_without_overflow() -> Result<(), Box<dyn
             if ai.nodes().len() != 1 {
                 return Err(format!("expected 1 root group, got {}", ai.nodes().len()));
             }
-            let depth = 1 + json_depth(ai.nodes());
+            let depth = 1 + neo_snapshot::json_depth(ai.nodes());
             if depth > MAX_JSON_DEPTH {
                 return Err(format!("json depth {depth} exceeded {MAX_JSON_DEPTH}"));
             }
             let snap = ai.into_snapshot();
-            let pw = render(&snap, Call::Playwright).into_text();
-            let full = render(&snap, Call::Full { max_tokens: None }).into_text();
-            let page = render(&snap, Call::Page(&Passed::default())).into_text();
+            let pw = neo_snapshot::render(&snap, Call::Playwright).into_text();
+            let full = neo_snapshot::render(&snap, Call::Full { max_tokens: None }).into_text();
+            let page = neo_snapshot::render(&snap, Call::Page(&Passed::default())).into_text();
             if !pw.contains("group") || !full.contains("group") || page.len() > pw.len() {
                 return Err("unexpected rendered output for 25k group chain".to_owned());
             }
@@ -2011,7 +2010,7 @@ fn deep_25k_chain_renders_on_2mib_stack_without_overflow() -> Result<(), Box<dyn
                 SnapshotTree::build(ApcBuilder::deep_chain(25_000), BuildOptions::new())
                     .map_err(|err| err.to_string())?;
             let plain_snap = plain_tree.aria(AriaAsk::ai(&mut refs)).into_snapshot();
-            let plain_pw = render(&plain_snap, Call::Playwright).into_text();
+            let plain_pw = neo_snapshot::render(&plain_snap, Call::Playwright).into_text();
             if plain_pw.len() > pw.len() {
                 return Err("unexpected rendered output for 25k plain chain".to_owned());
             }
@@ -2023,4 +2022,308 @@ fn deep_25k_chain_renders_on_2mib_stack_without_overflow() -> Result<(), Box<dyn
         Err(payload) => return Err(format!("25k stack thread panicked: {payload:?}").into()),
     };
     outcome.map_err(Into::into)
+}
+
+fn build_unrendered_relation_apc(
+    lbl_secret: &str,
+    desc_secret: &str,
+    err_secret: &str,
+) -> AnnotatedPageContent {
+    let pw_secret = format!("{CANARY}-PW");
+    ApcBuilder::new("doc-rel-mask")
+        .main_origin("https://vault.example", false)
+        .root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(
+                    NodeBuilder::form_control(FormControlType::ButtonButton)
+                        .dom_id(10)
+                        .tag("button")
+                        .aria_invalid("true")
+                        .labelledby(vec![BrowserOsRef {
+                            dom_node_id: Some(100),
+                            unrendered_text: Some(lbl_secret.to_owned()),
+                        }])
+                        .describedby(vec![BrowserOsRef {
+                            dom_node_id: Some(101),
+                            unrendered_text: Some(desc_secret.to_owned()),
+                        }])
+                        .errormessage(vec![BrowserOsRef {
+                            dom_node_id: Some(102),
+                            unrendered_text: Some(err_secret.to_owned()),
+                        }])
+                        .bounding_box(0, 0, 120, 24),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::InputPassword)
+                        .dom_id(20)
+                        .tag("input")
+                        .aria_label("Vault key")
+                        .redaction(RedactionDecision::RedactedHasBeenPassword)
+                        .redacted_value_length(6)
+                        .field_value(&pw_secret)
+                        .bounding_box(0, 30, 160, 24),
+                )
+                .child(
+                    NodeBuilder::form_control(FormControlType::ButtonButton)
+                        .dom_id(21)
+                        .tag("button")
+                        .labelledby(vec![BrowserOsRef {
+                            dom_node_id: Some(20),
+                            unrendered_text: Some(format!("{CANARY}-CHREF")),
+                        }])
+                        .bounding_box(0, 60, 120, 24),
+                ),
+        )
+        .build()
+}
+
+#[test]
+fn privacy_unrendered_relation_fallbacks_are_masked_without_canary_leaks()
+-> Result<(), Box<dyn Error>> {
+    let lbl_secret = format!("{CANARY}-LBL");
+    let desc_secret = format!("{CANARY}-DESC");
+    let err_secret = format!("{CANARY}-ERR");
+    let apc = build_unrendered_relation_apc(&lbl_secret, &desc_secret, &err_secret);
+
+    let mut private = PrivateNodes::new();
+    private.mark_key(node_key("doc-rel-mask", 100)?);
+    let vault_origin = DocOrigin {
+        opaque: false,
+        value: "https://vault.example".to_owned(),
+    };
+    private.mark_with_origin(node_key("doc-other", 101)?, Some(vault_origin.clone()));
+    private.mark_with_origin(node_key("doc-other", 102)?, Some(vault_origin));
+
+    let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
+    let cache = NameCache::new(&tree);
+    let mut refs = TabRefTable::new();
+    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let default = tree.aria(AriaAsk::default_mode());
+    assert_zero_canary_surface(&tree, &ai, &default, &refs, &private, &cache)?;
+
+    let btn_id = node_id_of(&tree, "doc-rel-mask", 10)?;
+    let expected_lbl = "•".repeat(lbl_secret.encode_utf16().count());
+    let expected_desc = "•".repeat(desc_secret.encode_utf16().count());
+    let expected_err = "•".repeat(err_secret.encode_utf16().count());
+    assert_eq!(
+        cache.name(btn_id, NameVisibility::VisibleOnly).text(),
+        expected_lbl
+    );
+    assert_eq!(
+        cache
+            .description(btn_id, NameVisibility::VisibleOnly)
+            .text(),
+        expected_desc
+    );
+    assert_eq!(cache.error_message(btn_id), expected_err);
+    assert!(find_by_role_name(ai.nodes(), "button", Some(&expected_lbl)).is_some());
+
+    let ch_btn_id = node_id_of(&tree, "doc-rel-mask", 21)?;
+    assert_eq!(
+        cache.name(ch_btn_id, NameVisibility::VisibleOnly).text(),
+        "••••••"
+    );
+    Ok(())
+}
+
+fn labelled_button(dom_id: i32, y: i32, target_dom: i32) -> NodeBuilder {
+    NodeBuilder::form_control(FormControlType::ButtonButton)
+        .dom_id(dom_id)
+        .tag("button")
+        .labelledby(vec![BrowserOsRef {
+            dom_node_id: Some(target_dom),
+            unrendered_text: None,
+        }])
+        .bounding_box(0, y, 120, 24)
+}
+
+fn build_masked_select_apc(
+    host_opt: &str,
+    host_val_only: &str,
+    nested_opt: &str,
+) -> AnnotatedPageContent {
+    let ch_select = NodeBuilder::form_control(FormControlType::SelectOne)
+        .dom_id(10)
+        .tag("select")
+        .aria_label("Card Expiry")
+        .redaction(RedactionDecision::RedactedIsSensitivePaymentField)
+        .redacted_value_length(4)
+        .select_option(select_opt(
+            &format!("{CANARY}-CHV1"),
+            &format!("{CANARY}-CH1"),
+            true,
+        ))
+        .select_option(select_opt(
+            &format!("{CANARY}-CHV2"),
+            &format!("{CANARY}-CH2"),
+            false,
+        ))
+        .bounding_box(0, 0, 140, 24);
+    let host_select = NodeBuilder::form_control(FormControlType::SelectOne)
+        .dom_id(20)
+        .tag("select")
+        .select_option(select_opt(&format!("{CANARY}-HV1"), host_opt, true))
+        .select_option(SelectOption {
+            text: None,
+            value: Some(host_val_only.to_owned()),
+            is_selected: Some(false),
+            is_disabled: Some(false),
+        })
+        .bounding_box(0, 60, 140, 24);
+    let nested_div = NodeBuilder::container()
+        .dom_id(30)
+        .bounding_box(0, 120, 200, 40)
+        .child(
+            NodeBuilder::form_control(FormControlType::SelectOne)
+                .dom_id(31)
+                .tag("select")
+                .aria_label("Nested Secret Select")
+                .select_option(select_opt(&format!("{CANARY}-NV"), nested_opt, true))
+                .bounding_box(0, 120, 140, 24),
+        );
+
+    ApcBuilder::new("doc-select-mask")
+        .root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .child(ch_select)
+                .child(labelled_button(11, 30, 10))
+                .child(host_select)
+                .child(labelled_button(21, 90, 20))
+                .child(nested_div),
+        )
+        .build()
+}
+
+#[test]
+fn privacy_masked_select_sanitizes_synthetic_and_embedded_option_names()
+-> Result<(), Box<dyn Error>> {
+    let host_opt = format!("{CANARY}-HOST");
+    let host_val_only = format!("{CANARY}-VALONLY");
+    let nested_opt = format!("{CANARY}-NESTED");
+    let apc = build_masked_select_apc(&host_opt, &host_val_only, &nested_opt);
+
+    let mut private = PrivateNodes::new();
+    private.mark_key(node_key("doc-select-mask", 20)?);
+    private.mark_key(node_key("doc-select-mask", 30)?);
+    let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
+    let cache = NameCache::new(&tree);
+    let mut refs = TabRefTable::new();
+    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let default = tree.aria(AriaAsk::default_mode());
+    assert_zero_canary_surface(&tree, &ai, &default, &refs, &private, &cache)?;
+
+    let ch_select = find_by_role_name(ai.nodes(), "combobox", Some("Card Expiry"))
+        .ok_or("missing Chromium-redacted select")?;
+    assert_eq!(ch_select.text.as_deref(), Some("••••"));
+    assert!(ch_select.children.is_empty());
+
+    let host_opt_bullets = "•".repeat(host_opt.encode_utf16().count());
+    let host_val_bullets = "•".repeat(host_val_only.encode_utf16().count());
+    let nested_bullets = "•".repeat(nested_opt.encode_utf16().count());
+    assert!(find_by_role_name(ai.nodes(), "option", Some(&host_opt_bullets)).is_some());
+    assert!(find_by_role_name(ai.nodes(), "option", Some(&host_val_bullets)).is_some());
+    assert!(find_by_role_name(ai.nodes(), "option", Some(&nested_bullets)).is_some());
+    let btn21 = node_id_of(&tree, "doc-select-mask", 21)?;
+    assert_eq!(
+        cache.name(btn21, NameVisibility::VisibleOnly).text(),
+        host_opt_bullets
+    );
+    Ok(())
+}
+
+fn build_inert_boundaries_apc() -> AnnotatedPageContent {
+    let dialog = NodeBuilder::element("dialog")
+        .dom_id(20)
+        .inert(false)
+        .aria_label("Active Modal")
+        .bounding_box(50, 50, 320, 220)
+        .child(visible_button(21, 70, "Modal Action").inert(false))
+        .child(
+            NodeBuilder::container()
+                .dom_id(22)
+                .role("generic")
+                .inert(false)
+                .bounding_box(60, 110, 200, 30)
+                .child(
+                    NodeBuilder::container()
+                        .dom_id(23)
+                        .inert(true)
+                        .bounding_box(60, 110, 200, 30)
+                        .child(NodeBuilder::text("Inert inside generic").inert(true)),
+                ),
+        )
+        .child(
+            NodeBuilder::container()
+                .dom_id(24)
+                .inert(false)
+                .aria_label("Repeated inert copy")
+                .bounding_box(60, 150, 200, 30)
+                .child(
+                    NodeBuilder::container()
+                        .dom_id(25)
+                        .inert(true)
+                        .bounding_box(60, 150, 200, 30)
+                        .child(NodeBuilder::text("Repeated inert copy").inert(true)),
+                ),
+        );
+    let body = NodeBuilder::element("body")
+        .dom_id(2)
+        .inert(true)
+        .bounding_box(0, 0, 800, 600)
+        .child(
+            NodeBuilder::container()
+                .dom_id(10)
+                .inert(true)
+                .bounding_box(0, 0, 300, 30)
+                .child(NodeBuilder::text("Background plain div text").inert(true)),
+        )
+        .child(dialog);
+    ApcBuilder::new("doc-inert-bounds")
+        .root(NodeBuilder::root().dom_id(1).child(body))
+        .build()
+}
+
+#[test]
+fn inert_boundaries_survive_plain_container_pruning_and_generic_text_inlining()
+-> Result<(), Box<dyn Error>> {
+    let tree = build_tree(build_inert_boundaries_apc(), BuildOptions::new())?;
+    let mut refs = TabRefTable::new();
+    let ai = tree.aria(AriaAsk::ai(&mut refs));
+
+    let action = find_by_role_name(ai.nodes(), "button", Some("Modal Action"))
+        .ok_or("missing live Modal Action button")?;
+    assert_eq!(action.inert, None);
+
+    let bg = find_by_role_text(ai.nodes(), "generic", "Background plain div text")
+        .ok_or("missing inert background plain div")?;
+    assert_eq!(bg.inert, Some(true));
+
+    let nested_inert = find_by_role_text(ai.nodes(), "generic", "Inert inside generic")
+        .ok_or("missing inert child inside live generic")?;
+    assert_eq!(nested_inert.inert, Some(true));
+
+    let repeated = find_by_role_text(ai.nodes(), "generic", "Repeated inert copy")
+        .ok_or("inert child repeating live parent name must keep its inert node")?;
+    assert_eq!(repeated.inert, Some(true));
+
+    let snap = ai.into_snapshot();
+    let page = neo_snapshot::render(&snap, Call::Page(&Passed::default())).into_text();
+    assert!(page.starts_with("# not listed:"));
+    assert!(page.contains("Modal Action"));
+    assert!(!page.contains("Background plain div text"));
+    assert!(!page.contains("Inert inside generic"));
+
+    let with_inert = neo_snapshot::render(
+        &snap,
+        Call::Page(&Passed {
+            inert: Some(true),
+            ..Passed::default()
+        }),
+    )
+    .into_text();
+    assert!(with_inert.contains("Background plain div text"));
+    assert!(with_inert.contains("Inert inside generic"));
+    Ok(())
 }

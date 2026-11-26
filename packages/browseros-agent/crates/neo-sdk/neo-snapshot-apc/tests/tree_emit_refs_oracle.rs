@@ -28,9 +28,7 @@ use std::path::PathBuf;
 use std::{fs, mem};
 
 use fixture_pages::{CANARY_PREFIX, FIXTURES};
-use neo_snapshot::{
-    AriaChild, AriaNode, Baseline, Call, Earlier, Invalid, Passed, Tristate, json_depth, render,
-};
+use neo_snapshot::{AriaChild, AriaNode, Baseline, Call, Earlier, Invalid, Passed, Tristate};
 use neo_snapshot_apc::proto::{
     AnnotatedPageContent, AnnotatedRole, BrowserOsPageContentData, BrowserOsRef, BrowserOsTriState,
     ClickabilityReason, FormControlType, RedactionDecision, SelectOption,
@@ -289,14 +287,14 @@ fn render_and_check_safety(
     refs: &TabRefTable,
 ) -> Result<(RenderedBundle, Baseline), Box<dyn Error>> {
     assert!(
-        json_depth(ai.nodes()) < MAX_JSON_DEPTH,
+        neo_snapshot::json_depth(ai.nodes()) < MAX_JSON_DEPTH,
         "{context}: ai json_depth {} must stay below {MAX_JSON_DEPTH}",
-        json_depth(ai.nodes())
+        neo_snapshot::json_depth(ai.nodes())
     );
     assert!(
-        json_depth(default.nodes()) < MAX_JSON_DEPTH,
+        neo_snapshot::json_depth(default.nodes()) < MAX_JSON_DEPTH,
         "{context}: default json_depth {} must stay below {MAX_JSON_DEPTH}",
-        json_depth(default.nodes())
+        neo_snapshot::json_depth(default.nodes())
     );
     assert!(
         collect_printed_refs(default.nodes()).is_empty(),
@@ -316,9 +314,9 @@ fn render_and_check_safety(
     let ai_snap = ai.to_snapshot();
     let default_snap = default.into_snapshot();
 
-    let ai_playwright = render(&ai_snap, Call::Playwright).into_text();
-    let ai_full = render(&ai_snap, Call::Full { max_tokens: None }).into_text();
-    let ai_page_answer = render(&ai_snap, Call::Page(&passed));
+    let ai_playwright = neo_snapshot::render(&ai_snap, Call::Playwright).into_text();
+    let ai_full = neo_snapshot::render(&ai_snap, Call::Full { max_tokens: None }).into_text();
+    let ai_page_answer = neo_snapshot::render(&ai_snap, Call::Page(&passed));
     let pending = ai_page_answer
         .pending()
         .ok_or_else(|| format!("{context}: Call::Page must return a pending baseline"))?;
@@ -328,9 +326,10 @@ fn render_and_check_safety(
     };
     let ai_page = ai_page_answer.into_text();
 
-    let default_playwright = render(&default_snap, Call::Playwright).into_text();
-    let default_full = render(&default_snap, Call::Full { max_tokens: None }).into_text();
-    let default_page = render(&default_snap, Call::Page(&passed)).into_text();
+    let default_playwright = neo_snapshot::render(&default_snap, Call::Playwright).into_text();
+    let default_full =
+        neo_snapshot::render(&default_snap, Call::Full { max_tokens: None }).into_text();
+    let default_page = neo_snapshot::render(&default_snap, Call::Page(&passed)).into_text();
 
     for (label, text) in [
         ("ai Call::Playwright", ai_playwright.as_str()),
@@ -370,7 +369,7 @@ fn assert_idempotent_delta(
     );
     let passed = Passed::default();
     let second_snap = second_ai.into_snapshot();
-    let delta = render(
+    let delta = neo_snapshot::render(
         &second_snap,
         Call::Delta {
             passed: &passed,

@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::proto::{
-    ContentAttributes, ContentData, FormControlData, FormControlType, RedactionDecision,
+    BrowserOsRef, ContentAttributes, ContentData, FormControlData, FormControlType,
+    RedactionDecision,
 };
 
 use super::hidden;
@@ -204,7 +205,8 @@ struct NodeHeader {
 }
 
 /// Applies Chromium redaction decisions and host-private node masks in-place over `nodes`,
-/// scrubbing sensitive form values and descendant text nodes iteratively without recursion.
+/// scrubbing sensitive form values, `<select>` options, descendant text nodes, and private
+/// `BrowserOsRef::unrendered_text` fallbacks iteratively without recursion.
 pub(crate) fn apply_masks(
     nodes: &mut [TreeNode],
     docs: &[TreeDoc],
@@ -212,6 +214,7 @@ pub(crate) fn apply_masks(
 ) -> Vec<NodeMask> {
     let len = nodes.len();
     let mut masks = vec![NodeMask::Clear; len];
+    let mut chromium_targets: HashSet<(DocId, DomNodeId)> = HashSet::new();
 
     for index in 0..len {
         let Some(header) = nodes.get(index).map(inspect_node) else {
@@ -220,6 +223,9 @@ pub(crate) fn apply_masks(
         let end = header.subtree_end.index().min(len);
 
         if let Some(mask) = apply_chromium_redaction(nodes, index, &header, end) {
+            if let Some(dom_id) = header.dom_id {
+                chromium_targets.insert((header.doc_id, dom_id));
+            }
             set_mask(&mut masks, index, mask);
             continue;
         }
@@ -250,6 +256,10 @@ pub(crate) fn apply_masks(
         set_mask(&mut masks, index, mask);
     }
 
+    if !chromium_targets.is_empty() || private.is_some_and(|set| !set.is_empty()) {
+        sanitize_relation_fallbacks(nodes, docs, private, &chromium_targets);
+    }
+
     masks
 }
 
@@ -266,7 +276,7 @@ fn apply_chromium_redaction(
                 .and_then(TreeNode::raw_attributes_mut)
                 .map_or(0, |raw| {
                     let count = chromium_redacted_bullets(raw);
-                    scrub_field_value(raw);
+                    scrub_form_control_secrets(raw);
                     if hidden::is_text_node(raw) {
                         scrub_text_node(raw);
                     }
@@ -280,7 +290,7 @@ fn apply_chromium_redaction(
         }
         ChromiumRedaction::UnredactedEmpty => {
             if let Some(raw) = nodes.get_mut(index).and_then(TreeNode::raw_attributes_mut) {
-                scrub_field_value(raw);
+                scrub_form_control_secrets(raw);
                 if hidden::is_text_node(raw) {
                     scrub_text_node(raw);
                 }
@@ -426,9 +436,18 @@ fn is_native_input_or_textarea(raw: &ContentAttributes) -> bool {
         })
 }
 
-fn scrub_field_value(raw: &mut ContentAttributes) {
+fn bullets_for(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        "•".repeat(count)
+    }
+}
+
+fn scrub_form_control_secrets(raw: &mut ContentAttributes) {
     if let Some(control) = form_control_data_mut(raw) {
         control.field_value = None;
+        control.select_options.clear();
     }
 }
 
@@ -441,6 +460,93 @@ fn take_and_scrub_field_value_bullets(raw: &mut ContentAttributes) -> usize {
     });
     control.field_value = None;
     bullets
+}
+
+fn mask_select_options(raw: &mut ContentAttributes) -> usize {
+    mask_select_options_within(raw, MAX_REDACTED_BULLETS)
+}
+
+fn mask_select_options_within(raw: &mut ContentAttributes, budget: usize) -> usize {
+    let Some(control) = form_control_data_mut(raw) else {
+        return 0;
+    };
+    let mut total_bullets: usize = 0;
+    for opt in &mut control.select_options {
+        let raw_label = opt.text.as_deref().or(opt.value.as_deref());
+        if let Some(label) = raw_label {
+            let remaining = budget.saturating_sub(total_bullets);
+            let len = label.encode_utf16().count().min(remaining);
+            opt.text = Some(bullets_for(len));
+            total_bullets = total_bullets.saturating_add(len);
+        }
+        opt.value = None;
+    }
+    total_bullets
+}
+
+fn sanitize_relation_fallbacks(
+    nodes: &mut [TreeNode],
+    docs: &[TreeDoc],
+    private: Option<&PrivateNodes>,
+    chromium_targets: &HashSet<(DocId, DomNodeId)>,
+) {
+    for node in nodes {
+        let doc_id = node.doc();
+        let doc = docs.get(doc_id.index());
+        let Some(browseros) = node
+            .raw_attributes_mut()
+            .and_then(|raw| raw.browseros.as_deref_mut())
+        else {
+            continue;
+        };
+        sanitize_ref_list(
+            &mut browseros.labelledby,
+            doc_id,
+            doc,
+            private,
+            chromium_targets,
+        );
+        sanitize_ref_list(
+            &mut browseros.describedby,
+            doc_id,
+            doc,
+            private,
+            chromium_targets,
+        );
+        sanitize_ref_list(
+            &mut browseros.errormessage,
+            doc_id,
+            doc,
+            private,
+            chromium_targets,
+        );
+    }
+}
+
+fn sanitize_ref_list(
+    refs: &mut [BrowserOsRef],
+    doc_id: DocId,
+    doc: Option<&TreeDoc>,
+    private: Option<&PrivateNodes>,
+    chromium_targets: &HashSet<(DocId, DomNodeId)>,
+) {
+    for item in refs {
+        let Some(raw_dom) = item.dom_node_id else {
+            continue;
+        };
+        let dom_id = DomNodeId::new(raw_dom);
+        if chromium_targets.contains(&(doc_id, dom_id)) {
+            item.unrendered_text = None;
+            continue;
+        }
+        let is_private = private.is_some_and(|set| {
+            !set.is_empty() && doc.is_some_and(|tree_doc| set.matches_doc_node(tree_doc, dom_id))
+        });
+        if is_private && let Some(text) = item.unrendered_text.as_mut() {
+            let bullets = text.encode_utf16().count().min(MAX_REDACTED_BULLETS);
+            *text = bullets_for(bullets);
+        }
+    }
 }
 
 fn scrub_text_node(raw: &mut ContentAttributes) {
@@ -498,10 +604,11 @@ fn scrub_descendant_text(nodes: &mut [TreeNode], root_index: usize, root_doc: Do
             cursor = desc.subtree_end().index().max(cursor.saturating_add(1));
             continue;
         }
-        if let Some(raw) = desc.raw_attributes_mut()
-            && hidden::is_text_node(raw)
-        {
-            scrub_text_node(raw);
+        if let Some(raw) = desc.raw_attributes_mut() {
+            scrub_form_control_secrets(raw);
+            if hidden::is_text_node(raw) {
+                scrub_text_node(raw);
+            }
         }
         cursor = cursor.saturating_add(1);
     }
@@ -524,16 +631,19 @@ fn mask_descendant_text(
             cursor = desc.subtree_end().index().max(cursor.saturating_add(1));
             continue;
         }
-        if let Some(raw) = desc.raw_attributes_mut()
-            && hidden::is_text_node(raw)
-        {
-            if hidden::is_ua_shadow(raw) {
-                scrub_text_node(raw);
-            } else {
-                let remaining = MAX_REDACTED_BULLETS.saturating_sub(total_bullets);
-                let len = text_node_utf16_len(raw).min(remaining);
-                overwrite_text_node_with_bullets(raw, len);
-                total_bullets = total_bullets.saturating_add(len);
+        if let Some(raw) = desc.raw_attributes_mut() {
+            let remaining = MAX_REDACTED_BULLETS.saturating_sub(total_bullets);
+            let select_len = mask_select_options_within(raw, remaining);
+            total_bullets = total_bullets.saturating_add(select_len);
+            if hidden::is_text_node(raw) {
+                if hidden::is_ua_shadow(raw) {
+                    scrub_text_node(raw);
+                } else {
+                    let remaining = MAX_REDACTED_BULLETS.saturating_sub(total_bullets);
+                    let len = text_node_utf16_len(raw).min(remaining);
+                    overwrite_text_node_with_bullets(raw, len);
+                    total_bullets = total_bullets.saturating_add(len);
+                }
             }
         }
         cursor = cursor.saturating_add(1);
@@ -551,7 +661,13 @@ fn mask_host_native_control(
     let bullets = nodes
         .get_mut(index)
         .and_then(TreeNode::raw_attributes_mut)
-        .map_or(0, take_and_scrub_field_value_bullets);
+        .map_or(0, |raw| {
+            let len = take_and_scrub_field_value_bullets(raw);
+            if let Some(control) = form_control_data_mut(raw) {
+                control.select_options.clear();
+            }
+            len
+        });
     scrub_descendant_text(nodes, index, doc_id, end);
     host_private_mask(bullets)
 }
@@ -562,12 +678,17 @@ fn mask_host_content_element(
     doc_id: DocId,
     end: usize,
 ) -> NodeMask {
-    let field_bullets = nodes
+    let (field_bullets, select_bullets) = nodes
         .get_mut(index)
         .and_then(TreeNode::raw_attributes_mut)
-        .map_or(0, take_and_scrub_field_value_bullets);
+        .map_or((0, 0), |raw| {
+            (
+                take_and_scrub_field_value_bullets(raw),
+                mask_select_options(raw),
+            )
+        });
     let text_bullets = mask_descendant_text(nodes, index, doc_id, end);
-    host_private_mask(field_bullets.max(text_bullets))
+    host_private_mask(field_bullets.max(text_bullets).max(select_bullets))
 }
 
 const fn host_private_mask(bullets: usize) -> NodeMask {

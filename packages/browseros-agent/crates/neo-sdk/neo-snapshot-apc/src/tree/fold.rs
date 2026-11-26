@@ -261,13 +261,13 @@ pub(crate) fn logical_children_iter(nodes: &[TreeNode], parent: NodeId) -> Logic
 /// iterative time.
 pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
     let bottom_up = compute_bottom_up(nodes);
-    let top_down = compute_top_down(nodes, &bottom_up.has_real_option_descendant);
+    let top_down = compute_top_down(nodes, &bottom_up);
     let proxies = resolve_click_proxies(
         nodes,
         docs,
         &top_down.labels_for,
         &top_down.nearest_ancestor_unlinked_label,
-        &bottom_up.first_labelable_descendant,
+        &bottom_up.first_labelable,
     );
 
     FoldInfo {
@@ -282,9 +282,10 @@ pub(crate) fn compute_fold(nodes: &[TreeNode], docs: &[TreeDoc]) -> FoldInfo {
     }
 }
 
-struct BottomUpSummary {
-    has_real_option_descendant: Vec<bool>,
-    first_labelable_descendant: Vec<Option<NodeId>>,
+struct DescendantSummary {
+    has_real_option: Vec<bool>,
+    first_labelable: Vec<Option<NodeId>>,
+    has_live: Vec<bool>,
 }
 
 struct TopDownSummary {
@@ -377,9 +378,10 @@ fn is_unlinked_label(node: &TreeNode) -> bool {
         && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("label"))
 }
 
-fn compute_bottom_up(nodes: &[TreeNode]) -> BottomUpSummary {
-    let mut has_real_option_descendant = vec![false; nodes.len()];
-    let mut first_labelable_descendant: Vec<Option<NodeId>> = vec![None; nodes.len()];
+fn compute_bottom_up(nodes: &[TreeNode]) -> DescendantSummary {
+    let mut has_real_option = vec![false; nodes.len()];
+    let mut first_labelable: Vec<Option<NodeId>> = vec![None; nodes.len()];
+    let mut has_live = vec![false; nodes.len()];
 
     for index in (0..nodes.len()).rev() {
         let Some(node) = nodes.get(index) else {
@@ -394,12 +396,19 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> BottomUpSummary {
                 && !hidden::is_ua_shadow(raw)
                 && hidden::raw_tag(raw).is_some_and(|tag| tag.eq_ignore_ascii_case("option"))
         });
-        let child_has_option = has_real_option_descendant
-            .get(index)
-            .copied()
-            .unwrap_or(false);
+        let child_has_option = has_real_option.get(index).copied().unwrap_or(false);
         if (is_real_option || child_has_option)
-            && let Some(parent_slot) = has_real_option_descendant.get_mut(parent_id.index())
+            && let Some(parent_slot) = has_real_option.get_mut(parent_id.index())
+        {
+            *parent_slot = true;
+        }
+
+        let is_live_element = node.raw_attributes().is_some_and(|raw| {
+            !hidden::is_text_node(raw) && !hidden::is_ua_shadow(raw) && !node.state().inert()
+        });
+        let child_has_live = has_live.get(index).copied().unwrap_or(false);
+        if (is_live_element || child_has_live)
+            && let Some(parent_slot) = has_live.get_mut(parent_id.index())
         {
             *parent_slot = true;
         }
@@ -407,19 +416,20 @@ fn compute_bottom_up(nodes: &[TreeNode]) -> BottomUpSummary {
         let labelable_candidate = if is_labelable_element(node) {
             Some(node.id())
         } else {
-            first_labelable_descendant.get(index).copied().flatten()
+            first_labelable.get(index).copied().flatten()
         };
         if let Some(labelable_id) = labelable_candidate
-            && let Some(parent_slot) = first_labelable_descendant.get_mut(parent_id.index())
+            && let Some(parent_slot) = first_labelable.get_mut(parent_id.index())
             && parent_slot.is_none_or(|existing| labelable_id < existing)
         {
             *parent_slot = Some(labelable_id);
         }
     }
 
-    BottomUpSummary {
-        has_real_option_descendant,
-        first_labelable_descendant,
+    DescendantSummary {
+        has_real_option,
+        first_labelable,
+        has_live,
     }
 }
 
@@ -530,7 +540,7 @@ fn is_plain_prunable_element(
     !has_accessible_label_attr(raw)
 }
 
-fn compute_top_down(nodes: &[TreeNode], has_real_option_descendant: &[bool]) -> TopDownSummary {
+fn compute_top_down(nodes: &[TreeNode], bottom_up: &DescendantSummary) -> TopDownSummary {
     let mut labels_for: HashMap<(DocId, DomNodeId), Vec<NodeId>> = HashMap::new();
     let mut nearest_ancestor_unlinked_label: Vec<Option<NodeId>> = Vec::with_capacity(nodes.len());
     let mut unlinked_label_for_descendants: Vec<Option<NodeId>> = Vec::with_capacity(nodes.len());
@@ -549,6 +559,11 @@ fn compute_top_down(nodes: &[TreeNode], has_real_option_descendant: &[bool]) -> 
         let parent_logical_inert = parent_id
             .and_then(|pid| logical_inert_for_descendants.get(pid.index()).copied())
             .unwrap_or(false);
+        let has_live = bottom_up.has_live.get(index).copied().unwrap_or(false);
+        // Only an inert ancestor with zero live descendants can itself be coalesced as `inert`;
+        // an inert ancestor protecting a live modal stays unmarked so its inert children must not
+        // prune into it.
+        let self_marks_inert = node.state().inert() && !has_live;
 
         nearest_ancestor_unlinked_label.push(parent_unlinked_label);
         unlinked_label_for_descendants.push(if is_unlinked_label(node) {
@@ -558,7 +573,7 @@ fn compute_top_down(nodes: &[TreeNode], has_real_option_descendant: &[bool]) -> 
         });
 
         let Some(raw) = node.raw_attributes() else {
-            logical_inert_for_descendants.push(node.state().inert());
+            logical_inert_for_descendants.push(self_marks_inert);
             node_flags.push(0);
             continue;
         };
@@ -567,7 +582,7 @@ fn compute_top_down(nodes: &[TreeNode], has_real_option_descendant: &[bool]) -> 
         logical_inert_for_descendants.push(if is_ua_shadow {
             parent_logical_inert
         } else {
-            node.state().inert()
+            self_marks_inert
         });
 
         if is_ua_shadow || hidden::is_text_node(raw) {
@@ -584,7 +599,8 @@ fn compute_top_down(nodes: &[TreeNode], has_real_option_descendant: &[bool]) -> 
                 .push(node.id());
         }
 
-        let has_real_option = has_real_option_descendant
+        let has_real_option = bottom_up
+            .has_real_option
             .get(index)
             .copied()
             .unwrap_or(false);
@@ -1290,6 +1306,13 @@ mod tests {
                         ),
                 )
                 .child(
+                    NodeBuilder::element("div").dom_id(64).inert(true).child(
+                        NodeBuilder::container()
+                            .ua_shadow(true)
+                            .child(NodeBuilder::element("div").dom_id(65).inert(true)),
+                    ),
+                )
+                .child(
                     NodeBuilder::element("div")
                         .dom_id(70)
                         .aria_label("\u{0085}"),
@@ -1306,18 +1329,18 @@ mod tests {
         )?;
         let fold = compute_fold(tree.nodes(), tree.documents());
 
-        for dom in [13, 51, 61] {
+        for dom in [13, 51, 65] {
             let id = node_id(&tree, "doc-main", dom)?;
             assert!(
                 fold.is_plain_prunable_container(id),
-                "dom_id {dom} must be prunable (blank attrs or inherited boundary)"
+                "dom_id {dom} must be prunable (blank attrs or pure inherited boundary)"
             );
         }
-        for dom in [50, 60, 62, 63, 70, 71, 72] {
+        for dom in [50, 60, 61, 62, 63, 64, 70, 71, 72] {
             let id = node_id(&tree, "doc-main", dom)?;
             assert!(
                 !fold.is_plain_prunable_container(id),
-                "dom_id {dom} must NOT be pruned (own boundary or non-blank label)"
+                "dom_id {dom} must NOT be pruned (own boundary, live-protecting inert parent, or non-blank label)"
             );
         }
         Ok(())
