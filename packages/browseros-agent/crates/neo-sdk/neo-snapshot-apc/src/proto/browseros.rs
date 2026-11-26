@@ -165,6 +165,12 @@ pub struct BrowserOsContentAttributes {
     /// empty kept so the name pass does not fall back to the `title` attribute. Version 6.
     #[prost(string, optional, tag = "34")]
     pub svg_title: Option<String>,
+    /// The element's own client rect has no area, while its outer box, visible box and fragments
+    /// were filled from its content (stock APC repairs an empty box that way). Playwright tests
+    /// visibility on the element's own `getBoundingClientRect()`, so such an element is not drawn.
+    /// Element nodes only. Numbers 35 to 37 are held for unrendered elements. Version 8.
+    #[prost(bool, optional, tag = "38")]
+    pub own_box_empty: Option<bool>,
 }
 
 /// Target of an ARIA relation (proto `BrowserOSRef`).

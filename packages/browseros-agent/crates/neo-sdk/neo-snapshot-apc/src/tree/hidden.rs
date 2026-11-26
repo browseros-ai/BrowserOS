@@ -217,6 +217,10 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
         let inert = !is_text && browseros.is_some_and(|b| b.inert == Some(true));
         let display_contents =
             !is_text && browseros.is_some_and(|b| b.display_contents == Some(true));
+        // Contract field 38: the outer box below was borrowed from content around an element
+        // whose own client rect is empty, which Playwright's `computeBox` calls not visible.
+        // Absent before version 8, so older browsers keep reading the outer box alone.
+        let own_box_empty = !is_text && browseros.is_some_and(|b| b.own_box_empty == Some(true));
 
         let is_slot = !is_text && tag.is_some_and(|name| name.eq_ignore_ascii_case("slot"));
         let is_ignored = !is_text && tag.is_some_and(is_ignored_for_aria_tag);
@@ -227,6 +231,7 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
         let box_visible = !ua_shadow
             && !visibility_hidden
             && !content_hidden
+            && !own_box_empty
             && raw.is_some_and(has_non_empty_outer_box);
 
         let hidden_for_aria = if ua_shadow {
