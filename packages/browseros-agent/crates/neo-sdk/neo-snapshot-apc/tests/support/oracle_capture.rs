@@ -28,7 +28,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::oracle::{self, Oracle, OracleAria, OracleElement, OracleFrame, OracleStates};
+use crate::oracle::{
+    self, Oracle, OracleAria, OracleElement, OracleFrame, OracleOption, OracleStates,
+};
 
 /// Neo's probe with Playwright's own injected engine, roles and ARIA snapshot included, as
 /// `neo-playwright-js/scripts/build.ts` writes it for the differential tests (the bundle Neo
@@ -378,6 +380,18 @@ struct EngineElement {
     hidden: bool,
     visible: bool,
     states: OracleStates,
+    #[serde(default)]
+    option: Option<EngineOption>,
+}
+
+/// An `<option>`'s place in its select's list as oracle.js writes it; `select` indexes
+/// `__neoOracleNodes` as `node` does.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineOption {
+    select: usize,
+    index: u32,
+    count: u32,
 }
 
 /// One ai-mode ref and the element it names.
@@ -514,6 +528,14 @@ async fn read_frame(
     };
     let mut elements = Vec::with_capacity(read.elements.len());
     for element in read.elements {
+        let option = match element.option {
+            Some(option) => Some(OracleOption {
+                select: backend_id(option.select)?,
+                index: option.index,
+                count: option.count,
+            }),
+            None => None,
+        };
         elements.push(OracleElement {
             backend_node_id: backend_id(element.node)?,
             role: element.role,
@@ -523,6 +545,7 @@ async fn read_frame(
             hidden: element.hidden,
             visible: element.visible,
             states: element.states,
+            option,
         });
     }
     let mut refs = BTreeMap::new();

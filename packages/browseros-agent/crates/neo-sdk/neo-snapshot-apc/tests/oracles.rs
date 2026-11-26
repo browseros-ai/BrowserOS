@@ -17,7 +17,7 @@ mod fixture_server;
 #[path = "support/oracle.rs"]
 mod oracle;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use fixture_pages::{CANARY_PREFIX, FIXTURES};
 use neo_snapshot::{AriaChild, AriaNode};
 use neo_snapshot_apc::AnnotatedPageContent;
-use neo_snapshot_apc::proto::{ContentData, ContentNode, IframeDataContent};
+use neo_snapshot_apc::proto::{ContentData, ContentNode, FormControlType, IframeDataContent};
 use oracle::Oracle;
 use serde::Deserialize;
 use serde_json::Value;
@@ -225,12 +225,13 @@ fn no_recorded_fixture_holds_a_typed_secret() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// One document of a decoded APC tree: its URL without the port, and the DOM node ids of the
-/// `<iframe>` nodes directly in it.
+/// One document of a decoded APC tree: its URL without the port, the DOM node ids of the
+/// `<iframe>` nodes directly in it, and of its `<select>` nodes with how many options each sent.
 #[derive(Debug)]
 struct ApcDocument {
     url: Option<String>,
     iframe_owners: HashSet<i32>,
+    selects: HashMap<i32, usize>,
 }
 
 /// The documents of `apc`, main first. An iframe node with `FrameData` holds its child
@@ -244,11 +245,25 @@ fn apc_documents(apc: &AnnotatedPageContent) -> Vec<ApcDocument> {
     let mut documents = vec![ApcDocument {
         url: main_url,
         iframe_owners: HashSet::new(),
+        selects: HashMap::new(),
     }];
     let mut pending: Vec<(&ContentNode, usize)> =
         apc.root_node.iter().map(|node| (node, 0)).collect();
     while let Some((node, document)) = pending.pop() {
         let mut children_document = document;
+        if let Some(attrs) = node.content_attributes.as_ref()
+            && let Some(ContentData::FormControl(control)) = attrs.content_data.as_ref()
+            && control.form_control_type.is_some_and(|kind| {
+                kind == FormControlType::SelectOne as i32
+                    || kind == FormControlType::SelectMultiple as i32
+            })
+            && let (Some(selects), Some(id)) = (
+                documents.get_mut(document).map(|doc| &mut doc.selects),
+                attrs.common_ancestor_dom_node_id,
+            )
+        {
+            selects.insert(id, control.select_options.len());
+        }
         if let Some(attrs) = node.content_attributes.as_ref()
             && let Some(ContentData::Iframe(iframe)) = attrs.content_data.as_ref()
         {
@@ -268,6 +283,7 @@ fn apc_documents(apc: &AnnotatedPageContent) -> Vec<ApcDocument> {
             documents.push(ApcDocument {
                 url,
                 iframe_owners: HashSet::new(),
+                selects: HashMap::new(),
             });
         }
         for child in &node.children_nodes {
@@ -305,6 +321,56 @@ fn child_frame_owners_are_iframe_nodes_of_the_same_load_pb() -> Result<(), Box<d
                  both files come from one page load, so backendNodeIds must agree",
                 fixture.name, frame.url
             );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn every_recorded_option_place_names_a_select_of_the_same_load_pb() -> Result<(), Box<dyn Error>> {
+    for fixture in FIXTURES {
+        let oracle = load_oracle(fixture.name)?;
+        let documents = apc_documents(&load_pb(fixture.name)?);
+        for frame in &oracle.frames {
+            for element in &frame.elements {
+                let Some(option) = &element.option else {
+                    continue;
+                };
+                assert!(
+                    option.index < option.count,
+                    "{}: option {} sits at {} of a list of {}; select.options holds it, so its \
+                     index is below the list's length",
+                    fixture.name,
+                    element.backend_node_id,
+                    option.index,
+                    option.count
+                );
+                let select = i32::try_from(option.select)?;
+                // DOM node ids are per renderer, so the select is looked up in the option's own
+                // frame's document only.
+                let sent = documents
+                    .iter()
+                    .filter(|document| document.url.as_deref() == Some(frame.url.as_str()))
+                    .find_map(|document| document.selects.get(&select).copied());
+                let Some(sent) = sent else {
+                    panic!(
+                        "{}: option {}'s select {select} is no <select> node of {} in the .pb; \
+                         both files come from one page load, so backendNodeIds must agree",
+                        fixture.name, element.backend_node_id, frame.url
+                    );
+                };
+                // Chromium fills select_options from select.options (GetOptionList()), the list
+                // the oracle indexes, so a select that sent its options sent this many: the
+                // count the option's slot is joined by.
+                assert!(
+                    sent == 0 || usize::try_from(option.count)? == sent,
+                    "{}: option {}'s select {select} sent {sent} options in the .pb, but the \
+                     page listed {} on the same load",
+                    fixture.name,
+                    element.backend_node_id,
+                    option.count
+                );
+            }
         }
     }
     Ok(())

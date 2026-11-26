@@ -24,6 +24,8 @@ mod fixture_server;
     reason = "oracle::recorded_url serves tests/oracles.rs; only Oracle types are read here"
 )]
 mod oracle;
+#[path = "support/oracle_join.rs"]
+mod oracle_join;
 #[path = "support/parity_ledger.rs"]
 #[expect(
     dead_code,
@@ -367,10 +369,7 @@ fn compare_fixture(name: &'static str) -> Result<FixtureComparison, Box<dyn Erro
         };
         for element in &frame.elements {
             let node = match doc {
-                Some(doc) => tree.node_by_key(&NodeKey::new(
-                    doc.token().clone(),
-                    DomNodeId::new(i32::try_from(element.backend_node_id)?),
-                )),
+                Some(doc) => oracle_join::joined_node(&tree, doc, element)?,
                 None => None,
             };
             if let Some(node) = node {
