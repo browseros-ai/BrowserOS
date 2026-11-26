@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::{fmt, mem};
 
 use neo_snapshot::{
@@ -166,7 +167,9 @@ impl<'a> AriaAsk<'a> {
         self
     }
 
-    /// Sets an optional 0-based maximum emitted tree depth.
+    /// Sets the depth option as Playwright's `ariaSnapshot({ depth })` takes it: a top-level node
+    /// is at depth 0, nodes at `depth` print without children, and `Some(0)` is upstream's falsy
+    /// zero, no cut at all. A child frame gets the arithmetic upstream gives it ([`FrameDepth`]).
     pub const fn with_depth(mut self, depth: Option<usize>) -> Self {
         self.depth = depth;
         self
@@ -255,12 +258,6 @@ impl AriaTree {
         &self.partial
     }
 
-    /// Consumes this tree and returns its `(nodes, partial)` components.
-    #[must_use]
-    pub fn into_parts(self) -> (Vec<AriaNode>, Vec<AriaPartialFrame>) {
-        (self.nodes, self.partial)
-    }
-
     /// Consumes this tree and converts it into a [`Snapshot`] ready for [`neo_snapshot::render`].
     #[must_use]
     pub fn into_snapshot(self) -> Snapshot {
@@ -299,9 +296,93 @@ impl fmt::Debug for AriaTree {
 
 impl SnapshotTree {
     /// Emits a distilled, depth-bounded, multi-frame [`AriaTree`] according to `ask`.
-    #[must_use]
-    pub fn aria(&self, ask: AriaAsk<'_>) -> AriaTree {
+    ///
+    /// # Errors
+    ///
+    /// [`AriaTooDeep`] when the captured document is nested deeper than an [`AriaNode`] tree may
+    /// be and the requested depth does not cut it shorter. A child document that deep becomes a
+    /// partial frame instead.
+    pub fn aria(&self, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooDeep> {
         emit_aria(self, ask)
+    }
+}
+
+/// The refusal of [`SnapshotTree::aria`]: the captured tree is nested deeper than
+/// [`MAX_TREE_DEPTH`] levels, which every [`AriaNode`] consumer relies on, and no requested depth
+/// cuts it shorter. Today's snapshot refuses such a page the same way, before any tree reaches the
+/// agent, so the message is the one it prints and tells the agent how to retry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AriaTooDeep {
+    levels: usize,
+}
+
+impl AriaTooDeep {
+    /// How many levels deep the refused tree is, a top-level node being level 1.
+    #[must_use]
+    pub const fn levels(self) -> usize {
+        self.levels
+    }
+}
+
+impl fmt::Display for AriaTooDeep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&depth_error(self.levels))
+    }
+}
+
+impl Error for AriaTooDeep {}
+
+/// One document's depth option, as upstream's numbers behave (`ariaSnapshot.ts`
+/// `renderAriaTreeAsJSON`, `ariaSnapshotDistiller.ts` `beyondDepth`, and neo-playwright's
+/// `snapshot_op.rs` `child_depth`). A child frame's option is the parent's minus the iframe's
+/// depth minus one, so it can reach zero, which upstream reads as none, or go negative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameDepth {
+    /// No cut: no depth asked, or a zero one.
+    Unlimited,
+    /// Nodes at this depth print without children, and deeper ones do not print. Never zero.
+    Cut(usize),
+    /// Below zero: the frame prints whole, yet its distiller counts every node as past the cut,
+    /// so no name is dropped as redundant. An iframe at its parent's cut reaches this.
+    PastCut,
+}
+
+impl FrameDepth {
+    const fn requested(depth: Option<usize>) -> Self {
+        match depth {
+            None | Some(0) => Self::Unlimited,
+            Some(depth) => Self::Cut(depth),
+        }
+    }
+
+    /// The option of the document under an iframe printed at `iframe_depth`.
+    const fn for_child(self, iframe_depth: usize) -> Self {
+        match self {
+            Self::Unlimited => Self::Unlimited,
+            Self::PastCut => Self::PastCut,
+            Self::Cut(depth) => match depth.checked_sub(iframe_depth + 1) {
+                None => Self::PastCut,
+                Some(0) => Self::Unlimited,
+                Some(child) => Self::Cut(child),
+            },
+        }
+    }
+
+    /// The depth whose nodes print without children, when this frame has one.
+    const fn print_cut(self) -> Option<usize> {
+        match self {
+            Self::Cut(depth) => Some(depth),
+            Self::Unlimited | Self::PastCut => None,
+        }
+    }
+
+    /// Whether the distiller treats a node at `depth` as unprinted.
+    const fn is_beyond(self, depth: usize) -> bool {
+        match self {
+            Self::Unlimited => false,
+            Self::Cut(cut) => depth > cut,
+            Self::PastCut => true,
+        }
     }
 }
 
@@ -323,16 +404,46 @@ enum CaptureScope {
     Subtree(NodeId),
 }
 
+impl CaptureScope {
+    /// Whether the capture holds `node`. A `ClickProxy` label folds into its control's line only
+    /// when the capture holds the control too; otherwise the label's text would vanish with it.
+    fn holds(self, tree: &SnapshotTree, node: NodeId) -> bool {
+        match self {
+            Self::FullDoc => true,
+            Self::Subtree(root) => tree
+                .node(root)
+                .is_some_and(|root| root.subtree_range().contains(node)),
+        }
+    }
+}
+
 struct DocJob {
     job_idx: usize,
     doc_id: DocId,
     scope: CaptureScope,
-    remaining_depth: Option<usize>,
+    depth: FrameDepth,
+    /// Levels of the stitched tree above this document's top nodes, for a refusal's message.
+    levels_above: usize,
 }
 
-struct EmittedDoc {
+/// A document's materialized top nodes and the iframes among them, in document order.
+struct EmittedFrames {
     nodes: Vec<AriaNode>,
-    iframe_slots: Vec<ResolvedIframeSlot>,
+    iframe_slots: Vec<EmittedIframe>,
+}
+
+/// The iframe slots of one document resolved for stitching, and the child documents to emit.
+struct ScheduledFrames {
+    slots: Vec<ResolvedIframeSlot>,
+    jobs: Vec<DocJob>,
+}
+
+enum EmittedDoc {
+    Frames {
+        nodes: Vec<AriaNode>,
+        iframe_slots: Vec<ResolvedIframeSlot>,
+    },
+    TooDeep(AriaTooDeep),
 }
 
 enum ResolvedIframeSlot {
@@ -358,7 +469,6 @@ struct EmittedIframe {
     iframe_ref: String,
     kind: EmittedIframeKind,
     tree_depth: usize,
-    at_depth_limit: bool,
 }
 
 enum EmittedIframeKind {
@@ -553,18 +663,18 @@ impl DraftArena {
     }
 }
 
-fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> AriaTree {
+fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooDeep> {
     let AriaAsk {
         root,
         mut mode,
         depth,
         boxes,
     } = ask;
-    let Some(first_job) = resolve_initial_job(tree, root, depth) else {
-        return AriaTree {
+    let Some(first_job) = resolve_initial_job(tree, root, FrameDepth::requested(depth)) else {
+        return Ok(AriaTree {
             nodes: Vec::new(),
             partial: Vec::new(),
-        };
+        });
     };
 
     let scale = if boxes { compute_box_scale(tree) } else { 1.0 };
@@ -576,30 +686,32 @@ fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> AriaTree {
 
     while let Some(job) = job_stack.pop() {
         emit_order.push(job.job_idx);
-        let (nodes, raw_slots) = emit_single_doc(tree, &name_cache, &mut mode, &job, boxes, scale);
-        let (resolved_slots, child_jobs) =
-            schedule_child_jobs(raw_slots, job.remaining_depth, &mut emitted_docs);
+        let emitted = match emit_single_doc(tree, &name_cache, &mut mode, &job, boxes, scale) {
+            Ok(frames) => {
+                let scheduled = schedule_child_jobs(frames.iframe_slots, &job, &mut emitted_docs);
+                job_stack.extend(scheduled.jobs.into_iter().rev());
+                EmittedDoc::Frames {
+                    nodes: frames.nodes,
+                    iframe_slots: scheduled.slots,
+                }
+            }
+            // The captured document itself: nothing to stand in for it, so the whole ask fails.
+            Err(too_deep) if job.job_idx == 0 => return Err(too_deep),
+            Err(too_deep) => EmittedDoc::TooDeep(too_deep),
+        };
         if let Some(slot) = emitted_docs.get_mut(job.job_idx) {
-            *slot = Some(EmittedDoc {
-                nodes,
-                iframe_slots: resolved_slots,
-            });
+            *slot = Some(emitted);
         }
-        job_stack.extend(child_jobs.into_iter().rev());
     }
 
     let root_stitched = stitch_documents(&emit_order, &mut emitted_docs);
-    AriaTree {
+    Ok(AriaTree {
         nodes: root_stitched.nodes,
         partial: root_stitched.partial,
-    }
+    })
 }
 
-fn resolve_initial_job(
-    tree: &SnapshotTree,
-    root: AriaRoot,
-    depth: Option<usize>,
-) -> Option<DocJob> {
+fn resolve_initial_job(tree: &SnapshotTree, root: AriaRoot, depth: FrameDepth) -> Option<DocJob> {
     match root {
         AriaRoot::Page => {
             if tree.nodes().is_empty() || tree.document(DocId::MAIN).is_none() {
@@ -609,7 +721,8 @@ fn resolve_initial_job(
                 job_idx: 0,
                 doc_id: DocId::MAIN,
                 scope: CaptureScope::FullDoc,
-                remaining_depth: depth,
+                depth,
+                levels_above: 0,
             })
         }
         AriaRoot::Document(doc_id) => {
@@ -621,7 +734,8 @@ fn resolve_initial_job(
                 job_idx: 0,
                 doc_id,
                 scope: CaptureScope::FullDoc,
-                remaining_depth: depth,
+                depth,
+                levels_above: 0,
             })
         }
         AriaRoot::Subtree(node_id) => {
@@ -631,24 +745,23 @@ fn resolve_initial_job(
                 job_idx: 0,
                 doc_id: node.doc(),
                 scope: CaptureScope::Subtree(node_id),
-                remaining_depth: depth,
+                depth,
+                levels_above: 0,
             })
         }
     }
 }
 
+/// Gives every printed iframe's document its own job. An iframe at its parent's cut prints, so its
+/// document is emitted too, whole, as upstream fetches it with a negative depth.
 fn schedule_child_jobs(
     raw_slots: Vec<EmittedIframe>,
-    parent_remaining: Option<usize>,
+    parent: &DocJob,
     emitted_docs: &mut Vec<Option<EmittedDoc>>,
-) -> (Vec<ResolvedIframeSlot>, Vec<DocJob>) {
+) -> ScheduledFrames {
     let mut resolved = Vec::with_capacity(raw_slots.len());
     let mut child_jobs = Vec::new();
     for slot in raw_slots {
-        if slot.at_depth_limit {
-            resolved.push(ResolvedIframeSlot::Empty);
-            continue;
-        }
         match slot.kind {
             EmittedIframeKind::ChildDoc {
                 doc_id,
@@ -656,8 +769,6 @@ fn schedule_child_jobs(
             } => {
                 let child_job_idx = emitted_docs.len();
                 emitted_docs.push(None);
-                let child_remaining =
-                    parent_remaining.map(|d| d.saturating_sub(slot.tree_depth.saturating_add(1)));
                 resolved.push(ResolvedIframeSlot::ChildJob {
                     job_idx: child_job_idx,
                     iframe_ref: slot.iframe_ref,
@@ -667,7 +778,8 @@ fn schedule_child_jobs(
                     job_idx: child_job_idx,
                     doc_id,
                     scope: CaptureScope::FullDoc,
-                    remaining_depth: child_remaining,
+                    depth: parent.depth.for_child(slot.tree_depth),
+                    levels_above: parent.levels_above + slot.tree_depth + 1,
                 });
             }
             EmittedIframeKind::Partial {
@@ -683,7 +795,10 @@ fn schedule_child_jobs(
             EmittedIframeKind::Empty => resolved.push(ResolvedIframeSlot::Empty),
         }
     }
-    (resolved, child_jobs)
+    ScheduledFrames {
+        slots: resolved,
+        jobs: child_jobs,
+    }
 }
 
 fn emit_single_doc(
@@ -693,12 +808,16 @@ fn emit_single_doc(
     job: &DocJob,
     boxes: bool,
     scale: f64,
-) -> (Vec<AriaNode>, Vec<EmittedIframe>) {
+) -> Result<EmittedFrames, AriaTooDeep> {
+    let empty = || EmittedFrames {
+        nodes: Vec::new(),
+        iframe_slots: Vec::new(),
+    };
     let Some(doc) = tree.document(job.doc_id) else {
-        return (Vec::new(), Vec::new());
+        return Ok(empty());
     };
     if doc.node_range().is_empty() {
-        return (Vec::new(), Vec::new());
+        return Ok(empty());
     }
 
     let is_full_doc = matches!(job.scope, CaptureScope::FullDoc);
@@ -710,20 +829,30 @@ fn emit_single_doc(
     let doc_seq = begin_doc_refs(mode, doc, is_full_doc);
     let mut arena = run_doc_build(tree, name_cache, mode, doc, job.scope, doc_seq);
     if is_full_doc && let AriaMode::Ai { refs, .. } = mode {
-        refs.finish_doc_capture(doc.token());
+        refs.finish_doc_capture(doc.token(), |key| tree.node_by_key(key).is_some());
     }
 
     if distill_mode.is_ai() {
         resolve_name_from_content_drafts(&mut arena, name_cache);
     }
-    distill_draft(&mut arena, distill_mode, job.remaining_depth);
+    distill_draft(&mut arena, distill_mode, job.depth);
     if distill_mode.is_ai() {
         mark_inert_draft(&mut arena);
     }
 
-    let effective_max_depth = job
-        .remaining_depth
-        .map_or(MAX_SINGLE_FRAME_DEPTH, |d| d.min(MAX_SINGLE_FRAME_DEPTH));
+    // The cap keeps every AriaNode tree within MAX_TREE_DEPTH levels. When it, and not the asked
+    // depth, would cut content, the document is refused rather than shown incomplete.
+    let effective_max_depth = job.depth.print_cut().map_or(MAX_SINGLE_FRAME_DEPTH, |cut| {
+        cut.min(MAX_SINGLE_FRAME_DEPTH)
+    });
+    if effective_max_depth == MAX_SINGLE_FRAME_DEPTH {
+        let levels = draft_levels(&arena);
+        if levels > MAX_TREE_DEPTH {
+            return Err(AriaTooDeep {
+                levels: job.levels_above + levels,
+            });
+        }
+    }
     let frame_origin = if boxes {
         doc_frame_origin(tree, doc)
     } else {
@@ -737,7 +866,32 @@ fn emit_single_doc(
         scale,
         effective_max_depth,
     };
-    materialize_draft(&mut arena, &mat_cfg)
+    Ok(materialize_draft(&mut arena, &mat_cfg))
+}
+
+/// How many levels the distilled tree has, a top-level node being level 1, walked without
+/// recursion.
+fn draft_levels(arena: &DraftArena) -> usize {
+    let mut deepest = 0;
+    let mut stack: Vec<(usize, usize)> = arena.nodes.first().map_or_else(Vec::new, |root| {
+        root.children
+            .iter()
+            .filter_map(|child| match child {
+                DraftChild::Node(idx) => Some((*idx, 1)),
+                DraftChild::Text(_) => None,
+            })
+            .collect()
+    });
+    while let Some((idx, level)) = stack.pop() {
+        deepest = deepest.max(level);
+        if let Some(node) = arena.nodes.get(idx) {
+            stack.extend(node.children.iter().filter_map(|child| match child {
+                DraftChild::Node(child_idx) => Some((*child_idx, level + 1)),
+                DraftChild::Text(_) => None,
+            }));
+        }
+    }
+    deepest
 }
 
 fn begin_doc_refs(mode: &mut AriaMode<'_>, doc: &TreeDoc, is_full_doc: bool) -> Option<DocSeq> {
@@ -774,6 +928,7 @@ fn run_doc_build(
         doc_seq,
         mode: distill_mode,
         render_active,
+        scope,
         arena: DraftArena::new(),
     };
     build_doc_draft(&mut ctx, doc, scope);
@@ -787,6 +942,7 @@ struct DocBuildCtx<'t, 'c, 'r> {
     doc_seq: Option<DocSeq>,
     mode: DistillMode,
     render_active: bool,
+    scope: CaptureScope,
     arena: DraftArena,
 }
 
@@ -794,7 +950,9 @@ impl DocBuildCtx<'_, '_, '_> {
     fn assign_ref(&mut self, node_id: NodeId, role: &str, name: &str) -> Option<String> {
         let doc_seq = self.doc_seq?;
         let refs = self.refs.as_deref_mut()?;
-        if !self.tree.is_ref_worthy(node_id) {
+        // A label this capture folds never gets here: it passes through before its element is
+        // visited. One that reaches here stands on its own line, so the unfolded rule applies.
+        if !self.tree.is_ref_worthy_unfolded(node_id) {
             return None;
         }
         let key = self.tree.node_key(node_id)?;
@@ -935,7 +1093,7 @@ fn process_walk_frame(
     }
 
     if let Some(passthrough_flags) =
-        folded_label_passthrough(ctx.tree, node, frame.flags, ctx.mode, is_iframe)
+        folded_label_passthrough(ctx.tree, node, frame.flags, ctx.mode, is_iframe, ctx.scope)
     {
         push_logical_children_reversed(
             ctx.tree,
@@ -970,8 +1128,14 @@ fn folded_label_passthrough(
     flags: WalkFlags,
     mode: DistillMode,
     is_iframe: bool,
+    scope: CaptureScope,
 ) -> Option<WalkFlags> {
-    if mode.is_ai() && tree.fold().folded_label_target(node.id()).is_some() {
+    if mode.is_ai()
+        && tree
+            .fold()
+            .folded_label_target(node.id())
+            .is_some_and(|control| scope.holds(tree, control))
+    {
         return Some(
             flags
                 .with_parent_visible(true)
@@ -1364,8 +1528,8 @@ struct DistillFrame {
 /// `inlineTextIntoGeneric`, `removeNameRepeatingChild` and `unwrapSingleChildGenerics`. The first
 /// hook that removes or unwraps a node ends its chain. `pending_content` is upstream's
 /// `pendingContentRefs` keyed by draft index. Depth counts the root's children as 0, as upstream
-/// does, and `max_depth` is the cut [`materialize_draft`] prints at.
-fn distill_draft(arena: &mut DraftArena, mode: DistillMode, max_depth: Option<usize>) {
+/// does, and `frame_depth` says which nodes lie past the cut.
+fn distill_draft(arena: &mut DraftArena, mode: DistillMode, frame_depth: FrameDepth) {
     let mut root_pending = arena
         .nodes
         .first_mut()
@@ -1401,8 +1565,7 @@ fn distill_draft(arena: &mut DraftArena, mode: DistillMode, max_depth: Option<us
                                 enter_redundant_name_tracking(
                                     child_idx,
                                     node,
-                                    child_depth,
-                                    max_depth,
+                                    frame_depth.is_beyond(child_depth),
                                     &mut pending_content,
                                 );
                             }
@@ -1452,8 +1615,7 @@ fn distill_draft(arena: &mut DraftArena, mode: DistillMode, max_depth: Option<us
 fn enter_redundant_name_tracking(
     draft_idx: usize,
     node: &DraftNode,
-    depth: usize,
-    max_depth: Option<usize>,
+    beyond_depth: bool,
     pending_content: &mut HashSet<usize>,
 ) {
     if node.r#ref.is_none() {
@@ -1462,7 +1624,6 @@ fn enter_redundant_name_tracking(
     for &contrib_idx in &node.name_from_content_drafts {
         pending_content.insert(contrib_idx);
     }
-    let beyond_depth = max_depth.is_some_and(|max| depth > max);
     let is_leaf_generic = node.role == "generic"
         && node
             .children
@@ -1738,10 +1899,7 @@ struct MatFrame {
     child_ancestor_has_pointer: bool,
 }
 
-fn materialize_draft(
-    arena: &mut DraftArena,
-    cfg: &MaterializeConfig<'_>,
-) -> (Vec<AriaNode>, Vec<EmittedIframe>) {
+fn materialize_draft(arena: &mut DraftArena, cfg: &MaterializeConfig<'_>) -> EmittedFrames {
     let root_children = arena
         .nodes
         .first_mut()
@@ -1765,7 +1923,10 @@ fn materialize_draft(
         }
     }
 
-    (top_nodes, iframe_slots)
+    EmittedFrames {
+        nodes: top_nodes,
+        iframe_slots,
+    }
 }
 
 fn drain_mat_stack(
@@ -1823,7 +1984,7 @@ fn start_mat_frame(
     let draft = arena.nodes.get_mut(idx)?;
     let is_at_depth_limit = tree_depth >= cfg.effective_max_depth;
     if draft.role == "iframe" {
-        record_iframe_slot(draft, tree_depth, is_at_depth_limit, iframe_slots);
+        record_iframe_slot(draft, tree_depth, iframe_slots);
     }
 
     let sets_pointer = cfg.mode.is_ai()
@@ -1885,7 +2046,6 @@ fn start_mat_frame(
 fn record_iframe_slot(
     draft: &mut DraftNode,
     tree_depth: usize,
-    at_depth_limit: bool,
     iframe_slots: &mut Vec<EmittedIframe>,
 ) {
     let kind = match mem::replace(&mut draft.iframe, DraftIframe::None) {
@@ -1909,7 +2069,6 @@ fn record_iframe_slot(
         iframe_ref: draft.r#ref.clone().unwrap_or_default(),
         kind,
         tree_depth,
-        at_depth_limit,
     });
 }
 
@@ -1922,34 +2081,41 @@ fn apply_d20_prohibited_name(node: &mut AriaNode) {
     }
 }
 
+/// A document stitched with its children, or the refusal its iframe slot reports instead.
+type StitchedSlot = Option<Result<StitchedDoc, AriaTooDeep>>;
+
 fn stitch_documents(emit_order: &[usize], emitted_docs: &mut [Option<EmittedDoc>]) -> StitchedDoc {
-    let mut stitched: Vec<Option<StitchedDoc>> = Vec::with_capacity(emitted_docs.len());
+    let mut stitched: Vec<StitchedSlot> = Vec::with_capacity(emitted_docs.len());
     stitched.resize_with(emitted_docs.len(), || None);
 
     for &job_idx in emit_order.iter().rev() {
-        let Some(doc) = emitted_docs.get_mut(job_idx).and_then(Option::take) else {
-            continue;
+        let done = match emitted_docs.get_mut(job_idx).and_then(Option::take) {
+            Some(EmittedDoc::Frames {
+                nodes,
+                iframe_slots,
+            }) => Ok(stitch_single_doc(nodes, iframe_slots, &mut stitched)),
+            Some(EmittedDoc::TooDeep(too_deep)) => Err(too_deep),
+            None => continue,
         };
-        let done = stitch_single_doc(doc, &mut stitched);
         if let Some(slot) = stitched.get_mut(job_idx) {
             *slot = Some(done);
         }
     }
 
-    stitched
-        .first_mut()
-        .and_then(Option::take)
-        .unwrap_or(StitchedDoc {
+    match stitched.first_mut().and_then(Option::take) {
+        Some(Ok(root)) => root,
+        _ => StitchedDoc {
             nodes: Vec::new(),
             partial: Vec::new(),
-        })
+        },
+    }
 }
 
-fn stitch_single_doc(doc: EmittedDoc, stitched: &mut [Option<StitchedDoc>]) -> StitchedDoc {
-    let EmittedDoc {
-        mut nodes,
-        mut iframe_slots,
-    } = doc;
+fn stitch_single_doc(
+    mut nodes: Vec<AriaNode>,
+    mut iframe_slots: Vec<ResolvedIframeSlot>,
+    stitched: &mut [StitchedSlot],
+) -> StitchedDoc {
     let mut doc_partial = Vec::new();
 
     if !iframe_slots.is_empty() {
@@ -1990,7 +2156,7 @@ fn attach_iframe_slot(
     node: &mut AriaNode,
     slot: ResolvedIframeSlot,
     obj_depth: usize,
-    stitched: &mut [Option<StitchedDoc>],
+    stitched: &mut [StitchedSlot],
     doc_partial: &mut Vec<AriaPartialFrame>,
 ) {
     match slot {
@@ -1999,9 +2165,19 @@ fn attach_iframe_slot(
             iframe_ref,
             frame_label,
         } => {
-            if let Some(child) = stitched.get_mut(job_idx).and_then(Option::take)
-                && !child.nodes.is_empty()
-            {
+            let child = match stitched.get_mut(job_idx).and_then(Option::take) {
+                Some(Ok(child)) => child,
+                Some(Err(too_deep)) => {
+                    doc_partial.push(AriaPartialFrame {
+                        r#ref: iframe_ref,
+                        frame: frame_label,
+                        reason: too_deep.to_string(),
+                    });
+                    return;
+                }
+                None => return,
+            };
+            if !child.nodes.is_empty() {
                 let deepest = neo_snapshot::json_depth(&child.nodes);
                 let total_depth = obj_depth.saturating_add(deepest);
                 if total_depth > MAX_JSON_DEPTH {
@@ -2252,10 +2428,12 @@ mod tests {
     use crate::refs::{RefLookup, RefTarget, TabRefTable};
     use crate::tree::{
         ApcBuilder, BuildOptions, DocToken, DomNodeId, FrameBuilder, MIN_CONTRACT_VERSION,
-        NodeBuilder, NodeKey, PartialIframeSpec, SnapshotTree,
+        NodeBuilder, NodeKey, PartialIframeSpec, SnapshotTree, TreeNode,
     };
 
-    use super::{AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, MAX_JSON_DEPTH, depth_error};
+    use super::{
+        AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, MAX_JSON_DEPTH, MAX_TREE_DEPTH, depth_error,
+    };
 
     fn find_by_role_name<'a>(
         nodes: &'a [AriaNode],
@@ -2406,7 +2584,7 @@ mod tests {
     fn ai_mode_emits_states_refs_cursor_and_synthesized_options() -> Result<(), Box<dyn Error>> {
         let tree = build_rich_tree()?;
         let mut refs = TabRefTable::new();
-        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
 
         assert!(
             find_by_role_name(ai.nodes(), "document", None).is_none(),
@@ -2466,7 +2644,7 @@ mod tests {
             .count();
         assert_eq!(pointer_count, 1);
 
-        let ai_no_active = tree.aria(AriaAsk::ai(&mut refs).with_render_active(false));
+        let ai_no_active = tree.aria(AriaAsk::ai(&mut refs).with_render_active(false))?;
         let toggle_no_active = find_by_role_name(ai_no_active.nodes(), "button", Some("Toggle"))
             .ok_or("missing toggle without active")?;
         assert_eq!(toggle_no_active.active, None);
@@ -2477,7 +2655,7 @@ mod tests {
     #[test]
     fn default_mode_omits_refs_active_cursor_and_ai_distillation() -> Result<(), Box<dyn Error>> {
         let tree = build_rich_tree()?;
-        let default = tree.aria(AriaAsk::default_mode());
+        let default = tree.aria(AriaAsk::default_mode())?;
         for node in all_nodes(default.nodes()) {
             assert_eq!(node.r#ref, None);
             assert_eq!(node.active, None);
@@ -2536,7 +2714,7 @@ mod tests {
         let tree = build_click_proxy_tree()?;
 
         let mut refs = TabRefTable::new();
-        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
 
         let terms = find_by_role_name(ai.nodes(), "link", Some("Terms"))
             .ok_or("interactive link inside folded label must stay visible")?;
@@ -2579,7 +2757,7 @@ mod tests {
             "folded label text must not duplicate outside controls"
         );
 
-        let default = tree.aria(AriaAsk::default_mode());
+        let default = tree.aria(AriaAsk::default_mode())?;
         let has_accept_text = all_nodes(default.nodes())
             .into_iter()
             .any(|node| node.role == "text" && node.text.as_deref() == Some("Accept"));
@@ -2626,7 +2804,7 @@ mod tests {
         let tree = SnapshotTree::build(apc, BuildOptions::new())?;
 
         let mut refs = TabRefTable::new();
-        let first = tree.aria(AriaAsk::ai(&mut refs));
+        let first = tree.aria(AriaAsk::ai(&mut refs))?;
 
         let chrome = find_by_role_text(first.nodes(), "generic", "Chrome 1")
             .ok_or("generic whose sole content matched aria-label must promote name to text")?;
@@ -2643,13 +2821,53 @@ mod tests {
         let code = find_by_role_text(first.nodes(), "code", "npm test").ok_or("missing code")?;
         assert_eq!(code.name, None);
 
-        let second = tree.aria(AriaAsk::ai(&mut refs));
+        let second = tree.aria(AriaAsk::ai(&mut refs))?;
         let chrome_again =
             find_by_role_text(second.nodes(), "generic", "Chrome 1").ok_or("missing chrome 2")?;
         assert_eq!(
             chrome_again.r#ref.as_deref(),
             Some(chrome_ref.as_str()),
             "ref assignment before D20 must preserve ref stability across snapshots"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_subtree_capture_folds_a_label_only_with_its_control() -> Result<(), Box<dyn Error>> {
+        let tree = build_click_proxy_tree()?;
+        let doc_token = DocToken::new("doc-proxy").ok_or("valid token")?;
+        let node_of = |dom_id: i32| {
+            tree.node_by_key(&NodeKey::new(doc_token.clone(), DomNodeId::new(dom_id)))
+                .map(TreeNode::id)
+                .ok_or("node in the tree")
+        };
+
+        let mut refs = TabRefTable::new();
+        let label_alone =
+            tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Subtree(node_of(10)?)))?;
+        let label = label_alone
+            .nodes()
+            .first()
+            .ok_or("the label prints on its own line")?;
+        let label_ref = label.r#ref.as_deref().ok_or("the label gets a ref")?;
+        assert_eq!(
+            refs.resolve_str(label_ref),
+            RefLookup::Key(RefTarget {
+                key: NodeKey::new(doc_token.clone(), DomNodeId::new(10)),
+                click_proxy: None,
+            })
+        );
+        assert!(
+            serde_json::to_string(label_alone.nodes())?.contains("Accept"),
+            "its checkbox lies outside the subtree, so the label keeps its text"
+        );
+
+        let wrapping =
+            tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Subtree(node_of(20)?)))?;
+        assert!(
+            find_by_role_name(wrapping.nodes(), "radio", Some("Choice A"))
+                .is_some_and(|radio| radio.r#ref.is_some()),
+            "the label holds its radio, so it still folds into the radio's line"
         );
         Ok(())
     }
@@ -2694,7 +2912,7 @@ mod tests {
         let tree = SnapshotTree::build(apc, BuildOptions::new())?;
 
         let mut refs = TabRefTable::new();
-        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
         let dialog = find_by_role_name(ai.nodes(), "dialog", None)
             .ok_or("ai mode prints the dialog without the name its heading repeats")?;
         assert!(dialog.r#ref.is_some(), "the nameless dialog keeps its ref");
@@ -2704,7 +2922,7 @@ mod tests {
         assert_eq!(link.url.as_deref(), Some("/docs"));
         assert!(find_by_role_name(ai.nodes(), "heading", Some("Read the docs")).is_some());
 
-        let default = tree.aria(AriaAsk::default_mode());
+        let default = tree.aria(AriaAsk::default_mode())?;
         assert!(
             find_by_role_name(default.nodes(), "dialog", Some("Confirm delete")).is_some(),
             "default mode does not run removeRedundantNames"
@@ -2742,7 +2960,7 @@ mod tests {
         let tree = SnapshotTree::build(apc, BuildOptions::new())?;
 
         let mut refs = TabRefTable::new();
-        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
         let button = find_by_role_name(ai.nodes(), "button", Some("Save draft")).ok_or(
             "the button keeps its name: the later element had no ref when the button's subtree \
              ended, so upstream never counts it",
@@ -2800,7 +3018,7 @@ mod tests {
         let tree = SnapshotTree::build(apc, BuildOptions::new())?;
 
         let mut refs = TabRefTable::new();
-        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
 
         let mixed_wrapper = ai.nodes().first().ok_or("missing mixed wrapper")?;
         assert_eq!(
@@ -2821,7 +3039,7 @@ mod tests {
             "inert mark must coalesce onto the topmost inert container"
         );
 
-        let default = tree.aria(AriaAsk::default_mode());
+        let default = tree.aria(AriaAsk::default_mode())?;
         for node in all_nodes(default.nodes()) {
             assert_eq!(node.inert, None);
         }
@@ -2858,7 +3076,7 @@ mod tests {
         let tree = SnapshotTree::build(apc, BuildOptions::new())?;
 
         let mut refs = TabRefTable::new();
-        let out = tree.aria(AriaAsk::ai(&mut refs).with_boxes(true));
+        let out = tree.aria(AriaAsk::ai(&mut refs).with_boxes(true))?;
 
         let main_btn =
             find_by_role_name(out.nodes(), "button", Some("Main")).ok_or("missing main btn")?;
@@ -2884,7 +3102,7 @@ mod tests {
             })
         );
 
-        let no_boxes = tree.aria(AriaAsk::ai(&mut refs));
+        let no_boxes = tree.aria(AriaAsk::ai(&mut refs))?;
         for node in all_nodes(no_boxes.nodes()) {
             assert_eq!(node.r#box, None);
         }
@@ -2930,7 +3148,7 @@ mod tests {
         let tree = SnapshotTree::build(apc, BuildOptions::new())?;
 
         let mut refs = TabRefTable::new();
-        let ai = tree.aria(AriaAsk::ai(&mut refs));
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
         let child_btn = find_by_role_name(ai.nodes(), "button", Some("Child Go"))
             .ok_or("child iframe button must stitch in ai mode")?;
         assert!(
@@ -2946,17 +3164,18 @@ mod tests {
         assert_eq!(partial.reason, "timeout after 2000 ms");
         assert!(!partial.r#ref.is_empty());
 
-        let default = tree.aria(AriaAsk::default_mode());
+        let default = tree.aria(AriaAsk::default_mode())?;
         let default_child_btn = find_by_role_name(default.nodes(), "button", Some("Child Go"))
             .ok_or("child iframe button must stitch in default mode without refs")?;
         assert_eq!(default_child_btn.r#ref, None);
         assert_eq!(default.partial().len(), 1);
 
-        let cut = tree.aria(AriaAsk::default_mode().with_depth(Some(0)));
-        assert!(find_by_role_name(cut.nodes(), "button", Some("Child Go")).is_none());
-        let (cut_nodes, cut_partial) = cut.into_parts();
-        assert_eq!(cut_nodes.len(), 2);
-        assert!(cut_partial.is_empty());
+        let zero = tree.aria(AriaAsk::default_mode().with_depth(Some(0)))?;
+        assert_eq!(
+            zero,
+            tree.aria(AriaAsk::default_mode())?,
+            "depth 0 is upstream's falsy zero: no cut"
+        );
         Ok(())
     }
 
@@ -2983,7 +3202,7 @@ mod tests {
         let deep_tree = SnapshotTree::build(deep_apc, BuildOptions::new())?;
 
         let mut deep_refs = TabRefTable::new();
-        let deep_out = deep_tree.aria(AriaAsk::ai(&mut deep_refs));
+        let deep_out = deep_tree.aria(AriaAsk::ai(&mut deep_refs))?;
         assert!(neo_snapshot::json_depth(deep_out.nodes()) < MAX_JSON_DEPTH);
         assert!(find_by_role_name(deep_out.nodes(), "button", Some("Deep")).is_none());
         let iframe_node = find_by_role_name(deep_out.nodes(), "iframe", None)
@@ -2996,6 +3215,122 @@ mod tests {
         assert_eq!(refusal.frame, "https://deep.example/inner");
         let expected_reason = depth_error((163 + 162 - 1) / 2);
         assert_eq!(refusal.reason, expected_reason);
+        Ok(())
+    }
+
+    fn deep_button(text: &str) -> NodeBuilder {
+        NodeBuilder::form_control(FormControlType::ButtonButton)
+            .tag("button")
+            .bounding_box(0, 0, 40, 20)
+            .child(NodeBuilder::text(text))
+    }
+
+    #[test]
+    fn child_frame_depth_follows_upstream_arithmetic() -> Result<(), Box<dyn Error>> {
+        let frame_a = FrameBuilder::new("doc-depth-a")
+            .url("https://a.example/")
+            .root(
+                NodeBuilder::root().child(
+                    NodeBuilder::element("a")
+                        .dom_id(5)
+                        .href("/docs")
+                        .bounding_box(0, 0, 100, 20)
+                        .child(
+                            NodeBuilder::element("h3")
+                                .dom_id(6)
+                                .bounding_box(0, 0, 100, 20)
+                                .child(NodeBuilder::text("Read the docs")),
+                        ),
+                ),
+            );
+        let frame_b = FrameBuilder::new("doc-depth-b")
+            .url("https://b.example/")
+            .root(NodeBuilder::root().child(deep_button("B button")));
+        let apc = ApcBuilder::new("doc-depth")
+            .root(
+                NodeBuilder::root()
+                    .child(build_nested_group_chain(
+                        1,
+                        NodeBuilder::iframe(frame_a).bounding_box(0, 0, 100, 100),
+                    ))
+                    .child(build_nested_group_chain(
+                        2,
+                        NodeBuilder::iframe(frame_b).bounding_box(0, 100, 100, 100),
+                    )),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+
+        // Depth 1: A's iframe prints at the cut, so its frame gets 1 - 1 - 1 = -1 and prints
+        // whole, keeping every name. B's iframe lies past the cut, so its frame is never read.
+        let cut = tree.aria(AriaAsk::ai(&mut refs).with_depth(Some(1)))?;
+        assert!(find_by_role_name(cut.nodes(), "link", Some("Read the docs")).is_some());
+        assert!(find_by_role_name(cut.nodes(), "heading", Some("Read the docs")).is_some());
+        assert!(find_by_role_name(cut.nodes(), "button", Some("B button")).is_none());
+        assert!(cut.partial().is_empty());
+
+        // Depth 3: A's frame gets 3 - 1 - 1 = 1, a cut again, so the link's name repeats its
+        // printed heading and goes. B's gets 3 - 2 - 1 = 0, which upstream reads as no cut.
+        let deeper = tree.aria(AriaAsk::ai(&mut refs).with_depth(Some(3)))?;
+        assert!(find_by_role_name(deeper.nodes(), "link", None).is_some());
+        assert!(find_by_role_name(deeper.nodes(), "button", Some("B button")).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn a_page_deeper_than_the_cap_is_refused_unless_a_depth_cuts_it() -> Result<(), Box<dyn Error>>
+    {
+        let apc = ApcBuilder::new("doc-too-deep")
+            .root(NodeBuilder::root().child(build_nested_group_chain(150, deep_button("Deep"))))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+
+        let refused = tree
+            .aria(AriaAsk::ai(&mut refs))
+            .err()
+            .ok_or("150 groups and a button pass the cap, so the page is refused, not cut")?;
+        assert_eq!(refused.levels(), 151);
+        assert_eq!(refused.to_string(), depth_error(151));
+        assert!(tree.aria(AriaAsk::default_mode()).is_err());
+
+        let asked = tree.aria(AriaAsk::ai(&mut refs).with_depth(Some(140)))?;
+        assert!(
+            find_by_role_name(asked.nodes(), "button", Some("Deep")).is_none(),
+            "a depth the caller asked for cuts the page without a refusal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_child_frame_deeper_than_the_cap_becomes_a_partial_frame() -> Result<(), Box<dyn Error>> {
+        let deep_frame = FrameBuilder::new("doc-deep-frame")
+            .url("https://deep.example/frame")
+            .root(NodeBuilder::root().child(build_nested_group_chain(150, deep_button("Deep"))));
+        let apc = ApcBuilder::new("doc-shallow-parent")
+            .root(
+                NodeBuilder::root()
+                    .child(deep_button("Top"))
+                    .child(NodeBuilder::iframe(deep_frame).bounding_box(0, 40, 100, 100)),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+
+        let out = tree.aria(AriaAsk::ai(&mut refs))?;
+        assert!(find_by_role_name(out.nodes(), "button", Some("Top")).is_some());
+        assert!(find_by_role_name(out.nodes(), "button", Some("Deep")).is_none());
+        let partial = out
+            .partial()
+            .first()
+            .ok_or("the deep frame says why it is missing")?;
+        assert_eq!(partial.frame, "https://deep.example/frame");
+        assert_eq!(
+            partial.reason,
+            depth_error(152),
+            "its iframe's level plus the frame's 151"
+        );
         Ok(())
     }
 
@@ -3028,7 +3363,7 @@ mod tests {
             .id();
 
         let mut refs = TabRefTable::new();
-        let full1 = tree.aria(AriaAsk::ai(&mut refs));
+        let full1 = tree.aria(AriaAsk::ai(&mut refs))?;
         let beta_ref_1 = find_by_role_name(full1.nodes(), "button", Some("Beta"))
             .and_then(|n| n.r#ref.clone())
             .ok_or("missing beta ref 1")?;
@@ -3037,11 +3372,11 @@ mod tests {
         assert_eq!(sub_ask.root(), AriaRoot::Subtree(alpha_id));
         assert_eq!(sub_ask.depth(), None);
         assert!(!sub_ask.boxes());
-        let sub = tree.aria(sub_ask);
+        let sub = tree.aria(sub_ask)?;
         assert_eq!(sub.nodes().len(), 1);
         assert!(find_by_role_name(sub.nodes(), "button", Some("Alpha")).is_some());
 
-        let full2 = tree.aria(AriaAsk::ai(&mut refs));
+        let full2 = tree.aria(AriaAsk::ai(&mut refs))?;
         let beta_ref_2 = find_by_role_name(full2.nodes(), "button", Some("Beta"))
             .and_then(|n| n.r#ref.clone())
             .ok_or("missing beta ref 2")?;
@@ -3083,7 +3418,7 @@ mod tests {
         let ask_dbg = format!("{ask:?}");
         assert!(ask_dbg.contains("AriaAsk"));
 
-        let aria_tree = tree.aria(ask);
+        let aria_tree = tree.aria(ask)?;
         let tree_dbg = format!("{aria_tree:?}");
         assert!(!tree_dbg.contains("TOP_SECRET_TEXT"));
         assert!(!tree_dbg.contains("secret.example"));
@@ -3181,22 +3516,39 @@ mod tests {
                     SnapshotTree::build(apc, BuildOptions::new()).map_err(|err| err.to_string())?;
 
                 let mut refs = TabRefTable::new();
-                let ai = tree.aria(AriaAsk::ai(&mut refs).with_boxes(true));
-                if ai.nodes().len() != 1 {
-                    return Err(format!("expected 1 top-level node, got {}", ai.nodes().len()));
-                }
-                let ai_depth = 1 + neo_snapshot::json_depth(ai.nodes());
-                if ai_depth > MAX_JSON_DEPTH {
-                    return Err(format!(
-                        "ai json depth {ai_depth} exceeded MAX_JSON_DEPTH ({MAX_JSON_DEPTH})"
-                    ));
+                for refused in [
+                    tree.aria(AriaAsk::ai(&mut refs).with_boxes(true)),
+                    tree.aria(AriaAsk::default_mode()),
+                ] {
+                    let Err(too_deep) = refused else {
+                        return Err("a 25k-level page must be refused, not cut short".to_owned());
+                    };
+                    if too_deep.levels() <= MAX_TREE_DEPTH
+                        || !too_deep
+                            .to_string()
+                            .starts_with("This tree is nested about")
+                    {
+                        return Err(format!("unexpected refusal: {too_deep}"));
+                    }
                 }
 
-                let default = tree.aria(AriaAsk::default_mode());
-                let default_depth = 1 + neo_snapshot::json_depth(default.nodes());
-                if default_depth > MAX_JSON_DEPTH {
+                let cut = tree
+                    .aria(
+                        AriaAsk::ai(&mut refs)
+                            .with_boxes(true)
+                            .with_depth(Some(100)),
+                    )
+                    .map_err(|err| err.to_string())?;
+                if cut.nodes().len() != 1 {
                     return Err(format!(
-                        "default json depth {default_depth} exceeded MAX_JSON_DEPTH ({MAX_JSON_DEPTH})"
+                        "expected 1 top-level node, got {}",
+                        cut.nodes().len()
+                    ));
+                }
+                let cut_depth = 1 + neo_snapshot::json_depth(cut.nodes());
+                if cut_depth > MAX_JSON_DEPTH {
+                    return Err(format!(
+                        "ai json depth {cut_depth} exceeded MAX_JSON_DEPTH ({MAX_JSON_DEPTH})"
                     ));
                 }
                 Ok(())

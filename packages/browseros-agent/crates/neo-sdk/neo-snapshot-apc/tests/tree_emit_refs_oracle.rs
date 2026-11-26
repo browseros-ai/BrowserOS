@@ -471,9 +471,9 @@ fn assert_idempotent_delta(
     first_ai: &AriaTree,
     baseline: &Baseline,
     refs: &mut TabRefTable,
-) {
+) -> Result<(), Box<dyn Error>> {
     let first_refs = collect_printed_refs(first_ai.nodes());
-    let second_ai = tree.aria(AriaAsk::ai(refs));
+    let second_ai = tree.aria(AriaAsk::ai(refs))?;
     let second_refs = collect_printed_refs(second_ai.nodes());
     assert_eq!(
         second_refs, first_refs,
@@ -494,6 +494,7 @@ fn assert_idempotent_delta(
         delta, NO_CHANGE_LINE,
         "{context}: repeated identical ai capture must render as unchanged delta"
     );
+    Ok(())
 }
 
 /// Every printed ref resolves to a live node of the tree. Returns how many resolved.
@@ -781,8 +782,8 @@ fn check_recorded_page(
 ) -> Result<PageCounts, Box<dyn Error>> {
     let page = RecordedPage::load(name)?;
     let mut refs = TabRefTable::new();
-    let ai = page.tree.aria(AriaAsk::ai(&mut refs));
-    let default = page.tree.aria(AriaAsk::default_mode());
+    let ai = page.tree.aria(AriaAsk::ai(&mut refs))?;
+    let default = page.tree.aria(AriaAsk::default_mode())?;
     assert_eq!(
         ai.partial().len(),
         page.partial_frames,
@@ -819,7 +820,7 @@ fn check_recorded_page(
     );
 
     let (rendered, baseline) = render_and_check_safety(name, &page.tree, &ai, default, &refs)?;
-    assert_idempotent_delta(name, &page.tree, &ai, &baseline, &mut refs);
+    assert_idempotent_delta(name, &page.tree, &ai, &baseline, &mut refs)?;
     if name == "hung-subframe" {
         assert_eq!(
             page.partial_frames, 1,
@@ -891,7 +892,7 @@ fn find_printed<'a>(nodes: &'a [AriaNode], role: &str, label: &str) -> Option<&'
 fn ua_shadow_recording_folds_browser_made_content() -> Result<(), Box<dyn Error>> {
     let page = RecordedPage::load("ua-shadow")?;
     let mut refs = TabRefTable::new();
-    let ai = page.tree.aria(AriaAsk::ai(&mut refs));
+    let ai = page.tree.aria(AriaAsk::ai(&mut refs))?;
     let emitted = index_emitted_by_key(ai.nodes(), &refs)?;
 
     let ua_shadow: Vec<_> = page
@@ -939,7 +940,7 @@ fn ua_shadow_recording_folds_browser_made_content() -> Result<(), Box<dyn Error>
 fn private_forms_recording_masks_values_as_the_page_masker_does() -> Result<(), Box<dyn Error>> {
     let page = RecordedPage::load("private-forms")?;
     let mut refs = TabRefTable::new();
-    let ai = page.tree.aria(AriaAsk::ai(&mut refs));
+    let ai = page.tree.aria(AriaAsk::ai(&mut refs))?;
 
     let masked: Vec<&str> = collect_all_nodes(ai.nodes())
         .into_iter()
@@ -968,7 +969,7 @@ fn private_forms_recording_masks_values_as_the_page_masker_does() -> Result<(), 
 fn modal_inert_recording_marks_each_inert_subtree_at_its_top() -> Result<(), Box<dyn Error>> {
     let page = RecordedPage::load("modal-inert")?;
     let mut refs = TabRefTable::new();
-    let ai = page.tree.aria(AriaAsk::ai(&mut refs));
+    let ai = page.tree.aria(AriaAsk::ai(&mut refs))?;
 
     for (role, label) in [
         ("heading", "heading: page behind the modal"),
@@ -1057,7 +1058,7 @@ fn nested_frames_recording_names_refs_by_frame_across_all_eight() -> Result<(), 
         .filter_map(|(idx, frame)| Some((*page.frame_to_doc.get(&frame.frame)?, idx)))
         .collect();
     let mut refs = TabRefTable::new();
-    let ai = page.tree.aria(AriaAsk::ai(&mut refs));
+    let ai = page.tree.aria(AriaAsk::ai(&mut refs))?;
     let mut refs_per_frame = vec![0_usize; page.oracle.frames.len()];
     for ref_str in collect_printed_refs(ai.nodes()) {
         let RefLookup::Key(target) = refs.resolve_str(&ref_str) else {

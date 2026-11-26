@@ -44,7 +44,9 @@ mod tree_node;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use apc_builder::{ApcBuilder, FrameBuilder, NodeBuilder, PartialIframeSpec};
-pub use aria_emit::{AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, AriaTree, MAX_JSON_DEPTH};
+pub use aria_emit::{
+    AriaAsk, AriaMode, AriaPartialFrame, AriaRoot, AriaTooDeep, AriaTree, MAX_JSON_DEPTH,
+};
 pub use build_error::BuildError;
 pub use fold::{ClickProxy, FoldInfo, LogicalChildrenIter, SyntheticOption};
 pub use hidden::Hidden;

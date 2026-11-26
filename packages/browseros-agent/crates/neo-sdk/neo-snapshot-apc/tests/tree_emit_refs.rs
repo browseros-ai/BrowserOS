@@ -168,7 +168,8 @@ fn refs_rules_one_through_three_and_delta_stability() -> Result<(), Box<dyn Erro
     let passed = Passed::default();
     let mut refs = TabRefTable::new();
 
-    let aria_v1 = build_delta_page(visible_button(50, 600, "Save"))?.aria(AriaAsk::ai(&mut refs));
+    let aria_v1 =
+        build_delta_page(visible_button(50, 600, "Save"))?.aria(AriaAsk::ai(&mut refs))?;
     let save_ref = find_by_role_name(aria_v1.nodes(), "button", Some("Save"))
         .and_then(|node| node.r#ref.clone())
         .ok_or("missing initial Save button ref")?;
@@ -176,7 +177,7 @@ fn refs_rules_one_through_three_and_delta_stability() -> Result<(), Box<dyn Erro
 
     // Rules 1 & 2: identical (role, name) across captures reuses every e-ref and yields no-change delta.
     let aria_repeat =
-        build_delta_page(visible_button(50, 600, "Save"))?.aria(AriaAsk::ai(&mut refs));
+        build_delta_page(visible_button(50, 600, "Save"))?.aria(AriaAsk::ai(&mut refs))?;
     assert_eq!(
         find_by_role_name(aria_repeat.nodes(), "button", Some("Save"))
             .and_then(|node| node.r#ref.as_deref()),
@@ -190,7 +191,8 @@ fn refs_rules_one_through_three_and_delta_stability() -> Result<(), Box<dyn Erro
     );
 
     // Rule 3a: name change on the same NodeKey mints a fresh e-ref; old alias stays resolvable.
-    let aria_v2 = build_delta_page(visible_button(50, 600, "Saved"))?.aria(AriaAsk::ai(&mut refs));
+    let aria_v2 =
+        build_delta_page(visible_button(50, 600, "Saved"))?.aria(AriaAsk::ai(&mut refs))?;
     let saved_ref = find_by_role_name(aria_v2.nodes(), "button", Some("Saved"))
         .and_then(|node| node.r#ref.clone())
         .ok_or("missing renamed Saved button ref")?;
@@ -212,7 +214,7 @@ fn refs_rules_one_through_three_and_delta_stability() -> Result<(), Box<dyn Erro
         .href("/saved")
         .bounding_box(0, 600, 120, 24)
         .child(NodeBuilder::text("Saved"));
-    let aria_v3 = build_delta_page(link_node)?.aria(AriaAsk::ai(&mut refs));
+    let aria_v3 = build_delta_page(link_node)?.aria(AriaAsk::ai(&mut refs))?;
     let link_ref = find_by_role_name(aria_v3.nodes(), "link", Some("Saved"))
         .and_then(|node| node.r#ref.clone())
         .ok_or("missing retyped link ref")?;
@@ -229,6 +231,34 @@ fn refs_rules_one_through_three_and_delta_stability() -> Result<(), Box<dyn Erro
     );
     assert!(delta_retyped.contains(&format!("-- button \"Saved\" [ref={saved_ref}]")));
     assert!(delta_retyped.contains(&format!("+- link \"Saved\" [ref={link_ref}]")));
+    Ok(())
+}
+
+#[test]
+fn refs_a_button_that_briefly_takes_no_pointer_events_keeps_its_ref() -> Result<(), Box<dyn Error>>
+{
+    let mut refs = TabRefTable::new();
+    let first = build_delta_page(visible_button(50, 600, "Pay"))?.aria(AriaAsk::ai(&mut refs))?;
+    let pay_ref = find_by_role_name(first.nodes(), "button", Some("Pay"))
+        .and_then(|node| node.r#ref.clone())
+        .ok_or("Pay prints with a ref")?;
+
+    let blocked = build_delta_page(visible_button(50, 600, "Pay").pointer_events_none(true))?
+        .aria(AriaAsk::ai(&mut refs))?;
+    assert!(
+        find_by_role_name(blocked.nodes(), "button", Some("Pay"))
+            .is_some_and(|node| node.r#ref.is_none()),
+        "a button that takes no pointer events prints without a ref"
+    );
+
+    let restored =
+        build_delta_page(visible_button(50, 600, "Pay"))?.aria(AriaAsk::ai(&mut refs))?;
+    assert_eq!(
+        find_by_role_name(restored.nodes(), "button", Some("Pay"))
+            .and_then(|node| node.r#ref.as_deref()),
+        Some(pay_ref.as_str()),
+        "the node never left the capture, so it gets its e-ref back"
+    );
     Ok(())
 }
 
@@ -262,7 +292,7 @@ fn refs_rule_four_minted_n_ref_unifies_without_forcing_inclusion() -> Result<(),
     assert_eq!(n2.to_string(), "n2");
     assert_eq!(n2.kind(), RefKind::Minted);
 
-    let aria = tree.aria(AriaAsk::ai(&mut refs));
+    let aria = tree.aria(AriaAsk::ai(&mut refs))?;
     assert!(
         find_by_role_name(aria.nodes(), "button", Some("Hidden Action")).is_none(),
         "minting an n-ref must never force a hidden node into the snapshot"
@@ -342,7 +372,7 @@ fn refs_lifecycle_retire_and_forget_enforce_monotonic_non_collision() -> Result<
     let doc_a = doc_token("doc-child-a")?;
     let mut refs = TabRefTable::new();
 
-    let first = tree.aria(AriaAsk::ai(&mut refs));
+    let first = tree.aria(AriaAsk::ai(&mut refs))?;
     let main_ref_1 = find_by_role_name(first.nodes(), "button", Some("Main Btn"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing Main Btn ref")?;
@@ -365,7 +395,7 @@ fn refs_lifecycle_retire_and_forget_enforce_monotonic_non_collision() -> Result<
     assert!(refs.resolve_str(&main_ref_1).as_key().is_some());
     assert!(refs.resolve_str(&child_b_ref_1).as_key().is_some());
 
-    let second = tree.aria(AriaAsk::ai(&mut refs));
+    let second = tree.aria(AriaAsk::ai(&mut refs))?;
     let child_a_ref_2 = find_by_role_name(second.nodes(), "button", Some("Child A"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing Child A ref after forget_doc")?;
@@ -375,7 +405,7 @@ fn refs_lifecycle_retire_and_forget_enforce_monotonic_non_collision() -> Result<
     // retire_doc retires doc-child-a's sequence so re-capturing assigns a brand-new seq.
     refs.retire_doc(&doc_a);
     assert!(refs.resolve_str(&child_a_ref_2).is_retired());
-    let third = tree.aria(AriaAsk::ai(&mut refs));
+    let third = tree.aria(AriaAsk::ai(&mut refs))?;
     let child_a_ref_3 = find_by_role_name(third.nodes(), "button", Some("Child A"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing Child A ref after retire_doc")?;
@@ -390,7 +420,7 @@ fn refs_lifecycle_retire_and_forget_enforce_monotonic_non_collision() -> Result<
     assert!(refs.resolve_str(&main_ref_1).is_retired());
     assert!(refs.resolve_str(&child_a_ref_3).is_retired());
 
-    let fourth = tree.aria(AriaAsk::ai(&mut refs));
+    let fourth = tree.aria(AriaAsk::ai(&mut refs))?;
     let main_ref_2 = find_by_role_name(fourth.nodes(), "button", Some("Main Btn"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing Main Btn ref after forget")?;
@@ -416,7 +446,7 @@ fn refs_bounded_eviction_drops_identity_and_evicts_oldest_unseen_first()
     let mut refs = TabRefTable::with_max_records(3);
 
     // Capture 1: A (e1, oldest tick) and B (e2, newer tick).
-    let cap1 = build_buttons_doc(&[(10, "Alpha"), (20, "Beta")])?.aria(AriaAsk::ai(&mut refs));
+    let cap1 = build_buttons_doc(&[(10, "Alpha"), (20, "Beta")])?.aria(AriaAsk::ai(&mut refs))?;
     let ref_a = find_by_role_name(cap1.nodes(), "button", Some("Alpha"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing Alpha ref")?;
@@ -426,7 +456,7 @@ fn refs_bounded_eviction_drops_identity_and_evicts_oldest_unseen_first()
     assert_eq!(refs.record_count(), 2);
 
     // Capture 2: only C (e3). Within cap (3), so A & B stay resolvable but lose last_identity.
-    let cap2 = build_buttons_doc(&[(30, "Gamma")])?.aria(AriaAsk::ai(&mut refs));
+    let cap2 = build_buttons_doc(&[(30, "Gamma")])?.aria(AriaAsk::ai(&mut refs))?;
     let ref_c = find_by_role_name(cap2.nodes(), "button", Some("Gamma"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing Gamma ref")?;
@@ -435,7 +465,7 @@ fn refs_bounded_eviction_drops_identity_and_evicts_oldest_unseen_first()
     assert!(refs.resolve_str(&ref_b1).as_key().is_some());
 
     // Capture 3: C (reused) + D (new). Record count exceeds 3 -> evicts oldest unseen (A), keeps B.
-    let cap3 = build_buttons_doc(&[(30, "Gamma"), (40, "Delta")])?.aria(AriaAsk::ai(&mut refs));
+    let cap3 = build_buttons_doc(&[(30, "Gamma"), (40, "Delta")])?.aria(AriaAsk::ai(&mut refs))?;
     assert_eq!(
         find_by_role_name(cap3.nodes(), "button", Some("Gamma")).and_then(|n| n.r#ref.as_deref()),
         Some(ref_c.as_str())
@@ -447,7 +477,7 @@ fn refs_bounded_eviction_drops_identity_and_evicts_oldest_unseen_first()
     // Capture 4: B returns with identical (role, name); dropped last_identity mints fresh e-ref
     // while keeping original ref_b1 resolvable as an alias.
     let cap4 = build_buttons_doc(&[(20, "Beta"), (30, "Gamma"), (40, "Delta")])?
-        .aria(AriaAsk::ai(&mut refs));
+        .aria(AriaAsk::ai(&mut refs))?;
     let ref_b2 = find_by_role_name(cap4.nodes(), "button", Some("Beta"))
         .and_then(|n| n.r#ref.clone())
         .ok_or("missing returning Beta ref")?;
@@ -696,7 +726,7 @@ fn ua_shadow_all_seven_shapes_and_select_no_duplicate_synthesis() -> Result<(), 
     let tree = build_tree(apc, BuildOptions::new())?;
 
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
     let pw = neo_snapshot::render(&ai.to_snapshot(), Call::Playwright).into_text();
     assert_ua_shadow_inputs_and_selects(&tree, ai.nodes(), &pw)?;
 
@@ -793,8 +823,8 @@ fn plain_container_scroll_independence() -> Result<(), Box<dyn Error>> {
 
     let mut flat_refs = TabRefTable::new();
     let mut wrapped_refs = TabRefTable::new();
-    let flat_ai = flat_tree.aria(AriaAsk::ai(&mut flat_refs));
-    let wrapped_ai = wrapped_tree.aria(AriaAsk::ai(&mut wrapped_refs));
+    let flat_ai = flat_tree.aria(AriaAsk::ai(&mut flat_refs))?;
+    let wrapped_ai = wrapped_tree.aria(AriaAsk::ai(&mut wrapped_refs))?;
     assert_eq!(flat_ai.nodes(), wrapped_ai.nodes());
 
     let flat_snap = flat_ai.into_snapshot();
@@ -851,7 +881,7 @@ fn clickable_div_cursor_pointer_and_nested_suppression() -> Result<(), Box<dyn E
     )?;
 
     let mut refs = TabRefTable::new();
-    let ai = click_tree.aria(AriaAsk::ai(&mut refs));
+    let ai = click_tree.aria(AriaAsk::ai(&mut refs))?;
     let outer_card = ai.nodes().first().ok_or("missing pointer card")?;
     assert_eq!(outer_card.role, "generic");
     assert!(outer_card.r#ref.is_some());
@@ -950,7 +980,7 @@ fn build_click_proxy_all_controls() -> Result<SnapshotTree, Box<dyn Error>> {
 fn click_proxy_zero_size_checkbox_radio_file_ai_vs_default() -> Result<(), Box<dyn Error>> {
     let tree = build_click_proxy_all_controls()?;
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
 
     let terms = find_by_role_name(ai.nodes(), "link", Some("Terms"))
         .ok_or("unrelated link inside folded label must stay visible")?;
@@ -995,7 +1025,7 @@ fn click_proxy_zero_size_checkbox_radio_file_ai_vs_default() -> Result<(), Box<d
         assert!(!has_stray, "folded label text leaked: {folded:?}");
     }
 
-    let default = tree.aria(AriaAsk::default_mode());
+    let default = tree.aria(AriaAsk::default_mode())?;
     assert!(
         all_nodes(default.nodes())
             .into_iter()
@@ -1099,7 +1129,7 @@ fn click_proxy_nosize_negative_cases() -> Result<(), Box<dyn Error>> {
     }
 
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
 
     for (role, name) in [
         ("textbox", "Hidden Text"),
@@ -1401,8 +1431,8 @@ fn privacy_chromium_redaction_tokens_type_flip_and_zero_canaries() -> Result<(),
     let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
 
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
-    let default = tree.aria(AriaAsk::default_mode());
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+    let default = tree.aria(AriaAsk::default_mode())?;
 
     let expected_bullets = [
         ("in-curr-pw", 8),
@@ -1589,8 +1619,8 @@ fn privacy_host_private_origin_isolation_contenteditable_and_labelledby()
         BuildOptions::new().with_private_nodes(&private),
     )?;
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
-    let default = tree.aria(AriaAsk::default_mode());
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+    let default = tree.aria(AriaAsk::default_mode())?;
 
     // Emoji surrogate pair "p😀s" has 4 UTF-16 code units -> 4 bullets.
     assert_textbox_text(ai.nodes(), "Host TypeFlip Emoji", "••••")?;
@@ -1679,7 +1709,7 @@ fn build_boxes_and_roots_tree() -> Result<SnapshotTree, Box<dyn Error>> {
 fn aria_root_document_and_subtree_and_boxes_dpr_iframe_scroll() -> Result<(), Box<dyn Error>> {
     let tree = build_boxes_and_roots_tree()?;
     let mut refs = TabRefTable::new();
-    let full = tree.aria(AriaAsk::ai(&mut refs).with_boxes(true));
+    let full = tree.aria(AriaAsk::ai(&mut refs).with_boxes(true))?;
 
     let main_btn = find_by_role_name(full.nodes(), "button", Some("Scrolled Main"))
         .ok_or("missing Scrolled Main")?;
@@ -1717,18 +1747,18 @@ fn aria_root_document_and_subtree_and_boxes_dpr_iframe_scroll() -> Result<(), Bo
         .ok_or("missing doc-cross")?
         .id();
     assert_eq!(child_doc_id, DocId::new(1));
-    let doc_only = tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Document(child_doc_id)));
+    let doc_only = tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Document(child_doc_id)))?;
     assert!(find_by_role_name(doc_only.nodes(), "button", Some("Scrolled Child")).is_some());
     assert!(find_by_role_name(doc_only.nodes(), "button", Some("Scrolled Main")).is_none());
 
     // AriaRoot::Subtree emits only the requested section without dropping sibling ref identities.
     let section_id = node_id_of(&tree, "doc-boxes", 10)?;
-    let sub_only = tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Subtree(section_id)));
+    let sub_only = tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Subtree(section_id)))?;
     assert!(find_by_role_name(sub_only.nodes(), "region", Some("Filters")).is_some());
     assert!(find_by_role_name(sub_only.nodes(), "button", Some("Scrolled Main")).is_some());
     assert!(find_by_role_name(sub_only.nodes(), "button", Some("Outside Sibling")).is_none());
 
-    let full_again = tree.aria(AriaAsk::ai(&mut refs));
+    let full_again = tree.aria(AriaAsk::ai(&mut refs))?;
     let sibling_ref_after =
         find_by_role_name(full_again.nodes(), "button", Some("Outside Sibling"))
             .and_then(|n| n.r#ref.as_deref())
@@ -1776,7 +1806,7 @@ fn depth_cap_refusal_prunes_grandchild_partial_and_renders_comment() -> Result<(
     let tree = build_tree(apc, BuildOptions::new())?;
 
     let mut refs = TabRefTable::new();
-    let out = tree.aria(AriaAsk::ai(&mut refs));
+    let out = tree.aria(AriaAsk::ai(&mut refs))?;
     assert!(neo_snapshot::json_depth(out.nodes()) <= MAX_JSON_DEPTH);
     assert!(find_by_role_name(out.nodes(), "button", Some("Mid Leaf")).is_none());
 
@@ -1880,7 +1910,7 @@ fn build_modal_inert_tree() -> Result<SnapshotTree, Box<dyn Error>> {
 fn inert_modal_dialog_escape_rendered_through_neo_page() -> Result<(), Box<dyn Error>> {
     let tree = build_modal_inert_tree()?;
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
     let confirm = find_by_role_name(ai.nodes(), "button", Some("Modal confirm"))
         .ok_or("missing Modal confirm")?;
     assert_eq!(confirm.active, Some(true));
@@ -1995,7 +2025,15 @@ fn deep_25k_chain_renders_on_2mib_stack_without_overflow() -> Result<(), Box<dyn
                 SnapshotTree::build(build_deep_group_chain(25_000), BuildOptions::new())
                     .map_err(|err| err.to_string())?;
             let mut refs = TabRefTable::new();
-            let ai = group_tree.aria(AriaAsk::ai(&mut refs));
+            let refused = group_tree.aria(AriaAsk::ai(&mut refs));
+            if !refused.is_err_and(|too_deep| too_deep.levels() > 24_000) {
+                return Err(
+                    "a 25k-level page must be refused, as today's snapshot refuses it".to_owned(),
+                );
+            }
+            let ai = group_tree
+                .aria(AriaAsk::ai(&mut refs).with_depth(Some(100)))
+                .map_err(|err| err.to_string())?;
             if ai.nodes().len() != 1 {
                 return Err(format!("expected 1 root group, got {}", ai.nodes().len()));
             }
@@ -2014,7 +2052,10 @@ fn deep_25k_chain_renders_on_2mib_stack_without_overflow() -> Result<(), Box<dyn
             let plain_tree =
                 SnapshotTree::build(ApcBuilder::deep_chain(25_000), BuildOptions::new())
                     .map_err(|err| err.to_string())?;
-            let plain_snap = plain_tree.aria(AriaAsk::ai(&mut refs)).into_snapshot();
+            let plain_snap = plain_tree
+                .aria(AriaAsk::ai(&mut refs))
+                .map_err(|err| err.to_string())?
+                .into_snapshot();
             let plain_pw = neo_snapshot::render(&plain_snap, Call::Playwright).into_text();
             if plain_pw.len() > pw.len() {
                 return Err("unexpected rendered output for 25k plain chain".to_owned());
@@ -2103,8 +2144,8 @@ fn privacy_unrendered_relation_fallbacks_are_masked_without_canary_leaks()
     let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
     let cache = NameCache::new(&tree);
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
-    let default = tree.aria(AriaAsk::default_mode());
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+    let default = tree.aria(AriaAsk::default_mode())?;
     assert_zero_canary_surface(&tree, &ai, &default, &refs, &private, &cache)?;
 
     let btn_id = node_id_of(&tree, "doc-rel-mask", 10)?;
@@ -2215,8 +2256,8 @@ fn privacy_masked_select_sanitizes_synthetic_and_embedded_option_names()
     let tree = build_tree(apc, BuildOptions::new().with_private_nodes(&private))?;
     let cache = NameCache::new(&tree);
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
-    let default = tree.aria(AriaAsk::default_mode());
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+    let default = tree.aria(AriaAsk::default_mode())?;
     assert_zero_canary_surface(&tree, &ai, &default, &refs, &private, &cache)?;
 
     let ch_select = find_by_role_name(ai.nodes(), "combobox", Some("Card Expiry"))
@@ -2295,7 +2336,7 @@ fn inert_boundaries_survive_plain_container_pruning_and_generic_text_inlining()
 -> Result<(), Box<dyn Error>> {
     let tree = build_tree(build_inert_boundaries_apc(), BuildOptions::new())?;
     let mut refs = TabRefTable::new();
-    let ai = tree.aria(AriaAsk::ai(&mut refs));
+    let ai = tree.aria(AriaAsk::ai(&mut refs))?;
 
     let action = find_by_role_name(ai.nodes(), "button", Some("Modal Action"))
         .ok_or("missing live Modal Action button")?;

@@ -469,18 +469,28 @@ impl TabRefTable {
         fresh
     }
 
-    /// Finalizes a snapshot capture pass for `doc`.
+    /// Finalizes a snapshot capture pass for `doc`; `present` says which keys the capture holds.
     ///
-    /// Frees cached printed identities (`last_name`) for records in `doc` that were not seen in
-    /// the latest capture while keeping their refs resolvable, then evicts the oldest unseen
-    /// records across all documents while [`Self::record_count`] exceeds [`Self::max_records`].
-    pub fn finish_doc_capture(&mut self, doc: &DocToken) {
+    /// A record whose node the capture holds counts as seen, ref or no ref: a node that lost its
+    /// ref for a capture, say under `pointer-events: none`, keeps its printed identity, so it gets
+    /// the same `e`-ref back with the same role and name, as upstream's `_ariaRef` does. A record
+    /// whose node the capture lacks frees that identity but stays resolvable (design 3.6). Then the
+    /// oldest unseen records across all documents are evicted while [`Self::record_count`] exceeds
+    /// [`Self::max_records`].
+    pub fn finish_doc_capture(&mut self, doc: &DocToken, present: impl Fn(&NodeKey) -> bool) {
         if let Some(&seq) = self.doc_to_seq.get(doc)
             && let Some(state) = self.seq_to_doc.get(&seq)
         {
             let epoch = state.capture_epoch;
+            let tick = self.next_tick();
             for (key, record) in &mut self.by_key {
-                if key.doc == *doc && record.last_seen_doc_epoch < epoch {
+                if key.doc != *doc || record.last_seen_doc_epoch >= epoch {
+                    continue;
+                }
+                if present(key) {
+                    record.last_seen_doc_epoch = epoch;
+                    record.last_seen_tick = tick;
+                } else {
                     record.last_identity = None;
                 }
             }
@@ -878,7 +888,7 @@ mod tests {
         assert_eq!(seq1, DocSeq::new(0));
         let r1 = table.assign_snapshot_ref(seq1, &btn, "button", "Submit", Some(proxy1));
         assert_eq!(r1.to_string(), "e1");
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         let seq2 = table.begin_doc_capture(&main, None);
         assert_eq!(seq2, DocSeq::new(0));
@@ -887,7 +897,7 @@ mod tests {
             r2, r1,
             "unchanged (role, name) must keep the exact same e-ref"
         );
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         assert_eq!(
             table.resolve(&r1),
@@ -903,6 +913,46 @@ mod tests {
     }
 
     #[test]
+    fn a_node_the_capture_holds_keeps_its_identity_while_it_has_no_ref()
+    -> Result<(), Box<dyn Error>> {
+        let mut table = TabRefTable::new();
+        let main = doc("doc-main")?;
+        let pay = key("doc-main", 10)?;
+
+        let seq = table.begin_doc_capture(&main, None);
+        let first = table.assign_snapshot_ref(seq, &pay, "button", "Pay", None);
+        table.finish_doc_capture(&main, |_| false);
+
+        table.begin_doc_capture(&main, None);
+        table.finish_doc_capture(&main, |candidate| *candidate == pay);
+        let seq = table.begin_doc_capture(&main, None);
+        let again = table.assign_snapshot_ref(seq, &pay, "button", "Pay", None);
+        table.finish_doc_capture(&main, |_| false);
+        assert_eq!(
+            again, first,
+            "present without a ref keeps the identity, so the ref returns"
+        );
+
+        table.begin_doc_capture(&main, None);
+        table.finish_doc_capture(&main, |_| false);
+        let seq = table.begin_doc_capture(&main, None);
+        let after_absence = table.assign_snapshot_ref(seq, &pay, "button", "Pay", None);
+        assert_ne!(
+            after_absence, first,
+            "absent from a capture frees the identity"
+        );
+        assert_eq!(
+            table.resolve(&first),
+            RefLookup::Key(RefTarget {
+                key: pay,
+                click_proxy: None,
+            }),
+            "the freed ref still resolves"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn ticket_03_rule_3_mints_fresh_ref_and_keeps_old_aliases_on_identity_change()
     -> Result<(), Box<dyn Error>> {
         let mut table = TabRefTable::new();
@@ -912,15 +962,15 @@ mod tests {
 
         let seq = table.begin_doc_capture(&main, None);
         let e1 = table.assign_snapshot_ref(seq, &node, "button", "Save", None);
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         let seq = table.begin_doc_capture(&main, None);
         let e2 = table.assign_snapshot_ref(seq, &node, "button", "Saved", Some(proxy.clone()));
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         let seq = table.begin_doc_capture(&main, None);
         let e3 = table.assign_snapshot_ref(seq, &node, "link", "Saved", Some(proxy.clone()));
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         assert_eq!(e1.to_string(), "e1");
         assert_eq!(e2.to_string(), "e2");
@@ -962,7 +1012,7 @@ mod tests {
 
         let seq = table.begin_doc_capture(&main, None);
         let e1 = table.assign_snapshot_ref(seq, &target, "button", "Go", Some(proxy.clone()));
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         assert_eq!(e1.to_string(), "e1");
         assert_eq!(
@@ -1002,14 +1052,14 @@ mod tests {
         let e1 = table.assign_snapshot_ref(seq, &k1, "button", "One", None);
         let e2 = table.assign_snapshot_ref(seq, &k2, "button", "Two", None);
         let e3 = table.assign_snapshot_ref(seq, &k3, "button", "Three", None);
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
         assert_eq!(table.record_count(), 3);
 
         // Capture 2 sees only k3: k1 (oldest unseen) is evicted; k2 drops identity but stays live.
         let seq = table.begin_doc_capture(&main, None);
         let e3_again = table.assign_snapshot_ref(seq, &k3, "button", "Three", None);
         assert_eq!(e3_again, e3);
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         assert_eq!(table.record_count(), 2);
         assert!(table.resolve(&e1).is_retired());
@@ -1034,7 +1084,7 @@ mod tests {
         // while keeping e2 resolvable as an alias.
         let seq = table.begin_doc_capture(&main, None);
         let e2_new = table.assign_snapshot_ref(seq, &k2, "button", "Two", None);
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
         assert_ne!(e2_new, e2);
         let expected_k2 = RefLookup::Key(RefTarget {
             key: k2,
@@ -1055,13 +1105,13 @@ mod tests {
 
         let s_main = table.begin_doc_capture(&main, Some(DocSeq::new(0)));
         let e_main = table.assign_snapshot_ref(s_main, &k_main, "button", "Main", None);
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         let s_iframe = table.begin_doc_capture(&iframe, None);
         assert_eq!(s_iframe, DocSeq::new(1));
         let e_iframe = table.assign_snapshot_ref(s_iframe, &k_iframe, "iframe", "Sub", None);
         assert_eq!(e_iframe.to_string(), "f1e1");
-        table.finish_doc_capture(&iframe);
+        table.finish_doc_capture(&iframe, |_| false);
 
         // Unissued refs resolve to Unknown.
         assert!(table.resolve_str("e2").is_unknown());
@@ -1078,7 +1128,7 @@ mod tests {
         let e_main_2 = table.assign_snapshot_ref(s_main_again, &k_main, "button", "Main", None);
         assert_eq!(e_main_2.to_string(), "e2");
         assert!(table.resolve(&e_main).is_retired());
-        table.finish_doc_capture(&main);
+        table.finish_doc_capture(&main, |_| false);
 
         // retire_doc retires the iframe's seq so even unissued refs on that seq resolve Retired.
         table.retire_doc(&iframe);

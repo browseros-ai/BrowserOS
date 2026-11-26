@@ -323,16 +323,19 @@ impl SnapshotTree {
     /// either are box-visible and receive pointer events or hold a [`ClickProxy`] pairing.
     #[must_use]
     pub fn is_ref_worthy(&self, id: NodeId) -> bool {
+        self.fold.folded_label_target(id).is_none() && self.is_ref_worthy_unfolded(id)
+    }
+
+    /// [`Self::is_ref_worthy`] for a capture that keeps `id` on its own line: a subtree capture
+    /// that holds a paired label but not its control prints the label, not the control's line.
+    pub(crate) fn is_ref_worthy_unfolded(&self, id: NodeId) -> bool {
         let Some(node) = self.node(id) else {
             return false;
         };
         let Some(raw) = node.raw_attributes() else {
             return false;
         };
-        if node.dom_node_id().is_none()
-            || hidden::is_text_node(raw)
-            || node.hidden().is_ua_shadow()
-            || self.fold.folded_label_target(id).is_some()
+        if node.dom_node_id().is_none() || hidden::is_text_node(raw) || node.hidden().is_ua_shadow()
         {
             return false;
         }
