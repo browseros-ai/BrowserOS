@@ -245,6 +245,13 @@ async function quickjsGlobal(entry: string, name: string): Promise<string> {
  * Rust no longer sends (`snapshot`) still run on until engine chunk 14 deletes them. Never
  * written to disk.
  */
+/**
+ * The first line of both probe bundles. DeepScan already scans the sources they are built
+ * from, and in the page asset upstream's InjectedScript calls Neo's stand-ins, which throw by
+ * design, so its flow rules would flag upstream's code after those calls.
+ */
+const DEEPSCAN_OFF = '/* deepscan-disable */\n'
+
 export async function oracleProbe(): Promise<string> {
   return bundle('src/probe/index.ts', 'iife', [vendoredPlugin('vendored')])
 }
@@ -298,11 +305,9 @@ ${prelude}`
       // (neo-snapshot-apc/tests/select_match_oracle.rs) and, in a world of its own, in the
       // zero-conflict harness's pages (tests/support/oracle_capture.rs). The probe with the
       // vendored ARIA engine still bundled, as the page asset was before the switch-over. A
-      // test file only: Neo never ships it. Its first line keeps DeepScan off upstream's
-      // bundled code, which its sources' own scan already covers.
+      // test file only: Neo never ships it.
       path: 'crates/neo-sdk/neo-snapshot-apc/tests/data/oracle-injected.js',
-      text: `/* deepscan-disable */
-/*
+      text: `${DEEPSCAN_OFF}/*
  * Test oracle, not a page asset: Neo's probe with Playwright ${tag} (${commit}) packages/injected
  * InjectedScript and its own ARIA engine (roleUtils, ariaSnapshot, roleSelectorEngine), built
  * unmodified by crates/neo-sdk/neo-playwright-js/scripts/build.ts for the APC engine's
@@ -312,7 +317,7 @@ ${oracle}`,
     },
     {
       path: 'crates/neo-sdk/neo-playwright/assets/injected.js',
-      text: `/*
+      text: `${DEEPSCAN_OFF}/*
  * Neo's probe with Playwright ${tag} (${commit}), packages/injected InjectedScript.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
  * Built from crates/neo-sdk/neo-playwright/third_party/playwright, with

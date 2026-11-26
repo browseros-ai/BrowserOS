@@ -1,3 +1,4 @@
+/* deepscan-disable */
 /*
  * Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
