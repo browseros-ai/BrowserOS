@@ -135,6 +135,25 @@ async fn page_once(
         Err(ProbeFailure::Gone(_)) => return Ok(None),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
+    // Upstream polls the main frame for `body,frameset` before it reads it
+    // (`ariaSnapshotJSONForFrame`): a document still parsing towards its body, behind a
+    // parser-blocking script, is read again rather than answered as an empty page. The page is
+    // asked, not the tree: the browser's tree leaves out a body that draws nothing, as an empty
+    // or a `display: none` one.
+    match world.document_has_body().await {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(error) => match ProbeFailure::from_core(error) {
+            // The main world went away, as under a navigation. Dropped, the next attempt
+            // installs one in the page's current document; kept, it would fail the same way
+            // until the op times out.
+            ProbeFailure::Gone(_) => {
+                page.tree().invalidate_world(page.frames(), &world);
+                return Ok(None);
+            }
+            failure => return Err(resolve::failed(scope, failure)),
+        },
+    }
     let captured = page
         .tree()
         .capture_seeded(scope, page, AttemptStart::now())

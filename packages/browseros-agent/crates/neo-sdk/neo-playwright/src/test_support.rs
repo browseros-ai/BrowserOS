@@ -262,6 +262,12 @@ pub(crate) trait TabScript: Send + Sync + 'static {
         false
     }
 
+    /// Whether the page's document has its body yet (`document.body`), which a page snapshot
+    /// polls for before it reads the page: a scripted page has one.
+    fn body_parsed(&self) -> bool {
+        true
+    }
+
     /// Sees every command before it is answered, with the session it went out on (`None`: the
     /// browser's own), for a script that checks where input went.
     fn seen(&self, _method: &str, _params: &Value, _session: Option<&SessionId>) {}
@@ -601,6 +607,11 @@ impl<S: TabScript> ScriptedTab<S> {
             );
         }
         let function = params["functionDeclaration"].as_str().unwrap_or_default();
+        if function.contains("document.body !== null") {
+            return Ok(
+                json!({ "result": { "type": "boolean", "value": self.script.body_parsed() } }),
+            );
+        }
         if let Some(answer) = params["objectId"]
             .as_str()
             .and_then(|object| self.script.main_world(object, function))

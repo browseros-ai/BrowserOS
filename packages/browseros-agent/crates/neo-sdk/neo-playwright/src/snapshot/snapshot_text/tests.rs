@@ -102,6 +102,17 @@ struct OneMain {
     seq: AtomicU64,
     /// The page's cover survey throws, as on a page shape it never foresaw.
     survey_throws: bool,
+    /// How many of the page's body checks come before its body is parsed, as behind a
+    /// parser-blocking script.
+    bodyless: usize,
+    /// Body checks the page answered.
+    body_checks: AtomicUsize,
+    /// Worlds installed in the page: its `Page.createIsolatedWorld` calls.
+    installs: AtomicUsize,
+    /// The first world installed in the page is gone, as the cached main world is after a
+    /// cross-document navigation: its body checks fail as Chromium fails a call on a released
+    /// handle, while a world installed after it answers.
+    first_world_gone: bool,
 }
 
 impl TabScript for OneMain {
@@ -110,6 +121,9 @@ impl TabScript for OneMain {
             && let Some(seq) = params["arguments"][0]["value"]["frameSeq"].as_u64()
         {
             self.seq.store(seq, Ordering::SeqCst);
+        }
+        if method == "Page.createIsolatedWorld" {
+            self.installs.fetch_add(1, Ordering::SeqCst);
         }
         match method {
             // A tab opened under this instance: no private marks to read before a snapshot.
@@ -127,7 +141,18 @@ impl TabScript for OneMain {
         }
     }
 
-    fn cdp_error(&self, method: &str, _params: &Value) -> Option<&'static str> {
+    fn body_parsed(&self) -> bool {
+        self.body_checks.fetch_add(1, Ordering::SeqCst) >= self.bodyless
+    }
+
+    fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
+        let body_check = method == "Runtime.callFunctionOn"
+            && params["functionDeclaration"]
+                .as_str()
+                .is_some_and(|function| function.contains("document.body !== null"));
+        if body_check && self.first_world_gone && self.installs.load(Ordering::SeqCst) <= 1 {
+            return Some("Could not find object with given id");
+        }
         (self.broken && method == "Page.getAnnotatedPageContent")
             .then_some("the scripted browser could not read the page")
     }
@@ -338,6 +363,73 @@ async fn tests_that_a_snapshot_returns_without_on_top_lines_when_the_survey_thro
         answer,
         json!({ "snapshot": printed(Call::Page(&Passed::default()))? })
     );
+    Ok(())
+}
+
+/// A main document still parsing towards its body is asked again until the body is there, as
+/// upstream polls the main frame for `body,frameset`, and only then read, rather than answered
+/// as an empty page.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_page_without_its_body_yet_is_read_once_it_has_one() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        bodyless: 2,
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshot")?,
+            page_input(&run, 0, &json!({ "mode": "ai", "format": { "neo": {} } })),
+        )
+        .await?;
+    assert_eq!(
+        answer,
+        json!({ "snapshot": printed(Call::Page(&Passed::default()))? })
+    );
+    assert_eq!(
+        tab.script().body_checks.load(Ordering::SeqCst),
+        3,
+        "two checks without a body, then one with it"
+    );
+    assert_eq!(
+        tab.script().reads.load(Ordering::SeqCst),
+        1,
+        "the page is captured once it has its body"
+    );
+    Ok(())
+}
+
+/// A body check whose cached main world went away under a cross-document navigation drops that
+/// world, so the next attempt installs one in the new document and reads it, rather than asking
+/// the gone one until the op times out.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_body_check_in_a_gone_world_reads_the_page_in_a_new_one() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        first_world_gone: true,
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshot")?,
+            page_input(
+                &run,
+                5_000,
+                &json!({ "mode": "ai", "format": { "neo": {} } }),
+            ),
+        )
+        .await?;
+    // Dropping the world retired its document's refs, as a navigation does, so the new world's
+    // refs carry a frame prefix.
+    assert_eq!(
+        answer,
+        json!({ "snapshot": "- main [ref=f1e1]:\n  - text: Go" })
+    );
+    assert_eq!(tab.script().installs.load(Ordering::SeqCst), 2);
     Ok(())
 }
 
