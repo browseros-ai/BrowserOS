@@ -883,17 +883,18 @@ fn mark_on_top(
     }
 }
 
-/// Moves each held layer's ref-less holder text with the layer. The layer's holders often share a
-/// parent that holds nothing else but text (a `display: contents` wrapper around a backdrop and
-/// its dialog), which the tree emits no node for (apc-engine-design 3.5): its own text then sits
-/// beside the nodes [`mark_on_top`] marked, where upstream's holder `generic` carried it along.
-/// Where that text and the marked nodes sit side by side in one children list, they are wrapped
+/// Moves each held layer's ref-less holder text with the layer. A holder the tree emits no node
+/// for (a plain or `display: contents` container, apc-engine-design 3.5) prints its own text in
+/// its place, beside the nodes [`mark_on_top`] marked, where upstream's holder `generic` carried
+/// it along. The survey names such a holder itself when the layer's faces share it, or names the
+/// faces, a backdrop and its dialog, when they share none, and then their parent is that holder.
+/// Where its text and the marked nodes sit side by side in one children list, they are wrapped
 /// in one `generic` that carries the mark in their place, so the text prints in the layer's
-/// block. Text the tree masks is never matched (`SnapshotTree::node_text`), so such a parent is
+/// block. Text the tree masks is never matched (`SnapshotTree::node_text`), so such a holder is
 /// left as it is.
 fn carry_holder_text(tree: &SnapshotTree, json: &mut [AriaNode], held: &[(String, Vec<NodeKey>)]) {
     for (layer, holders) in held {
-        let Some(texts) = shared_holder_texts(tree, holders) else {
+        let Some(texts) = holder_texts(tree, holders) else {
             continue;
         };
         let mut pending: Vec<&mut AriaNode> = json.iter_mut().collect();
@@ -909,29 +910,59 @@ fn carry_holder_text(tree: &SnapshotTree, json: &mut [AriaNode], held: &[(String
     }
 }
 
-/// The direct text of the parent `holders` share, as the emitted tree writes strings, when that
-/// parent holds nothing but them and text; `None` otherwise, or when it holds no text.
-fn shared_holder_texts(tree: &SnapshotTree, holders: &[NodeKey]) -> Option<Vec<String>> {
+/// The text that prints beside a layer's marked nodes, as the emitted tree writes strings: the
+/// direct text of each holder that emits no node of its own, and that of the parent the holders
+/// share when that parent holds nothing else that prints. `None` when there is none.
+fn holder_texts(tree: &SnapshotTree, holders: &[NodeKey]) -> Option<Vec<String>> {
     let nodes: Vec<&TreeNode> = holders
         .iter()
         .filter_map(|holder| tree.node_by_key(holder))
         .collect();
-    let parent = nodes.first()?.parent()?;
-    if nodes.iter().any(|node| node.parent() != Some(parent)) {
+    let mut texts: Vec<String> = nodes
+        .iter()
+        .filter(|node| emits_no_node(tree, node))
+        .flat_map(|node| tree.children(node.id()))
+        .filter_map(|child| tree.node_text(child.id()))
+        .map(printed_text)
+        .filter(|text| !text.is_empty())
+        .collect();
+    texts.extend(shared_parent_texts(tree, &nodes).unwrap_or_default());
+    (!texts.is_empty()).then_some(texts)
+}
+
+/// The direct text of the parent `nodes` share, when that parent emits no node and holds nothing
+/// else but text and empty boxes that print nothing, as a backdrop beside its dialog.
+fn shared_parent_texts(tree: &SnapshotTree, nodes: &[&TreeNode]) -> Option<Vec<String>> {
+    let parent = tree.node(nodes.first()?.parent()?)?;
+    if !emits_no_node(tree, parent) || nodes.iter().any(|node| node.parent() != Some(parent.id())) {
         return None;
     }
     let mut texts = Vec::new();
-    for child in tree.children(parent) {
+    for child in tree.children(parent.id()) {
         if nodes.iter().any(|node| node.id() == child.id()) {
             continue;
         }
-        let text = tree.node_text(child.id())?;
-        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !text.is_empty() {
-            texts.push(text);
+        if let Some(text) = tree.node_text(child.id()) {
+            let text = printed_text(text);
+            if !text.is_empty() {
+                texts.push(text);
+            }
+        } else if !(emits_no_node(tree, child) && tree.children(child.id()).next().is_none()) {
+            return None;
         }
     }
-    (!texts.is_empty()).then_some(texts)
+    Some(texts)
+}
+
+/// Whether the ai tree prints no line of `node`'s own: a role-less plain container (design 3.5),
+/// whose children print in its place.
+fn emits_no_node(tree: &SnapshotTree, node: &TreeNode) -> bool {
+    node.role().is_none() && tree.fold().is_plain_prunable_container(node.id())
+}
+
+/// A text node's text as the emitter prints it, whitespace runs folded to one space.
+fn printed_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Wraps, in `children`, the one run of the nodes marked `layer` and the strings in `texts`
@@ -1041,8 +1072,92 @@ mod tests {
     use std::error::Error;
 
     use neo_snapshot::{AriaChild, AriaNode};
+    use neo_snapshot_apc::proto::FormControlType;
+    use neo_snapshot_apc::tree::{
+        ApcBuilder, BuildOptions, DocToken, DomNodeId, NodeBuilder, NodeKey, SnapshotTree,
+    };
 
-    use super::{backend_ids_below, depth_of, wrap_with_layer};
+    use super::{backend_ids_below, depth_of, holder_texts, wrap_with_layer};
+
+    /// e15's page: a `main` holding a button, then a `display: contents` holder (20) whose own
+    /// text precedes a whole-view backdrop (22) and a dialog (23) holding a button.
+    fn layer_page() -> Result<SnapshotTree, Box<dyn Error>> {
+        let button = |dom: i32, name: &str| {
+            NodeBuilder::form_control(FormControlType::ButtonButton)
+                .dom_id(dom)
+                .tag("button")
+                .bounding_box(0, 0, 80, 24)
+                .child(NodeBuilder::text(name))
+        };
+        let body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 1280, 800)
+            .child(
+                NodeBuilder::element("main")
+                    .dom_id(4)
+                    .bounding_box(0, 0, 1280, 100)
+                    .child(button(5, "Outside box")),
+            )
+            .child(
+                NodeBuilder::container()
+                    .dom_id(20)
+                    .display_contents(true)
+                    .child(NodeBuilder::text("Please read  this whole message"))
+                    .child(
+                        NodeBuilder::container()
+                            .dom_id(22)
+                            .bounding_box(0, 0, 1280, 800),
+                    )
+                    .child(
+                        NodeBuilder::element("section")
+                            .dom_id(23)
+                            .role("dialog")
+                            .aria_label("Ref-less block")
+                            .bounding_box(400, 200, 400, 300)
+                            .child(button(24, "Dismiss")),
+                    ),
+            );
+        let apc = ApcBuilder::new("doc-layer")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        Ok(SnapshotTree::build(apc, BuildOptions::new())?)
+    }
+
+    fn keys(doms: &[i32]) -> Result<Vec<NodeKey>, Box<dyn Error>> {
+        let token = DocToken::new("doc-layer").ok_or("a document token")?;
+        Ok(doms
+            .iter()
+            .map(|&dom| NodeKey::new(token.clone(), DomNodeId::new(dom)))
+            .collect())
+    }
+
+    #[test]
+    fn tests_that_a_layers_holder_text_is_found_whichever_holders_the_survey_names()
+    -> Result<(), Box<dyn Error>> {
+        let tree = layer_page()?;
+        let text = Some(vec!["Please read this whole message".to_owned()]);
+        assert_eq!(
+            holder_texts(&tree, &keys(&[20])?),
+            text,
+            "the shared holder itself, its own text"
+        );
+        assert_eq!(
+            holder_texts(&tree, &keys(&[22, 23])?),
+            text,
+            "the backdrop and the dialog, their parent's text"
+        );
+        assert_eq!(
+            holder_texts(&tree, &keys(&[23])?),
+            text,
+            "the dialog alone, beside an empty backdrop"
+        );
+        assert_eq!(
+            holder_texts(&tree, &keys(&[4])?),
+            None,
+            "a holder that prints, beside other content"
+        );
+        Ok(())
+    }
 
     fn node(role: &str, on_top: Option<&str>) -> Result<AriaChild, serde_json::Error> {
         let mut node: AriaNode = serde_json::from_value(json!({ "role": role }))?;
