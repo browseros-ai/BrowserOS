@@ -141,7 +141,9 @@ impl fmt::Debug for PrivateMirror {
             .field("origin_state", &self.origin_state)
             .field("marks", &self.marks)
             .field("seeded_docs", &self.seeded_docs.len())
-            .field("marks_seeded_at", &self.marks_seeded_at)
+            // Whether a seed brought marks in, not its stamp: the stamp is process state, and
+            // Debug stays the tab's state and counts.
+            .field("marks_seeded", &self.marks_seeded_at.is_some())
             .finish()
     }
 }
@@ -607,7 +609,7 @@ pub(super) mod tests {
         assert_eq!(
             debug,
             "PrivateMirror { origin_state: ExistedAtStart, marks: PrivateNodes { marked_ids: 1, \
-             site_marks: 2, anywhere_marks: 0 }, seeded_docs: 1 }",
+             site_marks: 2, anywhere_marks: 0 }, seeded_docs: 1, marks_seeded: true }",
             "Debug reports the tab's state and counts only"
         );
         Ok(())
