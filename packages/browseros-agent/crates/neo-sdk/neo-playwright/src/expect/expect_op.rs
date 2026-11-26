@@ -482,9 +482,13 @@ async fn tree_poll(
         strictness: expect.strictness(),
         want: Want::Element,
     };
-    let Some(Landed { reply, world, .. }) = resolver.attempt_at(request).await? else {
+    let Some(Landed {
+        reply, world, sent, ..
+    }) = resolver.attempt_at(request).await?
+    else {
         return Ok(expect.nothing_found());
     };
+    let frame_visible = sent.as_ref().is_none_or(|sent| sent.frame_visible);
     let (pin, preview) = match reply {
         ProbeReply::Element { pin, preview, .. } => (pin, preview),
         other => return expect.poll_of(scope, other),
@@ -519,7 +523,7 @@ async fn tree_poll(
     // property poll that failed; a template poll attaches none.
     let aria_snapshot = match aria {
         AriaExpect::Property(_) if verdict.matches == expect.is_not() => {
-            failure_snapshot(page, tree, found.doc, found.node, true, Some(1))
+            failure_snapshot(page, tree, found.doc, found.node, frame_visible, Some(1))
         }
         AriaExpect::Property(_) | AriaExpect::Template(_) => None,
     };
