@@ -22,13 +22,19 @@
 //! - **A retired seq stays retired:** a document that comes back (a page restored from the
 //!   back/forward cache keeps its token) takes a fresh seq, so refs from its earlier life still
 //!   answer `element_detached`. Only a capture requested after the retirement can bring it back.
+//! - **A retirement carries its cause's time, not the time it was processed:** the request time of
+//!   the capture whose report displaced the document, the install time of the world a hydration
+//!   proved, or the moment a world was found gone or a hydration found its document absent.
+//!   Reports are processed out of order, so a processing time would make a later capture of a
+//!   returning page look stale.
 //! - **A stale capture changes nothing:** captures of one tab can be in flight together, and their
 //!   reports arrive in any order. Each frame remembers when its document was last reported; a
 //!   capture requested before that neither displaces the frame's document nor activates its own,
 //!   which it can only have seen before the frame moved on.
 //! - **Every retirement is reported once:** a document becomes `Retired` only through
-//!   [`DocTable::retire_token`] or [`DocTable::insert_retired`], and each queues the token for
-//!   [`DocTable::take_retired`]. `TabTree` drains that queue
+//!   [`DocTable::retire_token`] or [`DocTable::insert_retired`], and each queues the retired seq
+//!   for [`DocTable::take_retired`]. The seq, not the token, names the life that ended, since a
+//!   returning token has a second one. `TabTree` drains that queue
 //!   into its ref table, so a document's refs go when its seq retires (design 2.3), including
 //!   retirements made by `FrameWorlds` paths that never pass through `TabTree`.
 //! - **No page URLs in diagnostics:** [`DocTable`] never stores raw URLs (only whether a document
@@ -226,10 +232,10 @@ pub(crate) struct DocTable {
     /// When each frame's document was last reported: the newest request time of a capture that
     /// reported it, or the moment hydration proved a world on it.
     frame_seen: HashMap<FrameId, Stamp>,
-    /// Tokens retired since the last [`Self::take_retired`], in retirement order. Only documents
-    /// a `TabTree` capture or hydration numbered can retire, so on a page `TabTree` never reads
-    /// the queue stays empty.
-    retired_since_take: Vec<DocToken>,
+    /// Seqs of the document lives retired since the last [`Self::take_retired`], in retirement
+    /// order. Only documents a `TabTree` capture or hydration numbered can retire, so on a page
+    /// `TabTree` never reads the queue stays empty.
+    retired_since_take: Vec<FrameSeq>,
 }
 
 impl fmt::Debug for DocTable {
@@ -283,6 +289,21 @@ impl DocTable {
         left && entry.url_kind == PageUrlKind::RealOrUnknown
     }
 
+    /// Whether a document other than `token` is `frame`'s active one and was reported after
+    /// `since`: then `frame` left `token`'s document after `since`.
+    pub(crate) fn reported_other_since(
+        &self,
+        frame: &FrameId,
+        token: &DocToken,
+        since: Stamp,
+    ) -> bool {
+        self.frame_seen.get(frame).is_some_and(|&seen| seen > since)
+            && self
+                .active_by_frame
+                .get(frame)
+                .is_some_and(|active| active != token)
+    }
+
     /// Compares a capture's report of `frame`, requested at `requested_at`, with the frame's last
     /// report, and records it when it is the newest.
     pub(crate) fn report_frame(&mut self, frame: &FrameId, requested_at: Stamp) -> FrameReport {
@@ -311,8 +332,9 @@ impl DocTable {
             })
             .collect();
         matched.sort();
+        let found_gone = Stamp::next();
         for token in &matched {
-            let _ = self.retire_token(token);
+            let _ = self.retire_token(token, found_gone);
         }
     }
 
@@ -365,16 +387,18 @@ impl DocTable {
         })
     }
 
-    /// Inserts a newly seen document in the `Reserved` state.
+    /// Inserts a newly seen document in the `Reserved` state, retiring the frame's previous
+    /// document as of `at`.
     pub(crate) fn insert_reserved(
         &mut self,
         token: DocToken,
         seq: FrameSeq,
         frame: Option<FrameId>,
         url: Option<&str>,
+        at: Stamp,
     ) {
         if let Some(frame) = &frame {
-            self.retire_other_active_on_frame(frame, &token);
+            self.retire_other_active_on_frame(frame, &token, at);
             self.active_by_frame.insert(frame.clone(), token.clone());
         }
         self.by_seq.insert(seq, token.clone());
@@ -387,33 +411,38 @@ impl DocTable {
         );
     }
 
-    /// Inserts a document that only a stale capture reported: the frame had moved on by the time a
-    /// newer capture reported it, so the document is already gone.
-    pub(crate) fn insert_retired(&mut self, token: DocToken, seq: FrameSeq, url: Option<&str>) {
+    /// Inserts a document that only a stale capture, requested at `at`, reported: the frame had
+    /// moved on by the time a newer capture reported it, so the document is already gone.
+    pub(crate) fn insert_retired(
+        &mut self,
+        token: DocToken,
+        seq: FrameSeq,
+        url: Option<&str>,
+        at: Stamp,
+    ) {
         self.by_seq.insert(seq, token.clone());
-        self.retired_since_take.push(token.clone());
+        self.retired_since_take.push(seq);
         self.by_token.insert(
             token,
             DocEntry {
-                binding: DocBinding::Retired {
-                    seq,
-                    at: Stamp::next(),
-                },
+                binding: DocBinding::Retired { seq, at },
                 url_kind: PageUrlKind::from_url(url),
             },
         );
     }
 
-    /// Inserts a newly seen document directly in the `Bound` state.
+    /// Inserts a newly seen document directly in the `Bound` state, retiring the frame's previous
+    /// document as of `at`.
     pub(crate) fn insert_bound(
         &mut self,
         token: DocToken,
         seq: FrameSeq,
         world: IsolatedWorld,
         url: Option<&str>,
+        at: Stamp,
     ) {
         let frame = world.frame().clone();
-        self.retire_other_active_on_frame(&frame, &token);
+        self.retire_other_active_on_frame(&frame, &token, at);
         self.active_by_frame.insert(frame, token.clone());
         self.by_seq.insert(seq, token.clone());
         self.by_token.insert(
@@ -426,11 +455,13 @@ impl DocTable {
     }
 
     /// Promotes an existing `Reserved` document or updates an existing `Bound` document to `world`,
-    /// preserving its existing [`FrameSeq`]. Returns `None` if `token` is absent or `Retired`.
+    /// preserving its existing [`FrameSeq`] and retiring the frame's previous document as of `at`.
+    /// Returns `None` if `token` is absent or `Retired`.
     pub(crate) fn bind_existing(
         &mut self,
         token: &DocToken,
         world: IsolatedWorld,
+        at: Stamp,
     ) -> Option<FrameSeq> {
         let (seq, previous_frame) = {
             let entry = self.by_token.get(token)?;
@@ -446,7 +477,7 @@ impl DocTable {
         {
             self.clear_active_frame(&old_frame, token);
         }
-        self.retire_other_active_on_frame(&new_frame, token);
+        self.retire_other_active_on_frame(&new_frame, token, at);
         self.active_by_frame.insert(new_frame, token.clone());
         if let Some(entry) = self.by_token.get_mut(token) {
             entry.binding = DocBinding::Bound { seq, world };
@@ -455,8 +486,8 @@ impl DocTable {
     }
 
     /// Records a newly discovered [`FrameId`] on an existing `Reserved` document whose frame was
-    /// previously `None`.
-    pub(crate) fn set_reserved_frame(&mut self, token: &DocToken, frame: FrameId) {
+    /// previously `None`, retiring the frame's previous document as of `at`.
+    pub(crate) fn set_reserved_frame(&mut self, token: &DocToken, frame: FrameId, at: Stamp) {
         let needs_update = matches!(
             self.by_token.get(token).map(|entry| &entry.binding),
             Some(DocBinding::Reserved { frame: None, .. })
@@ -464,7 +495,7 @@ impl DocTable {
         if !needs_update {
             return;
         }
-        self.retire_other_active_on_frame(&frame, token);
+        self.retire_other_active_on_frame(&frame, token, at);
         self.active_by_frame.insert(frame.clone(), token.clone());
         if let Some(entry) = self.by_token.get_mut(token)
             && let DocBinding::Reserved {
@@ -488,9 +519,9 @@ impl DocTable {
         }
     }
 
-    /// Transitions an active (`Reserved` or `Bound`) document to `Retired`. Returns `None` if
-    /// `token` is unknown or already `Retired`.
-    pub(crate) fn retire_token(&mut self, token: &DocToken) -> Option<RetiredDoc> {
+    /// Transitions an active (`Reserved` or `Bound`) document to `Retired` as of `at`, the time of
+    /// what caused it. Returns `None` if `token` is unknown or already `Retired`.
+    pub(crate) fn retire_token(&mut self, token: &DocToken, at: Stamp) -> Option<RetiredDoc> {
         let (seq, url_kind, frame) = {
             let entry = self.by_token.get_mut(token)?;
             let seq = match &entry.binding {
@@ -499,31 +530,28 @@ impl DocTable {
             };
             let frame = entry.frame().cloned();
             let url_kind = entry.url_kind;
-            entry.binding = DocBinding::Retired {
-                seq,
-                at: Stamp::next(),
-            };
+            entry.binding = DocBinding::Retired { seq, at };
             (seq, url_kind, frame)
         };
         if let Some(frame) = frame {
             self.clear_active_frame(&frame, token);
         }
-        self.retired_since_take.push(token.clone());
+        self.retired_since_take.push(seq);
         Some(RetiredDoc { seq, url_kind })
     }
 
-    /// Takes every token retired since the last call, in retirement order.
-    #[must_use = "a dropped token keeps its document's refs live"]
-    pub(crate) fn take_retired(&mut self) -> Vec<DocToken> {
+    /// Takes the seq of every document life retired since the last call, in retirement order.
+    #[must_use = "a dropped seq keeps that document life's refs live"]
+    pub(crate) fn take_retired(&mut self) -> Vec<FrameSeq> {
         mem::take(&mut self.retired_since_take)
     }
 
-    fn retire_other_active_on_frame(&mut self, frame: &FrameId, incoming: &DocToken) {
+    fn retire_other_active_on_frame(&mut self, frame: &FrameId, incoming: &DocToken, at: Stamp) {
         if let Some(existing) = self.active_by_frame.get(frame)
             && existing != incoming
         {
             let existing = existing.clone();
-            let _ = self.retire_token(&existing);
+            let _ = self.retire_token(&existing, at);
         }
     }
 
@@ -564,6 +592,7 @@ mod tests {
             FrameSeq(0),
             Some(frame.clone()),
             Some(secret_url),
+            Stamp::next(),
         );
 
         let table_debug = format!("{table:?}");
@@ -584,17 +613,29 @@ mod tests {
     }
 
     #[test]
-    fn retirements_queue_each_token_once_until_taken() -> TestResult {
+    fn retirements_queue_each_retired_seq_once_until_taken() -> TestResult {
         let frame = FrameId("frame-main".to_owned());
         let first = DocToken::new("doc-first").ok_or("non-empty doc token")?;
         let second = DocToken::new("doc-second").ok_or("non-empty doc token")?;
         let mut table = DocTable::new();
-        table.insert_reserved(first.clone(), FrameSeq(0), Some(frame.clone()), None);
-        table.insert_reserved(second.clone(), FrameSeq(1), Some(frame), None);
+        table.insert_reserved(
+            first.clone(),
+            FrameSeq(0),
+            Some(frame.clone()),
+            None,
+            Stamp::next(),
+        );
+        table.insert_reserved(
+            second.clone(),
+            FrameSeq(1),
+            Some(frame),
+            None,
+            Stamp::next(),
+        );
         assert_eq!(
             table.take_retired(),
-            vec![first.clone()],
-            "a document displaced from its frame must be queued"
+            vec![FrameSeq(0)],
+            "a document displaced from its frame must be queued by the seq it held"
         );
         assert!(
             table.take_retired().is_empty(),
@@ -602,20 +643,20 @@ mod tests {
         );
 
         assert!(
-            table.retire_token(&second).is_some(),
+            table.retire_token(&second, Stamp::next()).is_some(),
             "an active document retires"
         );
         assert!(
-            table.retire_token(&second).is_none(),
-            "retirement is terminal, so a second retire changes nothing"
+            table.retire_token(&second, Stamp::next()).is_none(),
+            "a retired document has no active life left to retire"
         );
         assert!(
-            table.retire_token(&first).is_none(),
+            table.retire_token(&first, Stamp::next()).is_none(),
             "a document displaced earlier is already retired"
         );
         assert_eq!(
             table.take_retired(),
-            vec![second],
+            vec![FrameSeq(1)],
             "each retirement must be queued exactly once"
         );
         Ok(())

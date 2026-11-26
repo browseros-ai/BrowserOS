@@ -344,20 +344,23 @@ async fn prove_pre_capture_worlds(
     proven
 }
 
-/// Drops the refs of every document `DocTable` retired since the last drain, so the ref table
-/// retires in lockstep with `DocTable`, its authority on document lifetime (design 2.3).
+/// Drops the refs of every document life `DocTable` retired since the last drain, so the ref
+/// table retires in lockstep with `DocTable`, its authority on document lifetime (design 2.3).
 ///
 /// The queue also carries retirements made outside `TabTree`, such as the resolver invalidating a
 /// world that failed `Gone`; draining after every capture catches those before refs are printed.
-/// The `FrameWorlds` lock is released before the ref table's is taken, so the two never nest.
+/// It names the retired seq, not the token: a page back from the back/forward cache has a second
+/// life under a fresh seq, which another capture may print refs for between this drain's two
+/// locks, and retiring by token would delete them. The `FrameWorlds` lock is released before the
+/// ref table's is taken, so the two never nest.
 fn retire_refs_of_retired_docs(frames: &FrameWorlds, refs: &Mutex<TabRefTable>) {
-    let retired = frames.take_retired_docs();
+    let retired = frames.take_retired_seqs();
     if retired.is_empty() {
         return;
     }
     let mut table = refs.lock().unwrap_or_else(PoisonError::into_inner);
-    for doc in &retired {
-        table.retire_doc(doc);
+    for seq in retired {
+        table.retire_seq(DocSeq::new(seq.0));
     }
 }
 
@@ -371,7 +374,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use browseros_core::FrameId;
     use neo_snapshot::{AriaChild, AriaNode};
-    use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget};
+    use neo_snapshot_apc::refs::{Ref, RefLookup, RefTarget, TabRefTable};
     use neo_snapshot_apc::tree::{
         ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, DomNodeId, MIN_CONTRACT_VERSION,
         NodeBuilder, NodeKey, SnapshotTree,
@@ -388,7 +391,7 @@ mod tests {
         TestResult, count_op,
     };
     use crate::tree::{AttemptStart, HydrateOutcome, SiteKey, TabOriginState, TabTree};
-    use crate::world::{DocLookup, FrameSeq, Pin, Place};
+    use crate::world::{DocContext, DocLookup, DocPlace, FrameSeq, FrameWorlds, Pin, Place, Stamp};
 
     // --- Minimal protobuf wire encoder for hand-crafted offline APC fixtures ---
 
@@ -1829,6 +1832,58 @@ mod tests {
             tree.resolve_ref(&e1),
             RefLookup::Retired,
             "a document retired outside TabTree must lose its refs by the next capture"
+        );
+        Ok(())
+    }
+
+    /// A page back from the back/forward cache prints refs under a fresh seq while its first
+    /// visit's retirement may still wait in the queue. Draining that retirement must drop the first
+    /// visit's refs and spare the restored page's.
+    #[test]
+    fn draining_a_retired_visit_spares_the_restored_pages_refs() -> TestResult {
+        let frames = FrameWorlds::new(FrameSeq(0));
+        let refs = Mutex::new(TabRefTable::new());
+        let main = FrameId("main".to_owned());
+        let button = key("doc-page", 10)?;
+        let other = DocToken::new("doc-other-page").ok_or("non-empty doc token")?;
+        let report = |token: &DocToken| {
+            frames.seq_for_doc(
+                DocContext {
+                    token,
+                    frame: Some(&main),
+                    place: DocPlace::Main,
+                    url: Some("https://a.test/"),
+                    requested_at: Stamp::next(),
+                },
+                &HashMap::new(),
+            )
+        };
+        let assign = |seq: DocSeq| {
+            refs.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .assign_snapshot_ref(seq, &button, "button", "Pay", None)
+        };
+
+        let first_ref = assign(report(&button.doc));
+        let _ = report(&other);
+        let restored_ref = assign(report(&button.doc));
+        assert_ne!(
+            restored_ref.seq(),
+            first_ref.seq(),
+            "the restored page prints under a fresh seq"
+        );
+        super::retire_refs_of_retired_docs(&frames, &refs);
+
+        let table = refs.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(
+            table.resolve(&restored_ref),
+            live(&button),
+            "a drain of the first visit must not delete the restored page's refs"
+        );
+        assert_eq!(
+            table.resolve(&first_ref),
+            RefLookup::Retired,
+            "the first visit's refs must answer element_detached"
         );
         Ok(())
     }

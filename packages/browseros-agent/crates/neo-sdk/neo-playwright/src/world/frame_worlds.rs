@@ -328,12 +328,12 @@ impl FrameWorlds {
         inner.docs.retire_by_world(world);
     }
 
-    /// Takes every APC [`DocToken`] that `DocTable` retired since the last call, whichever path
+    /// Takes the seq of every document life `DocTable` retired since the last call, whichever path
     /// retired it: an invalidated world, a capture that displaced a frame's document, or an
-    /// explicit [`Self::retire_doc`]. `TabTree` drops their refs.
+    /// explicit [`Self::retire_doc`]. `TabTree` drops the refs printed under them.
     #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
-    #[must_use = "a dropped token keeps its document's refs live"]
-    pub(crate) fn take_retired_docs(&self) -> Vec<DocToken> {
+    #[must_use = "a dropped seq keeps that document life's refs live"]
+    pub(crate) fn take_retired_seqs(&self) -> Vec<FrameSeq> {
         self.lock().docs.take_retired()
     }
 
@@ -397,7 +397,10 @@ impl FrameWorlds {
                         .docs
                         .is_world_bound_to_other_active(candidate, ctx.token)
                 {
-                    let _ = inner.docs.bind_existing(ctx.token, candidate.clone());
+                    let _ =
+                        inner
+                            .docs
+                            .bind_existing(ctx.token, candidate.clone(), ctx.requested_at);
                     inner.frames.insert(seq, candidate.frame().clone());
                 }
                 return DocSeq::new(seq.0);
@@ -411,10 +414,14 @@ impl FrameWorlds {
                     && let Some(world) = proven.get(frame)
                     && !inner.docs.is_world_bound_to_other_active(world, ctx.token)
                 {
-                    let _ = inner.docs.bind_existing(ctx.token, world.clone());
+                    let _ = inner
+                        .docs
+                        .bind_existing(ctx.token, world.clone(), ctx.requested_at);
                     inner.frames.insert(seq, world.frame().clone());
                 } else if frame_was_missing && let Some(frame) = ctx.frame {
-                    inner.docs.set_reserved_frame(ctx.token, frame.clone());
+                    inner
+                        .docs
+                        .set_reserved_frame(ctx.token, frame.clone(), ctx.requested_at);
                     inner.frames.insert(seq, frame.clone());
                 }
                 if ctx.place == DocPlace::Main {
@@ -436,7 +443,9 @@ impl FrameWorlds {
             // Only a stale capture has seen this document, so it was gone before the frame's
             // newer report: it starts retired and displaces nothing.
             let seq = inner.next_seq();
-            inner.docs.insert_retired(ctx.token.clone(), seq, ctx.url);
+            inner
+                .docs
+                .insert_retired(ctx.token.clone(), seq, ctx.url, ctx.requested_at);
             return DocSeq::new(seq.0);
         }
 
@@ -452,14 +461,21 @@ impl FrameWorlds {
         world: &IsolatedWorld,
     ) -> Option<FrameSeq> {
         let mut inner = self.lock();
-        // The hydration that called this just proved `world` alive and holding `token`'s node, so
-        // `token` is the frame's document now: newer than any capture requested before this.
+        // The hydration that called this proved `world` alive and holding `token`'s node, so
+        // `token` was the frame's document from the world's install until that proof (design 6.2).
+        // Its evidence dates from the install, not from when its reply was processed: a capture
+        // requested after the install that reported another document saw the frame after `token`
+        // left it, and must win.
+        let since = world.installed_at();
+        if inner.docs.reported_other_since(world.frame(), token, since) {
+            return None;
+        }
         match inner.docs.binding(token) {
             Some(DocBinding::Retired { .. }) => None,
             Some(DocBinding::Reserved { .. } | DocBinding::Bound { .. }) => {
-                let seq = inner.docs.bind_existing(token, world.clone())?;
+                let seq = inner.docs.bind_existing(token, world.clone(), since)?;
                 inner.frames.insert(seq, world.frame().clone());
-                let _ = inner.docs.report_frame(world.frame(), Stamp::next());
+                let _ = inner.docs.report_frame(world.frame(), since);
                 Some(seq)
             }
             None => {
@@ -473,13 +489,13 @@ impl FrameWorlds {
                 } else {
                     DocPlace::Child
                 };
-                let seq = inner.resolve_doc_seq(world.seq(), place, token);
+                let seq = inner.resolve_doc_seq(world.seq(), place, token, since);
                 inner
                     .docs
-                    .insert_bound(token.clone(), seq, world.clone(), None);
+                    .insert_bound(token.clone(), seq, world.clone(), None, since);
                 inner.frames.insert(seq, world.frame().clone());
                 inner.next = inner.next.max(seq.0.saturating_add(1));
-                let _ = inner.docs.report_frame(world.frame(), Stamp::next());
+                let _ = inner.docs.report_frame(world.frame(), since);
                 Some(seq)
             }
         }
@@ -518,7 +534,7 @@ impl FrameWorlds {
     pub(crate) fn retire_doc(&self, token: &DocToken) -> Option<FrameSeq> {
         self.lock()
             .docs
-            .retire_token(token)
+            .retire_token(token, Stamp::next())
             .map(|retired| retired.seq)
     }
 
@@ -630,7 +646,7 @@ impl WorldsInner {
             if let Some(RetiredDoc {
                 seq: old_seq,
                 url_kind: PageUrlKind::RealOrUnknown,
-            }) = self.docs.retire_token(&old_token)
+            }) = self.docs.retire_token(&old_token, ctx.requested_at)
                 && ctx.place == DocPlace::Main
                 && self.main_seq == Some(old_seq)
             {
@@ -643,9 +659,14 @@ impl WorldsInner {
             && let Some(world) = proven.get(frame)
             && !self.docs.is_world_bound_to_other_active(world, ctx.token)
         {
-            let seq = self.resolve_doc_seq(world.seq(), ctx.place, ctx.token);
-            self.docs
-                .insert_bound(ctx.token.clone(), seq, world.clone(), ctx.url);
+            let seq = self.resolve_doc_seq(world.seq(), ctx.place, ctx.token, ctx.requested_at);
+            self.docs.insert_bound(
+                ctx.token.clone(),
+                seq,
+                world.clone(),
+                ctx.url,
+                ctx.requested_at,
+            );
             self.frames.insert(seq, world.frame().clone());
             self.next = self.next.max(seq.0.saturating_add(1));
             if ctx.place == DocPlace::Main {
@@ -658,9 +679,14 @@ impl WorldsInner {
         }
 
         let candidate = self.candidate_for(ctx.frame, ctx.place);
-        let seq = self.resolve_doc_seq(candidate, ctx.place, ctx.token);
-        self.docs
-            .insert_reserved(ctx.token.clone(), seq, ctx.frame.cloned(), ctx.url);
+        let seq = self.resolve_doc_seq(candidate, ctx.place, ctx.token, ctx.requested_at);
+        self.docs.insert_reserved(
+            ctx.token.clone(),
+            seq,
+            ctx.frame.cloned(),
+            ctx.url,
+            ctx.requested_at,
+        );
         if let Some(frame) = ctx.frame {
             self.frames.insert(seq, frame.clone());
         }
@@ -673,14 +699,15 @@ impl WorldsInner {
 
     /// Enforces the `DocTable` non-aliasing invariant on a candidate seq: reuse of a seq a document
     /// already held is permitted only for a main-frame document replacing an explicit
-    /// `"about:blank"` document (Playwright AR-053). A document that comes back never takes its own
-    /// old seq, which stays retired.
+    /// `"about:blank"` document (Playwright AR-053), which retires as of `at`. A document that comes
+    /// back never takes its own old seq, which stays retired.
     #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     fn resolve_doc_seq(
         &mut self,
         candidate: FrameSeq,
         place: DocPlace,
         new_token: &DocToken,
+        at: Stamp,
     ) -> FrameSeq {
         if let Some(previous) = self.docs.token_for_seq(candidate) {
             if previous != new_token
@@ -688,7 +715,7 @@ impl WorldsInner {
                 && self.docs.is_about_blank(previous)
             {
                 let previous = previous.clone();
-                let _ = self.docs.retire_token(&previous);
+                let _ = self.docs.retire_token(&previous, at);
                 return candidate;
             }
             let fresh = self.next_seq();
@@ -1602,7 +1629,9 @@ mod tests {
             "a page only a stale capture saw was gone before the newer report"
         );
         assert!(
-            !worlds.take_retired_docs().contains(&live_page),
+            !worlds
+                .take_retired_seqs()
+                .contains(&FrameSeq(live_seq.raw())),
             "the live page's refs must not be retired"
         );
         assert_eq!(
@@ -1622,9 +1651,13 @@ mod tests {
         let second = doc_token("doc-second-page")?;
 
         let first_seq = report_main(&worlds, &first, "https://a.test/", Stamp::next());
-        let _ = report_main(&worlds, &second, "https://b.test/", Stamp::next());
+        let second_seq = report_main(&worlds, &second, "https://b.test/", Stamp::next());
         assert!(matches!(worlds.lookup_doc(&first), DocLookup::Retired));
-        let _ = worlds.take_retired_docs();
+        assert_eq!(
+            worlds.take_retired_seqs(),
+            vec![FrameSeq(first_seq.raw())],
+            "the queue names the first visit by its seq, so a late drain spares a later life"
+        );
 
         let back_seq = report_main(&worlds, &first, "https://a.test/", Stamp::next());
         assert_ne!(
@@ -1647,8 +1680,8 @@ mod tests {
             "going back must retire the page it left"
         );
         assert_eq!(
-            worlds.take_retired_docs(),
-            vec![second],
+            worlds.take_retired_seqs(),
+            vec![FrameSeq(second_seq.raw())],
             "only the page left behind retires; the restored page does not retire twice"
         );
         Ok(())
@@ -1683,19 +1716,19 @@ mod tests {
         Ok(())
     }
 
-    /// Hydration proves a world alive and holding its document after a capture was requested, so
-    /// that capture's late report of an older page must not undo the proof.
+    /// A world installed after a capture was requested holds the frame's newer document, so once
+    /// hydration proves it, that capture's late report of an older page must not undo the proof.
     #[tokio::test]
     async fn tests_that_a_stale_capture_never_displaces_a_document_hydration_proved() -> TestResult
     {
         let log = Arc::new(FrameAttachLog::default());
         let worlds = logged(&log);
         let installs = AtomicU32::new(0);
-        let world = main_at(&worlds, &installs, "https://b.test/").await?;
         let old_page = doc_token("doc-old-page")?;
         let proved = doc_token("doc-proved-page")?;
 
         let capture_requested = Stamp::next();
+        let world = main_at(&worlds, &installs, "https://b.test/").await?;
         let proved_seq = worlds
             .bind_proven_world(&proved, &world)
             .ok_or("an unknown token binds to a proven world")?;
@@ -1707,6 +1740,65 @@ mod tests {
         assert!(
             matches!(worlds.lookup_doc(&old_page), DocLookup::Retired),
             "the older page the stale capture saw must start retired"
+        );
+        Ok(())
+    }
+
+    /// Leaving a page and coming straight back puts two captures in flight: one requested on the
+    /// next page, then one on the restored page. Processing the first retires the restored page as
+    /// of that capture's request, so the second, requested later, still brings it back.
+    #[tokio::test]
+    async fn tests_that_a_page_restored_while_the_previous_capture_was_in_flight_comes_back()
+    -> TestResult {
+        let worlds = logged(&Arc::new(FrameAttachLog::default()));
+        let page_a = doc_token("doc-page-a")?;
+        let page_b = doc_token("doc-page-b")?;
+        let first_seq = report_main(&worlds, &page_a, "https://a.test/", Stamp::next());
+
+        let requested_on_b = Stamp::next();
+        let requested_back_on_a = Stamp::next();
+        let _ = report_main(&worlds, &page_b, "https://b.test/", requested_on_b);
+        let back_seq = report_main(&worlds, &page_a, "https://a.test/", requested_back_on_a);
+        assert!(
+            back_seq != first_seq
+                && matches!(worlds.lookup_doc(&page_a), DocLookup::Reserved { seq, .. } if seq.0 == back_seq.raw()),
+            "the restored page, captured after the next page's capture was requested, must come back"
+        );
+        assert!(
+            matches!(worlds.lookup_doc(&page_b), DocLookup::Retired),
+            "the page left behind must retire"
+        );
+        Ok(())
+    }
+
+    /// A hydration's pin succeeds, the page navigates, a capture is requested on the next page, and
+    /// only then is the pin's reply processed. Its proof dates from its world's install, so the
+    /// next page's capture is the newer report and must win.
+    #[tokio::test]
+    async fn tests_that_a_late_hydration_reply_never_makes_the_next_pages_capture_stale()
+    -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let world = main_at(&worlds, &installs, "https://a.test/").await?;
+        let page_a = doc_token("doc-page-a")?;
+        let page_b = doc_token("doc-page-b")?;
+
+        let requested_on_b = Stamp::next();
+        let _ = worlds.bind_proven_world(&page_a, &world);
+        let b_seq = report_main(&worlds, &page_b, "https://b.test/", requested_on_b);
+        assert!(
+            matches!(worlds.lookup_doc(&page_b), DocLookup::Reserved { seq, .. } if seq.0 == b_seq.raw()),
+            "a capture requested after the proven world's install saw the frame later and must win"
+        );
+        assert!(
+            matches!(worlds.lookup_doc(&page_a), DocLookup::Retired),
+            "the page the late reply proved has been left"
+        );
+        assert_eq!(
+            worlds.bind_proven_world(&page_a, &world),
+            None,
+            "a proof older than the frame's newer report must not bind again"
         );
         Ok(())
     }
@@ -1983,10 +2075,10 @@ mod tests {
         ));
 
         // Invalidating the child world retires its DocToken and reports it exactly once.
-        let _ = worlds.take_retired_docs();
+        let _ = worlds.take_retired_seqs();
         worlds.invalidate(&child);
-        assert_eq!(worlds.take_retired_docs(), vec![tok_child.clone()]);
-        assert!(worlds.take_retired_docs().is_empty());
+        assert_eq!(worlds.take_retired_seqs(), vec![FrameSeq(1)]);
+        assert!(worlds.take_retired_seqs().is_empty());
         assert!(matches!(worlds.lookup_doc(&tok_child), DocLookup::Retired));
         assert!(matches!(
             worlds.lookup_doc_seq(FrameSeq(1)),
