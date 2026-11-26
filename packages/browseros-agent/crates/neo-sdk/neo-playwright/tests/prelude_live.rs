@@ -2165,8 +2165,9 @@ async fn unmarked_then_marked(url: &str) -> TestResult<(Value, Value)> {
 /// Marking never removes a ref the v1 text prints: on a fresh copy of the same page, every ref
 /// the unmarked text prints, in both forms, is printed by the marked text too. The tree marks what
 /// Chromium reports clickable, so the listener items, the menu and the listener card are marked,
-/// the card as one line that holds its article's text, and the `tabindex` containers and shadow
-/// card are not; the region keeps its line.
+/// the card as one line that holds its article's text. A `tabindex` container that holds a target
+/// is not marked, and the shadow card whose slot holds only text is, as a leaf. The region keeps
+/// its line.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResult {
@@ -2188,8 +2189,8 @@ async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResu
     }
     assert!(plain.contains("] [cursor=pointer]: Open menu"), "{plain}");
     assert!(
-        plain.contains("- text: Card text") && !plain.contains("[cursor=pointer]: Card text"),
-        "a `tabindex` shadow card is not what Chromium reports clickable: {plain}"
+        plain.contains("] [cursor=pointer]: Card text"),
+        "the shadow card whose slot holds text is a leaf: {plain}"
     );
     Ok(())
 }
