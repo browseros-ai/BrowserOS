@@ -1,9 +1,30 @@
 //! The identities an isolated world is known by: which `Playwright` booted it, which document of
 //! a page it serves, and which node in it.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
+
+static NEXT_STAMP: AtomicU64 = AtomicU64::new(1);
+
+/// Monotonic process-local logical timestamp ordering world installs, attempt starts, and APC
+/// capture dispatches without relying on wall-clock or paused-timer resolution.
+///
+/// Section 6.2 proves a world predates a capture via `world.installed_at() < capture.requested_at()`,
+/// and section 7.3 coalesces an attempt into an in-flight capture only when
+/// `attempt.started_at() < capture.requested_at()`. Because each call to [`Stamp::next`] advances
+/// a `SeqCst` counter, causally ordered events never tie, including under `tokio::time::pause`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Stamp(u64);
+
+impl Stamp {
+    /// Returns a strictly greater stamp than every stamp issued earlier in this process.
+    pub(crate) fn next() -> Self {
+        Self(NEXT_STAMP.fetch_add(1, Ordering::SeqCst))
+    }
+}
 
 /// The `Playwright` instance a world answers to, random per instance. Worlds are shared by
 /// every CDP connection to a tab (measured), so after a claw-sdk restart the new process meets

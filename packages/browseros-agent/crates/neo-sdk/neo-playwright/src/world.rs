@@ -38,14 +38,16 @@
 //!   `uninstalled` reply is [`ProbeFailure::Gone`](crate::probe::ProbeFailure); resolution
 //!   re-installs and retries once, a ref jump fails `element_detached`.
 
+mod doc_table;
 mod engine_source;
 mod frame_attach_log;
 mod frame_seq;
 mod frame_worlds;
 mod isolated_world;
 
+pub(crate) use doc_table::{DocBinding, DocContext, DocLookup, DocPlace, DocTable};
 pub(crate) use frame_attach_log::{FrameAttachLog, FrameEvent};
-pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin};
+pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin, Stamp};
 pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,
 };
