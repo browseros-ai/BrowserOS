@@ -4,13 +4,13 @@
   "browser": "Chrome/158.0.8127.18",
   "frames": [
     {
-      "frame": "6E1D10C0A6735E1874363B268B29CEA7",
+      "frame": "E3630974E56C204EDC9919FD9B7F7644",
       "parent": null,
       "owner": null,
       "url": "http://127.0.0.1/nested/top.html",
       "elements": [
         {
-          "backendNodeId": 7,
+          "backendNodeId": 10,
           "role": "document",
           "name": "",
           "description": "",
@@ -22,7 +22,7 @@
           }
         },
         {
-          "backendNodeId": 9,
+          "backendNodeId": 12,
           "role": "heading",
           "name": "Top",
           "description": "",
@@ -35,7 +35,7 @@
           }
         },
         {
-          "backendNodeId": 13,
+          "backendNodeId": 16,
           "role": "button",
           "name": "Top button",
           "description": "",
@@ -64,12 +64,12 @@
         }
       ],
       "refs": {
-        "e1": 8,
-        "e2": 9,
-        "e3": 13,
+        "e1": 11,
+        "e2": 12,
+        "e3": 16,
         "e4": 4,
-        "e5": 10,
-        "e6": 11
+        "e5": 13,
+        "e6": 14
       },
       "aria": {
         "ai": [
@@ -129,13 +129,13 @@
       }
     },
     {
-      "frame": "400B8F36EA6048D0FBDB0E11A243D490",
-      "parent": "6E1D10C0A6735E1874363B268B29CEA7",
-      "owner": 10,
+      "frame": "023526828230CC13C10CA7E431F21579",
+      "parent": "E3630974E56C204EDC9919FD9B7F7644",
+      "owner": 13,
       "url": "http://127.0.0.1/nested/a1.html",
       "elements": [
         {
-          "backendNodeId": 22,
+          "backendNodeId": 20,
           "role": "document",
           "name": "",
           "description": "",
@@ -147,7 +147,7 @@
           }
         },
         {
-          "backendNodeId": 24,
+          "backendNodeId": 22,
           "role": "heading",
           "name": "A1",
           "description": "",
@@ -160,7 +160,7 @@
           }
         },
         {
-          "backendNodeId": 27,
+          "backendNodeId": 25,
           "role": "button",
           "name": "A1 button",
           "description": "",
@@ -174,7 +174,7 @@
           }
         },
         {
-          "backendNodeId": 19,
+          "backendNodeId": 5,
           "role": "textbox",
           "name": "A1 field",
           "description": "",
@@ -189,11 +189,11 @@
         }
       ],
       "refs": {
-        "f1e1": 23,
-        "f1e2": 24,
-        "f1e3": 27,
-        "f1e4": 19,
-        "f1e5": 25
+        "f1e1": 21,
+        "f1e2": 22,
+        "f1e3": 25,
+        "f1e4": 5,
+        "f1e5": 23
       },
       "aria": {
         "ai": [
@@ -245,13 +245,13 @@
       }
     },
     {
-      "frame": "D042C54A36BF89309FCAE783F1854B33",
-      "parent": "400B8F36EA6048D0FBDB0E11A243D490",
-      "owner": 25,
+      "frame": "E49A31A035965567F6E7436D8DBC291F",
+      "parent": "023526828230CC13C10CA7E431F21579",
+      "owner": 23,
       "url": "http://localhost/nested/b2.html",
       "elements": [
         {
-          "backendNodeId": 7,
+          "backendNodeId": 6,
           "role": "document",
           "name": "",
           "description": "",
@@ -263,7 +263,7 @@
           }
         },
         {
-          "backendNodeId": 9,
+          "backendNodeId": 8,
           "role": "heading",
           "name": "B2",
           "description": "",
@@ -276,7 +276,7 @@
           }
         },
         {
-          "backendNodeId": 12,
+          "backendNodeId": 11,
           "role": "button",
           "name": "B2 button",
           "description": "",
@@ -305,11 +305,11 @@
         }
       ],
       "refs": {
-        "f2e1": 8,
-        "f2e2": 9,
-        "f2e3": 12,
+        "f2e1": 7,
+        "f2e2": 8,
+        "f2e3": 11,
         "f2e4": 1,
-        "f2e5": 10
+        "f2e5": 9
       },
       "aria": {
         "ai": [
@@ -361,13 +361,13 @@
       }
     },
     {
-      "frame": "C0D22FFA956B3EF455D3FA0B3B7FD0ED",
-      "parent": "D042C54A36BF89309FCAE783F1854B33",
-      "owner": 10,
+      "frame": "897D96558E0C156860326A42B2DC3B4A",
+      "parent": "E49A31A035965567F6E7436D8DBC291F",
+      "owner": 9,
       "url": "http://localhost/nested/b3.html",
       "elements": [
         {
-          "backendNodeId": 20,
+          "backendNodeId": 17,
           "role": "document",
           "name": "",
           "description": "",
@@ -379,7 +379,7 @@
           }
         },
         {
-          "backendNodeId": 22,
+          "backendNodeId": 19,
           "role": "heading",
           "name": "B3",
           "description": "",
@@ -392,7 +392,7 @@
           }
         },
         {
-          "backendNodeId": 24,
+          "backendNodeId": 21,
           "role": "button",
           "name": "B3 button",
           "description": "",
@@ -406,7 +406,7 @@
           }
         },
         {
-          "backendNodeId": 18,
+          "backendNodeId": 15,
           "role": "textbox",
           "name": "B3 field",
           "description": "",
@@ -421,10 +421,10 @@
         }
       ],
       "refs": {
-        "f3e1": 21,
-        "f3e2": 22,
-        "f3e3": 24,
-        "f3e4": 18
+        "f3e1": 18,
+        "f3e2": 19,
+        "f3e3": 21,
+        "f3e4": 15
       },
       "aria": {
         "ai": [
@@ -469,13 +469,13 @@
       }
     },
     {
-      "frame": "768A45E9BEC98EAD315B351A2BFD7FDB",
-      "parent": "6E1D10C0A6735E1874363B268B29CEA7",
-      "owner": 11,
+      "frame": "24BEE50548818EEA900DAE5FA565880A",
+      "parent": "E3630974E56C204EDC9919FD9B7F7644",
+      "owner": 14,
       "url": "http://localhost/nested/b1.html",
       "elements": [
         {
-          "backendNodeId": 61,
+          "backendNodeId": 58,
           "role": "document",
           "name": "",
           "description": "",
@@ -487,7 +487,7 @@
           }
         },
         {
-          "backendNodeId": 28,
+          "backendNodeId": 25,
           "role": "heading",
           "name": "B1",
           "description": "",
@@ -500,7 +500,7 @@
           }
         },
         {
-          "backendNodeId": 30,
+          "backendNodeId": 27,
           "role": "button",
           "name": "B1 button",
           "description": "",
@@ -514,7 +514,7 @@
           }
         },
         {
-          "backendNodeId": 2,
+          "backendNodeId": 4,
           "role": "textbox",
           "name": "B1 field",
           "description": "",
@@ -529,11 +529,11 @@
         }
       ],
       "refs": {
-        "f4e1": 67,
-        "f4e2": 28,
-        "f4e3": 30,
-        "f4e4": 2,
-        "f4e5": 33
+        "f4e1": 64,
+        "f4e2": 25,
+        "f4e3": 27,
+        "f4e4": 4,
+        "f4e5": 30
       },
       "aria": {
         "ai": [
@@ -585,9 +585,9 @@
       }
     },
     {
-      "frame": "85077CBE5A400E4345E58E1C2C555020",
-      "parent": "768A45E9BEC98EAD315B351A2BFD7FDB",
-      "owner": 33,
+      "frame": "7D0BBF1F1F98475029197A98AD8154DD",
+      "parent": "24BEE50548818EEA900DAE5FA565880A",
+      "owner": 30,
       "url": "http://[::1]/nested/c2.html",
       "elements": [
         {
@@ -701,8 +701,8 @@
       }
     },
     {
-      "frame": "0CC2EC2F44D5ECB0B52AC7BC76A56498",
-      "parent": "85077CBE5A400E4345E58E1C2C555020",
+      "frame": "D7B3466036058806DF80BA61CC20083B",
+      "parent": "7D0BBF1F1F98475029197A98AD8154DD",
       "owner": 11,
       "url": "http://127.0.0.1/nested/a3.html",
       "elements": [
@@ -817,8 +817,8 @@
       }
     },
     {
-      "frame": "618067DAFFB5D4A528865287FFDDA6F3",
-      "parent": "0CC2EC2F44D5ECB0B52AC7BC76A56498",
+      "frame": "B37F72545E01258263C32F4212940DE5",
+      "parent": "D7B3466036058806DF80BA61CC20083B",
       "owner": 41,
       "url": "http://[::1]/nested/c4.html",
       "elements": [

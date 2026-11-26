@@ -100,14 +100,9 @@ const DEFAULT_TREE_DIFFERS: &[(&str, &str)] = &[
          holds a partial frame where the oracle holds the frame's content",
     ),
     (
-        "roles",
-        "the inline svg's title name and the display: contents rows (ledger Name and Join, \
-         contract facts)",
-    ),
-    (
         "names",
-        "the block ::after break (ledger Name), and APC's collapsible-whitespace skip: no text \
-         node carries the space between two inline elements, so their texts join",
+        "APC's collapsible-whitespace skip: no text node carries the space between two inline \
+         elements, so their texts join",
     ),
     (
         "states",

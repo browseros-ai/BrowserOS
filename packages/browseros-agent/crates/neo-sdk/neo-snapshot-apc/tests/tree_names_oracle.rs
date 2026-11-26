@@ -3,7 +3,7 @@
 //! (`tests/fixtures/<name>.{pb,oracle.json}`) and a contract-v4 mirror of `tests/pages/names.html`.
 //!
 //! Frames join by `owner` `<iframe>` `DomNodeId` and elements join by `backendNodeId`. Every
-//! recording carries contract v4, so the joined elements whose name, description or error message
+//! recording carries contract v6, so the joined elements whose name, description or error message
 //! differ from the oracle's must equal the parity ledger (`support/parity_ledger.rs`).
 
 #[path = "support/fixture_pages.rs"]

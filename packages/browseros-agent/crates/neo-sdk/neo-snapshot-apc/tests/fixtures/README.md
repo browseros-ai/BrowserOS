@@ -10,7 +10,8 @@ The registry is `FIXTURES` in `tests/support/fixture_pages.rs`. A fixture that i
 ## Recording environment
 
 - Browser binary: `BrowserOS Dev` (`/Users/shadowfax/code/chromium-1/src/out/Default_browseros_arm64/BrowserOS Dev.app/Contents/MacOS/BrowserOS Dev`).
-- Browser version: BrowserOS Chromium `158.0.8127.18` at `bc227cff7` (BrowserOS-internal #66 to #69, Chromium contract PRs C1 to C4), APC contract v4. Every `.pb` reports `contract_version: 4`. Each oracle records `Browser.getVersion`'s product in `browser`, which does not tell a patched build from stock.
+- Browser version: BrowserOS Chromium `158.0.8127.18` at `735d57e27` (BrowserOS-internal #66 to #71, Chromium contract PRs C1 to C6), APC contract v6. Every `.pb` reports `contract_version: 6`. Each oracle records `Browser.getVersion`'s product in `browser`, which does not tell a patched build from stock.
+- What v5 and v6 added to the captures: an `<html>` node in every document (P12: 4 on `nested-cross-site-frames`, 1 each on `shadow-roots` and `modal-inert`), a node per `display: contents` element (P11: 5 on `roles`), `svg_title` (P13) and `break_before` at a non-inline `::before` or `::after` box (P14). The oracles are the same as on v4 apart from CDP frame ids and `backendNodeId`s, which each page load assigns afresh.
 
 Run from `packages/browseros-agent` (in a heavy slot on the shared machine), with `--contract` so the contract's private fields are typed into too. Pass fixture names after the flag to re-record a subset:
 
@@ -52,26 +53,26 @@ new tab ─▶ Emulation.setFocusEmulationEnabled ─▶ navigate ─▶ ready p
 
 | Fixture | Design 3.8 row it pins | Frames | APC nodes | Oracle elements | Refs | `.pb` bytes | Oracle bytes |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `nested-cross-site-frames` | Nested cross-site frames (8 frames, 3 sites) | 8 | 71 | 32 | 39 | 6,363 | 21,357 |
+| `nested-cross-site-frames` | Nested cross-site frames (8 frames, 3 sites) | 8 | 75 | 32 | 39 | 6,580 | 21,357 |
 | `hung-subframe` | Nested cross-site frames, `?hang` | 3 | 16 | 9 | 11 | 1,751 | 6,449 |
 | `shadow-dom` | Open and closed shadow roots (one level) | 1 | 23 | 9 | 13 | 2,148 | 6,495 |
-| `shadow-roots` | Open and closed shadow roots, two levels, slots, a frame inside a closed root | 2 | 69 | 24 | 32 | 6,528 | 19,597 |
+| `shadow-roots` | Open and closed shadow roots, two levels, slots, a frame inside a closed root | 2 | 70 | 24 | 32 | 6,581 | 19,597 |
 | `zero-size-checkbox` | Zero-size checkboxes with labels | 1 | 13 | 4 | 5 | 1,266 | 3,505 |
 | `zero-size-controls` | Zero-size checkbox, radio and file input, labels by `for` and by nesting | 1 | 59 | 13 | 22 | 5,351 | 12,762 |
 | `nosize` | Zero-size controls (`data/prelude/nosize.html`) | 1 | 72 | 30 | 14 | 5,977 | 20,650 |
-| `ua-shadow` | Browser-made shadow content | 1 | 88 | 18 | 23 | 7,734 | 13,636 |
-| `roles` | Roles | 1 | 379 | 178 | 218 | 30,455 | 125,646 |
-| `names` | Names | 1 | 223 | 77 | 107 | 21,460 | 62,352 |
+| `ua-shadow` | Browser-made shadow content | 1 | 88 | 18 | 23 | 7,734 | 13,640 |
+| `roles` | Roles | 1 | 384 | 178 | 218 | 30,643 | 125,646 |
+| `names` | Names | 1 | 223 | 77 | 107 | 21,465 | 62,352 |
 | `states` | States | 1 | 314 | 147 | 174 | 30,181 | 121,159 |
 | `private-forms` | Private forms | 1 | 70 | 21 | 50 | 6,523 | 26,237 |
 | `sensitive-form` | Private forms (values set in markup, not typed) | 1 | 20 | 6 | 10 | 1,854 | 5,599 |
 | `covered-button` | A covered button | 1 | 16 | 8 | 9 | 1,590 | 5,308 |
-| `modal-inert` | A modal dialog, an `inert` subtree | 1 | 27 | 13 | 15 | 2,584 | 9,298 |
+| `modal-inert` | A modal dialog, an `inert` subtree | 1 | 28 | 13 | 15 | 2,642 | 9,298 |
 | `deep-nesting` | None: 120 nested groups, past prost's and serde's default depth limits | 1 | 127 | 123 | 123 | 9,555 | 388,209 |
 
 Frames is the oracle's count; APC's frame count (main plus iframe nodes) is the same on every fixture.
 
-Total: 16 fixtures, 32 files, 989,579 bytes (141,320 in `.pb` files, 848,259 in oracles). `deep-nesting.oracle.json` is 388,209 of them: pretty-printing indents its 120-level tree. Compressed, as git stores it, the directory is about 82 KB (`deep-nesting.oracle.json` about 5.5 KB), so the oracles stay pretty-printed for review.
+Total: 16 fixtures, 32 files, 990,104 bytes (141,841 in `.pb` files, 848,263 in oracles). `deep-nesting.oracle.json` is 388,209 of them: pretty-printing indents its 120-level tree. Compressed, as git stores it, the directory is about 82 KB (`deep-nesting.oracle.json` about 5.5 KB), so the oracles stay pretty-printed for review.
 
 ## Secrets and the canary guard
 

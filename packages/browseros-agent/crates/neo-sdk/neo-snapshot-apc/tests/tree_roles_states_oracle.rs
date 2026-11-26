@@ -2,7 +2,7 @@
 //! against the 16 recorded Playwright oracles (`tests/fixtures/<name>.{pb,oracle.json}`).
 //!
 //! Frames join by `owner` `<iframe>` `DomNodeId` and elements join by `backendNodeId`. Every
-//! recording carries contract v4, so the elements that fail to join or disagree on role, hidden,
+//! recording carries contract v6, so the elements that fail to join or disagree on role, hidden,
 //! box visibility or any state must equal the parity ledger (`support/parity_ledger.rs`), and every
 //! `ContentHidden` node must be hidden for the oracle.
 

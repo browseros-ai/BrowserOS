@@ -2932,6 +2932,37 @@ mod tests {
     }
 
     #[test]
+    fn a_link_keeps_the_name_its_svg_icon_title_gives_it() -> Result<(), Box<dyn Error>> {
+        // Upstream's SVG step returns the unrendered `<title>`'s text, so no printed element
+        // contributed the link's name, and removeRedundantNames keeps it.
+        let apc = ApcBuilder::new("doc-svg-link")
+            .root(
+                NodeBuilder::root().child(
+                    NodeBuilder::element("a")
+                        .dom_id(10)
+                        .href("/settings")
+                        .bounding_box(0, 0, 24, 24)
+                        .child(
+                            NodeBuilder::element("svg")
+                                .dom_id(11)
+                                .svg_title("Settings")
+                                .bounding_box(0, 0, 24, 24),
+                        ),
+                ),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let link = find_by_role_name(ai.nodes(), "link", Some("Settings"))
+            .ok_or("the link keeps the name its icon's title gives it")?;
+        assert_eq!(link.url.as_deref(), Some("/settings"));
+        assert!(find_by_role_name(ai.nodes(), "img", Some("Settings")).is_some());
+        Ok(())
+    }
+
+    #[test]
     fn ai_mode_keeps_a_name_whose_contributor_comes_later() -> Result<(), Box<dyn Error>> {
         let apc = ApcBuilder::new("doc-later")
             .root(

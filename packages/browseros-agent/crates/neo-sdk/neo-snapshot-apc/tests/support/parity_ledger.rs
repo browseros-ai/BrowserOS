@@ -1,5 +1,5 @@
 //! The parity ledger: every oracle element where [`neo_snapshot_apc::tree`] and the recorded
-//! Playwright oracle still disagree on the contract-v4 recordings, with the reason.
+//! Playwright oracle still disagree on the contract-v6 recordings, with the reason.
 //!
 //! `tree_roles_states_oracle.rs` (join, role, hidden, box visibility, each state),
 //! `tree_names_oracle.rs` (name, description, error message) and `tree_emit_refs_oracle.rs` (ref)
@@ -106,9 +106,7 @@ pub(crate) struct KnownMismatch {
     pub(crate) nodes: &'static [OracleNode],
 }
 
-const NESTED: &str = "nested-cross-site-frames";
-
-/// Recorded on BrowserOS Dev 158.0.8127.18 at contract v4 (`tests/fixtures/README.md`).
+/// Recorded on BrowserOS Dev 158.0.8127.18 at contract v6 (`tests/fixtures/README.md`).
 pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
     KnownMismatch {
         field: Field::Join,
@@ -120,21 +118,6 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
             child("hung-subframe", "http://[::1]/hung-subframe/hung.html", 2),
             child("hung-subframe", "http://[::1]/hung-subframe/hung.html", 4),
             child("hung-subframe", "http://[::1]/hung-subframe/hung.html", 6),
-        ],
-    },
-    KnownMismatch {
-        field: Field::Join,
-        tree: "",
-        cause: Cause::ContractFact,
-        why: "APC emits no node for these documents' <html> element, which holds Playwright's \
-              `document` role",
-        nodes: &[
-            child(NESTED, "http://localhost/nested/b1.html", 61),
-            child(NESTED, "http://[::1]/nested/c2.html", 18),
-            child(NESTED, "http://127.0.0.1/nested/a3.html", 69),
-            child(NESTED, "http://[::1]/nested/c4.html", 34),
-            child("shadow-roots", "about:srcdoc", 72),
-            main("modal-inert", 6),
         ],
     },
     KnownMismatch {
@@ -158,20 +141,6 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
             main("names", 340),
             main("states", 374),
             main("states", 456),
-        ],
-    },
-    KnownMismatch {
-        field: Field::Join,
-        tree: "",
-        cause: Cause::ContractFact,
-        why: "a `display: contents` element has no layout object, so no APC node until contract \
-              P11 (field 33) lands",
-        nodes: &[
-            main("roles", 647),
-            main("roles", 649),
-            main("roles", 651),
-            main("roles", 653),
-            main("roles", 654),
         ],
     },
     KnownMismatch {
@@ -228,22 +197,6 @@ pub(crate) const KNOWN_MISMATCHES: &[KnownMismatch] = &[
         ],
     },
     KnownMismatch {
-        field: Field::Name,
-        tree: "",
-        cause: Cause::ContractFact,
-        why: "an inline <svg>'s <title> child reaches APC only through stock `label`, which Rust \
-              never reads (contract assumption 3)",
-        nodes: &[main("roles", 398)],
-    },
-    KnownMismatch {
-        field: Field::Name,
-        tree: "content: block pseudoblock-after",
-        cause: Cause::ContractFact,
-        why: "the generated text of a `display: block` ::after has no break_before, so it joins \
-              the previous word without a space",
-        nodes: &[main("names", 197)],
-    },
-    KnownMismatch {
         field: Field::ErrorMessage,
         tree: "",
         cause: Cause::AcceptedGap("G6"),
@@ -261,14 +214,14 @@ pub(crate) const PRINTED_ONLY_MISMATCHES: &[KnownMismatch] = &[KnownMismatch {
     why: "with nothing focused, APC sends no focused_node_id, while Playwright's \
           document.activeElement falls back to the main document's <body>",
     nodes: &[
-        main(NESTED, 8),
+        main("nested-cross-site-frames", 11),
         main("shadow-dom", 8),
         main("zero-size-checkbox", 6),
         main("covered-button", 6),
         main("sensitive-form", 11),
         main("hung-subframe", 8),
         main("deep-nesting", 6),
-        main("shadow-roots", 16),
+        main("shadow-roots", 15),
         main("zero-size-controls", 6),
         main("nosize", 26),
         main("ua-shadow", 14),

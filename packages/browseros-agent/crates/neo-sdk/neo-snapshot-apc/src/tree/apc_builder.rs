@@ -922,6 +922,12 @@ impl NodeBuilder {
         self
     }
 
+    /// Sets `browseros.svg_title` (contract field 34).
+    pub fn svg_title(mut self, svg_title: &str) -> Self {
+        self.browseros_mut().svg_title = Some(svg_title.to_owned());
+        self
+    }
+
     /// Appends a child node.
     pub fn child(mut self, child: Self) -> Self {
         self.children.push(child);
