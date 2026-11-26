@@ -30,11 +30,10 @@
 mod fixture_server;
 
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::error::Error;
 use std::fmt::Write as _;
-use std::ptr;
 use std::time::Duration;
+use std::{env, ptr};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -214,6 +213,17 @@ impl Capture {
     }
 }
 
+/// Where a test's tab opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    /// A tab in the shared window. Tests run concurrently, so a newer tab may hide it.
+    SharedWindow,
+    /// A window of its own, so the tab stays visible while other tests open tabs. A test that
+    /// waits on `requestAnimationFrame` needs it: a hidden tab stops producing frames, and stock
+    /// code captures a hidden tab on the critical path at every version.
+    OwnWindow,
+}
+
 /// An open tab on one fixture page, with a flattened CDP session attached.
 struct Tab<'a> {
     client: &'a CdpClient,
@@ -222,9 +232,20 @@ struct Tab<'a> {
 }
 
 impl<'a> Tab<'a> {
-    async fn open(client: &'a CdpClient, url: String) -> Result<Self, Box<dyn Error>> {
+    async fn open(
+        client: &'a CdpClient,
+        url: String,
+        placement: Placement,
+    ) -> Result<Self, Box<dyn Error>> {
         let created = client
-            .send("Target.createTarget", json!({ "url": "about:blank" }), None)
+            .send(
+                "Target.createTarget",
+                json!({
+                    "url": "about:blank",
+                    "newWindow": placement == Placement::OwnWindow,
+                }),
+                None,
+            )
             .await?;
         let target_id = created
             .get("targetId")
@@ -481,10 +502,30 @@ async fn check_patch(
     path: &str,
     check: impl AsyncFnOnce(&Tab<'_>, &Capture) -> TestResult,
 ) -> TestResult {
+    check_patch_in(patch, pages, path, Placement::SharedWindow, check).await
+}
+
+/// [`check_patch`] with the tab in a window of its own, for checks that wait on the page's frames.
+async fn check_patch_visible(
+    patch: Patch,
+    pages: HashMap<String, Page>,
+    path: &str,
+    check: impl AsyncFnOnce(&Tab<'_>, &Capture) -> TestResult,
+) -> TestResult {
+    check_patch_in(patch, pages, path, Placement::OwnWindow, check).await
+}
+
+async fn check_patch_in(
+    patch: Patch,
+    pages: HashMap<String, Page>,
+    path: &str,
+    placement: Placement,
+    check: impl AsyncFnOnce(&Tab<'_>, &Capture) -> TestResult,
+) -> TestResult {
     let server = FixtureServer::start(pages).await?;
     let client = connect_cdp().await?;
     let result = async {
-        let tab = Tab::open(&client, server.url("127.0.0.1", path)).await?;
+        let tab = Tab::open(&client, server.url("127.0.0.1", path), placement).await?;
         let checked = async {
             let capture = tab.capture().await?;
             // Printed at every version, so a run before and after a patch compares page size
@@ -1927,9 +1968,36 @@ async fn p15_whitespace_between_inline_boxes_raises_a_break() -> TestResult {
 
 // Helpers for the version 8 tests (P18 to P22).
 
-/// Waits for two of the page's frames, so a change made before it has been painted.
-const TWO_FRAMES: &str =
-    "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))";
+/// Waits for two of the page's frames, so a change made before it has been painted, then reads
+/// the page's visibility.
+const TWO_FRAMES_THEN_VISIBILITY: &str = "new Promise((done) => requestAnimationFrame(() => \
+    requestAnimationFrame(done))).then(() => document.visibilityState)";
+
+impl Tab<'_> {
+    /// Lets two of the page's frames pass. Fails unless the tab is still visible afterwards: the
+    /// frame-clock checks of P18 and P21 mean nothing in a hidden tab.
+    async fn settle_two_frames(&self) -> TestResult {
+        let reply = self
+            .send(
+                "Runtime.evaluate",
+                json!({
+                    "expression": TWO_FRAMES_THEN_VISIBILITY,
+                    "awaitPromise": true,
+                    "returnByValue": true,
+                }),
+            )
+            .await?;
+        let state = reply
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if state == json!("visible") {
+            Ok(())
+        } else {
+            Err(format!("the tab must stay visible for a frame-clock check, it is {state}").into())
+        }
+    }
+}
 
 /// Whether `node` embeds a child document: an `<iframe>`, or since P19 a frameset's `<frame>`.
 fn is_frame_node(node: &ContentNode) -> bool {
@@ -2041,7 +2109,7 @@ async fn p18_capture_reads_the_page_as_it_is_now() -> TestResult {
         "/critical-path.html".to_owned(),
         Page::html(CRITICAL_PATH_PAGE),
     )]);
-    check_patch(
+    check_patch_visible(
         Patch::CriticalPath,
         pages,
         "/critical-path.html",
@@ -2049,11 +2117,7 @@ async fn p18_capture_reads_the_page_as_it_is_now() -> TestResult {
             let mut before = 0;
             for round in 0..CRITICAL_PATH_ROUNDS {
                 // Two frames first, so the previous round's callback cannot land in this one.
-                tab.send(
-                    "Runtime.evaluate",
-                    json!({ "expression": TWO_FRAMES, "awaitPromise": true }),
-                )
-                .await?;
+                tab.settle_two_frames().await?;
                 tab.eval(&format!("window.__flip({round})")).await?;
                 let capture = tab.capture().await?;
                 if capture.text_node(&format!("before {round}")).is_ok() {
@@ -2367,11 +2431,28 @@ const DESKTOP_VIEWPORT: (u32, u32) = (800, 600);
 /// The probe nodes of a P21 child document: the button by its tag, the rest by `aria-label`.
 const CROSS_SITE_PROBES: [&str; 4] = ["button", "Child cursor", "Tab stop", "Parked"];
 
-/// A node's interaction info as P21 compares it: sorted clickability reasons, `is_focusable`
-/// and `is_tabbable`. `None` when the node carries none.
-type Interaction = Option<(Vec<i32>, Option<bool>, Option<bool>)>;
+/// A node's interaction info as P21 compares it.
+#[derive(Debug, PartialEq, Eq)]
+struct Interaction {
+    /// Clickability reasons, sorted.
+    reasons: Vec<i32>,
+    is_focusable: Option<bool>,
+    is_tabbable: Option<bool>,
+}
 
-fn interaction_of(node: &ContentNode) -> Interaction {
+impl Interaction {
+    fn has(&self, reason: ClickabilityReason) -> bool {
+        self.reasons.contains(&i32::from(reason))
+    }
+
+    /// Focusable and in the tab order.
+    fn is_tab_stop(&self) -> bool {
+        self.is_focusable == Some(true) && self.is_tabbable == Some(true)
+    }
+}
+
+/// `None` when the node carries no interaction info at all.
+fn interaction_of(node: &ContentNode) -> Option<Interaction> {
     let info = node
         .content_attributes
         .as_ref()?
@@ -2379,7 +2460,11 @@ fn interaction_of(node: &ContentNode) -> Interaction {
         .as_ref()?;
     let mut reasons = info.clickability_reasons.clone();
     reasons.sort_unstable();
-    Some((reasons, info.is_focusable, info.is_tabbable))
+    Some(Interaction {
+        reasons,
+        is_focusable: info.is_focusable,
+        is_tabbable: info.is_tabbable,
+    })
 }
 
 /// The frame node holding the child document named `name`, and that document's probe nodes in
@@ -2431,7 +2516,7 @@ async fn p21_cross_site_frame_out_of_view_keeps_interaction_info() -> TestResult
             Page::html(CROSS_SITE_CHILD),
         ),
     ]);
-    check_patch(
+    check_patch_visible(
         Patch::CrossSiteInteraction,
         pages,
         "/cross-site/top.html",
@@ -2443,11 +2528,7 @@ async fn p21_cross_site_frame_out_of_view_keeps_interaction_info() -> TestResult
             )
             .await?;
             // Let the new viewport reach every renderer before the capture; the page never scrolls.
-            tab.send(
-                "Runtime.evaluate",
-                json!({ "expression": TWO_FRAMES, "awaitPromise": true }),
-            )
-            .await?;
+            tab.settle_two_frames().await?;
             time::sleep(Duration::from_millis(300)).await;
             let capture = tab.capture().await?;
 
@@ -2461,22 +2542,29 @@ async fn p21_cross_site_frame_out_of_view_keeps_interaction_info() -> TestResult
             assert!(!has_no_area(visible_box(in_view_frame)), "the upper frame is on screen");
 
             // The same-site twin, which v7 already gets right.
-            let has = |node: &ContentNode, reason: ClickabilityReason| {
-                interaction_of(node)
-                    .is_some_and(|(reasons, _, _)| reasons.contains(&i32::from(reason)))
-            };
-            let focus = |node: &ContentNode| {
-                interaction_of(node).map(|(_, focusable, tabbable)| (focusable, tabbable))
-            };
             let [button, cursor, tab_stop, parked] = twin.as_slice() else {
                 return Err("four probes, checked by cross_site_frame".into());
             };
-            assert!(has(button, ClickabilityReason::ClickableControl), "twin button: ClickableControl");
-            assert_eq!(focus(button), Some((Some(true), Some(true))), "twin button: focusable, tabbable");
-            assert!(has(cursor, ClickabilityReason::CursorPointer), "twin group: CursorPointer");
-            assert!(has(tab_stop, ClickabilityReason::TabIndex), "twin tab stop: TabIndex");
-            assert_eq!(focus(tab_stop), Some((Some(true), Some(true))), "twin tab stop: focusable, tabbable");
-            assert_eq!(interaction_of(parked), None, "twin parked link: the offscreen filter drops its info");
+            let button = interaction_of(button).ok_or("twin button: no interaction info")?;
+            assert!(
+                button.has(ClickabilityReason::ClickableControl) && button.is_tab_stop(),
+                "twin button: ClickableControl, focusable and tabbable: {button:?}"
+            );
+            let cursor = interaction_of(cursor).ok_or("twin group: no interaction info")?;
+            assert!(
+                cursor.has(ClickabilityReason::CursorPointer),
+                "twin group: CursorPointer: {cursor:?}"
+            );
+            let tab_stop = interaction_of(tab_stop).ok_or("twin tab stop: no interaction info")?;
+            assert!(
+                tab_stop.has(ClickabilityReason::TabIndex) && tab_stop.is_tab_stop(),
+                "twin tab stop: TabIndex, focusable and tabbable: {tab_stop:?}"
+            );
+            assert_eq!(
+                interaction_of(parked),
+                None,
+                "twin parked link: the offscreen filter drops its info"
+            );
 
             // The cross-site frame out of view carries exactly what its twin carries, and the one
             // on screen is unchanged. On v7 the out-of-view frame's nodes carry none.
