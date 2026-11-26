@@ -14,13 +14,14 @@ use crate::proto::{
 };
 use crate::refs::TabRefTable;
 
+use super::fold::SyntheticOption;
 use super::hidden;
 use super::mask::{self, MaskSource, NodeMask};
 use super::name::{self, NameCache, NameVisibility};
 use super::node_key::{DocId, DocSeq, FrameToken, NodeId};
 use super::role::Role;
 use super::snapshot_tree::SnapshotTree;
-use super::state::{InvalidState, TriState};
+use super::state::{InvalidState, State, TriState};
 use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
 
@@ -79,6 +80,12 @@ pub enum AriaMode<'a> {
     /// Playwright default mode: omits refs, `active`, `inert`, `ClickProxy` folding, and AI-only
     /// distillation passes.
     Default,
+    /// Default mode as Playwright's template matcher reads it (`toMatchAriaSnapshot`, whose tree
+    /// is `toAriaNode`'s before `renderAriaTreeAsJSON` drops defaults): every state a node's role
+    /// owns is written explicitly, `false` and `0` included, so `[checked=false]` and
+    /// `[expanded=false]` can match. Everything else is [`Self::Default`]'s, and so is its YAML,
+    /// since the printer drops `false` and `0`.
+    Template,
 }
 
 impl AriaMode<'_> {
@@ -99,6 +106,73 @@ impl fmt::Debug for AriaMode<'_> {
                 .field("render_active", render_active)
                 .finish(),
             Self::Default => f.write_str("Default"),
+            Self::Template => f.write_str("Template"),
+        }
+    }
+}
+
+/// How a node's ARIA states are written. `Wire` is `AriaNodeJSON`'s: only the values Playwright's
+/// renderer prints (true, mixed, a level above 0), so AI and default JSON keep their oracles'
+/// bytes. `Explicit` is `toAriaNode`'s: every state the role owns, which a template's
+/// `[selected=false]` compares against.
+#[derive(Clone, Copy)]
+enum StateForm {
+    Wire,
+    Explicit,
+}
+
+impl StateForm {
+    const fn of(mode: &AriaMode<'_>) -> Self {
+        match mode {
+            AriaMode::Ai { .. } | AriaMode::Default => Self::Wire,
+            AriaMode::Template => Self::Explicit,
+        }
+    }
+
+    /// Writes `state` onto `draft`. `State` already gates each field by upstream's `kAria*Roles`,
+    /// so `None` is `toAriaNode`'s `undefined`, and `Explicit` writes it as it stands; `expanded`
+    /// stays `None` when `aria-expanded` is unset, which `[expanded=false]` must not match.
+    fn write(self, state: State, draft: &mut DraftNode) {
+        let checked = state.checked().map(tristate);
+        let pressed = state.pressed().map(tristate);
+        let invalid = state.invalid().map(invalid);
+        let level = state.level();
+        match self {
+            Self::Explicit => {
+                draft.checked = checked;
+                draft.disabled = state.disabled();
+                draft.expanded = state.expanded();
+                draft.invalid = invalid;
+                draft.level = level.map(Number::from);
+                draft.pressed = pressed;
+                draft.selected = state.selected();
+            }
+            Self::Wire => {
+                draft.checked = checked.filter(|&checked| checked != Tristate::False);
+                draft.disabled = state.disabled().filter(|&disabled| disabled);
+                draft.expanded = state.expanded().filter(|&expanded| expanded);
+                draft.invalid = invalid.filter(|&invalid| invalid != Invalid::False);
+                draft.level = level.filter(|&level| level > 0).map(Number::from);
+                draft.pressed = pressed.filter(|&pressed| pressed != Tristate::False);
+                draft.selected = state.selected().filter(|&selected| selected);
+            }
+        }
+    }
+
+    /// Writes a `<select>`'s synthesized option's states onto `draft`. Role `option` owns
+    /// `checked`, `disabled` and `selected`; the option carries no `aria-checked`, so upstream's
+    /// `getAriaChecked` reads it `false`.
+    fn write_option(self, option: &SyntheticOption, draft: &mut DraftNode) {
+        match self {
+            Self::Explicit => {
+                draft.checked = Some(Tristate::False);
+                draft.disabled = Some(option.disabled());
+                draft.selected = Some(option.selected());
+            }
+            Self::Wire => {
+                draft.disabled = option.disabled().then_some(true);
+                draft.selected = option.selected().then_some(true);
+            }
         }
     }
 }
@@ -138,6 +212,17 @@ impl<'a> AriaAsk<'a> {
         }
     }
 
+    /// Creates a template-mode request ([`AriaMode::Template`]) rooted at [`AriaRoot::Page`] with
+    /// no explicit depth cutoff and `boxes: false`: the tree `toMatchAriaSnapshot` matches.
+    pub const fn template_mode() -> AriaAsk<'static> {
+        AriaAsk {
+            root: AriaRoot::Page,
+            mode: AriaMode::Template,
+            depth: None,
+            boxes: false,
+        }
+    }
+
     /// Creates a request for an explicit `root` and `mode` with no depth cutoff and `boxes: false`.
     pub const fn new(root: AriaRoot, mode: AriaMode<'a>) -> Self {
         Self {
@@ -155,7 +240,7 @@ impl<'a> AriaAsk<'a> {
     }
 
     /// Sets whether `active` focus flags are emitted in [`AriaMode::Ai`]; no-op in
-    /// [`AriaMode::Default`].
+    /// [`AriaMode::Default`] and [`AriaMode::Template`].
     pub const fn with_render_active(mut self, render_active: bool) -> Self {
         if let AriaMode::Ai {
             render_active: slot,
@@ -914,12 +999,13 @@ fn run_doc_build(
     scope: CaptureScope,
     doc_seq: Option<DocSeq>,
 ) -> DraftArena {
+    let state_form = StateForm::of(mode);
     let (refs, render_active, distill_mode) = match mode {
         AriaMode::Ai {
             refs,
             render_active,
         } => (Some(&mut **refs), *render_active, DistillMode::Ai),
-        AriaMode::Default => (None, false, DistillMode::Default),
+        AriaMode::Default | AriaMode::Template => (None, false, DistillMode::Default),
     };
     let mut ctx = DocBuildCtx {
         tree,
@@ -927,6 +1013,7 @@ fn run_doc_build(
         refs,
         doc_seq,
         mode: distill_mode,
+        state_form,
         render_active,
         scope,
         arena: DraftArena::new(),
@@ -941,6 +1028,7 @@ struct DocBuildCtx<'t, 'c, 'r> {
     refs: Option<&'r mut TabRefTable>,
     doc_seq: Option<DocSeq>,
     mode: DistillMode,
+    state_form: StateForm,
     render_active: bool,
     scope: CaptureScope,
     arena: DraftArena,
@@ -1304,7 +1392,7 @@ fn visit_element_node(
 
     let child_suppress = populate_field_value_and_mask(node, raw, &mut draft, frame.flags);
     let draft_idx = ctx.arena.push(draft);
-    push_synthetic_options(ctx.tree, node, draft_idx, &mut ctx.arena);
+    push_synthetic_options(ctx.tree, node, draft_idx, ctx.state_form, &mut ctx.arena);
     ctx.arena
         .push_child(frame.parent_draft, DraftChild::Node(draft_idx));
 
@@ -1347,14 +1435,8 @@ fn build_element_draft(
     };
 
     let mut draft = DraftNode::new(role_str, raw_name, flags);
-    draft.checked = convert_tristate(state.checked());
-    draft.disabled = (state.disabled() == Some(true)).then_some(true);
-    draft.expanded = (state.expanded() == Some(true)).then_some(true);
+    ctx.state_form.write(state, &mut draft);
     draft.active = (is_ai && render_active && state.active()).then_some(true);
-    draft.invalid = convert_invalid(state.invalid());
-    draft.level = state.level().filter(|&n| n > 0).map(Number::from);
-    draft.pressed = convert_tristate(state.pressed());
-    draft.selected = (state.selected() == Some(true)).then_some(true);
     draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
     draft.r#ref = assigned_ref;
     draft.url = url;
@@ -1411,6 +1493,7 @@ fn push_synthetic_options(
     tree: &SnapshotTree,
     select_node: &TreeNode,
     select_draft_idx: usize,
+    state_form: StateForm,
     arena: &mut DraftArena,
 ) {
     let synthetic = tree.fold().synthetic_options(select_node.id());
@@ -1422,8 +1505,7 @@ fn push_synthetic_options(
         .with_inert(select_node.state().inert());
     for opt in synthetic {
         let mut draft = DraftNode::new("option", opt.name().to_owned(), flags);
-        draft.selected = opt.selected().then_some(true);
-        draft.disabled = opt.disabled().then_some(true);
+        state_form.write_option(opt, &mut draft);
         let opt_idx = arena.push(draft);
         arena.push_child(select_draft_idx, DraftChild::Node(opt_idx));
     }
@@ -2369,20 +2451,20 @@ fn extract_text_content(raw: &ContentAttributes) -> Option<&str> {
     }
 }
 
-const fn convert_tristate(state: Option<TriState>) -> Option<Tristate> {
+const fn tristate(state: TriState) -> Tristate {
     match state {
-        Some(TriState::True) => Some(Tristate::True),
-        Some(TriState::Mixed) => Some(Tristate::Mixed),
-        Some(TriState::False) | None => None,
+        TriState::False => Tristate::False,
+        TriState::True => Tristate::True,
+        TriState::Mixed => Tristate::Mixed,
     }
 }
 
-const fn convert_invalid(state: Option<InvalidState>) -> Option<Invalid> {
+const fn invalid(state: InvalidState) -> Invalid {
     match state {
-        Some(InvalidState::True) => Some(Invalid::True),
-        Some(InvalidState::Grammar) => Some(Invalid::Grammar),
-        Some(InvalidState::Spelling) => Some(Invalid::Spelling),
-        Some(InvalidState::False) | None => None,
+        InvalidState::False => Invalid::False,
+        InvalidState::True => Invalid::True,
+        InvalidState::Grammar => Invalid::Grammar,
+        InvalidState::Spelling => Invalid::Spelling,
     }
 }
 
@@ -2664,6 +2746,219 @@ mod tests {
         }
         assert!(find_by_role_text(default.nodes(), "generic", "Badge").is_none());
         assert!(find_by_role_name(default.nodes(), "img", None).is_some());
+        Ok(())
+    }
+
+    /// The seven states a template compares, as one emitted node carries them.
+    #[derive(Debug, PartialEq)]
+    struct States {
+        checked: Option<Tristate>,
+        disabled: Option<bool>,
+        expanded: Option<bool>,
+        invalid: Option<Invalid>,
+        level: Option<Number>,
+        pressed: Option<Tristate>,
+        selected: Option<bool>,
+    }
+
+    impl States {
+        fn of(node: &AriaNode) -> Self {
+            Self {
+                checked: node.checked,
+                disabled: node.disabled,
+                expanded: node.expanded,
+                invalid: node.invalid,
+                level: node.level.clone(),
+                pressed: node.pressed,
+                selected: node.selected,
+            }
+        }
+    }
+
+    /// One node of each state shape `toAriaNode` writes: a role owning a state at its default, an
+    /// `aria-expanded="false"` beside an unset one, levels 0 and 2, a role owning none (a list:
+    /// default mode unwraps an unnamed generic, so none is printed), and a `<select>`'s
+    /// synthesized options.
+    fn build_state_tree() -> Result<SnapshotTree, Box<dyn Error>> {
+        let body = NodeBuilder::element("body")
+            .child(
+                NodeBuilder::form_control(FormControlType::InputCheckbox)
+                    .tag("input")
+                    .aria_label("Terms"),
+            )
+            .child(NodeBuilder::element("button").child(NodeBuilder::text("Save")))
+            .child(
+                NodeBuilder::element("button")
+                    .expanded_state(BrowserOsTriState::False)
+                    .child(NodeBuilder::text("Menu")),
+            )
+            .child(
+                NodeBuilder::element("ul")
+                    .child(NodeBuilder::element("li").child(NodeBuilder::text("One"))),
+            )
+            .child(NodeBuilder::element("h2").child(NodeBuilder::text("Settings")))
+            .child(
+                NodeBuilder::form_control(FormControlType::InputText)
+                    .tag("input")
+                    .aria_label("Email"),
+            )
+            .child(
+                NodeBuilder::element("div")
+                    .role("row")
+                    .child(NodeBuilder::text("Row")),
+            )
+            .child(
+                NodeBuilder::element("a")
+                    .href("/next")
+                    .child(NodeBuilder::text("Next")),
+            )
+            .child(
+                NodeBuilder::form_control(FormControlType::SelectOne)
+                    .tag("select")
+                    .aria_label("Country")
+                    .select_option(SelectOption {
+                        value: Some("us".to_owned()),
+                        text: Some("United States".to_owned()),
+                        is_selected: Some(true),
+                        is_disabled: Some(false),
+                    })
+                    .select_option(SelectOption {
+                        value: Some("ca".to_owned()),
+                        text: Some("Canada".to_owned()),
+                        is_selected: Some(false),
+                        is_disabled: Some(true),
+                    }),
+            );
+        let apc = ApcBuilder::new("doc-states")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        Ok(SnapshotTree::build(apc, BuildOptions::new())?)
+    }
+
+    #[test]
+    fn template_mode_writes_every_state_the_role_owns() -> Result<(), Box<dyn Error>> {
+        let tree = build_state_tree()?;
+        let template = tree.aria(AriaAsk::template_mode())?;
+        let states =
+            |checked, disabled, expanded, invalid, level: Option<u32>, pressed, selected| States {
+                checked,
+                disabled,
+                expanded,
+                invalid,
+                level: level.map(Number::from),
+                pressed,
+                selected,
+            };
+        let unchecked = Some(Tristate::False);
+        let enabled = Some(false);
+        let valid = Some(Invalid::False);
+        let rows = [
+            (
+                "checkbox",
+                Some("Terms"),
+                states(unchecked, enabled, None, valid, None, None, None),
+                "kAriaChecked, Disabled, Expanded and Invalid roles; aria-expanded is unset",
+            ),
+            (
+                "button",
+                Some("Save"),
+                states(None, enabled, None, None, None, unchecked, None),
+                "a plain button: pressed false, expanded unset",
+            ),
+            (
+                "button",
+                Some("Menu"),
+                states(None, enabled, Some(false), None, None, unchecked, None),
+                "aria-expanded=\"false\" is false, which an unset one is not",
+            ),
+            (
+                "listitem",
+                None,
+                states(None, None, None, None, Some(0), None, None),
+                "a listitem with no aria-level is level 0",
+            ),
+            (
+                "heading",
+                Some("Settings"),
+                states(None, None, None, None, Some(2), None, None),
+                "h2's native level",
+            ),
+            (
+                "textbox",
+                Some("Email"),
+                states(None, enabled, None, valid, None, None, None),
+                "a valid textbox is invalid false",
+            ),
+            (
+                "row",
+                Some("Row"),
+                states(None, enabled, None, None, Some(0), None, Some(false)),
+                "an unselected row, level 0",
+            ),
+            (
+                "link",
+                Some("Next"),
+                states(None, enabled, None, None, None, None, None),
+                "a link owns disabled and expanded, and aria-expanded is unset",
+            ),
+            (
+                "list",
+                None,
+                states(None, None, None, None, None, None, None),
+                "a list owns no state, so it writes none",
+            ),
+            (
+                "combobox",
+                Some("Country"),
+                states(None, enabled, None, valid, None, None, None),
+                "a select is a combobox with aria-expanded unset",
+            ),
+            (
+                "option",
+                Some("United States"),
+                states(unchecked, enabled, None, None, None, None, Some(true)),
+                "a synthesized option owns checked, disabled and selected",
+            ),
+            (
+                "option",
+                Some("Canada"),
+                states(unchecked, Some(true), None, None, None, None, Some(false)),
+                "a disabled, unselected synthesized option",
+            ),
+        ];
+        for (role, name, expected, why) in rows {
+            let node = find_by_role_name(template.nodes(), role, name)
+                .ok_or_else(|| format!("template mode emits {role} {name:?}"))?;
+            assert_eq!(States::of(node), expected, "{role} {name:?}: {why}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn template_mode_prints_default_modes_yaml_and_default_keeps_the_wire_form()
+    -> Result<(), Box<dyn Error>> {
+        let tree = build_state_tree()?;
+        let template = tree.aria(AriaAsk::template_mode())?;
+        let default = tree.aria(AriaAsk::default_mode())?;
+        assert_eq!(
+            neo_snapshot::render(&template.to_snapshot(), Call::Playwright).into_text(),
+            neo_snapshot::render(&default.to_snapshot(), Call::Playwright).into_text(),
+            "the printer drops false and 0, so the two modes print the same YAML"
+        );
+        for node in all_nodes(default.nodes()) {
+            assert!(
+                node.checked != Some(Tristate::False)
+                    && node.pressed != Some(Tristate::False)
+                    && node.invalid != Some(Invalid::False)
+                    && node.disabled != Some(false)
+                    && node.expanded != Some(false)
+                    && node.selected != Some(false)
+                    && node.level != Some(Number::from(0)),
+                "default mode writes only what AriaNodeJSON carries: {} {:?}",
+                node.role,
+                node.name
+            );
+        }
         Ok(())
     }
 

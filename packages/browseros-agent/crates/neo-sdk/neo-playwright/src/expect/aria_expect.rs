@@ -9,16 +9,17 @@
 //!
 //!  each poll:
 //!   SnapshotTree + NameCache + target NodeId ─▶ PropertyMatcher::check ─┐
-//!   the element's default-mode AriaNodes ────▶ TemplateMatcher::check ─┴─▶ AriaVerdict
-//!                                                       { matches, received } ─▶ Poll::Ran
+//!   SnapshotTree + target NodeId ─▶ TemplateMatcher::check ─────────────┴─▶ AriaVerdict
+//!     (tree.aria in template mode: the element's nodes, explicit states)   { matches, received }
+//!                                                                            ─▶ Poll::Ran
 //!   a failed property poll + Visibility ─▶ FailureSnapshot (what the caller renders)
 //! ```
 //!
 //! Every read here is pure: no CDP, no page, no clock. The caller (the expect op after the
-//! switch-over) resolves the target, builds the tree's `NameCache` once per attempt, produces the
-//! element's default-mode aria nodes, and owns `resolved`, the failure snapshot's text and the
-//! loop. The expected values are whatever the script passed (a matcher may compare a secret), so
-//! nothing here that holds one implements `Debug` (STYLE P4).
+//! switch-over) resolves the target, builds the tree's `NameCache` once per attempt, and owns
+//! `resolved`, the failure snapshot's text and the loop. The expected values are whatever the
+//! script passed (a matcher may compare a secret), so nothing here that holds one implements
+//! `Debug` (STYLE P4).
 
 #![cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 
@@ -26,9 +27,10 @@ use std::error::Error;
 use std::fmt;
 
 use neo_snapshot::template::{self, AriaTemplateNode, TemplateError};
-use neo_snapshot::{AriaNode, Call, JsRegex, RegexError, Snapshot};
+use neo_snapshot::{Call, JsRegex, RegexError, Snapshot};
 use neo_snapshot_apc::tree::{
-    NameCache, NameVisibility, NodeId, SnapshotTree, TreeNode, normalize_whitespace,
+    AriaAsk, AriaRoot, AriaTooDeep, NameCache, NameVisibility, NodeId, SnapshotTree, TreeNode,
+    normalize_whitespace,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -43,8 +45,8 @@ mod tests;
 /// its expected value checked and its regex compiled before the first poll.
 ///
 /// The two arms take different inputs per poll, so the caller matches on them: a property needs
-/// only the tree and the target's node, a template the element's default-mode aria nodes, which
-/// cost a tree walk the property matchers never pay.
+/// the tree, its name pass and the target's node, which may be absent; a template needs the
+/// target's node to emit the element's aria tree from, a walk the property matchers never pay.
 pub(crate) enum AriaExpect {
     Property(PropertyMatcher),
     Template(TemplateMatcher),
@@ -139,6 +141,9 @@ pub(crate) enum AriaExpectError {
     /// Params no prelude sends, named by their path (the decode error is left out: serde quotes
     /// the value it could not read).
     Malformed(String),
+    /// The element's tree is nested deeper than an aria tree may be: the snapshot's own refusal,
+    /// which tells the script how to retry.
+    TooDeep(AriaTooDeep),
 }
 
 impl fmt::Display for AriaExpectError {
@@ -152,6 +157,7 @@ impl fmt::Display for AriaExpectError {
             Self::Malformed(path) => {
                 write!(f, "params.{path} is not what Playwright's matchers send")
             }
+            Self::TooDeep(error) => write!(f, "{error}"),
         }
     }
 }
@@ -161,6 +167,7 @@ impl Error for AriaExpectError {
         match self {
             Self::InvalidRegex(error) => Some(error),
             Self::Template(error) => Some(error),
+            Self::TooDeep(error) => Some(error),
             Self::UnknownMatcher(_) | Self::Malformed(_) => None,
         }
     }
@@ -290,21 +297,30 @@ impl PropertyMatcher {
 }
 
 impl TemplateMatcher {
-    /// One poll: the template against the element's aria tree in default mode (`tree.aria` of the
-    /// target, the element's node or nodes at the top), and that tree's YAML as received.
+    /// One poll: the template against `target`'s aria tree (the element's node or nodes at the
+    /// top), and that tree's YAML as received.
     ///
-    /// The nodes must carry explicit `false` and `0` on roles that own a state, as upstream's
-    /// `toAriaNode` does (see `neo_snapshot::template`), so `[checked=false]` matches; the YAML
-    /// printer treats those as absent, as upstream's does.
-    pub(crate) fn check(&self, nodes: Vec<AriaNode>) -> Result<AriaVerdict, AriaExpectError> {
+    /// The tree is emitted here in template mode, where every state a node's role owns is
+    /// explicit, as upstream's `toAriaNode` writes it, so `[checked=false]` matches an unchecked
+    /// checkbox and `[expanded=false]` only an `aria-expanded="false"` (see
+    /// `neo_snapshot::template`). The YAML is default mode's: the printer drops `false` and `0`,
+    /// as upstream's does.
+    pub(crate) fn check(
+        &self,
+        tree: &SnapshotTree,
+        target: NodeId,
+    ) -> Result<AriaVerdict, AriaExpectError> {
+        let ask = AriaAsk::template_mode().with_root(AriaRoot::Subtree(target));
+        let aria = tree.aria(ask).map_err(AriaExpectError::TooDeep)?;
+        // The element's nodes alone: `Call::Playwright` with no partial frames prints upstream's
+        // lines for them and nothing else.
         let snapshot = Snapshot {
-            tree: nodes,
+            tree: aria.into_snapshot().tree,
             ..Snapshot::default()
         };
         let matches = template::matches_template(&snapshot.tree, &self.template)
             .map_err(AriaExpectError::Template)?;
-        // `Call::Playwright` prints upstream's lines for every node and, with no partial frames,
-        // nothing else: `renderAriaSnapshotAsYaml` of the default-mode JSON.
+        // `renderAriaSnapshotAsYaml` of the default-mode JSON.
         let raw = neo_snapshot::render(&snapshot, Call::Playwright).into_text();
         let mut received = Map::new();
         received.insert("raw".to_owned(), Value::String(raw));

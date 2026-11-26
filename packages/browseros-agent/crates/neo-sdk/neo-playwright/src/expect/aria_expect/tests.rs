@@ -1,11 +1,10 @@
 //! The tree's answers to the four accessibility matchers and `toMatchAriaSnapshot`, each held to
-//! upstream's `expectSingleElement` and `ExpectedTextMatcher` rules, over hand-built APC trees
-//! (`ApcBuilder`) and hand-built default-mode `AriaNode` trees.
+//! upstream's `expectSingleElement`, `ExpectedTextMatcher` and `matchesExpectAriaTemplate` rules,
+//! over hand-built APC trees (`ApcBuilder`).
 
 use std::error::Error;
 
-use neo_snapshot::AriaNode;
-use neo_snapshot_apc::proto::{BrowserOsRef, FormControlType};
+use neo_snapshot_apc::proto::{BrowserOsRef, BrowserOsTriState, FormControlType, SelectOption};
 use neo_snapshot_apc::tree::{
     ApcBuilder, BuildOptions, DocToken, DomNodeId, NodeBuilder, NodeId, NodeKey, SnapshotTree,
 };
@@ -55,6 +54,10 @@ fn page() -> TestResult<SnapshotTree> {
                 .dom_id(PLAIN)
                 .child(NodeBuilder::text("plain")),
         );
+    build(root)
+}
+
+fn build(root: NodeBuilder) -> TestResult<SnapshotTree> {
     let apc = ApcBuilder::new("doc-main").root(root).build();
     Ok(SnapshotTree::build(apc, BuildOptions::default())?)
 }
@@ -377,21 +380,24 @@ fn tests_that_other_expressions_stay_in_the_page() -> TestResult {
     Ok(())
 }
 
-/// A `main` landmark holding a level-1 heading, a link and a list of two items: the element's
-/// tree as `tree.aria` gives it in default mode.
-fn main_landmark() -> TestResult<Vec<AriaNode>> {
-    Ok(serde_json::from_value(json!([{
-        "role": "main",
-        "children": [
-            { "role": "heading", "name": "Checkout", "level": 1 },
-            { "role": "link", "name": "Back", "url": "/cart" },
-            "Total due",
-            { "role": "list", "children": [
-                { "role": "listitem", "text": "One" },
-                { "role": "listitem", "text": "Two" },
-            ] },
-        ],
-    }]))?)
+const MAIN: i32 = 60;
+
+/// A `main` landmark holding a level-1 heading, a link, a text and a list of two items.
+fn landmark_page() -> TestResult<SnapshotTree> {
+    let list = NodeBuilder::element("ul")
+        .child(NodeBuilder::element("li").child(NodeBuilder::text("One")))
+        .child(NodeBuilder::element("li").child(NodeBuilder::text("Two")));
+    let main = NodeBuilder::element("main")
+        .dom_id(MAIN)
+        .child(NodeBuilder::element("h1").child(NodeBuilder::text("Checkout")))
+        .child(
+            NodeBuilder::element("a")
+                .href("/cart")
+                .child(NodeBuilder::text("Back")),
+        )
+        .child(NodeBuilder::text("Total due"))
+        .child(list);
+    build(NodeBuilder::root().child(main))
 }
 
 const MAIN_YAML: &str = "- main:\n  - heading \"Checkout\" [level=1]\n  - link \"Back\":\n    - /url: /cart\n  - text: Total due\n  - list:\n    - listitem: One\n    - listitem: Two";
@@ -418,7 +424,8 @@ fn tests_that_a_template_matches_the_element_tree_and_receives_its_yaml() -> Tes
             role("list", json!({ "children": [role("listitem", json!({ "children": [text("Two")] }))] })),
         ] }))] }),
     ))?;
-    let verdict = template.check(main_landmark()?)?;
+    let tree = landmark_page()?;
+    let verdict = template.check(&tree, node(&tree, MAIN)?)?;
     assert!(
         verdict.matches,
         "contain mode: a subsequence of the main's children"
@@ -441,8 +448,9 @@ fn tests_that_a_template_that_does_not_match_still_receives_the_yaml() -> TestRe
             json!({ "containerMode": "equal", "children": [role("listitem", json!({}))] }),
         ),
     ];
+    let tree = landmark_page()?;
     for row in rows {
-        let verdict = template(row)?.check(main_landmark()?)?;
+        let verdict = template(row)?.check(&tree, node(&tree, MAIN)?)?;
         assert!(
             !verdict.matches,
             "no subtree has that name, level or exact child list"
@@ -459,13 +467,124 @@ fn tests_that_a_template_that_does_not_match_still_receives_the_yaml() -> TestRe
 #[test]
 fn tests_that_a_template_errors_on_a_name_regex_that_does_not_compile() -> TestResult {
     let template = template(role("heading", json!({ "name": { "pattern": "(" } })))?;
+    let tree = landmark_page()?;
     let error = template
-        .check(main_landmark()?)
+        .check(&tree, node(&tree, MAIN)?)
         .err()
         .ok_or("an unterminated group does not compile")?;
     assert!(
         matches!(error, AriaExpectError::Template(_)),
         "the template's own error, raised where upstream's page throws"
+    );
+    Ok(())
+}
+
+const TERMS: i32 = 70;
+const SAVE: i32 = 71;
+const MENU: i32 = 72;
+const COUNTRY: i32 = 73;
+
+/// An unchecked checkbox, a button with no `aria-expanded`, one with `aria-expanded="false"`, and
+/// a `<select>` whose options APC sends as data, which the tree synthesizes as option nodes.
+fn states_page() -> TestResult<SnapshotTree> {
+    let option = |text: &str, selected: bool| SelectOption {
+        value: Some(text.to_lowercase()),
+        text: Some(text.to_owned()),
+        is_selected: Some(selected),
+        is_disabled: Some(false),
+    };
+    let root = NodeBuilder::root()
+        .child(
+            NodeBuilder::form_control(FormControlType::InputCheckbox)
+                .tag("input")
+                .dom_id(TERMS)
+                .aria_label("Terms"),
+        )
+        .child(
+            NodeBuilder::element("button")
+                .dom_id(SAVE)
+                .child(NodeBuilder::text("Save")),
+        )
+        .child(
+            NodeBuilder::element("button")
+                .dom_id(MENU)
+                .expanded_state(BrowserOsTriState::False)
+                .child(NodeBuilder::text("Menu")),
+        )
+        .child(
+            NodeBuilder::form_control(FormControlType::SelectOne)
+                .tag("select")
+                .dom_id(COUNTRY)
+                .aria_label("Country")
+                .select_option(option("France", true))
+                .select_option(option("Spain", false)),
+        );
+    build(root)
+}
+
+/// Whether `template` matches the element `dom` of `tree`.
+fn matches_at(tree: &SnapshotTree, dom: i32, template: Value) -> TestResult<bool> {
+    Ok(self::template(template)?
+        .check(tree, node(tree, dom)?)?
+        .matches)
+}
+
+#[test]
+fn tests_that_a_template_compares_the_explicit_false_states_upstream_writes() -> TestResult {
+    let tree = states_page()?;
+    let rows = [
+        (
+            TERMS,
+            role("checkbox", json!({ "checked": false })),
+            true,
+            "[checked=false] matches an unchecked checkbox",
+        ),
+        (
+            TERMS,
+            role("checkbox", json!({ "checked": true })),
+            false,
+            "[checked] does not",
+        ),
+        (
+            MENU,
+            role("button", json!({ "expanded": false })),
+            true,
+            "[expanded=false] matches aria-expanded=\"false\"",
+        ),
+        (
+            SAVE,
+            role("button", json!({ "expanded": false })),
+            false,
+            "and not a button with no aria-expanded, which upstream leaves undefined",
+        ),
+        (
+            SAVE,
+            role("button", json!({ "pressed": false, "disabled": false })),
+            true,
+            "a plain button is not pressed and not disabled",
+        ),
+        (
+            COUNTRY,
+            role("option", json!({ "name": "Spain", "selected": false })),
+            true,
+            "[selected=false] matches an unselected synthesized option",
+        ),
+        (
+            COUNTRY,
+            role("option", json!({ "name": "France", "selected": false })),
+            false,
+            "and not the selected one",
+        ),
+    ];
+    for (dom, row, expected, why) in rows {
+        assert_eq!(matches_at(&tree, dom, row)?, expected, "{why}");
+    }
+    let verdict = template(role("checkbox", json!({ "checked": false })))?
+        .check(&tree, node(&tree, TERMS)?)?;
+    assert_eq!(
+        verdict.received,
+        json!({ "raw": "- checkbox \"Terms\"" }),
+        "received prints default mode's YAML, where false is absent"
     );
     Ok(())
 }
