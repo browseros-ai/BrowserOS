@@ -42,8 +42,10 @@ expect(await page.locator('#echo').textContent()).toBe(
   `Confirm your code ${String.fromCharCode(52, 56, 50, 57, 49, 51)}`,
 )
 await page.goto(`${origin}/shadow.html`)
+// The APC tree reads closed shadow roots (apc-engine-design 5.3), so a role locator finds the
+// closed root's button; the page's own engines, which CSS and text locators use, still cannot.
 expect(await page.getByRole('button', { name: 'Closed button' }).count()).toBe(
-  0,
+  1,
 )
 expect(
   await page.getByRole('button', { name: 'Inner button' }).textContent(),
