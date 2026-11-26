@@ -664,6 +664,147 @@ it('tests rule 7: other roles print no line and lose their refs; their content m
   ])
 })
 
+it('tests that a line printed where an aria-hidden node printed no line around it carries [aria-hidden]', () => {
+  // `getByRole` reaches these elements only with `includeHidden`, which an agent asks for only
+  // where the line, or a line it is nested under, says `[aria-hidden]`.
+  const json = [
+    generic(
+      [
+        button('Next slide', 'e1'),
+        {
+          role: 'heading',
+          name: 'Slide 2',
+          level: 2,
+          children: [link('Read more', 'e2')],
+        },
+        section('main', 'e3', [button('Inside main', 'e4')]),
+      ],
+      { ariaHidden: true },
+    ),
+    {
+      ...button('Menu', 'e5'),
+      ariaHidden: true,
+      children: [link('Settings', 'e6')],
+    },
+    {
+      role: 'combobox',
+      name: 'Plan',
+      ref: 'e8',
+      children: [
+        { role: 'option', name: 'Basic' },
+        {
+          role: 'group',
+          name: 'Old',
+          ariaHidden: true,
+          children: [{ role: 'option', name: 'Legacy', selected: true }],
+        },
+      ],
+    },
+    button('After', 'e7'),
+  ] as Node[]
+  const marked = [
+    '- button "Next slide" [aria-hidden] [ref=e1]',
+    '- heading "Slide 2" [level=2] [aria-hidden]',
+    '- link "Read more" [aria-hidden] [ref=e2]',
+    '- main [aria-hidden] [ref=e3]:',
+    '  - button "Inside main" [ref=e4]',
+    '- button "Menu" [aria-hidden] [ref=e5]',
+    '- link "Settings" [aria-hidden] [ref=e6]',
+    '- combobox "Plan" [ref=e8]:',
+    '  - option "Basic"',
+    '  - option "Legacy" [selected] [aria-hidden]',
+    '- button "After" [ref=e7]',
+  ].join('\n')
+  expect(both(json)).toEqual([marked, marked])
+})
+
+it('tests that a kept block keeps the [aria-hidden] of a section around it, so a cut that prints it at the left edge keeps the mark', () => {
+  const json = [
+    section('main', 'e1', [
+      ...[1, 2, 3, 4, 5, 6].map((index) =>
+        button(`Item ${index}`, `e${index + 9}`),
+      ),
+      section('dialog', 'e2', [button('OK', 'e3')], 'Confirm'),
+      // A child document: the mark above its iframe does not reach it.
+      section('iframe', 'e4', [
+        section('dialog', 'f1e1', [button('Card', 'f1e2')], 'Pay'),
+      ]),
+    ]),
+  ].map((node) => ({ ...node, ariaHidden: true as const }))
+  expect(render(json, { text: false })).toBe(
+    [
+      '- main [aria-hidden] [ref=e1]:',
+      ...[1, 2, 3, 4, 5, 6].map(
+        (index) => `  - button "Item ${index}" [ref=e${index + 9}]`,
+      ),
+      '  - dialog "Confirm" [aria-hidden] [ref=e2]:',
+      '    - button "OK" [ref=e3]',
+      '  - iframe [ref=e4]:',
+      '    - dialog "Pay" [ref=f1e1]:',
+      '      - button "Card" [ref=f1e2]',
+    ].join('\n'),
+  )
+  expect(render(json, { text: false, maxTokens: 30 })).toBe(
+    [
+      '- main [aria-hidden] [ref=e1]:',
+      '  - button "Item 1" [ref=e10]',
+      '  - button "Item 2" [ref=e11]',
+      '  - button "Item 3" [ref=e12]',
+      "# cut: 4 more lines (4 with refs); the whole snapshot is about 100 tokens. page.getByRef('e4').ariaSnapshot() shows the iframe section, which is not shown above. Or pass a larger maxTokens.",
+      '- dialog "Confirm" [aria-hidden] [ref=e2]:',
+      '  - button "OK" [ref=e3]',
+      '- dialog "Pay" [ref=f1e1]:',
+      '  - button "Card" [ref=f1e2]',
+    ].join('\n'),
+  )
+})
+
+it('tests that what a whole-view layer holds keeps the [aria-hidden] of a node above it when it prints first', () => {
+  const json = [
+    generic(
+      [
+        generic([
+          {
+            ...section('dialog', 'e5', [button('Close', 'e6')], 'Promo'),
+            onTop: 'e5',
+          },
+        ]),
+      ],
+      { ariaHidden: true },
+    ),
+    // A child document: the mark on its iframe does not reach it.
+    {
+      ...section('iframe', 'e8', [
+        { ...button('Framed', 'f1e1'), onTop: 'e5' },
+      ]),
+      ariaHidden: true,
+    },
+    button('Page', 'e7'),
+  ] as Node[]
+  const onTop = [
+    {
+      ref: 'e5',
+      line: '# on top: dialog "Promo" [ref=e5] over the whole view',
+      wholeView: true,
+    },
+  ]
+  expect(
+    renderSnapshotV1(
+      { json, partial: [], onTop },
+      { urls: false, maxTokens: 8_000 },
+    ).text,
+  ).toBe(
+    [
+      '# on top: dialog "Promo" [ref=e5] over the whole view',
+      '- dialog "Promo" [aria-hidden] [ref=e5]:',
+      '  - button "Close" [ref=e6]',
+      '- button "Framed" [ref=f1e1]',
+      '- iframe [aria-hidden] [ref=e8]',
+      '- button "Page" [ref=e7]',
+    ].join('\n'),
+  )
+})
+
 it('tests that a tree far deeper than any call stack renders: the walk keeps its own stack', () => {
   let deep: Node = button('Deep', 'e1')
   for (let level = 0; level < 100_000; level++)
